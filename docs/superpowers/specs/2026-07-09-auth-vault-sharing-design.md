@@ -1,10 +1,10 @@
-# Second Brain Platform — Auth & Vault/Sharing Model
+# Chapters — Auth & Vault/Sharing Model
 
 Sub-project 1 of 6. Structural design only — no implementation detail.
 
 ## Product context
 
-A self-hostable, open-source "second brain" web app. One deployment serves one
+Chapters is a self-hostable, open-source "second brain" web app. One deployment serves one
 organization (company); the code itself is open source so anyone can run their
 own instance. Replaces Obsidian entirely — the web app is the only editor, on
 every device, with a single source of truth on the server (no local vault

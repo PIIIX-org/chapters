@@ -1,4 +1,4 @@
-# Second Brain Platform — Graph Engine & View
+# Chapters — Graph Engine & View
 
 Sub-project 3 of 6. Structural design only — no implementation detail.
 

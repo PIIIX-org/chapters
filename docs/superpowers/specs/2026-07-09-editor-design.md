@@ -1,4 +1,4 @@
-# Second Brain Platform — Editor
+# Chapters — Editor
 
 Sub-project 2 of 6. Structural design only — no implementation detail.
 

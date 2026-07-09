@@ -1,4 +1,4 @@
-# Second Brain
+# Chapters
 
 An open-source, self-hostable "second brain" platform: a team knowledge base
 built on plain markdown files, a live-preview editor, and an AI-navigable
