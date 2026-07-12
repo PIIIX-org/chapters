@@ -85,6 +85,24 @@ Sub-project 4 of 6. Structural design only — no implementation detail.
   updates on save, consistent with how the embedding index (sub-project 3)
   already updates.
 
+## Security hardening (audit follow-up, 2026-07-12)
+
+Adopted from the security audit — see
+`2026-07-12-security-audit-findings.md`.
+
+### No existence/content leakage across permission boundaries
+
+- Every result — keyword, semantic, or merged "search everywhere" — is
+  filtered by the caller's live effective permission *before* being
+  returned, not just before its full content is shown. A vault the
+  searcher can't access must never surface even indirectly: not as a
+  snippet, not as a title, not as a match count, not as an "N more
+  results you don't have access to" hint. Absence of access means
+  absence from the result set entirely.
+- This applies identically to human UI queries and MCP queries (per the
+  "one search function, N callers" design) — there is no separate,
+  looser check for either caller.
+
 ## Assumptions carried forward (revisit if wrong)
 
 - Merge/ranking strategy between keyword and semantic results (e.g.

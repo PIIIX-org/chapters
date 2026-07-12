@@ -97,6 +97,19 @@ note content to an external API on every interaction.
 - **MCP-exposed graph queries** — sub-project 6 wraps this engine for AI
   access; this spec only covers the engine and its human-facing view.
 
+## Security hardening (audit follow-up, 2026-07-12)
+
+Adopted from the security audit — see
+`2026-07-12-security-audit-findings.md`.
+
+### Merge-time access re-validation
+
+- As stated in sub-project 1's amended spec: the merged cross-vault graph
+  always re-resolves each candidate vault's live access at query time. A
+  vault whose share was revoked since the user last set their
+  `VaultGraphPreference` never surfaces nodes, edges, titles, or snippets
+  in the merged view, regardless of the stored preference value.
+
 ## Assumptions carried forward (revisit if wrong)
 
 - Semantic similarity threshold for creating an inferred edge is a tunable

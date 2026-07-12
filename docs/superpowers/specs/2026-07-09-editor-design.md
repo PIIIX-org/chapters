@@ -83,6 +83,23 @@ or `owner`), as resolved by the access rule defined there.
 - **Attachments** — out of scope for the whole product (notes are
   markdown-only, decided in sub-project 1's spec).
 
+## Security hardening (audit follow-up, 2026-07-12)
+
+Adopted from the security audit — see
+`2026-07-12-security-audit-findings.md`.
+
+### Server-side OKF validation (closes: validation was only a UI guarantee)
+
+- OKF-schema and path validation (valid `type`, valid frontmatter shape,
+  correct `type/name` placement, no path collisions) is enforced by a
+  single shared server-side function, called by **every** write path —
+  the browser editor's save, and the MCP write tool (sub-project 6) alike.
+  The structured property panel described above is a UI convenience on
+  top of this; it is never the only enforcement point.
+- Type/name collisions (two notes that would resolve to the same path)
+  are rejected at that same validation point, not just avoided by UI
+  convention.
+
 ## Assumptions carried forward (revisit if wrong)
 
 - `owner` permission behaves identically to `edit` for editing purposes —
