@@ -124,6 +124,54 @@ the calling connection's live effective permission:
   soft-delete mechanism is specified here; how long deleted notes remain
   recoverable before permanent purge is an implementation-time decision.
 
+## Security hardening (audit follow-up, 2026-07-12)
+
+Adopted from the security audit — see
+`2026-07-12-security-audit-findings.md`.
+
+### Scope enforcement on account-wide operations (closes: vault-scoped tokens could reach account-wide surfaces)
+
+- Every MCP operation first checks the calling connection's declared
+  `scope`. Account-wide operations — the merged cross-vault graph,
+  "search everywhere," listing all of a user's vaults — are **hard
+  rejected** for `scope=vault` connections, never silently narrowed to
+  "just this vault's slice of the account-wide result." A vault-scoped
+  token stays exactly as narrow as its name implies.
+
+### Audit/revert access control (closes: revert exposed at plain-read level, no purge)
+
+- Viewing a note's change history and invoking revert both require
+  `edit`/`owner` permission on the vault, not merely `read` — read-only
+  access shows current state, not history.
+- A separate, explicit **hard purge** action exists (owner or admin
+  triggered) that permanently removes a specific prior revision from
+  history — distinct from soft-delete/revert — for cases like an
+  accidentally-committed secret, where "recoverable" is the wrong
+  property to have.
+
+### Prompt-injection awareness (closes: no stated boundary between note content and instructions)
+
+- Note content read via MCP (through read, search, or graph-query
+  results) is data, never instructions — this platform makes no attempt
+  to sanitize note content for "safety," but MCP client integrations are
+  expected to treat retrieved note text as untrusted data in their own
+  system-prompt contract, the same way a browser treats fetched HTML as
+  data rather than code.
+- Bulk or destructive MCP-triggered operations (mass edit across many
+  notes, mass delete, cross-vault write in a single call) require
+  explicit human confirmation before executing — closing the risk of one
+  poisoned note's embedded instructions causing a wide-blast-radius
+  action via an unsupervised agent.
+
+### Rate limiting is structural, not deferred (closes: no throttling despite "unsupervised concurrent agents" framing)
+
+- Per-connection and per-user request throttling is a v1 structural
+  requirement, not an implementation-time nice-to-have — a single
+  runaway or malicious agent must not be able to degrade the shared
+  instance for every other user. Exact quota numbers remain an
+  implementation-time decision; the presence of *some* throttling does
+  not.
+
 ## Assumptions carried forward (revisit if wrong)
 
 - An MCP connection's "AI" presence label in the collaboration engine is

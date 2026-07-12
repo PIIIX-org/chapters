@@ -88,6 +88,33 @@ Sub-project 5 of 6. Structural design only — no implementation detail.
   beyond the CRDT's live state.
 - **Comments/annotations** — not part of this sub-project's scope.
 
+## Security hardening (audit follow-up, 2026-07-12)
+
+Adopted from the security audit — see
+`2026-07-12-security-audit-findings.md`.
+
+### Per-operation permission enforcement (closes: permission checked only at handshake)
+
+- The sync relay validates a connection's live permission on receipt of
+  **every** inbound edit operation, not only when the connection is first
+  opened. A revocation event (share revoked, `mergeable` changed,
+  deactivation) triggers an immediate server-initiated kick or downgrade
+  of any affected open socket — the relay does not wait for the socket to
+  naturally reconnect or for a periodic recheck. This is what actually
+  delivers on the "access is always checked live" guarantee for an
+  already-open collaboration session; without it, a revoked editor's
+  already-open connection could keep emitting valid edits for some window
+  after their access was pulled.
+
+### Presence visibility (closes: identity disclosure to unauthorized viewers)
+
+- Presence identity (name/avatar/cursor) is visible only to users who
+  could otherwise see who has access to the vault (i.e., who could see
+  its share/membership list) — not to every viewer regardless of their
+  relationship to the vault's owner or team. A read-only user with
+  individual access to a vault does not automatically get visibility into
+  which team members are concurrently editing it.
+
 ## Assumptions carried forward (revisit if wrong)
 
 - Collaborator color assignment is per-session (reassigned each time

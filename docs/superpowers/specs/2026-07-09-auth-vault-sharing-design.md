@@ -126,6 +126,111 @@ Effective permission is the highest permission across all matching grants.
 - A cap on the number of MCP connections a user may generate — unlimited
   for v1.
 
+## Security hardening (audit follow-up, 2026-07-12)
+
+Adopted from a dedicated security audit of all six specs — see
+`2026-07-12-security-audit-findings.md` for the full findings list and
+severity ranking. This section amends the design above; where it conflicts
+with earlier wording, this section wins.
+
+### Bootstrap (closes: first-user race condition)
+
+- The first-admin bootstrap is **not** "whoever signs up first." Instead,
+  a one-time setup token is generated at deploy time (printed to the
+  deploy log / set via an env var) and must be presented once, out of
+  band from public signup, to claim the initial admin account. Public
+  signup only becomes reachable after this one-time setup completes. This
+  closes a real exploit: an org's instance can be reachable before the
+  founder actually visits `/signup`, letting an attacker who finds the
+  URL first claim permanent admin control.
+
+### Account lifecycle (closes: no offboarding, no ownership transfer)
+
+- User `status` gains a third value: `deactivated` (admin-triggered).
+  Deactivation immediately invalidates all active sessions for that user
+  and stops their `MCPConnection`s from resolving any access (consistent
+  with "access is always checked live").
+- Vault ownership is transferable: an admin may reassign a vault's owner
+  when its current owner is deactivated or unreachable. Ownership
+  transfer is otherwise owner-initiated (hand a vault to someone else
+  directly).
+- Deleting a Team or deactivating a user cascades: dangling `VaultShare`
+  and `TeamMembership` rows referencing them are cleaned up rather than
+  left pointing at a removed entity.
+
+### Password & session security (closes: no reset flow, no transport/session requirements, no brute-force protection)
+
+- **Password reset**: a reset flow exists, gated by a verified email
+  address (email verification is therefore now part of signup, not just
+  password reset). Reset tokens are single-use, short-lived, and their
+  request endpoint is rate-limited to resist enumeration and abuse.
+- **Transport & cookies**: the deployment requires TLS; session cookies
+  must be `Secure`, `HttpOnly`, and `SameSite`. Sessions are invalidated
+  on logout, password change, and admin-triggered deactivation — not left
+  to expire naturally.
+- **Brute-force protection**: login attempts are throttled per-account
+  and per-source.
+- **MFA**: not in v1, but explicitly tracked as a near-term follow-up
+  given the sensitivity of the data this platform holds — noted here so
+  it isn't silently forgotten.
+
+### Team-based sharing (closes: unreviewed privilege escalation via team membership)
+
+- When a team's membership changes, vault owners who have shared a vault
+  with that team are notified of the change.
+- A vault owner can view, at any time, the *current, expanded* list of
+  everyone with access to their vault through a team share (not just the
+  grant record naming the team) — closing the gap where a vault owner has
+  no visibility into who a team's own owner has since added.
+- Open team creation (any active user, no admin gate) remains as
+  originally specced, but is explicitly re-flagged here as a
+  social-engineering surface: sharing a vault to a team should get the
+  same scrutiny as sharing to an individual you don't fully trust yet.
+
+### Merge preference re-validation (closes: stale preference after revocation)
+
+- `VaultGraphPreference` is only meaningful in combination with the
+  user's *current* effective access — merge-time inclusion always
+  re-resolves live access to each candidate vault, never trusting the
+  stored preference flag as a proxy for still having access.
+- Setting a `VaultGraphPreference` itself requires currently having
+  access to that vault (prevents using the preference toggle to probe the
+  existence of vault IDs the user can't otherwise reach).
+
+### MCP connection token lifecycle (closes: unspecified token handling)
+
+- Tokens are stored **hashed** server-side (same posture as passwords),
+  never recoverable in plaintext after initial creation.
+- Tokens support expiry and rotation.
+- Every user gets a visible list of their own connections showing
+  creation time, last-used time, and scope — with one-click revoke. This
+  is a safety-critical property the rest of the MCP design (sub-project 6)
+  depends on, not an optional nicety.
+
+### Security-event logging (closes: no auth/access observability)
+
+- Alongside the content audit trail (sub-project 6), the platform logs
+  security-relevant *access* events: failed logins, permission-denied
+  responses, admin approvals/promotions, and MCP token
+  creation/use/revocation — the telemetry needed to detect the issues
+  above after the fact.
+
+### Deployment requirements for self-hosters (closes: no secrets/backup guidance)
+
+- Secrets (DB credentials, session signing material) must come from
+  environment/secret-manager configuration, never hardcoded or committed.
+- Backup/restore procedures must preserve soft-delete and audit-trail
+  consistency — restoring an old backup must not silently resurrect
+  content that was since hard-purged, without that being an explicit,
+  visible action.
+
+### Terminology clarification
+
+- Throughout these specs, "account" means an individual **User**, not an
+  organization/tenant — there is no `Organization` entity; a deployment
+  *is* the org (per the README). "Cross-account isolation" (sub-project 6)
+  means isolation between users, not between tenants.
+
 ### Assumptions carried forward (revisit if wrong)
 
 - Vault `mergeable` defaults to **off** (private-by-default is the safer

@@ -8,6 +8,11 @@ knowledge graph.
 yet. This repository currently contains design specs only — see
 [`docs/superpowers/specs/`](docs/superpowers/specs/).
 
+All six sub-project specs have been through a dedicated security audit; see
+[`2026-07-12-security-audit-findings.md`](docs/superpowers/specs/2026-07-12-security-audit-findings.md)
+for the findings and each affected spec's "Security hardening" section for
+the resulting design changes.
+
 ## Why we're building this
 
 Every note-taking tool we looked at forced a trade-off we didn't want to
@@ -70,6 +75,25 @@ with its own design spec before any code is written:
 
 See [`docs/superpowers/specs/`](docs/superpowers/specs/) for the detailed
 design of each completed sub-project.
+
+## Known gaps / future work
+
+The security audit surfaced real capability gaps beyond hardening — tracked
+here explicitly rather than left silently absent:
+
+- **Data export / vault backup / migration.** Not yet specced. This
+  directly matters for the "no proprietary database holding your notes
+  hostage" promise above — an org needs a real way to get its raw markdown
+  files back out, not just direct database access. Likely sub-project 7.
+- **Notifications / activity feed.** Team-membership-change notifications
+  to affected vault owners are specced as part of sub-project 1's security
+  hardening, but a general "you were shared with / added to a team / your
+  edit was reverted" activity feed is not yet designed.
+- **Admin oversight dashboard.** Beyond the signup-approval queue, there's
+  no specced way for an admin to see vault counts, storage usage, or
+  activity across the instance.
+- **MFA.** Tracked as a near-term follow-up to password auth (see
+  sub-project 1's spec), not built in v1.
 
 ## Contributing
 
