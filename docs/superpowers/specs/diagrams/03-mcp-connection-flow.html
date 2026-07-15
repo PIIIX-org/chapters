@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI / MCP Connection · Sequence</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">USER FLOW — CHAPTERS</p>
+    <h1>AI / MCP Connection</h1>
+
+    <svg viewBox="0 0 1040 784" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/>
+        </marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/>
+        </marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/>
+        </marker>
+      </defs>
+
+      <!-- Background: clean paper, no dot texture (embedded in product docs) -->
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- =================================================================
+           LIFELINES — dashed vertical lines from each actor, behind everything.
+           Centers: User 112 · App Server 368 · AI Agent 624 · Vault Store 880
+           ================================================================= -->
+      <line x1="112" y1="128" x2="112" y2="704" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="368" y1="128" x2="368" y2="704" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="624" y1="128" x2="624" y2="704" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="880" y1="128" x2="880" y2="704" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+      <!-- =================================================================
+           ACTIVATION BARS — App Server holds control in three separate spans
+           (connection creation · MCP read/search · MCP write). Vault Store
+           activates briefly for the fetch. Drawn before arrows.
+           ================================================================= -->
+      <rect x="364" y="180" width="8" height="52"  fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="364" y="276" width="8" height="228" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="364" y="544" width="8" height="152" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="876" y="400" width="8" height="52"  fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+
+      <!-- =================================================================
+           MESSAGE ARROWS — time flows top→down. Drawn before labels.
+           ================================================================= -->
+
+      <!-- M1: User → App Server — create connection, choose scope -->
+      <line x1="112" y1="176" x2="368" y2="176" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- M2: App Server → User — token issued, shown once (dashed return) -->
+      <line x1="368" y1="224" x2="112" y2="224" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+
+      <!-- M3: AI Agent → App Server — MCP call, authenticated with token -->
+      <line x1="624" y1="272" x2="368" y2="272" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+
+      <!-- M4: App Server self-message — check live effective permission / scope -->
+      <path d="M 372 316 L 408 316 L 408 348 L 372 348" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- M5: App Server → Vault Store — fetch/search permitted data -->
+      <line x1="368" y1="396" x2="880" y2="396" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- M6: Vault Store → App Server — return raw results (dashed) -->
+      <line x1="880" y1="444" x2="368" y2="444" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+
+      <!-- M7: App Server → AI Agent — filtered results forwarded (dashed, link-blue: crosses MCP boundary) -->
+      <line x1="368" y1="492" x2="624" y2="492" stroke="#2e5aa8" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-link)"/>
+
+      <!-- M8: AI Agent → App Server — WRITE via CRDT engine, live + attributed (headline) -->
+      <line x1="624" y1="540" x2="368" y2="540" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+
+      <!-- M9: App Server self-message — validate via shared OKF-validation function -->
+      <path d="M 372 576 L 408 576 L 408 608 L 372 608" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- M10: App Server self-message — log security event, update last-used -->
+      <path d="M 372 656 L 408 656 L 408 688 L 372 688" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- =================================================================
+           MESSAGE LABELS — each with an opaque paper mask.
+           ================================================================= -->
+
+      <!-- M1 -->
+      <rect x="180" y="160" width="120" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="240" y="170" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">NEW CONNECTION</text>
+
+      <!-- M2 -->
+      <rect x="188" y="208" width="104" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="240" y="218" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">TOKEN (ONCE)</text>
+
+      <!-- M3 -->
+      <rect x="440" y="256" width="112" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="496" y="266" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SEARCH / READ</text>
+
+      <!-- M4 (label right of self-loop) -->
+      <rect x="416" y="324" width="96" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="464" y="334" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">CHECK SCOPE</text>
+
+      <!-- M5 (shifted off the AI Agent lifeline it crosses) -->
+      <rect x="704" y="380" width="96" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="752" y="390" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">QUERY VAULT</text>
+
+      <!-- M6 (shifted off the AI Agent lifeline it crosses) -->
+      <rect x="464" y="428" width="64" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="496" y="438" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">RESULTS</text>
+
+      <!-- M7 -->
+      <rect x="460" y="476" width="72" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="496" y="486" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">FILTERED</text>
+
+      <!-- M8 (coral · headline) -->
+      <rect x="444" y="524" width="104" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="496" y="534" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">WRITE (CRDT)</text>
+
+      <!-- M9 (label right of self-loop) -->
+      <rect x="416" y="584" width="104" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="468" y="594" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">VALIDATE OKF</text>
+
+      <!-- M10 (label right of self-loop) -->
+      <rect x="416" y="664" width="80" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="456" y="674" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">AUDIT LOG</text>
+
+      <!-- =================================================================
+           ACTOR BOXES — drawn after arrows/labels.
+           ================================================================= -->
+
+      <!-- Actor 1: User (input) -->
+      <rect x="40" y="72" width="144" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="40" y="72" width="144" height="56" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <rect x="48" y="80" width="28" height="12" rx="2" fill="transparent" stroke="rgba(122,131,153,0.40)" stroke-width="0.8"/>
+      <text x="62" y="89" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">USR</text>
+      <text x="112" y="104" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">User</text>
+      <text x="112" y="119" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Account owner</text>
+
+      <!-- Actor 2: App Server (backend) -->
+      <rect x="296" y="72" width="144" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="296" y="72" width="144" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="304" y="80" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+      <text x="318" y="89" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+      <text x="368" y="104" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">App Server</text>
+      <text x="368" y="119" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Auth · permissions</text>
+
+      <!-- Actor 3: AI Agent (focal — its own colored, named participant) -->
+      <rect x="544" y="72" width="160" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="544" y="72" width="160" height="56" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <rect x="552" y="80" width="28" height="12" rx="2" fill="transparent" stroke="rgba(235,108,54,0.50)" stroke-width="0.8"/>
+      <text x="566" y="89" fill="#eb6c36" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">MCP</text>
+      <text x="624" y="104" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">AI Agent</text>
+      <text x="624" y="119" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">MCP client</text>
+
+      <!-- Actor 4: Vault Store (store) -->
+      <rect x="808" y="72" width="144" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="808" y="72" width="144" height="56" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <rect x="816" y="80" width="32" height="12" rx="2" fill="transparent" stroke="rgba(79,93,117,0.40)" stroke-width="0.8"/>
+      <text x="832" y="89" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DATA</text>
+      <text x="880" y="104" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Vault Store</text>
+      <text x="880" y="119" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Notes · CRDT</text>
+
+      <!-- =================================================================
+           ANNOTATION CALLOUTS (max 2) — editorial asides, italic serif,
+           placed in clear gaps, leaders never cross a lifeline.
+           ================================================================= -->
+
+      <!-- Callout 1: hard-reject branch on the permission check (M4) -->
+      <text x="464" y="296" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="start">vault-scope tokens</text>
+      <text x="464" y="316" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="start">never widen, ever</text>
+      <path d="M 460 304 Q 436 316 412 320" fill="none" stroke="rgba(45,49,66,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="408" cy="320" r="2" fill="#2d3142"/>
+
+      <!-- Callout 2: last-used + revoke visibility (M10), set in the clear User↔App Server gap -->
+      <text x="340" y="632" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">surfaces in Settings</text>
+      <text x="340" y="652" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">· one-click revoke</text>
+      <path d="M 336 660 Q 356 662 372 664" fill="none" stroke="rgba(45,49,66,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="372" cy="664" r="2" fill="#2d3142"/>
+
+      <!-- =================================================================
+           LEGEND — horizontal strip at the bottom.
+           ================================================================= -->
+      <line x1="40" y1="724" x2="1000" y2="724" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="40" y="740" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+
+      <!-- Item 1: focal actor swatch -->
+      <rect x="40" y="756" width="14" height="10" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <text x="60" y="764" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">AI participant</text>
+
+      <!-- Item 2: activation bar swatch -->
+      <rect x="220" y="752" width="4" height="18" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <text x="232" y="764" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Server processing</text>
+
+      <!-- Item 3: MCP protocol call (link-blue) -->
+      <line x1="420" y1="760" x2="448" y2="760" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="456" y="764" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">MCP protocol call</text>
+
+      <!-- Item 4: return / internal (muted dashed) -->
+      <line x1="620" y1="760" x2="648" y2="760" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <text x="656" y="764" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Return / internal</text>
+
+      <!-- Item 5: live write (coral) -->
+      <line x1="820" y1="760" x2="848" y2="760" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <text x="856" y="764" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Live write (CRDT)</text>
+
+    </svg>
+  </div>
+</body>
+</html>

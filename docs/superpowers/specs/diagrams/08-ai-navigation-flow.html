@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How AI Navigates the Brain</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1240px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      color: var(--color-muted);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 1000px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">User flow — Chapters</p>
+    <h1>How AI Navigates the Brain</h1>
+    <p class="subtitle">One question, two purposeful MCP tool calls, five actors.</p>
+
+    <svg viewBox="0 0 1120 860" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/>
+        </marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/>
+        </marker>
+        <marker id="arrow-ink" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#2d3142"/>
+        </marker>
+      </defs>
+
+      <!-- Background: clean paper, no texture (sits inside a product doc) -->
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- =================================================================
+           ANNOTATION CALLOUT — editorial aside, top margin, lands near
+           the SEARCH() call (step 2). Italic Instrument Serif.
+           ================================================================= -->
+      <text x="480" y="44" fill="#2d3142" font-size="14" font-style="italic"
+            font-family="'Instrument Serif', serif" text-anchor="end">note content = data, never instructions</text>
+      <path d="M 300 52 Q 420 68 420 104 L 420 228" fill="none"
+            stroke="rgba(45,49,66,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="420" cy="228" r="2" fill="#2d3142"/>
+
+      <!-- =================================================================
+           LIFELINES
+           Centers: Human 96 · AI Agent 312 · MCP Server 528 ·
+                    Search + Graph Engine 744 · Note Store 960
+           ================================================================= -->
+      <line x1="96"  y1="160" x2="96"  y2="760" stroke="rgba(45,49,66,0.22)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="312" y1="160" x2="312" y2="760" stroke="rgba(45,49,66,0.22)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="528" y1="160" x2="528" y2="760" stroke="rgba(45,49,66,0.22)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="744" y1="160" x2="744" y2="760" stroke="rgba(45,49,66,0.22)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="960" y1="160" x2="960" y2="760" stroke="rgba(45,49,66,0.22)" stroke-width="1" stroke-dasharray="3,3"/>
+
+      <!-- =================================================================
+           ACTIVATION BARS — drawn before message arrows.
+           ================================================================= -->
+      <!-- AI Agent: in control for the full round trip -->
+      <rect x="308" y="212" width="8" height="512" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <!-- MCP Server: two segments — search call, then graph-query call -->
+      <rect x="524" y="256" width="8" height="248" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="524" y="544" width="8" height="136" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <!-- Search + Graph Engine: two segments — hybrid search, then graph lookup -->
+      <rect x="740" y="368" width="8" height="92"  fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="740" y="588" width="8" height="48"  fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <!-- Note Store: brief, filtered fetch -->
+      <rect x="956" y="412" width="8" height="32"  fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="0.8"/>
+
+      <!-- =================================================================
+           MESSAGE ARROWS — time flows top → down.
+           ================================================================= -->
+
+      <!-- M1: Human -> AI Agent -->
+      <line x1="96" y1="208" x2="312" y2="208" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- M2: AI Agent -> MCP Server — SEARCH tool call (coral, focal 1) -->
+      <line x1="312" y1="252" x2="528" y2="252" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+
+      <!-- M3: MCP Server self-message — live permission scope check -->
+      <path d="M 532 288 L 568 288 L 568 324 L 532 324" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- M4: MCP Server -> Search + Graph Engine — hybrid query -->
+      <line x1="528" y1="364" x2="744" y2="364" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- M5: Search + Graph Engine -> Note Store — scoped fetch -->
+      <line x1="744" y1="408" x2="960" y2="408" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- M6: Search + Graph Engine -> MCP Server — return ranked results -->
+      <line x1="744" y1="452" x2="528" y2="452" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+
+      <!-- M7: MCP Server -> AI Agent — return ranked results -->
+      <line x1="528" y1="496" x2="312" y2="496" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+
+      <!-- M8: AI Agent -> MCP Server — GRAPH-QUERY tool call (coral, focal 2) -->
+      <line x1="312" y1="540" x2="528" y2="540" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+
+      <!-- M9: MCP Server -> Search + Graph Engine — graph lookup -->
+      <line x1="528" y1="584" x2="744" y2="584" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- M10: Search + Graph Engine -> MCP Server — return structural context -->
+      <line x1="744" y1="628" x2="528" y2="628" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+
+      <!-- M11: MCP Server -> AI Agent — return structural context -->
+      <line x1="528" y1="672" x2="312" y2="672" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+
+      <!-- M12: AI Agent -> Human — synthesized answer -->
+      <line x1="312" y1="716" x2="96" y2="716" stroke="#2d3142" stroke-width="1.4" marker-end="url(#arrow-ink)"/>
+
+      <!-- =================================================================
+           MESSAGE LABELS — each with an opaque paper mask.
+           ================================================================= -->
+
+      <rect x="152" y="192" width="104" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="204" y="202" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">ASKS QUESTION</text>
+
+      <rect x="384" y="236" width="72" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="420" y="246" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SEARCH()</text>
+
+      <rect x="572" y="300" width="96" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="620" y="310" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">CHECK SCOPE</text>
+
+      <rect x="584" y="348" width="104" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="636" y="358" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">HYBRID SEARCH</text>
+
+      <rect x="796" y="392" width="112" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="852" y="402" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">FETCH + FILTER</text>
+
+      <rect x="580" y="436" width="112" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="636" y="446" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">RANKED RESULTS</text>
+
+      <rect x="364" y="480" width="112" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="420" y="490" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">RANKED RESULTS</text>
+
+      <rect x="364" y="524" width="112" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="420" y="534" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">GRAPH-QUERY()</text>
+
+      <rect x="588" y="568" width="96" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="636" y="578" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">GRAPH LOOKUP</text>
+
+      <rect x="576" y="612" width="120" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="636" y="622" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">LINKS + CLUSTER</text>
+
+      <rect x="360" y="656" width="120" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="420" y="666" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">LINKS + CLUSTER</text>
+
+      <rect x="172" y="700" width="64" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="204" y="710" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">ANSWER</text>
+
+      <!-- =================================================================
+           ACTOR BOXES — drawn after arrows/labels.
+           ================================================================= -->
+
+      <!-- Human (input) -->
+      <rect x="32" y="104" width="128" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="32" y="104" width="128" height="56" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <rect x="40" y="112" width="32" height="12" rx="2" fill="transparent" stroke="rgba(122,131,153,0.40)" stroke-width="0.8"/>
+      <text x="56" y="121" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">USER</text>
+      <text x="96" y="136" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Human</text>
+      <text x="96" y="151" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Vault owner</text>
+
+      <!-- AI Agent (step / orchestrator) -->
+      <rect x="240" y="104" width="144" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="240" y="104" width="144" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="248" y="112" width="36" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+      <text x="266" y="121" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text>
+      <text x="312" y="136" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">AI Agent</text>
+      <text x="312" y="151" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">MCP client</text>
+
+      <!-- MCP Server (backend / gateway) -->
+      <rect x="440" y="104" width="176" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="440" y="104" width="176" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="448" y="112" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+      <text x="462" y="121" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">MCP</text>
+      <text x="528" y="136" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">MCP Server</text>
+      <text x="528" y="151" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">App / Auth Server</text>
+
+      <!-- Search + Graph Engine (backend) -->
+      <rect x="644" y="104" width="200" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="644" y="104" width="200" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="652" y="112" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+      <text x="666" y="121" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SVC</text>
+      <text x="744" y="136" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Search + Graph Engine</text>
+      <text x="744" y="151" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Hybrid + graph index</text>
+
+      <!-- Note Store (store) -->
+      <rect x="896" y="104" width="128" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="896" y="104" width="128" height="56" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <rect x="904" y="112" width="32" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.22)" stroke-width="0.8"/>
+      <text x="920" y="121" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DATA</text>
+      <text x="960" y="136" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Note Store</text>
+      <text x="960" y="151" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Vault content</text>
+
+      <!-- =================================================================
+           LEGEND — horizontal strip at the bottom.
+           ================================================================= -->
+      <line x1="32" y1="784" x2="1088" y2="784" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="32" y="800" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+
+      <!-- Item 1: Tool call (coral) -->
+      <line x1="32" y1="820" x2="60" y2="820" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <text x="68" y="828" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Tool call (search / graph)</text>
+
+      <!-- Item 2: Return path (dashed muted) -->
+      <line x1="260" y1="820" x2="288" y2="820" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <text x="296" y="828" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Return path</text>
+
+      <!-- Item 3: Synthesized answer (ink) -->
+      <line x1="460" y1="820" x2="488" y2="820" stroke="#2d3142" stroke-width="1.4" marker-end="url(#arrow-ink)"/>
+      <text x="496" y="828" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Synthesized answer</text>
+
+      <!-- Item 4: Activation bar -->
+      <rect x="680" y="812" width="4" height="16" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <text x="692" y="828" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Activation</text>
+
+      <!-- Item 5: Data store node -->
+      <rect x="860" y="816" width="14" height="10" rx="2" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="880" y="828" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Data store</text>
+
+    </svg>
+  </div>
+</body>
+</html>

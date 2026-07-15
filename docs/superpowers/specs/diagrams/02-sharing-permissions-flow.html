@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sharing & Permissions · Chapters</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1280px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      color: var(--color-muted);
+      margin-bottom: 1.5rem;
+      max-width: 62ch;
+    }
+
+    svg { width: 100%; min-width: 960px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">User flow — Chapters</p>
+    <h1>Sharing &amp; Permissions</h1>
+    <p class="subtitle">Granting vault access, and how revocation takes effect immediately — no cached permission survives a live request or an open collaboration session.</p>
+
+    <svg viewBox="0 0 1200 500" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+          <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+        </pattern>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+      <rect width="100%" height="100%" fill="url(#dots)" opacity="0.5"/>
+
+      <!-- Lane dividers -->
+      <line x1="40" y1="60"  x2="1160" y2="60"  stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+      <line x1="40" y1="172" x2="1160" y2="172" stroke="rgba(45,49,66,0.10)" stroke-width="1"/>
+      <line x1="40" y1="284" x2="1160" y2="284" stroke="rgba(45,49,66,0.10)" stroke-width="1"/>
+      <line x1="40" y1="396" x2="1160" y2="396" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+
+      <!-- Actor column divider -->
+      <line x1="160" y1="60" x2="160" y2="396" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+
+      <!-- Time-gap divider between grant phase and revoke phase -->
+      <line x1="960" y1="60" x2="960" y2="396" stroke="rgba(45,49,66,0.18)" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="960" y="48" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">LATER</text>
+
+      <!-- Lane labels -->
+      <text x="60" y="116" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.18em">VAULT OWNER</text>
+      <text x="60" y="228" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.18em">SYSTEM</text>
+      <text x="60" y="340" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.18em">GRANTEE</text>
+
+      <!-- Arrows (drawn before boxes) -->
+      <!-- 1. Grant access -> Create VaultShare (Owner -> System) -->
+      <line x1="340" y1="140" x2="380" y2="204" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 2. Create VaultShare -> Vault appears (System -> Grantee) -->
+      <line x1="540" y1="252" x2="560" y2="316" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 3. Vault appears -> Open vault (within Grantee lane) -->
+      <line x1="720" y1="340" x2="760" y2="340" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 4. Revoke access -> Live recheck (Owner -> System) -->
+      <line x1="1080" y1="140" x2="1080" y2="204" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 5. Live recheck -> Access updates (System -> Grantee, headline edge) -->
+      <line x1="1080" y1="252" x2="1080" y2="316" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+
+      <!-- Arrow labels -->
+      <rect x="340" y="164" width="40" height="14" rx="2" fill="#f5f5f5"/>
+      <text x="360" y="174" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GRANT</text>
+
+      <rect x="523" y="276" width="54" height="14" rx="2" fill="#f5f5f5"/>
+      <text x="550" y="286" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">RESOLVE</text>
+
+      <rect x="722" y="332" width="36" height="14" rx="2" fill="#f5f5f5"/>
+      <text x="740" y="342" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">OPEN</text>
+
+      <rect x="1056" y="164" width="48" height="14" rx="2" fill="#f5f5f5"/>
+      <text x="1080" y="174" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">REVOKE</text>
+
+      <rect x="1050" y="276" width="60" height="14" rx="2" fill="#f5f5f5"/>
+      <text x="1080" y="286" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.05em">NO CACHE</text>
+
+      <!-- Steps -->
+      <!-- Owner: Grant access -->
+      <rect x="180" y="92" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="260" y="114" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Grant access</text>
+      <text x="260" y="128" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">grantee + read/edit</text>
+
+      <!-- System: Create VaultShare -->
+      <rect x="380" y="204" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="460" y="226" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Create VaultShare</text>
+      <text x="460" y="240" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">vault · grantee · perm</text>
+
+      <!-- Grantee: Vault appears -->
+      <rect x="560" y="316" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="640" y="338" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Vault appears</text>
+      <text x="640" y="352" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">highest permission wins</text>
+
+      <!-- Grantee: Open vault -->
+      <rect x="760" y="316" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="840" y="338" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Open vault</text>
+      <text x="840" y="352" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">read: locked · edit: full</text>
+
+      <!-- Owner: Revoke access -->
+      <rect x="1000" y="92" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="1080" y="114" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Revoke access</text>
+      <text x="1080" y="128" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">revoke · or team change</text>
+
+      <!-- System: Live recheck (focal) -->
+      <rect x="1000" y="204" width="160" height="48" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <text x="1080" y="226" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Live recheck</text>
+      <text x="1080" y="240" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">every request · no cache</text>
+
+      <!-- Grantee: Access updates -->
+      <rect x="1000" y="316" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="1080" y="338" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Access updates</text>
+      <text x="1080" y="352" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">vault gone · editor drops</text>
+
+      <!-- Legend -->
+      <line x1="40" y1="424" x2="1160" y2="424" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="40" y="440" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+
+      <rect x="40" y="456" width="14" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="60" y="464" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Step</text>
+
+      <rect x="160" y="456" width="14" height="10" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <text x="180" y="464" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Live recheck (focal)</text>
+
+      <line x1="360" y1="461" x2="388" y2="461" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="396" y="464" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Handoff / step</text>
+
+      <line x1="540" y1="461" x2="568" y2="461" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <text x="576" y="464" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Live, uncached check</text>
+    </svg>
+  </div>
+</body>
+</html>
