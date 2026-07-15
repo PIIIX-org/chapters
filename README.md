@@ -72,6 +72,8 @@ with its own design spec before any code is written:
 5. **Real-time collaborative editing** — live multi-user editing.
 6. **MCP integration** — scoped AI-assistant access per account and per
    vault.
+7. **Data export & portability** — per-note/per-vault download, shareable
+   export links, cross-instance import, and full-instance admin backup.
 
 See [`docs/superpowers/specs/`](docs/superpowers/specs/) for the detailed
 design of each completed sub-project.
@@ -128,10 +130,10 @@ How an agent uses search + graph via MCP.
 The security audit surfaced real capability gaps beyond hardening — tracked
 here explicitly rather than left silently absent:
 
-- **Data export / vault backup / migration.** Not yet specced. This
-  directly matters for the "no proprietary database holding your notes
-  hostage" promise above — an org needs a real way to get its raw markdown
-  files back out, not just direct database access. Likely sub-project 7.
+- **Cloud storage integrations** (Google Drive, Dropbox, S3, etc.) and
+  **automated/scheduled backups** — deliberately deferred out of
+  sub-project 7's core scope (see that spec); each needs its own
+  design pass once the manual export/import primitives exist.
 - **Notifications / activity feed.** Team-membership-change notifications
   to affected vault owners are specced as part of sub-project 1's security
   hardening, but a general "you were shared with / added to a team / your
