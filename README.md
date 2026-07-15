@@ -89,6 +89,9 @@ Beyond the core 7, additional cross-cutting specs closing tracked gaps:
   actions in one place, plus a force-revoke incident-response lever that
   never grants content access. See
   [`2026-07-15-admin-oversight-dashboard-design.md`](docs/superpowers/specs/2026-07-15-admin-oversight-dashboard-design.md).
+- **Multi-factor authentication** — TOTP, opt-in per user or
+  admin-mandated instance-wide, with one-time backup codes for recovery.
+  See [`2026-07-15-mfa-design.md`](docs/superpowers/specs/2026-07-15-mfa-design.md).
 
 ## User flow & system diagrams
 
@@ -139,15 +142,14 @@ How an agent uses search + graph via MCP.
 
 ## Known gaps / future work
 
-The security audit surfaced real capability gaps beyond hardening — tracked
-here explicitly rather than left silently absent:
+Every gap surfaced by the security audit now has a spec (see above). One
+deliberately deferred item remains, tracked here rather than left silently
+absent:
 
 - **Cloud storage integrations** (Google Drive, Dropbox, S3, etc.) and
   **automated/scheduled backups** — deliberately deferred out of
   sub-project 7's core scope (see that spec); each needs its own
   design pass once the manual export/import primitives exist.
-- **MFA.** Tracked as a near-term follow-up to password auth (see
-  sub-project 1's spec), not built in v1.
 
 ## Contributing
 
