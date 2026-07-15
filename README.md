@@ -78,6 +78,13 @@ with its own design spec before any code is written:
 See [`docs/superpowers/specs/`](docs/superpowers/specs/) for the detailed
 design of each completed sub-project.
 
+Beyond the core 7, additional cross-cutting specs closing tracked gaps:
+
+- **Notifications & activity feed** — five triggers (vault shared/revoked,
+  team membership changes, note reverted, signup approved, team-share
+  changes), delivered in-app + email. See
+  [`2026-07-15-notifications-activity-feed-design.md`](docs/superpowers/specs/2026-07-15-notifications-activity-feed-design.md).
+
 ## User flow & system diagrams
 
 Visual diagrams covering the flows that cross the six sub-project specs.
@@ -134,10 +141,6 @@ here explicitly rather than left silently absent:
   **automated/scheduled backups** — deliberately deferred out of
   sub-project 7's core scope (see that spec); each needs its own
   design pass once the manual export/import primitives exist.
-- **Notifications / activity feed.** Team-membership-change notifications
-  to affected vault owners are specced as part of sub-project 1's security
-  hardening, but a general "you were shared with / added to a team / your
-  edit was reverted" activity feed is not yet designed.
 - **Admin oversight dashboard.** Beyond the signup-approval queue, there's
   no specced way for an admin to see vault counts, storage usage, or
   activity across the instance.
