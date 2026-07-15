@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Search</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      color: var(--color-muted);
+      margin-bottom: 1.5rem;
+      max-width: 640px;
+    }
+
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">User flow — Chapters</p>
+    <h1>Search</h1>
+    <p class="subtitle">One retrieval path for humans and AI agents — permission-filtered before anything returns.</p>
+
+    <svg viewBox="0 0 1000 920" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/>
+        </marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/>
+        </marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- ============ ARROWS (behind nodes) ============ -->
+
+      <!-- Human -> Search query (shared entry point) -->
+      <line x1="240" y1="88" x2="500" y2="132" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- AI assistant -> Search query (shared entry point) -->
+      <line x1="760" y1="88" x2="500" y2="132" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- Search query -> Scope decision -->
+      <line x1="500" y1="188" x2="500" y2="220" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- Diamond left exit (vault only) -> fork dot -->
+      <path d="M 400 268 Q 400 392 500 392" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- Diamond right exit (everywhere) -> fork dot -->
+      <path d="M 600 268 Q 600 392 500 392" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- Fork dot -> keyword match -->
+      <line x1="500" y1="392" x2="340" y2="432" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- Fork dot -> semantic match -->
+      <line x1="500" y1="392" x2="660" y2="432" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- Keyword match -> merge & rank -->
+      <line x1="340" y1="488" x2="440" y2="528" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- Semantic match -> merge & rank -->
+      <line x1="660" y1="488" x2="560" y2="528" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- Merge & rank -> permission filter (critical gate — accent) -->
+      <line x1="500" y1="584" x2="500" y2="624" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <!-- Permission filter -> results returned (critical gate — accent) -->
+      <line x1="500" y1="688" x2="500" y2="728" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+
+      <!-- Fork dot marker -->
+      <circle cx="500" cy="392" r="4" fill="#2d3142"/>
+
+      <!-- Arrow labels -->
+      <rect x="356" y="288" width="88" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="400" y="300" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">VAULT ONLY</text>
+      <rect x="372" y="304" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="400" y="312" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">(default)</text>
+
+      <rect x="556" y="288" width="88" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="600" y="300" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.1em">EVERYWHERE</text>
+
+      <!-- ============ NODES ============ -->
+
+      <!-- Human (input) -->
+      <rect x="160" y="40" width="160" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="160" y="40" width="160" height="48" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <text x="240" y="64" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Human</text>
+      <text x="240" y="78" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">via search UI</text>
+
+      <!-- AI assistant (input) -->
+      <rect x="680" y="40" width="160" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="680" y="40" width="160" height="48" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <text x="760" y="64" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">AI assistant</text>
+      <text x="760" y="78" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">via MCP</text>
+
+      <!-- Search query (start oval) -->
+      <rect x="400" y="132" width="200" height="56" rx="28" fill="#f5f5f5"/>
+      <rect x="400" y="132" width="200" height="56" rx="28" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <text x="500" y="164" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Search query</text>
+
+      <!-- Scope decision (diamond) -->
+      <polygon points="500,220 600,268 500,316 400,268" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="500" y="266" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Current vault</text>
+      <text x="500" y="280" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">or everywhere?</text>
+
+      <!-- Keyword match (process) -->
+      <rect x="240" y="432" width="200" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="240" y="432" width="200" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="248" y="440" width="32" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="264" y="449" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">TEXT</text>
+      <text x="340" y="464" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Keyword match</text>
+      <text x="340" y="480" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">title · frontmatter · body</text>
+
+      <!-- Semantic match (process) -->
+      <rect x="560" y="432" width="200" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="560" y="432" width="200" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="568" y="440" width="44" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="590" y="449" fill="rgba(45,49,66,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">VECTOR</text>
+      <text x="660" y="464" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Semantic match</text>
+      <text x="660" y="480" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">shared with graph engine</text>
+
+      <!-- Merge & rank (process) -->
+      <rect x="380" y="528" width="240" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="380" y="528" width="240" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="500" y="556" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Merge &amp; rank</text>
+      <text x="500" y="572" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">combined, ranked list</text>
+
+      <!-- Permission filter (safety-critical gate — accent) -->
+      <rect x="360" y="624" width="280" height="64" rx="6" fill="#f5f5f5"/>
+      <rect x="360" y="624" width="280" height="64" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.4" stroke-dasharray="4,4"/>
+      <rect x="368" y="632" width="32" height="12" rx="2" fill="transparent" stroke="rgba(235,108,54,0.60)" stroke-width="0.8"/>
+      <text x="384" y="641" fill="#eb6c36" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GATE</text>
+      <text x="500" y="656" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Permission filter</text>
+      <text x="500" y="672" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">live access, checked before return</text>
+
+      <!-- Results returned (end oval) -->
+      <rect x="360" y="728" width="280" height="60" rx="30" fill="#f5f5f5"/>
+      <rect x="360" y="728" width="280" height="60" rx="30" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <text x="500" y="756" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Results returned</text>
+      <text x="500" y="770" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">path · snippet · frontmatter · score</text>
+
+      <!-- ============ ANNOTATION CALLOUTS (max 2) ============ -->
+
+      <!-- Callout 1: one function, two callers -->
+      <text x="960" y="56" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">same function, either caller</text>
+      <path d="M 900 64 Q 752 100 600 148" fill="none" stroke="rgba(45,49,66,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="600" cy="148" r="2" fill="#2d3142"/>
+
+      <!-- Callout 2: no indirect leakage -->
+      <text x="24" y="650" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="start">nothing leaks — not even a hint</text>
+      <path d="M 60 660 Q 220 660 360 656" fill="none" stroke="rgba(45,49,66,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="360" cy="656" r="2" fill="#2d3142"/>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="40" y1="828" x2="960" y2="828" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="40" y="844" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND · SHAPE CARRIES TYPE</text>
+
+      <rect x="40" y="860" width="24" height="12" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <text x="72" y="868" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Start / end</text>
+
+      <rect x="220" y="860" width="24" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="252" y="868" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Process step</text>
+
+      <polygon points="412,866 424,860 436,866 424,872" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="448" y="868" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Decision</text>
+
+      <circle cx="616" cy="866" r="4" fill="#2d3142"/>
+      <text x="628" y="868" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Fork / merge</text>
+
+      <rect x="760" y="860" width="24" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2" stroke-dasharray="3,3"/>
+      <text x="792" y="868" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Safety-critical gate</text>
+    </svg>
+  </div>
+</body>
+</html>

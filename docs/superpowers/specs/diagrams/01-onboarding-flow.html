@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Onboarding · Chapters</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1400px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      color: var(--color-muted);
+      margin-bottom: 1.5rem;
+      max-width: 640px;
+      line-height: 1.5;
+    }
+
+    svg { width: 100%; min-width: 1200px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">User flow — Chapters</p>
+    <h1>Onboarding</h1>
+    <p class="subtitle">Signup through first vault and first note. Normal signup path only — the first-user bootstrap case is a separate flow.</p>
+
+    <svg viewBox="0 0 1840 560" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- Lane dividers -->
+      <line x1="40" y1="80"  x2="1800" y2="80"  stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+      <line x1="40" y1="208" x2="1800" y2="208" stroke="rgba(45,49,66,0.10)" stroke-width="1"/>
+      <line x1="40" y1="336" x2="1800" y2="336" stroke="rgba(45,49,66,0.10)" stroke-width="1"/>
+      <line x1="40" y1="464" x2="1800" y2="464" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+
+      <!-- Actor column divider -->
+      <line x1="160" y1="80" x2="160" y2="464" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+
+      <!-- Lane labels -->
+      <text x="60" y="148" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">USER</text>
+      <text x="60" y="276" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">SYSTEM</text>
+      <text x="60" y="404" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">ADMIN</text>
+
+      <!-- Arrows (drawn before boxes) -->
+      <!-- A1: Submit signup -> Create pending user (User -> System) -->
+      <line x1="340" y1="144" x2="372" y2="272" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- A2: Create pending user -> Verify email (System -> User) -->
+      <line x1="552" y1="272" x2="584" y2="144" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- A3: Verify email -> Review & approve (User -> Admin) -->
+      <line x1="724" y1="144" x2="756" y2="400" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- A4: Review & approve -> Activate user (Admin -> System, critical handoff) -->
+      <line x1="936" y1="400" x2="968" y2="272" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <!-- A5: Activate user -> Log in (System -> User) -->
+      <line x1="1128" y1="272" x2="1160" y2="144" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- A6: Log in -> Create first vault (within User) -->
+      <line x1="1360" y1="144" x2="1392" y2="144" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- A7: Create first vault -> Create first note (within User) -->
+      <line x1="1552" y1="144" x2="1584" y2="144" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- Arrow labels -->
+      <rect x="532" y="192" width="72" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="568" y="201" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">VERIFY LINK</text>
+
+      <rect x="712" y="256" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="740" y="265" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">QUEUED</text>
+
+      <rect x="920" y="320" width="64" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="952" y="329" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">APPROVED</text>
+
+      <rect x="1112" y="192" width="64" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="1144" y="201" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">NOTIFIED</text>
+
+      <!-- Steps -->
+      <!-- User: Submit signup -->
+      <rect x="180" y="116" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="260" y="140" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Submit signup</text>
+      <text x="260" y="156" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">email + password · /signup</text>
+
+      <!-- System: Create pending user -->
+      <rect x="372" y="244" width="180" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="462" y="268" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Create pending user</text>
+      <text x="462" y="284" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">status → pending_approval</text>
+
+      <!-- User: Verify email -->
+      <rect x="584" y="116" width="140" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="654" y="140" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Verify email</text>
+      <text x="654" y="156" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">clicks emailed link</text>
+
+      <!-- Admin: Review & approve (FOCAL) -->
+      <rect x="756" y="376" width="180" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="756" y="376" width="180" height="56" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <text x="846" y="400" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Review &amp; approve</text>
+      <text x="846" y="416" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">pending approval queue</text>
+
+      <!-- System: Activate user -->
+      <rect x="968" y="244" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="1048" y="268" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Activate user</text>
+      <text x="1048" y="284" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">status → active</text>
+
+      <!-- User: Log in -->
+      <rect x="1160" y="108" width="200" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="1260" y="132" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Log in</text>
+      <text x="1260" y="148" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">email + password</text>
+      <text x="1260" y="162" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">TLS · secure/httponly/samesite</text>
+
+      <!-- User: Create first vault -->
+      <rect x="1392" y="108" width="160" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="1472" y="140" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Create first vault</text>
+      <text x="1472" y="156" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">owner · mergeable: off</text>
+
+      <!-- User: Create first note -->
+      <rect x="1584" y="108" width="200" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="1684" y="132" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Create first note</text>
+      <text x="1684" y="148" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">type-first: picks type before name</text>
+      <text x="1684" y="162" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">auto path + OKF frontmatter</text>
+
+      <!-- Legend -->
+      <line x1="40" y1="496" x2="1800" y2="496" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="40" y="512" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+
+      <rect x="40" y="528" width="14" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="60" y="536" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Step</text>
+
+      <rect x="340" y="528" width="14" height="10" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <text x="360" y="536" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Focal · manual approval gate</text>
+
+      <line x1="660" y1="531" x2="696" y2="531" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="704" y="536" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Handoff</text>
+
+      <line x1="980" y1="531" x2="1016" y2="531" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <text x="1024" y="536" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Critical handoff</text>
+    </svg>
+  </div>
+</body>
+</html>
