@@ -84,6 +84,11 @@ Beyond the core 7, additional cross-cutting specs closing tracked gaps:
   team membership changes, note reverted, signup approved, team-share
   changes), delivered in-app + email. See
   [`2026-07-15-notifications-activity-feed-design.md`](docs/superpowers/specs/2026-07-15-notifications-activity-feed-design.md).
+- **Admin oversight dashboard** — metadata-only instance visibility
+  (users, vaults, teams, storage, activity), unifies existing admin
+  actions in one place, plus a force-revoke incident-response lever that
+  never grants content access. See
+  [`2026-07-15-admin-oversight-dashboard-design.md`](docs/superpowers/specs/2026-07-15-admin-oversight-dashboard-design.md).
 
 ## User flow & system diagrams
 
@@ -141,9 +146,6 @@ here explicitly rather than left silently absent:
   **automated/scheduled backups** — deliberately deferred out of
   sub-project 7's core scope (see that spec); each needs its own
   design pass once the manual export/import primitives exist.
-- **Admin oversight dashboard.** Beyond the signup-approval queue, there's
-  no specced way for an admin to see vault counts, storage usage, or
-  activity across the instance.
 - **MFA.** Tracked as a near-term follow-up to password auth (see
   sub-project 1's spec), not built in v1.
 
