@@ -76,6 +76,53 @@ with its own design spec before any code is written:
 See [`docs/superpowers/specs/`](docs/superpowers/specs/) for the detailed
 design of each completed sub-project.
 
+## User flow & system diagrams
+
+Visual diagrams covering the flows that cross the six sub-project specs.
+Each image links to a self-contained, interactive HTML/SVG version under
+[`docs/superpowers/specs/diagrams/`](docs/superpowers/specs/diagrams/) —
+open it directly in a browser for the full-resolution vector version.
+
+### Onboarding
+Signup through first note.
+
+[![Onboarding flow](docs/superpowers/specs/diagrams/01-onboarding-flow.png)](docs/superpowers/specs/diagrams/01-onboarding-flow.html)
+
+### Sharing & permissions
+Grant, live re-check, revoke.
+
+[![Sharing & permissions flow](docs/superpowers/specs/diagrams/02-sharing-permissions-flow.png)](docs/superpowers/specs/diagrams/02-sharing-permissions-flow.html)
+
+### AI/MCP connection
+Scoped tokens, live permission check.
+
+[![AI/MCP connection flow](docs/superpowers/specs/diagrams/03-mcp-connection-flow.png)](docs/superpowers/specs/diagrams/03-mcp-connection-flow.html)
+
+### Live collaboration
+CRDT presence, mid-session revocation.
+
+[![Live collaboration flow](docs/superpowers/specs/diagrams/04-live-collaboration-flow.png)](docs/superpowers/specs/diagrams/04-live-collaboration-flow.html)
+
+### Graph exploration
+Clustering, filters, merged view.
+
+[![Graph exploration flow](docs/superpowers/specs/diagrams/05-graph-exploration-flow.png)](docs/superpowers/specs/diagrams/05-graph-exploration-flow.html)
+
+### Search
+Hybrid retrieval, permission-filtered results.
+
+[![Search flow](docs/superpowers/specs/diagrams/06-search-flow.png)](docs/superpowers/specs/diagrams/06-search-flow.html)
+
+### System data flow
+Full component/connection architecture map.
+
+[![System data flow architecture](docs/superpowers/specs/diagrams/07-system-data-flow.png)](docs/superpowers/specs/diagrams/07-system-data-flow.html)
+
+### AI navigation
+How an agent uses search + graph via MCP.
+
+[![AI navigation flow](docs/superpowers/specs/diagrams/08-ai-navigation-flow.png)](docs/superpowers/specs/diagrams/08-ai-navigation-flow.html)
+
 ## Known gaps / future work
 
 The security audit surfaced real capability gaps beyond hardening — tracked
