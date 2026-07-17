@@ -11,11 +11,13 @@
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
+    "@fastify/multipart": "^10.1.0",
     "@fastify/rate-limit": "^10.3.0",
     "@hocuspocus/server": "^4.4.0",
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@node-rs/argon2": "^2.0.2",
+    "adm-zip": "^0.6.0",
     "drizzle-orm": "^0.44.2",
     "fastify": "^5.6.0",
     "fastify-plugin": "^5.0.1",
@@ -30,6 +32,7 @@
   },
   "devDependencies": {
     "@hocuspocus/provider": "^4.4.0",
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^24.0.0",
     "@types/nodemailer": "^7.0.0",
     "@types/ws": "^8.18.1",

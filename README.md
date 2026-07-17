@@ -19,7 +19,9 @@ search over a shared local embedding index) sub-project 5 (real-time
 collaboration), and sub-project 6 (MCP integration — permission-scoped
 AI access with full tool parity, writes flowing through the live
 collaboration engine, and an attributed audit trail with revert) are
-implemented and tested; sub-project 7 (data export) is next.
+implemented and tested, as is sub-project 7 (data export & portability
+— zip exports with manifest, expiring share links, validated import,
+full-instance admin backup). Remaining backend: admin dashboard + MFA.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
