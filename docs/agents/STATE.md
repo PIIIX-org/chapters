@@ -19,8 +19,11 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   expiring/revocable share links, multipart import (new vault, shared
   validation, email share re-matching + unmatched report), admin
   full-instance backup (vault bundles + account dump). 57 tests green.
-- **Current task**: admin dashboard endpoints (instance stats, vault/
-  team oversight metadata-only, force-revoke) then MFA (TOTP opt-in +
-  admin-mandatable). After that: backend done → UI phase.
+- **Done also**: admin dashboard (this branch): stats, vault/team
+  oversight (metadata only — tested that no note content leaks),
+  security-event + audit-trail views, instance-wide force-revoke of
+  shares (with live kick) and MCP connections. 62 tests green.
+- **Current task**: MFA (TOTP opt-in + admin-mandatable) — the last
+  backend spec. Then backend done → UI phase.
 - **Open PRs**: none
 - **Open issues**: #9 (cli-visualizer — deferred, assigned @snavid-dev)
