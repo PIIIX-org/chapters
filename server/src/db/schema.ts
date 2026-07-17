@@ -253,6 +253,32 @@ export const notes = pgTable(
   ],
 )
 
+export const actorType = pgEnum('actor_type', ['user', 'mcp', 'collab'])
+
+/**
+ * Audit trail (spec 6): every write records its actor and the resulting
+ * state — enough to attribute and to revert. Rows are only removed by
+ * explicit hard purge.
+ */
+export const noteRevisions = pgTable(
+  'note_revisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    noteId: uuid('note_id')
+      .notNull()
+      .references(() => notes.id, { onDelete: 'cascade' }),
+    actorType: actorType('actor_type').notNull(),
+    actorId: uuid('actor_id'),
+    action: text('action').notNull(),
+    frontmatter: jsonb('frontmatter').notNull(),
+    body: text('body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index('note_revisions_note_idx').on(t.noteId, t.createdAt)],
+)
+
 /** EXTRACTED edges: wikilink targets per note, replaced on every save. */
 export const noteLinks = pgTable(
   'note_links',

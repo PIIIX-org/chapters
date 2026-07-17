@@ -22,6 +22,13 @@
       "when": 1784302689974,
       "tag": "0002_lean_living_lightning",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784304467391,
+      "tag": "0003_plain_prima",
+      "breakpoints": true
     }
   ]
 }

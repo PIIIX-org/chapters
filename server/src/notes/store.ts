@@ -1,8 +1,8 @@
 import { mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { noteLinks, notes } from '../db/schema.js'
+import { noteLinks, noteRevisions, notes } from '../db/schema.js'
 import { config } from '../config.js'
 import { scheduleEmbedding } from '../search/embedding-queue.js'
 import {
@@ -16,6 +16,45 @@ import {
 } from './okf.js'
 
 export type NoteRow = typeof notes.$inferSelect
+export type RevisionRow = typeof noteRevisions.$inferSelect
+
+/** Who performed a write — recorded in the audit trail (spec 6). */
+export interface Actor {
+  type: 'user' | 'mcp' | 'collab'
+  id?: string
+}
+
+const SYSTEM_ACTOR: Actor = { type: 'collab' }
+
+/** Records a revision unless identical to the note's latest one (dedupes
+ * the MCP-immediate + collab-debounced double-write of the same state). */
+async function recordRevision(
+  noteId: string,
+  action: string,
+  frontmatter: unknown,
+  body: string,
+  actor: Actor,
+): Promise<void> {
+  const last = (
+    await db
+      .select({ frontmatter: noteRevisions.frontmatter, body: noteRevisions.body })
+      .from(noteRevisions)
+      .where(eq(noteRevisions.noteId, noteId))
+      .orderBy(desc(noteRevisions.createdAt))
+      .limit(1)
+  )[0]
+  if (last && last.body === body && JSON.stringify(last.frontmatter) === JSON.stringify(frontmatter)) {
+    return
+  }
+  await db.insert(noteRevisions).values({
+    noteId,
+    actorType: actor.type,
+    actorId: actor.id,
+    action,
+    frontmatter: frontmatter as Record<string, unknown>,
+    body,
+  })
+}
 
 function vaultDir(vaultId: string): string {
   return join(config.dataDir, 'vaults', vaultId)
@@ -77,6 +116,7 @@ async function regenIndex(vaultId: string, type: string): Promise<void> {
 export async function createNote(
   vaultId: string,
   input: { type: string; name: string; frontmatter?: Record<string, unknown>; body?: string },
+  actor: Actor = SYSTEM_ACTOR,
 ): Promise<NoteRow> {
   const frontmatter: Frontmatter = {
     timestamp: new Date().toISOString(),
@@ -103,6 +143,7 @@ export async function createNote(
   await regenIndex(vaultId, input.type)
   await syncLinks(row.id, body)
   scheduleEmbedding(row.id)
+  await recordRevision(row.id, 'create', frontmatter, body, actor)
   return row
 }
 
@@ -146,6 +187,7 @@ export async function updateNote(
   vaultId: string,
   path: string,
   input: { frontmatter?: Record<string, unknown>; body?: string },
+  actor: Actor = SYSTEM_ACTOR,
 ): Promise<NoteRow | null> {
   const row = await getLiveNote(vaultId, path)
   if (!row) return null
@@ -163,6 +205,7 @@ export async function updateNote(
   await atomicWrite(noteFile(vaultId, path), serializeNote({ frontmatter, body }))
   await syncLinks(row.id, body)
   scheduleEmbedding(row.id)
+  await recordRevision(row.id, 'update', frontmatter, body, actor)
   return updated!
 }
 
@@ -189,7 +232,11 @@ export async function renameNote(
 }
 
 /** Soft delete (spec 6: one consistent delete behavior): file → .trash, row keeps everything. */
-export async function softDeleteNote(vaultId: string, path: string): Promise<NoteRow | null> {
+export async function softDeleteNote(
+  vaultId: string,
+  path: string,
+  actor: Actor = SYSTEM_ACTOR,
+): Promise<NoteRow | null> {
   const row = await getLiveNote(vaultId, path)
   if (!row) return null
   const [updated] = await db
@@ -200,6 +247,7 @@ export async function softDeleteNote(vaultId: string, path: string): Promise<Not
   await mkdir(join(vaultDir(vaultId), '.trash'), { recursive: true })
   await rename(noteFile(vaultId, path), trashFile(vaultId, row.id))
   await regenIndex(vaultId, row.type)
+  await recordRevision(row.id, 'delete', row.frontmatter, row.body, actor)
   return updated!
 }
 
@@ -255,6 +303,77 @@ export async function listTrash(vaultId: string): Promise<
     })
     .from(notes)
     .where(and(eq(notes.vaultId, vaultId), isNotNull(notes.deletedAt)))
+}
+
+/** Change history for a note, newest first (edit/owner only — enforced by callers). */
+export async function listRevisions(
+  vaultId: string,
+  path: string,
+): Promise<RevisionRow[] | null> {
+  const row = await getLiveNote(vaultId, path)
+  if (!row) return null
+  return db
+    .select()
+    .from(noteRevisions)
+    .where(eq(noteRevisions.noteId, row.id))
+    .orderBy(desc(noteRevisions.createdAt))
+}
+
+/** Restores a note to a recorded revision (a new attributed write). */
+export async function revertNote(
+  vaultId: string,
+  path: string,
+  revisionId: string,
+  actor: Actor,
+): Promise<NoteRow | null> {
+  const row = await getLiveNote(vaultId, path)
+  if (!row) return null
+  const revision = (
+    await db
+      .select()
+      .from(noteRevisions)
+      .where(and(eq(noteRevisions.id, revisionId), eq(noteRevisions.noteId, row.id)))
+  )[0]
+  if (!revision) return null
+  const updated = await updateNote(
+    vaultId,
+    path,
+    { frontmatter: revision.frontmatter as Record<string, unknown>, body: revision.body },
+    actor,
+  )
+  if (updated) {
+    const newest = (
+      await db
+        .select({ id: noteRevisions.id })
+        .from(noteRevisions)
+        .where(eq(noteRevisions.noteId, row.id))
+        .orderBy(desc(noteRevisions.createdAt))
+        .limit(1)
+    )[0]
+    if (newest) {
+      await db
+        .update(noteRevisions)
+        .set({ action: 'revert' })
+        .where(eq(noteRevisions.id, newest.id))
+    }
+  }
+  return updated
+}
+
+/**
+ * Hard purge (spec 6): permanently removes one recorded revision — for
+ * accidentally-committed secrets, where "recoverable" is the wrong
+ * property. Owner/admin only — enforced by callers.
+ */
+export async function purgeRevision(vaultId: string, revisionId: string): Promise<boolean> {
+  const rows = await db
+    .select({ revisionId: noteRevisions.id })
+    .from(noteRevisions)
+    .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
+    .where(and(eq(noteRevisions.id, revisionId), eq(notes.vaultId, vaultId)))
+  if (rows.length === 0) return false
+  await db.delete(noteRevisions).where(eq(noteRevisions.id, revisionId))
+  return true
 }
 
 /** Permanently removes a trashed note (used by purge policies later). */
