@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import cookie from '@fastify/cookie'
+import multipart from '@fastify/multipart'
 import rateLimit from '@fastify/rate-limit'
 import { config } from './config.js'
 import { authPlugin } from './auth/plugin.js'
@@ -11,6 +12,7 @@ import { graphRoutes } from './graph/routes.js'
 import { searchRoutes } from './search/routes.js'
 import { syncRoutes } from './sync/routes.js'
 import { mcpRoutes } from './mcp/routes.js'
+import { exportRoutes } from './export/routes.js'
 import { teamRoutes } from './vaults/team-routes.js'
 import { mcpConnectionRoutes } from './vaults/mcp-connection-routes.js'
 import { notificationRoutes } from './notifications/routes.js'
@@ -19,6 +21,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
 
   await app.register(cookie)
+  await app.register(multipart, { limits: { fileSize: 100 * 1024 * 1024 } })
   await app.register(rateLimit, {
     global: true,
     max: 1000,
@@ -39,6 +42,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       await api.register(async (a) => graphRoutes(a))
       await api.register(async (a) => searchRoutes(a))
       await api.register(async (a) => syncRoutes(a))
+      await api.register(async (a) => exportRoutes(a))
       await api.register(async (a) => teamRoutes(a))
       await api.register(async (a) => mcpConnectionRoutes(a))
       await api.register(async (a) => adminRoutes(a), { prefix: '/admin' })
