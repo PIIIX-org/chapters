@@ -15,6 +15,13 @@
       "when": 1784302208156,
       "tag": "0001_tidy_thing",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784302689974,
+      "tag": "0002_lean_living_lightning",
+      "breakpoints": true
     }
   ]
 }
