@@ -2,6 +2,7 @@
 .gstack/
 node_modules/
 dist/
+data/
 coverage/
 .env
 .env.*

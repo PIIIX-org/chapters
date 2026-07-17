@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import {
   boolean,
   index,
@@ -215,3 +216,35 @@ export const instanceState = pgTable('instance_state', {
   setupTokenHash: text('setup_token_hash'),
   setupCompletedAt: timestamp('setup_completed_at', { withTimezone: true }),
 })
+
+/**
+ * Derived index of the OKF files on disk (canonical source is the file
+ * tree). Rebuildable; search and graph attach to this table.
+ */
+export const notes = pgTable(
+  'notes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    vaultId: uuid('vault_id')
+      .notNull()
+      .references(() => vaults.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    name: text('name').notNull(),
+    path: text('path').notNull(),
+    frontmatter: jsonb('frontmatter').notNull(),
+    body: text('body').notNull(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('notes_vault_path_live')
+      .on(t.vaultId, t.path)
+      .where(sql`deleted_at is null`),
+    index('notes_vault_type_idx').on(t.vaultId, t.type),
+  ],
+)
