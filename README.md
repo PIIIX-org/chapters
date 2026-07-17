@@ -142,14 +142,21 @@ How an agent uses search + graph via MCP.
 
 ## Known gaps / future work
 
-Every gap surfaced by the security audit now has a spec (see above). One
-deliberately deferred item remains, tracked here rather than left silently
-absent:
+Every gap surfaced by the security audit now has a spec (see above). Items
+below are tracked but not yet designed:
 
 - **Cloud storage integrations** (Google Drive, Dropbox, S3, etc.) and
   **automated/scheduled backups** — deliberately deferred out of
   sub-project 7's core scope (see that spec); each needs its own
   design pass once the manual export/import primitives exist.
+- **Codebase exploration & mapping.** Chapters is currently scoped around
+  markdown notes (OKF format) only. There's an open direction to extend it
+  to also explore and map codebases — not just notes — aimed broadly at
+  making a developer's life easier when working with AI on a codebase.
+  Not yet scoped into a sub-project; needs its own brainstorming pass to
+  figure out what this actually means structurally (a new content type
+  alongside notes? a separate graph/index sourced from a repo? how it
+  interacts with the existing OKF/graph/search/MCP design?).
 
 ## Contributing
 
