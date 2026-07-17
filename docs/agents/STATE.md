@@ -2,22 +2,23 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Phase**: Backend — sub-project 6 (MCP integration)
-- **Spec**: `docs/superpowers/specs/2026-07-12-mcp-integration-design.md`
+- **Phase**: Backend — sub-project 7 (Data export & portability)
+- **Spec**: `docs/superpowers/specs/2026-07-15-data-export-portability-design.md`
 - **Done**:
-  - Scaffold (#16); 1 Auth (#18); 2 Notes (#21); 3+4 Graph+Search (#23)
-  - Sub-project 5 Realtime collab (this branch): Hocuspocus 4 on
-    COLLAB_PORT (same process), session-token auth requiring edit,
-    per-message live permission re-check, event-driven kick bus wired
-    into share/team/admin mutations, debounced persistence through
-    notes/store (shared OKF validation), SSE live view for read-only
-    users (no awareness/identity exposure). 46 tests green.
-- **Current task**: sub-project 6 — MCP server (TS SDK) over HTTP:
-  read/write/search/graph tools via resolveMcpToken, writes through
-  hocuspocus openDirectConnection, audit trail + revert + hard purge,
-  scope enforcement (vault-scoped ≠ account surfaces), per-connection
-  rate limiting, bulk-op confirmation
-- **Next step**: plan `docs/superpowers/plans/2026-07-17-mcp-integration.md`
+  - Scaffold (#16); 1 Auth (#18); 2 Notes (#21); 3+4 Graph+Search (#23);
+    5 Realtime collab (#25)
+  - Sub-project 6 MCP (this branch): stateless Streamable HTTP /mcp with
+    Bearer auth via resolveMcpToken, 10 tools (read/browse/create/edit/
+    delete/search/graph/history/revert/list_vaults), scope hard-reject
+    for vault tokens on account surfaces, writes through hocuspocus
+    direct connection with attributed note_revisions audit trail +
+    revert + hard purge endpoints, per-connection rate limit, revert
+    notifications. 52 tests green.
+- **Current task**: sub-project 7 — per-note/vault export (zip +
+  manifest), expiring share links, import with OKF validation + share
+  re-matching, full-instance admin backup
+- **Next step**: plan `docs/superpowers/plans/2026-07-17-data-export.md`
+- **Remaining after that**: admin dashboard endpoints, MFA (TOTP),
+  then backend done → UI phase
 - **Open PRs**: none
 - **Open issues**: #9 (cli-visualizer — deferred, assigned @snavid-dev)
-- **UI phase**: not started, blocked on backend + page-by-page UI design

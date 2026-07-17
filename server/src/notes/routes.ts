@@ -1,8 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { atLeast, resolveAccess, type Access } from '../vaults/permissions.js'
+import { atLeast, listUsersWithAccess, resolveAccess, type Access } from '../vaults/permissions.js'
 import { OkfValidationError } from './okf.js'
+import { logSecurityEvent } from '../auth/security-events.js'
+import { notify } from '../notifications/notify.js'
 import {
   createNote,
+  listRevisions,
+  purgeRevision,
+  revertNote,
   listNotes,
   listTrash,
   readNote,
@@ -64,7 +69,7 @@ export function noteRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       if (!(await guard(req as VaultReq, reply, 'edit'))) return
-      return createNote(req.params.id, req.body)
+      return createNote(req.params.id, req.body, { type: 'user', id: req.user!.id })
     },
   )
 
@@ -92,7 +97,10 @@ export function noteRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!(await guard(req, reply, 'edit'))) return
       splitPath(req.params['*'])
-      const updated = await updateNote(req.params.id, req.params['*'], req.body)
+      const updated = await updateNote(req.params.id, req.params['*'], req.body, {
+        type: 'user',
+        id: req.user!.id,
+      })
       if (!updated) return reply.code(404).send({ error: 'note not found' })
       return updated
     },
@@ -126,7 +134,10 @@ export function noteRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!(await guard(req, reply, 'edit'))) return
       splitPath(req.params['*'])
-      const deleted = await softDeleteNote(req.params.id, req.params['*'])
+      const deleted = await softDeleteNote(req.params.id, req.params['*'], {
+        type: 'user',
+        id: req.user!.id,
+      })
       if (!deleted) return reply.code(404).send({ error: 'note not found' })
       return { status: 'trashed', id: deleted.id }
     },
@@ -146,4 +157,73 @@ export function noteRoutes(app: FastifyInstance) {
       return restored
     },
   )
+
+  app.get<{ Params: { id: string; '*': string } }>(
+    '/vaults/:id/history/*',
+    async (req, reply) => {
+      // Audit rule: history requires edit, not merely read.
+      if (!(await guard(req, reply, 'edit'))) return
+      splitPath(req.params['*'])
+      const revisions = await listRevisions(req.params.id, req.params['*'])
+      if (!revisions) return reply.code(404).send({ error: 'note not found' })
+      return revisions
+    },
+  )
+
+  app.post<{ Params: { id: string; '*': string }; Body: { revisionId: string } }>(
+    '/vaults/:id/revert/*',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['revisionId'],
+          properties: { revisionId: { type: 'string', format: 'uuid' } },
+        },
+      },
+    },
+    async (req, reply) => {
+      if (!(await guard(req, reply, 'edit'))) return
+      splitPath(req.params['*'])
+      const reverted = await revertNote(req.params.id, req.params['*'], req.body.revisionId, {
+        type: 'user',
+        id: req.user!.id,
+      })
+      if (!reverted) return reply.code(404).send({ error: 'note or revision not found' })
+      await notifyRevert(req.params.id, req.params['*'], req.user!.id)
+      return reverted
+    },
+  )
+
+  app.delete<{ Params: { id: string; revisionId: string; '*': string } }>(
+    '/vaults/:id/revisions/:revisionId',
+    async (req, reply) => {
+      // Hard purge: owner or admin only (spec 6).
+      const access = await resolveAccess(req.user!.id, req.params.id)
+      const isAdmin = req.user!.role === 'admin'
+      if (access !== 'owner' && !isAdmin) return reply.code(404).send({ error: 'not found' })
+      const purged = await purgeRevision(req.params.id, req.params.revisionId)
+      if (!purged) return reply.code(404).send({ error: 'revision not found' })
+      await logSecurityEvent({
+        type: 'revision_purged',
+        actorUserId: req.user!.id,
+        detail: { vaultId: req.params.id, revisionId: req.params.revisionId },
+      })
+      return { status: 'purged' }
+    },
+  )
+}
+
+/** Notifications spec trigger 3: a note you have access to was reverted. */
+async function notifyRevert(vaultId: string, path: string, actorUserId: string): Promise<void> {
+  const users = await listUsersWithAccess(vaultId)
+  for (const userId of users) {
+    if (userId === actorUserId) continue
+    await notify({
+      recipientId: userId,
+      type: 'note_reverted',
+      entityType: 'vault',
+      entityId: vaultId,
+      message: `Note ${path} was reverted to an earlier version.`,
+    })
+  }
 }

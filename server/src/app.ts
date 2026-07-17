@@ -10,6 +10,7 @@ import { noteRoutes } from './notes/routes.js'
 import { graphRoutes } from './graph/routes.js'
 import { searchRoutes } from './search/routes.js'
 import { syncRoutes } from './sync/routes.js'
+import { mcpRoutes } from './mcp/routes.js'
 import { teamRoutes } from './vaults/team-routes.js'
 import { mcpConnectionRoutes } from './vaults/mcp-connection-routes.js'
 import { notificationRoutes } from './notifications/routes.js'
@@ -26,6 +27,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(authPlugin)
 
   app.get('/health', () => ({ status: 'ok' }))
+
+  mcpRoutes(app)
 
   await app.register(
     async (api) => {
