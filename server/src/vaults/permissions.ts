@@ -101,3 +101,21 @@ export async function listAccessibleVaults(
   }
   return [...byId.values()]
 }
+
+/** Every user who can currently reach the vault (owner, direct, via team). */
+export async function listUsersWithAccess(vaultId: string): Promise<string[]> {
+  const vault = (
+    await db.select({ ownerId: vaults.ownerId }).from(vaults).where(eq(vaults.id, vaultId))
+  )[0]
+  if (!vault) return []
+  const direct = await db
+    .select({ userId: vaultShares.granteeId })
+    .from(vaultShares)
+    .where(and(eq(vaultShares.vaultId, vaultId), eq(vaultShares.granteeType, 'user')))
+  const viaTeam = await db
+    .select({ userId: teamMemberships.userId })
+    .from(vaultShares)
+    .innerJoin(teamMemberships, eq(teamMemberships.teamId, vaultShares.granteeId))
+    .where(and(eq(vaultShares.vaultId, vaultId), eq(vaultShares.granteeType, 'team')))
+  return [...new Set([vault.ownerId, ...direct.map((d) => d.userId), ...viaTeam.map((t) => t.userId)])]
+}

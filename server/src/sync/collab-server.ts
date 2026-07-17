@@ -36,6 +36,13 @@ function docState(document: Y.Doc): { frontmatter: Record<string, unknown>; body
  * MCP writes (sub-project 6) use openDirectConnection on this instance,
  * so every AI edit is a visible participant in the same engine.
  */
+let currentInstance: Hocuspocus | null = null
+
+/** The running relay instance, if any — MCP writes route through it. */
+export function getCollab(): Hocuspocus | null {
+  return currentInstance
+}
+
 export async function startCollabServer(port: number): Promise<Server> {
   const server = new Server({
     port,
@@ -104,6 +111,7 @@ export async function startCollabServer(port: number): Promise<Server> {
 
   await server.listen(port)
   wireKick(server.hocuspocus)
+  currentInstance = server.hocuspocus
   return server
 }
 
