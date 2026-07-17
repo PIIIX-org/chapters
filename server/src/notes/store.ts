@@ -2,10 +2,12 @@ import { mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises
 import { dirname, join } from 'node:path'
 import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { notes } from '../db/schema.js'
+import { noteLinks, notes } from '../db/schema.js'
 import { config } from '../config.js'
+import { scheduleEmbedding } from '../search/embedding-queue.js'
 import {
   OkfValidationError,
+  extractWikilinks,
   parseNote,
   serializeNote,
   validateNote,
@@ -99,7 +101,25 @@ export async function createNote(
   }
   await atomicWrite(noteFile(vaultId, path), serializeNote({ frontmatter, body }))
   await regenIndex(vaultId, input.type)
+  await syncLinks(row.id, body)
+  scheduleEmbedding(row.id)
   return row
+}
+
+/** Replaces the note's EXTRACTED link rows from its current wikilinks. */
+export async function syncNoteLinks(noteId: string, body: string): Promise<void> {
+  return syncLinks(noteId, body)
+}
+
+async function syncLinks(noteId: string, body: string): Promise<void> {
+  await db.delete(noteLinks).where(eq(noteLinks.sourceNoteId, noteId))
+  const targets = extractWikilinks(body)
+  if (targets.length > 0) {
+    await db
+      .insert(noteLinks)
+      .values(targets.map((targetPath) => ({ sourceNoteId: noteId, targetPath })))
+      .onConflictDoNothing()
+  }
 }
 
 export async function getLiveNote(vaultId: string, path: string): Promise<NoteRow | null> {
@@ -141,6 +161,8 @@ export async function updateNote(
     .where(eq(notes.id, row.id))
     .returning()
   await atomicWrite(noteFile(vaultId, path), serializeNote({ frontmatter, body }))
+  await syncLinks(row.id, body)
+  scheduleEmbedding(row.id)
   return updated!
 }
 
@@ -199,6 +221,7 @@ export async function restoreNote(vaultId: string, noteId: string): Promise<Note
   await mkdir(dirname(noteFile(vaultId, row.path)), { recursive: true })
   await rename(trashFile(vaultId, row.id), noteFile(vaultId, row.path))
   await regenIndex(vaultId, row.type)
+  scheduleEmbedding(row.id)
   return updated!
 }
 
