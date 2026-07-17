@@ -157,6 +157,11 @@ below are tracked but not yet designed:
   figure out what this actually means structurally (a new content type
   alongside notes? a separate graph/index sourced from a repo? how it
   interacts with the existing OKF/graph/search/MCP design?).
+- **CLI execution visualizer** — an opt-in mode for following what a CLI
+  command does internally, proposed in
+  [issue #9](https://github.com/PIIIX-org/chapters/issues/9). Deferred
+  until the backend and its CLI surface exist; see
+  [`2026-07-17-cli-visualizer-design.md`](docs/superpowers/specs/2026-07-17-cli-visualizer-design.md).
 
 ## Contributing
 
