@@ -4,9 +4,14 @@ An open-source, self-hostable "second brain" platform: a team knowledge base
 built on plain markdown files, a live-preview editor, and an AI-navigable
 knowledge graph.
 
-**Status: research & structural design phase.** Nothing has been implemented
-yet. This repository currently contains design specs only — see
-[`docs/superpowers/specs/`](docs/superpowers/specs/).
+**Status: implementation starting.** The structural design phase is
+complete — all specs live in
+[`docs/superpowers/specs/`](docs/superpowers/specs/). The tech stack is
+decided (TypeScript end to end: Node/Fastify + Yjs/Hocuspocus + React/
+CodeMirror 6 + PostgreSQL/pgvector, local ONNX embeddings — chosen for
+best AI navigability; see
+[`2026-07-17-tech-stack-decision.md`](docs/superpowers/specs/2026-07-17-tech-stack-decision.md)).
+No code has landed yet; sub-project 1 (Auth & Vault/Sharing) is first.
 
 All six sub-project specs have been through a dedicated security audit; see
 [`2026-07-12-security-audit-findings.md`](docs/superpowers/specs/2026-07-12-security-audit-findings.md)
