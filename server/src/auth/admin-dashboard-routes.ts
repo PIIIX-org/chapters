@@ -14,6 +14,7 @@ import {
 } from '../db/schema.js'
 import { logSecurityEvent } from './security-events.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
+import { setInstanceMfaRequirement } from './mfa.js'
 
 /**
  * Admin oversight dashboard (spec): metadata only, never note content —
@@ -174,4 +175,26 @@ export function adminDashboardRoutes(app: FastifyInstance) {
     })
     return { status: 'revoked' }
   })
+
+  app.put<{ Body: { required: boolean } }>(
+    '/mfa-requirement',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['required'],
+          properties: { required: { type: 'boolean' } },
+        },
+      },
+    },
+    async (req) => {
+      await setInstanceMfaRequirement(req.body.required)
+      await logSecurityEvent({
+        type: 'mfa_requirement_changed',
+        actorUserId: req.user!.id,
+        detail: { required: req.body.required },
+      })
+      return { required: req.body.required }
+    },
+  )
 }
