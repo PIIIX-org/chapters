@@ -2,8 +2,8 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Phase**: Backend — sub-project 7 (Data export & portability)
-- **Spec**: `docs/superpowers/specs/2026-07-15-data-export-portability-design.md`
+- **Phase**: Backend — cross-cutting specs (admin dashboard, MFA)
+- **Specs**: `2026-07-15-admin-oversight-dashboard-design.md`, `2026-07-15-mfa-design.md`
 - **Done**:
   - Scaffold (#16); 1 Auth (#18); 2 Notes (#21); 3+4 Graph+Search (#23);
     5 Realtime collab (#25)
@@ -14,11 +14,13 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
     direct connection with attributed note_revisions audit trail +
     revert + hard purge endpoints, per-connection rate limit, revert
     notifications. 52 tests green.
-- **Current task**: sub-project 7 — per-note/vault export (zip +
-  manifest), expiring share links, import with OKF validation + share
-  re-matching, full-instance admin backup
-- **Next step**: plan `docs/superpowers/plans/2026-07-17-data-export.md`
-- **Remaining after that**: admin dashboard endpoints, MFA (TOTP),
-  then backend done → UI phase
+- **Done also**: sub-project 7 export (this branch): per-note/vault zip
+  export (edit+ only, trash excluded, manifest sidecar), sessionless
+  expiring/revocable share links, multipart import (new vault, shared
+  validation, email share re-matching + unmatched report), admin
+  full-instance backup (vault bundles + account dump). 57 tests green.
+- **Current task**: admin dashboard endpoints (instance stats, vault/
+  team oversight metadata-only, force-revoke) then MFA (TOTP opt-in +
+  admin-mandatable). After that: backend done → UI phase.
 - **Open PRs**: none
 - **Open issues**: #9 (cli-visualizer — deferred, assigned @snavid-dev)

@@ -253,6 +253,27 @@ export const notes = pgTable(
   ],
 )
 
+/** Expiring, revocable download links for vault exports (spec 7). */
+export const exportLinks = pgTable(
+  'export_links',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    vaultId: uuid('vault_id')
+      .notNull()
+      .references(() => vaults.id, { onDelete: 'cascade' }),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index('export_links_vault_idx').on(t.vaultId)],
+)
+
 export const actorType = pgEnum('actor_type', ['user', 'mcp', 'collab'])
 
 /**
