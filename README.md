@@ -13,6 +13,12 @@ best AI navigability; see
 [`2026-07-17-tech-stack-decision.md`](docs/superpowers/specs/2026-07-17-tech-stack-decision.md)).
 No code has landed yet; sub-project 1 (Auth & Vault/Sharing) is first.
 
+Development runs on a two-branch model — everything lands on **`dev`**
+(default) via reviewed PRs and is promoted to **`prod`** once verified —
+and is agent-driven: the working agreements (implementation prompt, file/
+context/resume/testing protocols, GitHub workflow) live in
+[`docs/agents/`](docs/agents/).
+
 All six sub-project specs have been through a dedicated security audit; see
 [`2026-07-12-security-audit-findings.md`](docs/superpowers/specs/2026-07-12-security-audit-findings.md)
 for the findings and each affected spec's "Security hardening" section for
