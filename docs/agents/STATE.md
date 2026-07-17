@@ -2,25 +2,22 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Phase**: Backend — cross-cutting specs (admin dashboard, MFA)
-- **Specs**: `2026-07-15-admin-oversight-dashboard-design.md`, `2026-07-15-mfa-design.md`
-- **Done**:
-  - Scaffold (#16); 1 Auth (#18); 2 Notes (#21); 3+4 Graph+Search (#23);
-    5 Realtime collab (#25)
-  - Sub-project 6 MCP (this branch): stateless Streamable HTTP /mcp with
-    Bearer auth via resolveMcpToken, 10 tools (read/browse/create/edit/
-    delete/search/graph/history/revert/list_vaults), scope hard-reject
-    for vault tokens on account surfaces, writes through hocuspocus
-    direct connection with attributed note_revisions audit trail +
-    revert + hard purge endpoints, per-connection rate limit, revert
-    notifications. 52 tests green.
-- **Done also**: sub-project 7 export (this branch): per-note/vault zip
-  export (edit+ only, trash excluded, manifest sidecar), sessionless
-  expiring/revocable share links, multipart import (new vault, shared
-  validation, email share re-matching + unmatched report), admin
-  full-instance backup (vault bundles + account dump). 57 tests green.
-- **Current task**: admin dashboard endpoints (instance stats, vault/
-  team oversight metadata-only, force-revoke) then MFA (TOTP opt-in +
-  admin-mandatable). After that: backend done → UI phase.
-- **Open PRs**: none
-- **Open issues**: #9 (cli-visualizer — deferred, assigned @snavid-dev)
+- **Phase**: BACKEND COMPLETE → next is the UI phase
+- **Done** (all on prod via dev):
+  - Scaffold #16 | 1 Auth #18 | 2 Notes #21 | 3+4 Graph+Search #23 |
+    5 Realtime #25 | 6 MCP #28 | 7 Export #30 | Admin dashboard #32 |
+    MFA (this branch). 64 tests green across 13 suites.
+  - Every spec implemented incl. all security-audit hardening; tracked
+    deviations recorded in the plan docs (Louvain-not-Leiden, SSE
+    read-only live view, collab on its own port).
+- **Current task**: none in flight — backend done.
+- **Next step (UI phase)**: design the page-by-page UI structure with
+  the owner, then build `client/` (React+Vite+CM6+y-codemirror, Tailwind
+  + shadcn via shadcn MCP, GSAP via magic MCP + docs, anime.js dep) per
+  `docs/agents/implementation.md`. UI does NOT start until the owner
+  approves the page structure.
+- **Known deferred**: cloud storage/backups (unspecced), codebase
+  exploration direction (needs brainstorming), cli-visualizer (#9,
+  assigned @snavid-dev), Leiden upgrade, multi-process scaling notes
+  (`ponytail:` comments mark them all).
+- **Open issues**: #9 (deferred, assigned)

@@ -10,6 +10,7 @@ import { createEmailToken, consumeEmailToken } from './email-tokens.js'
 import { clearFailures, isLocked, recordFailure } from './lockout.js'
 import { logSecurityEvent } from './security-events.js'
 import { isSetupComplete } from './bootstrap.js'
+import { verifyMfaCode } from './mfa.js'
 import { SESSION_COOKIE } from './plugin.js'
 
 const credentialsSchema = {
@@ -141,9 +142,20 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
     },
   )
 
-  app.post<{ Body: { email: string; password: string } }>(
+  app.post<{ Body: { email: string; password: string; totp?: string } }>(
     '/login',
-    { config: strictRateLimit, schema: { body: credentialsSchema } },
+    {
+      config: strictRateLimit,
+      schema: {
+        body: {
+          ...credentialsSchema,
+          properties: {
+            ...credentialsSchema.properties,
+            totp: { type: 'string', minLength: 6, maxLength: 16 },
+          },
+        },
+      },
+    },
     async (req, reply) => {
       const email = req.body.email.toLowerCase()
       const accountKey = `acct:${email}`
@@ -159,6 +171,19 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
         recordFailure(ipKey)
         await logSecurityEvent({ type: 'login_failed', ip: req.ip, detail: { email } })
         return reply.code(401).send({ error: 'invalid credentials' })
+      }
+      // MFA spec: every login is challenged when TOTP is enabled — no
+      // device-trust exception. Backup codes accepted in the same field.
+      if (user.mfaEnabledAt) {
+        if (!req.body.totp) {
+          return reply.code(401).send({ error: 'totp code required', mfaRequired: true })
+        }
+        if (!(await verifyMfaCode(user, req.body.totp))) {
+          recordFailure(accountKey)
+          recordFailure(ipKey)
+          await logSecurityEvent({ type: 'login_mfa_failed', ip: req.ip, detail: { email } })
+          return reply.code(401).send({ error: 'invalid totp code', mfaRequired: true })
+        }
       }
       clearFailures(accountKey)
       const token = await createSession(user.id)
