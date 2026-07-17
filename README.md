@@ -4,24 +4,35 @@ An open-source, self-hostable "second brain" platform: a team knowledge base
 built on plain markdown files, a live-preview editor, and an AI-navigable
 knowledge graph.
 
-**Status: implementation starting.** The structural design phase is
-complete — all specs live in
-[`docs/superpowers/specs/`](docs/superpowers/specs/). The tech stack is
-decided (TypeScript end to end: Node/Fastify + Yjs/Hocuspocus + React/
-CodeMirror 6 + PostgreSQL/pgvector, local ONNX embeddings — chosen for
-best AI navigability; see
-[`2026-07-17-tech-stack-decision.md`](docs/superpowers/specs/2026-07-17-tech-stack-decision.md)).
-Backend implementation is underway: sub-project 1 (Auth & Vault/Sharing),
-sub-project 2 (Editor backend — OKF notes on plain files), and
-sub-projects 3+4 (graph engine — extracted/structural/semantic edges with
-Louvain communities and a merged cross-vault view; hybrid keyword+semantic
-search over a shared local embedding index) sub-project 5 (real-time
-collaboration), and sub-project 6 (MCP integration — permission-scoped
-AI access with full tool parity, writes flowing through the live
-collaboration engine, and an attributed audit trail with revert) are
-implemented and tested, as is sub-project 7 (data export & portability
-— zip exports with manifest, expiring share links, validated import,
-full-instance admin backup). Remaining backend: admin dashboard + MFA.
+**Status: backend complete; UI phase next.** All specs
+([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
+server-side on the decided stack (TypeScript end to end: Node/Fastify +
+Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
+for best AI navigability, see
+[`2026-07-17-tech-stack-decision.md`](docs/superpowers/specs/2026-07-17-tech-stack-decision.md)):
+
+- **Auth & sharing** — setup-token bootstrap, signup→verify→approve,
+  sessions, teams, vault shares with live permission resolution, MFA
+  (TOTP + backup codes, admin-mandatable)
+- **Notes** — plain OKF markdown files on disk, one shared server-side
+  validation for every write path, soft-delete trash, per-type index.md
+- **Graph & search** — save-time embedding index; extracted/structural/
+  semantic edges with Louvain communities and an opt-in merged
+  cross-vault view; hybrid keyword+semantic search, permission-filtered
+  in-query
+- **Real-time collaboration** — Yjs relay with per-operation live
+  permission checks, instant revocation kick, and an identity-free live
+  view for read-only users
+- **MCP** — permission-scoped AI access with full tool parity, writes
+  flowing through the live collaboration engine, attributed audit trail
+  with revert and hard purge, per-connection rate limits
+- **Export & portability** — zip exports with manifest, expiring share
+  links, validated import, full-instance admin backup
+- **Admin oversight** — metadata-only dashboards and instance-wide
+  force-revoke; never note content
+
+The UI (React + CodeMirror 6) starts once its page-by-page structure is
+designed — tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —

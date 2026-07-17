@@ -36,10 +36,26 @@ export const users = pgTable('users', {
   status: userStatus('status').notNull().default('pending_approval'),
   role: userRole('role').notNull().default('member'),
   emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
+  totpSecret: text('totp_secret'),
+  mfaEnabledAt: timestamp('mfa_enabled_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
 })
+
+/** One-time MFA backup codes, hashed, single-use (MFA spec). */
+export const mfaBackupCodes = pgTable(
+  'mfa_backup_codes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull().unique(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+  },
+  (t) => [index('mfa_backup_codes_user_idx').on(t.userId)],
+)
 
 export const sessions = pgTable(
   'sessions',
@@ -217,6 +233,8 @@ export const instanceState = pgTable('instance_state', {
   id: text('id').primaryKey().default('singleton'),
   setupTokenHash: text('setup_token_hash'),
   setupCompletedAt: timestamp('setup_completed_at', { withTimezone: true }),
+  /** Admin-mandated MFA: users without TOTP must set it up to continue. */
+  requireMfa: boolean('require_mfa').notNull().default(false),
 })
 
 /**

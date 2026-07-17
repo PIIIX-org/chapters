@@ -7,6 +7,7 @@ import { authPlugin } from './auth/plugin.js'
 import { authRoutes } from './auth/routes.js'
 import { adminRoutes } from './auth/admin-routes.js'
 import { adminDashboardRoutes } from './auth/admin-dashboard-routes.js'
+import { mfaRoutes } from './auth/mfa-routes.js'
 import { vaultRoutes } from './vaults/routes.js'
 import { noteRoutes } from './notes/routes.js'
 import { graphRoutes } from './graph/routes.js'
@@ -38,6 +39,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     async (api) => {
       authRoutes(api, { isProd: config.isProd })
       await api.register(async (a) => notificationRoutes(a))
+      await api.register(async (a) => mfaRoutes(a))
       await api.register(async (a) => vaultRoutes(a))
       await api.register(async (a) => noteRoutes(a))
       await api.register(async (a) => graphRoutes(a))
