@@ -6,6 +6,7 @@ import { config } from './config.js'
 import { authPlugin } from './auth/plugin.js'
 import { authRoutes } from './auth/routes.js'
 import { adminRoutes } from './auth/admin-routes.js'
+import { adminDashboardRoutes } from './auth/admin-dashboard-routes.js'
 import { vaultRoutes } from './vaults/routes.js'
 import { noteRoutes } from './notes/routes.js'
 import { graphRoutes } from './graph/routes.js'
@@ -46,6 +47,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       await api.register(async (a) => teamRoutes(a))
       await api.register(async (a) => mcpConnectionRoutes(a))
       await api.register(async (a) => adminRoutes(a), { prefix: '/admin' })
+      await api.register(async (a) => adminDashboardRoutes(a), { prefix: '/admin' })
     },
     { prefix: '/api' },
   )
