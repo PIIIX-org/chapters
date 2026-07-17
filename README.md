@@ -111,6 +111,10 @@ Beyond the core 7, additional cross-cutting specs closing tracked gaps:
 - **Multi-factor authentication** — TOTP, opt-in per user or
   admin-mandated instance-wide, with one-time backup codes for recovery.
   See [`2026-07-15-mfa-design.md`](docs/superpowers/specs/2026-07-15-mfa-design.md).
+- **Hosted UI structure** — page-by-page IA, user flows, and component
+  placement for the hosted app, where the Yildizim galaxy layer is Home
+  and 2D pages frame the work. See
+  [`2026-07-17-hosted-ui-structure-design.md`](docs/superpowers/specs/2026-07-17-hosted-ui-structure-design.md).
 
 ## User flow & system diagrams
 
