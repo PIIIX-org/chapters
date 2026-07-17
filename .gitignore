@@ -1,2 +1,8 @@
 .DS_Store
 .gstack/
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+*.log

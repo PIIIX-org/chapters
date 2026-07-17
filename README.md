@@ -11,7 +11,8 @@ decided (TypeScript end to end: Node/Fastify + Yjs/Hocuspocus + React/
 CodeMirror 6 + PostgreSQL/pgvector, local ONNX embeddings — chosen for
 best AI navigability; see
 [`2026-07-17-tech-stack-decision.md`](docs/superpowers/specs/2026-07-17-tech-stack-decision.md)).
-No code has landed yet; sub-project 1 (Auth & Vault/Sharing) is first.
+The backend scaffold is in place (pnpm workspace, Fastify server, Vitest,
+CI); sub-project 1 (Auth & Vault/Sharing) is being implemented first.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
