@@ -11,11 +11,12 @@ decided (TypeScript end to end: Node/Fastify + Yjs/Hocuspocus + React/
 CodeMirror 6 + PostgreSQL/pgvector, local ONNX embeddings — chosen for
 best AI navigability; see
 [`2026-07-17-tech-stack-decision.md`](docs/superpowers/specs/2026-07-17-tech-stack-decision.md)).
-Backend implementation is underway: sub-project 1 (Auth & Vault/Sharing)
-and sub-project 2 (Editor backend — OKF notes on plain files with shared
-server-side validation, tree/CRUD/rename endpoints, soft-delete trash)
-are implemented and tested; sub-projects 3+4 (graph engine + search) are
-next.
+Backend implementation is underway: sub-project 1 (Auth & Vault/Sharing),
+sub-project 2 (Editor backend — OKF notes on plain files), and
+sub-projects 3+4 (graph engine — extracted/structural/semantic edges with
+Louvain communities and a merged cross-vault view; hybrid keyword+semantic
+search over a shared local embedding index) are implemented and tested;
+sub-project 5 (real-time collaboration) is next.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —

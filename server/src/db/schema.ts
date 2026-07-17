@@ -7,9 +7,11 @@ import {
   pgTable,
   primaryKey,
   text,
+  real,
   timestamp,
   uniqueIndex,
   uuid,
+  vector,
 } from 'drizzle-orm/pg-core'
 
 export const userStatus = pgEnum('user_status', [
@@ -234,6 +236,8 @@ export const notes = pgTable(
     frontmatter: jsonb('frontmatter').notNull(),
     body: text('body').notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    /** One embedding per note, computed at save-time (specs 3+4's shared index). */
+    embedding: vector('embedding', { dimensions: 384 }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -246,5 +250,42 @@ export const notes = pgTable(
       .on(t.vaultId, t.path)
       .where(sql`deleted_at is null`),
     index('notes_vault_type_idx').on(t.vaultId, t.type),
+  ],
+)
+
+/** EXTRACTED edges: wikilink targets per note, replaced on every save. */
+export const noteLinks = pgTable(
+  'note_links',
+  {
+    sourceNoteId: uuid('source_note_id')
+      .notNull()
+      .references(() => notes.id, { onDelete: 'cascade' }),
+    targetPath: text('target_path').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.sourceNoteId, t.targetPath] }),
+    index('note_links_target_idx').on(t.targetPath),
+  ],
+)
+
+/**
+ * Semantic INFERRED edges, maintained by the embedding queue. Ordered
+ * pair (a < b). Deliberately not vault-restricted — permission filtering
+ * happens at query time against the caller's live vault set.
+ */
+export const semanticEdges = pgTable(
+  'semantic_edges',
+  {
+    noteA: uuid('note_a')
+      .notNull()
+      .references(() => notes.id, { onDelete: 'cascade' }),
+    noteB: uuid('note_b')
+      .notNull()
+      .references(() => notes.id, { onDelete: 'cascade' }),
+    similarity: real('similarity').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.noteA, t.noteB] }),
+    index('semantic_edges_b_idx').on(t.noteB),
   ],
 )

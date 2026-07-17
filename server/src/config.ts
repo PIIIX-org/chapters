@@ -10,6 +10,10 @@ export const config = {
   dataDir: env.DATA_DIR ?? './data',
   /** Optional pre-set one-time setup token; generated+logged if absent. */
   setupToken: env.SETUP_TOKEN,
+  /** 'local' = ONNX bge-small on CPU; 'fake' = deterministic test embedder. */
+  embeddings: env.EMBEDDINGS ?? (env.NODE_ENV === 'production' ? 'local' : 'fake'),
+  semanticThreshold: Number(env.SEMANTIC_THRESHOLD ?? 0.75),
+  semanticK: Number(env.SEMANTIC_K ?? 8),
   smtp: env.SMTP_HOST
     ? {
         host: env.SMTP_HOST,
