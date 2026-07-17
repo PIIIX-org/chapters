@@ -1,4 +1,5 @@
 import { buildApp } from './app.js'
+import { startCollabServer } from './sync/collab-server.js'
 import { runMigrations } from './db/migrate.js'
 import { ensureInstanceState } from './auth/bootstrap.js'
 import { scheduleMissingEmbeddings } from './search/embedding-queue.js'
@@ -16,7 +17,8 @@ try {
     console.log(`\n=== Chapters one-time setup token: ${setupToken} ===\n`)
   }
   await app.listen({ port: config.port, host: '0.0.0.0' })
-  console.log(`Chapters server listening on :${config.port}`)
+  await startCollabServer(config.collabPort)
+  console.log(`Chapters server listening on :${config.port} (collab on :${config.collabPort})`)
 } catch (err) {
   console.error(err)
   process.exit(1)
