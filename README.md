@@ -15,8 +15,11 @@ Backend implementation is underway: sub-project 1 (Auth & Vault/Sharing),
 sub-project 2 (Editor backend — OKF notes on plain files), and
 sub-projects 3+4 (graph engine — extracted/structural/semantic edges with
 Louvain communities and a merged cross-vault view; hybrid keyword+semantic
-search over a shared local embedding index) are implemented and tested;
-sub-project 5 (real-time collaboration) is next.
+search over a shared local embedding index) and sub-project 5 (real-time
+collaboration — Yjs/Hocuspocus relay with live per-operation permission
+checks, revocation kick, and an identity-free live view for read-only
+users) are implemented and tested; sub-project 6 (MCP integration) is
+next.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —

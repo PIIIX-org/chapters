@@ -12,6 +12,7 @@
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
     "@fastify/rate-limit": "^10.3.0",
+    "@hocuspocus/server": "^4.4.0",
     "@huggingface/transformers": "^4.2.0",
     "@node-rs/argon2": "^2.0.2",
     "drizzle-orm": "^0.44.2",
@@ -21,11 +22,15 @@
     "graphology-communities-louvain": "^2.0.2",
     "nodemailer": "^7.0.0",
     "postgres": "^3.4.7",
-    "yaml": "^2.9.0"
+    "ws": "^8.21.1",
+    "yaml": "^2.9.0",
+    "yjs": "^13.6.31"
   },
   "devDependencies": {
+    "@hocuspocus/provider": "^4.4.0",
     "@types/node": "^24.0.0",
     "@types/nodemailer": "^7.0.0",
+    "@types/ws": "^8.18.1",
     "drizzle-kit": "^0.31.4",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",

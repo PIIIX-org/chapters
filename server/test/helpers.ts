@@ -28,6 +28,16 @@ export async function createActiveUser(
   return user!
 }
 
+/** Logs in and returns the raw session token (for collab connections). */
+export async function loginToken(
+  app: FastifyInstance,
+  email: string,
+  password = TEST_PASSWORD,
+): Promise<string> {
+  const cookie = await loginCookie(app, email, password)
+  return cookie.split('=')[1]!
+}
+
 /** Logs in via the real endpoint and returns the session cookie header. */
 export async function loginCookie(
   app: FastifyInstance,

@@ -5,6 +5,7 @@ import { teamMemberships, users, vaults, vaultShares } from '../db/schema.js'
 import { destroyUserSessions } from './sessions.js'
 import { logSecurityEvent } from './security-events.js'
 import { notify } from '../notifications/notify.js'
+import { emitPermissionChange } from '../sync/permission-events.js'
 
 export function adminRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAdmin)
@@ -81,6 +82,7 @@ export function adminRoutes(app: FastifyInstance) {
       actorUserId: req.user!.id,
       subjectUserId: user.id,
     })
+    emitPermissionChange({ userIds: [user.id] })
     await notify({
       recipientId: user.id,
       type: 'account_status_changed',

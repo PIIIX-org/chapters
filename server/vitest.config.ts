@@ -16,6 +16,7 @@ export default defineConfig({
       DATA_DIR: join(tmpdir(), 'chapters-test-data'),
       // Fake embedder's bag-of-words vectors need a looser edge threshold.
       SEMANTIC_THRESHOLD: '0.2',
+      COLLAB_DEBOUNCE_MS: '150',
     },
   },
 })
