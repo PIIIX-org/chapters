@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { defineConfig } from 'vitest/config'
 
 const TEST_DATABASE_URL =
@@ -11,6 +13,7 @@ export default defineConfig({
     env: {
       DATABASE_URL: TEST_DATABASE_URL,
       NODE_ENV: 'test',
+      DATA_DIR: join(tmpdir(), 'chapters-test-data'),
     },
   },
 })
