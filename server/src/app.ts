@@ -9,6 +9,7 @@ import { vaultRoutes } from './vaults/routes.js'
 import { noteRoutes } from './notes/routes.js'
 import { graphRoutes } from './graph/routes.js'
 import { searchRoutes } from './search/routes.js'
+import { syncRoutes } from './sync/routes.js'
 import { teamRoutes } from './vaults/team-routes.js'
 import { mcpConnectionRoutes } from './vaults/mcp-connection-routes.js'
 import { notificationRoutes } from './notifications/routes.js'
@@ -34,6 +35,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       await api.register(async (a) => noteRoutes(a))
       await api.register(async (a) => graphRoutes(a))
       await api.register(async (a) => searchRoutes(a))
+      await api.register(async (a) => syncRoutes(a))
       await api.register(async (a) => teamRoutes(a))
       await api.register(async (a) => mcpConnectionRoutes(a))
       await api.register(async (a) => adminRoutes(a), { prefix: '/admin' })

@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { teamMemberships, teams, users, vaults, vaultShares } from '../db/schema.js'
 import { notify } from '../notifications/notify.js'
+import { emitPermissionChange } from '../sync/permission-events.js'
 
 async function isTeamOwner(userId: string, teamId: string): Promise<boolean> {
   const row = (
@@ -127,6 +128,7 @@ export function teamRoutes(app: FastifyInstance) {
         team.id,
         `${member.email} was added to team "${team.name}"`,
       )
+      emitPermissionChange({ userIds: [member.id] })
       return { status: 'added' }
     },
   )
@@ -161,6 +163,7 @@ export function teamRoutes(app: FastifyInstance) {
         team.id,
         `${member?.email ?? 'a user'} was removed from team "${team.name}"`,
       )
+      emitPermissionChange({ userIds: [req.params.userId] })
       return { status: 'removed' }
     },
   )
@@ -170,10 +173,12 @@ export function teamRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'team owner required' })
     }
     // Cascade per spec hardening: shares to this team must not dangle.
-    await db
+    const removed = await db
       .delete(vaultShares)
       .where(and(eq(vaultShares.granteeType, 'team'), eq(vaultShares.granteeId, req.params.id)))
+      .returning({ vaultId: vaultShares.vaultId })
     await db.delete(teams).where(eq(teams.id, req.params.id))
+    if (removed.length > 0) emitPermissionChange({ vaultIds: removed.map((r) => r.vaultId) })
     return { status: 'deleted' }
   })
 }

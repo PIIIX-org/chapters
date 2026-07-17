@@ -12,6 +12,7 @@ import {
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
 import { listAccessibleVaults, resolveAccess } from './permissions.js'
+import { emitPermissionChange } from '../sync/permission-events.js'
 
 async function requireOwner(userId: string, vaultId: string) {
   const access = await resolveAccess(userId, vaultId)
@@ -141,6 +142,7 @@ export function vaultRoutes(app: FastifyInstance) {
         actorUserId: req.user!.id,
         detail: { vaultId, granteeType, granteeId, permission },
       })
+      emitPermissionChange({ vaultIds: [vaultId] })
       return share
     },
   )
@@ -198,6 +200,7 @@ export function vaultRoutes(app: FastifyInstance) {
         actorUserId: req.user!.id,
         detail: { vaultId, shareId: share.id },
       })
+      emitPermissionChange({ vaultIds: [vaultId] })
       return { status: 'revoked' }
     },
   )
@@ -234,6 +237,7 @@ export function vaultRoutes(app: FastifyInstance) {
         subjectUserId: newOwner.id,
         detail: { vaultId: vault!.id },
       })
+      emitPermissionChange({ vaultIds: [vault!.id] })
       return { ownerId: newOwner.id }
     },
   )

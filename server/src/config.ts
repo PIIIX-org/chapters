@@ -4,6 +4,8 @@ export const config = {
   nodeEnv: env.NODE_ENV ?? 'development',
   isProd: env.NODE_ENV === 'production',
   port: Number(env.PORT ?? 3000),
+  /** Yjs sync relay port (same process, own listener). */
+  collabPort: Number(env.COLLAB_PORT ?? 3001),
   databaseUrl:
     env.DATABASE_URL ?? 'postgres://chapters:chapters@localhost:5432/chapters',
   /** Root directory for vault note files (OKF markdown on disk). */
