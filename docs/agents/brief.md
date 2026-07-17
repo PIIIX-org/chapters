@@ -20,10 +20,10 @@ accurately. Full origin story: repo `README.md`.
 
 ## Source of truth
 
-- Design: `docs/superpowers/specs/` — 12 specs (7 sub-projects + security
-  audit + notifications + admin dashboard + MFA + tech stack). The specs
-  are final; implementation follows them, deviations get tracked in
-  writing.
+- Design: `docs/superpowers/specs/` — the 7 sub-project specs plus the
+  security audit, cross-cutting specs (notifications, admin dashboard,
+  MFA), deferred items, and the tech-stack decision. The specs are final;
+  implementation follows them, deviations get tracked in writing.
 - Stack: `docs/superpowers/specs/2026-07-17-tech-stack-decision.md` —
   TypeScript end to end, chosen for best AI navigability.
 - Operations: the other files in this folder (`implementation.md`,
