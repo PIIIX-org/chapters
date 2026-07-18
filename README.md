@@ -31,6 +31,15 @@ for best AI navigability, see
 - **Admin oversight** — metadata-only dashboards and instance-wide
   force-revoke; never note content
 
+Two more sub-projects are speced and next up for backend implementation:
+**Repository ingestion & permissions** and **Code graph & unified
+search/MCP integration** — extending the platform to also map codebases
+(read-only), sharing the existing graph/search/MCP infrastructure rather
+than duplicating it. See
+[`2026-07-18-repository-ingestion-design.md`](docs/superpowers/specs/2026-07-18-repository-ingestion-design.md)
+and
+[`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
+
 The UI (React + CodeMirror 6) starts once its page-by-page structure is
 designed — tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
@@ -106,6 +115,14 @@ with its own design spec before any code is written:
    vault.
 7. **Data export & portability** — per-note/per-vault download, shareable
    export links, cross-instance import, and full-instance admin backup.
+8. **Repository ingestion & permissions** — connecting a codebase
+   (git URL, local path, or agent/CLI push), kept fresh, shared read-only
+   the same way a vault is. See
+   [`2026-07-18-repository-ingestion-design.md`](docs/superpowers/specs/2026-07-18-repository-ingestion-design.md).
+9. **Code graph & unified search/MCP integration** — tree-sitter-derived
+   code structure joining the existing graph/search/MCP engines, so notes
+   and code are one navigable, queryable knowledge base. See
+   [`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
 
 See [`docs/superpowers/specs/`](docs/superpowers/specs/) for the detailed
 design of each completed sub-project.
@@ -185,14 +202,6 @@ below are tracked but not yet designed:
   **automated/scheduled backups** — deliberately deferred out of
   sub-project 7's core scope (see that spec); each needs its own
   design pass once the manual export/import primitives exist.
-- **Codebase exploration & mapping.** Chapters is currently scoped around
-  markdown notes (OKF format) only. There's an open direction to extend it
-  to also explore and map codebases — not just notes — aimed broadly at
-  making a developer's life easier when working with AI on a codebase.
-  Not yet scoped into a sub-project; needs its own brainstorming pass to
-  figure out what this actually means structurally (a new content type
-  alongside notes? a separate graph/index sourced from a repo? how it
-  interacts with the existing OKF/graph/search/MCP design?).
 - **CLI execution visualizer** — an opt-in mode for following what a CLI
   command does internally, proposed in
   [issue #9](https://github.com/PIIIX-org/chapters/issues/9). Deferred
@@ -201,6 +210,7 @@ below are tracked but not yet designed:
 
 ## Contributing
 
-This project is in early, active design. Nothing is implemented yet, so the
-most useful contribution right now is design feedback on the specs, not
-code.
+The backend is implemented; the UI hasn't started. Design feedback on
+open specs (see "Known gaps" above) is useful at any time; code
+contributions should target gaps in the implemented backend or wait for
+the UI phase to begin — check `docs/agents/STATE.md` for current status.
