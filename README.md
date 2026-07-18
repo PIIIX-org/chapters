@@ -54,6 +54,16 @@ search/MCP engines rather than a parallel one:
 The UI (React + CodeMirror 6) starts once its page-by-page structure is
 designed — tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
+**Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
+real deployment — security headers on by default, CORS off (same-origin
+only) unless `CORS_ORIGIN` is set, Dependabot watching dependencies. One
+real constraint worth knowing before scaling: this backend assumes a
+single running instance (lockout counters, the embedding/extraction
+queues, the live-collaboration permission-kick bus, MCP rate limiting,
+and repository polling are all in-process state) — see
+[`docs/agents/implementation.md`](docs/agents/implementation.md)'s
+"Deployment topology" section before running more than one instance.
+
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
 and is agent-driven: the working agreements (implementation prompt, file/

@@ -6,4 +6,5 @@ data/
 coverage/
 .env
 .env.*
+!.env.example
 *.log
