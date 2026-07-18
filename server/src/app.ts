@@ -19,6 +19,7 @@ import { teamRoutes } from './vaults/team-routes.js'
 import { mcpConnectionRoutes } from './vaults/mcp-connection-routes.js'
 import { notificationRoutes } from './notifications/routes.js'
 import { repositoryRoutes } from './repositories/routes.js'
+import { repositoryPushRoutes } from './repositories/push-routes.js'
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
@@ -35,6 +36,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.get('/health', () => ({ status: 'ok' }))
 
   mcpRoutes(app)
+  repositoryPushRoutes(app)
 
   await app.register(
     async (api) => {
