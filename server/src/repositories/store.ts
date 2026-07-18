@@ -3,6 +3,7 @@ import { and, eq, notInArray } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositoryFiles } from '../db/schema.js'
 import { detectLanguage } from './language.js'
+import { scheduleExtraction } from './extraction-queue.js'
 
 export type RepositoryFileRow = typeof repositoryFiles.$inferSelect
 
@@ -58,9 +59,11 @@ export async function syncRepositoryFiles(
     }
     if (current) {
       await db.update(repositoryFiles).set(values).where(eq(repositoryFiles.id, current.id))
+      scheduleExtraction(current.id)
       result.updated += 1
     } else {
-      await db.insert(repositoryFiles).values(values)
+      const [inserted] = await db.insert(repositoryFiles).values(values).returning({ id: repositoryFiles.id })
+      scheduleExtraction(inserted!.id)
       result.created += 1
     }
   }
