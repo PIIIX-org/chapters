@@ -17,6 +17,7 @@ export default defineConfig({
       // Fake embedder's bag-of-words vectors need a looser edge threshold.
       SEMANTIC_THRESHOLD: '0.2',
       COLLAB_DEBOUNCE_MS: '150',
+      CREDENTIALS_ENCRYPTION_KEY: '0'.repeat(63) + '1',
     },
   },
 })
