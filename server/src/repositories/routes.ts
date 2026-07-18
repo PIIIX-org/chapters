@@ -13,6 +13,7 @@ import {
 import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { encryptCredential } from './credentials.js'
+import { generateToken } from '../auth/tokens.js'
 import { listAccessibleRepositories, resolveRepositoryAccess } from './permissions.js'
 import { createSyncToken, listSyncTokens, revokeSyncToken } from './sync-tokens.js'
 import { listRepositoryFiles } from './store.js'
@@ -254,6 +255,23 @@ export function repositoryRoutes(app: FastifyInstance) {
     const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
     if (!access) return reply.code(404).send({ error: 'not found' })
     return listRepositoryFiles(req.params.id)
+  })
+
+  app.post<{ Params: { id: string } }>('/repositories/:id/webhook-secret', async (req, reply) => {
+    if (!(await requireOwner(req.user!.id, req.params.id))) {
+      return reply.code(404).send({ error: 'not found' })
+    }
+    const repo = (await db.select().from(repositories).where(eq(repositories.id, req.params.id)))[0]!
+    if (repo.ingestionMethod !== 'git') {
+      return reply.code(400).send({ error: 'webhooks only apply to git-sourced repositories' })
+    }
+    const secret = generateToken()
+    await db
+      .update(repositories)
+      .set({ webhookSecretEncrypted: encryptCredential(secret) })
+      .where(eq(repositories.id, req.params.id))
+    // Shown exactly once — configure it on the git host's webhook settings now.
+    return { secret, webhookPath: `/repositories/${req.params.id}/webhook` }
   })
 
   app.post<{ Params: { id: string } }>('/repositories/:id/sync-tokens', async (req, reply) => {
