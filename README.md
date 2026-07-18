@@ -31,13 +31,14 @@ for best AI navigability, see
 - **Admin oversight** — metadata-only dashboards and instance-wide
   force-revoke; never note content
 
-Two more sub-projects are speced and next up for backend implementation:
-**Repository ingestion & permissions** and **Code graph & unified
-search/MCP integration** — extending the platform to also map codebases
-(read-only), sharing the existing graph/search/MCP infrastructure rather
-than duplicating it. See
-[`2026-07-18-repository-ingestion-design.md`](docs/superpowers/specs/2026-07-18-repository-ingestion-design.md)
-and
+Sub-project 8 (**Repository ingestion & permissions**) is implemented:
+connect a codebase via git URL (shallow clone + webhook/poll
+freshness), a local path (real-time filesystem watch), or an agent/CLI
+push, and share it read-only the same way a vault is shared. See
+[`2026-07-18-repository-ingestion-design.md`](docs/superpowers/specs/2026-07-18-repository-ingestion-design.md).
+Sub-project 9 (**Code graph & unified search/MCP integration** — tree-
+sitter extraction joining the existing graph/search/MCP engines) is
+next. See
 [`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
 
 The UI (React + CodeMirror 6) starts once its page-by-page structure is
