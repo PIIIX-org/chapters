@@ -98,3 +98,41 @@ dumping ground.
 - Definition of done for any task: tests green locally, pushed, PR
   merged per `github-workflow.md`, README + STATE.md updated if the
   change is meaningful.
+
+## Deployment topology: single process only (important, read before scaling)
+
+This entire backend assumes exactly one running instance. Five
+subsystems hold state in process memory, not in Postgres or any shared
+store — none of them are broken for a single instance (the intended
+deployment target), but **every one of them silently misbehaves the
+moment a second instance runs against the same database**, whether
+that's for horizontal scale or just redundancy:
+
+- `auth/lockout.ts` — brute-force lockout counters (per-process; a
+  second instance has its own counter, so the shared lockout threshold
+  is effectively multiplied by instance count).
+- `search/embedding-queue.ts` / `repositories/extraction-queue.ts` —
+  in-process serial queues (work scheduled on one instance never runs
+  on another; no risk of double-processing, but no load distribution
+  either).
+- `sync/permission-events.ts` — the live permission-change event bus
+  driving instant collab/SSE kicks on revocation. An instance that
+  didn't receive the in-process event never kicks its own connections
+  — a revoked user could keep a live session open on a different
+  instance than the one that processed the revocation.
+- `mcp/rate-limit.ts` — per-connection rate buckets (per-process; a
+  client can get up to N× the intended limit by having requests land
+  across N instances behind a load balancer).
+- `repositories/scheduler.ts` — the git polling fallback (multiple
+  instances would each independently poll and clone the same
+  repositories on their own schedules).
+
+**Upgrade path, if this is ever needed**: Postgres `LISTEN`/`NOTIFY` or
+Redis pub/sub for the permission-event bus; a `jobs` table or a real
+queue (BullMQ, etc.) for the embedding/extraction queues and the
+polling scheduler (with a claim/lock column so only one instance picks
+up a given job); the lockout and rate-limit counters move to Postgres
+or Redis with atomic increment. None of this is built — don't assume
+it exists. Each site above already carries its own `ponytail:` comment
+naming this same upgrade path; this section exists so the constraint is
+visible in one place instead of five.
