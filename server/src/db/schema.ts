@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import {
   boolean,
   index,
+  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -353,4 +354,128 @@ export const semanticEdges = pgTable(
     primaryKey({ columns: [t.noteA, t.noteB] }),
     index('semantic_edges_b_idx').on(t.noteB),
   ],
+)
+
+export const repositoryIngestionMethod = pgEnum('repository_ingestion_method', [
+  'git',
+  'local_path',
+  'agent_push',
+])
+export const repositorySyncStatus = pgEnum('repository_sync_status', [
+  'idle',
+  'syncing',
+  'error',
+])
+
+/**
+ * A codebase connected to Chapters (spec: repository ingestion &
+ * permissions). Mirrors Vault's owner/share pattern but read-only —
+ * no edit permission tier, since nothing here is ever written to.
+ */
+export const repositories = pgTable(
+  'repositories',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    ingestionMethod: repositoryIngestionMethod('ingestion_method').notNull(),
+    gitUrl: text('git_url'),
+    /** Encrypted (not hashed) — must be reusable for future pulls. */
+    gitCredentialEncrypted: text('git_credential_encrypted'),
+    /** Encrypted, generated at creation time for git-sourced repositories. */
+    webhookSecretEncrypted: text('webhook_secret_encrypted'),
+    localPath: text('local_path'),
+    mergeable: boolean('mergeable').notNull().default(false),
+    syncStatus: repositorySyncStatus('sync_status').notNull().default('idle'),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    lastSyncError: text('last_sync_error'),
+    /** Staleness signal for the polling fallback scheduler. */
+    lastWebhookAt: timestamp('last_webhook_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index('repositories_owner_idx').on(t.ownerId)],
+)
+
+export const repositoryShares = pgTable(
+  'repository_shares',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    granteeType: granteeType('grantee_type').notNull(),
+    granteeId: uuid('grantee_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('repository_shares_unique').on(t.repositoryId, t.granteeType, t.granteeId),
+    index('repository_shares_grantee_idx').on(t.granteeType, t.granteeId),
+  ],
+)
+
+export const repositoryGraphPreferences = pgTable(
+  'repository_graph_preferences',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    include: boolean('include').notNull().default(false),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.repositoryId] })],
+)
+
+/**
+ * The indexed content of a repository — derived from whatever the
+ * ingestion method last synced, never authored in Chapters. Hard
+ * deleted on sync (no trash/audit): git remains the record of code
+ * history, not Chapters.
+ */
+export const repositoryFiles = pgTable(
+  'repository_files',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    language: text('language'),
+    content: text('content').notNull(),
+    contentHash: text('content_hash').notNull(),
+    size: integer('size').notNull(),
+    sourceModifiedAt: timestamp('source_modified_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [uniqueIndex('repository_files_repo_path').on(t.repositoryId, t.path)],
+)
+
+/** Auth for the agent/CLI push ingestion method — same lifecycle as an MCP token. */
+export const repositorySyncTokens = pgTable(
+  'repository_sync_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [index('repository_sync_tokens_repo_idx').on(t.repositoryId)],
 )
