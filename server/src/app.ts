@@ -18,6 +18,9 @@ import { exportRoutes } from './export/routes.js'
 import { teamRoutes } from './vaults/team-routes.js'
 import { mcpConnectionRoutes } from './vaults/mcp-connection-routes.js'
 import { notificationRoutes } from './notifications/routes.js'
+import { repositoryRoutes } from './repositories/routes.js'
+import { repositoryPushRoutes } from './repositories/push-routes.js'
+import { repositoryWebhookRoutes } from './repositories/git-webhook-routes.js'
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
@@ -34,6 +37,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.get('/health', () => ({ status: 'ok' }))
 
   mcpRoutes(app)
+  repositoryPushRoutes(app)
+  repositoryWebhookRoutes(app)
 
   await app.register(
     async (api) => {
@@ -47,6 +52,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       await api.register(async (a) => syncRoutes(a))
       await api.register(async (a) => exportRoutes(a))
       await api.register(async (a) => teamRoutes(a))
+      await api.register(async (a) => repositoryRoutes(a))
       await api.register(async (a) => mcpConnectionRoutes(a))
       await api.register(async (a) => adminRoutes(a), { prefix: '/admin' })
       await api.register(async (a) => adminDashboardRoutes(a), { prefix: '/admin' })
