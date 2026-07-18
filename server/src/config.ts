@@ -35,4 +35,6 @@ export const config = {
         from: env.SMTP_FROM ?? 'chapters@localhost',
       }
     : null,
+  /** Comma-separated allowed cross-origin callers; unset = same-origin only. */
+  corsOrigins: env.CORS_ORIGIN ? env.CORS_ORIGIN.split(',').map((o) => o.trim()) : [],
 }

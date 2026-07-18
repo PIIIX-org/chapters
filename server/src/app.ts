@@ -1,5 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import cookie from '@fastify/cookie'
+import cors from '@fastify/cors'
+import helmet from '@fastify/helmet'
 import multipart from '@fastify/multipart'
 import rateLimit from '@fastify/rate-limit'
 import { config } from './config.js'
@@ -25,6 +27,13 @@ import { repositoryWebhookRoutes } from './repositories/git-webhook-routes.js'
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
 
+  await app.register(helmet)
+  // Same-origin only when unconfigured — no CORS registration at all is
+  // the correct default for a self-hosted app whose UI is expected to be
+  // reverse-proxied under the same origin as the API.
+  if (config.corsOrigins.length > 0) {
+    await app.register(cors, { origin: config.corsOrigins, credentials: true })
+  }
   await app.register(cookie)
   await app.register(multipart, { limits: { fileSize: 100 * 1024 * 1024 } })
   await app.register(rateLimit, {
