@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
+import { resolveSyncToken } from '../src/repositories/sync-tokens.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -130,5 +131,53 @@ describe('repository CRUD + shares', () => {
       body: { include: true },
     })
     expect(allowed.statusCode).toBe(200)
+  })
+
+  it('sync tokens: shown once, owner-only, revoke kills resolution', async () => {
+    const owner = await createActiveUser()
+    const stranger = await createActiveUser()
+    const ownerCookie = await loginCookie(app, owner.email)
+    const strangerCookie = await loginCookie(app, stranger.email)
+    const repo = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/repositories',
+        headers: { cookie: ownerCookie },
+        body: { name: 'Tokened', ingestionMethod: 'agent_push' },
+      })
+    ).json() as { id: string }
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: `/api/repositories/${repo.id}/sync-tokens`,
+      headers: { cookie: strangerCookie },
+    })
+    expect(denied.statusCode).toBe(404)
+
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/repositories/${repo.id}/sync-tokens`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(created.statusCode).toBe(200)
+    const { token } = created.json() as { token: string }
+    expect(token).toBeTruthy()
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/api/repositories/${repo.id}/sync-tokens`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(JSON.stringify(listed.json())).not.toContain(token)
+
+    const resolved = await resolveSyncToken(token)
+    expect(resolved?.repositoryId).toBe(repo.id)
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/repositories/${repo.id}/sync-tokens/${resolved!.tokenId}/revoke`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(await resolveSyncToken(token)).toBeNull()
   })
 })

@@ -14,6 +14,7 @@ import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { encryptCredential } from './credentials.js'
 import { listAccessibleRepositories, resolveRepositoryAccess } from './permissions.js'
+import { createSyncToken, listSyncTokens, revokeSyncToken } from './sync-tokens.js'
 
 async function requireOwner(userId: string, repositoryId: string): Promise<boolean> {
   return (await resolveRepositoryAccess(userId, repositoryId)) === 'owner'
@@ -244,6 +245,34 @@ export function repositoryRoutes(app: FastifyInstance) {
         actorUserId: req.user!.id,
         detail: { repositoryId, shareId: share.id },
       })
+      return { status: 'revoked' }
+    },
+  )
+
+  app.post<{ Params: { id: string } }>('/repositories/:id/sync-tokens', async (req, reply) => {
+    if (!(await requireOwner(req.user!.id, req.params.id))) {
+      return reply.code(404).send({ error: 'not found' })
+    }
+    const token = await createSyncToken(req.params.id)
+    // Shown exactly once, same pattern as MCP connection tokens.
+    return { token }
+  })
+
+  app.get<{ Params: { id: string } }>('/repositories/:id/sync-tokens', async (req, reply) => {
+    if (!(await requireOwner(req.user!.id, req.params.id))) {
+      return reply.code(404).send({ error: 'not found' })
+    }
+    return listSyncTokens(req.params.id)
+  })
+
+  app.post<{ Params: { id: string; tokenId: string } }>(
+    '/repositories/:id/sync-tokens/:tokenId/revoke',
+    async (req, reply) => {
+      if (!(await requireOwner(req.user!.id, req.params.id))) {
+        return reply.code(404).send({ error: 'not found' })
+      }
+      const revoked = await revokeSyncToken(req.params.id, req.params.tokenId)
+      if (!revoked) return reply.code(404).send({ error: 'token not found' })
       return { status: 'revoked' }
     },
   )
