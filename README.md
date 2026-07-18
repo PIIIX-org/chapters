@@ -27,7 +27,9 @@ for best AI navigability, see
   flowing through the live collaboration engine, attributed audit trail
   with revert and hard purge, per-connection rate limits
 - **Export & portability** — zip exports with manifest, expiring share
-  links, validated import, full-instance admin backup
+  links, validated import, full-instance admin backup and a matching
+  `pnpm restore-backup` CLI (deliberately not an HTTP endpoint) for
+  disaster recovery onto a fresh instance
 - **Admin oversight** — metadata-only dashboards and instance-wide
   force-revoke; never note content
 
