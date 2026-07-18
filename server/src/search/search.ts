@@ -9,11 +9,20 @@ function uuidArray(ids: string[]): SQL {
   )}]`
 }
 
+export type ResourceType = 'note' | 'code'
+
+export interface SearchResourceSet {
+  vaultIds: string[]
+  repositoryIds: string[]
+}
+
 export interface SearchResult {
-  noteId: string
-  vaultId: string
+  resourceType: ResourceType
+  id: string // noteId or repositoryFileId
+  containerId: string // vaultId or repositoryId
   path: string
-  frontmatter: unknown
+  frontmatter?: unknown // notes only
+  language?: string | null // code only
   snippet: string
   score: number
 }
@@ -21,83 +30,121 @@ export interface SearchResult {
 const CANDIDATES = 30
 const RRF_K = 60
 
+interface Row {
+  id: string
+  container_id: string
+  path: string
+  frontmatter?: unknown
+  language?: string | null
+  snippet: string
+}
+
+async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'semantic', vec?: string): Promise<Row[]> {
+  if (vaultIds.length === 0) return []
+  const rows =
+    mode === 'keyword'
+      ? await db.execute(sql`
+          SELECT id, vault_id AS container_id, path, frontmatter,
+                 ts_headline('english', body, websearch_to_tsquery('english', ${query}),
+                             'MaxWords=30, MinWords=10') AS snippet
+          FROM notes
+          WHERE vault_id = ANY(${uuidArray(vaultIds)})
+            AND deleted_at IS NULL
+            AND fts @@ websearch_to_tsquery('english', ${query})
+          ORDER BY ts_rank(fts, websearch_to_tsquery('english', ${query})) DESC
+          LIMIT ${CANDIDATES}
+        `)
+      : await db.execute(sql`
+          SELECT id, vault_id AS container_id, path, frontmatter, left(body, 200) AS snippet
+          FROM notes
+          WHERE vault_id = ANY(${uuidArray(vaultIds)})
+            AND deleted_at IS NULL
+            AND embedding IS NOT NULL
+          ORDER BY embedding <=> ${vec}::vector
+          LIMIT ${CANDIDATES}
+        `)
+  return rows as unknown as Row[]
+}
+
+async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' | 'semantic', vec?: string): Promise<Row[]> {
+  if (repositoryIds.length === 0) return []
+  const rows =
+    mode === 'keyword'
+      ? await db.execute(sql`
+          SELECT id, repository_id AS container_id, path, language,
+                 ts_headline('english', content, websearch_to_tsquery('english', ${query}),
+                             'MaxWords=30, MinWords=10') AS snippet
+          FROM repository_files
+          WHERE repository_id = ANY(${uuidArray(repositoryIds)})
+            AND fts @@ websearch_to_tsquery('english', ${query})
+          ORDER BY ts_rank(fts, websearch_to_tsquery('english', ${query})) DESC
+          LIMIT ${CANDIDATES}
+        `)
+      : await db.execute(sql`
+          SELECT id, repository_id AS container_id, path, language, left(content, 200) AS snippet
+          FROM repository_files
+          WHERE repository_id = ANY(${uuidArray(repositoryIds)})
+            AND embedding IS NOT NULL
+          ORDER BY embedding <=> ${vec}::vector
+          LIMIT ${CANDIDATES}
+        `)
+  return rows as unknown as Row[]
+}
+
 /**
- * The one search function every caller uses (spec 4: human UI and MCP
- * share one path — results never diverge). Hybrid retrieval: Postgres
- * FTS + embedding KNN, merged by Reciprocal Rank Fusion. The permission
- * boundary is `vaultIds` — resolved live by the caller; the SQL never
- * touches anything outside it, so absence of access is absence from the
- * result set (no counts, no hints).
+ * The one search function every caller uses (spec 4/9: human UI and MCP
+ * share one path across both notes and code — results never diverge).
+ * Hybrid retrieval: Postgres FTS + embedding KNN, merged by Reciprocal
+ * Rank Fusion. The permission boundary is `resources` — resolved live by
+ * the caller; the SQL never touches anything outside it, so absence of
+ * access is absence from the result set (no counts, no hints).
  */
 export async function searchNotes(
-  vaultIds: string[],
+  resources: SearchResourceSet,
   query: string,
   limit = 20,
 ): Promise<SearchResult[]> {
-  if (vaultIds.length === 0 || query.trim() === '') return []
-
-  const keywordRows = (await db.execute(sql`
-    SELECT id, vault_id, path, frontmatter,
-           ts_headline('english', body, websearch_to_tsquery('english', ${query}),
-                       'MaxWords=30, MinWords=10') AS snippet
-    FROM notes
-    WHERE vault_id = ANY(${uuidArray(vaultIds)})
-      AND deleted_at IS NULL
-      AND fts @@ websearch_to_tsquery('english', ${query})
-    ORDER BY ts_rank(fts, websearch_to_tsquery('english', ${query})) DESC
-    LIMIT ${CANDIDATES}
-  `)) as unknown as Array<{
-    id: string
-    vault_id: string
-    path: string
-    frontmatter: unknown
-    snippet: string
-  }>
+  const { vaultIds, repositoryIds } = resources
+  if ((vaultIds.length === 0 && repositoryIds.length === 0) || query.trim() === '') return []
 
   const [queryVec] = await embedder.embed([query])
   const vec = JSON.stringify(queryVec)
-  const semanticRows = (await db.execute(sql`
-    SELECT id, vault_id, path, frontmatter, left(body, 200) AS snippet
-    FROM notes
-    WHERE vault_id = ANY(${uuidArray(vaultIds)})
-      AND deleted_at IS NULL
-      AND embedding IS NOT NULL
-    ORDER BY embedding <=> ${vec}::vector
-    LIMIT ${CANDIDATES}
-  `)) as unknown as Array<{
-    id: string
-    vault_id: string
-    path: string
-    frontmatter: unknown
-    snippet: string
-  }>
+
+  const [noteKeyword, noteSemantic, codeKeyword, codeSemantic] = await Promise.all([
+    noteRows(vaultIds, query, 'keyword'),
+    noteRows(vaultIds, query, 'semantic', vec),
+    codeRows(repositoryIds, query, 'keyword'),
+    codeRows(repositoryIds, query, 'semantic', vec),
+  ])
 
   // Reciprocal Rank Fusion — rank-based, no score normalization to tune.
   const merged = new Map<string, SearchResult>()
-  const contribute = (
-    rows: typeof keywordRows,
-    preferSnippet: boolean,
-  ): void => {
+  const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
     rows.forEach((row, rank) => {
-      const existing = merged.get(row.id)
+      const key = `${resourceType}:${row.id}`
       const contribution = 1 / (RRF_K + rank + 1)
+      const existing = merged.get(key)
       if (existing) {
         existing.score += contribution
         if (preferSnippet) existing.snippet = row.snippet
       } else {
-        merged.set(row.id, {
-          noteId: row.id,
-          vaultId: row.vault_id,
+        merged.set(key, {
+          resourceType,
+          id: row.id,
+          containerId: row.container_id,
           path: row.path,
-          frontmatter: row.frontmatter,
+          frontmatter: resourceType === 'note' ? row.frontmatter : undefined,
+          language: resourceType === 'code' ? row.language : undefined,
           snippet: row.snippet,
           score: contribution,
         })
       }
     })
   }
-  contribute(semanticRows, false)
-  contribute(keywordRows, true) // keyword snippets (highlighted) win
+  contribute('note', noteSemantic, false)
+  contribute('code', codeSemantic, false)
+  contribute('note', noteKeyword, true) // keyword snippets (highlighted) win
+  contribute('code', codeKeyword, true)
 
   return [...merged.values()].sort((a, b) => b.score - a.score).slice(0, limit)
 }

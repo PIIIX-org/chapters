@@ -194,11 +194,11 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         if (args.everywhere) {
           requireAccountScope('search everywhere')
           const vaults = await listAccessibleVaults(auth.user.id)
-          return searchNotes(vaults.map((v) => v.id), args.query, args.limit)
+          return searchNotes({ vaultIds: vaults.map((v) => v.id), repositoryIds: [] }, args.query, args.limit)
         }
         const target = vaultFor(args.vaultId)
         await requireAccess(target, 'read')
-        return searchNotes([target], args.query, args.limit)
+        return searchNotes({ vaultIds: [target], repositoryIds: [] }, args.query, args.limit)
       },
     ),
   )

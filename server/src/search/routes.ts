@@ -20,7 +20,7 @@ export function searchRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const access = await resolveAccess(req.user!.id, req.params.id)
       if (!atLeast(access, 'read')) return reply.code(404).send({ error: 'not found' })
-      return searchNotes([req.params.id], req.query.q, req.query.limit)
+      return searchNotes({ vaultIds: [req.params.id], repositoryIds: [] }, req.query.q, req.query.limit)
     },
   )
 
@@ -31,7 +31,7 @@ export function searchRoutes(app: FastifyInstance) {
     async (req) => {
       const accessible = await listAccessibleVaults(req.user!.id)
       return searchNotes(
-        accessible.map((v) => v.id),
+        { vaultIds: accessible.map((v) => v.id), repositoryIds: [] },
         req.query.q,
         req.query.limit,
       )
