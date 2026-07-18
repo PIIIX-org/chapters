@@ -12,9 +12,9 @@
     "test": "pnpm -r test"
   },
   "devDependencies": {
-    "eslint": "^9.39.0",
+    "eslint": "^10.7.0",
     "prettier": "^3.6.0",
-    "typescript": "^5.9.0",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.46.0"
   }
 }
