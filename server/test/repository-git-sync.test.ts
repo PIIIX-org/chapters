@@ -23,7 +23,12 @@ async function makeTempDir(prefix: string): Promise<string> {
 }
 
 /** A local file:// remote — real git plumbing, fully offline. */
-async function makeBareRemote(): Promise<{ remoteUrl: string; workDir: string; git: ReturnType<typeof simpleGit> }> {
+async function makeBareRemote(): Promise<{
+  remoteUrl: string
+  bareDir: string
+  workDir: string
+  git: ReturnType<typeof simpleGit>
+}> {
   const bareDir = await makeTempDir('chapters-bare-')
   await simpleGit(bareDir).init(true)
 
@@ -34,7 +39,7 @@ async function makeBareRemote(): Promise<{ remoteUrl: string; workDir: string; g
   await git.addConfig('user.name', 'Test')
   await git.addRemote('origin', bareDir)
 
-  return { remoteUrl: `file://${bareDir}`, workDir, git }
+  return { remoteUrl: `file://${bareDir}`, bareDir, workDir, git }
 }
 
 async function makeRepo(gitUrl: string) {
@@ -48,12 +53,16 @@ async function makeRepo(gitUrl: string) {
 
 describe('git URL ingestion', () => {
   it('clones, indexes, then propagates modification/addition/deletion on resync', async () => {
-    const { remoteUrl, workDir, git } = await makeBareRemote()
+    const { remoteUrl, bareDir, workDir, git } = await makeBareRemote()
     await writeFile(join(workDir, 'a.ts'), 'export const a = 1')
     await writeFile(join(workDir, 'b.ts'), 'export const b = 2')
     await git.add('.')
     await git.commit('initial')
     await git.push('origin', 'HEAD:refs/heads/main')
+    // The bare repo's HEAD may not symbolically point at 'main' depending
+    // on the environment's git defaults (e.g. CI vs local) — pin it
+    // explicitly so a --depth 1 clone always finds a checked-out tree.
+    await simpleGit(bareDir).raw(['symbolic-ref', 'HEAD', 'refs/heads/main'])
 
     const repo = await makeRepo(remoteUrl)
     await syncGitRepository(repo.id)
