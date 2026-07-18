@@ -15,6 +15,7 @@ import { logSecurityEvent } from '../auth/security-events.js'
 import { encryptCredential } from './credentials.js'
 import { listAccessibleRepositories, resolveRepositoryAccess } from './permissions.js'
 import { createSyncToken, listSyncTokens, revokeSyncToken } from './sync-tokens.js'
+import { listRepositoryFiles } from './store.js'
 
 async function requireOwner(userId: string, repositoryId: string): Promise<boolean> {
   return (await resolveRepositoryAccess(userId, repositoryId)) === 'owner'
@@ -248,6 +249,12 @@ export function repositoryRoutes(app: FastifyInstance) {
       return { status: 'revoked' }
     },
   )
+
+  app.get<{ Params: { id: string } }>('/repositories/:id/files', async (req, reply) => {
+    const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
+    if (!access) return reply.code(404).send({ error: 'not found' })
+    return listRepositoryFiles(req.params.id)
+  })
 
   app.post<{ Params: { id: string } }>('/repositories/:id/sync-tokens', async (req, reply) => {
     if (!(await requireOwner(req.user!.id, req.params.id))) {
