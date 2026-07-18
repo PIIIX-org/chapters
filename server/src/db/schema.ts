@@ -337,25 +337,32 @@ export const noteLinks = pgTable(
   ],
 )
 
+export const semanticNodeType = pgEnum('semantic_node_type', ['note', 'code'])
+
 /**
- * Semantic INFERRED edges, maintained by the embedding queue. Ordered
- * pair (a < b). Deliberately not vault-restricted — permission filtering
- * happens at query time against the caller's live vault set.
+ * Semantic INFERRED edges, maintained by the embedding/extraction
+ * queues. Polymorphic across notes and repository files (spec 9) — one
+ * shared embedding space means a note and a code file can be semantic
+ * neighbors, so the node identity is (type, id) rather than a plain
+ * note-only FK. No FK constraint on the id columns (same posture as
+ * `vaultShares.granteeId`'s user/team polymorphism) since they point at
+ * different tables depending on type. Ordered pair (canonical string
+ * form `type:id`, A < B). Deliberately not vault/repository-restricted
+ * — permission filtering happens at query time against the caller's
+ * live resource set.
  */
 export const semanticEdges = pgTable(
   'semantic_edges',
   {
-    noteA: uuid('note_a')
-      .notNull()
-      .references(() => notes.id, { onDelete: 'cascade' }),
-    noteB: uuid('note_b')
-      .notNull()
-      .references(() => notes.id, { onDelete: 'cascade' }),
+    nodeAType: semanticNodeType('node_a_type').notNull(),
+    nodeAId: uuid('node_a_id').notNull(),
+    nodeBType: semanticNodeType('node_b_type').notNull(),
+    nodeBId: uuid('node_b_id').notNull(),
     similarity: real('similarity').notNull(),
   },
   (t) => [
-    primaryKey({ columns: [t.noteA, t.noteB] }),
-    index('semantic_edges_b_idx').on(t.noteB),
+    primaryKey({ columns: [t.nodeAType, t.nodeAId, t.nodeBType, t.nodeBId] }),
+    index('semantic_edges_b_idx').on(t.nodeBType, t.nodeBId),
   ],
 )
 

@@ -57,6 +57,20 @@
       "when": 1784372964563,
       "tag": "0007_married_silver_surfer",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784374070366,
+      "tag": "0008_petite_hellfire_club",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784374086695,
+      "tag": "0009_heavy_exiles",
+      "breakpoints": true
     }
   ]
 }

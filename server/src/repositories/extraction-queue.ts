@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFileSymbols, repositoryFiles } from '../db/schema.js'
 import { embedder } from '../search/embeddings.js'
+import { recomputeSemanticEdges } from '../search/semantic-edges.js'
 import { extractStructure, isSupportedLanguage } from './extraction.js'
 import { resolveImportPath } from './import-resolution.js'
 
@@ -75,4 +76,5 @@ async function processFile(fileId: string): Promise<void> {
 
   const [embedding] = await embedder.embed([`${row.path}\n${row.content}`])
   await db.update(repositoryFiles).set({ embedding }).where(eq(repositoryFiles.id, fileId))
+  await recomputeSemanticEdges('code', fileId, embedding!)
 }

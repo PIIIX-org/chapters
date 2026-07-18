@@ -41,7 +41,7 @@ export function graphRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const access = await resolveAccess(req.user!.id, req.params.id)
       if (!atLeast(access, 'read')) return reply.code(404).send({ error: 'not found' })
-      return buildGraph([req.params.id], parseFilters(req.query))
+      return buildGraph({ vaultIds: [req.params.id], repositoryIds: [] }, parseFilters(req.query))
     },
   )
 
@@ -56,7 +56,7 @@ export function graphRoutes(app: FastifyInstance) {
     async (req) => {
       const accessible = await listAccessibleVaults(req.user!.id)
       const accessibleIds = accessible.map((v) => v.id)
-      if (accessibleIds.length === 0) return buildGraph([])
+      if (accessibleIds.length === 0) return buildGraph({ vaultIds: [], repositoryIds: [] })
       const prefs = await db
         .select({ vaultId: vaultGraphPreferences.vaultId })
         .from(vaultGraphPreferences)
@@ -70,7 +70,7 @@ export function graphRoutes(app: FastifyInstance) {
           ),
         )
       return buildGraph(
-        prefs.map((p) => p.vaultId),
+        { vaultIds: prefs.map((p) => p.vaultId), repositoryIds: [] },
         parseFilters(req.query),
       )
     },

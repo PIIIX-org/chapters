@@ -217,7 +217,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
     wrap(async (args: { vaultId?: string; types?: string[]; tags?: string[] }) => {
       const target = vaultFor(args.vaultId)
       await requireAccess(target, 'read')
-      return buildGraph([target], { types: args.types, tags: args.tags })
+      return buildGraph({ vaultIds: [target], repositoryIds: [] }, { types: args.types, tags: args.tags })
     }),
   )
 
