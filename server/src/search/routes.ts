@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { atLeast, listAccessibleVaults, resolveAccess } from '../vaults/permissions.js'
+import { listAccessibleRepositories } from '../repositories/permissions.js'
 import { searchNotes } from './search.js'
 
 const searchQuerySchema = {
@@ -20,18 +21,28 @@ export function searchRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const access = await resolveAccess(req.user!.id, req.params.id)
       if (!atLeast(access, 'read')) return reply.code(404).send({ error: 'not found' })
-      return searchNotes([req.params.id], req.query.q, req.query.limit)
+      return searchNotes({ vaultIds: [req.params.id], repositoryIds: [] }, req.query.q, req.query.limit)
     },
   )
 
-  /** "Search everywhere": every vault the caller can currently reach. */
+  /**
+   * "Search everywhere": every vault and repository the caller can
+   * currently reach — not gated by mergeable/graph-preference, a
+   * deliberately different (broader) scope than the merged graph view.
+   */
   app.get<{ Querystring: { q: string; limit?: number } }>(
     '/search',
     { schema: { querystring: searchQuerySchema } },
     async (req) => {
-      const accessible = await listAccessibleVaults(req.user!.id)
+      const [accessibleVaults, accessibleRepos] = await Promise.all([
+        listAccessibleVaults(req.user!.id),
+        listAccessibleRepositories(req.user!.id),
+      ])
       return searchNotes(
-        accessible.map((v) => v.id),
+        {
+          vaultIds: accessibleVaults.map((v) => v.id),
+          repositoryIds: accessibleRepos.map((r) => r.id),
+        },
         req.query.q,
         req.query.limit,
       )

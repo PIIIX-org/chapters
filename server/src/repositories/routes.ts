@@ -17,6 +17,22 @@ import { generateToken } from '../auth/tokens.js'
 import { listAccessibleRepositories, resolveRepositoryAccess } from './permissions.js'
 import { createSyncToken, listSyncTokens, revokeSyncToken } from './sync-tokens.js'
 import { listRepositoryFiles } from './store.js'
+import { buildGraph, type GraphFilters } from '../graph/assemble.js'
+import { searchNotes } from '../search/search.js'
+
+function parseGraphFilters(q: {
+  types?: string
+  tags?: string
+  since?: string
+  until?: string
+}): GraphFilters {
+  return {
+    types: q.types ? q.types.split(',').filter(Boolean) : undefined,
+    tags: q.tags ? q.tags.split(',').filter(Boolean) : undefined,
+    since: q.since,
+    until: q.until,
+  }
+}
 
 async function requireOwner(userId: string, repositoryId: string): Promise<boolean> {
   return (await resolveRepositoryAccess(userId, repositoryId)) === 'owner'
@@ -248,6 +264,39 @@ export function repositoryRoutes(app: FastifyInstance) {
         detail: { repositoryId, shareId: share.id },
       })
       return { status: 'revoked' }
+    },
+  )
+
+  app.get<{
+    Params: { id: string }
+    Querystring: { types?: string; tags?: string; since?: string; until?: string }
+  }>('/repositories/:id/graph', async (req, reply) => {
+    const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
+    if (!access) return reply.code(404).send({ error: 'not found' })
+    return buildGraph(
+      { vaultIds: [], repositoryIds: [req.params.id] },
+      parseGraphFilters(req.query),
+    )
+  })
+
+  app.get<{ Params: { id: string }; Querystring: { q: string; limit?: number } }>(
+    '/repositories/:id/search',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          required: ['q'],
+          properties: {
+            q: { type: 'string', minLength: 1, maxLength: 500 },
+            limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
+      if (!access) return reply.code(404).send({ error: 'not found' })
+      return searchNotes({ vaultIds: [], repositoryIds: [req.params.id] }, req.query.q, req.query.limit)
     },
   )
 
