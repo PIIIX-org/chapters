@@ -5,11 +5,14 @@ import { mcpConnections, users } from '../db/schema.js'
 import { generateToken, hashToken } from '../auth/tokens.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { resolveAccess } from './permissions.js'
+import { resolveRepositoryAccess } from '../repositories/permissions.js'
 
 export function mcpConnectionRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAuth)
 
-  app.post<{ Body: { name: string; scope: 'account' | 'vault'; vaultId?: string } }>(
+  app.post<{
+    Body: { name: string; scope: 'account' | 'vault' | 'repository'; vaultId?: string; repositoryId?: string }
+  }>(
     '/mcp-connections',
     {
       schema: {
@@ -18,18 +21,24 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
           required: ['name', 'scope'],
           properties: {
             name: { type: 'string', minLength: 1, maxLength: 200 },
-            scope: { enum: ['account', 'vault'] },
+            scope: { enum: ['account', 'vault', 'repository'] },
             vaultId: { type: 'string', format: 'uuid' },
+            repositoryId: { type: 'string', format: 'uuid' },
           },
         },
       },
     },
     async (req, reply) => {
-      const { name, scope, vaultId } = req.body
+      const { name, scope, vaultId, repositoryId } = req.body
       if (scope === 'vault') {
         if (!vaultId) return reply.code(400).send({ error: 'vaultId required for vault scope' })
         const access = await resolveAccess(req.user!.id, vaultId)
         if (!access) return reply.code(404).send({ error: 'vault not found' })
+      }
+      if (scope === 'repository') {
+        if (!repositoryId) return reply.code(400).send({ error: 'repositoryId required for repository scope' })
+        const access = await resolveRepositoryAccess(req.user!.id, repositoryId)
+        if (!access) return reply.code(404).send({ error: 'repository not found' })
       }
       const token = generateToken()
       const [connection] = await db
@@ -39,6 +48,7 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
           name,
           scope,
           vaultId: scope === 'vault' ? vaultId : null,
+          repositoryId: scope === 'repository' ? repositoryId : null,
           tokenHash: hashToken(token),
         })
         .returning()
@@ -46,7 +56,7 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
         type: 'mcp_connection_created',
         actorUserId: req.user!.id,
         mcpConnectionId: connection!.id,
-        detail: { scope, vaultId },
+        detail: { scope, vaultId, repositoryId },
       })
       // The raw token is returned exactly once and stored only as a hash.
       return { ...connectionView(connection!), token }
@@ -89,6 +99,7 @@ function connectionView(c: typeof mcpConnections.$inferSelect) {
     name: c.name,
     scope: c.scope,
     vaultId: c.vaultId,
+    repositoryId: c.repositoryId,
     createdAt: c.createdAt,
     lastUsedAt: c.lastUsedAt,
     expiresAt: c.expiresAt,
