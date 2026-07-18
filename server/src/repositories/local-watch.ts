@@ -1,21 +1,14 @@
-import { readFile, readdir } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import chokidar from 'chokidar'
 import { syncRepositoryFiles, type FileUpdate } from './store.js'
+import { listFilesRecursive } from './fs-scan.js'
 
 // ponytail: hardcoded ignore list, not full .gitignore parsing — covers
 // the overwhelming common case (vendored deps, git internals) cheaply.
-const IGNORED = /(^|\/)(\.git|node_modules)(\/|$)/
+export const IGNORED = /(^|\/)(\.git|node_modules)(\/|$)/
 
 const DEBOUNCE_MS = 300
-
-async function listCurrentPaths(root: string): Promise<string[]> {
-  const entries = await readdir(root, { recursive: true, withFileTypes: true })
-  return entries
-    .filter((e) => e.isFile())
-    .map((e) => relative(root, join(e.parentPath, e.name)))
-    .filter((p) => !IGNORED.test(p))
-}
 
 /** Real-time local-path ingestion (spec 8). Returns a stop() to close the watcher. */
 export function startWatching(repositoryId: string, localPath: string): () => void {
@@ -26,7 +19,7 @@ export function startWatching(repositoryId: string, localPath: string): () => vo
   // if profiling shows this matters for very large local trees.
   const runSync = () => {
     void (async () => {
-      const currentPaths = await listCurrentPaths(localPath)
+      const currentPaths = await listFilesRecursive(localPath, IGNORED)
       const files: FileUpdate[] = []
       for (const path of currentPaths) {
         try {
