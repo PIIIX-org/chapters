@@ -24,7 +24,7 @@ export const userRole = pgEnum('user_role', ['member', 'admin'])
 export const teamRole = pgEnum('team_role', ['owner', 'member'])
 export const granteeType = pgEnum('grantee_type', ['user', 'team'])
 export const permission = pgEnum('permission', ['read', 'edit'])
-export const mcpScope = pgEnum('mcp_scope', ['account', 'vault'])
+export const mcpScope = pgEnum('mcp_scope', ['account', 'vault', 'repository'])
 export const emailTokenPurpose = pgEnum('email_token_purpose', [
   'verify_email',
   'password_reset',
@@ -162,6 +162,9 @@ export const mcpConnections = pgTable(
     name: text('name').notNull(),
     scope: mcpScope('scope').notNull(),
     vaultId: uuid('vault_id').references(() => vaults.id, {
+      onDelete: 'cascade',
+    }),
+    repositoryId: uuid('repository_id').references(() => repositories.id, {
       onDelete: 'cascade',
     }),
     tokenHash: text('token_hash').notNull().unique(),
@@ -452,6 +455,8 @@ export const repositoryFiles = pgTable(
     contentHash: text('content_hash').notNull(),
     size: integer('size').notNull(),
     sourceModifiedAt: timestamp('source_modified_at', { withTimezone: true }),
+    /** Shared embedding index with notes (spec 9) — one model, one vector space. */
+    embedding: vector('embedding', { dimensions: 384 }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -460,6 +465,40 @@ export const repositoryFiles = pgTable(
       .defaultNow(),
   },
   (t) => [uniqueIndex('repository_files_repo_path').on(t.repositoryId, t.path)],
+)
+
+/** EXTRACTED edges for code: raw import targets, resolved against the same repository's files. */
+export const repositoryFileImports = pgTable(
+  'repository_file_imports',
+  {
+    sourceFileId: uuid('source_file_id')
+      .notNull()
+      .references(() => repositoryFiles.id, { onDelete: 'cascade' }),
+    targetPath: text('target_path').notNull(),
+    resolvedTargetFileId: uuid('resolved_target_file_id').references(() => repositoryFiles.id, {
+      onDelete: 'cascade',
+    }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.sourceFileId, t.targetPath] }),
+    index('repository_file_imports_resolved_idx').on(t.resolvedTargetFileId),
+  ],
+)
+
+/** "Contains" edges (spec 9): a file's own top-level declarations — cheap, no cross-file resolution. */
+export const repositoryFileSymbols = pgTable(
+  'repository_file_symbols',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    fileId: uuid('file_id')
+      .notNull()
+      .references(() => repositoryFiles.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    kind: text('kind').notNull(),
+    startLine: integer('start_line').notNull(),
+    endLine: integer('end_line').notNull(),
+  },
+  (t) => [index('repository_file_symbols_file_idx').on(t.fileId)],
 )
 
 /** Auth for the agent/CLI push ingestion method — same lifecycle as an MCP token. */
