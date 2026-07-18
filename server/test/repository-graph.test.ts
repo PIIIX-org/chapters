@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { eq } from 'drizzle-orm'
 import { buildGraph } from '../src/graph/assemble.js'
 import { db } from '../src/db/client.js'
 import { repositories } from '../src/db/schema.js'
@@ -114,6 +115,49 @@ describe('buildGraph over repositories', () => {
     const graph = await buildGraph({ vaultIds: [vault.id], repositoryIds: [repo.id] })
     const semantic = graph.edges.filter((e) => e.kind === 'semantic')
     expect(semantic.length).toBeGreaterThan(0)
+    await app.close()
+  })
+
+  it('resolves a repo: wikilink into a cross-type extracted edge, only within the caller\'s own resource set', async () => {
+    const app = await buildApp()
+    await app.ready()
+    const owner = await createActiveUser()
+    const cookie = await loginCookie(app, owner.email)
+    const repo = await makeRepo()
+    await db.update(repositories).set({ name: 'my-repo' }).where(eq(repositories.id, repo.id))
+    await syncRepositoryFiles(repo.id, [{ path: 'src/auth.ts', content: 'export const auth = 1' }], ['src/auth.ts'])
+    await flushExtraction()
+
+    const vault = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/vaults',
+        headers: { cookie },
+        body: { name: 'repo-link-vault' },
+      })
+    ).json() as { id: string }
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vault.id}/notes`,
+      headers: { cookie },
+      body: { type: 'docs', name: 'auth-design', body: 'See [[repo:my-repo/src/auth.ts]] for the implementation.' },
+    })
+
+    const withRepo = await buildGraph({ vaultIds: [vault.id], repositoryIds: [repo.id] })
+    const noteNode = withRepo.nodes.find((n) => n.path === 'docs/auth-design')!
+    const codeNode = withRepo.nodes.find((n) => n.path === 'src/auth.ts')!
+    expect(
+      withRepo.edges.some(
+        (e) =>
+          e.kind === 'extracted' &&
+          ((e.source === noteNode.id && e.target === codeNode.id) ||
+            (e.source === codeNode.id && e.target === noteNode.id)),
+      ),
+    ).toBe(true)
+
+    // Repository not included in this call's resource set → no edge, no throw.
+    const withoutRepo = await buildGraph({ vaultIds: [vault.id], repositoryIds: [] })
+    expect(withoutRepo.edges.some((e) => e.kind === 'extracted')).toBe(false)
     await app.close()
   })
 })

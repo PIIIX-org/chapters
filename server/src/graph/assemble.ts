@@ -10,6 +10,7 @@ import { db } from '../db/client.js'
 import {
   noteLinks,
   notes,
+  repositories,
   repositoryFileImports,
   repositoryFiles,
   semanticEdges,
@@ -145,8 +146,25 @@ export async function buildGraph(
   const noteByVaultPath = new Map(
     internalNodes.filter((n) => n.resourceType === 'note').map((n) => [`${n.resourceId}:${n.path}`, n.id]),
   )
+  const codeByRepoPath = new Map(
+    internalNodes.filter((n) => n.resourceType === 'code').map((n) => [`${n.resourceId}:${n.path}`, n.id]),
+  )
   const noteIds = internalNodes.filter((n) => n.resourceType === 'note').map((n) => n.id)
   const codeIds = internalNodes.filter((n) => n.resourceType === 'code').map((n) => n.id)
+
+  // repo:<name>/<path> wikilinks resolve only against repositories already
+  // in this call's own resource set — never a wider lookup.
+  const repoNameToId =
+    repositoryIds.length > 0
+      ? new Map(
+          (
+            await db
+              .select({ id: repositories.id, name: repositories.name })
+              .from(repositories)
+              .where(inArray(repositories.id, repositoryIds))
+          ).map((r) => [r.name, r.id]),
+        )
+      : new Map<string, string>()
 
   const edges: GraphEdge[] = []
   const seen = new Set<string>()
@@ -159,12 +177,20 @@ export async function buildGraph(
   }
 
   if (noteIds.length > 0) {
-    // EXTRACTED: wikilinks resolve within the source note's own vault
-    // (or against a repository, per Task 5's repo: prefix — added there).
+    // EXTRACTED: plain wikilinks resolve within the source note's own
+    // vault; a `repo:<name>/<path>` link resolves against a repository
+    // already in this call's resource set (cross-type — spec 9).
     const links = await db.select().from(noteLinks).where(inArray(noteLinks.sourceNoteId, noteIds))
     for (const link of links) {
       const source = byId.get(link.sourceNoteId)
       if (!source) continue
+      if (link.targetPath.startsWith('repo:')) {
+        const [repoName, ...pathParts] = link.targetPath.slice('repo:'.length).split('/')
+        const repositoryId = repoName ? repoNameToId.get(repoName) : undefined
+        const targetId = repositoryId ? codeByRepoPath.get(`${repositoryId}:${pathParts.join('/')}`) : undefined
+        if (targetId) addEdge(link.sourceNoteId, targetId, 'extracted')
+        continue
+      }
       const targetId = noteByVaultPath.get(`${source.resourceId}:${link.targetPath}`)
       if (targetId) addEdge(link.sourceNoteId, targetId, 'extracted')
     }
