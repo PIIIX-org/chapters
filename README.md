@@ -31,15 +31,23 @@ for best AI navigability, see
 - **Admin oversight** — metadata-only dashboards and instance-wide
   force-revoke; never note content
 
-Sub-project 8 (**Repository ingestion & permissions**) is implemented:
-connect a codebase via git URL (shallow clone + webhook/poll
-freshness), a local path (real-time filesystem watch), or an agent/CLI
-push, and share it read-only the same way a vault is shared. See
-[`2026-07-18-repository-ingestion-design.md`](docs/superpowers/specs/2026-07-18-repository-ingestion-design.md).
-Sub-project 9 (**Code graph & unified search/MCP integration** — tree-
-sitter extraction joining the existing graph/search/MCP engines) is
-next. See
-[`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
+**Codebase mapping** is also implemented, extending the platform beyond
+notes to also index and query code — read-only, sharing the same graph/
+search/MCP engines rather than a parallel one:
+
+- **Repository ingestion & permissions** — connect a codebase via git
+  URL (shallow clone + webhook/poll freshness), a local path (real-time
+  filesystem watch), or an agent/CLI push, and share it read-only the
+  same way a vault is shared. See
+  [`2026-07-18-repository-ingestion-design.md`](docs/superpowers/specs/2026-07-18-repository-ingestion-design.md).
+- **Code graph & unified search/MCP** — tree-sitter-derived import and
+  symbol structure; `buildGraph`/`searchNotes` extended to span both
+  vaults and repositories (one function, every caller); semantic edges
+  between a note and the code it describes, since both share one
+  embedding space; a `repo:` wikilink form links notes directly to
+  code; MCP gains repository-aware tools and a hard-scoped connection
+  type. See
+  [`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
 
 The UI (React + CodeMirror 6) starts once its page-by-page structure is
 designed — tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).

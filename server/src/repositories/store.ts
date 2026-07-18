@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { and, eq, notInArray } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { repositoryFiles } from '../db/schema.js'
+import { repositoryFiles, repositoryFileSymbols } from '../db/schema.js'
 import { detectLanguage } from './language.js'
 import { scheduleExtraction } from './extraction-queue.js'
 
@@ -39,6 +39,10 @@ export async function syncRepositoryFiles(
   const existingByPath = new Map(existing.map((r) => [r.path, r]))
 
   const result: SyncResult = { created: 0, updated: 0, deleted: 0, unchanged: 0 }
+  // Extraction is scheduled only after the whole batch is persisted (below)
+  // — starting it per-file would race cross-file import resolution against
+  // sibling files in the same batch still being inserted.
+  const toExtract: string[] = []
 
   for (const file of changedOrNewFiles) {
     const contentHash = createHash('sha256').update(file.content).digest('hex')
@@ -59,11 +63,11 @@ export async function syncRepositoryFiles(
     }
     if (current) {
       await db.update(repositoryFiles).set(values).where(eq(repositoryFiles.id, current.id))
-      scheduleExtraction(current.id)
+      toExtract.push(current.id)
       result.updated += 1
     } else {
       const [inserted] = await db.insert(repositoryFiles).values(values).returning({ id: repositoryFiles.id })
-      scheduleExtraction(inserted!.id)
+      toExtract.push(inserted!.id)
       result.created += 1
     }
   }
@@ -82,6 +86,8 @@ export async function syncRepositoryFiles(
     )
     result.deleted = toDelete.length
   }
+
+  for (const id of toExtract) scheduleExtraction(id)
 
   return result
 }
@@ -110,4 +116,19 @@ export async function listRepositoryFiles(
     })
     .from(repositoryFiles)
     .where(eq(repositoryFiles.repositoryId, repositoryId))
+}
+
+/** Declared top-level symbols for a file — its "outline" (spec 9). */
+export async function listFileSymbols(
+  fileId: string,
+): Promise<Array<Pick<typeof repositoryFileSymbols.$inferSelect, 'name' | 'kind' | 'startLine' | 'endLine'>>> {
+  return db
+    .select({
+      name: repositoryFileSymbols.name,
+      kind: repositoryFileSymbols.kind,
+      startLine: repositoryFileSymbols.startLine,
+      endLine: repositoryFileSymbols.endLine,
+    })
+    .from(repositoryFileSymbols)
+    .where(eq(repositoryFileSymbols.fileId, fileId))
 }
