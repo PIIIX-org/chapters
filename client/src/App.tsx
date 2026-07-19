@@ -1,4 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { RouterProvider } from 'react-router'
+import { router } from './router.js'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false } },
@@ -7,7 +9,7 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="font-display text-2xl">Chapters</div>
+      <RouterProvider router={router} />
     </QueryClientProvider>
   )
 }
