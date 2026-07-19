@@ -3,8 +3,9 @@ import { render, screen } from '@testing-library/react'
 import App from './App'
 
 describe('App', () => {
-  it('renders the Chapters wordmark', () => {
+  it('renders the Chapters wordmark in the display font', () => {
     render(<App />)
-    expect(screen.getByText('Chapters')).toBeInTheDocument()
+    const wordmark = screen.getByText('Chapters')
+    expect(wordmark).toHaveClass('font-display')
   })
 })

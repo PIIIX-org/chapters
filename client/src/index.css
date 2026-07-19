@@ -1,0 +1,75 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-display: "Petrona", serif;
+  --font-sans: "Hanken Grotesk", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+}
+
+:root {
+  --radius: 0.5rem;
+  /* Canvas / surface / ink, from the design system spec */
+  --background: #F4F1EA;
+  --foreground: #1C1A16;
+  --card: #FAF7F0;
+  --card-foreground: #1C1A16;
+  /* Human accent = primary (anything a person authored) */
+  --primary: #BA3B1D;
+  --primary-foreground: #FAF7F0;
+  --secondary: #EAE5D8;
+  --secondary-foreground: #1C1A16;
+  --muted: #EAE5D8;
+  --muted-foreground: #6B6558;
+  /* AI/machine accent used as the accent role */
+  --accent: #2B6E6B;
+  --accent-foreground: #FAF7F0;
+  --destructive: #BA3B1D;
+  --border: #D8D2C2;
+  --input: #D8D2C2;
+  --ring: #BA3B1D;
+}
+
+.dark {
+  --background: #17140F;
+  --foreground: #EDE8DD;
+  --card: #201C15;
+  --card-foreground: #EDE8DD;
+  --primary: #E2683F;
+  --primary-foreground: #17140F;
+  --secondary: #0F0D0A;
+  --secondary-foreground: #EDE8DD;
+  --muted: #0F0D0A;
+  --muted-foreground: #A39C8C;
+  --accent: #4FA39F;
+  --accent-foreground: #17140F;
+  --destructive: #E2683F;
+  --border: #322C22;
+  --input: #322C22;
+  --ring: #E2683F;
+}
+
+body {
+  font-family: var(--font-sans);
+}

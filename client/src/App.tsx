@@ -1,3 +1,3 @@
 export default function App() {
-  return <div>Chapters</div>
+  return <div className="font-display text-2xl">Chapters</div>
 }
