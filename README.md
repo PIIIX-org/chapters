@@ -68,7 +68,10 @@ Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
 and is agent-driven: the working agreements (implementation prompt, file/
 context/resume/testing protocols, GitHub workflow) live in
-[`docs/agents/`](docs/agents/).
+[`docs/agents/`](docs/agents/). For a full technical walkthrough of the
+backend — every subsystem, the data model, security posture, testing/
+deployment, and a maintenance runbook — see
+[`docs/agents/backend-reference.md`](docs/agents/backend-reference.md).
 
 All six sub-project specs have been through a dedicated security audit; see
 [`2026-07-12-security-audit-findings.md`](docs/superpowers/specs/2026-07-12-security-audit-findings.md)
