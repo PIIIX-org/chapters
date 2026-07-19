@@ -1,12 +1,3 @@
-// @vitest-environment happy-dom
-//
-// react-router's data router builds a native `Request` (Node's undici) for every
-// client-side navigation, even without loaders. jsdom overrides global
-// AbortController/AbortSignal with its own (non-undici-compatible) versions but
-// doesn't provide Request/fetch, so undici's Request rejects the signal:
-// https://github.com/vitest-dev/vitest/issues/8374
-// happy-dom ships a matching fetch/Request/AbortController set, so this file
-// (and App.test.tsx, which also exercises <Navigate>) run under it instead.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
