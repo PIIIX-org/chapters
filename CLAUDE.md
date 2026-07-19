@@ -9,5 +9,8 @@ Operating docs live in `docs/agents/`. Read in this order, every session:
 5. `docs/agents/github-workflow.md` — dev/prod branches, PR/issue/promotion cycle
 
 Design source of truth: `docs/superpowers/specs/`. Current phase:
-**backend only** — no UI code until the backend is done and the
-page-by-page UI structure is designed.
+**UI phase.** Backend is complete; page-by-page structure
+(`2026-07-17-hosted-ui-structure-design.md`) and the visual design system
+(`2026-07-19-ui-design-system.md`) are both approved. Building `client/`
+slice by slice per `docs/superpowers/plans/` — see `docs/agents/STATE.md`
+for current position.
