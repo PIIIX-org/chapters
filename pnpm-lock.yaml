@@ -86,6 +86,9 @@ importers:
       tree-sitter-go:
         specifier: ^0.25.0
         version: 0.25.0
+      tree-sitter-javascript:
+        specifier: ^0.23.1
+        version: 0.23.1
       tree-sitter-python:
         specifier: ^0.25.0
         version: 0.25.0

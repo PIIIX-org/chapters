@@ -35,6 +35,28 @@ describe('extractStructure', () => {
     )
   })
 
+  it('extracts JavaScript imports and top-level symbols', async () => {
+    const src = [
+      "import { x } from './a'",
+      "import y from '../b'",
+      '',
+      'function foo() {',
+      '  return 1',
+      '}',
+      '',
+      'class Bar {}',
+      '',
+    ].join('\n')
+    const result = await extractStructure('javascript', src)
+    expect(result.imports.sort()).toEqual(['../b', './a'])
+    expect(result.symbols).toEqual(
+      expect.arrayContaining([
+        { name: 'foo', kind: 'function', startLine: 4, endLine: 6 },
+        { name: 'Bar', kind: 'class', startLine: 8, endLine: 8 },
+      ]),
+    )
+  })
+
   it('extracts Python imports and top-level symbols', async () => {
     const src = [
       'import os',
