@@ -28,7 +28,7 @@
     "fastify-plugin": "^5.0.1",
     "graphology": "^0.26.0",
     "graphology-communities-louvain": "^2.0.2",
-    "nodemailer": "^7.0.0",
+    "nodemailer": "^9.0.3",
     "otpauth": "^9.5.1",
     "postgres": "^3.4.7",
     "simple-git": "^3.36.0",

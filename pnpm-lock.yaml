@@ -72,8 +72,8 @@ importers:
         specifier: ^2.0.2
         version: 2.0.2(graphology-types@0.24.8)
       nodemailer:
-        specifier: ^7.0.0
-        version: 7.0.13
+        specifier: ^9.0.3
+        version: 9.0.3
       otpauth:
         specifier: ^9.5.1
         version: 9.5.1
@@ -2083,8 +2083,8 @@ packages:
     resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
     hasBin: true
 
-  nodemailer@7.0.13:
-    resolution: {integrity: sha512-PNDFSJdP+KFgdsG3ZzMXCgquO7I6McjY2vlqILjtJd0hy8wEvtugS9xKRF2NWlPNGxvLCXlTNIae4serI7dinw==}
+  nodemailer@9.0.3:
+    resolution: {integrity: sha512-n+YP+NKwR5zRWa60k3GiQ6Q3B4KXCoAw40dAKeCtYn020iNN74aWK2liXIC3ZEATeGql7we3tE3t8QwhY0eskw==}
     engines: {node: '>=6.0.0'}
 
   object-assign@4.1.1:
@@ -4289,7 +4289,7 @@ snapshots:
 
   node-gyp-build@4.8.4: {}
 
-  nodemailer@7.0.13: {}
+  nodemailer@9.0.3: {}
 
   object-assign@4.1.1: {}
 
