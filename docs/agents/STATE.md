@@ -2,38 +2,30 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Phase**: BACKEND COMPLETE — hardened + documented
-- **Done**: full backend (original 7 + admin/MFA + codebase mapping 8/9
-  + backup restore). Pre-production hardening pass: verified the real
-  ONNX embedding path live (`NODE_ENV=production`, had never actually
-  run before), built+ran the real Dockerfile against real Postgres,
-  `@fastify/helmet` + env-gated `@fastify/cors`, `.github/dependabot.yml`,
-  single-process constraint consolidated into `implementation.md`.
-  Then: fixed the Dependabot npm group (was bundling major+minor
-  together, one breaking major sank the whole batch — now
-  minor/patch only, majors get individual PRs), found+fixed a real
-  latent bug (`tree-sitter-javascript` used but never declared as a
-  dependency, only worked by accident via `tsx`'s `NODE_PATH`), and
-  wrote `docs/agents/backend-reference.md` — full architecture, data
-  model, every subsystem, security, testing/deployment, maintenance
-  runbook. Details of both passes: `backend-reference.md` §11 and this
-  file's git history. 130 tests green.
-- **Current task**: UI phase kicked off. Page-by-page structure was
-  already speced (`2026-07-17-hosted-ui-structure-design.md`); its
-  deferred visual-design pass is now done too —
-  `2026-07-19-ui-design-system.md` (light-first "paper & ink,"
-  dual-accent human/AI color system, ink-fade graph decay, Figma-pattern
-  collab cursors on a curated ink palette, anti-slop tooling locked in:
-  `impeccable`, `gsap-skills`, `frontend-design`, `design-taste-frontend`).
-  Built via `/design-consultation`, approved by owner. Next: writing-plans
-  skill to turn both specs into an implementation plan, then build
-  `client/`.
-- **Next step (UI phase)**: run writing-plans against the two UI specs,
-  then build `client/` per `docs/agents/implementation.md`.
+- **Phase**: UI PHASE — Slice 1 (Scaffold + Auth) complete; Slice 2
+  (Editor) next.
+- **Done**: full backend, hardened + documented (130 tests; real ONNX
+  embeddings, real Dockerfile/Postgres, helmet+cors, Dependabot; see
+  `backend-reference.md` for full architecture/security/runbook — details
+  of the hardening pass live there and in this file's git history).
+  Slice 1 of the UI (`client/`, Tasks 1-13): Vite+React+TS scaffold,
+  Tailwind design system (paper & ink palette, `.dark` mode), shadcn
+  primitives (Button/Input/Label/Card), typed API client + auth
+  functions, TanStack Query session hook, react-router + `RequireAuth`
+  guard, every auth page (Setup, Signup, VerifyEmail, Login with inline
+  MFA, password reset request/confirm, logout). React-aware ESLint
+  (`eslint-plugin-react-hooks`/`-react-refresh`) now wired for
+  `client/**`. Full root verification green: lint, typecheck, 35 client +
+  130 server tests, `client` production build.
+- **Current task**: none — Slice 1 done and verified end to end.
+- **Next step**: Slice 2 (Editor) — live-preview markdown editing with
+  CodeMirror 6, OKF-compliant by construction. No spec/plan written yet;
+  run writing-plans against the Editor sub-project design first.
 - **Known deferred** (all deliberate, documented, verified via a
   full-repo audit 2026-07-18): cloud storage/scheduled backups,
   cli-visualizer (#9, assigned), cross-file call-graph resolution,
   symbol-level embeddings, Leiden upgrade, partial/selective restore,
   anomaly detection for runaway AI edit loops, single-process
-  architecture (see implementation.md).
+  architecture (see implementation.md). MFA *enrollment* UI is Settings-
+  page work for a later slice, not built yet (Global Constraints).
 - **Open issues**: #9 (deferred, assigned)
