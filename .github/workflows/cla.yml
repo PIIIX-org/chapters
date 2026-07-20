@@ -24,5 +24,5 @@ jobs:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/PIIIX-org/.github/blob/main/CLA.md'
           branch: 'main'
-          allowlist: taha-mahmoodi
+          allowlist: Taha-Mahmoodi
           custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign it'
