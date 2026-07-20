@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mockJsonResponse } from '../lib/api'
-import { getNote, getVaultTree } from './notes'
+import { getNote, getVaultTree, updateNote } from './notes'
 
 describe('notes api', () => {
   afterEach(() => {
@@ -40,6 +40,27 @@ describe('notes api', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/vaults/v1/notes/people/jane',
       expect.objectContaining({ credentials: 'include' }),
+    )
+  })
+
+  it('updateNote calls PUT /api/vaults/:id/notes/:path with the body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse(200, {
+        id: 'n1',
+        path: 'people/jane',
+        frontmatter: { type: 'people' },
+        body: 'Updated body.',
+        updatedAt: '2026-01-02',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await updateNote('v1', 'people/jane', { body: 'Updated body.' })
+
+    expect(result.body).toBe('Updated body.')
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/vaults/v1/notes/people/jane',
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ body: 'Updated body.' }) }),
     )
   })
 })
