@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js'
 import { Input } from '../../components/ui/input.js'
 import { Label } from '../../components/ui/label.js'
+import { FormError } from '../../components/FormError.js'
 import { resetPassword } from '../../api/auth.js'
 import { ApiError } from '../../lib/api.js'
 
@@ -48,7 +49,7 @@ export function ResetPasswordPage() {
                 required
               />
             </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            <FormError message={error} />
             <Button type="submit" disabled={submitting}>
               Reset password
             </Button>

@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/button.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js'
 import { Input } from '../../components/ui/input.js'
 import { Label } from '../../components/ui/label.js'
+import { FormError } from '../../components/FormError.js'
 import { isMfaRequired, login } from '../../api/auth.js'
 import { ApiError } from '../../lib/api.js'
 import { SESSION_QUERY_KEY } from '../../hooks/useSession.js'
@@ -65,7 +66,7 @@ export function LoginPage() {
                 <Label htmlFor="login-totp">Authentication code</Label>
                 <Input id="login-totp" value={totp} onChange={(e) => setTotp(e.target.value)} required autoFocus />
               </div>
-              {error && <p className="text-sm text-destructive">{error}</p>}
+              <FormError message={error} />
               <Button type="submit" disabled={submitting}>
                 Verify code
               </Button>
@@ -86,7 +87,7 @@ export function LoginPage() {
                   required
                 />
               </div>
-              {error && <p className="text-sm text-destructive">{error}</p>}
+              <FormError message={error} />
               <Button type="submit" disabled={submitting}>
                 Log in
               </Button>
