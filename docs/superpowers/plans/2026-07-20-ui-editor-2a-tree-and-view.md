@@ -717,7 +717,7 @@ git commit -m "Add VaultLayout with file-tree sidebar and empty state"
 ```tsx
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { getDefaultNormalizer, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { mockJsonResponse } from '../../lib/api'
 import { NoteView } from './NoteView'
@@ -757,7 +757,13 @@ describe('NoteView', () => {
 
     await waitFor(() => expect(screen.getByText('people/jane')).toBeInTheDocument())
     expect(screen.getByText('type:')).toBeInTheDocument()
-    expect(screen.getByText('# Jane\n\nNotes about Jane.')).toBeInTheDocument()
+    // RTL's default normalizer collapses whitespace (including \n\n); the
+    // <pre> body must preserve raw newlines, so the matcher opts out instead.
+    expect(
+      screen.getByText('# Jane\n\nNotes about Jane.', {
+        normalizer: getDefaultNormalizer({ collapseWhitespace: false }),
+      }),
+    ).toBeInTheDocument()
   })
 
   it('shows a not-found message for a missing note', async () => {
@@ -811,7 +817,7 @@ export function NoteView() {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border px-8 py-4 text-sm text-muted-foreground">
-        {(vault?.name ?? vaultId) + ' / ' + note.data!.path}
+        {vault?.name ?? vaultId} / <span className="text-foreground">{note.data!.path}</span>
       </div>
       <div className="border-b border-border px-8 py-4">
         <dl className="flex flex-col gap-1 text-sm">
