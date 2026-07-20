@@ -9,6 +9,7 @@ import { SignupPage } from './pages/auth/SignupPage.js'
 import { VerifyEmailPage } from './pages/auth/VerifyEmailPage.js'
 import { VaultLayout } from './pages/vault/VaultLayout.js'
 import { NoteEmptyState } from './pages/vault/NoteEmptyState.js'
+import { NoteView } from './pages/vault/NoteView.js'
 
 export const router = createBrowserRouter([
   {
@@ -18,7 +19,10 @@ export const router = createBrowserRouter([
       {
         path: '/vaults/:vaultId',
         element: <VaultLayout />,
-        children: [{ index: true, element: <NoteEmptyState /> }],
+        children: [
+          { index: true, element: <NoteEmptyState /> },
+          { path: 'notes/*', element: <NoteView /> },
+        ],
       },
     ],
   },
