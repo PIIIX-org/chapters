@@ -239,3 +239,4 @@ open specs (see "Known gaps" above) is useful at any time; code
 contributions should target gaps in the implemented backend or wait for
 the UI phase to begin — check `docs/agents/STATE.md` for current status.
 
+
