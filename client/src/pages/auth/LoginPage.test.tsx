@@ -79,4 +79,25 @@ describe('LoginPage', () => {
       }),
     )
   })
+
+  it('shows an error and stays on the TOTP field when the code is wrong', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockJsonResponse(401, { error: 'totp code required', mfaRequired: true }))
+      .mockResolvedValueOnce(mockJsonResponse(401, { error: 'invalid totp code', mfaRequired: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.type(screen.getByLabelText('Email'), 'a@b.com')
+    await user.type(screen.getByLabelText('Password'), 'password123')
+    await user.click(screen.getByRole('button', { name: 'Log in' }))
+
+    const totpField = await screen.findByLabelText('Authentication code')
+    await user.type(totpField, '000000')
+    await user.click(screen.getByRole('button', { name: 'Verify code' }))
+
+    await waitFor(() => expect(screen.getByText('invalid totp code')).toBeInTheDocument())
+    expect(screen.getByLabelText('Authentication code')).toBeInTheDocument()
+  })
 })

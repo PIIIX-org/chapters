@@ -29,6 +29,9 @@ export function LoginPage() {
     } catch (err) {
       if (isMfaRequired(err)) {
         setMfaChallenge(true)
+        // withTotp means this was a retry with a code already entered, so mfaRequired here
+        // means the code was wrong, not that we're seeing the prompt for the first time.
+        if (withTotp) setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.')
       } else if (err instanceof ApiError) {
         setError(err.message)
       } else {
