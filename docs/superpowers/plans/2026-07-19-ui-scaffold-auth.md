@@ -453,7 +453,7 @@ git commit -m "Add Tailwind v4 + shadcn/ui, remapped to the design system palett
 ### Task 3: shadcn primitives (Button, Input, Label, Card)
 
 **Files:**
-- Create: `client/src/components/ui/button.tsx` (generated)
+- Verify (already exists from Task 2's `shadcn init`): `client/src/components/ui/button.tsx`
 - Create: `client/src/components/ui/input.tsx` (generated)
 - Create: `client/src/components/ui/label.tsx` (generated)
 - Create: `client/src/components/ui/card.tsx` (generated)
@@ -482,22 +482,34 @@ describe('Button', () => {
 })
 ```
 
-- [ ] **Step 2: Run it, confirm it fails**
+- [ ] **Step 2: Run it, check the result**
 
 Run: `pnpm -C client test`
-Expected: FAIL — `./button` doesn't exist yet.
+`button.tsx` already exists (Task 2's `shadcn init` artifact), so this may
+already PASS rather than fail — that's fine, it means Task 2's generated
+Button already satisfies this interface; the test now locks that behavior
+in rather than driving new code. If it fails, treat the failure output as
+the real RED step and fix `button.tsx` in Step 3 alongside adding the
+other components.
 
-- [ ] **Step 3: Add the components via the shadcn CLI**
+- [ ] **Step 3: Add the remaining components via the shadcn CLI**
 
 Run:
 ```bash
 cd ~/Documents/chapters/client
-pnpm dlx shadcn@latest add @shadcn/button @shadcn/input @shadcn/label @shadcn/card
+pnpm dlx shadcn@latest add @shadcn/input @shadcn/label @shadcn/card
 ```
-Expected: writes `src/components/ui/button.tsx`, `input.tsx`, `label.tsx`,
-`card.tsx`, and adds `class-variance-authority`, `@radix-ui/react-slot`,
-`@radix-ui/react-label` to `client/package.json` (shadcn's Button/Label
-depend on these Radix primitives).
+Expected: writes `src/components/ui/input.tsx`, `label.tsx`, and `card.tsx`.
+`button.tsx` already exists from Task 2 (a `radix-nova`-preset artifact of
+running `shadcn init`) — check it against what a fresh `shadcn add button`
+would generate rather than re-adding it blindly; if they match, leave it,
+if not, regenerate it. Task 2 established the `radix-nova` preset, which
+ships Radix via the consolidated `radix-ui` meta-package (Task 2's
+`button.tsx` already imports `{ Slot } from 'radix-ui'`), **not** the
+scoped `@radix-ui/react-slot`/`@radix-ui/react-label` packages — expect
+`class-variance-authority` and possibly a `label.tsx`-specific Radix import
+from the same `radix-ui` package, not new scoped-package entries in
+`client/package.json`.
 
 - [ ] **Step 4: Run the test, verify it passes**
 

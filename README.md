@@ -4,7 +4,8 @@ An open-source, self-hostable "second brain" platform: a team knowledge base
 built on plain markdown files, a live-preview editor, and an AI-navigable
 knowledge graph.
 
-**Status: backend complete; UI phase next.** All specs
+**Status: backend complete; UI phase underway (Slice 1 — Scaffold + Auth —
+done; Editor next).** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -51,8 +52,9 @@ search/MCP engines rather than a parallel one:
   type. See
   [`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
 
-The UI (React + CodeMirror 6) starts once its page-by-page structure is
-designed — tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).
+The UI (React + CodeMirror 6) is underway — Slice 1 (Scaffold + Auth) is
+done, Slice 2 (Editor) is next — tracked in
+[`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
 real deployment — security headers on by default, CORS off (same-origin
@@ -63,6 +65,13 @@ queues, the live-collaboration permission-kick bus, MCP rate limiting,
 and repository polling are all in-process state) — see
 [`docs/agents/implementation.md`](docs/agents/implementation.md)'s
 "Deployment topology" section before running more than one instance.
+
+The frontend (`client/`) is a Vite + React app. In development, run the
+API (`pnpm -C server dev`) and the frontend (`pnpm -C client dev`)
+side by side — Vite proxies `/api/*` to the API on port 3000, so no CORS
+configuration is needed locally. `pnpm -C client build` produces a static
+`client/dist/` bundle to serve behind the same reverse proxy as the API in
+production.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
@@ -234,7 +243,8 @@ below are tracked but not yet designed:
 
 ## Contributing
 
-The backend is implemented; the UI hasn't started. Design feedback on
-open specs (see "Known gaps" above) is useful at any time; code
-contributions should target gaps in the implemented backend or wait for
-the UI phase to begin — check `docs/agents/STATE.md` for current status.
+The backend and Slice 1 of the UI (scaffold + auth) are implemented; the
+Editor and later slices haven't started. Design feedback on open specs
+(see "Known gaps" above) is useful at any time; code contributions should
+target gaps in the implemented backend/UI or wait for the next slice —
+check `docs/agents/STATE.md` for current status.
