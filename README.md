@@ -72,6 +72,9 @@ side by side — Vite proxies `/api/*` to the API on port 3000, so no CORS
 configuration is needed locally. `pnpm -C client build` produces a static
 `client/dist/` bundle to serve behind the same reverse proxy as the API in
 production.
+Logged-in users can now browse their vaults and view notes read-only
+(`/vaults/:id`, `/vaults/:id/notes/*`) — editing arrives in the next
+UI sub-plan.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
