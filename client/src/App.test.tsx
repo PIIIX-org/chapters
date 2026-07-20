@@ -13,6 +13,6 @@ describe('App', () => {
 
     render(<App />)
 
-    await waitFor(() => expect(screen.getByText('Login page (Task 10)')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByLabelText('Email')).toBeInTheDocument())
   })
 })
