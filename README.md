@@ -238,3 +238,4 @@ The backend is implemented; the UI hasn't started. Design feedback on
 open specs (see "Known gaps" above) is useful at any time; code
 contributions should target gaps in the implemented backend or wait for
 the UI phase to begin — check `docs/agents/STATE.md` for current status.
+
