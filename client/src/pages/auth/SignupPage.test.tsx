@@ -2,16 +2,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { createMemoryRouter, RouterProvider } from 'react-router'
+import { createMemoryRouter, RouterProvider, useLocation } from 'react-router'
 import { mockJsonResponse } from '../../lib/api'
 import { SignupPage } from './SignupPage'
+
+function VerifyEmailStub() {
+  const location = useLocation()
+  const email = (location.state as { email?: string } | null)?.email
+  return <div>Verify email page: {email}</div>
+}
 
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const router = createMemoryRouter(
     [
       { path: '/signup', element: <SignupPage /> },
-      { path: '/verify-email', element: <div>Verify email page</div> },
+      { path: '/verify-email', element: <VerifyEmailStub /> },
     ],
     { initialEntries: ['/signup'] },
   )
@@ -36,6 +42,6 @@ describe('SignupPage', () => {
     await user.type(screen.getByLabelText('Password'), 'a-strong-password')
     await user.click(screen.getByRole('button', { name: 'Sign up' }))
 
-    await waitFor(() => expect(screen.getByText('Verify email page')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Verify email page: new@example.com')).toBeInTheDocument())
   })
 })
