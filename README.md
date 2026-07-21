@@ -240,6 +240,23 @@ below are tracked but not yet designed:
   [issue #9](https://github.com/PIIIX-org/chapters/issues/9). Deferred
   until the backend and its CLI surface exist; see
   [`2026-07-17-cli-visualizer-design.md`](docs/superpowers/specs/2026-07-17-cli-visualizer-design.md).
+- **MCP `rename_note` tool** — a viral X post/article claiming "MCP is the
+  missing piece between Claude Code and your Obsidian vault" prompted a
+  look at community vault-as-MCP-server projects (e.g.
+  [obsidian-claude-code-mcp](https://github.com/iansinnott/obsidian-claude-code-mcp),
+  the ["Vault as MCP" Obsidian plugin](https://community.obsidian.md/plugins/vault-as-mcp)).
+  Their tool surface (read/search/create/update/delete/rename notes, daily
+  notes, templates) is narrower than Chapters' own 14-tool MCP layer
+  (permission-scoped tokens, CRDT-safe collaborative writes, RRF-fused
+  search over notes *and* code, revision history/revert — see
+  `docs/agents/backend-reference.md` §5.8) — so the pattern itself isn't
+  something Chapters needs to adopt. One concrete gap did turn up: `rename`
+  has a REST route and a `renameNote()` store function already (used by the
+  UI's upcoming note-lifecycle work in Slice 2b) but no MCP tool wraps it
+  yet, unlike `search`/`graph`, which share their REST implementation.
+  Low-effort addition once Slice 2b's note lifecycle lands. Daily/periodic
+  notes and template tools were considered and not adopted — they assume a
+  journaling workflow that doesn't fit Chapters' OKF-typed note model.
 
 ## Contributing
 
