@@ -4,9 +4,11 @@ An open-source, self-hostable "second brain" platform: a team knowledge base
 built on plain markdown files, a live-preview editor, and an AI-navigable
 knowledge graph.
 
-**Status: backend complete; UI phase underway (Slice 1 — Scaffold + Auth —
-and Slice 2a — vault tree + read-only note view — done; Slice 2b —
-CodeMirror 6 editing — next).** All specs
+**Status: backend complete; UI phase underway (Slice 1 — Scaffold + Auth,
+Slice 2a — vault tree + read-only note view, and Slice 2b-1 — CodeMirror 6
+basic editing + debounced autosave — done; the rest of Slice 2b — live-
+preview rendering, property panel, note lifecycle, permission lock —
+next).** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -53,9 +55,11 @@ search/MCP engines rather than a parallel one:
   type. See
   [`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
 
-The UI (React + CodeMirror 6) is underway — Slice 1 (Scaffold + Auth)
-and Slice 2a (vault tree + read-only note view) are done, Slice 2b
-(CodeMirror 6 editing) is next — tracked in
+The UI (React + CodeMirror 6) is underway — Slice 1 (Scaffold + Auth),
+Slice 2a (vault tree + read-only note view), and Slice 2b-1 (CodeMirror 6
+basic editing + debounced autosave) are done; the remaining Slice 2b
+increments (live-preview rendering, property panel, note lifecycle,
+permission lock) are next — tracked in
 [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
@@ -74,9 +78,10 @@ side by side — Vite proxies `/api/*` to the API on port 3000, so no CORS
 configuration is needed locally. `pnpm -C client build` produces a static
 `client/dist/` bundle to serve behind the same reverse proxy as the API in
 production.
-Logged-in users can now browse their vaults and view notes read-only
-(`/vaults/:id`, `/vaults/:id/notes/*`) — editing arrives in the next
-UI sub-plan.
+Logged-in users can browse their vaults and edit notes with a real
+CodeMirror 6 editor (`/vaults/:id/notes/*`, debounced autosave) — live-
+preview rendering, the frontmatter property panel, note create/rename/
+delete, and the permission-aware edit lock arrive in later UI sub-plans.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
