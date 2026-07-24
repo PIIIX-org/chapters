@@ -25,3 +25,20 @@ export interface NoteDetail {
 export function getNote(vaultId: string, path: string): Promise<NoteDetail> {
   return apiFetch(`/vaults/${vaultId}/notes/${path}`)
 }
+
+export interface UpdateNoteInput {
+  frontmatter?: Record<string, unknown>
+  body?: string
+}
+
+export interface UpdateNoteResult {
+  id: string
+  path: string
+  frontmatter: Record<string, unknown>
+  body: string
+  updatedAt: string
+}
+
+export function updateNote(vaultId: string, path: string, input: UpdateNoteInput): Promise<UpdateNoteResult> {
+  return apiFetch(`/vaults/${vaultId}/notes/${path}`, { method: 'PUT', body: JSON.stringify(input) })
+}
