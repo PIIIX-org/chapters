@@ -12,7 +12,13 @@ interface UseCodeMirrorEditorOptions {
 export function useCodeMirrorEditor({ doc, onChange }: UseCodeMirrorEditorOptions) {
   const containerRef = useRef<HTMLDivElement>(null)
   const onChangeRef = useRef(onChange)
-  onChangeRef.current = onChange
+  // Keep the ref pointing at the latest onChange without re-running the
+  // mount effect below. Assigned in an effect (not during render) so the
+  // update is a committed side effect — the CM6 updateListener only reads
+  // this ref at edit time, always after this effect has run.
+  useEffect(() => {
+    onChangeRef.current = onChange
+  })
 
   useEffect(() => {
     if (!containerRef.current) return
