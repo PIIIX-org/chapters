@@ -17,3 +17,8 @@ export function listVaults(): Promise<Vault[]> {
 export function getVaultAccess(vaultId: string): Promise<{ access: VaultAccess }> {
   return apiFetch(`/vaults/${vaultId}/access`)
 }
+
+/** Editing is allowed only for edit/owner access; unknown access is not. */
+export function canEdit(access: VaultAccess | undefined): boolean {
+  return access === 'edit' || access === 'owner'
+}

@@ -5,10 +5,10 @@ built on plain markdown files, a live-preview editor, and an AI-navigable
 knowledge graph.
 
 **Status: backend complete; UI phase underway (Slice 1 — Scaffold + Auth,
-Slice 2a — vault tree + read-only note view, and Slice 2b-1 — CodeMirror 6
-basic editing + debounced autosave — done; the rest of Slice 2b — live-
-preview rendering, property panel, note lifecycle, permission lock —
-next).** All specs
+Slice 2a — vault tree + read-only note view, Slice 2b-1 — CodeMirror 6
+basic editing + debounced autosave, and Slice 2b-2 — permission-aware
+editor lock — done; the rest of Slice 2b — editable property panel, note
+lifecycle, live-preview rendering — next).** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -56,11 +56,11 @@ search/MCP engines rather than a parallel one:
   [`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
 
 The UI (React + CodeMirror 6) is underway — Slice 1 (Scaffold + Auth),
-Slice 2a (vault tree + read-only note view), and Slice 2b-1 (CodeMirror 6
-basic editing + debounced autosave) are done; the remaining Slice 2b
-increments (live-preview rendering, property panel, note lifecycle,
-permission lock) are next — tracked in
-[`docs/agents/STATE.md`](docs/agents/STATE.md).
+Slice 2a (vault tree + read-only note view), Slice 2b-1 (CodeMirror 6
+basic editing + debounced autosave), and Slice 2b-2 (permission-aware
+editor lock) are done; the remaining Slice 2b increments (editable
+property panel, note lifecycle, live-preview rendering) are next — tracked
+in [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
 real deployment — security headers on by default, CORS off (same-origin
@@ -79,9 +79,10 @@ configuration is needed locally. `pnpm -C client build` produces a static
 `client/dist/` bundle to serve behind the same reverse proxy as the API in
 production.
 Logged-in users can browse their vaults and edit notes with a real
-CodeMirror 6 editor (`/vaults/:id/notes/*`, debounced autosave) — live-
-preview rendering, the frontmatter property panel, note create/rename/
-delete, and the permission-aware edit lock arrive in later UI sub-plans.
+CodeMirror 6 editor (`/vaults/:id/notes/*`, debounced autosave); read-only
+collaborators get the same note rendered but locked. The editable
+frontmatter property panel, note create/rename/delete, and live-preview
+rendering arrive in later UI sub-plans.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —

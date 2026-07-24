@@ -2,8 +2,16 @@ import { describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { useCodeMirrorEditor } from './useCodeMirrorEditor'
 
-function Harness({ doc, onChange }: { doc: string; onChange: (doc: string) => void }) {
-  const ref = useCodeMirrorEditor({ doc, onChange })
+function Harness({
+  doc,
+  onChange,
+  readOnly,
+}: {
+  doc: string
+  onChange: (doc: string) => void
+  readOnly?: boolean
+}) {
+  const ref = useCodeMirrorEditor({ doc, onChange, readOnly })
   return <div ref={ref} data-testid="editor-container" />
 }
 
@@ -21,5 +29,19 @@ describe('useCodeMirrorEditor', () => {
     render(<Harness doc="# Hello" onChange={onChange} />)
 
     expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('is editable by default (contenteditable true)', () => {
+    const { getByTestId } = render(<Harness doc="# Hello" onChange={vi.fn()} />)
+
+    const content = getByTestId('editor-container').querySelector('.cm-content')
+    expect(content?.getAttribute('contenteditable')).toBe('true')
+  })
+
+  it('is non-editable when readOnly is set (contenteditable false)', () => {
+    const { getByTestId } = render(<Harness doc="# Hello" onChange={vi.fn()} readOnly />)
+
+    const content = getByTestId('editor-container').querySelector('.cm-content')
+    expect(content?.getAttribute('contenteditable')).toBe('false')
   })
 })

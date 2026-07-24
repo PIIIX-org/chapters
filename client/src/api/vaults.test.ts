@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mockJsonResponse } from '../lib/api'
-import { getVaultAccess, listVaults } from './vaults'
+import { canEdit, getVaultAccess, listVaults } from './vaults'
 
 describe('vaults api', () => {
   afterEach(() => {
@@ -31,5 +31,12 @@ describe('vaults api', () => {
 
     expect(result).toEqual({ access: 'edit' })
     expect(fetchMock).toHaveBeenCalledWith('/api/vaults/v1/access', expect.objectContaining({ credentials: 'include' }))
+  })
+
+  it('canEdit is true only for edit and owner access', () => {
+    expect(canEdit('owner')).toBe(true)
+    expect(canEdit('edit')).toBe(true)
+    expect(canEdit('read')).toBe(false)
+    expect(canEdit(undefined)).toBe(false)
   })
 })

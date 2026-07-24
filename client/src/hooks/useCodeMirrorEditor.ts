@@ -7,9 +7,10 @@ import { markdown } from '@codemirror/lang-markdown'
 interface UseCodeMirrorEditorOptions {
   doc: string
   onChange: (doc: string) => void
+  readOnly?: boolean
 }
 
-export function useCodeMirrorEditor({ doc, onChange }: UseCodeMirrorEditorOptions) {
+export function useCodeMirrorEditor({ doc, onChange, readOnly = false }: UseCodeMirrorEditorOptions) {
   const containerRef = useRef<HTMLDivElement>(null)
   const onChangeRef = useRef(onChange)
   // Keep the ref pointing at the latest onChange without re-running the
@@ -37,6 +38,10 @@ export function useCodeMirrorEditor({ doc, onChange }: UseCodeMirrorEditorOption
           '.cm-content': { fontFamily: 'var(--font-mono)' },
           '.cm-scroller': { overflow: 'auto' },
         }),
+        // A genuinely non-editable rendered view needs BOTH: readOnly blocks
+        // edit transactions/commands, editable=false drops contentEditable so
+        // there's no caret. (CM6's documented recipe for a true read-only view.)
+        ...(readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
       ],
     })
 
@@ -45,11 +50,9 @@ export function useCodeMirrorEditor({ doc, onChange }: UseCodeMirrorEditorOption
     return () => {
       view.destroy()
     }
-    // Mount once per component instance — `doc` is only the INITIAL
-    // document. Switching notes remounts this component entirely (Task 4
-    // keys the content component by note path) rather than re-syncing
-    // `doc` into a live EditorView, which would fight the user's cursor
-    // position on every parent re-render.
+    // Mount once per component instance — `doc` and `readOnly` are captured at
+    // mount. Callers that need a different `readOnly` remount this component
+    // (Task 2 keys on it), matching how `doc` is already handled.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
