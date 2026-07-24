@@ -55,7 +55,9 @@ describe('NoteView', () => {
 
     renderNote('/vaults/v1/notes/people/jane', EDIT_VAULT)
 
-    await waitFor(() => expect(screen.getByText('type:')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('people')).toBeInTheDocument())
+    // property panel is present (type shown read-only, resource field editable)
+    expect(screen.getByText('resource')).toBeInTheDocument()
     const content = document.querySelector('.cm-content')
     expect(content).not.toBeNull()
     expect(content!.textContent).toContain('# Jane')
