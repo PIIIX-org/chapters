@@ -42,10 +42,11 @@ describe('NoteView', () => {
     await waitFor(() => expect(screen.getByText('type:')).toBeInTheDocument())
     const content = document.querySelector('.cm-content')
     expect(content).not.toBeNull()
-    expect(
-      content!.textContent === '# Jane' + '' + 'Notes about Jane.' ||
-        content!.textContent!.includes('Jane'),
-    ).toBe(true)
+    // CodeMirror renders each source line as its own .cm-line, so the body
+    // text is split across children — assert both non-empty lines are present
+    // rather than exact-matching a whitespace-collapsed textContent.
+    expect(content!.textContent).toContain('# Jane')
+    expect(content!.textContent).toContain('Notes about Jane.')
   })
 
   it('debounce-saves an edit to PUT /api/vaults/:id/notes/:path', async () => {
@@ -66,13 +67,21 @@ describe('NoteView', () => {
     const view = EditorView.findFromDOM(contentEl)!
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'edited' } })
 
-    await vi.advanceTimersByTimeAsync(1500)
+    const putCalls = () =>
+      fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'PUT')
 
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/vaults/v1/notes/people/jane',
-        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ body: 'edited' }) }),
-      ),
+    // Still inside the ~1200ms debounce window — the save must NOT have fired
+    // yet. (This assertion is what gives the test teeth: it fails if the
+    // debounce is removed and the PUT fires immediately.)
+    await vi.advanceTimersByTimeAsync(800)
+    expect(putCalls()).toHaveLength(0)
+
+    // Past the window — the debounced save fires exactly once, with the edit.
+    await vi.advanceTimersByTimeAsync(700)
+    await waitFor(() => expect(putCalls()).toHaveLength(1))
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/vaults/v1/notes/people/jane',
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ body: 'edited' }) }),
     )
   })
 
