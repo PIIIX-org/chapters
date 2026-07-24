@@ -9,7 +9,9 @@ import { NoteView } from './NoteView'
 const EDIT_VAULT: Vault = { id: 'v1', name: 'V1', ownerId: 'u1', mergeable: false, access: 'edit' }
 const READ_VAULT: Vault = { id: 'v1', name: 'V1', ownerId: 'u1', mergeable: false, access: 'read' }
 
-function renderNote(initialPath: string, vault: Vault | undefined = EDIT_VAULT) {
+// No default: passing `undefined` must stay undefined (a value default would
+// swallow it), so the unknown-access → read-only path can be tested for real.
+function renderNote(initialPath: string, vault: Vault | undefined) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const router = createMemoryRouter(
     [
@@ -51,7 +53,7 @@ describe('NoteView', () => {
       ),
     )
 
-    renderNote('/vaults/v1/notes/people/jane')
+    renderNote('/vaults/v1/notes/people/jane', EDIT_VAULT)
 
     await waitFor(() => expect(screen.getByText('type:')).toBeInTheDocument())
     const content = document.querySelector('.cm-content')
@@ -104,6 +106,7 @@ describe('NoteView', () => {
     await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull())
 
     expect(document.querySelector('.cm-content')!.getAttribute('contenteditable')).toBe('false')
+    expect(screen.getByText(/read-only/i)).toBeInTheDocument()
 
     // Even a programmatic change (readOnly does not block dispatch) must not save.
     const { EditorView } = await import('@codemirror/view')
@@ -113,10 +116,26 @@ describe('NoteView', () => {
     expect(putCalls(fetchMock)).toHaveLength(0)
   })
 
+  it('locks the editor when vault access is unknown (undefined)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockJsonResponse(200, { path: 'people/jane', frontmatter: { type: 'people' }, body: 'original', updatedAt: '2026-01-01' }),
+      ),
+    )
+
+    // No vault in outlet context → access unknown → conservative read-only lock.
+    renderNote('/vaults/v1/notes/people/jane', undefined)
+    await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull())
+
+    expect(document.querySelector('.cm-content')!.getAttribute('contenteditable')).toBe('false')
+    expect(screen.getByText(/read-only/i)).toBeInTheDocument()
+  })
+
   it('shows a not-found message for a missing note', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockJsonResponse(404, { error: 'note not found' })))
 
-    renderNote('/vaults/v1/notes/people/ghost')
+    renderNote('/vaults/v1/notes/people/ghost', EDIT_VAULT)
 
     await waitFor(() => expect(screen.getByText('Note not found.')).toBeInTheDocument())
   })
