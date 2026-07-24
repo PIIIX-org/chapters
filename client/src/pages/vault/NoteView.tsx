@@ -5,6 +5,7 @@ import { useUpdateNote } from '../../hooks/useUpdateNote.js'
 import { useCodeMirrorEditor } from '../../hooks/useCodeMirrorEditor.js'
 import { canEdit } from '../../api/vaults.js'
 import type { Vault } from '../../api/vaults.js'
+import { PropertyPanel } from '../../components/vault/PropertyPanel.js'
 
 const SAVE_DEBOUNCE_MS = 1200
 
@@ -76,14 +77,12 @@ function NoteEditor({ vaultId, path, vaultName, frontmatter, initialBody, readOn
         {readOnly && <span className="ml-2 text-xs uppercase tracking-wide">· read-only</span>}
       </div>
       <div className="border-b border-border px-8 py-4">
-        <dl className="flex flex-col gap-1 text-sm">
-          {Object.entries(frontmatter).map(([key, value]) => (
-            <div key={key} className="flex gap-2">
-              <dt className="font-medium text-muted-foreground">{key}:</dt>
-              <dd>{typeof value === 'string' ? value : JSON.stringify(value)}</dd>
-            </div>
-          ))}
-        </dl>
+        <PropertyPanel
+          vaultId={vaultId}
+          path={path}
+          initialFrontmatter={frontmatter}
+          readOnly={readOnly}
+        />
       </div>
       <div ref={editorRef} className="flex-1 overflow-auto" />
     </div>
