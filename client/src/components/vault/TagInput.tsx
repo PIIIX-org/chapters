@@ -47,6 +47,7 @@ export function TagInput({ value, onChange, disabled }: TagInputProps) {
             }
           }}
           placeholder="Add tag…"
+          aria-label="Add tag"
           className="h-6 w-28 flex-1"
         />
       )}
