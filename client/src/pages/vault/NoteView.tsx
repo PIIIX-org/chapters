@@ -18,7 +18,11 @@ export function NoteView() {
 
   return (
     <NoteEditor
-      key={path}
+      // Remount key is the full note identity (vault + path), not just path:
+      // if NoteView ever stays mounted across a cross-vault switch to the same
+      // path (e.g. a future cross-vault wikilink), keying on path alone would
+      // reuse the stale editor and PUT one vault's body into another's note.
+      key={`${vaultId}/${path}`}
       vaultId={vaultId!}
       path={path!}
       vaultName={vault?.name}
