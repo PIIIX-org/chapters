@@ -27,6 +27,16 @@ describe('wikilinkExtension', () => {
     expect(link!.getAttribute('data-wikilink-target')).toBe('people/jane')
   })
 
+  it('strips an alias from the target ([[path|alias]])', () => {
+    const { container } = render(<Editor doc="[[people/jane|Jane Doe]]" onClick={vi.fn()} />)
+    expect(container.querySelector('.cm-wikilink')!.getAttribute('data-wikilink-target')).toBe('people/jane')
+  })
+
+  it('strips a heading from the target ([[path#heading]])', () => {
+    const { container } = render(<Editor doc="[[people/jane#bio]]" onClick={vi.fn()} />)
+    expect(container.querySelector('.cm-wikilink')!.getAttribute('data-wikilink-target')).toBe('people/jane')
+  })
+
   it('navigates (calls onClick) when a wikilink on a non-cursor line is clicked', () => {
     const onClick = vi.fn()
     // cursor defaults to offset 0 (line 1); the wikilink is on line 3.
