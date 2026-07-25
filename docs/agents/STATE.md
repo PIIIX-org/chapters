@@ -11,20 +11,15 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   review** (Taha re-authorized 2026-07-25 while away; scope = PR→dev only,
   NOT dev→prod). Backend issue #66 open.
 - **Done**: full backend, hardened + documented (130 tests; see
-  `backend-reference.md`). UI: Slice 1 (scaffold, design system, shadcn
-  primitives, typed API client, auth pages, `RequireAuth`). Slice 2a (vault
-  list, `VaultLayout` file-tree sidebar, read-only `NoteView`). Slice 2b-1
-  (`useCodeMirrorEditor` CM6 body, debounced `updateNote`). Slice 2b-2
-  (`readOnly` + `canEdit` — read vaults locked). Slice 2b-3 (`TagInput` +
-  `PropertyPanel` editable frontmatter, `type` read-only, extras preserved).
-  Slice 2b-4 (`createNote`/`NewNoteForm` type-first create + `canEdit`-gated
-  "New note"). Slice 2b-5 (`renameNote`/`deleteNote` + hooks + `NoteActions`
-  inline rename/two-step-delete-confirm in `FileTree`, `canEdit`-gated,
-  navigates when the open note is renamed/deleted). Slice 2b-6 (markdown
-  `HighlightStyle` — inline `.cm-md-*` styling). Slice 2b-7
-  (`markdownMarkerHiding` ViewPlugin — hides `#`/`**`/`` ` `` at rest, reveals
-  on the cursor's line; keeps fenced-code fences + Setext underlines visible).
-  Root verification green: lint, typecheck, 90 client + 130 server tests,
+  `backend-reference.md`). UI **Editor complete (Slice 2b)**: Slice 1 (auth,
+  design system, API client, `RequireAuth`), 2a (vault list, `FileTree`
+  sidebar, `NoteView`), 2b-1 (`useCodeMirrorEditor` + debounced save), 2b-2
+  (`readOnly`/`canEdit` lock), 2b-3 (`PropertyPanel`/`TagInput` editable
+  frontmatter), 2b-4 (`NewNoteForm` type-first create), 2b-5 (`NoteActions`
+  rename/delete), 2b-6 (markdown `HighlightStyle` inline styling), 2b-7
+  (`markdownMarkerHiding` — live-preview marker hiding). Component/hook/api
+  names are the resume handles; details in README + git. Root verification
+  green: lint, typecheck, 90 client + 130 server tests,
   `client` build.
 - **Current task**: none — Slice 2b-7 done; **the Editor (Slice 2b) is
   complete**.
