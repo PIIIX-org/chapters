@@ -83,4 +83,29 @@ describe('useCodeMirrorEditor', () => {
     const last = lines[lines.length - 1]
     expect(last?.textContent).toBe('bold and code')
   })
+
+  it('reveals a hidden heading marker when the cursor moves back onto its line', async () => {
+    render(<Harness doc={'# Heading\n\nbody'} onChange={vi.fn()} />)
+    const { EditorView } = await import('@codemirror/view')
+    const view = EditorView.findFromDOM(document.querySelector('.cm-editor') as HTMLElement)!
+
+    // Off the heading line → hidden.
+    view.dispatch({ selection: { anchor: view.state.doc.length } })
+    expect(document.querySelector('.cm-line')?.textContent).toBe('Heading')
+
+    // Back onto the heading line → revealed.
+    view.dispatch({ selection: { anchor: 0 } })
+    expect(document.querySelector('.cm-line')?.textContent).toBe('# Heading')
+  })
+
+  it('keeps fenced-code fences visible (does not blank the ``` lines)', async () => {
+    render(<Harness doc={'intro\n\n```\ncode\n```'} onChange={vi.fn()} />)
+    const { EditorView } = await import('@codemirror/view')
+    const view = EditorView.findFromDOM(document.querySelector('.cm-editor') as HTMLElement)!
+    // Cursor on line 1; the fenced block is inactive — fences must NOT be hidden.
+    view.dispatch({ selection: { anchor: 0 } })
+    const text = document.querySelector('.cm-content')?.textContent ?? ''
+    expect(text).toContain('```')
+    expect(text).toContain('code')
+  })
 })

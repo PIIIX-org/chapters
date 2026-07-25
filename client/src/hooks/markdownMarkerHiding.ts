@@ -24,6 +24,11 @@ function buildDecorations(view: EditorView): DecorationSet {
       if (node.to <= node.from) return
       if (!HIDDEN_MARKS.has(node.name)) return
       if (onActiveLine(node.from, node.to)) return
+      // Skip markers that span a whole line rather than inline punctuation:
+      // a fenced-code fence (```) and a Setext underline (====) each occupy
+      // their own line, so hiding them would blank the line. Keep them visible.
+      const parent = node.node.parent?.name
+      if (parent === 'FencedCode' || parent?.startsWith('Setext')) return
       // Hide the heading '#' plus its trailing space so '# H' renders as 'H'.
       let to = node.to
       if (node.name === 'HeaderMark' && state.doc.sliceString(to, to + 1) === ' ') to += 1
