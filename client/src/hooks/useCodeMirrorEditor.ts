@@ -8,12 +8,14 @@ import { autocompletion } from '@codemirror/autocomplete'
 import { tags } from '@lezer/highlight'
 import { markdownMarkerHiding } from './markdownMarkerHiding.js'
 import { wikilinkCompletions } from './wikilinkCompletions.js'
+import { wikilinkExtension } from './wikilinkDecorations.js'
 
 interface UseCodeMirrorEditorOptions {
   doc: string
   onChange: (doc: string) => void
   readOnly?: boolean
   wikilinkTargets?: string[]
+  onWikilinkClick?: (target: string) => void
 }
 
 const markdownHighlight = HighlightStyle.define([
@@ -34,6 +36,7 @@ export function useCodeMirrorEditor({
   onChange,
   readOnly = false,
   wikilinkTargets = [],
+  onWikilinkClick,
 }: UseCodeMirrorEditorOptions) {
   const containerRef = useRef<HTMLDivElement>(null)
   const onChangeRef = useRef(onChange)
@@ -43,6 +46,10 @@ export function useCodeMirrorEditor({
   // this ref at edit time, always after this effect has run.
   useEffect(() => {
     onChangeRef.current = onChange
+  })
+  const onWikilinkClickRef = useRef(onWikilinkClick)
+  useEffect(() => {
+    onWikilinkClickRef.current = onWikilinkClick
   })
 
   useEffect(() => {
@@ -57,6 +64,7 @@ export function useCodeMirrorEditor({
         syntaxHighlighting(markdownHighlight),
         markdownMarkerHiding,
         autocompletion({ override: [wikilinkCompletions(wikilinkTargets)] }),
+        wikilinkExtension((target) => onWikilinkClickRef.current?.(target)),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) onChangeRef.current(update.state.doc.toString())
         }),
@@ -74,6 +82,7 @@ export function useCodeMirrorEditor({
           '.cm-md-code': { fontFamily: 'var(--font-mono)', fontSize: '0.9em' },
           '.cm-md-link': { color: 'var(--primary)', textDecoration: 'underline' },
           '.cm-md-quote': { fontStyle: 'italic', color: 'var(--muted-foreground)' },
+          '.cm-wikilink': { color: 'var(--primary)', textDecoration: 'underline', cursor: 'pointer' },
         }),
         // A genuinely non-editable rendered view needs BOTH: readOnly blocks
         // edit transactions/commands, editable=false drops contentEditable so

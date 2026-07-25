@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { useOutletContext, useParams } from 'react-router'
+import { useNavigate, useOutletContext, useParams } from 'react-router'
 import { useNote } from '../../hooks/useNote.js'
 import { useUpdateNote } from '../../hooks/useUpdateNote.js'
 import { useVaultTree } from '../../hooks/useVaultTree.js'
@@ -49,6 +49,7 @@ interface NoteEditorProps {
 }
 
 function NoteEditor({ vaultId, path, vaultName, frontmatter, initialBody, readOnly }: NoteEditorProps) {
+  const navigate = useNavigate()
   const updateNote = useUpdateNote(vaultId, path)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -71,7 +72,13 @@ function NoteEditor({ vaultId, path, vaultName, frontmatter, initialBody, readOn
 
   const tree = useVaultTree(vaultId)
   const wikilinkTargets = tree.data ? Object.values(tree.data).flat().map((n) => n.path) : []
-  const editorRef = useCodeMirrorEditor({ doc: initialBody, onChange: handleChange, readOnly, wikilinkTargets })
+  const editorRef = useCodeMirrorEditor({
+    doc: initialBody,
+    onChange: handleChange,
+    readOnly,
+    wikilinkTargets,
+    onWikilinkClick: (target) => navigate(`/vaults/${vaultId}/notes/${target}`),
+  })
 
   return (
     <div className="flex h-full flex-col">
