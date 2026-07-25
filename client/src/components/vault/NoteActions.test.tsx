@@ -11,7 +11,10 @@ const NOTE: NoteSummary = { id: 'n1', path: 'people/jane', type: 'people', name:
 function renderActions(currentPath = '/vaults/v1/notes/other/thing') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const router = createMemoryRouter(
-    [{ path: '/vaults/:vaultId/notes/*', element: <NoteActions vaultId="v1" note={NOTE} /> }],
+    [
+      { path: '/vaults/:vaultId/notes/*', element: <NoteActions vaultId="v1" note={NOTE} /> },
+      { path: '/vaults/:vaultId', element: <div>vault root</div> },
+    ],
     { initialEntries: [currentPath] },
   )
   render(
@@ -19,6 +22,7 @@ function renderActions(currentPath = '/vaults/v1/notes/other/thing') {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   )
+  return router
 }
 
 function calls(fetchMock: ReturnType<typeof vi.fn>, method: string) {
@@ -73,5 +77,30 @@ describe('NoteActions', () => {
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith('/api/vaults/v1/notes/people/jane', expect.objectContaining({ method: 'DELETE' })),
     )
+  })
+
+  it('navigates to the new path when renaming the currently-open note', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse(200, { id: 'n1', path: 'people/jane-doe', type: 'people', name: 'jane-doe', frontmatter: {}, body: '', updatedAt: '2026-01-02' }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const router = renderActions('/vaults/v1/notes/people/jane')
+
+    fireEvent.click(screen.getByRole('button', { name: /rename jane/i }))
+    fireEvent.change(screen.getByLabelText('New name'), { target: { value: 'jane-doe' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/vaults/v1/notes/people/jane-doe'))
+  })
+
+  it('navigates to the vault root when deleting the currently-open note', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, { status: 'trashed', id: 'n1' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const router = renderActions('/vaults/v1/notes/people/jane')
+
+    fireEvent.click(screen.getByRole('button', { name: /delete jane/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/vaults/v1'))
   })
 })
