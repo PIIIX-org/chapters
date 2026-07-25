@@ -9,7 +9,8 @@ Slice 2a (vault tree + read-only view), Slice 2b (Editor — CodeMirror 6
 editing, permission-aware lock, editable frontmatter property panel, note
 create/rename/delete, and full live-preview), and Slice 2c (wikilinks —
 `[[` autocomplete, clickable navigation, and link-to-create) are done;
-Slice 3 (Search) is next.** All specs
+Slice 3 (Search) is in progress — a ⌘K search overlay (3a) is done,
+keyboard navigation next.** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -61,7 +62,7 @@ Slice 2a (vault tree + read-only note view), and Slice 2b (the Editor —
 CodeMirror 6 editing, permission-aware lock, editable frontmatter property
 panel, note create/rename/delete, and full live-preview) and Slice 2c
 (wikilinks — autocomplete, clickable navigation, link-to-create) are done;
-Slice 3 (Search) is next — tracked in
+Slice 3 (Search) is in progress (a ⌘K search overlay is done) — tracked in
 [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
@@ -93,7 +94,9 @@ markers (`#`, `**`, `` ` ``) hide when the cursor leaves the line and
 reappear when you move back onto it (live-preview). Typing `[[` autocompletes
 against the vault's note paths, and a `[[link]]` you're not editing is
 clickable — it navigates to that note, or, if the note doesn't exist yet,
-creates it (type-first, from the path) and opens it.
+creates it (type-first, from the path) and opens it. Pressing ⌘K (Ctrl+K)
+anywhere opens a search overlay across every vault you can reach (hybrid
+keyword + semantic); clicking a match jumps to that note.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
