@@ -4,13 +4,12 @@ An open-source, self-hostable "second brain" platform: a team knowledge base
 built on plain markdown files, a live-preview editor, and an AI-navigable
 knowledge graph.
 
-**Status: backend complete; UI phase underway (Slice 1 — Scaffold + Auth,
-Slice 2a — vault tree + read-only note view, Slice 2b-1 — CodeMirror 6
-basic editing + debounced autosave, Slice 2b-2 — permission-aware editor
-lock, Slice 2b-3 — editable frontmatter property panel, Slice 2b-4 —
-type-first note creation, Slice 2b-5 — note rename/delete, Slice 2b-6 —
-inline markdown rendering, and Slice 2b-7 — live-preview marker hiding —
-done, completing the Editor (Slice 2b); Slice 2c — wikilinks — next).** All specs
+**Status: backend complete; UI phase underway. Slice 1 (Scaffold + Auth),
+Slice 2a (vault tree + read-only view), and Slice 2b (Editor — CodeMirror 6
+editing, permission-aware lock, editable frontmatter property panel, note
+create/rename/delete, and full live-preview) are done; Slice 2c (wikilinks)
+is in progress — `[[` autocomplete (2c-1) done, clickable links + link-to-
+create next.** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -58,12 +57,10 @@ search/MCP engines rather than a parallel one:
   [`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
 
 The UI (React + CodeMirror 6) is underway — Slice 1 (Scaffold + Auth),
-Slice 2a (vault tree + read-only note view), Slice 2b-1 (CodeMirror 6
-basic editing + debounced autosave), Slice 2b-2 (permission-aware editor
-lock), Slice 2b-3 (editable frontmatter property panel), Slice 2b-4
-(type-first note creation), Slice 2b-5 (note rename/delete), Slice 2b-6
-(inline markdown rendering), and Slice 2b-7 (live-preview marker hiding) are
-done — the Editor (Slice 2b) is complete; Slice 2c (wikilinks) is next — tracked in
+Slice 2a (vault tree + read-only note view), and Slice 2b (the Editor —
+CodeMirror 6 editing, permission-aware lock, editable frontmatter property
+panel, note create/rename/delete, and full live-preview) are done; Slice 2c
+(wikilinks) is in progress (`[[` autocomplete done) — tracked in
 [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
@@ -92,7 +89,8 @@ a `type`, then the note name), and rename or delete a note inline from the
 file tree. The editor renders markdown formatting inline — headings, bold,
 italic, inline code, and links are styled as you type — and the raw syntax
 markers (`#`, `**`, `` ` ``) hide when the cursor leaves the line and
-reappear when you move back onto it (live-preview).
+reappear when you move back onto it (live-preview). Typing `[[` autocompletes
+against the vault's note paths; clickable wikilinks and link-to-create follow.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
