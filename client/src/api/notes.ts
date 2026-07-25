@@ -42,3 +42,19 @@ export interface UpdateNoteResult {
 export function updateNote(vaultId: string, path: string, input: UpdateNoteInput): Promise<UpdateNoteResult> {
   return apiFetch(`/vaults/${vaultId}/notes/${path}`, { method: 'PUT', body: JSON.stringify(input) })
 }
+
+export interface CreateNoteInput {
+  type: string
+  name: string
+}
+
+export interface CreateNoteResult {
+  id: string
+  path: string
+  type: string
+  name: string
+}
+
+export function createNote(vaultId: string, input: CreateNoteInput): Promise<CreateNoteResult> {
+  return apiFetch(`/vaults/${vaultId}/notes`, { method: 'POST', body: JSON.stringify(input) })
+}
