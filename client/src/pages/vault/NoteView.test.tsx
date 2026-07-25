@@ -43,14 +43,17 @@ describe('NoteView', () => {
   it('renders the frontmatter and an editable CodeMirror body (edit access)', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockJsonResponse(200, {
-          path: 'people/jane',
-          frontmatter: { type: 'people', timestamp: '2026-01-01T00:00:00.000Z' },
-          body: '# Jane\n\nNotes about Jane.',
-          updatedAt: '2026-01-01',
-        }),
-      ),
+      vi.fn().mockImplementation((url: string) => {
+        if (url.endsWith('/tree')) return Promise.resolve(mockJsonResponse(200, {}))
+        return Promise.resolve(
+          mockJsonResponse(200, {
+            path: 'people/jane',
+            frontmatter: { type: 'people', timestamp: '2026-01-01T00:00:00.000Z' },
+            body: '# Jane\n\nNotes about Jane.',
+            updatedAt: '2026-01-01',
+          }),
+        )
+      }),
     )
 
     renderNote('/vaults/v1/notes/people/jane', EDIT_VAULT)
@@ -70,6 +73,7 @@ describe('NoteView', () => {
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (init?.method === 'PUT')
         return Promise.resolve(mockJsonResponse(200, { id: 'n1', path: 'people/jane', frontmatter: {}, body: 'edited', updatedAt: '2026-01-02' }))
+      if (url.endsWith('/tree')) return Promise.resolve(mockJsonResponse(200, {}))
       return Promise.resolve(
         mockJsonResponse(200, { path: 'people/jane', frontmatter: {}, body: 'original', updatedAt: '2026-01-01' }),
       )
@@ -98,6 +102,7 @@ describe('NoteView', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (init?.method === 'PUT') return Promise.resolve(mockJsonResponse(200, {}))
+      if (url.endsWith('/tree')) return Promise.resolve(mockJsonResponse(200, {}))
       return Promise.resolve(
         mockJsonResponse(200, { path: 'people/jane', frontmatter: { type: 'people' }, body: 'original', updatedAt: '2026-01-01' }),
       )
@@ -121,9 +126,12 @@ describe('NoteView', () => {
   it('locks the editor when vault access is unknown (undefined)', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockJsonResponse(200, { path: 'people/jane', frontmatter: { type: 'people' }, body: 'original', updatedAt: '2026-01-01' }),
-      ),
+      vi.fn().mockImplementation((url: string) => {
+        if (url.endsWith('/tree')) return Promise.resolve(mockJsonResponse(200, {}))
+        return Promise.resolve(
+          mockJsonResponse(200, { path: 'people/jane', frontmatter: { type: 'people' }, body: 'original', updatedAt: '2026-01-01' }),
+        )
+      }),
     )
 
     // No vault in outlet context → access unknown → conservative read-only lock.

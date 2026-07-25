@@ -4,13 +4,16 @@ import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { autocompletion } from '@codemirror/autocomplete'
 import { tags } from '@lezer/highlight'
 import { markdownMarkerHiding } from './markdownMarkerHiding.js'
+import { wikilinkCompletions } from './wikilinkCompletions.js'
 
 interface UseCodeMirrorEditorOptions {
   doc: string
   onChange: (doc: string) => void
   readOnly?: boolean
+  wikilinkTargets?: string[]
 }
 
 const markdownHighlight = HighlightStyle.define([
@@ -26,7 +29,12 @@ const markdownHighlight = HighlightStyle.define([
   { tag: tags.quote, class: 'cm-md-quote' },
 ])
 
-export function useCodeMirrorEditor({ doc, onChange, readOnly = false }: UseCodeMirrorEditorOptions) {
+export function useCodeMirrorEditor({
+  doc,
+  onChange,
+  readOnly = false,
+  wikilinkTargets = [],
+}: UseCodeMirrorEditorOptions) {
   const containerRef = useRef<HTMLDivElement>(null)
   const onChangeRef = useRef(onChange)
   // Keep the ref pointing at the latest onChange without re-running the
@@ -48,6 +56,7 @@ export function useCodeMirrorEditor({ doc, onChange, readOnly = false }: UseCode
         markdown(),
         syntaxHighlighting(markdownHighlight),
         markdownMarkerHiding,
+        autocompletion({ override: [wikilinkCompletions(wikilinkTargets)] }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) onChangeRef.current(update.state.doc.toString())
         }),
