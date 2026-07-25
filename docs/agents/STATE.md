@@ -10,22 +10,16 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   stacked); I merge them myself after CI green + clean review** (Taha
   re-authorized self-merge 2026-07-25 while away). Backend issue #66 open
   (updateNote lost-update race, tracked).
-- **Done**: full backend, hardened + documented (130 tests; real ONNX
-  embeddings, real Dockerfile/Postgres, helmet+cors, Dependabot; see
-  `backend-reference.md` for full architecture/security/runbook).
-  Slice 1 UI (`client/`, Tasks 1-13): scaffold, Tailwind design system,
-  shadcn primitives, typed API client + auth functions, session hook,
-  react-router + `RequireAuth` guard, every auth page. Slice 2a: vault
-  list on HomePage, `VaultLayout` file-tree sidebar, read-only `NoteView`.
-  Slice 2b-1: `updateNote` API + `useUpdateNote`, `useCodeMirrorEditor`
-  (CM6), editable debounce-saving `NoteView`. Slice 2b-2: `readOnly` CM6
-  option + `canEdit` helper — read-access vaults render a locked note.
-  Slice 2b-3: `TagInput` + `PropertyPanel` — editable frontmatter (`type`
-  read-only, others editable, extra keys preserved, debounced PUT). Slice
-  2b-4: `createNote` + `useCreateNote` + `NewNoteForm` (type-first, datalist
-  of existing types) + `canEdit`-gated "New note" in `VaultLayout` that
-  navigates to the created note. Root verification green: lint, typecheck,
-  73 client + 130 server tests, `client` build.
+- **Done**: full backend, hardened + documented (130 tests; see
+  `backend-reference.md`). UI: Slice 1 (scaffold, design system, shadcn
+  primitives, typed API client, auth pages, `RequireAuth`). Slice 2a (vault
+  list, `VaultLayout` file-tree sidebar, read-only `NoteView`). Slice 2b-1
+  (`useCodeMirrorEditor` CM6 body, debounced `updateNote`). Slice 2b-2
+  (`readOnly` + `canEdit` — read vaults locked). Slice 2b-3 (`TagInput` +
+  `PropertyPanel` editable frontmatter, `type` read-only, extras preserved).
+  Slice 2b-4 (`createNote`/`useCreateNote`/`NewNoteForm` type-first create +
+  `canEdit`-gated "New note" in `VaultLayout`). Root verification green:
+  lint, typecheck, 73 client + 130 server tests, `client` build.
 - **Current task**: none — Slice 2b-4 done and verified end to end.
 - **Next step** (autonomous, "keep going"): 2b-5 note rename + delete in the
   file tree (backend: POST `/vaults/:id/notes-rename` `{from,to}`, DELETE
