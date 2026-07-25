@@ -2,11 +2,13 @@ import { useEffect, useRef } from 'react'
 import { useNavigate, useOutletContext, useParams } from 'react-router'
 import { useNote } from '../../hooks/useNote.js'
 import { useUpdateNote } from '../../hooks/useUpdateNote.js'
+import { useCreateNote } from '../../hooks/useCreateNote.js'
 import { useVaultTree } from '../../hooks/useVaultTree.js'
 import { useCodeMirrorEditor } from '../../hooks/useCodeMirrorEditor.js'
 import { canEdit } from '../../api/vaults.js'
 import type { Vault } from '../../api/vaults.js'
 import { PropertyPanel } from '../../components/vault/PropertyPanel.js'
+import { handleWikilinkClick } from '../../lib/handleWikilinkClick.js'
 
 const SAVE_DEBOUNCE_MS = 1200
 
@@ -51,6 +53,7 @@ interface NoteEditorProps {
 function NoteEditor({ vaultId, path, vaultName, frontmatter, initialBody, readOnly }: NoteEditorProps) {
   const navigate = useNavigate()
   const updateNote = useUpdateNote(vaultId, path)
+  const createNote = useCreateNote(vaultId)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
@@ -77,7 +80,15 @@ function NoteEditor({ vaultId, path, vaultName, frontmatter, initialBody, readOn
     onChange: handleChange,
     readOnly,
     wikilinkTargets,
-    onWikilinkClick: (target) => navigate(`/vaults/${vaultId}/notes/${target}`),
+    onWikilinkClick: (target) =>
+      handleWikilinkClick(
+        target,
+        vaultId,
+        wikilinkTargets,
+        !readOnly,
+        (to) => navigate(to),
+        (input, onSettled) => createNote.mutate(input, { onSettled }),
+      ),
   })
 
   return (
