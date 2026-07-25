@@ -8,8 +8,8 @@ knowledge graph.
 Slice 2a (vault tree + read-only view), and Slice 2b (Editor — CodeMirror 6
 editing, permission-aware lock, editable frontmatter property panel, note
 create/rename/delete, and full live-preview) are done; Slice 2c (wikilinks)
-is in progress — `[[` autocomplete (2c-1) done, clickable links + link-to-
-create next.** All specs
+is in progress — `[[` autocomplete (2c-1) and clickable wikilink navigation
+(2c-2) done, link-to-create next.** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -60,8 +60,8 @@ The UI (React + CodeMirror 6) is underway — Slice 1 (Scaffold + Auth),
 Slice 2a (vault tree + read-only note view), and Slice 2b (the Editor —
 CodeMirror 6 editing, permission-aware lock, editable frontmatter property
 panel, note create/rename/delete, and full live-preview) are done; Slice 2c
-(wikilinks) is in progress (`[[` autocomplete done) — tracked in
-[`docs/agents/STATE.md`](docs/agents/STATE.md).
+(wikilinks) is in progress (`[[` autocomplete + clickable navigation done) —
+tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
 real deployment — security headers on by default, CORS off (same-origin
@@ -90,7 +90,9 @@ file tree. The editor renders markdown formatting inline — headings, bold,
 italic, inline code, and links are styled as you type — and the raw syntax
 markers (`#`, `**`, `` ` ``) hide when the cursor leaves the line and
 reappear when you move back onto it (live-preview). Typing `[[` autocompletes
-against the vault's note paths; clickable wikilinks and link-to-create follow.
+against the vault's note paths, and a `[[link]]` you're not editing is
+clickable — it navigates to that note (link-to-create for missing notes
+follows).
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —

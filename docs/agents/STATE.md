@@ -5,8 +5,9 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 - **Phase**: UI PHASE — the **Editor (Slice 2b) is COMPLETE in `dev`** (Slices
   1–2b-7 all merged; 2a–2b-3 via consolidating PR #68 after the stacked PRs
   were mis-merged into parents; 2b-4 #69, 2b-5 #70, 2b-6 #76, 2b-7 #77 self-
-  merged). Slice 2c-1 (`[[` wikilink autocomplete) complete on
-  `feat/ui-wikilinks-2c1` (off dev), PR + self-merge next. **Workflow: PRs
+  merged); Slice 2c-1 (`[[` autocomplete) merged (#78). Slice 2c-2 (clickable
+  wikilink navigation) complete on `feat/ui-wikilinks-2c2` (off dev), PR +
+  self-merge next. **Workflow: PRs
   target `dev` directly (NOT stacked); I self-merge after CI green + clean
   review** (Taha re-authorized 2026-07-25 while away; scope = PR→dev only,
   NOT dev→prod). Backend issue #66 open.
@@ -21,14 +22,18 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   (`wikilinkCompletions` source + `useCodeMirrorEditor` `wikilinkTargets` option
   + `autocompletion`; `NoteView` supplies vault note paths from `useVaultTree`).
   Component/hook/api names are the resume handles; details in README + git.
-  Root verification green: lint, typecheck, 94 client + 130 server tests,
+  Slice 2c-2 (`wikilinkExtension` — `MatchDecorator` decorates `[[target]]` as
+  `.cm-wikilink`; mousedown navigates when the link is on a non-cursor line;
+  `NoteView` supplies a `useNavigate` handler).
+  Root verification green: lint, typecheck, 100 client + 130 server tests,
   `client` build.
-- **Current task**: none — Slice 2c-1 (`[[` autocomplete) done.
-- **Next step** (autonomous, "keep going"): 2c-2 — clickable rendered
-  `[[links]]` (a ViewPlugin decorating wikilinks; click navigates to the note;
-  clicking a missing link creates it type-first). Then Slices 3–7
-  (Search/Team/Vault-settings/Admin/Settings + ⌘K palette). Also note the
-  carried wikilink `]]`-doubling minor (apply appends `]]` unconditionally).
+- **Current task**: none — Slice 2c-2 (clickable wikilinks) done.
+- **Next step** (autonomous, "keep going"): 2c-3 link-to-create — clicking a
+  wikilink to a note that doesn't exist creates it type-first (reuse
+  `createNote`; check the target against `wikilinkTargets` → navigate if present,
+  else create then navigate). Then Slices 3–7 (Search/Team/Vault-settings/Admin/
+  Settings + ⌘K palette). Carried wikilink minors: `]]`-doubling on re-complete;
+  targets frozen at mount.
   Plans against `2026-07-09-editor-design.md` and
   `2026-07-17-hosted-ui-structure-design.md`.
 - **Known deferred** (deliberate, audit-verified 2026-07-18): cloud
