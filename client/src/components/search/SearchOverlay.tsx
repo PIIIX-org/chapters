@@ -19,7 +19,10 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     return () => clearTimeout(id)
   }, [query])
 
-  const results = useSearch(debounced)
+  // When closed, disable the query so a leftover search doesn't background-
+  // refetch on window refocus (the overlay is always mounted). Reopening
+  // re-enables with the last query.
+  const results = useSearch(open ? debounced : '')
   const notes = (results.data ?? []).filter((r) => r.resourceType === 'note')
 
   if (!open) return null
