@@ -2,12 +2,14 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Phase**: UI PHASE — Slices 1 (Scaffold + Auth), 2a (vault tree +
-  read-only note view), 2b-1 (CodeMirror 6 basic editing), 2b-2
-  (permission-aware editor lock), and 2b-3 (editable frontmatter property
-  panel) complete. Editor-completion increment in progress; PRs
-  #60/#62/#64/#65 (Slices 1/2a/2b-1/2b-2) awaiting owner review; 2b-3 on
-  `feat/ui-editor-2b3` (stacked on 2b-2), PR next.
+- **Phase**: UI PHASE — Slices 1, 2a, 2b-1, 2b-2, 2b-3 all MERGED to `dev`
+  (2a–2b-3 landed via consolidating PR #68 — the stacked PRs #62/#64/#65/#67
+  had been mis-merged into parent branches, not dev; #68 fixed that). Slice
+  2b-4 (type-first note creation) complete on `feat/ui-editor-2b4` (off dev),
+  PR + self-merge next. **Workflow now: PRs target `dev` directly (NOT
+  stacked); I merge them myself after CI green + clean review** (Taha
+  re-authorized self-merge 2026-07-25 while away). Backend issue #66 open
+  (updateNote lost-update race, tracked).
 - **Done**: full backend, hardened + documented (130 tests; real ONNX
   embeddings, real Dockerfile/Postgres, helmet+cors, Dependabot; see
   `backend-reference.md` for full architecture/security/runbook).
@@ -19,17 +21,19 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   (CM6), editable debounce-saving `NoteView`. Slice 2b-2: `readOnly` CM6
   option + `canEdit` helper — read-access vaults render a locked note.
   Slice 2b-3: `TagInput` + `PropertyPanel` — editable frontmatter (`type`
-  read-only, `resource`/`tags`/`timestamp` editable, extra keys preserved,
-  debounced PUT `{frontmatter}`, respects the lock). Root verification
-  green: lint, typecheck, 65 client + 130 server tests, `client` build.
-- **Current task**: none — Slice 2b-3 done and verified end to end.
-- **Next step**: continue the editor-completion increment (owner delegated
-  sequencing via "keep going automatically"): 2b-4 note create/rename/delete
-  in the file tree (backend routes exist: POST `/vaults/:id/notes` type-first
-  create, POST `/vaults/:id/notes-rename` `{from,to}`, DELETE
-  `/vaults/:id/notes/*`, all gated `edit`; server 409s on collision). Then
-  live-preview rendering, then 2c (wikilinks). Plans against
-  `2026-07-09-editor-design.md`.
+  read-only, others editable, extra keys preserved, debounced PUT). Slice
+  2b-4: `createNote` + `useCreateNote` + `NewNoteForm` (type-first, datalist
+  of existing types) + `canEdit`-gated "New note" in `VaultLayout` that
+  navigates to the created note. Root verification green: lint, typecheck,
+  73 client + 130 server tests, `client` build.
+- **Current task**: none — Slice 2b-4 done and verified end to end.
+- **Next step** (autonomous, "keep going"): 2b-5 note rename + delete in the
+  file tree (backend: POST `/vaults/:id/notes-rename` `{from,to}`, DELETE
+  `/vaults/:id/notes/*`, both `edit`-gated; invalidate `['vault-tree',id]`;
+  navigate away if the open note is deleted/renamed). Then live-preview
+  rendering, then 2c (wikilinks), then Slices 3–7 (Search/Team/Vault-settings/
+  Admin/Settings + ⌘K). Plans against `2026-07-09-editor-design.md` and
+  `2026-07-17-hosted-ui-structure-design.md`.
 - **Known deferred** (all deliberate, documented, verified via a
   full-repo audit 2026-07-18): cloud storage/scheduled backups,
   cli-visualizer (#9, assigned), cross-file call-graph resolution,
