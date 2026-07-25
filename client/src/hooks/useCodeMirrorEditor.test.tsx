@@ -55,4 +55,32 @@ describe('useCodeMirrorEditor', () => {
     expect(container.querySelector('.cm-md-emphasis')).not.toBeNull()
     expect(container.querySelector('.cm-md-code')).not.toBeNull()
   })
+
+  it('shows the heading marker when the cursor is on that line', () => {
+    render(<Harness doc={'# Heading\n\nbody'} onChange={vi.fn()} />)
+    // Default selection is at offset 0 → line 1 is active → marker visible.
+    const firstLine = document.querySelector('.cm-line')
+    expect(firstLine?.textContent).toBe('# Heading')
+  })
+
+  it('hides the heading marker when the cursor is on another line', async () => {
+    render(<Harness doc={'# Heading\n\nbody'} onChange={vi.fn()} />)
+    const { EditorView } = await import('@codemirror/view')
+    const view = EditorView.findFromDOM(document.querySelector('.cm-editor') as HTMLElement)!
+    // Move the cursor to the end (the "body" line) — line 1 is no longer active.
+    view.dispatch({ selection: { anchor: view.state.doc.length } })
+    const firstLine = document.querySelector('.cm-line')
+    expect(firstLine?.textContent).toBe('Heading')
+  })
+
+  it('hides inline emphasis/code markers on an inactive line', async () => {
+    render(<Harness doc={'top\n\n**bold** and `code`'} onChange={vi.fn()} />)
+    const { EditorView } = await import('@codemirror/view')
+    const view = EditorView.findFromDOM(document.querySelector('.cm-editor') as HTMLElement)!
+    // Cursor on line 1 ("top"); the emphasis/code line is inactive.
+    view.dispatch({ selection: { anchor: 0 } })
+    const lines = document.querySelectorAll('.cm-line')
+    const last = lines[lines.length - 1]
+    expect(last?.textContent).toBe('bold and code')
+  })
 })

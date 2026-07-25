@@ -5,6 +5,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
+import { markdownMarkerHiding } from './markdownMarkerHiding.js'
 
 interface UseCodeMirrorEditorOptions {
   doc: string
@@ -46,6 +47,7 @@ export function useCodeMirrorEditor({ doc, onChange, readOnly = false }: UseCode
         keymap.of([...defaultKeymap, ...historyKeymap]),
         markdown(),
         syntaxHighlighting(markdownHighlight),
+        markdownMarkerHiding,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) onChangeRef.current(update.state.doc.toString())
         }),
