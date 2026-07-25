@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { Input } from '../ui/input'
@@ -19,11 +19,21 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     return () => clearTimeout(id)
   }, [query])
 
+  const [active, setActive] = useState(0)
+  // New query -> results change -> restart selection at the top.
+  useEffect(() => setActive(0), [debounced])
+
   // When closed, disable the query so a leftover search doesn't background-
   // refetch on window refocus (the overlay is always mounted). Reopening
   // re-enables with the last query.
   const results = useSearch(open ? debounced : '')
   const notes = (results.data ?? []).filter((r) => r.resourceType === 'note')
+
+  const activeIndex = notes.length ? Math.min(active, notes.length - 1) : 0
+  const activeRef = useRef<HTMLLIElement>(null)
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex])
 
   if (!open) return null
 
@@ -33,7 +43,19 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   }
 
   function onKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Escape') onClose()
+    if (e.key === 'Escape') {
+      onClose()
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActive((i) => Math.min(i + 1, notes.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActive((i) => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      const r = notes[activeIndex]
+      if (r) go(r.containerId, r.path)
+    }
   }
 
   return (
@@ -52,13 +74,19 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
           placeholder="Search notes…"
           className="h-11 rounded-none border-0 border-b border-border text-base focus-visible:ring-0"
         />
-        <ul className="max-h-[50vh] overflow-auto">
-          {notes.map((r) => (
-            <li key={`${r.resourceType}:${r.id}`}>
+        <ul role="listbox" className="max-h-[50vh] overflow-auto">
+          {notes.map((r, i) => (
+            <li
+              key={`${r.resourceType}:${r.id}`}
+              ref={i === activeIndex ? activeRef : undefined}
+              role="option"
+              aria-selected={i === activeIndex}
+            >
               <button
                 type="button"
                 onClick={() => go(r.containerId, r.path)}
-                className="block w-full px-4 py-2 text-left hover:bg-muted"
+                onMouseMove={() => setActive(i)}
+                className={`block w-full px-4 py-2 text-left ${i === activeIndex ? 'bg-muted' : ''}`}
               >
                 <div className="text-sm">{r.path}</div>
                 <div className="truncate text-xs text-muted-foreground">{r.snippet}</div>
