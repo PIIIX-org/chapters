@@ -8,9 +8,9 @@ knowledge graph.
 Slice 2a — vault tree + read-only note view, Slice 2b-1 — CodeMirror 6
 basic editing + debounced autosave, Slice 2b-2 — permission-aware editor
 lock, Slice 2b-3 — editable frontmatter property panel, Slice 2b-4 —
-type-first note creation, Slice 2b-5 — note rename/delete, and Slice 2b-6 —
-inline markdown rendering — done; the rest of Slice 2b — hiding syntax
-markers at rest — next).** All specs
+type-first note creation, Slice 2b-5 — note rename/delete, Slice 2b-6 —
+inline markdown rendering, and Slice 2b-7 — live-preview marker hiding —
+done, completing the Editor (Slice 2b); Slice 2c — wikilinks — next).** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -61,9 +61,9 @@ The UI (React + CodeMirror 6) is underway — Slice 1 (Scaffold + Auth),
 Slice 2a (vault tree + read-only note view), Slice 2b-1 (CodeMirror 6
 basic editing + debounced autosave), Slice 2b-2 (permission-aware editor
 lock), Slice 2b-3 (editable frontmatter property panel), Slice 2b-4
-(type-first note creation), Slice 2b-5 (note rename/delete), and Slice 2b-6
-(inline markdown rendering) are done; the remaining Slice 2b increment
-(hiding syntax markers at rest) is next — tracked in
+(type-first note creation), Slice 2b-5 (note rename/delete), Slice 2b-6
+(inline markdown rendering), and Slice 2b-7 (live-preview marker hiding) are
+done — the Editor (Slice 2b) is complete; Slice 2c (wikilinks) is next — tracked in
 [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
@@ -90,8 +90,9 @@ read-only collaborators get the same note rendered but locked. Edit-capable
 users can create notes from the sidebar via a type-first flow (pick or name
 a `type`, then the note name), and rename or delete a note inline from the
 file tree. The editor renders markdown formatting inline — headings, bold,
-italic, inline code, and links are styled as you type (the raw syntax
-markers are still shown; hiding them at rest is the next refinement).
+italic, inline code, and links are styled as you type — and the raw syntax
+markers (`#`, `**`, `` ` ``) hide when the cursor leaves the line and
+reappear when you move back onto it (live-preview).
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
