@@ -45,7 +45,7 @@
   "devDependencies": {
     "@hocuspocus/provider": "^4.4.0",
     "@types/adm-zip": "^0.5.8",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.1.1",
     "@types/nodemailer": "^7.0.0",
     "@types/ws": "^8.18.1",
     "drizzle-kit": "^0.31.4",
