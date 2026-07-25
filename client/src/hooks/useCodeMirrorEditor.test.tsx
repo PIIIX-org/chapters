@@ -44,4 +44,15 @@ describe('useCodeMirrorEditor', () => {
     const content = getByTestId('editor-container').querySelector('.cm-content')
     expect(content?.getAttribute('contenteditable')).toBe('false')
   })
+
+  it('applies markdown styling classes (heading, strong, emphasis, code)', () => {
+    const { getByTestId } = render(
+      <Harness doc={'# Title\n\n**bold** and *italic* and `code`'} onChange={vi.fn()} />,
+    )
+    const container = getByTestId('editor-container')
+    expect(container.querySelector('.cm-md-h1')).not.toBeNull()
+    expect(container.querySelector('.cm-md-strong')).not.toBeNull()
+    expect(container.querySelector('.cm-md-emphasis')).not.toBeNull()
+    expect(container.querySelector('.cm-md-code')).not.toBeNull()
+  })
 })

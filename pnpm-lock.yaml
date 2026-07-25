@@ -35,6 +35,9 @@ importers:
       '@codemirror/lang-markdown':
         specifier: 6.5.1
         version: 6.5.1
+      '@codemirror/language':
+        specifier: 6.12.4
+        version: 6.12.4
       '@codemirror/state':
         specifier: 6.7.1
         version: 6.7.1
@@ -44,6 +47,9 @@ importers:
       '@fontsource-variable/geist':
         specifier: ^5.2.9
         version: 5.2.9
+      '@lezer/highlight':
+        specifier: 1.2.3
+        version: 1.2.3
       '@tanstack/react-query':
         specifier: ^5.101.2
         version: 5.101.2(react@19.2.7)
