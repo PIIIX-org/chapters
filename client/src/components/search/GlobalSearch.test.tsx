@@ -19,10 +19,18 @@ describe('GlobalSearch', () => {
     renderGlobal()
     expect(screen.queryByPlaceholderText(/search/i)).toBeNull()
 
-    fireEvent.keyDown(window, { key: 'k', metaKey: true })
+    // Set both modifiers so the platform-specific check (Cmd on macOS, Ctrl
+    // elsewhere) opens regardless of the test host's platform.
+    fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true })
     expect(screen.getByPlaceholderText(/search/i)).toBeInTheDocument()
 
     fireEvent.keyDown(screen.getByPlaceholderText(/search/i), { key: 'Escape' })
+    expect(screen.queryByPlaceholderText(/search/i)).toBeNull()
+  })
+
+  it('does NOT open on Shift+Mod+K (that is the editor delete-line shortcut)', () => {
+    renderGlobal()
+    fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true, shiftKey: true })
     expect(screen.queryByPlaceholderText(/search/i)).toBeNull()
   })
 })
