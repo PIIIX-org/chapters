@@ -32,10 +32,9 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   Plans against `2026-07-09-editor-design.md` and
   `2026-07-17-hosted-ui-structure-design.md`.
 - **Known deferred** (deliberate, audit-verified 2026-07-18): cloud
-  storage/scheduled backups,
-  cli-visualizer (#9, assigned), cross-file call-graph resolution,
-  symbol-level embeddings, Leiden upgrade, partial/selective restore,
-  anomaly detection for runaway AI edit loops, single-process
-  architecture (see implementation.md). MFA *enrollment* UI is Settings-
-  page work for a later slice, not built yet (Global Constraints).
-- **Open issues**: #9 (deferred, assigned)
+  storage/scheduled backups, cli-visualizer (#9, assigned), cross-file
+  call-graph resolution, symbol-level embeddings, Leiden upgrade,
+  partial/selective restore, anomaly detection for runaway AI edit loops,
+  single-process architecture (see implementation.md). MFA *enrollment* UI
+  is Settings-page work for a later slice (Global Constraints).
+- **Open issues**: #9 (deferred, assigned); #66 (updateNote race, backend)
