@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useOutletContext, useParams } from 'react-router'
 import { useNote } from '../../hooks/useNote.js'
 import { useUpdateNote } from '../../hooks/useUpdateNote.js'
+import { useVaultTree } from '../../hooks/useVaultTree.js'
 import { useCodeMirrorEditor } from '../../hooks/useCodeMirrorEditor.js'
 import { canEdit } from '../../api/vaults.js'
 import type { Vault } from '../../api/vaults.js'
@@ -68,7 +69,9 @@ function NoteEditor({ vaultId, path, vaultName, frontmatter, initialBody, readOn
     }, SAVE_DEBOUNCE_MS)
   }
 
-  const editorRef = useCodeMirrorEditor({ doc: initialBody, onChange: handleChange, readOnly })
+  const tree = useVaultTree(vaultId)
+  const wikilinkTargets = tree.data ? Object.values(tree.data).flat().map((n) => n.path) : []
+  const editorRef = useCodeMirrorEditor({ doc: initialBody, onChange: handleChange, readOnly, wikilinkTargets })
 
   return (
     <div className="flex h-full flex-col">
