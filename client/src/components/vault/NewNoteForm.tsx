@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Button } from '../ui/button'
+import { FormError } from '../FormError'
 import { useCreateNote } from '../../hooks/useCreateNote'
 import type { CreateNoteResult } from '../../api/notes'
 
@@ -62,7 +63,7 @@ export function NewNoteForm({ vaultId, existingTypes, onCreated }: NewNoteFormPr
         onChange={(e) => setName(e.target.value)}
         placeholder="e.g. jane-doe"
       />
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      <FormError message={error} />
       <Button type="submit" disabled={createNote.isPending}>
         {createNote.isPending ? 'Creating…' : 'Create note'}
       </Button>

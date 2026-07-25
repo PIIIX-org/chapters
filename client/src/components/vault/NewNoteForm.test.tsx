@@ -31,6 +31,19 @@ describe('NewNoteForm', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('rejects an invalid name (valid type) before calling the server', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'people' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Jane Doe' } })
+    fireEvent.click(screen.getByRole('button', { name: /create note/i }))
+
+    expect(screen.getByText(/name must be/i)).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('creates a note and calls onCreated with the result', async () => {
     vi.stubGlobal(
       'fetch',
