@@ -58,3 +58,28 @@ export interface CreateNoteResult {
 export function createNote(vaultId: string, input: CreateNoteInput): Promise<CreateNoteResult> {
   return apiFetch(`/vaults/${vaultId}/notes`, { method: 'POST', body: JSON.stringify(input) })
 }
+
+export interface RenameNoteInput {
+  from: string
+  to: string
+}
+
+export interface RenameNoteResult {
+  id: string
+  path: string
+  type: string
+  name: string
+}
+
+export function renameNote(vaultId: string, input: RenameNoteInput): Promise<RenameNoteResult> {
+  return apiFetch(`/vaults/${vaultId}/notes-rename`, { method: 'POST', body: JSON.stringify(input) })
+}
+
+export interface DeleteNoteResult {
+  status: string
+  id: string
+}
+
+export function deleteNote(vaultId: string, path: string): Promise<DeleteNoteResult> {
+  return apiFetch(`/vaults/${vaultId}/notes/${path}`, { method: 'DELETE' })
+}

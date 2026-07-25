@@ -7,9 +7,9 @@ knowledge graph.
 **Status: backend complete; UI phase underway (Slice 1 — Scaffold + Auth,
 Slice 2a — vault tree + read-only note view, Slice 2b-1 — CodeMirror 6
 basic editing + debounced autosave, Slice 2b-2 — permission-aware editor
-lock, Slice 2b-3 — editable frontmatter property panel, and Slice 2b-4 —
-type-first note creation — done; the rest of Slice 2b — note rename/delete,
-live-preview rendering — next).** All specs
+lock, Slice 2b-3 — editable frontmatter property panel, Slice 2b-4 —
+type-first note creation, and Slice 2b-5 — note rename/delete — done; the
+rest of Slice 2b — live-preview rendering — next).** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -59,9 +59,9 @@ search/MCP engines rather than a parallel one:
 The UI (React + CodeMirror 6) is underway — Slice 1 (Scaffold + Auth),
 Slice 2a (vault tree + read-only note view), Slice 2b-1 (CodeMirror 6
 basic editing + debounced autosave), Slice 2b-2 (permission-aware editor
-lock), Slice 2b-3 (editable frontmatter property panel), and Slice 2b-4
-(type-first note creation) are done; the remaining Slice 2b increments
-(note rename/delete, live-preview rendering) are next — tracked in
+lock), Slice 2b-3 (editable frontmatter property panel), Slice 2b-4
+(type-first note creation), and Slice 2b-5 (note rename/delete) are done;
+the remaining Slice 2b increment (live-preview rendering) is next — tracked in
 [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
@@ -86,8 +86,8 @@ structured property panel for the note's frontmatter (`type` shown
 read-only, `resource`/`tags`/`timestamp` editable, extra keys preserved);
 read-only collaborators get the same note rendered but locked. Edit-capable
 users can create notes from the sidebar via a type-first flow (pick or name
-a `type`, then the note name). Note rename/delete and live-preview rendering
-arrive in later UI sub-plans.
+a `type`, then the note name), and rename or delete a note inline from the
+file tree. Live-preview markdown rendering arrives in a later UI sub-plan.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —

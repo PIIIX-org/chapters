@@ -43,7 +43,7 @@ export function VaultLayout() {
             )}
           </div>
         )}
-        {tree.data && <FileTree vaultId={vaultId!} tree={tree.data} />}
+        {tree.data && <FileTree vaultId={vaultId!} tree={tree.data} canEdit={canEdit(vault?.access)} />}
       </aside>
       <div className="flex-1">
         <Outlet context={vault} />
