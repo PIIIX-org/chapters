@@ -7,13 +7,15 @@ function Harness({
   onChange,
   readOnly,
   wikilinkTargets,
+  onWikilinkClick,
 }: {
   doc: string
   onChange: (doc: string) => void
   readOnly?: boolean
   wikilinkTargets?: string[]
+  onWikilinkClick?: (target: string) => void
 }) {
-  const ref = useCodeMirrorEditor({ doc, onChange, readOnly, wikilinkTargets })
+  const ref = useCodeMirrorEditor({ doc, onChange, readOnly, wikilinkTargets, onWikilinkClick })
   return <div ref={ref} data-testid="editor-container" />
 }
 
@@ -117,5 +119,12 @@ describe('useCodeMirrorEditor', () => {
     )
     const container = getByTestId('editor-container')
     expect(container.querySelector('.cm-content')?.textContent).toBe('body')
+  })
+
+  it('decorates wikilinks when onWikilinkClick is provided', () => {
+    const { getByTestId } = render(
+      <Harness doc={'see [[people/jane]]'} onChange={vi.fn()} onWikilinkClick={vi.fn()} />,
+    )
+    expect(getByTestId('editor-container').querySelector('.cm-wikilink')).not.toBeNull()
   })
 })
