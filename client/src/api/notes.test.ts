@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mockJsonResponse } from '../lib/api'
-import { createNote, getNote, getVaultTree, updateNote } from './notes'
+import { createNote, deleteNote, getNote, getVaultTree, renameNote, updateNote } from './notes'
 
 describe('notes api', () => {
   afterEach(() => {
@@ -76,6 +76,34 @@ describe('notes api', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/vaults/v1/notes',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ type: 'people', name: 'jane' }) }),
+    )
+  })
+
+  it('renameNote POSTs /api/vaults/:id/notes-rename with from and to', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse(200, { id: 'n1', path: 'people/jane-doe', type: 'people', name: 'jane-doe', frontmatter: {}, body: '', updatedAt: '2026-01-02' }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await renameNote('v1', { from: 'people/jane', to: 'jane-doe' })
+
+    expect(result.path).toBe('people/jane-doe')
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/vaults/v1/notes-rename',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ from: 'people/jane', to: 'jane-doe' }) }),
+    )
+  })
+
+  it('deleteNote DELETEs /api/vaults/:id/notes/:path', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, { status: 'trashed', id: 'n1' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await deleteNote('v1', 'people/jane')
+
+    expect(result.status).toBe('trashed')
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/vaults/v1/notes/people/jane',
+      expect.objectContaining({ method: 'DELETE' }),
     )
   })
 })
