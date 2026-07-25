@@ -11,22 +11,17 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   target `dev` directly (NOT stacked); I self-merge after CI green + clean
   review** (Taha re-authorized 2026-07-25 while away; scope = PR→dev only,
   NOT dev→prod). Backend issue #66 open.
-- **Done**: full backend, hardened + documented (130 tests; see
-  `backend-reference.md`). UI **Editor complete (Slice 2b)**: Slice 1 (auth,
-  design system, API client, `RequireAuth`), 2a (vault list, `FileTree`
-  sidebar, `NoteView`), 2b-1 (`useCodeMirrorEditor` + debounced save), 2b-2
-  (`readOnly`/`canEdit` lock), 2b-3 (`PropertyPanel`/`TagInput` editable
-  frontmatter), 2b-4 (`NewNoteForm` type-first create), 2b-5 (`NoteActions`
-  rename/delete), 2b-6 (markdown `HighlightStyle` inline styling), 2b-7
-  (`markdownMarkerHiding` — live-preview marker hiding). Slice 2c-1
-  (`wikilinkCompletions` source + `useCodeMirrorEditor` `wikilinkTargets` option
-  + `autocompletion`; `NoteView` supplies vault note paths from `useVaultTree`).
-  Component/hook/api names are the resume handles; details in README + git.
-  Slice 2c-2 (`wikilinkExtension` — `MatchDecorator` decorates `[[target]]` as
-  `.cm-wikilink`; mousedown navigates when the link is on a non-cursor line;
-  `NoteView` supplies a `useNavigate` handler).
-  Root verification green: lint, typecheck, 100 client + 130 server tests,
-  `client` build.
+- **Done**: full backend (130 tests; see `backend-reference.md`). UI: Slice 1
+  (auth, design system, `RequireAuth`), 2a (vault list, `FileTree`, `NoteView`),
+  **Editor complete (2b)** — `useCodeMirrorEditor` w/ debounced save,
+  `readOnly`/`canEdit` lock, `PropertyPanel`/`TagInput` frontmatter,
+  `NewNoteForm` create, `NoteActions` rename/delete, `HighlightStyle` +
+  `markdownMarkerHiding` live-preview. Slice 2c wikilinks: 2c-1
+  `wikilinkCompletions` (`[[` autocomplete), 2c-2 `wikilinkExtension`
+  (`MatchDecorator` `.cm-wikilink` + mousedown-navigate on non-cursor line,
+  `NoteView` uses `useNavigate`). Hook/api names are the resume handles; details
+  in README + git. Root verification green: lint, typecheck, 100 client + 130
+  server tests, `client` build.
 - **Current task**: none — Slice 2c-2 (clickable wikilinks) done.
 - **Next step** (autonomous, "keep going"): 2c-3 link-to-create — clicking a
   wikilink to a note that doesn't exist creates it type-first (reuse
