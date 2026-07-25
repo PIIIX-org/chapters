@@ -31,8 +31,8 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   then Slices 3–7 (Search/Team/Vault-settings/Admin/Settings + ⌘K palette).
   Plans against `2026-07-09-editor-design.md` and
   `2026-07-17-hosted-ui-structure-design.md`.
-- **Known deferred** (all deliberate, documented, verified via a
-  full-repo audit 2026-07-18): cloud storage/scheduled backups,
+- **Known deferred** (deliberate, audit-verified 2026-07-18): cloud
+  storage/scheduled backups,
   cli-visualizer (#9, assigned), cross-file call-graph resolution,
   symbol-level embeddings, Leiden upgrade, partial/selective restore,
   anomaly detection for runaway AI edit loops, single-process
