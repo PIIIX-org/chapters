@@ -4,7 +4,13 @@ An open-source, self-hostable "second brain" platform: a team knowledge base
 built on plain markdown files, a live-preview editor, and an AI-navigable
 knowledge graph.
 
-**Status: backend complete; UI phase next.** All specs
+**Status: backend complete; UI phase underway. Slice 1 (Scaffold + Auth),
+Slice 2a (vault tree + read-only view), Slice 2b (Editor — CodeMirror 6
+editing, permission-aware lock, editable frontmatter property panel, note
+create/rename/delete, and full live-preview), and Slice 2c (wikilinks —
+`[[` autocomplete, clickable navigation, and link-to-create) are done;
+Slice 3 (Search) is in progress — a ⌘K search overlay (3a) is done,
+keyboard navigation next.** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -51,8 +57,13 @@ search/MCP engines rather than a parallel one:
   type. See
   [`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
 
-The UI (React + CodeMirror 6) starts once its page-by-page structure is
-designed — tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).
+The UI (React + CodeMirror 6) is underway — Slice 1 (Scaffold + Auth),
+Slice 2a (vault tree + read-only note view), and Slice 2b (the Editor —
+CodeMirror 6 editing, permission-aware lock, editable frontmatter property
+panel, note create/rename/delete, and full live-preview) and Slice 2c
+(wikilinks — autocomplete, clickable navigation, link-to-create) are done;
+Slice 3 (Search) is in progress (a ⌘K search overlay is done) — tracked in
+[`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
 real deployment — security headers on by default, CORS off (same-origin
@@ -64,11 +75,37 @@ and repository polling are all in-process state) — see
 [`docs/agents/implementation.md`](docs/agents/implementation.md)'s
 "Deployment topology" section before running more than one instance.
 
+The frontend (`client/`) is a Vite + React app. In development, run the
+API (`pnpm -C server dev`) and the frontend (`pnpm -C client dev`)
+side by side — Vite proxies `/api/*` to the API on port 3000, so no CORS
+configuration is needed locally. `pnpm -C client build` produces a static
+`client/dist/` bundle to serve behind the same reverse proxy as the API in
+production.
+Logged-in users can browse their vaults and edit notes with a real
+CodeMirror 6 editor (`/vaults/:id/notes/*`, debounced autosave) plus a
+structured property panel for the note's frontmatter (`type` shown
+read-only, `resource`/`tags`/`timestamp` editable, extra keys preserved);
+read-only collaborators get the same note rendered but locked. Edit-capable
+users can create notes from the sidebar via a type-first flow (pick or name
+a `type`, then the note name), and rename or delete a note inline from the
+file tree. The editor renders markdown formatting inline — headings, bold,
+italic, inline code, and links are styled as you type — and the raw syntax
+markers (`#`, `**`, `` ` ``) hide when the cursor leaves the line and
+reappear when you move back onto it (live-preview). Typing `[[` autocompletes
+against the vault's note paths, and a `[[link]]` you're not editing is
+clickable — it navigates to that note, or, if the note doesn't exist yet,
+creates it (type-first, from the path) and opens it. Pressing ⌘K (Ctrl+K)
+anywhere opens a search overlay across every vault you can reach (hybrid
+keyword + semantic); clicking a match jumps to that note.
+
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
 and is agent-driven: the working agreements (implementation prompt, file/
 context/resume/testing protocols, GitHub workflow) live in
-[`docs/agents/`](docs/agents/).
+[`docs/agents/`](docs/agents/). For a full technical walkthrough of the
+backend — every subsystem, the data model, security posture, testing/
+deployment, and a maintenance runbook — see
+[`docs/agents/backend-reference.md`](docs/agents/backend-reference.md).
 
 All six sub-project specs have been through a dedicated security audit; see
 [`2026-07-12-security-audit-findings.md`](docs/superpowers/specs/2026-07-12-security-audit-findings.md)
@@ -228,10 +265,28 @@ below are tracked but not yet designed:
   [issue #9](https://github.com/PIIIX-org/chapters/issues/9). Deferred
   until the backend and its CLI surface exist; see
   [`2026-07-17-cli-visualizer-design.md`](docs/superpowers/specs/2026-07-17-cli-visualizer-design.md).
+- **MCP `rename_note` tool** — a viral X post/article claiming "MCP is the
+  missing piece between Claude Code and your Obsidian vault" prompted a
+  look at community vault-as-MCP-server projects (e.g.
+  [obsidian-claude-code-mcp](https://github.com/iansinnott/obsidian-claude-code-mcp),
+  the ["Vault as MCP" Obsidian plugin](https://community.obsidian.md/plugins/vault-as-mcp)).
+  Their tool surface (read/search/create/update/delete/rename notes, daily
+  notes, templates) is narrower than Chapters' own 14-tool MCP layer
+  (permission-scoped tokens, CRDT-safe collaborative writes, RRF-fused
+  search over notes *and* code, revision history/revert — see
+  `docs/agents/backend-reference.md` §5.8) — so the pattern itself isn't
+  something Chapters needs to adopt. One concrete gap did turn up: `rename`
+  has a REST route and a `renameNote()` store function already (used by the
+  UI's upcoming note-lifecycle work in Slice 2b) but no MCP tool wraps it
+  yet, unlike `search`/`graph`, which share their REST implementation.
+  Low-effort addition once Slice 2b's note lifecycle lands. Daily/periodic
+  notes and template tools were considered and not adopted — they assume a
+  journaling workflow that doesn't fit Chapters' OKF-typed note model.
 
 ## Contributing
 
-The backend is implemented; the UI hasn't started. Design feedback on
-open specs (see "Known gaps" above) is useful at any time; code
-contributions should target gaps in the implemented backend or wait for
-the UI phase to begin — check `docs/agents/STATE.md` for current status.
+The backend and Slice 1 of the UI (scaffold + auth) are implemented; the
+Editor and later slices haven't started. Design feedback on open specs
+(see "Known gaps" above) is useful at any time; code contributions should
+target gaps in the implemented backend/UI or wait for the next slice —
+check `docs/agents/STATE.md` for current status.
