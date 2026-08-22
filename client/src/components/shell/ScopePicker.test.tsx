@@ -19,7 +19,13 @@ function LocationProbe() {
 }
 
 function renderPicker(initialEntry = '/') {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockJsonResponse(200, VAULTS)))
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/trash')) return Promise.resolve(mockJsonResponse(200, []))
+      return Promise.resolve(mockJsonResponse(200, VAULTS))
+    }),
+  )
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
@@ -98,5 +104,16 @@ describe('ScopePicker', () => {
     fireEvent.click(trigger)
 
     await expectNoA11yViolations(container)
+  })
+
+  it('shows owner row actions inside the open list', async () => {
+    renderPicker()
+    const trigger = await screen.findByRole('button', { name: 'All vaults' })
+    await waitFor(() => expect(trigger).not.toBeDisabled())
+    fireEvent.click(trigger)
+
+    expect(screen.getByRole('option', { name: 'Engineering' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /rename engineering/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /delete engineering/i })).toBeInTheDocument()
   })
 })
