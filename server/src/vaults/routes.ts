@@ -1,7 +1,10 @@
+import { rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { and, eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import {
+  notes,
   teamMemberships,
   teams,
   users,
@@ -9,8 +12,10 @@ import {
   vaults,
   vaultShares,
 } from '../db/schema.js'
+import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
+import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import { listAccessibleVaults, resolveAccess } from './permissions.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 
@@ -270,6 +275,34 @@ export function vaultRoutes(app: FastifyInstance) {
       .set({ deletedAt: new Date() })
       .where(eq(vaults.id, req.params.id))
     return { status: 'trashed', id: req.params.id }
+  })
+
+  app.post<{ Params: { id: string } }>('/vaults/:id/purge', async (req, reply) => {
+    const rows = await db
+      .select({ id: vaults.id, ownerId: vaults.ownerId, deletedAt: vaults.deletedAt })
+      .from(vaults)
+      .where(eq(vaults.id, req.params.id))
+    const vault = rows[0]
+    if (!vault || vault.ownerId !== req.user!.id) {
+      return reply.code(404).send({ error: 'not found' })
+    }
+    // Same contract as purgeNote: purge only what is already trashed.
+    if (!vault.deletedAt) {
+      return reply.code(409).send({ error: 'vault is not trashed' })
+    }
+
+    // semanticEdges is polymorphic with no FK, so it does not cascade (#92).
+    // Collect note ids BEFORE deleting the vault row.
+    const noteIds = (
+      await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, req.params.id))
+    ).map((n) => n.id)
+    await deleteSemanticEdgesFor('note', noteIds)
+
+    // Everything else referencing the vault cascades via FK.
+    await db.delete(vaults).where(eq(vaults.id, req.params.id))
+    await rm(join(config.dataDir, 'vaults', req.params.id), { recursive: true, force: true })
+
+    return { status: 'purged', id: req.params.id }
   })
 
   app.put<{ Params: { id: string }; Body: { include: boolean } }>(

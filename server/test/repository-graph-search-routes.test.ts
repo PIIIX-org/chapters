@@ -70,6 +70,36 @@ describe('repository-scoped and merged graph/search routes', () => {
     expect(deniedSearch.statusCode).toBe(404)
   })
 
+  it('graph-preference defaults to excluded and 404s for a stranger', async () => {
+    const owner = await createActiveUser()
+    const stranger = await createActiveUser()
+    const ownerCookie = await loginCookie(app, owner.email)
+    const strangerCookie = await loginCookie(app, stranger.email)
+    const repo = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/repositories',
+        headers: { cookie: ownerCookie },
+        body: { name: 'pref-repo', ingestionMethod: 'agent_push' },
+      })
+    ).json() as { id: string }
+
+    const pref = await app.inject({
+      method: 'GET',
+      url: `/api/repositories/${repo.id}/graph-preference`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(pref.statusCode).toBe(200)
+    expect(pref.json()).toEqual({ include: false })
+
+    const denied = await app.inject({
+      method: 'GET',
+      url: `/api/repositories/${repo.id}/graph-preference`,
+      headers: { cookie: strangerCookie },
+    })
+    expect(denied.statusCode).toBe(404)
+  })
+
   it('merged graph includes an opted-in mergeable repository', async () => {
     const owner = await createActiveUser()
     const cookie = await loginCookie(app, owner.email)

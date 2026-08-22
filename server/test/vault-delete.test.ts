@@ -1,6 +1,10 @@
+import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
+import { and, eq, or } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
+import { db } from '../src/db/client.js'
+import { notes, semanticEdges, vaults } from '../src/db/schema.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -64,5 +68,58 @@ describe('vault soft delete', () => {
       headers: { cookie: otherCookie },
     })
     expect(res.statusCode).toBe(404)
+  })
+})
+
+describe('vault purge', () => {
+  it('refuses to purge a vault that is not trashed', async () => {
+    const id = await makeVault(ownerCookie, 'Still live')
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${id}/purge`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(409)
+  })
+
+  it('removes the vault, its notes, and their semantic edges', async () => {
+    const id = await makeVault(ownerCookie, 'Purge me')
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${id}/notes`,
+      headers: { cookie: ownerCookie },
+      body: { type: 'notes', name: 'doomed', body: 'x', frontmatter: { type: 'notes' } },
+    })
+    const noteRows = await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, id))
+    const noteId = noteRows[0]!.id
+    // semanticEdges has no FK, so it cannot cascade. Seed BOTH directions
+    // against a synthetic other end — a row where the purged note is the
+    // TARGET is the one a naive cleanup misses.
+    const other = randomUUID()
+    await db.insert(semanticEdges).values([
+      { sourceType: 'note', sourceId: noteId, targetType: 'note', targetId: other, similarity: 0.9 },
+      { sourceType: 'note', sourceId: other, targetType: 'note', targetId: noteId, similarity: 0.9 },
+    ])
+
+    await app.inject({ method: 'DELETE', url: `/api/vaults/${id}`, headers: { cookie: ownerCookie } })
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${id}/purge`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+
+    expect(await db.select().from(vaults).where(eq(vaults.id, id))).toEqual([])
+    expect(await db.select().from(notes).where(eq(notes.vaultId, id))).toEqual([])
+    const edges = await db
+      .select()
+      .from(semanticEdges)
+      .where(
+        or(
+          and(eq(semanticEdges.sourceType, 'note'), eq(semanticEdges.sourceId, noteId)),
+          and(eq(semanticEdges.targetType, 'note'), eq(semanticEdges.targetId, noteId)),
+        ),
+      )
+    expect(edges).toEqual([])
   })
 })

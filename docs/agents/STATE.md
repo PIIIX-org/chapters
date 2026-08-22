@@ -13,14 +13,13 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   search (`useSearch`, `SearchOverlay`, `GlobalSearch`). Names = resume handles.
 - **Graph plan fully implemented** (#91/#92/#93 via PRs #94/#95; plan
   `docs/superpowers/plans/2026-08-22-graph-engineering-findings.md`): semantic
-  edges now stored **directed** — source owns its top-k rows, `buildGraph()`
-  dedups on read (migration `0010_backfill_semantic_edge_directions.sql`);
-  `purgeNote()`/`syncRepositoryFiles()` clear edges explicitly (polymorphic
-  table, no FK, nothing cascades); measured with the new `pnpm profile-graph`:
-  `buildGraph()` ≈500ms at 10k notes, **Louvain is NOT the bottleneck**
-  (~25.6ms). Cost is the graphology build ~40%, O(n²) pairwise structural
-  loops ~23%, `semantic_edges` query ~22%. Table in implementation.md.
-- **Current task**: none.
+  edges stored **directed**, dedup'd on read by `buildGraph()`; purge paths
+  clear edges explicitly (polymorphic table, no FK). `pnpm profile-graph`:
+  ≈500ms at 10k notes, Louvain is NOT the bottleneck. Table in implementation.md.
+- **Current task**: none. Unit 1a done on `feat/unit-1a-vaults`
+  (`docs/superpowers/sdd/2026-08-22-unit-1a-graph-shell-backend/`): vault
+  soft delete + owner-only purge (mirrors `purgeNote`); `aggregate=community`
+  wired through `/repositories/:id/graph` ahead of `feat/unit-1a-graph`.
 - **⚠ THE UI GAP** — most important fact for the next session: the client is
   the note-taking core only. The backend's graph, real-time collaboration,
   repository/code-graph, vault sharing, admin, and MFA features have **no
