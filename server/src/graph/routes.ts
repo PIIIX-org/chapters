@@ -12,6 +12,7 @@ function parseFilters(q: {
   since?: string
   until?: string
   aggregate?: string
+  community?: string
 }): GraphFilters {
   return {
     types: q.types ? q.types.split(',').filter(Boolean) : undefined,
@@ -19,6 +20,10 @@ function parseFilters(q: {
     since: q.since,
     until: q.until,
     aggregate: q.aggregate === 'community' ? 'community' : undefined,
+    community:
+      q.community !== undefined && q.community !== '' && Number.isInteger(Number(q.community))
+        ? Number(q.community)
+        : undefined,
   }
 }
 
@@ -30,6 +35,7 @@ const filterQuerySchema = {
     since: { type: 'string' },
     until: { type: 'string' },
     aggregate: { type: 'string', enum: ['community'] },
+    community: { type: 'string' },
   },
 } as const
 
@@ -38,7 +44,14 @@ export function graphRoutes(app: FastifyInstance) {
 
   app.get<{
     Params: { id: string }
-    Querystring: { types?: string; tags?: string; since?: string; until?: string; aggregate?: string }
+    Querystring: {
+      types?: string
+      tags?: string
+      since?: string
+      until?: string
+      aggregate?: string
+      community?: string
+    }
   }>(
     '/vaults/:id/graph',
     { schema: { querystring: filterQuerySchema } },
@@ -54,7 +67,16 @@ export function graphRoutes(app: FastifyInstance) {
    * request (audit rule): my preference ∩ owner's mergeable gate ∩ my
    * current access — a stale preference never surfaces anything.
    */
-  app.get<{ Querystring: { types?: string; tags?: string; since?: string; until?: string; aggregate?: string } }>(
+  app.get<{
+    Querystring: {
+      types?: string
+      tags?: string
+      since?: string
+      until?: string
+      aggregate?: string
+      community?: string
+    }
+  }>(
     '/graph/merged',
     { schema: { querystring: filterQuerySchema } },
     async (req) => {

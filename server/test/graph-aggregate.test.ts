@@ -101,3 +101,75 @@ describe('community-aggregated graph', () => {
     expect(graph.nodes.every((n) => !n.id.startsWith('community:'))).toBe(true)
   })
 })
+
+describe('community drill-down', () => {
+  it('returns only the members of one community', async () => {
+    const agg = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/vaults/${vaultId}/graph?aggregate=community`,
+        headers: { cookie },
+      })
+    ).json() as CommunityGraphResponse
+    const first = agg.nodes[0]!
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/graph?community=${first.community}`,
+      headers: { cookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const members = res.json() as { nodes: Array<{ id: string; community: number }>; edges: Array<{ source: string; target: string }> }
+    expect(members.nodes).toHaveLength(first.size)
+    expect(members.nodes.every((n) => n.community === first.community)).toBe(true)
+
+    const ids = new Set(members.nodes.map((n) => n.id))
+    for (const e of members.edges) {
+      expect(ids.has(e.source)).toBe(true)
+      expect(ids.has(e.target)).toBe(true)
+    }
+  })
+
+  it('returns an empty graph for a community that does not exist', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/graph?community=99999`,
+      headers: { cookie },
+    })
+    expect(res.statusCode).toBe(200)
+    expect((res.json() as { nodes: unknown[] }).nodes).toEqual([])
+  })
+})
+
+describe('merged graph aggregation', () => {
+  it('returns aggregated community super-nodes from /graph/merged', async () => {
+    // The merged endpoint only includes a vault when the user's graph
+    // preference is set to include it AND the vault itself is mergeable.
+    await app.inject({
+      method: 'PUT',
+      url: `/api/vaults/${vaultId}/graph-preference`,
+      headers: { cookie },
+      body: { include: true },
+    })
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/vaults/${vaultId}`,
+      headers: { cookie },
+      body: { mergeable: true },
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/graph/merged?aggregate=community',
+      headers: { cookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const graph = res.json() as CommunityGraphResponse
+    expect(graph.aggregated).toBe(true)
+    expect(graph.nodes.length).toBeGreaterThan(0)
+    for (const n of graph.nodes) {
+      expect(n.id).toMatch(/^community:\d+$/)
+      expect(n.size).toBeGreaterThan(0)
+    }
+  })
+})

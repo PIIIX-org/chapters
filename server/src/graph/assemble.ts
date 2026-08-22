@@ -51,6 +51,7 @@ export interface GraphFilters {
   since?: string
   until?: string
   aggregate?: 'community'
+  community?: number
 }
 
 export interface CommunityNode {
@@ -364,5 +365,15 @@ export async function buildGraph(
   }))
 
   const assembled: VaultGraph = { nodes, edges, cappedGroups }
-  return filters.aggregate === 'community' ? collapseToCommunities(assembled) : assembled
+  if (filters.aggregate === 'community') return collapseToCommunities(assembled)
+  if (filters.community !== undefined) {
+    const members = assembled.nodes.filter((n) => n.community === filters.community)
+    const ids = new Set(members.map((n) => n.id))
+    return {
+      nodes: members,
+      edges: assembled.edges.filter((e) => ids.has(e.source) && ids.has(e.target)),
+      cappedGroups: assembled.cappedGroups,
+    }
+  }
+  return assembled
 }
