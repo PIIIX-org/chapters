@@ -15,12 +15,12 @@
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.3.0",
     "@fastify/helmet": "^13.1.0",
-    "@fastify/multipart": "^10.1.0",
+    "@fastify/multipart": "^10.1.1",
     "@fastify/rate-limit": "^11.2.0",
     "@hocuspocus/server": "^4.6.0",
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@node-rs/argon2": "^2.0.2",
+    "@node-rs/argon2": "^2.1.0",
     "adm-zip": "^0.6.0",
     "chokidar": "^5.0.0",
     "drizzle-orm": "^0.45.2",
@@ -51,6 +51,6 @@
     "drizzle-kit": "^0.31.4",
     "tsx": "^4.23.12",
     "typescript": "^5.9.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }
