@@ -26,6 +26,7 @@ export interface GraphNode {
   type: string | null // note OKF type, or detected language for code
   tags: string[] // notes only, empty for code
   timestamp: string | null // notes only, null for code
+  updatedAt: string | null
   community: number
 }
 
@@ -49,6 +50,30 @@ export interface GraphFilters {
   tags?: string[]
   since?: string
   until?: string
+  aggregate?: 'community'
+  community?: number
+}
+
+export interface CommunityNode {
+  id: string
+  community: number
+  size: number
+  noteCount: number
+  codeCount: number
+  lastActivity: string | null
+}
+
+export interface CommunityEdge {
+  source: string
+  target: string
+  weight: number
+}
+
+export interface CommunityGraph {
+  aggregated: true
+  nodes: CommunityNode[]
+  edges: CommunityEdge[]
+  cappedGroups: string[]
 }
 
 export interface GraphResourceSet {
@@ -64,6 +89,7 @@ interface InternalNode {
   type: string | null
   tags: string[]
   timestamp: string | null
+  updatedAt: string | null
 }
 
 function passesFilters(node: InternalNode, filters: GraphFilters): boolean {
@@ -75,6 +101,58 @@ function passesFilters(node: InternalNode, filters: GraphFilters): boolean {
 }
 
 /**
+ * Collapses an assembled graph into one node per Louvain community. This
+ * shrinks the payload and what the client has to draw; it does NOT make
+ * buildGraph cheaper — the full assembly still runs (see issue #93).
+ */
+function collapseToCommunities(graph: VaultGraph): CommunityGraph {
+  const byCommunity = new Map<number, CommunityNode>()
+  const communityOf = new Map<string, number>()
+
+  for (const n of graph.nodes) {
+    communityOf.set(n.id, n.community)
+    let c = byCommunity.get(n.community)
+    if (!c) {
+      c = {
+        id: `community:${n.community}`,
+        community: n.community,
+        size: 0,
+        noteCount: 0,
+        codeCount: 0,
+        lastActivity: null,
+      }
+      byCommunity.set(n.community, c)
+    }
+    c.size += 1
+    if (n.resourceType === 'code') c.codeCount += 1
+    else c.noteCount += 1
+    const ts = n.updatedAt ?? null
+    if (ts && (c.lastActivity === null || ts > c.lastActivity)) c.lastActivity = ts
+  }
+
+  const weights = new Map<string, CommunityEdge>()
+  for (const e of graph.edges) {
+    const a = communityOf.get(e.source)
+    const b = communityOf.get(e.target)
+    if (a === undefined || b === undefined) continue
+    if (a === b) continue // intra-community edges are already implied by size
+    const [lo, hi] = a < b ? [a, b] : [b, a]
+    const key = `${lo}|${hi}`
+    const existing = weights.get(key)
+    if (existing) existing.weight += 1
+    else
+      weights.set(key, { source: `community:${lo}`, target: `community:${hi}`, weight: 1 })
+  }
+
+  return {
+    aggregated: true,
+    nodes: [...byCommunity.values()].sort((x, y) => y.size - x.size),
+    edges: [...weights.values()],
+    cappedGroups: graph.cappedGroups,
+  }
+}
+
+/**
  * Assembles the graph for a set of vaults and repositories the caller
  * has already been authorized for (callers re-resolve access live —
  * audit rule). Notes and repository files are unioned into one node
@@ -83,11 +161,24 @@ function passesFilters(node: InternalNode, filters: GraphFilters): boolean {
  */
 export async function buildGraph(
   resources: GraphResourceSet,
+  filters?: Omit<GraphFilters, 'aggregate'> & { aggregate?: undefined },
+): Promise<VaultGraph>
+export async function buildGraph(
+  resources: GraphResourceSet,
+  filters: Omit<GraphFilters, 'aggregate'> & { aggregate: 'community' },
+): Promise<CommunityGraph>
+export async function buildGraph(
+  resources: GraphResourceSet,
+  filters?: GraphFilters,
+): Promise<VaultGraph | CommunityGraph>
+export async function buildGraph(
+  resources: GraphResourceSet,
   filters: GraphFilters = {},
-): Promise<VaultGraph> {
+): Promise<VaultGraph | CommunityGraph> {
   const { vaultIds, repositoryIds } = resources
   if (vaultIds.length === 0 && repositoryIds.length === 0) {
-    return { nodes: [], edges: [], cappedGroups: [] }
+    const empty: VaultGraph = { nodes: [], edges: [], cappedGroups: [] }
+    return filters.aggregate === 'community' ? collapseToCommunities(empty) : empty
   }
 
   let internalNodes: InternalNode[] = []
@@ -100,6 +191,7 @@ export async function buildGraph(
         path: notes.path,
         type: notes.type,
         frontmatter: notes.frontmatter,
+        updatedAt: notes.updatedAt,
       })
       .from(notes)
       .where(and(inArray(notes.vaultId, vaultIds), isNull(notes.deletedAt)))
@@ -113,6 +205,7 @@ export async function buildGraph(
         type: r.type,
         tags: Array.isArray(fm.tags) ? fm.tags : [],
         timestamp: typeof fm.timestamp === 'string' ? fm.timestamp : null,
+        updatedAt: r.updatedAt?.toISOString() ?? null,
       })
     }
   }
@@ -124,6 +217,7 @@ export async function buildGraph(
         repositoryId: repositoryFiles.repositoryId,
         path: repositoryFiles.path,
         language: repositoryFiles.language,
+        updatedAt: repositoryFiles.updatedAt,
       })
       .from(repositoryFiles)
       .where(inArray(repositoryFiles.repositoryId, repositoryIds))
@@ -136,6 +230,7 @@ export async function buildGraph(
         type: r.language,
         tags: [],
         timestamp: null,
+        updatedAt: r.updatedAt?.toISOString() ?? null,
       })
     }
   }
@@ -269,5 +364,16 @@ export async function buildGraph(
     community: communities[n.id] ?? 0,
   }))
 
-  return { nodes, edges, cappedGroups }
+  const assembled: VaultGraph = { nodes, edges, cappedGroups }
+  if (filters.aggregate === 'community') return collapseToCommunities(assembled)
+  if (filters.community !== undefined) {
+    const members = assembled.nodes.filter((n) => n.community === filters.community)
+    const ids = new Set(members.map((n) => n.id))
+    return {
+      nodes: members,
+      edges: assembled.edges.filter((e) => ids.has(e.source) && ids.has(e.target)),
+      cappedGroups: assembled.cappedGroups,
+    }
+  }
+  return assembled
 }
