@@ -216,10 +216,10 @@ export async function buildGraph(
     const sem = await db
       .select()
       .from(semanticEdges)
-      .where(or(inArray(semanticEdges.nodeAId, allIds), inArray(semanticEdges.nodeBId, allIds)))
+      .where(or(inArray(semanticEdges.sourceId, allIds), inArray(semanticEdges.targetId, allIds)))
     for (const edge of sem) {
-      if (byId.has(edge.nodeAId) && byId.has(edge.nodeBId)) {
-        addEdge(edge.nodeAId, edge.nodeBId, 'semantic')
+      if (byId.has(edge.sourceId) && byId.has(edge.targetId)) {
+        addEdge(edge.sourceId, edge.targetId, 'semantic')
       }
     }
   }

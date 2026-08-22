@@ -5,6 +5,7 @@ import { db } from '../db/client.js'
 import { noteLinks, noteRevisions, notes } from '../db/schema.js'
 import { config } from '../config.js'
 import { scheduleEmbedding } from '../search/embedding-queue.js'
+import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import {
   OkfValidationError,
   extractWikilinks,
@@ -385,6 +386,9 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
   const row = rows[0]
   if (!row) return false
   await db.delete(notes).where(eq(notes.id, row.id))
+  // semanticEdges is polymorphic and has no FK (spec 9), so it does not
+  // cascade — clear it by hand or the rows leak (#92).
+  await deleteSemanticEdgesFor('note', [row.id])
   await rm(trashFile(vaultId, row.id), { force: true })
   return true
 }

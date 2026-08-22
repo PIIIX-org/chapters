@@ -1,4 +1,4 @@
-import { and, eq, isNull, ne, or, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes, repositoryFiles, semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
@@ -63,14 +63,12 @@ export async function recomputeSemanticEdges(
   nodeId: string,
   embedding: number[],
 ): Promise<void> {
+  // Only this node's OWN edges. kNN is asymmetric — B can hold A in its top-k
+  // while A does not hold B — so deleting by either side would wipe an edge B
+  // owns and nothing would restore it until B is re-embedded (#91).
   await db
     .delete(semanticEdges)
-    .where(
-      or(
-        and(eq(semanticEdges.nodeAType, nodeType), eq(semanticEdges.nodeAId, nodeId)),
-        and(eq(semanticEdges.nodeBType, nodeType), eq(semanticEdges.nodeBId, nodeId)),
-      ),
-    )
+    .where(and(eq(semanticEdges.sourceType, nodeType), eq(semanticEdges.sourceId, nodeId)))
 
   const vec = JSON.stringify(embedding)
   const neighbors = (await knn(vec, nodeType, nodeId)).filter(
@@ -78,22 +76,39 @@ export async function recomputeSemanticEdges(
   )
   if (neighbors.length === 0) return
 
-  const self = { type: nodeType, id: nodeId }
-  const rows = neighbors.map((n) => {
-    const [a, b] = `${self.type}:${self.id}` < `${n.type}:${n.id}` ? [self, n] : [n, self]
-    return {
-      nodeAType: a.type,
-      nodeAId: a.id,
-      nodeBType: b.type,
-      nodeBId: b.id,
-      similarity: n.similarity,
-    }
-  })
+  const rows = neighbors.map((n) => ({
+    sourceType: nodeType,
+    sourceId: nodeId,
+    targetType: n.type,
+    targetId: n.id,
+    similarity: n.similarity,
+  }))
   await db
     .insert(semanticEdges)
     .values(rows)
     .onConflictDoUpdate({
-      target: [semanticEdges.nodeAType, semanticEdges.nodeAId, semanticEdges.nodeBType, semanticEdges.nodeBId],
+      target: [
+        semanticEdges.sourceType,
+        semanticEdges.sourceId,
+        semanticEdges.targetType,
+        semanticEdges.targetId,
+      ],
       set: { similarity: sql`excluded.similarity` },
     })
+}
+
+/** Removes every semantic edge touching a node, in both directions. */
+export async function deleteSemanticEdgesFor(
+  nodeType: SemanticNodeType,
+  nodeIds: string[],
+): Promise<void> {
+  if (nodeIds.length === 0) return
+  await db
+    .delete(semanticEdges)
+    .where(
+      or(
+        and(eq(semanticEdges.sourceType, nodeType), inArray(semanticEdges.sourceId, nodeIds)),
+        and(eq(semanticEdges.targetType, nodeType), inArray(semanticEdges.targetId, nodeIds)),
+      ),
+    )
 }

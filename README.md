@@ -25,7 +25,11 @@ for best AI navigability, see
 - **Graph & search** — save-time embedding index; extracted/structural/
   semantic edges with Louvain communities and an opt-in merged
   cross-vault view; hybrid keyword+semantic search, permission-filtered
-  in-query
+  in-query. Semantic edges are stored directed — each node owns the rows
+  for its own top-k, read back undirected — and are cleared explicitly
+  when a note is purged or a repository file disappears (the table is
+  polymorphic, so nothing cascades); migration `0010` mirrors
+  pre-existing rows, so no edge is lost on upgrade
 - **Real-time collaboration** — Yjs relay with per-operation live
   permission checks, instant revocation kick, and an identity-free live
   view for read-only users
@@ -282,6 +286,15 @@ below are tracked but not yet designed:
   Low-effort addition once Slice 2b's note lifecycle lands. Daily/periodic
   notes and template tools were considered and not adopted — they assume a
   journaling workflow that doesn't fit Chapters' OKF-typed note model.
+- **`buildGraph()` Louvain profiling** — `graph/assemble.ts` runs Louvain
+  over the whole assembled graph on every request, uncached, against a
+  stated 10k-note budget, and it has never been measured
+  ([issue #93](https://github.com/PIIIX-org/chapters/issues/93)). Measure
+  first; optimize only if it's the dominant cost. The same research pass
+  closed four tracked deferrals as decided against — Leiden, a graph
+  database, GraphRAG-style LLM community summaries, and cross-file call
+  resolution — with the reasoning in
+  [`2026-08-22-graph-engineering-findings.md`](docs/superpowers/plans/2026-08-22-graph-engineering-findings.md).
 
 ## Contributing
 
