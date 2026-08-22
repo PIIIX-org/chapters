@@ -26,17 +26,18 @@ function parseGraphFilters(q: {
   since?: string
   until?: string
   aggregate?: string
-}): GraphFilters & { aggregate?: 'community' } {
+  community?: string
+}): GraphFilters {
   return {
     types: q.types ? q.types.split(',').filter(Boolean) : undefined,
     tags: q.tags ? q.tags.split(',').filter(Boolean) : undefined,
     since: q.since,
     until: q.until,
-    // ponytail: GraphFilters doesn't declare `aggregate` yet in this
-    // worktree (it lands with feat/unit-1a-graph) — carried as an
-    // intersection so it still reaches buildGraph without touching
-    // server/src/graph/assemble.ts.
     aggregate: q.aggregate === 'community' ? 'community' : undefined,
+    community:
+      q.community !== undefined && q.community !== '' && Number.isInteger(Number(q.community))
+        ? Number(q.community)
+        : undefined,
   }
 }
 
@@ -275,7 +276,14 @@ export function repositoryRoutes(app: FastifyInstance) {
 
   app.get<{
     Params: { id: string }
-    Querystring: { types?: string; tags?: string; since?: string; until?: string; aggregate?: string }
+    Querystring: {
+      types?: string
+      tags?: string
+      since?: string
+      until?: string
+      aggregate?: string
+      community?: string
+    }
   }>('/repositories/:id/graph', async (req, reply) => {
     const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
     if (!access) return reply.code(404).send({ error: 'not found' })

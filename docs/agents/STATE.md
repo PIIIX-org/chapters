@@ -17,9 +17,10 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   clear edges explicitly (polymorphic table, no FK). `pnpm profile-graph`:
   ≈500ms at 10k notes, Louvain is NOT the bottleneck. Table in implementation.md.
 - **Current task**: none. Unit 1a done on `feat/unit-1a-vaults`
-  (`docs/superpowers/sdd/2026-08-22-unit-1a-graph-shell-backend/`): vault
-  soft delete + owner-only purge (mirrors `purgeNote`); `aggregate=community`
-  wired through `/repositories/:id/graph` ahead of `feat/unit-1a-graph`.
+  (ledger: `.superpowers/sdd/2026-08-22-unit-1a-graph-shell-backend/`, repo
+  root, git-ignored): vault soft delete + owner-only purge (mirrors
+  `purgeNote`); `aggregate=community` and `community=<n>` drill-down wired
+  through `/repositories/:id/graph`, `GET .../graph-preference` added.
 - **⚠ THE UI GAP** — most important fact for the next session: the client is
   the note-taking core only. The backend's graph, real-time collaboration,
   repository/code-graph, vault sharing, admin, and MFA features have **no

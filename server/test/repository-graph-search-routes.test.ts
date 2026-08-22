@@ -150,6 +150,59 @@ describe('repository-scoped and merged graph/search routes', () => {
     expect(merged.nodes.length).toBeGreaterThan(0)
   })
 
+  it('graph community drill-down actually filters (not silently ignored)', async () => {
+    const owner = await createActiveUser()
+    const cookie = await loginCookie(app, owner.email)
+    const repo = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/repositories',
+        headers: { cookie },
+        body: { name: 'community-repo', ingestionMethod: 'agent_push' },
+      })
+    ).json() as { id: string }
+    const { token } = (
+      await app.inject({
+        method: 'POST',
+        url: `/api/repositories/${repo.id}/sync-tokens`,
+        headers: { cookie },
+      })
+    ).json() as { token: string }
+    // src/a.ts + src/b.ts share language and top-level dir → one community.
+    // other/lonely.py shares neither → its own, disconnected, community.
+    await app.inject({
+      method: 'POST',
+      url: '/repositories/sync',
+      headers: { authorization: `Bearer ${token}` },
+      body: {
+        files: [
+          { path: 'src/a.ts', content: 'export const a = 1' },
+          { path: 'src/b.ts', content: 'export const b = 2' },
+          { path: 'other/lonely.py', content: 'lonely = True' },
+        ],
+        currentPaths: ['src/a.ts', 'src/b.ts', 'other/lonely.py'],
+      },
+    })
+    await flushExtraction()
+
+    const plain = (
+      await app.inject({ method: 'GET', url: `/api/repositories/${repo.id}/graph`, headers: { cookie } })
+    ).json() as { nodes: Array<{ id: string; community: number }> }
+    expect(plain.nodes).toHaveLength(3)
+
+    const targetCommunity = plain.nodes[0]!.community
+    const filtered = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/repositories/${repo.id}/graph?community=${targetCommunity}`,
+        headers: { cookie },
+      })
+    ).json() as { nodes: Array<{ id: string; community: number }> }
+    // This fails (returns all 3) if the community param is dropped.
+    expect(filtered.nodes.length).toBeLessThan(plain.nodes.length)
+    expect(filtered.nodes.every((n) => n.community === targetCommunity)).toBe(true)
+  })
+
   it('search everywhere finds a result in any accessible repository, unmergeable or not', async () => {
     const owner = await createActiveUser()
     const cookie = await loginCookie(app, owner.email)

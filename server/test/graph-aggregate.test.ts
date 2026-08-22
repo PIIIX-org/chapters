@@ -10,7 +10,14 @@ let vaultId: string
 
 interface CommunityGraphResponse {
   aggregated?: boolean
-  nodes: Array<{ id: string; community: number; size: number; lastActivity: string | null }>
+  nodes: Array<{
+    id: string
+    community: number
+    size: number
+    noteCount: number
+    codeCount: number
+    lastActivity: string | null
+  }>
   edges: Array<{ source: string; target: string; weight: number }>
 }
 
@@ -43,6 +50,9 @@ beforeAll(async () => {
     ['people', 'apollo', 'Rocket engine design. See [[people/wernher]].', '1000-01-01T00:00:00.000Z'],
     ['people', 'wernher', 'Chief rocket engine designer for apollo.', '1000-01-01T00:00:00.000Z'],
     ['tasks', 'grocery', 'Buy milk and coffee beans tomorrow.', '9999-12-31T23:59:59.999Z'],
+    // Cross-community wikilink so the aggregated graph has at least one
+    // inter-community edge to collapse (see the edge-collapse test below).
+    ['tasks', 'escalate', 'Escalate the blocked ticket. See [[people/apollo]].', '9999-12-31T23:59:59.999Z'],
   ] as const) {
     await app.inject({
       method: 'POST',
@@ -78,9 +88,31 @@ describe('community-aggregated graph', () => {
         url: `/api/vaults/${vaultId}/graph`,
         headers: { cookie },
       })
-    ).json() as { nodes: unknown[] }
+    ).json() as {
+      nodes: Array<{
+        id: string
+        community: number
+        resourceType: 'note' | 'code'
+        updatedAt: string | null
+      }>
+    }
     const total = graph.nodes.reduce((sum, n) => sum + n.size, 0)
     expect(total).toBe(plain.nodes.length)
+
+    // ink-fade inputs: noteCount/codeCount must tile the community exactly,
+    // and lastActivity must be the MAX updatedAt among that community's
+    // plain-graph members (flipping assemble.ts's `>` to `<` would make it
+    // the minimum instead, and this is the only place that would notice).
+    for (const c of graph.nodes) {
+      const members = plain.nodes.filter((n) => n.community === c.community)
+      expect(c.noteCount + c.codeCount).toBe(c.size)
+      const expectedLastActivity = members
+        .map((m) => m.updatedAt)
+        .filter((ts): ts is string => ts !== null)
+        .sort()
+        .at(-1)
+      expect(c.lastActivity).toBe(expectedLastActivity ?? null)
+    }
   })
 
   it('collapses edges between the same community pair into one weighted edge', async () => {
@@ -91,6 +123,9 @@ describe('community-aggregated graph', () => {
         headers: { cookie },
       })
     ).json() as CommunityGraphResponse
+    // Guard against the loop below passing vacuously: the fixture must
+    // actually produce at least one aggregated inter-community edge.
+    expect(graph.edges.length).toBeGreaterThan(0)
     const seen = new Set<string>()
     for (const e of graph.edges) {
       const key = [e.source, e.target].sort().join('|')
