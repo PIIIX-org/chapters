@@ -179,7 +179,26 @@ per-vault export. Team page: by-user constellation hero, roster of
 **aggregate stats only** (the privacy rule is absolute — no per-note activity),
 team create/manage, and the "who can reach this vault" expansion.
 
-### Unit 3 — Admin
+### Unit 3 — Admin and the onboarding path
+
+**Onboarding is the reason Admin is here and not last.** Login requires
+`status === 'active'` *and* `emailVerifiedAt` (`auth/routes.ts:169`); signup
+sets neither. The first admin is fine — `/setup` creates an active, verified
+admin from the one-time token the server prints on first boot, and logs them
+in. Every subsequent user needs email verification *and* an admin approval, and
+approval has no UI, so today a second person cannot get in without `curl` or
+`psql`.
+
+This unit closes that. It also fixes a UX hole: an unapproved user currently
+gets a generic `401 invalid credentials` at login — correct, because saying
+"pending approval" there would leak account existence — but it means they see
+"wrong password" indefinitely with no idea what they are waiting for. The
+resolution is to say it where there is no enumeration risk: the signup and
+verify-email screens state plainly that an administrator must approve the
+account before sign-in works, and the login screen stays generic. Do not
+"improve" the login error.
+
+
 One area, metadata-only throughout: approval queue over
 `GET /admin/users?status=pending_approval` + `POST /admin/users/:id/approve`,
 user management (`deactivate`/`promote`), vault and team oversight tables
