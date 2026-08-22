@@ -71,6 +71,13 @@
       "when": 1784374086695,
       "tag": "0009_heavy_exiles",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787395632287,
+      "tag": "0010_backfill_semantic_edge_directions",
+      "breakpoints": true
     }
   ]
 }

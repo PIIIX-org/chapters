@@ -24,7 +24,12 @@ Full decision + rationale: `docs/superpowers/specs/2026-07-17-tech-stack-decisio
   canonical note content.
 - **Embeddings**: local ONNX via Transformers.js (`bge-small-en-v1.5`
   default). Note content never leaves the instance.
-- **Graph analysis**: graphology (Louvain now, Leiden tracked as upgrade).
+- **Graph analysis**: graphology (Louvain). Leiden was evaluated and
+  **decided against** (2026-08-22): its guarantee is that Louvain can emit
+  disconnected communities, which only matters when a community is fed to a
+  summarizer. We never summarize communities — the result is one integer the
+  client colours nodes by. See
+  `docs/superpowers/plans/2026-08-22-graph-engineering-findings.md`.
 - **MCP**: official MCP TypeScript SDK.
 - **Frontend (UI phase, later)**: React + Vite, CodeMirror 6 +
   y-codemirror.next, Tailwind CSS + **shadcn/ui** (fetched via the shadcn
