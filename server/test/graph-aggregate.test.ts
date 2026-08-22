@@ -28,16 +28,27 @@ beforeAll(async () => {
     })).json() as { id: string }
   ).id
 
-  for (const [name, body] of [
-    ['apollo', 'Rocket engine design. See [[people/wernher]].'],
-    ['wernher', 'Chief rocket engine designer for apollo.'],
-    ['grocery', 'Buy milk and coffee beans tomorrow.'],
+  // apollo/wernher share a type, a wikilink, and vocabulary — one
+  // community. grocery has a different type and deliberately unrelated
+  // wording so it neither picks up a structural edge (different type)
+  // nor a semantic one (fake embedder is bag-of-words; disjoint
+  // vocabulary keeps cosine similarity under SEMANTIC_THRESHOLD=0.2 in
+  // tests). Timestamps are pinned far apart: createNote auto-stamps
+  // `now()` into frontmatter, and three notes created back-to-back land
+  // within the same second — those shared ISO date/time tokens alone
+  // pushed similarity over threshold and silently reconnected the
+  // "unrelated" note, which is exactly the trap this fixture needs to
+  // avoid.
+  for (const [type, name, body, timestamp] of [
+    ['people', 'apollo', 'Rocket engine design. See [[people/wernher]].', '1000-01-01T00:00:00.000Z'],
+    ['people', 'wernher', 'Chief rocket engine designer for apollo.', '1000-01-01T00:00:00.000Z'],
+    ['tasks', 'grocery', 'Buy milk and coffee beans tomorrow.', '9999-12-31T23:59:59.999Z'],
   ] as const) {
     await app.inject({
       method: 'POST',
       url: `/api/vaults/${vaultId}/notes`,
       headers: { cookie },
-      body: { type: 'notes', name, body, frontmatter: { type: 'notes' } },
+      body: { type, name, body, frontmatter: { type, timestamp } },
     })
   }
   await flushEmbeddings()
@@ -122,6 +133,22 @@ describe('community drill-down', () => {
     const members = res.json() as { nodes: Array<{ id: string; community: number }>; edges: Array<{ source: string; target: string }> }
     expect(members.nodes).toHaveLength(first.size)
     expect(members.nodes.every((n) => n.community === first.community)).toBe(true)
+
+    // The fixture yields >1 community (see beforeAll), so drill-down must
+    // actually exclude nodes — this fails if the community filter is a
+    // no-op that returns every node.
+    const plain = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/vaults/${vaultId}/graph`,
+        headers: { cookie },
+      })
+    ).json() as { nodes: Array<{ id: string; community: number }> }
+    expect(plain.nodes.length).toBeGreaterThan(1) // sanity: more than one candidate node exists
+    expect(members.nodes.length).toBeLessThan(plain.nodes.length)
+    const outsiders = plain.nodes.filter((n) => n.community !== first.community)
+    expect(outsiders.length).toBeGreaterThan(0) // sanity: a different community actually exists
+    for (const n of outsiders) expect(members.nodes.some((m) => m.id === n.id)).toBe(false)
 
     const ids = new Set(members.nodes.map((n) => n.id))
     for (const e of members.edges) {
