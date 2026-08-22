@@ -9,6 +9,7 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "reindex": "tsx src/scripts/reindex.ts",
+    "profile-graph": "tsx src/scripts/profile-graph.ts",
     "restore-backup": "tsx src/scripts/restore-backup.ts"
   },
   "dependencies": {
