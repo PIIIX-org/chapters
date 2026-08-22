@@ -63,6 +63,22 @@ Each of these was a real fork; the rationale matters more than the choice.
    communities, controls in a bottom sheet on small screens. This is the most
    expensive answer and it lands on the hardest unit; see Risks.
 
+9. **Progressive Home, so the bundle rule survives.** Decision 1 collides with
+   performance rule 6 in `implementation.md` — "initial bundle < 300KB gzipped;
+   heavy views (graph) lazy-load" — because a lazy-loaded Home is a blank first
+   paint. Resolution: the shell, chrome, scope picker and empty state ship in
+   the initial bundle under the existing 300KB budget; the graph renderer is a
+   lazy chunk requested immediately after first paint, with a skeleton in
+   place. The rule stands unamended and Home still paints instantly, at the
+   cost of one visible loading beat on the graph canvas.
+
+10. **Accessibility is gated in CI, per unit.** `vitest-axe` is added to the
+    client suite; every new component ships an axe assertion and CI fails on
+    violations. The design system asserts WCAG AA contrast but nothing has ever
+    enforced it. Adding the gate before seven units of UI exist is far cheaper
+    than retrofitting it across a graph canvas, a modal stack and a command
+    palette afterwards. This is the one new dev dependency this design adds.
+
 ## Binding constraints (already approved — do not relitigate)
 
 From `2026-07-19-ui-design-system.md`:
@@ -117,6 +133,11 @@ toggled — layering both was considered and rejected. Physics controls (force
 strength, link distance, clustering tightness, node size, edge styling) are
 exposed, not hidden defaults.
 
+**Cross-cutting client behaviour.** A `401` anywhere returns the user to login
+without losing unsaved editor content; a `429` from the rate limiter surfaces
+as a plain-language retry message rather than a generic failure. Both are
+easily forgotten per-unit, so they belong in the shell.
+
 **Secrets shown once** — MFA backup codes, sync tokens, webhook secrets — all
 use one shared component.
 
@@ -159,10 +180,14 @@ per-vault export. Team page: by-user constellation hero, roster of
 team create/manage, and the "who can reach this vault" expansion.
 
 ### Unit 3 — Admin
-One area, metadata-only throughout: approval queue, user management
-(deactivate/promote/transfer), vault and team oversight tables, instance
-activity with the security-event log and audit trail, aggregate stats,
-force-revoke.
+One area, metadata-only throughout: approval queue over
+`GET /admin/users?status=pending_approval` + `POST /admin/users/:id/approve`,
+user management (`deactivate`/`promote`), vault and team oversight tables
+(`GET /admin/vaults`, `/admin/teams`, `/admin/shares`), instance activity with
+the security-event log and audit trail, aggregate stats (`GET /admin/stats`),
+force-revoke of shares and MCP connections, and **instance backup download**
+(`GET /admin/backup`). Restore stays a CLI (`pnpm restore-backup`) by
+deliberate design — restoring over a live instance is not a button.
 
 ### Unit 4 — Settings and MFA
 Account (email, password, **TOTP enrollment with backup codes shown once**),
@@ -171,10 +196,16 @@ component as the vault-scoped list, and full-account export requests. TOTP
 only — no SMS, no WebAuthn, no "remember this device", no admin-initiated
 reset.
 
-### Unit 5 — Trash and revision history
+### Unit 5 — Trash, revision history, and import
 Trash browser with restore, revision history panel in the Editor rail, revert,
 and owner/admin-only revision purge. Endpoints all exist and are unused today,
 which is why a deleted note is currently unrecoverable through the app.
+
+Also **vault import** (`POST /api/import`, multipart zip) — the counterpart to
+the export in unit 2. It is grouped here rather than with export because it is
+a recovery path, and because an import that silently collides with existing
+notes is the same class of hazard as an unrecoverable delete: the confirm step
+must state what it will do to existing content.
 
 ### Unit 6 — Collaboration
 `y-codemirror.next` against the existing Hocuspocus relay: live co-editing,
@@ -190,12 +221,40 @@ sync health and last-synced state, sync-token management, read-only code
 viewer with the per-file symbol outline, and "open on GitHub" for git-sourced
 repos.
 
+## Deployment prerequisites
+
+Not code gaps — things that must be true of the environment, and are not today,
+because the app has never been deployed.
+
+- **SMTP must be configured in production.** `server/src/email/mailer.ts` falls
+  back to *recording* mail when `SMTP_HOST` is unset. That is correct for dev
+  and test, and silent data loss in production: signup verification and
+  password reset would appear to work and never arrive. First item on the
+  deploy checklist.
+- **`CREDENTIALS_ENCRYPTION_KEY` must be set** (32-byte hex) or private-repo
+  credentials and webhook secrets cannot be stored.
+- **Exactly one instance.** Lockout state, the embedding queue, the extraction
+  queue, MCP rate limiting and the repository poller are all in-process — see
+  the single-process section of `implementation.md`. Horizontal scaling is not
+  available, and a restart drops in-flight queue work. Accepted constraint, not
+  a defect, but it bounds how this can be run.
+
 ## Testing
 
 Each unit ships tests in the existing style: vitest + happy-dom for client,
 real-database integration tests for the five backend additions. The community
 aggregation endpoint is tested at 10k synthetic nodes, reusing the seeding in
 `server/src/scripts/profile-graph.ts`.
+
+## Assumptions
+
+- **i18n is out of scope.** Nothing in either approved spec mentions it and no
+  string extraction exists. Retrofitting later is real work; recorded here so
+  the choice is visible rather than accidental.
+- **The graph rendering approach is decided during planning**, biased toward the
+  fewest new dependencies. Community clustering means the top-level view is
+  tens of nodes, not thousands, so the expensive renderer is only needed once a
+  community is expanded.
 
 ## Out of scope
 
