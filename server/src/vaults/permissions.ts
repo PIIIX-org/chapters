@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { teamMemberships, users, vaults, vaultShares } from '../db/schema.js'
 
@@ -26,7 +26,10 @@ export async function resolveAccess(
   if (user?.status !== 'active') return null
 
   const vault = (
-    await db.select({ ownerId: vaults.ownerId }).from(vaults).where(eq(vaults.id, vaultId))
+    await db
+      .select({ ownerId: vaults.ownerId })
+      .from(vaults)
+      .where(and(eq(vaults.id, vaultId), isNull(vaults.deletedAt)))
   )[0]
   if (!vault) return null
   if (vault.ownerId === userId) return 'owner'
@@ -69,20 +72,35 @@ export async function listAccessibleVaults(
   )[0]
   if (user?.status !== 'active') return []
 
-  const owned = await db.select().from(vaults).where(eq(vaults.ownerId, userId))
+  const owned = await db
+    .select()
+    .from(vaults)
+    .where(and(eq(vaults.ownerId, userId), isNull(vaults.deletedAt)))
 
   const direct = await db
     .select({ vault: vaults, permission: vaultShares.permission })
     .from(vaultShares)
     .innerJoin(vaults, eq(vaults.id, vaultShares.vaultId))
-    .where(and(eq(vaultShares.granteeType, 'user'), eq(vaultShares.granteeId, userId)))
+    .where(
+      and(
+        eq(vaultShares.granteeType, 'user'),
+        eq(vaultShares.granteeId, userId),
+        isNull(vaults.deletedAt),
+      ),
+    )
 
   const viaTeam = await db
     .select({ vault: vaults, permission: vaultShares.permission })
     .from(vaultShares)
     .innerJoin(vaults, eq(vaults.id, vaultShares.vaultId))
     .innerJoin(teamMemberships, eq(teamMemberships.teamId, vaultShares.granteeId))
-    .where(and(eq(vaultShares.granteeType, 'team'), eq(teamMemberships.userId, userId)))
+    .where(
+      and(
+        eq(vaultShares.granteeType, 'team'),
+        eq(teamMemberships.userId, userId),
+        isNull(vaults.deletedAt),
+      ),
+    )
 
   const byId = new Map<string, { id: string; name: string; ownerId: string; mergeable: boolean; access: Access }>()
   for (const v of owned) {

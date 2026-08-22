@@ -261,6 +261,17 @@ export function vaultRoutes(app: FastifyInstance) {
     },
   )
 
+  app.delete<{ Params: { id: string } }>('/vaults/:id', async (req, reply) => {
+    const access = await resolveAccess(req.user!.id, req.params.id)
+    // Owner-only, and a non-owner must not learn the vault exists.
+    if (access !== 'owner') return reply.code(404).send({ error: 'not found' })
+    await db
+      .update(vaults)
+      .set({ deletedAt: new Date() })
+      .where(eq(vaults.id, req.params.id))
+    return { status: 'trashed', id: req.params.id }
+  })
+
   app.put<{ Params: { id: string }; Body: { include: boolean } }>(
     '/vaults/:id/graph-preference',
     {
