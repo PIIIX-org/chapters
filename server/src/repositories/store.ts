@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { and, eq, notInArray } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositoryFiles, repositoryFileSymbols } from '../db/schema.js'
+import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import { detectLanguage } from './language.js'
 import { scheduleExtraction } from './extraction-queue.js'
 
@@ -84,6 +85,8 @@ export async function syncRepositoryFiles(
         ),
       ),
     )
+    // Same as notes: semanticEdges has no FK and does not cascade (#92).
+    await deleteSemanticEdgesFor('code', toDelete.map((r) => r.id))
     result.deleted = toDelete.length
   }
 

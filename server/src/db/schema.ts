@@ -351,18 +351,31 @@ export const semanticNodeType = pgEnum('semantic_node_type', ['note', 'code'])
  * — permission filtering happens at query time against the caller's
  * live resource set.
  */
+/**
+ * Semantic kNN edges, stored **directed**: one row means "source holds target
+ * in its top-k", and the row is owned by its source. kNN is asymmetric, so the
+ * reverse row may or may not exist — `recomputeSemanticEdges()` only ever
+ * deletes rows it owns, and `buildGraph()` dedups both directions on read.
+ *
+ * Treating these as undirected in storage is the bug fixed in #91: deleting by
+ * either side wipes edges another node owns, and nothing restores them.
+ *
+ * The SQL columns are still named `node_a_*` / `node_b_*` from when the table
+ * was modelled as an undirected pair — renaming them would buy nothing but a
+ * migration. `node_a` is the source, `node_b` is the target.
+ */
 export const semanticEdges = pgTable(
   'semantic_edges',
   {
-    nodeAType: semanticNodeType('node_a_type').notNull(),
-    nodeAId: uuid('node_a_id').notNull(),
-    nodeBType: semanticNodeType('node_b_type').notNull(),
-    nodeBId: uuid('node_b_id').notNull(),
+    sourceType: semanticNodeType('node_a_type').notNull(),
+    sourceId: uuid('node_a_id').notNull(),
+    targetType: semanticNodeType('node_b_type').notNull(),
+    targetId: uuid('node_b_id').notNull(),
     similarity: real('similarity').notNull(),
   },
   (t) => [
-    primaryKey({ columns: [t.nodeAType, t.nodeAId, t.nodeBType, t.nodeBId] }),
-    index('semantic_edges_b_idx').on(t.nodeBType, t.nodeBId),
+    primaryKey({ columns: [t.sourceType, t.sourceId, t.targetType, t.targetId] }),
+    index('semantic_edges_b_idx').on(t.targetType, t.targetId),
   ],
 )
 

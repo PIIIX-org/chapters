@@ -2,38 +2,38 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Phase**: UI PHASE — the **Editor (Slice 2b) is COMPLETE in `dev`** (Slices
-  1–2b-7 all merged; 2a–2b-3 via consolidating PR #68 after the stacked PRs
-  were mis-merged into parents; 2b-4 #69, 2b-5 #70, 2b-6 #76, 2b-7 #77 self-
-  merged); Slice 2c (wikilinks) merged in full: #78/#79/#80. **Slices 1, 2a,
-  2b, 2c all in dev.** Slice 3a (⌘K search overlay) complete on
-  `feat/ui-search-3a` (off dev), PR + self-merge next. **Workflow: PRs
-  target `dev` directly (NOT stacked); I self-merge after CI green + clean
-  review** (Taha re-authorized 2026-07-25 while away; scope = PR→dev only,
-  NOT dev→prod). Backend issue #66 open.
-- **Done**: full backend (130 tests; see `backend-reference.md`). UI: Slice 1
+- **Phase**: UI PHASE. Slices 1, 2a, 2b (Editor), 2c (wikilinks), 3a (⌘K
+  search) merged to `dev`. **PRs target `dev` directly (NOT stacked); I
+  self-merge after CI green + clean review** (re-authorized 2026-07-25; scope
+  = PR→dev only, NOT dev→prod).
+- **Done**: full backend (135 tests, `backend-reference.md`). UI: Slice 1
   (auth, `RequireAuth`), 2a (vault list, `FileTree`, `NoteView`), 2b Editor
-  (`useCodeMirrorEditor`, debounced save, `readOnly`/`canEdit` lock,
-  `PropertyPanel`/`TagInput`, `NewNoteForm`, `NoteActions`, `HighlightStyle` +
-  `markdownMarkerHiding` live-preview), 2c wikilinks (`wikilinkCompletions`
-  autocomplete, `wikilinkDecorations` clickable-nav, `handleWikilinkClick`
-  link-to-create). Slice 3a Search: `search` API + `useSearch`
-  (`GET /search?q=&limit=`), `SearchOverlay` (debounced, note-filtered,
-  click-navigate, Esc/backdrop close), `GlobalSearch` (⌘K/Ctrl+K, platform-aware
-  modifier + !shift to dodge editor delete-line/kill-line) in `RequireAuth`.
-  Hook/api names are the resume handles; details in README + git. Root
-  verification green: lint, typecheck, 113 client + 130 server tests, build.
-- **Current task**: none — Slice 3a (⌘K search overlay) done.
-- **Next step** (autonomous, "keep going"): 3b — keyboard nav in the search
-  overlay (arrow up/down to move the selection, Enter to open it). Then Slices
-  4–7 (Team / Vault-settings / Admin / Settings incl. MFA-enrollment UI / ⌘K
-  palette). Carried minors: wikilink `]]`-doubling, targets frozen at mount,
-  first-line link needs cursor-move; search backdrop uses `bg-black/40` (no
-  overlay token), error state renders as "no results".
-- **Known deferred** (deliberate, audit-verified 2026-07-18): cloud
-  storage/scheduled backups, cli-visualizer (#9, assigned), cross-file
-  call-graph resolution, symbol-level embeddings, Leiden upgrade,
-  partial/selective restore, anomaly detection for runaway AI edit loops,
-  single-process architecture (see implementation.md). MFA *enrollment* UI
-  is Settings-page work for a later slice (Global Constraints).
-- **Open issues**: #9 (deferred, assigned); #66 (updateNote race, backend)
+  (`useCodeMirrorEditor`, debounced save, `canEdit` lock, `PropertyPanel`,
+  `NoteActions`, `markdownMarkerHiding`), 2c wikilinks (`wikilink*`), 3a
+  search (`useSearch`, `SearchOverlay`, `GlobalSearch`). Names = resume handles.
+- **Graph plan fully implemented** (#91/#92/#93 via PRs #94/#95; plan
+  `docs/superpowers/plans/2026-08-22-graph-engineering-findings.md`): semantic
+  edges now stored **directed** — source owns its top-k rows, `buildGraph()`
+  dedups on read (migration `0010_backfill_semantic_edge_directions.sql`);
+  `purgeNote()`/`syncRepositoryFiles()` clear edges explicitly (polymorphic
+  table, no FK, nothing cascades); measured with the new `pnpm profile-graph`:
+  `buildGraph()` ≈500ms at 10k notes, **Louvain is NOT the bottleneck**
+  (~25.6ms). Cost is the graphology build ~40%, O(n²) pairwise structural
+  loops ~23%, `semantic_edges` query ~22%. Table in implementation.md.
+- **Current task**: none.
+- **⚠ THE UI GAP** — most important fact for the next session: the client is
+  the note-taking core only. The backend's graph, real-time collaboration,
+  repository/code-graph, vault sharing, admin, and MFA features have **no
+  client UI at all** (grep `client/src` for `graph|repositor|yjs|collab`
+  returns nothing; `yjs` isn't even a client dependency). MCP is the
+  exception — AI clients consume it directly, so it needs no UI.
+- **Next step**: plan the remaining UI modules — 3b (search overlay keyboard
+  nav), then Slices 4–7 (Team / Vault-settings / Admin / Settings incl. MFA
+  enrollment / ⌘K palette). Carried minors: wikilink `]]`-doubling, targets
+  frozen at mount, search backdrop `bg-black/40`, error "no results".
+- **Known deferred**: cloud storage/scheduled backups, cli-visualizer (#9),
+  symbol-level embeddings, partial/selective restore, anomaly detection for
+  runaway AI edit loops, single-process architecture (implementation.md).
+  **Decided against 2026-08-22** (do not re-open): Leiden, a graph database,
+  GraphRAG-style LLM community summaries, cross-file call resolution.
+- **Open issues**: #9 (deferred, assigned); #66 (updateNote lost-update race)
