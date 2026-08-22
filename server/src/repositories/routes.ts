@@ -351,6 +351,25 @@ export function repositoryRoutes(app: FastifyInstance) {
     },
   )
 
+  app.get<{ Params: { id: string } }>(
+    '/repositories/:id/graph-preference',
+    async (req, reply) => {
+      const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
+      if (!access) return reply.code(404).send({ error: 'not found' })
+      const rows = await db
+        .select({ include: repositoryGraphPreferences.include })
+        .from(repositoryGraphPreferences)
+        .where(
+          and(
+            eq(repositoryGraphPreferences.userId, req.user!.id),
+            eq(repositoryGraphPreferences.repositoryId, req.params.id),
+          ),
+        )
+      // No row is not an error — the column defaults to false.
+      return { include: rows[0]?.include ?? false }
+    },
+  )
+
   app.put<{ Params: { id: string }; Body: { include: boolean } }>(
     '/repositories/:id/graph-preference',
     {

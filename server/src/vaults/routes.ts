@@ -242,6 +242,25 @@ export function vaultRoutes(app: FastifyInstance) {
     },
   )
 
+  app.get<{ Params: { id: string } }>(
+    '/vaults/:id/graph-preference',
+    async (req, reply) => {
+      const access = await resolveAccess(req.user!.id, req.params.id)
+      if (!access) return reply.code(404).send({ error: 'not found' })
+      const rows = await db
+        .select({ include: vaultGraphPreferences.include })
+        .from(vaultGraphPreferences)
+        .where(
+          and(
+            eq(vaultGraphPreferences.userId, req.user!.id),
+            eq(vaultGraphPreferences.vaultId, req.params.id),
+          ),
+        )
+      // No row is not an error — the column defaults to false.
+      return { include: rows[0]?.include ?? false }
+    },
+  )
+
   app.put<{ Params: { id: string }; Body: { include: boolean } }>(
     '/vaults/:id/graph-preference',
     {
