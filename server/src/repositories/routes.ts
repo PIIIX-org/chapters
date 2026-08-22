@@ -25,12 +25,19 @@ function parseGraphFilters(q: {
   tags?: string
   since?: string
   until?: string
+  aggregate?: string
+  community?: string
 }): GraphFilters {
   return {
     types: q.types ? q.types.split(',').filter(Boolean) : undefined,
     tags: q.tags ? q.tags.split(',').filter(Boolean) : undefined,
     since: q.since,
     until: q.until,
+    aggregate: q.aggregate === 'community' ? 'community' : undefined,
+    community:
+      q.community !== undefined && q.community !== '' && Number.isInteger(Number(q.community))
+        ? Number(q.community)
+        : undefined,
   }
 }
 
@@ -269,7 +276,14 @@ export function repositoryRoutes(app: FastifyInstance) {
 
   app.get<{
     Params: { id: string }
-    Querystring: { types?: string; tags?: string; since?: string; until?: string }
+    Querystring: {
+      types?: string
+      tags?: string
+      since?: string
+      until?: string
+      aggregate?: string
+      community?: string
+    }
   }>('/repositories/:id/graph', async (req, reply) => {
     const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
     if (!access) return reply.code(404).send({ error: 'not found' })
@@ -348,6 +362,25 @@ export function repositoryRoutes(app: FastifyInstance) {
       const revoked = await revokeSyncToken(req.params.id, req.params.tokenId)
       if (!revoked) return reply.code(404).send({ error: 'token not found' })
       return { status: 'revoked' }
+    },
+  )
+
+  app.get<{ Params: { id: string } }>(
+    '/repositories/:id/graph-preference',
+    async (req, reply) => {
+      const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
+      if (!access) return reply.code(404).send({ error: 'not found' })
+      const rows = await db
+        .select({ include: repositoryGraphPreferences.include })
+        .from(repositoryGraphPreferences)
+        .where(
+          and(
+            eq(repositoryGraphPreferences.userId, req.user!.id),
+            eq(repositoryGraphPreferences.repositoryId, req.params.id),
+          ),
+        )
+      // No row is not an error — the column defaults to false.
+      return { include: rows[0]?.include ?? false }
     },
   )
 

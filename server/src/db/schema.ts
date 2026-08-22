@@ -114,6 +114,7 @@ export const vaults = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (t) => [index('vaults_owner_idx').on(t.ownerId)],
 )

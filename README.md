@@ -22,6 +22,10 @@ for best AI navigability, see
   (TOTP + backup codes, admin-mandatable)
 - **Notes** — plain OKF markdown files on disk, one shared server-side
   validation for every write path, soft-delete trash, per-type index.md
+- **Vaults** — owner-only soft delete (`DELETE /api/vaults/:id`) and hard
+  purge (`POST /api/vaults/:id/purge`, only once trashed), matching the
+  note purge contract: clears semantic edges explicitly and removes the
+  vault's directory from disk
 - **Graph & search** — save-time embedding index; extracted/structural/
   semantic edges with Louvain communities and an opt-in merged
   cross-vault view; hybrid keyword+semantic search, permission-filtered
@@ -29,7 +33,13 @@ for best AI navigability, see
   for its own top-k, read back undirected — and are cleared explicitly
   when a note is purged or a repository file disappears (the table is
   polymorphic, so nothing cascades); migration `0010` mirrors
-  pre-existing rows, so no edge is lost on upgrade
+  pre-existing rows, so no edge is lost on upgrade. `?aggregate=community`
+  collapses a vault's or repository's graph into one super-node per
+  Louvain community (size, note/code counts, most-recent activity);
+  tapping one sends `?community=<n>` back to the same graph endpoint to
+  drill down to just that community's members and edges. Each vault/
+  repository also has a `GET`/`PUT .../graph-preference` toggle
+  controlling whether it's included in the merged cross-vault view
 - **Real-time collaboration** — Yjs relay with per-operation live
   permission checks, instant revocation kick, and an identity-free live
   view for read-only users
