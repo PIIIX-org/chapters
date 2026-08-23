@@ -182,9 +182,14 @@ export function vaultRoutes(app: FastifyInstance) {
           .innerJoin(users, eq(users.id, teamMemberships.userId))
           .where(inArray(teamMemberships.teamId, teamIds))
       : []
+    const userIds = shares.filter((s) => s.granteeType === 'user').map((s) => s.granteeId)
+    const granteeUsers = userIds.length
+      ? await db.select({ id: users.id, email: users.email }).from(users).where(inArray(users.id, userIds))
+      : []
     return shares.map((s) => ({
       ...s,
       members: s.granteeType === 'team' ? members.filter((m) => m.teamId === s.granteeId) : undefined,
+      email: s.granteeType === 'user' ? granteeUsers.find((u) => u.id === s.granteeId)?.email : undefined,
     }))
   })
 
