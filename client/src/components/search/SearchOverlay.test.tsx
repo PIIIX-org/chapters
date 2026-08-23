@@ -137,7 +137,7 @@ describe('SearchOverlay', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     stubFetch(() => mockJsonResponse(500, { error: 'search backend unavailable' }))
-    renderOverlay(true)
+    const { container } = renderOverlay(true)
 
     await search(user, 'jane')
 
@@ -145,6 +145,11 @@ describe('SearchOverlay', () => {
     expect(screen.getByText('search backend unavailable')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
     expect(screen.queryByText(/no results/i)).toBeNull()
+
+    // The alert (and its focusable Retry button) must not be a descendant of
+    // #search-listbox (role="listbox" permits only option/group children) —
+    // this is the one error-state test that actually catches that.
+    await expectNoA11yViolations(container)
   })
 
   it('closes on Escape', async () => {
@@ -300,6 +305,26 @@ describe('SearchOverlay commands', () => {
     expect(JSON.parse((postCall?.[1] as RequestInit).body as string)).toEqual({ name: 'Atlas' })
   })
 
+  it('keeps the overlay open and shows the error when creating a vault fails', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    stubCommandFetch({ createResponse: mockJsonResponse(500, { error: 'vault name already exists' }) })
+    const { onClose, router } = renderOverlay(true)
+
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: 'Command: Go to graph home' })).toBeInTheDocument(),
+    )
+    await search(user, 'Atlas')
+
+    const option = await screen.findByRole('option', { name: 'Command: Create vault "Atlas"' })
+    await user.click(option)
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+    expect(screen.getByText('vault name already exists')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/')
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('never renders a command for a route that does not exist yet', async () => {
     stubCommandFetch()
     renderOverlay(true)
@@ -313,17 +338,30 @@ describe('SearchOverlay commands', () => {
   it('renders commands above results', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    stubCommandFetch()
+    // Real results (FIXTURE), not stubCommandFetch's empty array — otherwise
+    // there is nothing for the commands to be above, and the test can't fail.
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/search')) return Promise.resolve(mockJsonResponse(200, FIXTURE))
+      if (url === '/api/vaults' && (!init || init.method === undefined)) {
+        return Promise.resolve(mockJsonResponse(200, VAULTS))
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
     renderOverlay(true)
 
     await waitFor(() =>
       expect(screen.getByRole('option', { name: 'Command: Go to graph home' })).toBeInTheDocument(),
     )
     await search(user, 'jane')
+    await waitFor(() => expect(screen.getByText('people/jane')).toBeInTheDocument())
 
     const options = screen.getAllByRole('option')
-    expect(options.length).toBeGreaterThan(0)
-    expect(options[0]).toHaveAccessibleName(/^Command: /)
+    const firstCommandIndex = options.findIndex((o) => /^Command: /.test(o.getAttribute('aria-label') ?? ''))
+    const firstNonCommandIndex = options.findIndex((o) => !/^Command: /.test(o.getAttribute('aria-label') ?? ''))
+    expect(firstCommandIndex).toBeGreaterThanOrEqual(0)
+    expect(firstNonCommandIndex).toBeGreaterThanOrEqual(0)
+    expect(firstCommandIndex).toBeLessThan(firstNonCommandIndex)
   })
 
   it('has no accessibility violations with commands and results both populated', async () => {
@@ -475,6 +513,25 @@ describe('SearchOverlay keyboard navigation', () => {
     expect(document.getElementById(activeId as string)).toHaveAccessibleName('Command: Open vault: Engineering')
   })
 
+  it('gives the keyboard-active option a visible bg-muted class, and clears it off the others', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    stubNavFetch()
+    renderOverlay(true)
+
+    await search(user, 'e')
+    await waitFor(() => expect(screen.getByText('people/jane')).toBeInTheDocument())
+    await user.keyboard('{ArrowDown}')
+
+    const options = screen.getAllByRole('option')
+    const activeOption = options.find((o) => o.getAttribute('aria-selected') === 'true')
+    expect(activeOption).toBeDefined()
+    expect(activeOption).toHaveClass('bg-muted')
+    for (const opt of options) {
+      if (opt !== activeOption) expect(opt).not.toHaveClass('bg-muted')
+    }
+  })
+
   it('has no accessibility violations with an active option set via the keyboard', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
@@ -541,7 +598,9 @@ describe('SearchOverlay scope and filters', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     const fetchMock = stubScopeFetch()
-    renderOverlay(true, '/?types=people')
+    // s_types, not types: the overlay's filter panel is namespaced
+    // separately from the graph's own ?types= so the two never collide.
+    renderOverlay(true, '/?s_types=people')
 
     await search(user, 'jane')
     await waitFor(() => expect(screen.getByText('people/jane')).toBeInTheDocument())
@@ -550,7 +609,7 @@ describe('SearchOverlay scope and filters', () => {
     expect(searchCall?.[0]).toContain('types=people')
   })
 
-  it('checking a tag checkbox writes tags= into the URL and refetches with it', async () => {
+  it('checking a tag checkbox writes s_tags= into the URL (never the graph-owned tags=) and refetches with it', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     const fetchMock = stubScopeFetch()
@@ -562,11 +621,26 @@ describe('SearchOverlay scope and filters', () => {
 
     await user.click(screen.getByRole('checkbox', { name: 'engineering' }))
 
-    await waitFor(() => expect(router.state.location.search).toContain('tags=engineering'))
+    await waitFor(() => expect(router.state.location.search).toContain('s_tags=engineering'))
+    expect(router.state.location.search).not.toMatch(/(?<!s_)tags=/)
     await waitFor(() => {
       const searchCall = fetchMock.mock.calls.find(([url]) => String(url).startsWith('/api/search'))
       expect(searchCall?.[0]).toContain('tags=engineering')
     })
+  })
+
+  it('does not let the graph-owned ?types=/?tags= leak into the overlay filter panel', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const fetchMock = stubScopeFetch()
+    renderOverlay(true, '/?types=people&tags=engineering')
+
+    await search(user, 'jane')
+    await waitFor(() => expect(screen.getByText('people/jane')).toBeInTheDocument())
+
+    const searchCall = fetchMock.mock.calls.find(([url]) => String(url).startsWith('/api/search'))
+    expect(searchCall?.[0]).not.toContain('types=')
+    expect(searchCall?.[0]).not.toContain('tags=')
   })
 
   it('has no accessibility violations with the scope control and filter panel both rendered', async () => {

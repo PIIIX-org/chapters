@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { Input } from '../ui/input.js'
@@ -67,7 +67,10 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   // second piece of state, is what keeps the two controls agreeing about
   // scope after ⌘K closes.
   const vaultId = searchParams.get('vault')
-  const filters = graphFiltersFromSearchParams(searchParams)
+  // 's_'-prefixed: namespaced separately from the graph's own ?types=/?tags=/
+  // etc. so the two filter panels mounted at once (Home's graph, and this
+  // overlay) never silently read or write each other's params.
+  const filters = graphFiltersFromSearchParams(searchParams, 's_')
 
   function selectScope(id: string | null) {
     setSearchParams((prev) => {
@@ -82,6 +85,40 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     const id = setTimeout(() => setDebounced(query), 250)
     return () => clearTimeout(id)
   }, [query])
+
+  // Whatever had focus before ⌘K opened gets it back on close, however the
+  // overlay closes (Escape, backdrop click, a command/result activating) —
+  // otherwise a user who opened ⌘K while editing a note is dumped at
+  // <body> and loses their place.
+  const previousFocusRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!open) return
+    previousFocusRef.current = document.activeElement as HTMLElement | null
+    return () => {
+      previousFocusRef.current?.focus()
+    }
+  }, [open])
+
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  function onPanelKeyDown(e: KeyboardEvent) {
+    if (e.key !== 'Tab') return
+    const panel = panelRef.current
+    if (!panel) return
+    const focusables = panel.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )
+    const first = focusables[0]
+    const last = focusables[focusables.length - 1]
+    if (!first || !last) return
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
 
   // When closed, disable the query so a leftover search doesn't background-
   // refetch on window refocus (the overlay is always mounted). Reopening
@@ -142,7 +179,14 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   }
 
   function runCommand(cmd: Command) {
-    void Promise.resolve(cmd.run()).then(() => onClose())
+    void Promise.resolve(cmd.run())
+      .then(() => onClose())
+      .catch(() => {
+        // Swallowed here on purpose: the only command whose run() can reject
+        // is create-vault, and its own mutation's isError/error (rendered
+        // below) is what surfaces the failure. Nav commands' run() is a bare
+        // navigate() call and cannot reject.
+      })
   }
 
   // The keyboard drives this flat list in order: commands, then results. It
@@ -169,6 +213,15 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     setPrevEntriesKey(entriesKey)
     setActiveIndex(0)
   }
+
+  // The listbox scrolls (max-h-[50vh] overflow-auto); without this, arrowing
+  // past the fold moves the active option off-screen with nothing visible to
+  // follow it.
+  const activeEntryId = entries[activeIndex]?.id
+  useEffect(() => {
+    if (!activeEntryId) return
+    document.getElementById(activeEntryId)?.scrollIntoView({ block: 'nearest' })
+  }, [activeEntryId])
 
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
@@ -200,7 +253,14 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="w-full max-w-xl overflow-hidden rounded-lg border border-border bg-background shadow-lg">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search"
+        onKeyDown={onPanelKeyDown}
+        className="w-full max-w-xl overflow-hidden rounded-lg border border-border bg-background shadow-lg"
+      >
         <div className="flex items-center gap-1.5 border-b border-border px-4 py-2">
           <span className="text-xs font-medium text-muted-foreground">Search:</span>
           <div role="radiogroup" aria-label="Search scope" className="flex flex-wrap gap-1">
@@ -247,8 +307,13 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
           className="h-11 rounded-none border-0 border-b border-border text-base focus-visible:ring-0"
         />
         <div className="border-b border-border p-2">
-          <GraphFilters nodes={filterNodes} />
+          <GraphFilters nodes={filterNodes} paramPrefix="s_" />
         </div>
+        {createVault.isError && (
+          <div role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
+            {createVault.error.message}
+          </div>
+        )}
         <div id="search-listbox" role="listbox" aria-label="Search" className="max-h-[50vh] overflow-auto">
           {commands.length > 0 && (
             <div role="group" aria-label="Commands">
@@ -261,7 +326,10 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                   aria-selected={activeIndex === i}
                   aria-label={`Command: ${cmd.label}`}
                   onClick={() => runCommand(cmd)}
-                  className="flex w-full items-center gap-2 px-4 py-2 text-left hover:bg-muted"
+                  className={cn(
+                    'flex w-full items-center gap-2 px-4 py-2 text-left hover:bg-muted',
+                    activeIndex === i && 'bg-muted',
+                  )}
                 >
                   <span aria-hidden="true" className="text-muted-foreground">
                     ›
@@ -271,19 +339,8 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
               ))}
             </div>
           )}
-          <div role="group" aria-label="Results">
-            {results.isError ? (
-              <div role="alert" className="px-4 py-3 text-sm">
-                <p className="text-destructive">{results.error?.message ?? 'Search failed.'}</p>
-                <button
-                  type="button"
-                  onClick={() => results.refetch()}
-                  className="mt-1 rounded bg-muted px-2 py-1 text-xs"
-                >
-                  Retry
-                </button>
-              </div>
-            ) : (
+          {!results.isError && (
+            <div role="group" aria-label="Results">
               <>
                 {items.map((r, i) => {
                   const key = resultKey(r)
@@ -299,7 +356,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                         role="option"
                         aria-selected={isActive}
                         onClick={() => toggleCode(key)}
-                        className="block w-full px-4 py-2 text-left hover:bg-muted"
+                        className={cn('block w-full px-4 py-2 text-left hover:bg-muted', isActive && 'bg-muted')}
                       >
                         <div className="flex items-center gap-2">
                           <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">Code</span>
@@ -327,7 +384,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                       role="option"
                       aria-selected={isActive}
                       onClick={() => go(r.containerId, r.path)}
-                      className="block w-full px-4 py-2 text-left hover:bg-muted"
+                      className={cn('block w-full px-4 py-2 text-left hover:bg-muted', isActive && 'bg-muted')}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="truncate font-mono text-sm">{r.path}</div>
@@ -349,9 +406,24 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                   <div className="px-4 py-3 text-sm text-muted-foreground">No results found.</div>
                 )}
               </>
-            )}
-          </div>
+            </div>
+          )}
         </div>
+        {results.isError && (
+          // Sibling of #search-listbox, not a descendant: role="listbox"
+          // permits only option/group children (aria-required-children), and
+          // this alert plus its focusable Retry button are neither.
+          <div role="alert" className="border-t border-border px-4 py-3 text-sm">
+            <p className="text-destructive">{results.error?.message ?? 'Search failed.'}</p>
+            <button
+              type="button"
+              onClick={() => results.refetch()}
+              className="mt-1 rounded bg-muted px-2 py-1 text-xs"
+            >
+              Retry
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
