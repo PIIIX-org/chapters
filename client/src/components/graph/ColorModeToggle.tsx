@@ -9,7 +9,7 @@
 // the same router, so the URL is the single source of truth both here and
 // there, and a shared link reproduces the view.
 import { useSearchParams } from 'react-router'
-import { CATEGORY_HUES, type ColorMode } from './draw.js'
+import { categoryHuesFor, type ColorMode } from './draw.js'
 import { cn } from '../../lib/utils.js'
 
 const OPTIONS: { value: ColorMode; label: string }[] = [
@@ -29,6 +29,10 @@ const LEGEND_NOUN: Record<ColorMode, string> = {
 export function ColorModeToggle() {
   const [searchParams, setSearchParams] = useSearchParams()
   const colorMode: ColorMode = searchParams.get('color') === 'community' ? 'community' : 'attribute'
+  // Matches GraphCanvas's own one-time `isDark` read (see GraphCanvas.tsx)
+  // — nothing in the client sets `.dark` reactively today, so re-reading on
+  // every render costs nothing and stays correct the day something does.
+  const hues = categoryHuesFor(document.documentElement.classList.contains('dark'))
 
   function select(mode: ColorMode) {
     setSearchParams((prev) => {
@@ -65,7 +69,7 @@ export function ColorModeToggle() {
       {/* Legend for the active mode only — never both at once, matching the
           "never layered" rule for the modes themselves. */}
       <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        {CATEGORY_HUES.map((hue, i) => (
+        {hues.map((hue, i) => (
           <li key={hue} className="flex items-center gap-1.5">
             <span aria-hidden="true" className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: hue }} />
             <span>{`${LEGEND_NOUN[colorMode]} ${i + 1}`}</span>

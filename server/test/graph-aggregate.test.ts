@@ -1,9 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
+import { eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
 import { notes, vaults } from '../src/db/schema.js'
-import { COMMUNITY_MEMBER_CAP } from '../src/graph/assemble.js'
+import { COMMUNITY_MEMBER_CAP, buildGraph } from '../src/graph/assemble.js'
+import { noteLinks } from '../src/db/schema.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -314,5 +316,104 @@ describe('merged graph aggregation', () => {
       expect(n.id).toMatch(/^community:\d+$/)
       expect(n.size).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('louvain determinism', () => {
+  /**
+   * A fixed local PRNG (independent of the one under test) generating a
+   * planted-partition graph shaped like the one the whole-slice review
+   * reproduced instability on: two groups of `perGroup` nodes, pIn/pOut
+   * edge probabilities weak enough that the partition is genuinely
+   * ambiguous, not a razor-sharp clique pair. All notes share one type so
+   * the structural type-group cap (50) swallows the type-clique entirely —
+   * every edge here is a deliberate wikilink, nothing structural leaking in.
+   */
+  function mulberry32(seed: number): () => number {
+    let a = seed >>> 0
+    return () => {
+      a = (a + 0x6d2b79f5) | 0
+      let t = Math.imul(a ^ (a >>> 15), 1 | a)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+  }
+
+  // These notes are inserted straight into the DB (no matching OKF file on
+  // disk, unlike the app's real note-creation path) — fine for buildGraph,
+  // which only reads the DB, but the admin instance-backup route walks
+  // every vault's notes and reads each one's file from disk (unguarded), so
+  // an orphaned vault left behind here 500s that route for every other
+  // test file that runs afterward. Deleted (cascades to notes/note_links)
+  // as soon as each test is done with it.
+  const createdVaultIds: string[] = []
+  afterEach(async () => {
+    for (const id of createdVaultIds.splice(0)) await db.delete(vaults).where(eq(vaults.id, id))
+  })
+
+  async function seedAmbiguousVault(): Promise<{ vaultId: string; noteIds: string[] }> {
+    const perGroup = 90
+    const pIn = 0.12
+    const pOut = 0.06
+    const owner = await createActiveUser()
+    const [vault] = await db.insert(vaults).values({ name: 'Ambiguous vault', ownerId: owner.id }).returning({ id: vaults.id })
+    const vaultId = vault!.id
+    createdVaultIds.push(vaultId)
+    const total = perGroup * 2
+    const rows = await db
+      .insert(notes)
+      .values(
+        Array.from({ length: total }, (_, i) => ({
+          vaultId,
+          type: 'flat',
+          name: `note-${i}`,
+          path: `flat/note-${i}.md`,
+          frontmatter: { type: 'flat' },
+          body: `note ${i}`,
+        })),
+      )
+      .returning({ id: notes.id, path: notes.path })
+    const rand = mulberry32(42)
+    const links: { sourceNoteId: string; targetPath: string }[] = []
+    for (let i = 0; i < total; i++) {
+      for (let j = i + 1; j < total; j++) {
+        const sameGroup = Math.floor(i / perGroup) === Math.floor(j / perGroup)
+        if (rand() < (sameGroup ? pIn : pOut)) {
+          links.push({ sourceNoteId: rows[i]!.id, targetPath: rows[j]!.path })
+        }
+      }
+    }
+    if (links.length > 0) await db.insert(noteLinks).values(links)
+    return { vaultId, noteIds: rows.map((r) => r.id) }
+  }
+
+  it('assigns the same community number to every node across repeated buildGraph calls over the same data', async () => {
+    const { vaultId } = await seedAmbiguousVault()
+
+    // Sequential, not Promise.all: this mirrors the real client flow (one
+    // HTTP round trip, then another) rather than firing a burst of
+    // concurrent connections at the shared test database.
+    const runs = []
+    for (let i = 0; i < 5; i++) runs.push(await buildGraph({ vaultIds: [vaultId], repositoryIds: [] }))
+    const first = new Map(runs[0]!.nodes.map((n) => [n.id, n.community]))
+    for (const run of runs.slice(1)) {
+      const communityById = new Map(run.nodes.map((n) => [n.id, n.community]))
+      expect(communityById).toEqual(first)
+    }
+  })
+
+  it('keeps the community a super-node was tapped from valid for the drill-down request', async () => {
+    const { vaultId } = await seedAmbiguousVault()
+
+    // Simulates the real client flow: fetch the aggregated graph (run A,
+    // whatever the client renders and lets the user tap), then a second,
+    // independent buildGraph call for the drill-down (run B) — exactly
+    // what GraphCanvas's `?community=<n>` request does.
+    const aggregated = await buildGraph({ vaultIds: [vaultId], repositoryIds: [] }, { aggregate: 'community' })
+    const tapped = aggregated.nodes[0]!
+    const drillDown = await buildGraph({ vaultIds: [vaultId], repositoryIds: [] }, { community: tapped.community })
+
+    expect(drillDown.nodes.length).toBe(tapped.size)
+    expect(drillDown.nodes.every((n) => n.community === tapped.community)).toBe(true)
   })
 })

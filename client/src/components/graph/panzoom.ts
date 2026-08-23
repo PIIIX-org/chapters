@@ -35,8 +35,9 @@ interface PointerState {
 export function createPanZoom(
   el: HTMLElement,
   onChange: (t: Transform) => void,
+  initial: Transform = { x: 0, y: 0, k: 1 },
 ): { transform: Transform; destroy(): void } {
-  const transform: Transform = { x: 0, y: 0, k: 1 }
+  const transform: Transform = { ...initial }
   const pointers = new Map<number, PointerState>()
 
   el.style.touchAction = 'none'

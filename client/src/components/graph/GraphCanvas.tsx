@@ -10,15 +10,15 @@ import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useGraph } from '../../hooks/useGraph.js'
 import { useVaults } from '../../hooks/useVaults.js'
-import type { CommunityEdge, CommunityGraph, CommunityNode, VaultGraph } from '../../api/graph.js'
+import type { CommunityEdge, CommunityGraph, CommunityNode, GraphEdge, GraphNode, VaultGraph } from '../../api/graph.js'
 import { GraphSkeleton } from './GraphSkeleton.js'
 import { GraphOutline } from './GraphOutline.js'
 import { ColorModeToggle } from './ColorModeToggle.js'
 import { PhysicsControls } from './PhysicsControls.js'
 import { GraphFilters, graphFiltersFromSearchParams, type FilterableNode } from './GraphFilters.js'
 import { CappedGroupsNotice, GraphEmptyState, GraphErrorState, TruncationNotice } from './GraphStates.js'
-import { createPanZoom, screenToWorld } from './panzoom.js'
-import { drawGraph, type ColorMode, type DrawAggregatedEdge } from './draw.js'
+import { createPanZoom, screenToWorld, type Transform } from './panzoom.js'
+import { drawGraph, type ColorMode, type DrawAggregatedEdge, type DrawMemberEdge } from './draw.js'
 import { createSimulation, DEFAULT_SIMULATION_PARAMS, type SimEdge, type SimNode, type SimulationParams } from './simulation.js'
 import { hitTest } from './hitTest.js'
 
@@ -68,6 +68,42 @@ function isCommunityGraph(data: VaultGraph | CommunityGraph): data is CommunityG
   return 'aggregated' in data && data.aggregated === true
 }
 
+// Same shape, same golden-angle spiral placement as the community
+// super-nodes above, for the real notes/files a drill-down reveals. A fixed
+// radius stands in for "size" here — an individual member has no analogous
+// size metric the way a community super-node's `size` does.
+const MEMBER_RADIUS = 6
+
+interface MemberSimNode extends SimNode {
+  type: string | null
+  tags: string[]
+  updatedAt: string | null
+  community: number
+}
+
+type MemberSimEdge = SimEdge<MemberSimNode> & { kind: GraphEdge['kind'] }
+
+function toMemberSimNodes(nodes: GraphNode[]): MemberSimNode[] {
+  return nodes.map((n, i) => {
+    const spread = 8 * Math.sqrt(i)
+    const angle = i * GOLDEN_ANGLE
+    return {
+      id: n.id,
+      type: n.type,
+      tags: n.tags,
+      updatedAt: n.updatedAt,
+      community: n.community,
+      radius: MEMBER_RADIUS,
+      x: spread * Math.cos(angle),
+      y: spread * Math.sin(angle),
+    }
+  })
+}
+
+function toMemberSimEdges(edges: GraphEdge[]): MemberSimEdge[] {
+  return edges.map((e) => ({ source: e.source, target: e.target, kind: e.kind }))
+}
+
 // A pointer that has moved more than this many CSS pixels between down and
 // up is a pan, not a tap — matches the panzoom module's own screen-space
 // units (clientX/clientY, unscaled by devicePixelRatio).
@@ -102,6 +138,14 @@ export default function GraphCanvas() {
   // second request) — read here only for the drill-down "showing N of M"
   // notice below, which lives beside the canvas rather than in the outline.
   const activeGraph = useGraph(expandedCommunity, filters)
+  // The real member graph once a drill-down's fetch resolves — `null`
+  // while collapsed, and also `null` while a just-expanded fetch is still
+  // pending, so a tap keeps showing the aggregated view (never a blank
+  // canvas) until real member data is ready to replace it. Referentially
+  // stable between renders (react-query's own cached object, or the same
+  // `null`) so it's safe as an effect dependency below.
+  const memberData: VaultGraph | null =
+    expandedCommunity !== null && activeGraph.data && !isCommunityGraph(activeGraph.data) ? activeGraph.data : null
   // HomePage never mounts this component with zero vaults (task 1's empty
   // state intercepts that case first), so a vault always exists here — this
   // is only which one "Create a note" should land on.
@@ -139,6 +183,19 @@ export default function GraphCanvas() {
   // (simulation.ts), it never restarts d3-force's own timer, so nothing
   // ticks again unless this loop notices and drives it.
   const updatePhysicsParamsRef = useRef<((next: Partial<SimulationParams>) => void) | null>(null)
+  // The latest physics params, read from inside the main effect below (an
+  // effect may read a ref freely without depending on it) so a filter
+  // change or a community drill-down — both of which tear down and rebuild
+  // the simulation — seed the new one from wherever the user last left the
+  // sliders instead of silently snapping back to DEFAULT_SIMULATION_PARAMS.
+  // PhysicsControls itself only ever reads its `initialParams` prop once,
+  // at its own mount (it's never remounted here), so this only needs to
+  // reach the simulation, not round-trip back into that panel's display.
+  const simParamsRef = useRef<SimulationParams>(DEFAULT_SIMULATION_PARAMS)
+  // Pan/zoom position, carried across the same rebuilds for the same
+  // reason: without this, changing a filter recentres the viewport back to
+  // {x:0,y:0,k:1} out from under whatever the user had panned/zoomed to.
+  const transformRef = useRef<Transform>({ x: 0, y: 0, k: 1 })
 
   function handlePhysicsChange(next: Partial<SimulationParams>) {
     updatePhysicsParamsRef.current?.(next)
@@ -155,10 +212,11 @@ export default function GraphCanvas() {
   useEffect(() => {
     // No `setSettled(false)` reset here on purpose: react-hooks bans a
     // synchronous setState call at the top of an effect body (cascading
-    // renders), and this effect's dependency is `graph.data`, which only
-    // changes once per mount in this unit's scope (no drill-down yet) — so
-    // there is nothing meaningful to reset to "unsettled" for.
-    if (!graph.data || !isCommunityGraph(graph.data)) return
+    // renders). A drill-down or filter change rebuilding mid-mount simply
+    // keeps whatever `settled` already was — reduced-motion users only ever
+    // cared about not seeing the *initial* thrash.
+    const displayData: VaultGraph | CommunityGraph | undefined = memberData ?? graph.data
+    if (!displayData) return
 
     const container = containerRef.current
     const canvas = canvasRef.current
@@ -183,16 +241,24 @@ export default function GraphCanvas() {
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(resize) : null
     ro?.observe(container)
 
-    const nodes = toSimNodes(graph.data.nodes)
-    const edges = toSimEdges(graph.data.edges)
-    const { sim, setParams } = createSimulation(nodes, edges)
+    // Tapping a community super-node drills into its real members
+    // (VaultGraph) instead of leaving the aggregated super-nodes on screen
+    // forever — this is the one branch point between the two node/edge
+    // shapes the canvas ever draws.
+    const nodes: (CommunitySimNode | MemberSimNode)[] = isCommunityGraph(displayData)
+      ? toSimNodes(displayData.nodes)
+      : toMemberSimNodes(displayData.nodes)
+    const edges: (CommunitySimEdge | MemberSimEdge)[] = isCommunityGraph(displayData)
+      ? toSimEdges(displayData.edges)
+      : toMemberSimEdges(displayData.edges)
+    const { sim, setParams } = createSimulation(nodes, edges, simParamsRef.current)
 
     // forceLink resolves every edge.source/target from an id string to the
     // matching node object the moment it's attached inside createSimulation
     // (which already happened, above) — so by this point every edge here is
-    // already a CommunitySimNode pair, not a string. drawGraph only reads
-    // x/y off these same objects, which sim.tick() mutates in place.
-    const drawEdges = edges as unknown as DrawAggregatedEdge[]
+    // already a resolved node pair, not a string. drawGraph only reads x/y
+    // off these same objects, which sim.tick() mutates in place.
+    const drawEdges = edges as unknown as (DrawAggregatedEdge | DrawMemberEdge)[]
 
     const isDark = document.documentElement.classList.contains('dark')
 
@@ -250,14 +316,22 @@ export default function GraphCanvas() {
       }
     }
 
-    const panzoom = createPanZoom(canvas, () => {
-      // A settled graph idles at zero draws per second; panning/zooming it
-      // schedules exactly one more redraw, never a tick.
-      if (mode === 'idle') {
-        mode = 'redraw'
-        requestFrame()
-      }
-    })
+    const panzoom = createPanZoom(
+      canvas,
+      (t) => {
+        // Kept live so the *next* rebuild (a filter change or a community
+        // drill-down, both of which tear this effect down and re-run it)
+        // starts from here instead of snapping back to {x:0,y:0,k:1}.
+        transformRef.current = t
+        // A settled graph idles at zero draws per second; panning/zooming it
+        // schedules exactly one more redraw, never a tick.
+        if (mode === 'idle') {
+          mode = 'redraw'
+          requestFrame()
+        }
+      },
+      transformRef.current,
+    )
 
     // Same idle -> redraw transition as panzoom's onChange above, triggered
     // by a colour-mode change or a node-size/edge-width slider instead of a
@@ -278,8 +352,12 @@ export default function GraphCanvas() {
     // resumes driving frame().
     updatePhysicsParamsRef.current = (next) => {
       setParams(next)
+      simParamsRef.current = { ...simParamsRef.current, ...next }
       if (mode !== 'running') {
-        mode = 'running'
+        // Reduced-motion users get the same batched settle a fresh load
+        // gives them, not the full one-tick-per-frame animation a physics
+        // re-heat would otherwise drop them into for the whole alpha decay.
+        mode = reducedMotion ? 'settling' : 'running'
         requestFrame()
       }
     }
@@ -330,7 +408,7 @@ export default function GraphCanvas() {
       canvas.removeEventListener('pointercancel', onPointerCancelForTap)
       ro?.disconnect()
     }
-  }, [graph.data, reducedMotion])
+  }, [graph.data, memberData, reducedMotion])
 
   // Non-reduced-motion has nothing to hide behind the skeleton for — the
   // canvas starts drawing live on its very first frame. Only the
@@ -362,11 +440,17 @@ export default function GraphCanvas() {
     <div data-testid="graph-canvas" className="flex h-full w-full bg-background">
       <div ref={containerRef} className="relative h-full flex-1">
         <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 h-full w-full" />
-        <div className="absolute left-4 top-4 flex flex-col items-start gap-3">
+        {/* top-20, not top-4: AppShell renders its own chrome (ScopePicker,
+            top-left; email + Log out, top-right) as later siblings at
+            `absolute {left,right}-4 top-4` OVER this component's container,
+            so anything this component places at top-4 paints underneath it.
+            Clearing that band is the only requirement — which corner stays
+            unchanged. */}
+        <div className="absolute left-4 top-20 flex flex-col items-start gap-3">
           <ColorModeToggle />
-          <GraphFilters nodes={filterableNodesOf(graph.data)} />
+          <GraphFilters nodes={filterableNodesOf(memberData ?? graph.data)} />
         </div>
-        <div className="absolute right-4 top-4">
+        <div className="absolute right-4 top-20">
           <PhysicsControls
             initialParams={DEFAULT_SIMULATION_PARAMS}
             onPhysicsChange={handlePhysicsChange}
@@ -395,7 +479,10 @@ export default function GraphCanvas() {
           </div>
         )}
       </div>
-      <aside className="h-full w-80 shrink-0 overflow-y-auto border-l border-border bg-card">
+      {/* pt-16 clears AppShell's email + Log out row, which is painted as a
+          later sibling at `absolute right-4 top-4` — directly over this
+          pane's top-right corner otherwise. */}
+      <aside className="h-full w-80 shrink-0 overflow-y-auto border-l border-border bg-card pt-16">
         <GraphOutline
           communities={communities}
           expandedCommunity={expandedCommunity}

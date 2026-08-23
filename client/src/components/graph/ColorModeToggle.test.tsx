@@ -110,6 +110,37 @@ describe('ColorModeToggle', () => {
     }
   })
 
+  it('never renders vermillion (#BA3B1D / #E2683F) as a swatch — that token means human authorship, not a category', async () => {
+    renderToggle()
+    const vermillion = ['#ba3b1d', '#e2683f']
+    const swatches = document.querySelectorAll('[style*="background-color"]')
+    expect(swatches.length).toBeGreaterThan(0)
+    for (const swatch of swatches) {
+      expect((swatch as HTMLElement).style.backgroundColor.toLowerCase()).not.toMatch(
+        new RegExp(vermillion.join('|')),
+      )
+    }
+  })
+
+  it('renders different swatch colours in dark mode than in light mode', () => {
+    const { container: lightContainer, unmount } = renderToggle()
+    const lightColor = (lightContainer.querySelector('[style*="background-color"]') as HTMLElement).style
+      .backgroundColor
+    unmount()
+
+    document.documentElement.classList.add('dark')
+    try {
+      const { container: darkContainer } = renderToggle()
+      const darkColor = (darkContainer.querySelector('[style*="background-color"]') as HTMLElement).style
+        .backgroundColor
+      // A theme-blind swatch source would make these identical regardless
+      // of `.dark` — this is the assertion that would catch that.
+      expect(darkColor).not.toBe(lightColor)
+    } finally {
+      document.documentElement.classList.remove('dark')
+    }
+  })
+
   it('source contains no bg-accent/text-accent — Tailwind\'s accent role is the teal AI token', () => {
     const source = readFileSync(join(process.cwd(), 'src/components/graph/ColorModeToggle.tsx'), 'utf-8')
     expect(source).not.toMatch(/\bbg-accent\b/)

@@ -92,11 +92,21 @@ export function decayAlpha(timestamp: string | null, now: number): number {
   return 1 - t * (1 - FLOOR_ALPHA)
 }
 
-// The five approved ink hues for category colour. Teal is deliberately
-// absent — it means AI/MCP authorship, never a category, and must never be
-// reachable from this palette. Exported so ColorModeToggle's legend swatches
-// come from this single source of truth instead of a second hardcoded copy.
-export const CATEGORY_HUES = ['#BA3B1D', '#3B4C8C', '#7A3B6B', '#8C6D1F', '#3B6B4C']
+// The five approved categorical hues for type/tag colour, one array per
+// theme. Vermillion (#BA3B1D/#E2683F) and teal (#2B6E6B/#4FA39F) are both
+// excluded on purpose: those two are the dual-accent AUTHORSHIP tokens
+// (person / AI-MCP respectively), not ordinary categories, so a node whose
+// type string happens to hash to a given slot must never borrow either of
+// them. Exported so ColorModeToggle's legend swatches come from this same
+// source of truth instead of a second hardcoded copy.
+export const CATEGORY_HUES_LIGHT = ['#5B3B8C', '#3B4C8C', '#7A3B6B', '#8C6D1F', '#3B6B4C']
+export const CATEGORY_HUES_DARK = ['#9B7FD1', '#7C8FD9', '#C97FB0', '#D9B24C', '#6FBF8A']
+/** @deprecated theme-blind alias kept only for consumers that just need the length; prefer `categoryHuesFor`. */
+export const CATEGORY_HUES = CATEGORY_HUES_LIGHT
+
+export function categoryHuesFor(isDark: boolean): readonly string[] {
+  return isDark ? CATEGORY_HUES_DARK : CATEGORY_HUES_LIGHT
+}
 
 function hashString(s: string): number {
   let h = 0
@@ -106,26 +116,30 @@ function hashString(s: string): number {
 
 // Modulo against a known-fixed-length array is always in range;
 // noUncheckedIndexedAccess just can't see that statically.
-function hueAt(n: number): string {
-  return CATEGORY_HUES[((n % CATEGORY_HUES.length) + CATEGORY_HUES.length) % CATEGORY_HUES.length]!
+function hueAt(n: number, isDark: boolean): string {
+  const palette = categoryHuesFor(isDark)
+  return palette[((n % palette.length) + palette.length) % palette.length]!
 }
 
 function isCommunityNode(node: DrawNode): node is DrawCommunityNode {
   return 'lastActivity' in node
 }
 
-function categoryColor(node: DrawNode, colorMode: ColorMode): string {
+function categoryColor(node: DrawNode, colorMode: ColorMode, isDark: boolean, mutedColor: string): string {
   if (colorMode === 'community') {
-    return hueAt(node.community)
+    return hueAt(node.community, isDark)
   }
   // 'attribute' mode: hash by type/tag. Community super-nodes have neither
-  // (they aggregate many notes' types), so they fall back to community
-  // number rather than inventing a type they don't have.
+  // (they aggregate many notes' types) — colouring them by community number
+  // here would just silently repaint the community-mode palette under a
+  // different label, which is exactly the "toggle does nothing" bug this
+  // replaces. They render neutral (muted) instead, honestly showing "no
+  // attribute to show" rather than borrowing the other mode's hue.
   if (isCommunityNode(node)) {
-    return hueAt(node.community)
+    return mutedColor
   }
   const key = node.type ?? node.tags[0] ?? 'untyped'
-  return hueAt(hashString(key))
+  return hueAt(hashString(key), isDark)
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -198,7 +212,7 @@ export function drawGraph(ctx: CanvasRenderingContext2D, opts: DrawGraphOptions)
     const timestamp = isCommunityNode(node) ? node.lastActivity : node.updatedAt
     const alpha = decayAlpha(timestamp, now)
     ctx.globalAlpha = alpha
-    ctx.fillStyle = mixToward(categoryColor(node, colorMode), muted, 1 - alpha)
+    ctx.fillStyle = mixToward(categoryColor(node, colorMode, isDark, muted), muted, 1 - alpha)
     ctx.beginPath()
     ctx.arc(node.x, node.y, node.radius * nodeScale, 0, Math.PI * 2)
     ctx.fill()

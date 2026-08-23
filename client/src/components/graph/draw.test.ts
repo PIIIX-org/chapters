@@ -157,6 +157,77 @@ describe('drawGraph — colour modes are exclusive', () => {
   })
 })
 
+describe('drawGraph — colour mode is meaningful for community super-nodes', () => {
+  // GraphCanvas's *aggregated* (Home) view only ever draws
+  // DrawCommunityNode shapes — a colour mode that produces the same fill
+  // for these, in both modes, is a toggle that visibly does nothing on the
+  // one screen it's rendered on. See the unit 1c review's finding on
+  // GraphCanvas.tsx:99 / draw.ts:117-128.
+  const baseCommunity = { id: 'c', lastActivity: null as string | null, radius: 8, x: 0, y: 0 }
+
+  it('a community super-node paints differently under attribute mode than under community mode', () => {
+    const nodes: DrawNode[] = [{ ...baseCommunity, community: 2 }]
+
+    const community = createFakeCtx()
+    drawGraph(community.ctx, { nodes, edges: [], transform: IDENTITY, colorMode: 'community', isDark: false, now: NOW })
+    const communityFill = community.calls.find((c) => c.op === 'fill')?.fillStyle
+
+    const attribute = createFakeCtx()
+    drawGraph(attribute.ctx, { nodes, edges: [], transform: IDENTITY, colorMode: 'attribute', isDark: false, now: NOW })
+    const attributeFill = attribute.calls.find((c) => c.op === 'fill')?.fillStyle
+
+    // A regression back to "both branches return hueAt(node.community)"
+    // would make these equal again.
+    expect(attributeFill).not.toBe(communityFill)
+  })
+
+  it('two community super-nodes with different community numbers still look identical under attribute mode (no attribute to show)', () => {
+    const nodes: DrawNode[] = [
+      { ...baseCommunity, id: 'a', community: 0 },
+      { ...baseCommunity, id: 'b', community: 1 },
+    ]
+    const { ctx, calls } = createFakeCtx()
+    drawGraph(ctx, { nodes, edges: [], transform: IDENTITY, colorMode: 'attribute', isDark: false, now: NOW })
+    const fills = calls.filter((c) => c.op === 'fill').map((c) => c.fillStyle)
+    expect(fills[0]).toBe(fills[1])
+  })
+})
+
+describe('drawGraph — category hues never include the authorship tokens', () => {
+  it('never uses vermillion (#BA3B1D / #E2683F) as a node fill, in either theme', () => {
+    const nodes: DrawNode[] = Array.from({ length: 5 }, (_, i) => ({
+      id: `n${i}`,
+      type: `type-${i}`,
+      tags: [],
+      updatedAt: null,
+      community: i,
+      radius: 5,
+      x: i,
+      y: i,
+    }))
+    const vermillion = ['#ba3b1d', '#e2683f']
+    for (const isDark of [false, true]) {
+      const { ctx, calls } = createFakeCtx()
+      drawGraph(ctx, { nodes, edges: [], transform: IDENTITY, colorMode: 'attribute', isDark, now: NOW })
+      const fills = calls.filter((c) => c.op === 'fill').map((c) => String(c.fillStyle).toLowerCase())
+      for (const fill of fills) expect(vermillion).not.toContain(fill)
+    }
+  })
+
+  it('uses a different, higher-contrast palette in dark mode than in light mode', () => {
+    const nodes: DrawNode[] = [{ id: 'a', type: 'note', tags: [], updatedAt: null, community: 0, radius: 5, x: 0, y: 0 }]
+
+    const light = createFakeCtx()
+    drawGraph(light.ctx, { nodes, edges: [], transform: IDENTITY, colorMode: 'attribute', isDark: false, now: NOW })
+    const dark = createFakeCtx()
+    drawGraph(dark.ctx, { nodes, edges: [], transform: IDENTITY, colorMode: 'attribute', isDark: true, now: NOW })
+
+    const lightFill = light.calls.find((c) => c.op === 'fill')?.fillStyle
+    const darkFill = dark.calls.find((c) => c.op === 'fill')?.fillStyle
+    expect(darkFill).not.toBe(lightFill)
+  })
+})
+
 describe('drawGraph — teal is never a node fill', () => {
   it('never records a teal fillStyle, in either theme or colour mode', () => {
     const nodes: DrawNode[] = [

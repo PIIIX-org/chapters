@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { mockJsonResponse } from '../../lib/api.js'
 import { expectNoA11yViolations } from '../../test/axe.js'
@@ -10,10 +10,14 @@ import GraphCanvas from './GraphCanvas.js'
 // Records every call to the real simulation's tick() without changing its
 // behaviour, so "settles in batches of at most 20" can be asserted directly
 // against the thing that actually runs, not a proxy for it.
-const { tickSpy } = vi.hoisted(() => ({ tickSpy: vi.fn() }))
+// createSimulationParamsSpy also records the (optional) 3rd argument every
+// call was actually seeded with — proves a rebuild reuses whatever the
+// sliders were last set to, not silently DEFAULT_SIMULATION_PARAMS again.
+const { tickSpy, createSimulationParamsSpy } = vi.hoisted(() => ({ tickSpy: vi.fn(), createSimulationParamsSpy: vi.fn() }))
 vi.mock('./simulation.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./simulation.js')>()
   const wrapped: typeof actual.createSimulation = (...args) => {
+    createSimulationParamsSpy(args[2])
     const result = actual.createSimulation(...args)
     const realTick = result.sim.tick.bind(result.sim)
     result.sim.tick = ((n?: number) => {
@@ -28,11 +32,12 @@ vi.mock('./simulation.js', async (importOriginal) => {
 // Records the colorMode drawGraph was actually called with, without
 // changing its behaviour — proves the toggle's value reaches the real
 // draw call, not just component state.
-const { drawGraphSpy } = vi.hoisted(() => ({ drawGraphSpy: vi.fn() }))
+const { drawGraphSpy, drawOptsSpy } = vi.hoisted(() => ({ drawGraphSpy: vi.fn(), drawOptsSpy: vi.fn() }))
 vi.mock('./draw.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./draw.js')>()
   const wrapped: typeof actual.drawGraph = (ctx, opts) => {
     drawGraphSpy(opts.colorMode)
+    drawOptsSpy(opts)
     return actual.drawGraph(ctx, opts)
   }
   return { ...actual, drawGraph: wrapped }
@@ -49,7 +54,14 @@ const GRAPH = {
 }
 
 function stubFetch() {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockJsonResponse(200, GRAPH)))
+  // A fresh Response per call, not one shared instance: a `Response` body
+  // can only be read once, and this component alone issues 2+ concurrent
+  // fetches at mount (vaults, graph) plus another on every filter/vault
+  // change — a shared instance's second `.json()` read silently resolves
+  // to `undefined` (caught by apiFetch, then rejected by react-query's own
+  // "data cannot be undefined" guard), which earlier single-fetch tests
+  // never noticed only because nothing here asserted on the vaults query.
+  vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(mockJsonResponse(200, GRAPH))))
 }
 
 function stubMatchMedia(reducedMotion: boolean) {
@@ -128,7 +140,9 @@ describe('GraphCanvas', () => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
     tickSpy.mockClear()
+    createSimulationParamsSpy.mockClear()
     drawGraphSpy.mockClear()
+    drawOptsSpy.mockClear()
   })
 
   it('under reduced motion, settles in batches of at most 20 ticks per manually-flushed frame, never all at once', async () => {
@@ -331,5 +345,166 @@ describe('GraphCanvas', () => {
     expect(drawGraphSpy).toHaveBeenCalledTimes(1)
     // Proves the redraw did not re-heat: no new ticks came from toggling.
     expect(tickSpy.mock.calls.length).toBe(ticksAtIdle)
+  })
+
+  it('renders the error state, never a silently empty canvas, when the graph query fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockJsonResponse(500, { error: 'Database unreachable' })))
+    stubMatchMedia(false)
+    stubCanvasContext()
+    renderGraphCanvas()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load the graph/i)
+    expect(screen.getByText('Database unreachable')).toBeInTheDocument()
+    // The two-pane canvas layout (and its outline buttons) must never
+    // render behind/alongside the error.
+    expect(screen.queryByRole('button', { name: /Community/ })).toBeNull()
+    expect(document.querySelector('canvas')).toBeNull()
+  })
+
+  it('tapping a super-node redraws the canvas with that community\'s real members, not the unchanged aggregate view', async () => {
+    const memberGraph = {
+      nodes: [
+        { id: 'm1', resourceType: 'note', resourceId: 'r1', path: 'notes/a.md', type: 'people', tags: [], timestamp: null, updatedAt: null, community: 0 },
+        { id: 'm2', resourceType: 'note', resourceId: 'r1', path: 'notes/b.md', type: 'tasks', tags: [], timestamp: null, updatedAt: null, community: 0 },
+      ],
+      edges: [],
+      cappedGroups: [],
+      memberTotal: 2,
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) =>
+        Promise.resolve(mockJsonResponse(200, url.includes('community=0') ? memberGraph : GRAPH)),
+      ),
+    )
+    stubMatchMedia(false)
+    stubCanvasContext()
+    const raf = stubManualRaf()
+    const user = userEvent.setup()
+
+    const { container } = renderGraphCanvas()
+    await waitFor(() => expect(raf.pending()).toBeGreaterThan(0))
+    const canvas = container.querySelector('canvas')!
+
+    await user.pointer({ keys: '[MouseLeft]', target: canvas, coords: { clientX: 0, clientY: 0 } })
+    await screen.findByText('notes/a.md')
+
+    // The effect rebuild triggered by the member fetch resolving schedules
+    // a fresh frame; flushing it draws the new (member) node set.
+    await waitFor(() => expect(raf.pending()).toBeGreaterThan(0))
+    drawOptsSpy.mockClear()
+    raf.flush()
+
+    const lastOpts = drawOptsSpy.mock.calls.at(-1)?.[0]
+    // A canvas still showing the unchanged aggregate view would draw
+    // GRAPH's 2 community super-nodes (no `type` field at all); the real
+    // member nodes carry `type`.
+    expect(lastOpts.nodes).toHaveLength(2)
+    expect(lastOpts.nodes.map((n: { type?: string }) => n.type).sort()).toEqual(['people', 'tasks'])
+  })
+
+  it('the type/tags filter panel populates from a community\'s real members once expanded — not permanently empty', async () => {
+    const memberGraph = {
+      nodes: [
+        { id: 'm1', resourceType: 'note', resourceId: 'r1', path: 'notes/a.md', type: 'people', tags: ['x'], timestamp: null, updatedAt: null, community: 0 },
+      ],
+      edges: [],
+      cappedGroups: [],
+      memberTotal: 1,
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) =>
+        Promise.resolve(mockJsonResponse(200, url.includes('community=0') ? memberGraph : GRAPH)),
+      ),
+    )
+    stubMatchMedia(false)
+    stubCanvasContext()
+    const raf = stubManualRaf()
+    const user = userEvent.setup()
+
+    const { container } = renderGraphCanvas()
+    await waitFor(() => expect(raf.pending()).toBeGreaterThan(0))
+
+    // Before any drill-down, the aggregated graph has no per-node
+    // type/tags — the Type/Tags fieldsets must not appear.
+    expect(screen.queryByText('Type')).toBeNull()
+
+    const canvas = container.querySelector('canvas')!
+    await user.pointer({ keys: '[MouseLeft]', target: canvas, coords: { clientX: 0, clientY: 0 } })
+    await screen.findByText('notes/a.md')
+
+    expect(await screen.findByText('Type')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'people' })).toBeInTheDocument()
+  })
+
+  it('under reduced motion, a physics change after settling re-enters batched settling, not one-tick-per-frame running', async () => {
+    stubFetch()
+    stubMatchMedia(true)
+    stubCanvasContext()
+    const raf = stubManualRaf()
+    const user = userEvent.setup()
+    renderGraphCanvas()
+
+    await waitFor(() => expect(raf.pending()).toBeGreaterThan(0))
+    for (let i = 0; i < 50 && raf.pending() > 0; i++) raf.flush()
+    expect(raf.pending()).toBe(0) // settled
+
+    tickSpy.mockClear()
+    await user.click(screen.getByRole('button', { name: /physics controls/i }))
+    const slider = screen.getByRole('slider', { name: /force strength/i })
+    fireEvent.change(slider, { target: { value: '-200' } })
+
+    expect(raf.pending()).toBeGreaterThan(0)
+    raf.flush()
+    // A batched settle re-heat ticks more than once per flushed frame; a
+    // re-heat that wrongly drops back into 'running' mode ticks exactly
+    // once per flush, which this would also satisfy if it were <= 1 — the
+    // strict ">1" is what a one-tick-per-frame regression fails.
+    expect(tickSpy.mock.calls.length).toBeGreaterThan(1)
+  })
+
+  it('a filter change carries the pan/zoom transform and physics params across the simulation rebuild', async () => {
+    stubFetch()
+    stubMatchMedia(false)
+    stubCanvasContext()
+    const raf = stubManualRaf()
+    const user = userEvent.setup()
+    const { container } = renderGraphCanvas()
+
+    await waitFor(() => expect(raf.pending()).toBeGreaterThan(0))
+    const canvas = container.querySelector('canvas')!
+
+    await user.pointer([
+      { keys: '[MouseLeft>]', target: canvas, coords: { clientX: 100, clientY: 100 } },
+      { target: canvas, coords: { clientX: 150, clientY: 100 } },
+      { keys: '[/MouseLeft]' },
+    ])
+
+    await user.click(screen.getByRole('button', { name: /physics controls/i }))
+    const linkSlider = screen.getByRole('slider', { name: /link distance/i })
+    fireEvent.change(linkSlider, { target: { value: '250' } })
+    expect(linkSlider).toHaveValue('250')
+
+    drawOptsSpy.mockClear()
+    createSimulationParamsSpy.mockClear()
+
+    // A filter change: the same mechanism GraphFilters itself uses (writes
+    // to the URL), which changes the `graph` query's key and rebuilds the
+    // simulation from scratch.
+    fireEvent.change(screen.getByLabelText(/since/i), { target: { value: '2020-01-01' } })
+
+    await waitFor(() => expect(raf.pending()).toBeGreaterThan(0))
+    raf.flush()
+
+    // Physics: the rebuilt simulation must be seeded with what the user
+    // set — a rebuild seeded from DEFAULT_SIMULATION_PARAMS instead of the
+    // ref would show 60 (the default `linkDistance`) here instead of 250.
+    expect(createSimulationParamsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ linkDistance: 250 }))
+
+    // Pan/zoom: the rebuilt simulation must still draw with the earlier
+    // pan applied, not a fresh identity transform.
+    const lastOpts = drawOptsSpy.mock.calls.at(-1)?.[0]
+    expect(lastOpts.transform.x).not.toBe(0)
   })
 })
