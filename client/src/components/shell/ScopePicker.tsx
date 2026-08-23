@@ -1,14 +1,18 @@
 import { useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import { useSearchParams } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { useVaults } from '../../hooks/useVaults.js'
+import { NewVaultForm } from '../vault/NewVaultForm.js'
 import { VaultRowActions, VaultTrashSection } from './VaultActions.js'
+import type { Vault } from '../../api/vaults.js'
 
 export function ScopePicker() {
   const [open, setOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
   const [searchParams, setSearchParams] = useSearchParams()
   const vaults = useVaults()
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const navigate = useNavigate()
 
   const vaultId = searchParams.get('vault')
   const activeVault = vaultId ? vaults.data?.find((v) => v.id === vaultId) : undefined
@@ -21,18 +25,37 @@ export function ScopePicker() {
       else next.delete('vault')
       return next
     })
-    setOpen(false)
+    close()
   }
 
+  function close() {
+    setOpen(false)
+    setCreating(false)
+  }
+
+  function toggle() {
+    setOpen((o) => !o)
+    setCreating(false)
+  }
+
+  function handleCreated(vault: Vault) {
+    close()
+    navigate(`/vaults/${vault.id}`)
+  }
+
+  // Bound to the wrapper, not the <ul>: after clicking the trigger, focus
+  // sits on the trigger button, a sibling of the popup — not a descendant of
+  // the listbox — so a real Escape keydown bubbles trigger -> this div and
+  // never reaches a handler on the <ul>.
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
-      setOpen(false)
+      close()
       triggerRef.current?.focus()
     }
   }
 
   return (
-    <div className="relative inline-block">
+    <div className="relative inline-block" onKeyDown={onKeyDown}>
       <button
         ref={triggerRef}
         type="button"
@@ -40,14 +63,14 @@ export function ScopePicker() {
         aria-expanded={open}
         aria-controls="scope-list"
         disabled={vaults.isPending}
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         className="rounded-md px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-100"
       >
         {label}
       </button>
       {open && (
         <div className="absolute left-0 top-full z-10 mt-1 min-w-[12rem] rounded-md border border-border bg-popover py-1 shadow-md">
-          <ul id="scope-list" role="listbox" aria-label="Scope" onKeyDown={onKeyDown}>
+          <ul id="scope-list" role="listbox" aria-label="Scope">
             <li role="presentation">
               <button
                 type="button"
@@ -73,23 +96,33 @@ export function ScopePicker() {
               </li>
             ))}
           </ul>
-          {/* Owner actions live outside the listbox's DOM subtree on purpose:
+          {/* Actions live outside the listbox's DOM subtree on purpose:
               role="listbox" requires every descendant of its options/groups to
               itself be an option, so rename/delete controls cannot be nested
-              inside it without an aria-required-children violation. */}
-          {vaults.data?.some((v) => v.access === 'owner') && (
-            <div className="border-t border-border py-1">
-              {vaults.data
-                .filter((v) => v.access === 'owner')
-                .map((v) => (
-                  <div key={v.id} className="flex items-center justify-between gap-2 px-3 py-1">
-                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{v.name}</span>
-                    <VaultRowActions vault={v} />
-                  </div>
-                ))}
+              inside it without an aria-required-children violation. Keyed to
+              the currently selected vault rather than listing every owned
+              vault again here, which used to repeat each name a second time
+              in the same open panel. */}
+          {activeVault?.access === 'owner' && (
+            <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-1">
+              <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{activeVault.name}</span>
+              <VaultRowActions vault={activeVault} />
             </div>
           )}
           <VaultTrashSection />
+          <div className="border-t border-border p-2">
+            {creating ? (
+              <NewVaultForm onCreated={handleCreated} />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setCreating(true)}
+                className="block w-full rounded-md px-1 py-1 text-left text-sm hover:bg-muted"
+              >
+                + New vault
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

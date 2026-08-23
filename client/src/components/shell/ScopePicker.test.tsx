@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter, useSearchParams } from 'react-router'
+import { createMemoryRouter, MemoryRouter, RouterProvider, useSearchParams } from 'react-router'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { mockJsonResponse } from '../../lib/api'
 import { expectNoA11yViolations } from '../../test/axe'
 import { ScopePicker } from './ScopePicker'
@@ -86,12 +87,19 @@ describe('ScopePicker', () => {
 
   it('Escape closes the list and returns focus to the trigger', async () => {
     renderPicker()
+    const user = userEvent.setup()
     const trigger = await screen.findByRole('button', { name: 'All vaults' })
     await waitFor(() => expect(trigger).not.toBeDisabled())
-    fireEvent.click(trigger)
+
+    // Drive this from a real user interaction, not a synthetic event fired
+    // straight at the handler's own node: after a real click, focus sits on
+    // the trigger (a sibling of the popup), so Escape must bubble from there
+    // to close the picker. Dispatching keyDown on the listbox directly would
+    // pass even if the handler were unreachable from the trigger.
+    await user.click(trigger)
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
 
-    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' })
+    await user.keyboard('{Escape}')
 
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
     expect(document.activeElement).toBe(trigger)
@@ -106,14 +114,64 @@ describe('ScopePicker', () => {
     await expectNoA11yViolations(container)
   })
 
-  it('shows owner row actions inside the open list', async () => {
+  it('shows owner row actions for the selected vault, without repeating its name in the option list', async () => {
     renderPicker()
     const trigger = await screen.findByRole('button', { name: 'All vaults' })
     await waitFor(() => expect(trigger).not.toBeDisabled())
     fireEvent.click(trigger)
 
+    // Nothing selected yet: no rename/delete for either vault.
+    expect(screen.queryByRole('button', { name: /rename engineering/i })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('option', { name: 'Engineering' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Engineering' })) // reopen after select closed it
+
     expect(screen.getByRole('option', { name: 'Engineering' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /rename engineering/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /delete engineering/i })).toBeInTheDocument()
+    // "Engineering" now legitimately appears three times (trigger label,
+    // the listbox option, and the action strip's name) — but never as a
+    // second, redundant row inside the action strip itself.
+    expect(screen.getAllByText('Engineering')).toHaveLength(3)
+    // Selecting Recipes instead must not carry Engineering's actions along.
+    fireEvent.click(screen.getByRole('option', { name: 'Recipes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Recipes' }))
+    expect(screen.queryByRole('button', { name: /rename engineering/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /rename recipes/i })).toBeInTheDocument()
+  })
+
+  it('New vault is reachable from the picker and navigates to the created vault', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return Promise.resolve(
+          mockJsonResponse(201, { id: 'v9', name: 'Personal', ownerId: 'u1', mergeable: true, access: 'owner' }),
+        )
+      }
+      if (url.endsWith('/trash')) return Promise.resolve(mockJsonResponse(200, []))
+      return Promise.resolve(mockJsonResponse(200, VAULTS))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(
+      [
+        { path: '/', element: <ScopePicker /> },
+        { path: '/vaults/:vaultId', element: <div>vault v9 loaded</div> },
+      ],
+      { initialEntries: ['/'] },
+    )
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+
+    const trigger = await screen.findByRole('button', { name: 'All vaults' })
+    await waitFor(() => expect(trigger).not.toBeDisabled())
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('button', { name: '+ New vault' }))
+    fireEvent.change(screen.getByLabelText('Vault name'), { target: { value: 'Personal' } })
+    fireEvent.click(screen.getByRole('button', { name: /create vault/i }))
+
+    await waitFor(() => expect(screen.getByText('vault v9 loaded')).toBeInTheDocument())
   })
 })
