@@ -9,13 +9,15 @@ import type { Vault } from '../../api/vaults'
 
 const VAULT: Vault = { id: 'v1', name: 'Engineering', ownerId: 'u1', mergeable: false, access: 'owner' }
 
-// SharingPanel fires its own GET /shares and GET /teams on mount; stub them
-// to a quiet empty state by default so tests aimed at the mergeable toggle
-// aren't tripped up by an unrelated section's fetches.
+// SharingPanel fires its own GET /shares and GET /teams on mount, and
+// VaultMcpPanel fires GET /mcp-connections; stub them all to a quiet empty
+// state by default so tests aimed at the mergeable toggle aren't tripped up
+// by an unrelated section's fetches.
 function stubFetch(makePatchResponse: () => Response) {
   const fetchMock = vi.fn().mockImplementation((url: string) => {
     if (url.includes('/shares')) return Promise.resolve(mockJsonResponse(200, []))
     if (url.includes('/teams')) return Promise.resolve(mockJsonResponse(200, []))
+    if (url.includes('/mcp-connections')) return Promise.resolve(mockJsonResponse(200, []))
     return Promise.resolve(makePatchResponse())
   })
   vi.stubGlobal('fetch', fetchMock)

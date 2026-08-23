@@ -11,6 +11,7 @@ import { Label } from '../ui/label.js'
 import { FormError } from '../FormError.js'
 import { useUpdateVault } from '../../hooks/useVaultMutations.js'
 import { SharingPanel } from './SharingPanel.js'
+import { VaultMcpPanel } from './VaultMcpPanel.js'
 import type { Vault } from '../../api/vaults.js'
 
 interface VaultSettingsModalProps {
@@ -73,6 +74,8 @@ export function VaultSettingsModal({ vault, open, onOpenChange }: VaultSettingsM
         </section>
 
         <SharingPanel vaultId={vault.id} />
+
+        <VaultMcpPanel vaultId={vault.id} />
       </DialogContent>
     </Dialog>
   )
