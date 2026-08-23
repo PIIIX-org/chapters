@@ -140,6 +140,38 @@ describe('ScopePicker', () => {
     expect(screen.getByRole('button', { name: /rename recipes/i })).toBeInTheDocument()
   })
 
+  it('Vault settings is owner-only: shown for an owned active vault, absent for a read-access one', async () => {
+    const mixedAccess = [
+      { id: 'v1', name: 'Engineering', ownerId: 'u1', mergeable: true, access: 'owner' },
+      { id: 'v2', name: 'Shared Notes', ownerId: 'u2', mergeable: true, access: 'read' },
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (url.endsWith('/trash')) return Promise.resolve(mockJsonResponse(200, []))
+        return Promise.resolve(mockJsonResponse(200, mixedAccess))
+      }),
+    )
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/?vault=v1']}>
+          <ScopePicker />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const trigger = await screen.findByRole('button', { name: 'Engineering' })
+    await waitFor(() => expect(trigger).not.toBeDisabled())
+    fireEvent.click(trigger)
+
+    expect(screen.getByRole('button', { name: 'Vault settings' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('option', { name: 'Shared Notes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Shared Notes' }))
+
+    expect(screen.queryByRole('button', { name: 'Vault settings' })).not.toBeInTheDocument()
+  })
+
   it('New vault is reachable from the picker and navigates to the created vault', async () => {
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (init?.method === 'POST') {

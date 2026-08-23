@@ -24,8 +24,12 @@ export function createVault(name: string): Promise<Vault> {
   return apiFetch('/vaults', { method: 'POST', body: JSON.stringify({ name }) })
 }
 
+export function updateVault(id: string, patch: { name?: string; mergeable?: boolean }): Promise<Vault> {
+  return apiFetch(`/vaults/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
 export function renameVault(id: string, name: string): Promise<Vault> {
-  return apiFetch(`/vaults/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+  return updateVault(id, { name })
 }
 
 export function deleteVault(id: string): Promise<{ status: 'trashed'; id: string }> {

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { lazy, Suspense, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { useVaults } from '../../hooks/useVaults.js'
@@ -6,9 +6,16 @@ import { NewVaultForm } from '../vault/NewVaultForm.js'
 import { VaultRowActions, VaultTrashSection } from './VaultActions.js'
 import type { Vault } from '../../api/vaults.js'
 
+// Lazy: keeps the radix dialog (and everything the settings modal pulls in)
+// out of the entry chunk — see client/src/bundle.test.ts.
+const VaultSettingsModal = lazy(() =>
+  import('../vault/VaultSettingsModal.js').then((m) => ({ default: m.VaultSettingsModal })),
+)
+
 export function ScopePicker() {
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [searchParams, setSearchParams] = useSearchParams()
   const vaults = useVaults()
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -106,6 +113,13 @@ export function ScopePicker() {
           {activeVault?.access === 'owner' && (
             <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-1">
               <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{activeVault.name}</span>
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(true)}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Vault settings
+              </button>
               <VaultRowActions vault={activeVault} />
             </div>
           )}
@@ -124,6 +138,11 @@ export function ScopePicker() {
             )}
           </div>
         </div>
+      )}
+      {settingsOpen && activeVault?.access === 'owner' && (
+        <Suspense fallback={null}>
+          <VaultSettingsModal vault={activeVault} open={settingsOpen} onOpenChange={setSettingsOpen} />
+        </Suspense>
       )}
     </div>
   )
