@@ -142,7 +142,15 @@ vault-create commands above the results (prefixed distinctly, filtered as
 you type), renders code matches with an inline snippet preview you toggle
 open, and is fully operable by keyboard — arrow keys move through commands
 and results in one list, Enter activates whichever is highlighted, Escape
-closes.
+closes. A notification bell sits top-right on every page (the shell's
+`data-slot="notifications"` slot), its accessible name carrying the unread
+count (e.g. "Notifications, 2 unread") derived from rows with no `readAt`
+in the fetched page; opening it drops a drawer feed listing each
+notification's message, a monospaced timestamp, and a "Mark as read"
+button on unread rows, with the failed-fetch state (an alert with Retry)
+checked before the empty "No notifications yet." state so the same
+fetch-ordering trap the graph view guards against can't hide a broken
+request behind an empty feed.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —

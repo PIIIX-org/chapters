@@ -15,6 +15,7 @@ function stubFetch(vaults: unknown[]) {
     'fetch',
     vi.fn().mockImplementation((url: string) => {
       if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, vaults))
+      if (url.startsWith('/api/notifications')) return Promise.resolve(mockJsonResponse(200, []))
       return Promise.resolve(mockJsonResponse(200, SESSION))
     }),
   )
@@ -50,6 +51,7 @@ describe('HomePage', () => {
       'fetch',
       vi.fn().mockImplementation((url: string) => {
         if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(500, { error: 'Database unreachable' }))
+        if (url.startsWith('/api/notifications')) return Promise.resolve(mockJsonResponse(200, []))
         return Promise.resolve(mockJsonResponse(200, SESSION))
       }),
     )
@@ -140,6 +142,7 @@ describe('HomePage', () => {
       'fetch',
       vi.fn().mockImplementation((url: string) => {
         if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(500, { error: 'Database unreachable' }))
+        if (url.startsWith('/api/notifications')) return Promise.resolve(mockJsonResponse(200, []))
         return Promise.resolve(mockJsonResponse(200, SESSION))
       }),
     )
