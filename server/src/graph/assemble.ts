@@ -132,7 +132,10 @@ interface InternalNode {
   updatedAt: string | null
 }
 
-function passesFilters(node: InternalNode, filters: GraphFilters): boolean {
+export function passesFilters(
+  node: { type: string | null; tags: string[]; timestamp: string | null },
+  filters: GraphFilters,
+): boolean {
   if (filters.types && (!node.type || !filters.types.includes(node.type))) return false
   if (filters.tags && !filters.tags.some((t) => node.tags.includes(t))) return false
   if (filters.since && (!node.timestamp || node.timestamp < filters.since)) return false

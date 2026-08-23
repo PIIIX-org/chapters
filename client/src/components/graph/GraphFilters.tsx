@@ -14,12 +14,15 @@ import { cn } from '../../lib/utils.js'
 
 const FILTER_KEYS = ['types', 'tags', 'since', 'until'] as const
 
-/** The one place a URLSearchParams is turned into the shape useGraph wants. */
-export function graphFiltersFromSearchParams(params: URLSearchParams): GraphFiltersValue {
-  const types = params.get('types')
-  const tags = params.get('tags')
-  const since = params.get('since')
-  const until = params.get('until')
+/** The one place a URLSearchParams is turned into the shape useGraph wants.
+ * `prefix` namespaces the four keys — pass the same prefix a caller uses when
+ * rendering <GraphFilters paramPrefix> so two filter panels mounted at once
+ * (the graph's own, and ⌘K's) never read or write each other's params. */
+export function graphFiltersFromSearchParams(params: URLSearchParams, prefix = ''): GraphFiltersValue {
+  const types = params.get(`${prefix}types`)
+  const tags = params.get(`${prefix}tags`)
+  const since = params.get(`${prefix}since`)
+  const until = params.get(`${prefix}until`)
   return {
     types: types ? types.split(',').filter(Boolean) : undefined,
     tags: tags ? tags.split(',').filter(Boolean) : undefined,
@@ -41,6 +44,8 @@ export interface GraphFiltersProps {
    * empty until a community view with real nodes is loaded.
    */
   nodes: FilterableNode[]
+  /** See graphFiltersFromSearchParams — defaults to unprefixed for the graph's own panel. */
+  paramPrefix?: string
 }
 
 function uniqueSorted(values: Iterable<string>): string[] {
@@ -54,21 +59,30 @@ function toggled(list: string[] | undefined, value: string): string[] {
   return [...set]
 }
 
-export function GraphFilters({ nodes }: GraphFiltersProps) {
+export function GraphFilters({ nodes, paramPrefix = '' }: GraphFiltersProps) {
   const [searchParams, setSearchParams] = useSearchParams()
-  const filters = graphFiltersFromSearchParams(searchParams)
+  const filters = graphFiltersFromSearchParams(searchParams, paramPrefix)
 
-  const availableTypes = uniqueSorted(nodes.map((n) => n.type).filter((t): t is string => Boolean(t)))
-  const availableTags = uniqueSorted(nodes.flatMap((n) => n.tags))
+  // Union with the currently-selected values, not node-derived values alone:
+  // narrowing the result/node set (a tag filter narrows exactly what tags
+  // show up) must never delete the checkbox for a value that's still active
+  // — that would leave a filter applied with no control left to switch it
+  // off.
+  const availableTypes = uniqueSorted([
+    ...nodes.map((n) => n.type).filter((t): t is string => Boolean(t)),
+    ...(filters.types ?? []),
+  ])
+  const availableTags = uniqueSorted([...nodes.flatMap((n) => n.tags), ...(filters.tags ?? [])])
 
   const activeCount =
     (filters.types?.length ?? 0) + (filters.tags?.length ?? 0) + (filters.since ? 1 : 0) + (filters.until ? 1 : 0)
 
   function setParam(key: (typeof FILTER_KEYS)[number], value: string | undefined) {
+    const fullKey = `${paramPrefix}${key}`
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev)
-      if (value) next.set(key, value)
-      else next.delete(key)
+      if (value) next.set(fullKey, value)
+      else next.delete(fullKey)
       return next
     })
   }
@@ -86,7 +100,7 @@ export function GraphFilters({ nodes }: GraphFiltersProps) {
   function clearFilters() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev)
-      for (const key of FILTER_KEYS) next.delete(key)
+      for (const key of FILTER_KEYS) next.delete(`${paramPrefix}${key}`)
       return next
     })
   }

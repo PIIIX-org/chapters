@@ -20,6 +20,7 @@ function stubFetch() {
     vi.fn().mockImplementation((url: string) => {
       if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, VAULTS))
       if (url === '/api/logout') return Promise.resolve(mockJsonResponse(200, { status: 'logged_out' }))
+      if (url.startsWith('/api/notifications')) return Promise.resolve(mockJsonResponse(200, []))
       return Promise.resolve(
         mockJsonResponse(200, { id: 'u1', email: 'taha@piiix.org', status: 'active', role: 'member', createdAt: '2026-01-01' }),
       )
@@ -77,15 +78,14 @@ describe('AppShell', () => {
     await waitFor(() => expect(screen.getByText('Login page')).toBeInTheDocument())
   })
 
-  it('has an empty notification slot with no placeholder bell', async () => {
+  it('renders the notification bell inside the notifications slot', async () => {
     stubFetch()
     const { container } = renderShell()
     await waitFor(() => expect(screen.getByText('taha@piiix.org')).toBeInTheDocument())
 
     const slot = container.querySelector('[data-slot="notifications"]')
     expect(slot).toBeInTheDocument()
-    expect(slot?.children.length).toBe(0)
-    expect(screen.queryByRole('button', { name: /notification/i })).toBeNull()
+    expect(slot?.querySelector('button[aria-haspopup="dialog"]')).toBeInTheDocument()
   })
 
   it('has no accessibility violations', async () => {

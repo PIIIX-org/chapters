@@ -135,6 +135,73 @@ describe('graph', () => {
 })
 
 describe('search', () => {
+  beforeAll(async () => {
+    await createNote(
+      ownerCookie,
+      vaultId,
+      'notes',
+      'zeppelin-log',
+      'Zeppelin airship engineering log for launch scheduling.',
+      { timestamp: '2026-03-01' },
+    )
+    await flushEmbeddings()
+  })
+
+  it('filters by type, dropping results of the wrong type', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/search?q=rocket&types=people`,
+      headers: { cookie: ownerCookie },
+    })
+    const results = res.json() as Array<{ path: string }>
+    expect(results.length).toBeGreaterThan(0)
+    const paths = results.map((r) => r.path)
+    expect(paths).toContain('people/wernher')
+    expect(paths).not.toContain('projects/apollo')
+  })
+
+  it('filters by tag, dropping untagged results', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/search?q=rocket&tags=engineering`,
+      headers: { cookie: ownerCookie },
+    })
+    const results = res.json() as Array<{ path: string }>
+    expect(results.length).toBeGreaterThan(0)
+    const paths = results.map((r) => r.path)
+    expect(paths).toContain('people/wernher')
+    expect(paths).not.toContain('projects/apollo')
+  })
+
+  it('filters by since/until date range', async () => {
+    const paths = async (qs: string) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/vaults/${vaultId}/search?q=zeppelin&${qs}`,
+        headers: { cookie: ownerCookie },
+      })
+      return (res.json() as Array<{ path: string }>).map((r) => r.path)
+    }
+
+    expect(await paths('since=2026-01-01')).toContain('notes/zeppelin-log')
+    expect(await paths('since=2026-06-01')).not.toContain('notes/zeppelin-log')
+    expect(await paths('until=2026-12-01')).toContain('notes/zeppelin-log')
+    expect(await paths('until=2026-01-01')).not.toContain('notes/zeppelin-log')
+  })
+
+  it('per-vault and everywhere search filter identically', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/search?q=rocket&types=people',
+      headers: { cookie: ownerCookie },
+    })
+    const results = res.json() as Array<{ path: string }>
+    expect(results.length).toBeGreaterThan(0)
+    const paths = results.map((r) => r.path)
+    expect(paths).toContain('people/wernher')
+    expect(paths).not.toContain('projects/apollo')
+  })
+
   it('finds notes by keyword with a highlighted snippet', async () => {
     const res = await app.inject({
       method: 'GET',

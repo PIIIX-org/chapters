@@ -5,6 +5,7 @@ import { Button } from '../ui/button.js'
 import { useSession, SESSION_QUERY_KEY } from '../../hooks/useSession.js'
 import { logout } from '../../api/auth.js'
 import { ScopePicker } from './ScopePicker.js'
+import { NotificationBell } from './NotificationBell.js'
 
 export function AppShell({ children }: { children: ReactNode }) {
   const session = useSession()
@@ -26,8 +27,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
 
       <div className="absolute right-4 top-4 flex items-center gap-2">
-        {/* ponytail: empty until unit 1e wires the notification bell + drawer */}
-        <div data-slot="notifications" />
+        <div data-slot="notifications">
+          <NotificationBell />
+        </div>
         {session.data && (
           <>
             <span className="text-sm text-muted-foreground">{session.data.email}</span>
