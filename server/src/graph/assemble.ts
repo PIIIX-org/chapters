@@ -41,9 +41,13 @@ export interface VaultGraph {
   edges: GraphEdge[]
   /** Structural groups skipped because pairwise edges would explode (no silent caps). */
   cappedGroups: string[]
+  /** Pre-slice member count for a `?community=<n>` request; undefined on other paths. */
+  memberTotal?: number
 }
 
 const STRUCTURAL_GROUP_CAP = 50
+/** Louvain communities can be huge; cap the member fetch so d3-force layout doesn't stall. */
+export const COMMUNITY_MEMBER_CAP = 2500
 
 export interface GraphFilters {
   types?: string[]
@@ -368,11 +372,19 @@ export async function buildGraph(
   if (filters.aggregate === 'community') return collapseToCommunities(assembled)
   if (filters.community !== undefined) {
     const members = assembled.nodes.filter((n) => n.community === filters.community)
-    const ids = new Set(members.map((n) => n.id))
+    const sliced = members
+      .slice()
+      .sort((a, b) => {
+        const byUpdatedAt = (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')
+        return byUpdatedAt !== 0 ? byUpdatedAt : a.id.localeCompare(b.id)
+      })
+      .slice(0, COMMUNITY_MEMBER_CAP)
+    const ids = new Set(sliced.map((n) => n.id))
     return {
-      nodes: members,
+      nodes: sliced,
       edges: assembled.edges.filter((e) => ids.has(e.source) && ids.has(e.target)),
       cappedGroups: assembled.cappedGroups,
+      memberTotal: members.length,
     }
   }
   return assembled

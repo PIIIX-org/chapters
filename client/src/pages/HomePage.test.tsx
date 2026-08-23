@@ -45,6 +45,25 @@ describe('HomePage', () => {
     expect(screen.queryByTestId('graph-canvas')).toBeNull()
   })
 
+  it('shows a retry-able error state when the vaults query fails, never the graph', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(500, { error: 'Database unreachable' }))
+        return Promise.resolve(mockJsonResponse(200, SESSION))
+      }),
+    )
+    renderHome()
+
+    // This is the entire reason the assertion exists: reverting the
+    // isPending -> isError -> length===0 -> graph order back to
+    // `vaults.data?.length === 0` makes `data` undefined on a failed fetch,
+    // the `=== 0` check false, and the graph render over the failed query.
+    expect(await screen.findByText('We couldn’t load your vaults.')).toBeInTheDocument()
+    expect(screen.getByText('Database unreachable')).toBeInTheDocument()
+    expect(screen.queryByTestId('graph-canvas')).toBeNull()
+  })
+
   it('shows the loading skeleton first, then lazy-loads the graph canvas once a vault exists', async () => {
     stubFetch([VAULT])
     renderHome()
@@ -112,6 +131,20 @@ describe('HomePage', () => {
     stubFetch([])
     const { container } = renderHome()
     await screen.findByRole('heading', { name: 'Your graph is empty' })
+
+    await expectNoA11yViolations(container)
+  })
+
+  it('has no accessibility violations in the vaults-error branch', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(500, { error: 'Database unreachable' }))
+        return Promise.resolve(mockJsonResponse(200, SESSION))
+      }),
+    )
+    const { container } = renderHome()
+    await screen.findByText('We couldn’t load your vaults.')
 
     await expectNoA11yViolations(container)
   })

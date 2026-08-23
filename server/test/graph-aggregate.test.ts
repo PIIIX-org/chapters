@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
+import { db } from '../src/db/client.js'
+import { notes, vaults } from '../src/db/schema.js'
+import { COMMUNITY_MEMBER_CAP } from '../src/graph/assemble.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -200,6 +203,84 @@ describe('community drill-down', () => {
     })
     expect(res.statusCode).toBe(200)
     expect((res.json() as { nodes: unknown[] }).nodes).toEqual([])
+  })
+})
+
+describe('community member cap', () => {
+  /**
+   * Seeds `count` notes sharing one type with no wikilinks between them.
+   * A shared type puts them all in one structural group, but the group
+   * exceeds STRUCTURAL_GROUP_CAP (50) so no pairwise edges are drawn —
+   * no edges at all means louvain is skipped and every node lands in
+   * community 0, which is exactly the fast, link-free fixture the cap
+   * test needs.
+   */
+  async function seedFlatVault(count: number): Promise<{ cookie: string; vaultId: string }> {
+    const owner = await createActiveUser()
+    const cookie = await loginCookie(app, owner.email)
+    const [vault] = await db
+      .insert(vaults)
+      .values({ name: `Cap vault ${count}`, ownerId: owner.id })
+      .returning({ id: vaults.id })
+    const vaultId = vault!.id
+    await db.insert(notes).values(
+      Array.from({ length: count }, (_, i) => ({
+        vaultId,
+        type: 'flat',
+        name: `note-${i}`,
+        path: `flat/note-${i}.md`,
+        frontmatter: { type: 'flat' },
+        body: `note ${i}`,
+      })),
+    )
+    return { cookie, vaultId }
+  }
+
+  it('caps a large community at COMMUNITY_MEMBER_CAP and reports the true total', async () => {
+    const { cookie, vaultId } = await seedFlatVault(COMMUNITY_MEMBER_CAP + 100)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/graph?community=0`,
+      headers: { cookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as {
+      nodes: Array<{ id: string }>
+      edges: Array<{ source: string; target: string }>
+      memberTotal?: number
+    }
+    expect(body.nodes.length).toBe(COMMUNITY_MEMBER_CAP)
+    expect(body.memberTotal).toBe(COMMUNITY_MEMBER_CAP + 100)
+    const ids = new Set(body.nodes.map((n) => n.id))
+    for (const e of body.edges) {
+      expect(ids.has(e.source)).toBe(true)
+      expect(ids.has(e.target)).toBe(true)
+    }
+
+    // Determinism: a repeat request keeps the same newest-first slice.
+    const res2 = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/graph?community=0`,
+      headers: { cookie },
+    })
+    const body2 = res2.json() as { nodes: Array<{ id: string }> }
+    expect(body2.nodes[0]!.id).toBe(body.nodes[0]!.id)
+    expect(body2.nodes.at(-1)!.id).toBe(body.nodes.at(-1)!.id)
+  })
+
+  it('does not fire below the cap', async () => {
+    const { cookie, vaultId } = await seedFlatVault(5)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/graph?community=0`,
+      headers: { cookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { nodes: unknown[]; memberTotal?: number }
+    expect(body.nodes.length).toBe(5)
+    expect(body.memberTotal).toBe(5)
   })
 })
 
