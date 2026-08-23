@@ -123,3 +123,86 @@ describe('vault purge', () => {
     expect(edges).toEqual([])
   })
 })
+
+describe('vault trash list', () => {
+  it('contains a soft-deleted vault and excludes live ones', async () => {
+    const trashed = await makeVault(ownerCookie, 'Trashed for listing')
+    const live = await makeVault(ownerCookie, 'Live for listing')
+    await app.inject({ method: 'DELETE', url: `/api/vaults/${trashed}`, headers: { cookie: ownerCookie } })
+
+    const res = await app.inject({ method: 'GET', url: '/api/vaults/trash', headers: { cookie: ownerCookie } })
+    expect(res.statusCode).toBe(200)
+    const ids = (res.json() as Array<{ id: string; deletedAt: string }>).map((v) => v.id)
+    expect(ids).toContain(trashed)
+    expect(ids).not.toContain(live)
+  })
+
+  it('does not contain another user’s trashed vault', async () => {
+    const id = await makeVault(otherCookie, 'Other person’s trash')
+    await app.inject({ method: 'DELETE', url: `/api/vaults/${id}`, headers: { cookie: otherCookie } })
+
+    const res = await app.inject({ method: 'GET', url: '/api/vaults/trash', headers: { cookie: ownerCookie } })
+    const ids = (res.json() as Array<{ id: string }>).map((v) => v.id)
+    expect(ids).not.toContain(id)
+  })
+
+  it('is not shadowed by the /vaults/:id route', async () => {
+    // If ":id" matched first, this would try to look up a vault literally
+    // named "trash" and 404 instead of returning the trash list.
+    const trashed = await makeVault(ownerCookie, 'Shadow check')
+    await app.inject({ method: 'DELETE', url: `/api/vaults/${trashed}`, headers: { cookie: ownerCookie } })
+
+    const res = await app.inject({ method: 'GET', url: '/api/vaults/trash', headers: { cookie: ownerCookie } })
+    expect(res.statusCode).toBe(200)
+    expect(Array.isArray(res.json())).toBe(true)
+  })
+})
+
+describe('vault restore', () => {
+  it('makes a trashed vault reappear and reachable again', async () => {
+    const id = await makeVault(ownerCookie, 'Restore me')
+    await app.inject({ method: 'DELETE', url: `/api/vaults/${id}`, headers: { cookie: ownerCookie } })
+
+    const restore = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${id}/restore`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(restore.statusCode).toBe(200)
+    expect((restore.json() as { id: string }).id).toBe(id)
+
+    const list = (
+      await app.inject({ method: 'GET', url: '/api/vaults', headers: { cookie: ownerCookie } })
+    ).json() as Array<{ id: string }>
+    expect(list.some((v) => v.id === id)).toBe(true)
+
+    const tree = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${id}/tree`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(tree.statusCode).toBe(200)
+  })
+
+  it('409s restoring a vault that is not trashed', async () => {
+    const id = await makeVault(ownerCookie, 'Never trashed')
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${id}/restore`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(409)
+  })
+
+  it('404s a non-owner instead of 403', async () => {
+    const id = await makeVault(ownerCookie, 'Not yours to restore')
+    await app.inject({ method: 'DELETE', url: `/api/vaults/${id}`, headers: { cookie: ownerCookie } })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${id}/restore`,
+      headers: { cookie: otherCookie },
+    })
+    expect(res.statusCode).toBe(404)
+  })
+})
