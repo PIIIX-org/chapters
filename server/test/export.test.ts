@@ -1,7 +1,10 @@
+import { rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import AdmZip from 'adm-zip'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
+import { config } from '../src/config.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -211,5 +214,42 @@ describe('export', () => {
       vaultShares: unknown[]
     }
     expect(dump.users.length).toBeGreaterThan(0)
+  })
+
+  // createNote writes the row before the file, so a crash in between leaves a
+  // live note with no file on disk — forever. That must not take the whole
+  // instance backup down with it (#102).
+  it('backs up a note whose file is missing from disk, from the row', async () => {
+    const owner = await createActiveUser()
+    const cookie = await loginCookie(app, owner.email)
+    const orphanVault = (
+      (await app.inject({
+        method: 'POST',
+        url: '/api/vaults',
+        headers: { cookie },
+        body: { name: 'Fileless vault' },
+      })).json() as { id: string }
+    ).id
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${orphanVault}/notes`,
+      headers: { cookie },
+      body: { type: 'people', name: 'orphan', body: 'Row outlived the file.' },
+    })
+    await rm(join(config.dataDir, 'vaults', orphanVault, 'people', 'orphan.md'))
+
+    const admin = await createActiveUser({ role: 'admin' })
+    const adminCookie = await loginCookie(app, admin.email)
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/admin/backup',
+      headers: { cookie: adminCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const entry = new AdmZip(res.rawPayload).getEntry(
+      `vaults/${orphanVault}/people/orphan.md`,
+    )
+    expect(entry).not.toBeNull()
+    expect(entry!.getData().toString('utf8')).toContain('Row outlived the file.')
   })
 })

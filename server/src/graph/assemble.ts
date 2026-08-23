@@ -3,9 +3,45 @@ import louvainModule from 'graphology-communities-louvain'
 import { and, inArray, isNull, or } from 'drizzle-orm'
 
 /** louvain ships CJS-flavored typings that fight NodeNext default imports. */
-type LouvainFn = (graph: UndirectedGraph) => Record<string, number>
+type LouvainFn = (
+  graph: UndirectedGraph,
+  options?: { rng?: () => number },
+) => Record<string, number>
 const louvain = ((louvainModule as { default?: unknown }).default ??
   louvainModule) as LouvainFn
+
+/**
+ * graphology-communities-louvain defaults to `rng: Math.random` — two
+ * requests over the identical node/edge set (e.g. the aggregated Home
+ * fetch, then a `?community=<n>` drill-down that rebuilds the graph from
+ * scratch) can and do land on different community numbers whenever the
+ * graph's structure is genuinely ambiguous, which is the normal case, not
+ * an edge case. Seeding from the graph's own node ids makes two runs over
+ * the same node set produce the same rng stream and therefore the same
+ * partition, while two runs over different filtered node sets still get
+ * different seeds. mulberry32: small, fast, good enough distribution for
+ * tie-breaking — not a cryptographic requirement.
+ */
+function seedFromNodeIds(ids: Iterable<string>): number {
+  let h = 2166136261
+  for (const id of [...ids].sort()) {
+    for (let i = 0; i < id.length; i++) {
+      h ^= id.charCodeAt(i)
+      h = Math.imul(h, 16777619)
+    }
+  }
+  return h >>> 0
+}
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
 import { db } from '../db/client.js'
 import {
   noteLinks,
@@ -41,9 +77,13 @@ export interface VaultGraph {
   edges: GraphEdge[]
   /** Structural groups skipped because pairwise edges would explode (no silent caps). */
   cappedGroups: string[]
+  /** Pre-slice member count for a `?community=<n>` request; undefined on other paths. */
+  memberTotal?: number
 }
 
 const STRUCTURAL_GROUP_CAP = 50
+/** Louvain communities can be huge; cap the member fetch so d3-force layout doesn't stall. */
+export const COMMUNITY_MEMBER_CAP = 2500
 
 export interface GraphFilters {
   types?: string[]
@@ -357,7 +397,8 @@ export async function buildGraph(
   for (const e of edges) {
     if (!g.hasEdge(e.source, e.target)) g.addEdge(e.source, e.target)
   }
-  const communities: Record<string, number> = g.order > 0 && g.size > 0 ? louvain(g) : {}
+  const communities: Record<string, number> =
+    g.order > 0 && g.size > 0 ? louvain(g, { rng: mulberry32(seedFromNodeIds(byId.keys())) }) : {}
 
   const nodes: GraphNode[] = internalNodes.map((n) => ({
     ...n,
@@ -368,11 +409,19 @@ export async function buildGraph(
   if (filters.aggregate === 'community') return collapseToCommunities(assembled)
   if (filters.community !== undefined) {
     const members = assembled.nodes.filter((n) => n.community === filters.community)
-    const ids = new Set(members.map((n) => n.id))
+    const sliced = members
+      .slice()
+      .sort((a, b) => {
+        const byUpdatedAt = (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')
+        return byUpdatedAt !== 0 ? byUpdatedAt : a.id.localeCompare(b.id)
+      })
+      .slice(0, COMMUNITY_MEMBER_CAP)
+    const ids = new Set(sliced.map((n) => n.id))
     return {
-      nodes: members,
+      nodes: sliced,
       edges: assembled.edges.filter((e) => ids.has(e.source) && ids.has(e.target)),
       cappedGroups: assembled.cappedGroups,
+      memberTotal: members.length,
     }
   }
   return assembled

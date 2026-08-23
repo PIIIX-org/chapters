@@ -40,7 +40,25 @@ for best AI navigability, see
   tapping one sends `?community=<n>` back to the same graph endpoint to
   drill down to just that community's members and edges. Each vault/
   repository also has a `GET`/`PUT .../graph-preference` toggle
-  controlling whether it's included in the merged cross-vault view
+  controlling whether it's included in the merged cross-vault view. The
+  client's Home renders this as a hand-rolled Canvas 2D scene — no graph
+  library — laid out by `d3-force` (the one new runtime dependency this
+  view adds) and panned/pinched by a ~55-line Pointer Events module;
+  `GraphCanvas` loads as its own lazy chunk, never the initial bundle.
+  `prefers-reduced-motion` settles the layout in rAF-sized batches of at
+  most 20 ticks per frame behind the loading skeleton instead of blocking
+  the main thread, then paints once and stops — a settled graph draws
+  nothing until the next pan, zoom, or physics change. A failed vaults or
+  graph fetch renders a plain-language error with a working Retry (never a
+  blank canvas, and checked before the empty-state length test so a failed
+  fetch can't fall through and render a stale graph); a successful fetch
+  with zero nodes renders "Nothing to draw yet" with a route to create a
+  note, since an empty graph is not an error; oversized structural groups
+  the server refuses to build pairwise edges for
+  (`cappedGroups`, `graph/assemble.ts`) surface as a named, non-blocking
+  notice instead of a silently thinner graph; and a drill-down capped at
+  ~2500 members states "Showing N of M notes in this community" rather
+  than truncating silently
 - **Real-time collaboration** — Yjs relay with per-operation live
   permission checks, instant revocation kick, and an identity-free live
   view for read-only users
@@ -50,7 +68,8 @@ for best AI navigability, see
 - **Export & portability** — zip exports with manifest, expiring share
   links, validated import, full-instance admin backup and a matching
   `pnpm restore-backup` CLI (deliberately not an HTTP endpoint) for
-  disaster recovery onto a fresh instance
+  disaster recovery onto a fresh instance; a note whose file is missing
+  from disk is recovered from its database row rather than failing the run
 - **Admin oversight** — metadata-only dashboards and instance-wide
   force-revoke; never note content
 
