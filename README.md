@@ -68,7 +68,8 @@ for best AI navigability, see
 - **Export & portability** — zip exports with manifest, expiring share
   links, validated import, full-instance admin backup and a matching
   `pnpm restore-backup` CLI (deliberately not an HTTP endpoint) for
-  disaster recovery onto a fresh instance
+  disaster recovery onto a fresh instance; a note whose file is missing
+  from disk is recovered from its database row rather than failing the run
 - **Admin oversight** — metadata-only dashboards and instance-wide
   force-revoke; never note content
 

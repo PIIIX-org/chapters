@@ -172,14 +172,29 @@ export async function getLiveNote(vaultId: string, path: string): Promise<NoteRo
   return rows[0] ?? null
 }
 
-/** Reads a note's current content from disk (canonical source). */
+/**
+ * Reads a note's current content from disk (canonical source), falling back
+ * to the row when the file is gone. createNote inserts the row before it
+ * writes the file, so a crash in between leaves a live note with no file —
+ * permanently. Every read path (note view, export, backup, collab, MCP) used
+ * to throw ENOENT on such a note; the instance backup, which walks every
+ * vault, then failed entirely because of one note. The row mirrors the file
+ * on every write, so it is the right recovery. Only ENOENT falls back: real
+ * disk faults still surface.
+ */
 export async function readNote(
   vaultId: string,
   path: string,
 ): Promise<{ row: NoteRow; frontmatter: Frontmatter; body: string } | null> {
   const row = await getLiveNote(vaultId, path)
   if (!row) return null
-  const raw = await readFile(noteFile(vaultId, path), 'utf8')
+  let raw: string
+  try {
+    raw = await readFile(noteFile(vaultId, path), 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    return { row, frontmatter: row.frontmatter as Frontmatter, body: row.body }
+  }
   const parsed = parseNote(raw)
   return { row, frontmatter: parsed.frontmatter, body: parsed.body }
 }
