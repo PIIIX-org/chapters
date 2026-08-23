@@ -48,6 +48,31 @@ async function notifyVaultOwnersOfMembershipChange(
 export function teamRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAuth)
 
+  app.get<{ Querystring: { email: string } }>(
+    '/users/lookup',
+    {
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+      schema: {
+        querystring: {
+          type: 'object',
+          required: ['email'],
+          properties: { email: { type: 'string', minLength: 3, maxLength: 320 } },
+        },
+      },
+    },
+    async (req, reply) => {
+      const normalised = req.query.email.trim().toLowerCase()
+      const match = (
+        await db
+          .select({ id: users.id, email: users.email })
+          .from(users)
+          .where(and(eq(users.email, normalised), eq(users.status, 'active')))
+      )[0]
+      if (!match) return reply.code(404).send({ error: 'not found' })
+      return match
+    },
+  )
+
   app.post<{ Body: { name: string } }>(
     '/teams',
     {
