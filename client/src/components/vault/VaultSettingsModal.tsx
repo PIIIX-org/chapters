@@ -10,6 +10,7 @@ import {
 import { Label } from '../ui/label.js'
 import { FormError } from '../FormError.js'
 import { useUpdateVault } from '../../hooks/useVaultMutations.js'
+import { SharingPanel } from './SharingPanel.js'
 import type { Vault } from '../../api/vaults.js'
 
 interface VaultSettingsModalProps {
@@ -70,6 +71,8 @@ export function VaultSettingsModal({ vault, open, onOpenChange }: VaultSettingsM
           </DialogDescription>
           <FormError message={error} />
         </section>
+
+        <SharingPanel vaultId={vault.id} />
       </DialogContent>
     </Dialog>
   )
