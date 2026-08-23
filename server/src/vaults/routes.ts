@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import {
   notes,
@@ -48,6 +48,16 @@ export function vaultRoutes(app: FastifyInstance) {
   )
 
   app.get('/vaults', async (req) => listAccessibleVaults(req.user!.id))
+
+  // Must be registered before '/vaults/:id/access' etc. so find-my-way's
+  // static route wins over the ':id' param for the literal segment
+  // "trash" — verified by a route-shadowing test, not just assumed.
+  app.get('/vaults/trash', async (req) =>
+    db
+      .select({ id: vaults.id, name: vaults.name, deletedAt: vaults.deletedAt })
+      .from(vaults)
+      .where(and(eq(vaults.ownerId, req.user!.id), isNotNull(vaults.deletedAt))),
+  )
 
   app.get<{ Params: { id: string } }>('/vaults/:id/access', async (req, reply) => {
     const access = await resolveAccess(req.user!.id, req.params.id)
@@ -304,6 +314,31 @@ export function vaultRoutes(app: FastifyInstance) {
     await rm(join(config.dataDir, 'vaults', req.params.id), { recursive: true, force: true })
 
     return { status: 'purged', id: req.params.id }
+  })
+
+  app.post<{ Params: { id: string } }>('/vaults/:id/restore', async (req, reply) => {
+    // Same reason as purge: resolveAccess/listAccessibleVaults filter out
+    // deleted vaults by design, so a trashed vault is invisible to them.
+    // Query the table directly and compare ownerId instead of "tidying"
+    // this into resolveAccess, which would 404 every vault this route
+    // exists to restore.
+    const rows = await db
+      .select({ id: vaults.id, ownerId: vaults.ownerId, deletedAt: vaults.deletedAt })
+      .from(vaults)
+      .where(eq(vaults.id, req.params.id))
+    const vault = rows[0]
+    if (!vault || vault.ownerId !== req.user!.id) {
+      return reply.code(404).send({ error: 'not found' })
+    }
+    if (!vault.deletedAt) {
+      return reply.code(409).send({ error: 'vault is not trashed' })
+    }
+    const [restored] = await db
+      .update(vaults)
+      .set({ deletedAt: null })
+      .where(eq(vaults.id, req.params.id))
+      .returning()
+    return { ...restored, access: 'owner' as const }
   })
 
   app.put<{ Params: { id: string }; Body: { include: boolean } }>(

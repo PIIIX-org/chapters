@@ -22,10 +22,11 @@ for best AI navigability, see
   (TOTP + backup codes, admin-mandatable)
 - **Notes** — plain OKF markdown files on disk, one shared server-side
   validation for every write path, soft-delete trash, per-type index.md
-- **Vaults** — owner-only soft delete (`DELETE /api/vaults/:id`) and hard
-  purge (`POST /api/vaults/:id/purge`, only once trashed), matching the
-  note purge contract: clears semantic edges explicitly and removes the
-  vault's directory from disk
+- **Vaults** — owner-only soft delete (`DELETE /api/vaults/:id`), trash
+  listing and restore (`GET /api/vaults/trash`, `POST /api/vaults/:id/restore`,
+  409 if not trashed), and hard purge (`POST /api/vaults/:id/purge`, only
+  once trashed), matching the note purge contract: clears semantic edges
+  explicitly and removes the vault's directory from disk
 - **Graph & search** — save-time embedding index; extracted/structural/
   semantic edges with Louvain communities and an opt-in merged
   cross-vault view; hybrid keyword+semantic search, permission-filtered
