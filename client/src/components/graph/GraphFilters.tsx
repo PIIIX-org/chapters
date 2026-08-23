@@ -58,8 +58,16 @@ export function GraphFilters({ nodes }: GraphFiltersProps) {
   const [searchParams, setSearchParams] = useSearchParams()
   const filters = graphFiltersFromSearchParams(searchParams)
 
-  const availableTypes = uniqueSorted(nodes.map((n) => n.type).filter((t): t is string => Boolean(t)))
-  const availableTags = uniqueSorted(nodes.flatMap((n) => n.tags))
+  // Union with the currently-selected values, not node-derived values alone:
+  // narrowing the result/node set (a tag filter narrows exactly what tags
+  // show up) must never delete the checkbox for a value that's still active
+  // — that would leave a filter applied with no control left to switch it
+  // off.
+  const availableTypes = uniqueSorted([
+    ...nodes.map((n) => n.type).filter((t): t is string => Boolean(t)),
+    ...(filters.types ?? []),
+  ])
+  const availableTags = uniqueSorted([...nodes.flatMap((n) => n.tags), ...(filters.tags ?? [])])
 
   const activeCount =
     (filters.types?.length ?? 0) + (filters.tags?.length ?? 0) + (filters.since ? 1 : 0) + (filters.until ? 1 : 0)

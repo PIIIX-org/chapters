@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { Input } from '../ui/input.js'
 import { useSearch } from '../../hooks/useSearch.js'
 import { useVaults } from '../../hooks/useVaults.js'
 import { useCreateVault } from '../../hooks/useVaultMutations.js'
+import { GraphFilters, graphFiltersFromSearchParams, type FilterableNode } from '../graph/GraphFilters.js'
+import { cn } from '../../lib/utils.js'
 import type { SearchResult } from '../../api/search.js'
 
 interface SearchOverlayProps {
@@ -16,6 +18,28 @@ interface Command {
   id: string
   label: string
   run: () => void | Promise<void>
+}
+
+// One flat, ordered entry — commands first, then results — is what the
+// keyboard actually drives. Each entry owns the DOM id its <button
+// role="option"> renders (so aria-activedescendant can point straight at it)
+// and the exact action a click on that option performs, so Enter can just
+// call it.
+interface Entry {
+  id: string
+  activate: () => void
+}
+
+function commandOptionId(cmd: Command): string {
+  return `search-option-cmd-${cmd.id}`
+}
+
+function resultKey(r: SearchResult): string {
+  return `${r.resourceType}:${r.id}`
+}
+
+function resultOptionId(r: SearchResult): string {
+  return `search-option-result-${resultKey(r)}`
 }
 
 function Chip({ children }: { children: React.ReactNode }) {
@@ -31,9 +55,28 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   const [query, setQuery] = useState('')
   const [debounced, setDebounced] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [prevEntriesKey, setPrevEntriesKey] = useState('')
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const vaults = useVaults()
   const createVault = useCreateVault()
+
+  // Same `vault` param the shell's ScopePicker owns (client/src/components/
+  // shell/ScopePicker.tsx) — reading and writing it here, rather than a
+  // second piece of state, is what keeps the two controls agreeing about
+  // scope after ⌘K closes.
+  const vaultId = searchParams.get('vault')
+  const filters = graphFiltersFromSearchParams(searchParams)
+
+  function selectScope(id: string | null) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (id) next.set('vault', id)
+      else next.delete('vault')
+      return next
+    })
+  }
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(query), 250)
@@ -43,10 +86,18 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   // When closed, disable the query so a leftover search doesn't background-
   // refetch on window refocus (the overlay is always mounted). Reopening
   // re-enables with the last query.
-  const results = useSearch(open ? debounced : '', null, {})
+  const results = useSearch(open ? debounced : '', vaultId, filters)
   const items = results.data ?? []
 
-  if (!open) return null
+  // Options for the filter panel come from the results actually loaded, not
+  // a hardcoded list — narrows as the query and filters narrow, same
+  // contract as GraphFilters' other caller (GraphCanvas's node set).
+  const filterNodes: FilterableNode[] = items.map((r) => ({
+    type: r.resourceType === 'code' ? (r.language ?? null) : (r.type ?? null),
+    tags: Array.isArray((r.frontmatter as { tags?: unknown } | undefined)?.tags)
+      ? ((r.frontmatter as { tags: string[] }).tags)
+      : [],
+  }))
 
   function go(containerId: string, path: string) {
     onClose()
@@ -60,10 +111,6 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
       else next.add(key)
       return next
     })
-  }
-
-  function onKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Escape') onClose()
   }
 
   const trimmedQuery = query.trim()
@@ -86,7 +133,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   if (trimmedQuery) {
     commands.push({
       id: 'create-vault',
-      label: `Create vault '${trimmedQuery}'`,
+      label: `Create vault "${trimmedQuery}"`,
       run: async () => {
         const vault = await createVault.mutateAsync(trimmedQuery)
         navigate(`/vaults/${vault.id}`)
@@ -98,6 +145,54 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     void Promise.resolve(cmd.run()).then(() => onClose())
   }
 
+  // The keyboard drives this flat list in order: commands, then results. It
+  // mirrors render order exactly, so an entry's position here is also its
+  // position in the two rendered groups below.
+  const entries: Entry[] = [
+    ...commands.map((cmd) => ({ id: commandOptionId(cmd), activate: () => runCommand(cmd) })),
+    ...(results.isError
+      ? []
+      : items.map((r) => ({
+          id: resultOptionId(r),
+          activate: () => (r.resourceType === 'code' ? toggleCode(resultKey(r)) : go(r.containerId, r.path)),
+        }))),
+  ]
+
+  // Reset the active index whenever the entry list's identity changes (new
+  // query, new results, new command set) so a stale index can never survive
+  // into a later Enter — that's how a keystroke ends up activating the wrong
+  // row, or silently no-oping past the end of a shrunk list. Adjusted during
+  // render (React's documented pattern for "reset state when a computed key
+  // changes") rather than in an effect, which would cascade an extra render.
+  const entriesKey = entries.map((e) => e.id).join('|')
+  if (entriesKey !== prevEntriesKey) {
+    setPrevEntriesKey(entriesKey)
+    setActiveIndex(0)
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      onClose()
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActiveIndex((i) => (entries.length === 0 ? 0 : (i + 1) % entries.length))
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActiveIndex((i) => (entries.length === 0 ? 0 : (i - 1 + entries.length) % entries.length))
+      return
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      entries[activeIndex]?.activate()
+    }
+  }
+
+  if (!open) return null
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[15vh]"
@@ -106,30 +201,64 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
       }}
     >
       <div className="w-full max-w-xl overflow-hidden rounded-lg border border-border bg-background shadow-lg">
+        <div className="flex items-center gap-1.5 border-b border-border px-4 py-2">
+          <span className="text-xs font-medium text-muted-foreground">Search:</span>
+          <div role="radiogroup" aria-label="Search scope" className="flex flex-wrap gap-1">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!vaultId}
+              onClick={() => selectScope(null)}
+              className={cn(
+                'rounded px-1.5 py-0.5 text-xs font-medium hover:bg-muted',
+                !vaultId && 'bg-muted text-foreground',
+              )}
+            >
+              Everywhere
+            </button>
+            {(vaults.data ?? []).map((v) => (
+              <button
+                key={v.id}
+                type="button"
+                role="radio"
+                aria-checked={vaultId === v.id}
+                onClick={() => selectScope(v.id)}
+                className={cn(
+                  'rounded px-1.5 py-0.5 text-xs font-medium hover:bg-muted',
+                  vaultId === v.id && 'bg-muted text-foreground',
+                )}
+              >
+                {v.name}
+              </button>
+            ))}
+          </div>
+        </div>
         <Input
           autoFocus
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={entries.length > 0}
+          aria-controls="search-listbox"
+          aria-activedescendant={entries[activeIndex]?.id}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder="Search notes and code…"
           className="h-11 rounded-none border-0 border-b border-border text-base focus-visible:ring-0"
         />
-        {/* Not a single role="listbox" spanning commands + results: results mix
-            true options (note rows) with a disclosure toggle (code preview),
-            and role="option" cannot carry aria-expanded — an ARIA listbox
-            requires every owned element to be option/group. Commands are a
-            homogeneous set, so they get their own self-contained listbox;
-            results stay plain buttons. Revisit once keyboard navigation
-            unifies these into one real composite widget. */}
-        <div className="max-h-[50vh] overflow-auto">
+        <div className="border-b border-border p-2">
+          <GraphFilters nodes={filterNodes} />
+        </div>
+        <div id="search-listbox" role="listbox" aria-label="Search" className="max-h-[50vh] overflow-auto">
           {commands.length > 0 && (
-            <div role="listbox" aria-label="Commands">
-              {commands.map((cmd) => (
+            <div role="group" aria-label="Commands">
+              {commands.map((cmd, i) => (
                 <button
                   key={cmd.id}
+                  id={commandOptionId(cmd)}
                   type="button"
                   role="option"
-                  aria-selected={false}
+                  aria-selected={activeIndex === i}
                   aria-label={`Command: ${cmd.label}`}
                   onClick={() => runCommand(cmd)}
                   className="flex w-full items-center gap-2 px-4 py-2 text-left hover:bg-muted"
@@ -142,7 +271,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
               ))}
             </div>
           )}
-          <div aria-label="Results">
+          <div role="group" aria-label="Results">
             {results.isError ? (
               <div role="alert" className="px-4 py-3 text-sm">
                 <p className="text-destructive">{results.error?.message ?? 'Search failed.'}</p>
@@ -156,15 +285,19 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
               </div>
             ) : (
               <>
-                {items.map((r) => {
-                  const key = `${r.resourceType}:${r.id}`
+                {items.map((r, i) => {
+                  const key = resultKey(r)
+                  const optionId = resultOptionId(r)
+                  const isActive = activeIndex === commands.length + i
                   if (r.resourceType === 'code') {
                     const isExpanded = expanded.has(key)
                     return (
                       <button
                         key={key}
+                        id={optionId}
                         type="button"
-                        aria-expanded={isExpanded}
+                        role="option"
+                        aria-selected={isActive}
                         onClick={() => toggleCode(key)}
                         className="block w-full px-4 py-2 text-left hover:bg-muted"
                       >
@@ -189,7 +322,10 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                   return (
                     <button
                       key={key}
+                      id={optionId}
                       type="button"
+                      role="option"
+                      aria-selected={isActive}
                       onClick={() => go(r.containerId, r.path)}
                       className="block w-full px-4 py-2 text-left hover:bg-muted"
                     >

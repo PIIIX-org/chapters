@@ -200,6 +200,26 @@ describe('GraphFilters', () => {
     await expectNoA11yViolations(container)
   })
 
+  it('still offers a checkbox for a selected value absent from the loaded nodes, so it can be turned off', async () => {
+    stubFetch()
+    const user = userEvent.setup()
+    renderFilters({ initialEntry: '/?vault=v1&tags=engineering' })
+
+    // Without the union fix, 'engineering' isn't in NODES' tags at all, so
+    // this throws instead of finding a checked, removable checkbox.
+    const engineering = await screen.findByRole('checkbox', { name: 'engineering' })
+    expect(engineering).toBeChecked()
+
+    // Regression check: the node-derived tags still render alongside it,
+    // with no duplicate entry for a value that's both selected and
+    // node-derived.
+    expect(screen.getAllByRole('checkbox', { name: 'friends' })).toHaveLength(1)
+    expect(screen.getByRole('checkbox', { name: 'travel' })).toBeInTheDocument()
+
+    await user.click(engineering)
+    await waitFor(() => expect(screen.getByTestId('params').textContent).toBe('vault=v1'))
+  })
+
   it('has no accessibility violations with filters applied', async () => {
     stubFetch()
     const user = userEvent.setup()

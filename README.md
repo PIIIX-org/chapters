@@ -9,8 +9,9 @@ Slice 2a (vault tree + read-only view), Slice 2b (Editor — CodeMirror 6
 editing, permission-aware lock, editable frontmatter property panel, note
 create/rename/delete, and full live-preview), and Slice 2c (wikilinks —
 `[[` autocomplete, clickable navigation, and link-to-create) are done;
-Slice 3 (Search) is in progress — a ⌘K search overlay (3a) is done,
-keyboard navigation next.** All specs
+and Slice 3 (Search — a ⌘K overlay with vault-scoped and everywhere search,
+type/tag/date filters, navigation and vault-create commands, code results
+with an inline preview toggle, and full keyboard navigation) are done.** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -96,7 +97,7 @@ Slice 2a (vault tree + read-only note view), and Slice 2b (the Editor —
 CodeMirror 6 editing, permission-aware lock, editable frontmatter property
 panel, note create/rename/delete, and full live-preview) and Slice 2c
 (wikilinks — autocomplete, clickable navigation, link-to-create) are done;
-Slice 3 (Search) is in progress (a ⌘K search overlay is done) — tracked in
+and Slice 3 (Search — the ⌘K overlay) are done — tracked in
 [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
@@ -129,8 +130,19 @@ reappear when you move back onto it (live-preview). Typing `[[` autocompletes
 against the vault's note paths, and a `[[link]]` you're not editing is
 clickable — it navigates to that note, or, if the note doesn't exist yet,
 creates it (type-first, from the path) and opens it. Pressing ⌘K (Ctrl+K)
-anywhere opens a search overlay across every vault you can reach (hybrid
-keyword + semantic); clicking a match jumps to that note.
+anywhere opens a search overlay (hybrid keyword + semantic) with a scope
+toggle at the top — search "Everywhere" you can reach, or narrow to the
+vault currently active in the shell's scope picker, since both controls
+read and write the same `vault` URL param. Below it, the same type/tag/date
+filter panel used by the graph view narrows results further, with the
+option lists always including whatever's currently selected even if it's
+dropped out of the loaded result set — so a filter is never stuck on with
+no checkbox left to turn it off. The overlay also lists navigation and
+vault-create commands above the results (prefixed distinctly, filtered as
+you type), renders code matches with an inline snippet preview you toggle
+open, and is fully operable by keyboard — arrow keys move through commands
+and results in one list, Enter activates whichever is highlighted, Escape
+closes.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
