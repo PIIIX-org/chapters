@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { mockJsonResponse } from '../../lib/api'
 import { expectNoA11yViolations } from '../../test/axe'
+import { VAULT_TRASH_QUERY_KEY } from '../../hooks/useVaults'
 import type { Vault, TrashedVault } from '../../api/vaults'
 import { VaultRowActions, VaultTrashSection } from './VaultActions'
 
@@ -146,10 +147,27 @@ describe('VaultTrashSection', () => {
   })
 
   it('renders nothing when the trash is empty', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockJsonResponse(200, [])))
-    const { container } = renderWithClient(<VaultTrashSection />)
+    // The previous version of this test asserted queryByText('Trash') was
+    // absent inside waitFor, which is already true in the loading state on
+    // the very first tick — it never actually waited for the fetch to
+    // settle, so it passed identically whether the empty branch worked or
+    // the component always rendered null. Checking "fetch was called" has
+    // the same race (it's true before the promise even resolves), so we
+    // wait on the query's own status instead — the one signal that is only
+    // true once trash.data is actually the resolved empty array. The
+    // sibling "lists a trashed vault" test above is the positive control
+    // proving this component CAN render 'Trash'; together they show the
+    // empty case is a real branch, not a no-op.
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, []))
+    vi.stubGlobal('fetch', fetchMock)
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <VaultTrashSection />
+      </QueryClientProvider>,
+    )
 
-    await waitFor(() => expect(screen.queryByText('Trash')).not.toBeInTheDocument())
+    await waitFor(() => expect(queryClient.getQueryState(VAULT_TRASH_QUERY_KEY)?.status).toBe('success'))
     expect(container).toBeEmptyDOMElement()
   })
 })
