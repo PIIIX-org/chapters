@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify'
-import { and, eq } from 'drizzle-orm'
+import { and, countDistinct, eq, inArray, max } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { teamMemberships, teams, users, vaults, vaultShares } from '../db/schema.js'
+import { noteRevisions, notes, teamMemberships, teams, users, vaults, vaultShares } from '../db/schema.js'
+import { listAccessibleVaults } from './permissions.js'
 import { notify } from '../notifications/notify.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 
@@ -116,6 +117,67 @@ export function teamRoutes(app: FastifyInstance) {
       .from(teamMemberships)
       .innerJoin(users, eq(users.id, teamMemberships.userId))
       .where(eq(teamMemberships.teamId, req.params.id))
+  })
+
+  /**
+   * Aggregate-only per-member stats for the Team page roster. Privacy rule
+   * (absolute, enforced here rather than trusted to the UI): never expose
+   * per-note activity, and never count activity in a vault the caller
+   * cannot themselves see.
+   */
+  app.get<{ Params: { id: string } }>('/teams/:id/stats', async (req, reply) => {
+    const membership = (
+      await db
+        .select()
+        .from(teamMemberships)
+        .where(
+          and(eq(teamMemberships.teamId, req.params.id), eq(teamMemberships.userId, req.user!.id)),
+        )
+    )[0]
+    if (!membership) return reply.code(404).send({ error: 'not found' })
+
+    const members = await db
+      .select({ userId: users.id, email: users.email })
+      .from(teamMemberships)
+      .innerJoin(users, eq(users.id, teamMemberships.userId))
+      .where(eq(teamMemberships.teamId, req.params.id))
+
+    const accessible = await listAccessibleVaults(req.user!.id)
+    const accessibleVaultIds = accessible.map((v) => v.id)
+    const memberIds = members.map((m) => m.userId)
+
+    const aggregates =
+      accessibleVaultIds.length === 0 || memberIds.length === 0
+        ? []
+        : await db
+            .select({
+              actorId: noteRevisions.actorId,
+              notesTouched: countDistinct(notes.id),
+              vaultsTouched: countDistinct(notes.vaultId),
+              lastActivityAt: max(noteRevisions.createdAt),
+            })
+            .from(noteRevisions)
+            .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
+            .where(
+              and(
+                eq(noteRevisions.actorType, 'user'),
+                inArray(noteRevisions.actorId, memberIds),
+                inArray(notes.vaultId, accessibleVaultIds),
+              ),
+            )
+            .groupBy(noteRevisions.actorId)
+
+    const byActor = new Map(aggregates.map((a) => [a.actorId, a]))
+    return members.map((member) => {
+      const agg = byActor.get(member.userId)
+      return {
+        userId: member.userId,
+        email: member.email,
+        notesTouched: agg?.notesTouched ?? 0,
+        vaultsTouched: agg?.vaultsTouched ?? 0,
+        lastActivityAt: agg?.lastActivityAt ?? null,
+      }
+    })
   })
 
   app.post<{ Params: { id: string }; Body: { userId: string } }>(
