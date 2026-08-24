@@ -154,9 +154,9 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   const lowerQuery = query.toLowerCase()
 
   // Command destinations are limited to routes that actually exist in
-  // router.tsx today. Do NOT add settings/team/admin/invite commands here
-  // until a later unit ships those pages — a command that goes nowhere is
-  // worse than no command at all.
+  // router.tsx today. Do NOT add settings/admin/invite commands here until a
+  // later unit ships those pages — a command that goes nowhere is worse than
+  // no command at all.
   const navCommands: Command[] = [
     { id: 'home', label: 'Go to graph home', run: () => navigate('/') },
     ...(vaults.data ?? []).map((v) => ({
@@ -164,6 +164,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
       label: `Open vault: ${v.name}`,
       run: () => navigate(`/vaults/${v.id}`),
     })),
+    { id: 'team', label: 'Go to team', run: () => navigate('/team') },
   ].filter((c) => c.label.toLowerCase().includes(lowerQuery))
 
   const commands: Command[] = [...navCommands]
