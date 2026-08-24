@@ -17,12 +17,23 @@ import { NoteEmptyState } from './pages/vault/NoteEmptyState.js'
 // chunk — same reasoning as GraphCanvas in HomePage.tsx, applied one level up.
 const VaultLayout = lazy(() => import('./pages/vault/VaultLayout.js').then((m) => ({ default: m.VaultLayout })))
 const NoteView = lazy(() => import('./pages/vault/NoteView.js').then((m) => ({ default: m.NoteView })))
+// Same reasoning as VaultLayout/NoteView above: Home never renders this, so
+// it doesn't belong in the entry chunk.
+const TeamPage = lazy(() => import('./pages/TeamPage.js').then((m) => ({ default: m.TeamPage })))
 
 export const router = createBrowserRouter([
   {
     element: <RequireAuth />,
     children: [
       { path: '/', element: <HomePage /> },
+      {
+        path: '/team',
+        element: (
+          <Suspense fallback={<GraphSkeleton />}>
+            <TeamPage />
+          </Suspense>
+        ),
+      },
       {
         path: '/vaults/:vaultId',
         element: (
