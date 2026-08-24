@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
+import { TeamManagement } from '../components/team/TeamManagement.js'
 import { UserConstellation } from '../components/team/UserConstellation.js'
 import { useTeamMembers, useTeams, useTeamStats } from '../hooks/useTeams.js'
 
@@ -30,6 +31,9 @@ function TeamEmptyState() {
       <Link to="/" className="text-sm text-foreground underline">
         ← Back home
       </Link>
+      <div className="mt-4 w-full max-w-md text-left">
+        <TeamManagement />
+      </div>
     </div>
   )
 }
@@ -159,6 +163,8 @@ export function TeamPage() {
                 </tbody>
               </table>
             </div>
+
+            <TeamManagement />
           </>
         )}
       </main>

@@ -71,11 +71,14 @@ describe('TeamPage', () => {
     stubFetch()
     renderPage()
 
-    expect(await screen.findByText('ada@example.com')).toBeInTheDocument()
-    expect(screen.getByText('grace@example.com')).toBeInTheDocument()
-    expect(screen.getByText('idle@example.com')).toBeInTheDocument()
+    // Scoped to the roster table — TeamManagement (below it) re-lists the
+    // same emails for member management, so an unscoped query is ambiguous.
+    const table = await screen.findByRole('table')
+    expect(within(table).getByText('ada@example.com')).toBeInTheDocument()
+    expect(within(table).getByText('grace@example.com')).toBeInTheDocument()
+    expect(within(table).getByText('idle@example.com')).toBeInTheDocument()
 
-    const idleRow = screen.getByText('idle@example.com').closest('tr')!
+    const idleRow = within(table).getByText('idle@example.com').closest('tr')!
     expect(within(idleRow).getByText('No activity yet')).toBeInTheDocument()
     // Both notesTouched and vaultsTouched render "0" for the idle member.
     expect(within(idleRow).getAllByText('0')).toHaveLength(2)
@@ -86,7 +89,7 @@ describe('TeamPage', () => {
     stubFetch()
     const { container } = renderPage()
 
-    await screen.findByText('ada@example.com')
+    await screen.findByRole('table')
     const circles = container.querySelectorAll('circle')
     expect(circles.length).toBe(3)
 
@@ -105,7 +108,7 @@ describe('TeamPage', () => {
     stubFetch()
     const { container } = renderPage()
 
-    await screen.findByText('ada@example.com')
+    await screen.findByRole('table')
 
     const text = container.textContent ?? ''
     expect(text).not.toMatch(/\.md\b/)
@@ -142,7 +145,7 @@ describe('TeamPage', () => {
     stubFetch()
     const { container } = renderPage()
 
-    await screen.findByText('ada@example.com')
+    await screen.findByRole('table')
     await expectNoA11yViolations(container)
   })
 })

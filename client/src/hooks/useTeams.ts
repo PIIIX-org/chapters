@@ -1,5 +1,13 @@
-import { useQuery } from '@tanstack/react-query'
-import { listTeamMembers, listTeams, listTeamStats } from '../api/teams.js'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  addTeamMember,
+  createTeam,
+  deleteTeam,
+  listTeamMembers,
+  listTeams,
+  listTeamStats,
+  removeTeamMember,
+} from '../api/teams.js'
 import type { Team, TeamMember, TeamMemberStats } from '../api/teams.js'
 import type { ApiError } from '../lib/api.js'
 
@@ -31,5 +39,47 @@ export function useTeamStats(teamId: string) {
     queryKey: teamStatsQueryKey(teamId),
     queryFn: () => listTeamStats(teamId),
     enabled: teamId !== '',
+  })
+}
+
+export function useCreateTeam() {
+  const queryClient = useQueryClient()
+  return useMutation<Team, ApiError, string>({
+    mutationFn: (name) => createTeam(name),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: TEAMS_QUERY_KEY, exact: true })
+    },
+  })
+}
+
+export function useAddTeamMember(teamId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<{ status: 'added' }, ApiError, string>({
+    mutationFn: (userId) => addTeamMember(teamId, userId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: teamMembersQueryKey(teamId) })
+      void queryClient.invalidateQueries({ queryKey: teamStatsQueryKey(teamId) })
+    },
+  })
+}
+
+export function useRemoveTeamMember(teamId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<{ status: 'removed' }, ApiError, string>({
+    mutationFn: (userId) => removeTeamMember(teamId, userId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: teamMembersQueryKey(teamId) })
+      void queryClient.invalidateQueries({ queryKey: teamStatsQueryKey(teamId) })
+    },
+  })
+}
+
+export function useDeleteTeam() {
+  const queryClient = useQueryClient()
+  return useMutation<{ status: 'deleted' }, ApiError, string>({
+    mutationFn: (teamId) => deleteTeam(teamId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: TEAMS_QUERY_KEY, exact: true })
+    },
   })
 }
