@@ -332,7 +332,18 @@ describe('SearchOverlay commands', () => {
     await waitFor(() =>
       expect(screen.getByRole('option', { name: 'Command: Go to graph home' })).toBeInTheDocument(),
     )
-    expect(screen.queryByRole('option', { name: /settings|team|admin|invite/i })).toBeNull()
+    // 'team' is deliberately excluded here — the Team page exists now and has
+    // its own command, asserted in the "SearchOverlay team command" suite.
+    expect(screen.queryByRole('option', { name: /settings|admin|invite/i })).toBeNull()
+  })
+
+  it('renders a "Go to team" command', async () => {
+    stubCommandFetch()
+    renderOverlay(true)
+
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: 'Command: Go to team' })).toBeInTheDocument(),
+    )
   })
 
   it('renders commands above results', async () => {
@@ -382,6 +393,57 @@ describe('SearchOverlay commands', () => {
     await waitFor(() => expect(screen.getByText('people/jane')).toBeInTheDocument())
 
     await expectNoA11yViolations(container)
+  })
+})
+
+describe('SearchOverlay team command', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  function stubTeamFetch() {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.startsWith('/api/search')) return Promise.resolve(mockJsonResponse(200, []))
+      if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, []))
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('typing "team" surfaces "Go to team", and Enter on it navigates to /team', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    stubTeamFetch()
+    const { onClose, router, container } = renderOverlay(true)
+
+    await search(user, 'team')
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: 'Command: Go to team' })).toBeInTheDocument(),
+    )
+    await expectNoA11yViolations(container)
+
+    // Driven from the real input, same as the other nav-command activations:
+    // Enter fires on whatever the flat list's activeIndex currently is.
+    await user.keyboard('{Enter}')
+
+    expect(router.state.location.pathname).toBe('/team')
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('a query that cannot match "team" leaves no "Go to team" option', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    stubTeamFetch()
+    renderOverlay(true)
+
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: 'Command: Go to graph home' })).toBeInTheDocument(),
+    )
+    await search(user, 'zzz')
+
+    expect(screen.queryByRole('option', { name: 'Command: Go to team' })).toBeNull()
   })
 })
 

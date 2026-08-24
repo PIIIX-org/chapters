@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { createVault, deleteVault, renameVault, restoreVault } from '../api/vaults.js'
+import { createVault, deleteVault, renameVault, restoreVault, updateVault } from '../api/vaults.js'
 import { VAULT_TRASH_QUERY_KEY, VAULTS_QUERY_KEY } from './useVaults.js'
 import type { ApiError } from '../lib/api.js'
 import type { Vault } from '../api/vaults.js'
@@ -21,6 +21,18 @@ export function useRenameVault() {
   return useMutation<Vault, ApiError, { id: string; name: string }>({
     mutationFn: ({ id, name }) => renameVault(id, name),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: VAULTS_QUERY_KEY, exact: true })
+    },
+  })
+}
+
+export function useUpdateVault() {
+  const queryClient = useQueryClient()
+  return useMutation<Vault, ApiError, { id: string; patch: { name?: string; mergeable?: boolean } }>({
+    mutationFn: ({ id, patch }) => updateVault(id, patch),
+    onSuccess: () => {
+      // exact: true — VAULT_TRASH_QUERY_KEY is prefixed by VAULTS_QUERY_KEY, and a
+      // non-exact invalidate would cascade into it. Only the vaults list moved.
       void queryClient.invalidateQueries({ queryKey: VAULTS_QUERY_KEY, exact: true })
     },
   })

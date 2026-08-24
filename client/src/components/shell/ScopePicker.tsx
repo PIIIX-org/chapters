@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { lazy, Suspense, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { useVaults } from '../../hooks/useVaults.js'
@@ -6,9 +6,16 @@ import { NewVaultForm } from '../vault/NewVaultForm.js'
 import { VaultRowActions, VaultTrashSection } from './VaultActions.js'
 import type { Vault } from '../../api/vaults.js'
 
+// Lazy: keeps the radix dialog (and everything the settings modal pulls in)
+// out of the entry chunk — see client/src/bundle.test.ts.
+const VaultSettingsModal = lazy(() =>
+  import('../vault/VaultSettingsModal.js').then((m) => ({ default: m.VaultSettingsModal })),
+)
+
 export function ScopePicker() {
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [searchParams, setSearchParams] = useSearchParams()
   const vaults = useVaults()
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -47,7 +54,15 @@ export function ScopePicker() {
   // sits on the trigger button, a sibling of the popup — not a descendant of
   // the listbox — so a real Escape keydown bubbles trigger -> this div and
   // never reaches a handler on the <ul>.
+  //
+  // The vault settings modal is a Radix Dialog: it portals its DOM into
+  // document.body, but React synthetic events still propagate along the
+  // React tree, not the DOM tree — so the dialog's own Escape handler and
+  // this one both see the same keydown. Guard while the modal is open, or
+  // one Escape closes both layers and yanks focus toward a trigger button
+  // Radix's FocusScope is also about to restore focus to mid-unmount.
   function onKeyDown(e: KeyboardEvent) {
+    if (settingsOpen) return
     if (e.key === 'Escape') {
       close()
       triggerRef.current?.focus()
@@ -106,6 +121,13 @@ export function ScopePicker() {
           {activeVault?.access === 'owner' && (
             <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-1">
               <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{activeVault.name}</span>
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(true)}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Vault settings
+              </button>
               <VaultRowActions vault={activeVault} />
             </div>
           )}
@@ -124,6 +146,11 @@ export function ScopePicker() {
             )}
           </div>
         </div>
+      )}
+      {settingsOpen && activeVault?.access === 'owner' && (
+        <Suspense fallback={null}>
+          <VaultSettingsModal vault={activeVault} open={settingsOpen} onOpenChange={setSettingsOpen} />
+        </Suspense>
       )}
     </div>
   )

@@ -170,4 +170,96 @@ describe('vault + share endpoints', () => {
       .where(eq(notifications.recipientId, vaultOwner.id))
     expect(ownerNotes.some((n) => n.type === 'team_membership_changed')).toBe(true)
   })
+
+  it('GET shares returns email for user grantees and members (no email) for team grantees', async () => {
+    const owner = await createActiveUser()
+    const userB = await createActiveUser()
+    const userC = await createActiveUser()
+    const userD = await createActiveUser()
+    const userE = await createActiveUser()
+    const ownerCookie = await loginCookie(app, owner.email)
+
+    const vault = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/vaults',
+        headers: { cookie: ownerCookie },
+        body: { name: 'Mixed shares' },
+      })
+    ).json() as { id: string }
+
+    const team = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/teams',
+        headers: { cookie: ownerCookie },
+        body: { name: 'Mixed team' },
+      })
+    ).json() as { id: string }
+    await app.inject({
+      method: 'POST',
+      url: `/api/teams/${team.id}/members`,
+      headers: { cookie: ownerCookie },
+      body: { userId: userC.id },
+    })
+    await app.inject({
+      method: 'POST',
+      url: `/api/teams/${team.id}/members`,
+      headers: { cookie: ownerCookie },
+      body: { userId: userD.id },
+    })
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vault.id}/shares`,
+      headers: { cookie: ownerCookie },
+      body: { granteeType: 'user', granteeId: userB.id, permission: 'read' },
+    })
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vault.id}/shares`,
+      headers: { cookie: ownerCookie },
+      body: { granteeType: 'user', granteeId: userE.id, permission: 'read' },
+    })
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vault.id}/shares`,
+      headers: { cookie: ownerCookie },
+      body: { granteeType: 'team', granteeId: team.id, permission: 'read' },
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vault.id}/shares`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const shares = res.json() as Array<{
+      granteeType: 'user' | 'team'
+      granteeId: string
+      email?: string
+      members?: Array<{ teamId: string; userId: string; email: string }>
+    }>
+
+    const userShareB = shares.find((s) => s.granteeType === 'user' && s.granteeId === userB.id)!
+    expect(userShareB.email).toBe(userB.email)
+    expect(userShareB.members).toBeUndefined()
+
+    const userShareE = shares.find((s) => s.granteeType === 'user' && s.granteeId === userE.id)!
+    expect(userShareE.email).toBe(userE.email)
+    expect(userShareE.members).toBeUndefined()
+
+    const teamShare = shares.find((s) => s.granteeType === 'team')!
+    expect(teamShare.email).toBeUndefined()
+    const memberEmails = (teamShare.members ?? []).map((m) => m.email)
+    expect(memberEmails).toEqual(expect.arrayContaining([userC.email, userD.email]))
+
+    const stranger = await createActiveUser()
+    const strangerRes = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vault.id}/shares`,
+      headers: { cookie: await loginCookie(app, stranger.email) },
+    })
+    expect(strangerRes.statusCode).toBe(404)
+  })
 })
