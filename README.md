@@ -7,10 +7,13 @@ knowledge graph.
 **Status: backend complete; UI phase underway. Slice 1 (Scaffold + Auth),
 Slice 2a (vault tree + read-only view), Slice 2b (Editor — CodeMirror 6
 editing, permission-aware lock, editable frontmatter property panel, note
-create/rename/delete, and full live-preview), and Slice 2c (wikilinks —
-`[[` autocomplete, clickable navigation, and link-to-create) are done;
-Slice 3 (Search) is in progress — a ⌘K search overlay (3a) is done,
-keyboard navigation next.** All specs
+create/rename/delete, and full live-preview), Slice 2c (wikilinks —
+`[[` autocomplete, clickable navigation, and link-to-create), Slice 3
+(Search — a ⌘K overlay with vault-scoped and everywhere search, type/tag/
+date filters, navigation and vault-create commands, code results with an
+inline preview toggle, and full keyboard navigation), and Slice 4/Unit 2
+(Sharing & team — the vault settings modal stack and a dedicated Team
+page, both reachable from ⌘K) are done.** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -22,6 +25,11 @@ for best AI navigability, see
   (TOTP + backup codes, admin-mandatable)
 - **Notes** — plain OKF markdown files on disk, one shared server-side
   validation for every write path, soft-delete trash, per-type index.md
+- **Vaults** — owner-only soft delete (`DELETE /api/vaults/:id`), trash
+  listing and restore (`GET /api/vaults/trash`, `POST /api/vaults/:id/restore`,
+  409 if not trashed), and hard purge (`POST /api/vaults/:id/purge`, only
+  once trashed), matching the note purge contract: clears semantic edges
+  explicitly and removes the vault's directory from disk
 - **Graph & search** — save-time embedding index; extracted/structural/
   semantic edges with Louvain communities and an opt-in merged
   cross-vault view; hybrid keyword+semantic search, permission-filtered
@@ -29,7 +37,31 @@ for best AI navigability, see
   for its own top-k, read back undirected — and are cleared explicitly
   when a note is purged or a repository file disappears (the table is
   polymorphic, so nothing cascades); migration `0010` mirrors
-  pre-existing rows, so no edge is lost on upgrade
+  pre-existing rows, so no edge is lost on upgrade. `?aggregate=community`
+  collapses a vault's or repository's graph into one super-node per
+  Louvain community (size, note/code counts, most-recent activity);
+  tapping one sends `?community=<n>` back to the same graph endpoint to
+  drill down to just that community's members and edges. Each vault/
+  repository also has a `GET`/`PUT .../graph-preference` toggle
+  controlling whether it's included in the merged cross-vault view. The
+  client's Home renders this as a hand-rolled Canvas 2D scene — no graph
+  library — laid out by `d3-force` (the one new runtime dependency this
+  view adds) and panned/pinched by a ~55-line Pointer Events module;
+  `GraphCanvas` loads as its own lazy chunk, never the initial bundle.
+  `prefers-reduced-motion` settles the layout in rAF-sized batches of at
+  most 20 ticks per frame behind the loading skeleton instead of blocking
+  the main thread, then paints once and stops — a settled graph draws
+  nothing until the next pan, zoom, or physics change. A failed vaults or
+  graph fetch renders a plain-language error with a working Retry (never a
+  blank canvas, and checked before the empty-state length test so a failed
+  fetch can't fall through and render a stale graph); a successful fetch
+  with zero nodes renders "Nothing to draw yet" with a route to create a
+  note, since an empty graph is not an error; oversized structural groups
+  the server refuses to build pairwise edges for
+  (`cappedGroups`, `graph/assemble.ts`) surface as a named, non-blocking
+  notice instead of a silently thinner graph; and a drill-down capped at
+  ~2500 members states "Showing N of M notes in this community" rather
+  than truncating silently
 - **Real-time collaboration** — Yjs relay with per-operation live
   permission checks, instant revocation kick, and an identity-free live
   view for read-only users
@@ -39,7 +71,8 @@ for best AI navigability, see
 - **Export & portability** — zip exports with manifest, expiring share
   links, validated import, full-instance admin backup and a matching
   `pnpm restore-backup` CLI (deliberately not an HTTP endpoint) for
-  disaster recovery onto a fresh instance
+  disaster recovery onto a fresh instance; a note whose file is missing
+  from disk is recovered from its database row rather than failing the run
 - **Admin oversight** — metadata-only dashboards and instance-wide
   force-revoke; never note content
 
@@ -65,8 +98,9 @@ The UI (React + CodeMirror 6) is underway — Slice 1 (Scaffold + Auth),
 Slice 2a (vault tree + read-only note view), and Slice 2b (the Editor —
 CodeMirror 6 editing, permission-aware lock, editable frontmatter property
 panel, note create/rename/delete, and full live-preview) and Slice 2c
-(wikilinks — autocomplete, clickable navigation, link-to-create) are done;
-Slice 3 (Search) is in progress (a ⌘K search overlay is done) — tracked in
+(wikilinks — autocomplete, clickable navigation, link-to-create), Slice 3
+(Search — the ⌘K overlay), and Slice 4/Unit 2 (Sharing & team — the vault
+settings modal stack and the Team page) are done — tracked in
 [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
@@ -99,8 +133,43 @@ reappear when you move back onto it (live-preview). Typing `[[` autocompletes
 against the vault's note paths, and a `[[link]]` you're not editing is
 clickable — it navigates to that note, or, if the note doesn't exist yet,
 creates it (type-first, from the path) and opens it. Pressing ⌘K (Ctrl+K)
-anywhere opens a search overlay across every vault you can reach (hybrid
-keyword + semantic); clicking a match jumps to that note.
+anywhere opens a search overlay (hybrid keyword + semantic) with a scope
+toggle at the top — search "Everywhere" you can reach, or narrow to the
+vault currently active in the shell's scope picker, since both controls
+read and write the same `vault` URL param. Below it, the same type/tag/date
+filter panel used by the graph view narrows results further, with the
+option lists always including whatever's currently selected even if it's
+dropped out of the loaded result set — so a filter is never stuck on with
+no checkbox left to turn it off. The overlay also lists navigation and
+vault-create commands above the results (prefixed distinctly, filtered as
+you type), renders code matches with an inline snippet preview you toggle
+open, and is fully operable by keyboard — arrow keys move through commands
+and results in one list, Enter activates whichever is highlighted, Escape
+closes. A notification bell sits top-right on every page (the shell's
+`data-slot="notifications"` slot), its accessible name carrying the unread
+count (e.g. "Notifications, 2 unread") derived from rows with no `readAt`
+in the fetched page; opening it drops a drawer feed listing each
+notification's message, a monospaced timestamp, and a "Mark as read"
+button on unread rows, with the failed-fetch state (an alert with Retry)
+checked before the empty "No notifications yet." state so the same
+fetch-ordering trap the graph view guards against can't hide a broken
+request behind an empty feed.
+
+Unit 2 (Sharing & team) adds a per-vault settings modal stack — opened from
+the vault view — covering sharing (grant/revoke, live-updated), the
+mergeable-into-cross-vault-graph toggle, vault-scoped MCP connections
+(one-time token reveal, same pattern as the sync tokens), and a per-vault
+export download; every revoke or removal confirms inline with its actual
+consequence rather than a bare "Are you sure?". Alongside it, a Team page
+(`/team`, reachable only via ⌘K — there is no persistent left nav) shows an
+aggregate-only roster (no note content, ever) with each member's vault
+count and last-activity date, team management (create/rename, add/remove
+members), and a "who can reach this vault" expansion per vault. The client
+leans on two new endpoints for this: `GET /api/users/lookup?email=` (exact
+match only, active users only, never a directory listing — used to resolve
+an email to a user before adding them to a team) and
+`GET /api/teams/:id/stats` (aggregate counts only, scoped to vaults the
+caller can already see).
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —

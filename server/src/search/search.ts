@@ -1,6 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { embedder } from './embeddings.js'
+import { passesFilters, type GraphFilters } from '../graph/assemble.js'
 
 function uuidArray(ids: string[]): SQL {
   return sql`ARRAY[${sql.join(
@@ -21,6 +22,7 @@ export interface SearchResult {
   id: string // noteId or repositoryFileId
   containerId: string // vaultId or repositoryId
   path: string
+  type?: string | null // note OKF type, or code language
   frontmatter?: unknown // notes only
   language?: string | null // code only
   snippet: string
@@ -34,6 +36,7 @@ interface Row {
   id: string
   container_id: string
   path: string
+  type?: string | null
   frontmatter?: unknown
   language?: string | null
   snippet: string
@@ -44,7 +47,7 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
   const rows =
     mode === 'keyword'
       ? await db.execute(sql`
-          SELECT id, vault_id AS container_id, path, frontmatter,
+          SELECT id, vault_id AS container_id, path, type, frontmatter,
                  ts_headline('english', body, websearch_to_tsquery('english', ${query}),
                              'MaxWords=30, MinWords=10') AS snippet
           FROM notes
@@ -55,7 +58,7 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
           LIMIT ${CANDIDATES}
         `)
       : await db.execute(sql`
-          SELECT id, vault_id AS container_id, path, frontmatter, left(body, 200) AS snippet
+          SELECT id, vault_id AS container_id, path, type, frontmatter, left(body, 200) AS snippet
           FROM notes
           WHERE vault_id = ANY(${uuidArray(vaultIds)})
             AND deleted_at IS NULL
@@ -103,6 +106,7 @@ export async function searchNotes(
   resources: SearchResourceSet,
   query: string,
   limit = 20,
+  filters: GraphFilters = {},
 ): Promise<SearchResult[]> {
   const { vaultIds, repositoryIds } = resources
   if ((vaultIds.length === 0 && repositoryIds.length === 0) || query.trim() === '') return []
@@ -133,6 +137,7 @@ export async function searchNotes(
           id: row.id,
           containerId: row.container_id,
           path: row.path,
+          type: resourceType === 'note' ? (row.type ?? null) : (row.language ?? null),
           frontmatter: resourceType === 'note' ? row.frontmatter : undefined,
           language: resourceType === 'code' ? row.language : undefined,
           snippet: row.snippet,
@@ -146,5 +151,20 @@ export async function searchNotes(
   contribute('note', noteKeyword, true) // keyword snippets (highlighted) win
   contribute('code', codeKeyword, true)
 
-  return [...merged.values()].sort((a, b) => b.score - a.score).slice(0, limit)
+  // ponytail: filtering runs after the 30-row-per-query candidate fetch, so a
+  // narrow filter can return fewer than `limit` rows even when more would
+  // match. Push predicates into SQL instead if recall complains.
+  const filtered = [...merged.values()].filter((r) => {
+    const fm = (r.frontmatter ?? {}) as { tags?: unknown; timestamp?: unknown }
+    return passesFilters(
+      {
+        type: r.type ?? null,
+        tags: Array.isArray(fm.tags) ? (fm.tags as string[]) : [],
+        timestamp: typeof fm.timestamp === 'string' ? fm.timestamp : null,
+      },
+      filters,
+    )
+  })
+
+  return filtered.sort((a, b) => b.score - a.score).slice(0, limit)
 }

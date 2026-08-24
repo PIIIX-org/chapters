@@ -88,6 +88,42 @@ describe('admin oversight dashboard', () => {
     expect(vaultsRes.body).not.toContain('TOP-SECRET-CONTENT')
   })
 
+  it('excludes a trashed (soft-deleted) vault from stats and the vault list', async () => {
+    const owner = await createActiveUser()
+    const ownerCookie2 = await loginCookie(app, owner.email)
+    const trashedVault = (
+      (await app.inject({
+        method: 'POST',
+        url: '/api/vaults',
+        headers: { cookie: ownerCookie2 },
+        body: { name: 'To be trashed' },
+      })).json() as { id: string }
+    ).id
+
+    const before = (
+      await app.inject({ method: 'GET', url: '/api/admin/stats', headers: { cookie: adminCookie } })
+    ).json() as { vaults: number }
+
+    await app.inject({
+      method: 'DELETE',
+      url: `/api/vaults/${trashedVault}`,
+      headers: { cookie: ownerCookie2 },
+    })
+
+    const after = (
+      await app.inject({ method: 'GET', url: '/api/admin/stats', headers: { cookie: adminCookie } })
+    ).json() as { vaults: number }
+    expect(after.vaults).toBe(before.vaults - 1)
+
+    const vaultsRes = await app.inject({
+      method: 'GET',
+      url: '/api/admin/vaults',
+      headers: { cookie: adminCookie },
+    })
+    const rows = vaultsRes.json() as Array<{ id: string }>
+    expect(rows.some((v) => v.id === trashedVault)).toBe(false)
+  })
+
   it('audit trail shows who changed what, without content', async () => {
     const res = await app.inject({
       method: 'GET',

@@ -1,50 +1,45 @@
-import { useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from 'react-router'
+import { lazy, Suspense } from 'react'
+import { AppShell } from '../components/shell/AppShell.js'
+import { GraphSkeleton } from '../components/graph/GraphSkeleton.js'
+import { VaultEmptyState } from '../components/vault/VaultEmptyState.js'
 import { Button } from '../components/ui/button.js'
-import { useSession, SESSION_QUERY_KEY } from '../hooks/useSession.js'
 import { useVaults } from '../hooks/useVaults.js'
-import { logout } from '../api/auth.js'
+
+// Loaded as a separate chunk, requested after first paint (spec decision 9) —
+// this import must stay dynamic, never hoisted to a static import above.
+const GraphCanvas = lazy(() => import('../components/graph/GraphCanvas.js'))
 
 export function HomePage() {
-  const session = useSession()
   const vaults = useVaults()
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-
-  async function handleLogout() {
-    await logout()
-    await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
-    navigate('/login')
-  }
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-border px-8 py-4">
-        <span className="font-display text-xl">Chapters</span>
-        {session.data && (
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-muted-foreground">{session.data.email}</span>
-            <Button variant="secondary" onClick={() => void handleLogout()}>
-              Log out
-            </Button>
-          </div>
-        )}
-      </header>
-      <main className="flex-1 p-8">
-        <h1 className="mb-6 font-display text-2xl">Vaults</h1>
-        {vaults.data?.length === 0 && <p className="text-muted-foreground">No vaults yet.</p>}
-        {vaults.data && vaults.data.length > 0 && (
-          <ul className="flex flex-col gap-2">
-            {vaults.data.map((vault) => (
-              <li key={vault.id}>
-                <Link to={`/vaults/${vault.id}`} className="text-primary underline">
-                  {vault.name}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </main>
-    </div>
+    <AppShell>
+      {vaults.isPending ? (
+        <GraphSkeleton />
+      ) : vaults.isError ? (
+        // Ordered before the `.length === 0` check on purpose: when the
+        // vaults fetch fails, `vaults.data` is undefined, so
+        // `vaults.data?.length === 0` is false and a chain that only tests
+        // for that falls through to the graph branch — rendering a stale
+        // or blank graph over a failed fetch. Unit 1b's review caught this
+        // exact shape; `isError` has to be checked before `data` is ever read.
+        <div
+          role="alert"
+          className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background px-4 text-center"
+        >
+          <h1 className="font-display text-2xl">We couldn&rsquo;t load your vaults.</h1>
+          <p className="max-w-sm text-muted-foreground">{vaults.error.message}</p>
+          <Button type="button" onClick={() => vaults.refetch()}>
+            Retry
+          </Button>
+        </div>
+      ) : vaults.data.length === 0 ? (
+        <VaultEmptyState />
+      ) : (
+        <Suspense fallback={<GraphSkeleton />}>
+          <GraphCanvas />
+        </Suspense>
+      )}
+    </AppShell>
   )
 }

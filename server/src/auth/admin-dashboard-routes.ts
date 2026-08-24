@@ -29,7 +29,10 @@ export function adminDashboardRoutes(app: FastifyInstance) {
       .select({ status: users.status, count: count() })
       .from(users)
       .groupBy(users.status)
-    const [vaultCount] = await db.select({ count: count() }).from(vaults)
+    const [vaultCount] = await db
+      .select({ count: count() })
+      .from(vaults)
+      .where(isNull(vaults.deletedAt))
     const [teamCount] = await db.select({ count: count() }).from(teams)
     const [noteCount] = await db
       .select({ count: count() })
@@ -67,6 +70,7 @@ export function adminDashboardRoutes(app: FastifyInstance) {
       .from(vaults)
       .innerJoin(users, eq(users.id, vaults.ownerId))
       .leftJoin(notes, and(eq(notes.vaultId, vaults.id), isNull(notes.deletedAt)))
+      .where(isNull(vaults.deletedAt))
       .groupBy(vaults.id, users.email)
     const shares = await db
       .select({ vaultId: vaultShares.vaultId, count: count() })
