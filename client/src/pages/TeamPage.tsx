@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { TeamManagement } from '../components/team/TeamManagement.js'
 import { UserConstellation } from '../components/team/UserConstellation.js'
+import { VaultReachExpansion } from '../components/team/VaultReachExpansion.js'
 import { useTeamMembers, useTeams, useTeamStats } from '../hooks/useTeams.js'
 
 const lastActiveFormatter = new Intl.DateTimeFormat('en-GB', {
@@ -31,8 +32,9 @@ function TeamEmptyState() {
       <Link to="/" className="text-sm text-foreground underline">
         ← Back home
       </Link>
-      <div className="mt-4 w-full max-w-md text-left">
+      <div className="mt-4 flex w-full max-w-md flex-col gap-6 text-left">
         <TeamManagement />
+        <VaultReachExpansion />
       </div>
     </div>
   )
@@ -165,6 +167,7 @@ export function TeamPage() {
             </div>
 
             <TeamManagement />
+            <VaultReachExpansion />
           </>
         )}
       </main>

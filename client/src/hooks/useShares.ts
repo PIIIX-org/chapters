@@ -12,10 +12,14 @@ import type { ApiError } from '../lib/api.js'
 export const sharesQueryKey = (vaultId: string) => ['shares', vaultId] as const
 export const TEAMS_QUERY_KEY = ['teams'] as const
 
-export function useShares(vaultId: string) {
+// `enabled` defaults true for SharingPanel's always-on fetch; VaultReachExpansion
+// passes its disclosure's open state so an owner with many vaults doesn't fire a
+// shares request for every one of them on page load.
+export function useShares(vaultId: string, enabled = true) {
   return useQuery<Share[], ApiError>({
     queryKey: sharesQueryKey(vaultId),
     queryFn: () => listShares(vaultId),
+    enabled,
   })
 }
 
