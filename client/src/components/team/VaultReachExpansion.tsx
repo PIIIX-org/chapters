@@ -85,9 +85,22 @@ function VaultReachRow({ vault }: { vault: Vault }) {
  */
 export function VaultReachExpansion() {
   const vaults = useVaults()
-  const owned = (vaults.data ?? []).filter((v) => v.access === 'owner')
 
-  if (vaults.isPending || owned.length === 0) return null
+  if (vaults.isPending) return null
+
+  if (vaults.isError) {
+    return (
+      <section className="flex flex-col gap-2">
+        <h2 className="font-display text-base text-foreground">Who can reach your vaults</h2>
+        <p role="alert" className="px-2 py-1 text-sm text-destructive">
+          Could not load your vaults, so this can&rsquo;t show who can reach them. Try again.
+        </p>
+      </section>
+    )
+  }
+
+  const owned = vaults.data.filter((v) => v.access === 'owner')
+  if (owned.length === 0) return null
 
   return (
     <section className="flex flex-col gap-2">

@@ -172,6 +172,72 @@ describe('ScopePicker', () => {
     expect(screen.queryByRole('button', { name: 'Vault settings' })).not.toBeInTheDocument()
   })
 
+  // The settings modal pulls in SharingPanel, VaultMcpPanel and
+  // VaultExportPanel, each firing its own GET on mount — stub them to a
+  // quiet empty state so these tests stay about the modal/dropdown
+  // interaction, not those panels' own content.
+  function stubFetchWithSettingsModal() {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/trash')) return Promise.resolve(mockJsonResponse(200, []))
+      if (url.includes('/shares')) return Promise.resolve(mockJsonResponse(200, []))
+      if (url.includes('/teams')) return Promise.resolve(mockJsonResponse(200, []))
+      if (url.includes('/mcp-connections')) return Promise.resolve(mockJsonResponse(200, []))
+      if (url.includes('/vaults')) return Promise.resolve(mockJsonResponse(200, VAULTS))
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+  }
+
+  it('clicking Vault settings actually opens the dialog', async () => {
+    stubFetchWithSettingsModal()
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/?vault=v1']}>
+          <ScopePicker />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const trigger = await screen.findByRole('button', { name: 'Engineering' })
+    await waitFor(() => expect(trigger).not.toBeDisabled())
+    await user.click(trigger)
+
+    await user.click(screen.getByRole('button', { name: 'Vault settings' }))
+
+    expect(await screen.findByRole('dialog', { name: /vault settings — engineering/i })).toBeInTheDocument()
+  })
+
+  it('Escape inside the vault settings modal closes only the modal, leaving the dropdown behind it open', async () => {
+    stubFetchWithSettingsModal()
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/?vault=v1']}>
+          <ScopePicker />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const trigger = await screen.findByRole('button', { name: 'Engineering' })
+    await waitFor(() => expect(trigger).not.toBeDisabled())
+    await user.click(trigger)
+    const settingsButton = screen.getByRole('button', { name: 'Vault settings' })
+    await user.click(settingsButton)
+    await screen.findByRole('dialog', { name: /vault settings — engineering/i })
+
+    await user.keyboard('{Escape}')
+
+    // The modal is gone...
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    // ...but one Escape must not also collapse the dropdown behind it: the
+    // trigger stays expanded and the "Vault settings" button — the exact
+    // element Radix restores focus to on unmount — is still in the DOM and
+    // focusable, not yanked out from under the focus restore.
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: 'Vault settings' })).toBeInTheDocument()
+  })
+
   it('New vault is reachable from the picker and navigates to the created vault', async () => {
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (init?.method === 'POST') {

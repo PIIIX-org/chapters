@@ -54,7 +54,15 @@ export function ScopePicker() {
   // sits on the trigger button, a sibling of the popup — not a descendant of
   // the listbox — so a real Escape keydown bubbles trigger -> this div and
   // never reaches a handler on the <ul>.
+  //
+  // The vault settings modal is a Radix Dialog: it portals its DOM into
+  // document.body, but React synthetic events still propagate along the
+  // React tree, not the DOM tree — so the dialog's own Escape handler and
+  // this one both see the same keydown. Guard while the modal is open, or
+  // one Escape closes both layers and yanks focus toward a trigger button
+  // Radix's FocusScope is also about to restore focus to mid-unmount.
   function onKeyDown(e: KeyboardEvent) {
+    if (settingsOpen) return
     if (e.key === 'Escape') {
       close()
       triggerRef.current?.focus()

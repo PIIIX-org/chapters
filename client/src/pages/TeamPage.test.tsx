@@ -15,12 +15,40 @@ const MEMBERS = [
 ]
 
 // Deliberately shaped so a stats bug that leaked per-note detail downstream
-// (a `notePaths` array, a `lastNoteTitle` string) would fail loudly against
-// the "no per-note text anywhere" assertion below.
+// (a `recentNotePaths` array, a `lastNoteTitle` string) would fail loudly
+// against the "no per-note text anywhere" assertion below. These two fields
+// are NOT part of the real TeamMemberStats response (the server never sends
+// per-note detail from /teams/:id/stats — see server/test/teams.test.ts:235)
+// — they exist only here, so that if TeamPage ever started reading and
+// rendering them, this test would catch it instead of vacuously passing.
 const STATS = [
-  { userId: 'u1', email: 'ada@example.com', notesTouched: 40, vaultsTouched: 3, lastActivityAt: '2026-08-01T00:00:00.000Z' },
-  { userId: 'u2', email: 'grace@example.com', notesTouched: 5, vaultsTouched: 1, lastActivityAt: '2026-07-15T00:00:00.000Z' },
-  { userId: 'u3', email: 'idle@example.com', notesTouched: 0, vaultsTouched: 0, lastActivityAt: null },
+  {
+    userId: 'u1',
+    email: 'ada@example.com',
+    notesTouched: 40,
+    vaultsTouched: 3,
+    lastActivityAt: '2026-08-01T00:00:00.000Z',
+    recentNotePaths: ['people/ada.md', 'projects/roadmap.md'],
+    lastNoteTitle: 'a-secret-title',
+  },
+  {
+    userId: 'u2',
+    email: 'grace@example.com',
+    notesTouched: 5,
+    vaultsTouched: 1,
+    lastActivityAt: '2026-07-15T00:00:00.000Z',
+    recentNotePaths: ['journal/2026-07-15.md'],
+    lastNoteTitle: 'grace-private-note',
+  },
+  {
+    userId: 'u3',
+    email: 'idle@example.com',
+    notesTouched: 0,
+    vaultsTouched: 0,
+    lastActivityAt: null,
+    recentNotePaths: [],
+    lastNoteTitle: null,
+  },
 ]
 
 // Three queries share this page (teams, members, stats) — mockResolvedValue
@@ -114,6 +142,11 @@ describe('TeamPage', () => {
     expect(text).not.toMatch(/\.md\b/)
     expect(text).not.toMatch(/notePath/i)
     expect(text).not.toMatch(/note title/i)
+    // Fixture-specific: catches the exact leaked values, not just the shape
+    // of the field names above.
+    expect(text).not.toMatch(/a-secret-title/)
+    expect(text).not.toMatch(/grace-private-note/)
+    expect(text).not.toMatch(/roadmap\.md/)
   })
 
   it('shows an error, not a false "no activity", when stats fails to load', async () => {

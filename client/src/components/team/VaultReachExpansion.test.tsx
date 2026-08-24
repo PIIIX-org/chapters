@@ -40,7 +40,7 @@ const ONE_USER_ONE_TEAM_SHARES: Share[] = [
 // One fresh Response per call — mockResolvedValue would hand back the same
 // Response object across the vaults + shares queries this component fires,
 // and a body stream can only be read once.
-function stubFetch(opts: { vaults?: Vault[]; shares?: Share[] | 'error' }) {
+function stubFetch(opts: { vaults?: Vault[] | 'error'; shares?: Share[] | 'error' }) {
   const vaults = opts.vaults ?? VAULTS
   const shares = opts.shares ?? ONE_USER_ONE_TEAM_SHARES
   const fetchMock = vi.fn().mockImplementation((url: string) => {
@@ -48,7 +48,10 @@ function stubFetch(opts: { vaults?: Vault[]; shares?: Share[] | 'error' }) {
       if (shares === 'error') return Promise.resolve(mockJsonResponse(500, { error: 'boom' }))
       return Promise.resolve(mockJsonResponse(200, shares))
     }
-    if (url.includes('/vaults')) return Promise.resolve(mockJsonResponse(200, vaults))
+    if (url.includes('/vaults')) {
+      if (vaults === 'error') return Promise.resolve(mockJsonResponse(500, { error: 'boom' }))
+      return Promise.resolve(mockJsonResponse(200, vaults))
+    }
     throw new Error(`Unexpected fetch: ${url}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -193,6 +196,18 @@ describe('VaultReachExpansion', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Who can reach Research' }))
     await screen.findByRole('alert')
+
+    await expectNoA11yViolations(container)
+  })
+
+  it('shows an error, not a blank section, when the vaults load itself fails', async () => {
+    stubFetch({ vaults: 'error' })
+    const { container } = renderExpansion()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not load your vaults/i)
+    // Never silently vanish — a five-vault owner and a zero-vault owner must
+    // not look the same as a failed request.
+    expect(screen.queryByRole('button', { name: /who can reach/i })).toBeNull()
 
     await expectNoA11yViolations(container)
   })

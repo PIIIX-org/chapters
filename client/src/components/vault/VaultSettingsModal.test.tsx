@@ -106,4 +106,44 @@ describe('VaultSettingsModal', () => {
     await screen.findByText('No one else has access to this vault yet.')
     await expectNoA11yViolations(container)
   })
+
+  it('puts focus inside the dialog when it opens', () => {
+    stubFetch(() => mockJsonResponse(200, VAULT))
+    renderModal()
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.contains(document.activeElement)).toBe(true)
+  })
+
+  it('traps Tab inside the dialog instead of letting it escape to the page', async () => {
+    stubFetch(() => mockJsonResponse(200, VAULT))
+    const user = userEvent.setup()
+    renderModal()
+    const dialog = screen.getByRole('dialog')
+
+    // More tabs than there are focusable elements in the dialog: a real trap
+    // cycles back inside rather than ever landing on document.body.
+    for (let i = 0; i < 15; i++) {
+      await user.tab()
+      expect(dialog.contains(document.activeElement)).toBe(true)
+    }
+  })
+
+  it('Escape closes the dialog', async () => {
+    stubFetch(() => mockJsonResponse(200, VAULT))
+    const user = userEvent.setup()
+    const { onOpenChange } = renderModal()
+
+    await user.keyboard('{Escape}')
+
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  // Focus RESTORE to the trigger on close is exercised in
+  // ScopePicker.test.tsx instead of here: this file always mounts the dialog
+  // pre-opened with no real trigger button that was focused first, and a
+  // bare always-mounted Radix dialog like that ends on document.body in
+  // happy-dom regardless of correctness — an environment limitation, not
+  // something this test can use to catch a regression. ScopePicker's test
+  // exercises the actual click-to-open flow and asserts the real observable
+  // symptom (the trigger surviving in the DOM, still focusable).
 })
