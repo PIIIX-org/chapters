@@ -11,13 +11,12 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   - **1** graph Home (Canvas 2D + `d3-force`; SVG and cytoscape FAILED the
     probe), shell, vault lifecycle, ⌘K. **Louvain is seeded** — drill-down
     addresses communities by number, so ids must stay stable.
-  - **2** vault settings **modal stack**, `/team`, `/users/lookup`
-    (exact-match, non-enumerable), `/teams/:id/stats` (aggregates only).
-  - **3** `/admin`, admins only, gated *before* any query fires: approvals,
-    roster, vault+team oversight, access view (shares + MCP connections,
-    force-revocable), paginated security log + audit trail, stats, backup.
-    **Metadata only.** Signup/verify state the approval wait; **login stays
-    generic on purpose** (enumeration).
+  - **2** vault settings modal stack, `/team`; `/users/lookup` is exact-match
+    and non-enumerable, `/teams/:id/stats` aggregates only.
+  - **3** `/admin` (approvals, roster, oversight, force-revoke, activity,
+    stats, backup) — admins only, gated *before* any query fires, **metadata
+    only**. **Login stays generic on purpose** (enumeration); the approval wait
+    is stated on signup/verify instead.
   - **4** `/settings`: TOTP enrolment (backup codes once via `SecretReveal`),
     change email (clears verification — sign-in fails until re-verified, and
     the copy says so), change password (kills other sessions, spares yours),
@@ -34,10 +33,10 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 - **`apiFetch` declared JSON with no body** → every bodyless DELETE/POST 400'd
   in a browser; tests stub `fetch` (#110, fixed). Click a unit in a real
   browser before calling it done.
-- **Test-that-cannot-fail: SEVEN times**, always a fixture too uniform to tell
-  working from broken. Mutation-verify every new test.
+- **Mutation-verify every new test** — break the impl, watch it fail, restore.
 - **Deferred**: cloud backups, cli-visualizer (#9), symbol embeddings, partial
-  restore, single-process arch. **Decided against 2026-08-22, do not re-open**:
+  restore, single-process arch. **Decided against 2026-08-22, do NOT re-open**:
   Leiden, a graph DB, GraphRAG summaries, cross-file calls.
 - **Open issues**: #9; #66 (updateNote race); #101 (graph query-params, dead
-  overload, dangling notifications on purge).
+  overload, dangling notifications on purge). **Test-that-cannot-fail: SEVEN
+  times**, always a fixture too uniform to tell working from broken.

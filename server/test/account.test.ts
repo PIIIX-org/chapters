@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
 import { users } from '../src/db/schema.js'
+import { ensureInstanceState } from '../src/auth/bootstrap.js'
 import { setInstanceMfaRequirement } from '../src/auth/mfa.js'
 import { createActiveUser, loginCookie, uniqueEmail, TEST_PASSWORD } from './helpers.js'
 
@@ -25,6 +26,9 @@ async function createVault(cookie: string, name: string): Promise<string> {
 }
 
 beforeAll(async () => {
+  // setInstanceMfaRequirement updates the singleton row; without a boot it
+  // would update nothing and every MFA assertion would pass vacuously.
+  await ensureInstanceState()
   app = await buildApp()
   await app.ready()
 })
@@ -244,7 +248,7 @@ describe('GET /me/export', () => {
     // so its absence from the zip is a decision and not a permission accident.
     const readable = await app.inject({
       method: 'GET',
-      url: `/api/vaults/${sharedId}/notes`,
+      url: `/api/vaults/${sharedId}/tree`,
       headers: { cookie: ownerCookie },
     })
     expect(readable.statusCode).toBe(200)

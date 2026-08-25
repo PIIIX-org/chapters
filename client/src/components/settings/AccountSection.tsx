@@ -74,7 +74,7 @@ export function AccountSection() {
 
   const emailError =
     emailFieldError ??
-    (changeEmail.error ? (changeEmail.error.status === 409 ? TAKEN : changeEmail.error.message) : null)
+    (changeEmail.error ? (changeEmail.error.message) : null)
 
   return (
     <div className="flex flex-col gap-8">
@@ -119,7 +119,7 @@ export function AccountSection() {
             signed in.
           </p>
           <FormError message={mismatch ? MISMATCH : (changePassword.error?.message ?? null)} />
-          {changePassword.isSuccess && mismatch && (
+          {changePassword.isSuccess && !mismatch && (
             <p role="status" className="text-sm text-foreground">
               Password changed. Every other device signed in as you has been signed out — they will
               each need the new password.
