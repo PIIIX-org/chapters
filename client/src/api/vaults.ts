@@ -48,3 +48,12 @@ export function restoreVault(id: string): Promise<Vault> {
 export function canEdit(access: VaultAccess | undefined): boolean {
   return access === 'edit' || access === 'owner'
 }
+
+/**
+ * Permanent. Purges the vault and every note in it, including trashed ones —
+ * the counterpart to the "until you purge it" the delete confirmation already
+ * promises. Owner only.
+ */
+export function purgeVault(id: string): Promise<{ status: 'purged' }> {
+  return apiFetch(`/vaults/${id}/purge`, { method: 'POST' })
+}

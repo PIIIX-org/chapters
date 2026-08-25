@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useOutletContext, useParams } from 'react-router'
 import { useNote } from '../../hooks/useNote.js'
 import { useUpdateNote } from '../../hooks/useUpdateNote.js'
@@ -6,8 +6,9 @@ import { useCreateNote } from '../../hooks/useCreateNote.js'
 import { useVaultTree } from '../../hooks/useVaultTree.js'
 import { useCodeMirrorEditor } from '../../hooks/useCodeMirrorEditor.js'
 import { canEdit } from '../../api/vaults.js'
-import type { Vault } from '../../api/vaults.js'
+import type { Vault, VaultAccess } from '../../api/vaults.js'
 import { PropertyPanel } from '../../components/vault/PropertyPanel.js'
+import { RevisionHistory } from '../../components/vault/RevisionHistory.js'
 import { handleWikilinkClick } from '../../lib/handleWikilinkClick.js'
 
 const SAVE_DEBOUNCE_MS = 1200
@@ -37,6 +38,7 @@ export function NoteView() {
       frontmatter={note.data!.frontmatter}
       initialBody={note.data!.body}
       readOnly={readOnly}
+      access={vault?.access ?? 'read'}
     />
   )
 }
@@ -48,10 +50,14 @@ interface NoteEditorProps {
   frontmatter: Record<string, unknown>
   initialBody: string
   readOnly: boolean
+  /** Drives the history rail's owner-only purge control. */
+  access: VaultAccess
 }
 
-function NoteEditor({ vaultId, path, vaultName, frontmatter, initialBody, readOnly }: NoteEditorProps) {
+function NoteEditor({ vaultId, path, vaultName, frontmatter, initialBody, readOnly, access }: NoteEditorProps) {
   const navigate = useNavigate()
+  // Closed by default: the rail is a recovery tool, not part of writing.
+  const [showHistory, setShowHistory] = useState(false)
   const updateNote = useUpdateNote(vaultId, path)
   const createNote = useCreateNote(vaultId)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -93,9 +99,23 @@ function NoteEditor({ vaultId, path, vaultName, frontmatter, initialBody, readOn
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-border px-8 py-4 text-sm text-muted-foreground">
-        {vaultName ?? vaultId} / <span className="text-foreground">{path}</span>
-        {readOnly && <span className="ml-2 text-xs uppercase tracking-wide">· read-only</span>}
+      <div className="flex items-center gap-2 border-b border-border px-8 py-4 text-sm text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate">
+          {vaultName ?? vaultId} / <span className="text-foreground">{path}</span>
+          {readOnly && <span className="ml-2 text-xs uppercase tracking-wide">· read-only</span>}
+        </span>
+        {/* History needs edit access server-side (audit rule), so a read-only
+            viewer is not offered a rail that would only ever 403. */}
+        {!readOnly && (
+          <button
+            type="button"
+            aria-pressed={showHistory}
+            onClick={() => setShowHistory((open) => !open)}
+            className="rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:text-foreground"
+          >
+            History
+          </button>
+        )}
       </div>
       <div className="border-b border-border px-8 py-4">
         <PropertyPanel
@@ -105,7 +125,19 @@ function NoteEditor({ vaultId, path, vaultName, frontmatter, initialBody, readOn
           readOnly={readOnly}
         />
       </div>
-      <div ref={editorRef} className="flex-1 overflow-auto" />
+      <div className="flex min-h-0 flex-1">
+        <div ref={editorRef} className="min-w-0 flex-1 overflow-auto" />
+        {/* The panel renders its own "History" heading, so the rail is
+            labelled by it rather than repeating the word above it. */}
+        {showHistory && (
+          <aside
+            aria-label="Revision history"
+            className="w-80 shrink-0 overflow-auto border-l border-border px-4 py-4"
+          >
+            <RevisionHistory vaultId={vaultId} path={path} access={access} />
+          </aside>
+        )}
+      </div>
     </div>
   )
 }

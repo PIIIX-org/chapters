@@ -7,28 +7,26 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   `dev → prod` needs Taha's explicit OK each time. Backend complete + twelve
   UI-driven additions; `pnpm profile-graph` ≈500ms at 10k notes, **Louvain NOT
   the bottleneck**; semantic edges stored **directed** (purges clear them, no FK).
-- **Units 1–4 shipped** (detail in README + git log):
-  - **1** graph Home (Canvas 2D + `d3-force`; SVG and cytoscape FAILED the
-    probe), shell, vault lifecycle, ⌘K. **Louvain is seeded** — drill-down
-    addresses communities by number, so ids must stay stable.
-  - **2** vault settings modal stack, `/team`; `/users/lookup` is exact-match
-    and non-enumerable, `/teams/:id/stats` aggregates only.
-  - **3** `/admin` (approvals, roster, oversight, force-revoke, activity,
-    stats, backup) — admins only, gated *before* any query fires, **metadata
-    only**. **Login stays generic on purpose** (enumeration); the approval wait
-    is stated on signup/verify instead.
-  - **4** `/settings`: TOTP enrolment (backup codes once via `SecretReveal`),
-    change email (clears verification — sign-in fails until re-verified, and
-    the copy says so), change password (kills other sessions, spares yours),
-    ONE notification-email switch, account-scope `McpPanel` (same component as
-    the vault list, per spec), account export. Admin can mandate MFA
-    instance-wide; `RequireAuth` then routes unenrolled users to `/settings`
-    and the disable control is not rendered at all. Added to the API:
-    `mfaEnabledAt`+`mfaRequired` on `/me`, `/me/{password,email,preferences,
-    export}`, `users.emailNotifications`. **Per-type notification prefs stay
-    OUT of scope** (the notifications spec defers them).
-- **Current task**: none. Unit 4 open as a PR off `dev`. **Next**: 5
-  trash/history/import · 6 collab (yjs) · 7 repositories — no client UI yet.
+- **Units 1–5 shipped** (detail in README + git log):
+  - **1** graph Home (Canvas 2D + `d3-force`), shell, vault lifecycle, ⌘K.
+    **Louvain is seeded** — drill-down addresses communities by number.
+  - **2** vault settings modal stack, `/team`; `/users/lookup` exact-match and
+    non-enumerable, `/teams/:id/stats` aggregates only.
+  - **3** `/admin` — admins only, gated *before* any query fires, **metadata
+    only**. **Login stays generic on purpose** (enumeration).
+  - **4** `/settings`: TOTP (codes once), change email/password, ONE
+    notification-email switch, account `McpPanel`, account export. Admin can
+    mandate MFA; `RequireAuth` then forces enrolment and disable is not
+    rendered. **Per-type notification prefs stay OUT of scope.**
+  - **5** note trash + restore (vault settings modal), vault purge (closes the
+    promise its own delete copy made), Editor history rail (revert = a NEW
+    attributed revision, nothing erased; owner-only revision purge), and import
+    (ALWAYS makes a new vault; reports skip reasons + unmatched shares).
+    Paginated `/history/*` (metadata only — **MCP `note_history` deliberately
+    untouched**) and `/trash`. `actorType` is `user|mcp|collab`, no 'system';
+    **collab is a PERSON** (vermillion), it is the default actor for relay saves.
+- **Current task**: none. Unit 5 open as a PR off `dev`. **Next**: 6 collab
+  (yjs) · 7 repositories — both building in worktrees `-u6` / `-u7`.
 - **Mutation-verify every new test** (break impl, watch it fail, restore) AND
   click the unit in a real browser: `apiFetch` sent JSON with no body, 400'ing
   every bodyless DELETE/POST, and the stubbed-`fetch` suite never saw it (#110).
