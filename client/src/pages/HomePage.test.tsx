@@ -125,8 +125,12 @@ describe('HomePage', () => {
       </QueryClientProvider>,
     )
 
+    // A routing smoke test, so it asserts the route resolved to the editor —
+    // not the body text. Since unit 6 an editor's body arrives over the collab
+    // relay rather than REST, so asserting REST content here would only be
+    // asserting that the relay is unreachable in this fixture.
     await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull())
-    expect(document.querySelector('.cm-content')!.textContent).toContain('Foo body')
+    expect(await screen.findByText('foo')).toBeInTheDocument()
   })
 
   it('has no accessibility violations in the empty-state branch', async () => {

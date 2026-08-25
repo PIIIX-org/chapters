@@ -6,6 +6,7 @@ import { readNote, updateNote, splitPath } from '../notes/store.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { affects, onPermissionChange } from './permission-events.js'
 import { publishNoteState } from './viewers.js'
+import { consumeTicket } from './tickets.js'
 
 const DEBOUNCE_MS = Number(process.env.COLLAB_DEBOUNCE_MS ?? 2000)
 
@@ -50,20 +51,29 @@ export async function startCollabServer(port: number): Promise<Server> {
     maxDebounce: DEBOUNCE_MS * 5,
     quiet: true,
 
+    /**
+     * Identity only. A browser presents a single-use ticket (its session
+     * cookie is httpOnly and unreadable from JS); server-side callers and the
+     * tests present a raw session token. Neither says what the connection may
+     * *do* — that is the live `edit` check below, and `beforeHandleMessage`
+     * on every message after it.
+     */
     async onAuthenticate({ token, documentName }) {
-      const user = token ? await getSessionUser(token) : null
-      if (!user) throw new Error('authentication required')
+      const ticketUser = token ? consumeTicket(token) : null
+      const userId =
+        ticketUser ?? (token ? ((await getSessionUser(token))?.id ?? null) : null)
+      if (!userId) throw new Error('authentication required')
       const { vaultId } = parseDocName(documentName)
-      const access = await resolveAccess(user.id, vaultId)
+      const access = await resolveAccess(userId, vaultId)
       if (!atLeast(access, 'edit')) {
         await logSecurityEvent({
           type: 'permission_denied',
-          actorUserId: user.id,
+          actorUserId: userId,
           detail: { surface: 'collab', documentName },
         })
         throw new Error('edit access required')
       }
-      return { userId: user.id } satisfies ConnectionContext
+      return { userId } satisfies ConnectionContext
     },
 
     async onLoadDocument({ documentName, document }) {
