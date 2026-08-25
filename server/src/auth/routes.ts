@@ -10,7 +10,7 @@ import { createEmailToken, consumeEmailToken } from './email-tokens.js'
 import { clearFailures, isLocked, recordFailure } from './lockout.js'
 import { logSecurityEvent } from './security-events.js'
 import { isSetupComplete } from './bootstrap.js'
-import { verifyMfaCode } from './mfa.js'
+import { instanceRequiresMfa, verifyMfaCode } from './mfa.js'
 import { SESSION_COOKIE } from './plugin.js'
 
 const credentialsSchema = {
@@ -22,7 +22,7 @@ const credentialsSchema = {
   },
 } as const
 
-const strictRateLimit = {
+export const strictRateLimit = {
   // Per-IP throttle on the abuse-sensitive routes; effectively off under test
   // (tests exercise the per-account lockout instead).
   rateLimit: {
@@ -199,8 +199,18 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
   })
 
   app.get('/me', { preHandler: app.requireAuth }, async (req) => {
-    const { id, email, status, role, createdAt } = req.user!
-    return { id, email, status, role, createdAt }
+    const { id, email, status, role, createdAt, mfaEnabledAt } = req.user!
+    // mfaRequired is the instance mandate, not this user's state: the shell
+    // uses it to decide whether enrolment is optional or a gate.
+    return {
+      id,
+      email,
+      status,
+      role,
+      createdAt,
+      mfaEnabledAt,
+      mfaRequired: await instanceRequiresMfa(),
+    }
   })
 
   app.post<{ Body: { email: string } }>(

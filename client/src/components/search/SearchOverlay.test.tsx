@@ -345,9 +345,10 @@ describe('SearchOverlay commands', () => {
     await waitFor(() =>
       expect(screen.getByRole('option', { name: 'Command: Go to graph home' })).toBeInTheDocument(),
     )
-    // 'team' is deliberately excluded here — the Team page exists now and has
-    // its own command, asserted in the "SearchOverlay team command" suite.
-    expect(screen.queryByRole('option', { name: /settings|admin|invite/i })).toBeNull()
+    // 'team' and 'settings' are deliberately excluded here — both pages exist
+    // now and have their own commands, asserted below. 'admin' stays on this
+    // list because it is role-gated and this fixture is a member.
+    expect(screen.queryByRole('option', { name: /admin|invite/i })).toBeNull()
   })
 
   it('renders a "Go to team" command', async () => {
@@ -746,5 +747,14 @@ describe('SearchOverlay scope and filters', () => {
     // this passes just as well when nothing rendered.
     expect(await screen.findByRole('option', { name: 'Command: Go to team' })).toBeInTheDocument()
     expect(screen.queryByRole('option', { name: 'Command: Go to admin' })).toBeNull()
+  })
+  it('offers "Go to settings" to everyone, admin or not', async () => {
+    stubFetch(() => mockJsonResponse(200, []), 'member')
+    const { router } = renderOverlay()
+
+    // Unlike admin, settings is every account's own page — a member reaching
+    // it hits their settings, not a wall.
+    await userEvent.click(await screen.findByRole('option', { name: 'Command: Go to settings' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings'))
   })
 })

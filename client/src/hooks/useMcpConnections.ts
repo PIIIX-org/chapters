@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createVaultMcpConnection, listMcpConnections, revokeMcpConnection } from '../api/mcp.js'
-import type { McpConnection, McpConnectionWithToken } from '../api/mcp.js'
+import {
+  createAccountMcpConnection,
+  createVaultMcpConnection,
+  listMcpConnections,
+  revokeMcpConnection,
+} from '../api/mcp.js'
+import type { McpConnection, McpConnectionWithToken, McpTarget } from '../api/mcp.js'
 import type { ApiError } from '../lib/api.js'
 
 // Unscoped: every scope the caller owns comes back in one list. Shared by
@@ -15,10 +20,13 @@ export function useMcpConnections() {
   })
 }
 
-export function useCreateVaultMcpConnection(vaultId: string) {
+// One hook for both scopes, so the panel picks a target instead of picking a
+// hook — a conditional hook call would break the rules of hooks.
+export function useCreateMcpConnection(target: McpTarget) {
   const queryClient = useQueryClient()
   return useMutation<McpConnectionWithToken, ApiError, string>({
-    mutationFn: (name) => createVaultMcpConnection(name, vaultId),
+    mutationFn: (name) =>
+      target.scope === 'vault' ? createVaultMcpConnection(name, target.vaultId) : createAccountMcpConnection(name),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: MCP_CONNECTIONS_QUERY_KEY, exact: true })
     },

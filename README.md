@@ -100,8 +100,8 @@ CodeMirror 6 editing, permission-aware lock, editable frontmatter property
 panel, note create/rename/delete, and full live-preview) and Slice 2c
 (wikilinks — autocomplete, clickable navigation, link-to-create), Slice 3
 (Search — the ⌘K overlay), Slice 4/Unit 2 (Sharing & team — the vault
-settings modal stack and the Team page), and Unit 3 (Admin & the onboarding
-path) are done — tracked in
+settings modal stack and the Team page), Unit 3 (Admin & the onboarding path)
+and Unit 4 (Settings & MFA) are done — tracked in
 [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
@@ -189,6 +189,27 @@ live instance is not a button. The signup and verify-email screens now say
 plainly that an administrator must approve the account, while the login
 error stays a generic "invalid credentials" — naming the reason there would
 tell a stranger whether an address has an account.
+
+Unit 4 (Settings & MFA) adds `/settings` — every account's own page, reachable
+via ⌘K. Two-factor authentication is TOTP from an authenticator app: enrolling
+shows the secret and an `otpauth://` URI, and on success the one-time backup
+codes appear exactly once, through the same reveal component MCP tokens use.
+An admin can require two-factor instance-wide from the admin area; while that
+is on, anyone without an authenticator is sent to enrol before they can reach
+anything else, and nobody can turn their own off — so the page hides the
+disable control entirely rather than offering a button the server will refuse.
+Alongside it: changing your email (which clears verification and mails a new
+code, so the screen says plainly that sign-in will fail until you enter it),
+changing your password (every other device is signed out, yours is not), a
+single switch for notification emails, the account-wide MCP connection list —
+literally the same component as the vault-scoped one, in a different scope —
+and an export of every vault you own.
+
+Notification preferences are deliberately **one switch, not a matrix**: the
+notifications spec puts per-type preferences and digests explicitly out of
+scope, and the in-app feed is not switchable at all because it is the
+historical record that spec depends on. Turning the switch off stops the
+emails and nothing else.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —

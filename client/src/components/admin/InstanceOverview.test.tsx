@@ -20,6 +20,30 @@ const STATS = {
   activeMcpConnections: 1,
 }
 
+const ADMIN_SESSION = {
+  id: 'me',
+  email: 'admin@example.com',
+  status: 'active',
+  role: 'admin',
+  createdAt: '2026-08-01T00:00:00.000Z',
+  mfaEnabledAt: null,
+  mfaRequired: false,
+}
+
+// A fresh Response per call, branched by URL: this page now also renders the
+// MFA-requirement toggle, which reads the session, and a Response body can
+// only be read once — a single mockResolvedValue hands the second query an
+// already-consumed body and the stats query resolves undefined.
+function stubFetch() {
+  const fetchMock = vi.fn().mockImplementation((url: string) => {
+    if (url === '/api/me') return Promise.resolve(mockJsonResponse(200, ADMIN_SESSION))
+    if (url.startsWith('/api/admin/stats')) return Promise.resolve(mockJsonResponse(200, STATS))
+    return Promise.resolve(mockJsonResponse(404, { error: 'not found' }))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
 function renderWithClient(ui: React.ReactNode) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
@@ -31,7 +55,7 @@ describe('InstanceOverview', () => {
   })
 
   it('reports an absent status bucket as zero, not as nothing', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockJsonResponse(200, STATS)))
+    stubFetch()
     const { container } = renderWithClient(<InstanceOverview />)
 
     // parentElement, not closest('div'): the label is itself a div, so
@@ -49,7 +73,7 @@ describe('InstanceOverview', () => {
   })
 
   it('offers the backup as a plain download link and names the CLI for restore', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockJsonResponse(200, STATS)))
+    stubFetch()
     renderWithClient(<InstanceOverview />)
 
     // A link, not a button: the response is a zip, and apiFetch would try to

@@ -1,5 +1,6 @@
 import { INSTANCE_BACKUP_URL } from '../../api/admin.js'
 import { useAdminStats } from '../../hooks/useAdmin.js'
+import { MfaRequirementToggle } from './MfaRequirementToggle.js'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -50,6 +51,8 @@ export function InstanceOverview() {
           <Stat label="Live MCP connections" value={stats.data.activeMcpConnections} />
         </div>
       )}
+
+      <MfaRequirementToggle />
 
       <section className="flex flex-col gap-2">
         <h3 className="font-display text-lg text-foreground">Instance backup</h3>

@@ -8,7 +8,12 @@ import { logSecurityEvent } from '../auth/security-events.js'
 import { resolveAccess, atLeast } from '../vaults/permissions.js'
 import { createNote, readNote, splitPath } from '../notes/store.js'
 import { parseNote, serializeNote, OkfValidationError } from '../notes/okf.js'
-import { buildInstanceBackup, buildVaultZip, type VaultManifest } from './archive.js'
+import {
+  addVaultToZip,
+  buildInstanceBackup,
+  buildVaultZip,
+  type VaultManifest,
+} from './archive.js'
 
 const LINK_TTL_MS = Number(process.env.EXPORT_LINK_TTL_HOURS ?? 24) * 60 * 60 * 1000
 
@@ -183,6 +188,24 @@ export function exportRoutes(app: FastifyInstance) {
       }
 
       return { vaultId: vault!.id, imported, skipped, unmatchedShares }
+    })
+
+    // Everything the caller *owns*. Vaults merely shared with them belong to
+    // someone else's account and are that owner's to export.
+    authed.get('/me/export', async (req, reply) => {
+      const owned = await db
+        .select({ id: vaults.id })
+        .from(vaults)
+        .where(and(eq(vaults.ownerId, req.user!.id), isNull(vaults.deletedAt)))
+      const zip = new AdmZip()
+      for (const vault of owned) {
+        await addVaultToZip(zip, vault.id, `vaults/${vault.id}/`)
+      }
+      await logSecurityEvent({ type: 'account_exported', actorUserId: req.user!.id })
+      return reply
+        .header('content-type', 'application/zip')
+        .header('content-disposition', 'attachment; filename="chapters-account-export.zip"')
+        .send(zip.toBuffer())
     })
 
     authed.get('/admin/backup', async (req, reply) => {

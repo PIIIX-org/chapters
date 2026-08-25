@@ -6,6 +6,13 @@ export interface SessionUser {
   status: string
   role: 'member' | 'admin'
   createdAt: string
+  /** null when TOTP is not enrolled. */
+  mfaEnabledAt: string | null
+  /**
+   * Instance-wide mandate (MFA spec). While true, nobody may disable their own
+   * TOTP and anyone without it is sent to enrollment before anything else.
+   */
+  mfaRequired: boolean
 }
 
 export function getSession(): Promise<SessionUser> {
