@@ -1,5 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { config } from '../config.js'
+import type { FastifyInstance } from 'fastify'
 import { atLeast, resolveAccess } from '../vaults/permissions.js'
 import { readNote, splitPath } from '../notes/store.js'
 import { addViewer } from './viewers.js'
