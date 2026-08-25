@@ -5,7 +5,7 @@ import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
 import {
   createNote,
-  listRevisions,
+  listRevisionMeta,
   purgeRevision,
   revertNote,
   listNotes,
@@ -143,10 +143,24 @@ export function noteRoutes(app: FastifyInstance) {
     },
   )
 
-  app.get<{ Params: { id: string; '*': string } }>('/vaults/:id/trash', async (req, reply) => {
-    if (!(await guard(req as VaultReq, reply, 'edit'))) return
-    return listTrash(req.params.id)
-  })
+  app.get<{ Params: { id: string; '*': string }; Querystring: { limit?: number; offset?: number } }>(
+    '/vaults/:id/trash',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+            offset: { type: 'integer', minimum: 0, default: 0 },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      if (!(await guard(req as VaultReq, reply, 'edit'))) return
+      return listTrash(req.params.id, req.query.limit ?? 50, req.query.offset ?? 0)
+    },
+  )
 
   app.post<{ Params: { id: string; noteId: string; '*': string } }>(
     '/vaults/:id/trash/:noteId/restore',
@@ -158,13 +172,30 @@ export function noteRoutes(app: FastifyInstance) {
     },
   )
 
-  app.get<{ Params: { id: string; '*': string } }>(
+  app.get<{ Params: { id: string; '*': string }; Querystring: { limit?: number; offset?: number } }>(
     '/vaults/:id/history/*',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+            offset: { type: 'integer', minimum: 0, default: 0 },
+          },
+        },
+      },
+    },
     async (req, reply) => {
       // Audit rule: history requires edit, not merely read.
-      if (!(await guard(req, reply, 'edit'))) return
+      if (!(await guard(req as unknown as VaultReq, reply, 'edit'))) return
       splitPath(req.params['*'])
-      const revisions = await listRevisions(req.params.id, req.params['*'])
+      // Metadata only: the list never carries note content.
+      const revisions = await listRevisionMeta(
+        req.params.id,
+        req.params['*'],
+        req.query.limit ?? 50,
+        req.query.offset ?? 0,
+      )
       if (!revisions) return reply.code(404).send({ error: 'note not found' })
       return revisions
     },

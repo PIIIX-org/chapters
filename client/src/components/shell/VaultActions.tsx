@@ -5,6 +5,7 @@ import { Button } from '../ui/button.js'
 import { FormError } from '../FormError.js'
 import { useDeleteVault, useRenameVault, useRestoreVault } from '../../hooks/useVaultMutations.js'
 import { useTrashedVaults } from '../../hooks/useVaults.js'
+import { usePurgeVault } from '../../hooks/useTrash.js'
 import type { Vault } from '../../api/vaults.js'
 
 // ponytail: "3 days ago" granularity is enough for a trash list; no library.
@@ -127,8 +128,24 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
 export function VaultTrashSection() {
   const trash = useTrashedVaults()
   const restoreVault = useRestoreVault()
+  const purgeVault = usePurgeVault()
   const [error, setError] = useState<string | null>(null)
+  const [purging, setPurging] = useState<string | null>(null)
 
+  // isError BEFORE .data: a 500 on the trash fetch used to make this whole
+  // section vanish, four lines under a delete confirmation that promises
+  // "you can restore it from Trash below" — the owner would see nothing at
+  // all and conclude their vault was gone for good.
+  if (trash.isError) {
+    return (
+      <div className="border-t border-border px-3 py-2">
+        <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Trash</div>
+        <p role="alert" className="text-xs text-destructive">
+          Couldn&rsquo;t load the trash. Anything you deleted is still there — try again.
+        </p>
+      </div>
+    )
+  }
   if (!trash.data || trash.data.length === 0) return null
 
   return (
@@ -155,8 +172,57 @@ export function VaultTrashSection() {
           >
             Restore
           </Button>
+          {/* The delete confirmation above already promises "until you purge
+              it". Until this existed, that sentence pointed at nothing. */}
+          {purging !== v.id && (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              aria-label={`Delete ${v.name} permanently`}
+              onClick={() => {
+                setError(null)
+                setPurging(v.id)
+              }}
+            >
+              Delete forever
+            </Button>
+          )}
         </div>
       ))}
+      {purging &&
+        (() => {
+          const target = trash.data.find((v) => v.id === purging)
+          if (!target) return null
+          return (
+            <div className="mt-1 flex flex-col gap-1 rounded-md border border-border bg-muted/40 p-2">
+              <p className="text-xs text-muted-foreground">
+                Delete &ldquo;{target.name}&rdquo; and everything in it for good? Its notes go too, including the
+                ones already in the note trash, and nothing here can bring them back. Anyone it was shared with
+                lost access when it was trashed and stays without it.
+              </p>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="destructive"
+                  disabled={purgeVault.isPending}
+                  onClick={() =>
+                    purgeVault.mutate(target.id, {
+                      onSuccess: () => setPurging(null),
+                      onError: (err) => setError(err.message || 'Could not delete the vault.'),
+                    })
+                  }
+                >
+                  Delete forever
+                </Button>
+                <Button type="button" size="xs" variant="ghost" onClick={() => setPurging(null)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )
+        })()}
       <FormError message={error} />
     </div>
   )

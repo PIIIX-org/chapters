@@ -306,9 +306,14 @@ export async function listNotes(vaultId: string): Promise<
     .orderBy(asc(notes.path))
 }
 
-export async function listTrash(vaultId: string): Promise<
-  Array<Pick<NoteRow, 'id' | 'path' | 'type' | 'name' | 'deletedAt'>>
-> {
+export async function listTrash(
+  vaultId: string,
+  limit = 50,
+  offset = 0,
+): Promise<Array<Pick<NoteRow, 'id' | 'path' | 'type' | 'name' | 'deletedAt'>>> {
+  // Paginated for the same reason history is (rule 3, no unbounded reads): a
+  // vault that has been in use for years accumulates trash without limit, and
+  // this unit is the first thing that ever reads it.
   return db
     .select({
       id: notes.id,
@@ -319,6 +324,9 @@ export async function listTrash(vaultId: string): Promise<
     })
     .from(notes)
     .where(and(eq(notes.vaultId, vaultId), isNotNull(notes.deletedAt)))
+    .orderBy(desc(notes.deletedAt))
+    .limit(limit)
+    .offset(offset)
 }
 
 /** Change history for a note, newest first (edit/owner only — enforced by callers). */
@@ -333,6 +341,34 @@ export async function listRevisions(
     .from(noteRevisions)
     .where(eq(noteRevisions.noteId, row.id))
     .orderBy(desc(noteRevisions.createdAt))
+}
+
+export type RevisionMeta = Pick<RevisionRow, 'id' | 'actorType' | 'actorId' | 'action' | 'createdAt'>
+
+/** Revision metadata only — never a note's content — newest first, always
+ * bounded (perf rule 3: no unbounded reads). `listRevisions` still returns the
+ * full payload for the MCP note_history tool. */
+export async function listRevisionMeta(
+  vaultId: string,
+  path: string,
+  limit: number,
+  offset: number,
+): Promise<RevisionMeta[] | null> {
+  const row = await getLiveNote(vaultId, path)
+  if (!row) return null
+  return db
+    .select({
+      id: noteRevisions.id,
+      actorType: noteRevisions.actorType,
+      actorId: noteRevisions.actorId,
+      action: noteRevisions.action,
+      createdAt: noteRevisions.createdAt,
+    })
+    .from(noteRevisions)
+    .where(eq(noteRevisions.noteId, row.id))
+    .orderBy(desc(noteRevisions.createdAt))
+    .limit(limit)
+    .offset(offset)
 }
 
 /** Restores a note to a recorded revision (a new attributed write). */
