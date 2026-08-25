@@ -182,4 +182,87 @@ describe('admin oversight dashboard', () => {
     expect(revoke.statusCode).toBe(200)
     expect(await resolveMcpToken(mcpToken)).toBeNull()
   })
+  it('lists MCP connections instance-wide, with live and revoked distinguishable, and never a token hash', async () => {
+    // Its own connections, not the shared fixture — this must not depend on
+    // whether the revoke test below has run yet.
+    const live = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/mcp-connections',
+        headers: { cookie: ownerCookie },
+        body: { name: 'still-live', scope: 'account' },
+      })
+    ).json() as { id: string; token: string }
+    const dead = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/mcp-connections',
+        headers: { cookie: granteeCookie },
+        body: { name: 'already-dead', scope: 'account' },
+      })
+    ).json() as { id: string }
+    await app.inject({
+      method: 'POST',
+      url: `/api/mcp-connections/${dead.id}/revoke`,
+      headers: { cookie: granteeCookie },
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/admin/mcp-connections',
+      headers: { cookie: adminCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const rows = res.json() as Array<{
+      id: string
+      name: string
+      userEmail: string
+      revokedAt: string | null
+      tokenHash?: string
+    }>
+
+    // Instance-wide: connections belonging to two different users, neither of
+    // whom is the admin making the call.
+    const liveRow = rows.find((r) => r.id === live.id)
+    const deadRow = rows.find((r) => r.id === dead.id)
+    expect(liveRow?.name).toBe('still-live')
+    expect(liveRow?.revokedAt).toBeNull()
+    expect(deadRow?.revokedAt).not.toBeNull()
+    expect(liveRow!.userEmail).not.toBe(deadRow!.userEmail)
+
+    // Metadata only: no hash on the row, and the raw token never appears.
+    expect(liveRow).not.toHaveProperty('tokenHash')
+    expect(res.body).not.toContain(live.token)
+  })
+
+  it('the approval queue shows whether the pending user verified their email', async () => {
+    // Mixed on purpose: approving the unverified one still leaves them locked
+    // out by routes.ts:169, so a queue that cannot tell them apart is broken.
+    const verified = await createActiveUser({
+      status: 'pending_approval',
+      emailVerifiedAt: new Date(),
+    })
+    const unverified = await createActiveUser({
+      status: 'pending_approval',
+      emailVerifiedAt: null,
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/admin/users?status=pending_approval',
+      headers: { cookie: adminCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const rows = res.json() as Array<{ id: string; status: string; emailVerifiedAt: string | null }>
+    expect(rows.every((r) => r.status === 'pending_approval')).toBe(true)
+    expect(rows.find((r) => r.id === verified.id)?.emailVerifiedAt).not.toBeNull()
+    expect(rows.find((r) => r.id === unverified.id)?.emailVerifiedAt).toBeNull()
+  })
+
+  it('non-admins get nothing from the two new reads either', async () => {
+    for (const url of ['/api/admin/mcp-connections', '/api/admin/users']) {
+      const res = await app.inject({ method: 'GET', url, headers: { cookie: ownerCookie } })
+      expect(res.statusCode).toBe(403)
+    }
+  })
 })

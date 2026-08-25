@@ -148,6 +148,27 @@ export function adminDashboardRoutes(app: FastifyInstance) {
     return db.select().from(vaultShares)
   })
 
+  // The revoke lever below addresses a connection by id; without this list an
+  // admin has no way to learn one. Metadata only — `tokenHash` is never
+  // selected, and the raw token was shown once at creation and never stored.
+  app.get('/mcp-connections', async () => {
+    return db
+      .select({
+        id: mcpConnections.id,
+        name: mcpConnections.name,
+        scope: mcpConnections.scope,
+        userEmail: users.email,
+        vaultId: mcpConnections.vaultId,
+        repositoryId: mcpConnections.repositoryId,
+        lastUsedAt: mcpConnections.lastUsedAt,
+        revokedAt: mcpConnections.revokedAt,
+        createdAt: mcpConnections.createdAt,
+      })
+      .from(mcpConnections)
+      .innerJoin(users, eq(users.id, mcpConnections.userId))
+      .orderBy(desc(mcpConnections.createdAt))
+  })
+
   // Incident-response lever: structural revocation, instance-wide.
   app.delete<{ Params: { shareId: string } }>('/shares/:shareId', async (req, reply) => {
     const [share] = await db
