@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, ne } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import {
   repositories,
@@ -14,8 +14,18 @@ import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { encryptCredential } from './credentials.js'
 import { generateToken } from '../auth/tokens.js'
-import { listAccessibleRepositories, resolveRepositoryAccess } from './permissions.js'
+import {
+  listAccessibleRepositories,
+  repositoryFields as repositoryView,
+  resolveRepositoryAccess,
+} from './permissions.js'
 import { createSyncToken, listSyncTokens, revokeSyncToken } from './sync-tokens.js'
+import { syncGitRepository } from './git-sync.js'
+import {
+  stopWatchingLocalRepository,
+  syncLocalRepository,
+  watchLocalRepository,
+} from './scheduler.js'
 import { listRepositoryFiles } from './store.js'
 import { buildGraph, type GraphFilters } from '../graph/assemble.js'
 import { searchNotes } from '../search/search.js'
@@ -45,20 +55,33 @@ async function requireOwner(userId: string, repositoryId: string): Promise<boole
   return (await resolveRepositoryAccess(userId, repositoryId)) === 'owner'
 }
 
-function repositoryView(repo: typeof repositories.$inferSelect) {
-  return {
-    id: repo.id,
-    name: repo.name,
-    ownerId: repo.ownerId,
-    ingestionMethod: repo.ingestionMethod,
-    gitUrl: repo.gitUrl,
-    localPath: repo.localPath,
-    mergeable: repo.mergeable,
-    syncStatus: repo.syncStatus,
-    lastSyncedAt: repo.lastSyncedAt,
-    lastSyncError: repo.lastSyncError,
-    createdAt: repo.createdAt,
+/**
+ * Fire-and-forget re-index, same shape as the webhook receiver's: the caller
+ * gets an immediate answer and watches `syncStatus` for the outcome. Both sync
+ * functions record success and failure on the row themselves, so nothing here
+ * needs to await them. `agent_push` has no puller — an agent is the only thing
+ * that can move its files — and never reaches this.
+ */
+function startSync(repo: typeof repositories.$inferSelect): void {
+  const fail = (err: unknown) => console.error(`sync failed for repository ${repo.id}:`, err)
+  if (repo.ingestionMethod !== 'local_path') {
+    void syncGitRepository(repo.id).catch(fail)
+    return
   }
+  // The watcher and this pass both write `repository_files`, which is uniquely
+  // indexed on (repository, path): run them at once and whichever loses the
+  // insert race fails the whole sync with a duplicate-key error on a
+  // repository that is perfectly fine. So the watcher stands down for the
+  // pass and is re-attached after it.
+  // ponytail: a repository deleted mid-pass leaves a watcher on a row that no
+  // longer exists until the next restart; re-read the row here if that stops
+  // being only a log line.
+  stopWatchingLocalRepository(repo.id)
+  void syncLocalRepository(repo.id)
+    .catch(fail)
+    .finally(() => {
+      if (repo.localPath) watchLocalRepository(repo.id, repo.localPath)
+    })
 }
 
 function isWithinLocalReposRoot(candidate: string): boolean {
@@ -131,6 +154,13 @@ export function repositoryRoutes(app: FastifyInstance) {
         })
         .returning()
 
+      // A connection that indexes nothing is indistinguishable from a broken
+      // one, so the first sync starts here rather than at the poller's next
+      // tick (minutes away for git) or never at all (local_path, which had no
+      // caller for `startWatching` anywhere in the server before this).
+      // `startSync` also leaves the folder watched from here on.
+      if (ingestionMethod !== 'agent_push') startSync(repo!)
+
       // Never echo the credential back — created-once, write-only from here.
       return repositoryView(repo!)
     },
@@ -175,6 +205,9 @@ export function repositoryRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'not found' })
     }
     await db.delete(repositories).where(eq(repositories.id, req.params.id))
+    // Otherwise the watcher outlives the row and keeps re-inserting files for
+    // a repository nobody can reach.
+    stopWatchingLocalRepository(req.params.id)
     return { status: 'deleted' }
   })
 
@@ -318,6 +351,39 @@ export function repositoryRoutes(app: FastifyInstance) {
     const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
     if (!access) return reply.code(404).send({ error: 'not found' })
     return listRepositoryFiles(req.params.id)
+  })
+
+  /**
+   * Manual re-index (the ingestion spec's "manual-reindex", owner-only). Every
+   * other trigger is on someone else's schedule — a webhook delivery, the
+   * poller's tick, an agent's push — so without this there is no way to answer
+   * "index it now".
+   */
+  app.post<{ Params: { id: string } }>('/repositories/:id/sync', async (req, reply) => {
+    if (!(await requireOwner(req.user!.id, req.params.id))) {
+      return reply.code(404).send({ error: 'not found' })
+    }
+    const repo = (await db.select().from(repositories).where(eq(repositories.id, req.params.id)))[0]!
+    if (repo.ingestionMethod === 'agent_push') {
+      return reply
+        .code(400)
+        .send({ error: 'agent-push repositories are updated by the agent, not by a sync' })
+    }
+    // Both sync functions bail silently on a row with no source, which would
+    // strand `syncStatus` at 'syncing' forever once it is claimed below.
+    if (!(repo.ingestionMethod === 'git' ? repo.gitUrl : repo.localPath)) {
+      return reply.code(400).send({ error: 'this connection has no source to read' })
+    }
+    // Claiming the row is the 409 check: a plain read-then-dispatch lets two
+    // simultaneous requests both see 'idle' and both start a clone.
+    const [claimed] = await db
+      .update(repositories)
+      .set({ syncStatus: 'syncing' })
+      .where(and(eq(repositories.id, repo.id), ne(repositories.syncStatus, 'syncing')))
+      .returning()
+    if (!claimed) return reply.code(409).send({ error: 'a sync is already running' })
+    startSync(claimed)
+    return { status: 'syncing' }
   })
 
   app.post<{ Params: { id: string } }>('/repositories/:id/webhook-secret', async (req, reply) => {

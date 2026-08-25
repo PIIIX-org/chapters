@@ -15,6 +15,9 @@ function stubFetch(vaults: unknown[]) {
     'fetch',
     vi.fn().mockImplementation((url: string) => {
       if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, vaults))
+      // ⌘K lists repositories alongside vaults since unit 7; without this the
+      // catch-all below hands it a session object and `.map` throws.
+      if (url === '/api/repositories') return Promise.resolve(mockJsonResponse(200, []))
       if (url.startsWith('/api/notifications')) return Promise.resolve(mockJsonResponse(200, []))
       return Promise.resolve(mockJsonResponse(200, SESSION))
     }),
@@ -51,6 +54,7 @@ describe('HomePage', () => {
       'fetch',
       vi.fn().mockImplementation((url: string) => {
         if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(500, { error: 'Database unreachable' }))
+        if (url === '/api/repositories') return Promise.resolve(mockJsonResponse(200, []))
         if (url.startsWith('/api/notifications')) return Promise.resolve(mockJsonResponse(200, []))
         return Promise.resolve(mockJsonResponse(200, SESSION))
       }),
@@ -109,6 +113,7 @@ describe('HomePage', () => {
       'fetch',
       vi.fn().mockImplementation((url: string) => {
         if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, [VAULT]))
+        if (url === '/api/repositories') return Promise.resolve(mockJsonResponse(200, []))
         if (url.endsWith('/tree')) return Promise.resolve(mockJsonResponse(200, {}))
         if (url === '/api/vaults/v1/notes/foo') {
           return Promise.resolve(mockJsonResponse(200, { path: 'foo', frontmatter: {}, body: 'Foo body' }))
@@ -142,6 +147,7 @@ describe('HomePage', () => {
       'fetch',
       vi.fn().mockImplementation((url: string) => {
         if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(500, { error: 'Database unreachable' }))
+        if (url === '/api/repositories') return Promise.resolve(mockJsonResponse(200, []))
         if (url.startsWith('/api/notifications')) return Promise.resolve(mockJsonResponse(200, []))
         return Promise.resolve(mockJsonResponse(200, SESSION))
       }),
