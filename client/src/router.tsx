@@ -23,6 +23,10 @@ const TeamPage = lazy(() => import('./pages/TeamPage.js').then((m) => ({ default
 // Same again, and doubly so: most people on an instance are not admins and
 // will never load this chunk at all.
 const AdminPage = lazy(() => import('./pages/AdminPage.js').then((m) => ({ default: m.AdminPage })))
+// Home never renders settings either, and an unenrolled user on an
+// MFA-mandating instance is sent straight here — one lazy chunk, not part of
+// the entry bundle.
+const SettingsPage = lazy(() => import('./pages/SettingsPage.js').then((m) => ({ default: m.SettingsPage })))
 
 export const router = createBrowserRouter([
   {
@@ -34,6 +38,14 @@ export const router = createBrowserRouter([
         element: (
           <Suspense fallback={<GraphSkeleton />}>
             <TeamPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: '/settings',
+        element: (
+          <Suspense fallback={<GraphSkeleton />}>
+            <SettingsPage />
           </Suspense>
         ),
       },

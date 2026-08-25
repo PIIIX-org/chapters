@@ -166,6 +166,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
       run: () => navigate(`/vaults/${v.id}`),
     })),
     { id: 'team', label: 'Go to team', run: () => navigate('/team') },
+    { id: 'settings', label: 'Go to settings', run: () => navigate('/settings') },
     // Admins only: /admin renders a "this area is for admins" wall to everyone
     // else, and offering a door that opens onto that is worse than no door.
     ...(session.data?.role === 'admin'
