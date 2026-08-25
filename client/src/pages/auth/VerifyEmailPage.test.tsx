@@ -43,4 +43,18 @@ describe('VerifyEmailPage', () => {
 
     await waitFor(() => expect(screen.getByText('invalid code')).toBeInTheDocument())
   })
+  it('names the approval wait, and warns that sign-in will look like a wrong password', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockJsonResponse(200, { status: 'verified' })))
+    renderPage({ email: 'new@example.com' })
+    const user = userEvent.setup()
+
+    await user.type(screen.getByLabelText('Verification code'), '123456')
+    await user.click(screen.getByRole('button', { name: 'Verify' }))
+
+    // Without this line the person sees "invalid credentials" at login
+    // indefinitely — correct, because the login screen must not confirm an
+    // address exists, but meaningless unless it is explained here.
+    expect(await screen.findByText(/has to approve your account/i)).toBeInTheDocument()
+    expect(screen.getByText(/that is the approval waiting, not your password/i)).toBeInTheDocument()
+  })
 })

@@ -14,10 +14,20 @@ export class ApiError extends Error {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  // Content-Type only when there IS content. Fastify rejects a request that
+  // declares `application/json` and sends nothing with
+  // FST_ERR_CTP_EMPTY_JSON_BODY (400), which is every bodyless call this
+  // client makes: logout, note delete, vault delete, share revoke, mark
+  // notification read, approve user. Sending the header unconditionally broke
+  // all of them in a real browser while every test passed, because the tests
+  // stub `fetch` and never reach a server that parses the header.
   const res = await fetch(`/api${path}`, {
     ...init,
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: {
+      ...(init?.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...init?.headers,
+    },
   })
   const body = await res.json().catch(() => undefined)
   if (!res.ok) throw new ApiError(res.status, body)
