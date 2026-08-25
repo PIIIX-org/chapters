@@ -3,7 +3,7 @@ import { ACCOUNT_EXPORT_URL } from '../../api/account.js'
 export function AccountExport() {
   return (
     <section className="flex flex-col gap-2">
-      <h3 className="font-display text-lg text-foreground">Export your account</h3>
+      <h2 className="font-display text-lg text-foreground">Export your account</h2>
       <p className="text-sm text-muted-foreground">
         Downloads every vault you own as a single zip: notes and frontmatter exactly as stored, plus
         a manifest of each vault&rsquo;s name, whether it is mergeable, and who it is shared with.

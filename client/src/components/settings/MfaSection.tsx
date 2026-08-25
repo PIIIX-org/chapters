@@ -83,7 +83,7 @@ export function MfaSection() {
 
   return (
     <section className="flex flex-col gap-2">
-      <h3 className="font-display text-lg text-foreground">Two-factor authentication</h3>
+      <h2 className="font-display text-lg text-foreground">Two-factor authentication</h2>
 
       {backupCodes && (
         // ponytail: one string, newline-separated, so Copy puts one code per

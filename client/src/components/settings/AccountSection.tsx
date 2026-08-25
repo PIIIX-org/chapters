@@ -105,7 +105,7 @@ export function AccountSection() {
   return (
     <div className="flex flex-col gap-8">
       <section className="flex flex-col gap-2">
-        <h3 className="font-display text-lg text-foreground">Password</h3>
+        <h2 className="font-display text-lg text-foreground">Password</h2>
         <form onSubmit={submitPassword} className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="account-current-password">Current password</Label>
@@ -158,7 +158,7 @@ export function AccountSection() {
       </section>
 
       <section className="flex flex-col gap-2">
-        <h3 className="font-display text-lg text-foreground">Email address</h3>
+        <h2 className="font-display text-lg text-foreground">Email address</h2>
         <p className="text-sm text-muted-foreground">
           You sign in as <span className="font-mono">{session.data.email}</span>.
         </p>

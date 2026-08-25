@@ -29,20 +29,33 @@ export function SettingsPage() {
       </header>
 
       <main className="mx-auto flex max-w-2xl flex-col gap-10">
-        {mustEnrol && (
-          <p role="alert" className="rounded-lg border border-border bg-card p-4 text-sm text-foreground">
-            An admin requires two-factor authentication on this instance. Set it up below to reach the rest of
-            Chapters.
-          </p>
+        {mustEnrol ? (
+          // Enrolment ONLY. Under a mandate the server 403s every other route
+          // on this page, so rendering the rest would fill the screen with
+          // panels whose contents are the words "MFA setup required" — and
+          // bury the one control that gets the person out of this state.
+          <>
+            {/* Says only what the section below does not: why the rest of the
+                page is missing. MfaSection already states the requirement
+                itself, and saying it twice on one short screen reads as a
+                stutter. */}
+            <p role="alert" className="rounded-lg border border-border bg-card p-4 text-sm text-foreground">
+              Your other settings are hidden until two-factor authentication is on.
+            </p>
+            <MfaSection />
+          </>
+        ) : (
+          <>
+            <MfaSection />
+            <AccountSection />
+            <NotificationPreferences />
+            {/* The same component the vault settings modal uses, in account
+                scope — the spec asks for the component to be reused, not
+                reimplemented. */}
+            <McpPanel scope="account" />
+            <AccountExport />
+          </>
         )}
-
-        <MfaSection />
-        <AccountSection />
-        <NotificationPreferences />
-        {/* The same component the vault settings modal uses, in account scope —
-            the spec asks for the component to be reused, not reimplemented. */}
-        <McpPanel scope="account" />
-        <AccountExport />
       </main>
     </div>
   )
