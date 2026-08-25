@@ -36,7 +36,9 @@ function fetchMock(session: typeof ADMIN) {
   })
 }
 
-function renderPage(session: typeof ADMIN) {
+// The role reaches the page through the fetch stub's /api/me answer, not
+// through a prop — there is no other way in, which is the point.
+function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
@@ -54,7 +56,7 @@ describe('AdminPage', () => {
 
   it('opens on the approval queue — the reason this area exists', async () => {
     vi.stubGlobal('fetch', fetchMock(ADMIN))
-    const { container } = renderPage(ADMIN)
+    const { container } = renderPage()
 
     expect(await screen.findByText(/Nobody is waiting/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Approvals' })).toHaveAttribute('aria-current', 'page')
@@ -65,7 +67,7 @@ describe('AdminPage', () => {
   it('tells a member this is not their area, and asks the server for nothing', async () => {
     const fetch = fetchMock(MEMBER)
     vi.stubGlobal('fetch', fetch)
-    renderPage(MEMBER)
+    renderPage()
 
     expect(await screen.findByText('This area is for admins.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Approvals' })).toBeNull()
@@ -80,7 +82,7 @@ describe('AdminPage', () => {
   it('loads a section only once it is opened', async () => {
     const fetch = fetchMock(ADMIN)
     vi.stubGlobal('fetch', fetch)
-    renderPage(ADMIN)
+    renderPage()
 
     await screen.findByText(/Nobody is waiting/)
     const before = fetch.mock.calls.map((c) => c[0] as string)
