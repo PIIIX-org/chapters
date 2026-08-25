@@ -7,7 +7,14 @@ import { apiFetch } from '../lib/api.js'
  */
 export interface Revision {
   id: string
-  actorType: 'user' | 'mcp' | 'system'
+  /**
+   * Exactly the `actor_type` pg enum (schema.ts) — there is no 'system'.
+   * 'collab' is the default actor for every write that does not name one,
+   * including every realtime co-editing save, so it is the value this list
+   * carries most often. It means a **person** edited through the collab
+   * relay, so it is vermillion like 'user', never teal.
+   */
+  actorType: 'user' | 'mcp' | 'collab'
   actorId: string | null
   action: string
   createdAt: string

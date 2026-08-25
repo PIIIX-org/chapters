@@ -182,10 +182,13 @@ describe('VaultTrashSection', () => {
       return Promise.resolve(mockJsonResponse(200, trashed))
     })
     vi.stubGlobal('fetch', fetchMock)
-    renderWithClient(<VaultTrashSection />)
+    const { container } = renderWithClient(<VaultTrashSection />)
 
     await screen.findByText('Scratch')
     fireEvent.click(screen.getByRole('button', { name: 'Delete Scratch permanently' }))
+    // The one new destructive surface in this unit — axe it in its open state,
+    // where the confirm panel actually exists.
+    await expectNoA11yViolations(container)
 
     // The consequence, not "Are you sure?" — and nothing sent yet.
     expect(screen.getByText(/including the ones already in the note trash/i)).toBeInTheDocument()
@@ -213,5 +216,17 @@ describe('VaultTrashSection', () => {
 
     expect(screen.queryByText(/including the ones already in the note trash/i)).not.toBeInTheDocument()
     expect(fetchMock).not.toHaveBeenCalledWith('/api/vaults/v3/purge', expect.anything())
+  })
+  it('says the trash could not be loaded instead of silently vanishing', async () => {
+    // Reading .data with no isError branch made a failed fetch look exactly
+    // like an empty trash — and the delete copy four lines up promises the
+    // trash is where the vault went.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(mockJsonResponse(500, { error: 'boom' })),
+    )
+    renderWithClient(<VaultTrashSection />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load the trash/i)
   })
 })

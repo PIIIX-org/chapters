@@ -8,7 +8,12 @@ import { ApiError } from '../lib/api.js'
 export interface ImportResult {
   vaultId: string
   imported: number
-  skipped: number
+  /**
+   * One `"<path>: <reason>"` per note the OKF validator rejected — a list, not
+   * a count. The reasons are the only place anything says why those notes did
+   * not come through, so they are shown, not counted.
+   */
+  skipped: string[]
   /**
    * Shares in the archive's manifest whose email matches no account here.
    * Those people simply do not get access, and nothing else says so — which is

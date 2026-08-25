@@ -132,6 +132,20 @@ export function VaultTrashSection() {
   const [error, setError] = useState<string | null>(null)
   const [purging, setPurging] = useState<string | null>(null)
 
+  // isError BEFORE .data: a 500 on the trash fetch used to make this whole
+  // section vanish, four lines under a delete confirmation that promises
+  // "you can restore it from Trash below" — the owner would see nothing at
+  // all and conclude their vault was gone for good.
+  if (trash.isError) {
+    return (
+      <div className="border-t border-border px-3 py-2">
+        <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Trash</div>
+        <p role="alert" className="text-xs text-destructive">
+          Couldn&rsquo;t load the trash. Anything you deleted is still there — try again.
+        </p>
+      </div>
+    )
+  }
   if (!trash.data || trash.data.length === 0) return null
 
   return (

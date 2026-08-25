@@ -18,6 +18,9 @@ function stubFetch(makePatchResponse: () => Response) {
     if (url.includes('/shares')) return Promise.resolve(mockJsonResponse(200, []))
     if (url.includes('/teams')) return Promise.resolve(mockJsonResponse(200, []))
     if (url.includes('/mcp-connections')) return Promise.resolve(mockJsonResponse(200, []))
+    // The modal now also carries the note-trash panel; without this its query
+    // falls through to the PATCH response and the panel maps over a non-array.
+    if (url.includes('/trash')) return Promise.resolve(mockJsonResponse(200, []))
     return Promise.resolve(makePatchResponse())
   })
   vi.stubGlobal('fetch', fetchMock)

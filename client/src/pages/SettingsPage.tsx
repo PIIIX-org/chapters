@@ -1,5 +1,6 @@
 import { Link } from 'react-router'
 import { AccountExport } from '../components/settings/AccountExport.js'
+import { VaultImport } from '../components/settings/VaultImport.js'
 import { AccountSection } from '../components/settings/AccountSection.js'
 import { MfaSection } from '../components/settings/MfaSection.js'
 import { NotificationPreferences } from '../components/settings/NotificationPreferences.js'
@@ -54,6 +55,8 @@ export function SettingsPage() {
                 reimplemented. */}
             <McpPanel scope="account" />
             <AccountExport />
+            {/* Directly beneath the export it is the counterpart to. */}
+            <VaultImport />
           </>
         )}
       </main>
