@@ -31,10 +31,22 @@ export function AdminPage() {
   const session = useSession()
   const [active, setActive] = useState<SectionId>('approvals')
 
+  // Nothing below renders until the role is known. Checking `session.data &&
+  // role !== 'admin'` instead would let every section mount during the one
+  // pending tick and fire its instance-wide read — which is the six 403s this
+  // gate exists to prevent, just too fast to see.
+  if (session.isPending) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      </div>
+    )
+  }
+
   // RequireAuth has already established there is a session; this is the role
   // gate. The server enforces it too (403 on every /api/admin route) — this
   // exists so a member sees an explanation instead of six failed requests.
-  if (session.data && session.data.role !== 'admin') {
+  if (session.data?.role !== 'admin') {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
         <h1 className="font-display text-2xl text-foreground">This area is for admins.</h1>

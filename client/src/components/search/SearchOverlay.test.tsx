@@ -49,10 +49,23 @@ function renderOverlay(open = true, initialEntry = '/') {
 // search fixture — and must build a fresh Response per call, since a Response
 // body can only be read once and `useVaults` + `useSearch` (and StrictMode-ish
 // re-fetches) can both land on the same mock.
-function stubFetch(search: () => Response) {
+function sessionUser(role: 'member' | 'admin') {
+  return {
+    id: 'me',
+    email: 'me@example.com',
+    status: 'active',
+    role,
+    createdAt: '2026-08-01T00:00:00.000Z',
+  }
+}
+
+function stubFetch(search: () => Response, role: 'member' | 'admin' = 'member') {
   const fetchMock = vi.fn().mockImplementation((url: string) => {
     if (url.startsWith('/api/search')) return Promise.resolve(search())
     if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, []))
+    // The overlay reads the session too: "Go to admin" is offered to admins
+    // only, so the role has to come from somewhere.
+    if (url === '/api/me') return Promise.resolve(mockJsonResponse(200, sessionUser(role)))
     throw new Error(`unexpected fetch: ${url}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -715,5 +728,23 @@ describe('SearchOverlay scope and filters', () => {
     await waitFor(() => expect(screen.getByText('people/jane')).toBeInTheDocument())
 
     await expectNoA11yViolations(container)
+  })
+  it('offers "Go to admin" to an admin only', async () => {
+    stubFetch(() => mockJsonResponse(200, []), 'admin')
+    const { router } = renderOverlay()
+
+    const adminCommand = await screen.findByRole('option', { name: 'Command: Go to admin' })
+    await userEvent.click(adminCommand)
+    await waitFor(() => expect(router.state.location.pathname).toBe('/admin'))
+  })
+
+  it('hides it from a member, who would only reach a wall', async () => {
+    stubFetch(() => mockJsonResponse(200, []), 'member')
+    renderOverlay()
+
+    // The team command proves the command list rendered at all — without it
+    // this passes just as well when nothing rendered.
+    expect(await screen.findByRole('option', { name: 'Command: Go to team' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Command: Go to admin' })).toBeNull()
   })
 })

@@ -44,4 +44,13 @@ describe('SignupPage', () => {
 
     await waitFor(() => expect(screen.getByText('Verify email page: new@example.com')).toBeInTheDocument())
   })
+  it('says approval is coming, without ever being the login screen', async () => {
+    renderPage()
+
+    // Stated here because the visitor supplied this address themselves — the
+    // login screen must stay generic, since naming the reason there would tell
+    // a stranger whether an address has an account.
+    expect(screen.getByText(/an administrator on this instance approves your account/i)).toBeInTheDocument()
+    expect(screen.getByText(/confirm your email with a code/i)).toBeInTheDocument()
+  })
 })
