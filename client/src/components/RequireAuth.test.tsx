@@ -5,13 +5,29 @@ import { createMemoryRouter, RouterProvider } from 'react-router'
 import { mockJsonResponse } from '../lib/api'
 import { RequireAuth } from './RequireAuth'
 
+function session(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'u1',
+    email: 'a@b.com',
+    status: 'active',
+    role: 'member',
+    createdAt: '2026-01-01',
+    mfaEnabledAt: null,
+    mfaRequired: false,
+    ...overrides,
+  }
+}
+
 function renderWithRouter(initialPath: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const router = createMemoryRouter(
     [
       {
         element: <RequireAuth />,
-        children: [{ path: '/', element: <div>Protected content</div> }],
+        children: [
+          { path: '/', element: <div>Protected content</div> },
+          { path: '/settings', element: <div>Settings page</div> },
+        ],
       },
       { path: '/login', element: <div>Login page</div> },
     ],
@@ -33,7 +49,7 @@ describe('RequireAuth', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
-        mockJsonResponse(200, { id: 'u1', email: 'a@b.com', status: 'active', role: 'member', createdAt: '2026-01-01' }),
+        mockJsonResponse(200, session()),
       ),
     )
 
@@ -48,5 +64,51 @@ describe('RequireAuth', () => {
     renderWithRouter('/')
 
     await waitFor(() => expect(screen.getByText('Login page')).toBeInTheDocument())
+  })
+  it('sends an unenrolled user to settings once the instance mandates MFA', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(mockJsonResponse(200, session({ mfaRequired: true, mfaEnabledAt: null }))),
+    )
+
+    renderWithRouter('/')
+
+    await waitFor(() => expect(screen.getByText('Settings page')).toBeInTheDocument())
+    expect(screen.queryByText('Protected content')).not.toBeInTheDocument()
+  })
+
+  it('leaves /settings itself reachable, or enrolment would be a closed loop', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(mockJsonResponse(200, session({ mfaRequired: true, mfaEnabledAt: null }))),
+    )
+
+    renderWithRouter('/settings')
+
+    await waitFor(() => expect(screen.getByText('Settings page')).toBeInTheDocument())
+  })
+
+  it('does not redirect a user who has already enrolled', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockJsonResponse(200, session({ mfaRequired: true, mfaEnabledAt: '2026-08-01T00:00:00.000Z' })),
+      ),
+    )
+
+    renderWithRouter('/')
+
+    await waitFor(() => expect(screen.getByText('Protected content')).toBeInTheDocument())
+  })
+
+  it('does not redirect when the instance does not mandate MFA', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(mockJsonResponse(200, session({ mfaRequired: false, mfaEnabledAt: null }))),
+    )
+
+    renderWithRouter('/')
+
+    await waitFor(() => expect(screen.getByText('Protected content')).toBeInTheDocument())
   })
 })

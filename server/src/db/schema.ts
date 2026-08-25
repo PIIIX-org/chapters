@@ -39,6 +39,9 @@ export const users = pgTable('users', {
   emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
   totpSecret: text('totp_secret'),
   mfaEnabledAt: timestamp('mfa_enabled_at', { withTimezone: true }),
+  // Account-level switch for notification *emails* only; the in-app row is
+  // always written — it is the activity feed (notifications spec).
+  emailNotifications: boolean('email_notifications').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

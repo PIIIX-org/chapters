@@ -14,6 +14,9 @@ export interface McpConnection {
   revokedAt: string | null
 }
 
+/** What a connection is being created for — the two scopes the UI offers. */
+export type McpTarget = { scope: 'vault'; vaultId: string } | { scope: 'account' }
+
 // Only the create response carries the raw token, and only once.
 export interface McpConnectionWithToken extends McpConnection {
   token: string
@@ -32,6 +35,13 @@ export function createVaultMcpConnection(name: string, vaultId: string): Promise
   return apiFetch('/mcp-connections', {
     method: 'POST',
     body: JSON.stringify({ name, scope: 'vault', vaultId }),
+  })
+}
+
+export function createAccountMcpConnection(name: string): Promise<McpConnectionWithToken> {
+  return apiFetch('/mcp-connections', {
+    method: 'POST',
+    body: JSON.stringify({ name, scope: 'account' }),
   })
 }
 

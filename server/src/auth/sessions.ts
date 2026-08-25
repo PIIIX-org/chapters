@@ -1,4 +1,4 @@
-import { and, eq, gt } from 'drizzle-orm'
+import { and, eq, gt, ne } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { sessions, users } from '../db/schema.js'
 import { generateToken, hashToken } from './tokens.js'
@@ -38,7 +38,20 @@ export async function destroySession(token: string): Promise<void> {
   await db.delete(sessions).where(eq(sessions.tokenHash, hashToken(token)))
 }
 
-/** Kills every session for a user (logout-everywhere, password change, deactivation). */
-export async function destroyUserSessions(userId: string): Promise<void> {
-  await db.delete(sessions).where(eq(sessions.userId, userId))
+/**
+ * Kills every session for a user (logout-everywhere, password change,
+ * deactivation). `exceptToken` spares one — a self-service password change
+ * signs out the other devices without signing out the device doing it.
+ */
+export async function destroyUserSessions(
+  userId: string,
+  exceptToken?: string,
+): Promise<void> {
+  await db
+    .delete(sessions)
+    .where(
+      exceptToken
+        ? and(eq(sessions.userId, userId), ne(sessions.tokenHash, hashToken(exceptToken)))
+        : eq(sessions.userId, userId),
+    )
 }
