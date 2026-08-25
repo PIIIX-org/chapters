@@ -20,6 +20,9 @@ const NoteView = lazy(() => import('./pages/vault/NoteView.js').then((m) => ({ d
 // Same reasoning as VaultLayout/NoteView above: Home never renders this, so
 // it doesn't belong in the entry chunk.
 const TeamPage = lazy(() => import('./pages/TeamPage.js').then((m) => ({ default: m.TeamPage })))
+// Same again, and doubly so: most people on an instance are not admins and
+// will never load this chunk at all.
+const AdminPage = lazy(() => import('./pages/AdminPage.js').then((m) => ({ default: m.AdminPage })))
 
 export const router = createBrowserRouter([
   {
@@ -31,6 +34,14 @@ export const router = createBrowserRouter([
         element: (
           <Suspense fallback={<GraphSkeleton />}>
             <TeamPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: '/admin',
+        element: (
+          <Suspense fallback={<GraphSkeleton />}>
+            <AdminPage />
           </Suspense>
         ),
       },

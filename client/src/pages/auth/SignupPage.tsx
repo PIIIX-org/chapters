@@ -52,6 +52,17 @@ export function SignupPage() {
                 required
               />
             </div>
+            {/* Said here, and on verify-email, and deliberately NOT on the
+                login screen: an unapproved account gets a generic "invalid
+                credentials" there, because naming the real reason would tell
+                a stranger whether an address has an account. Here the visitor
+                is the one supplying the address, so there is nothing to leak
+                — and without this they would wait on a wrong-password error
+                forever with no idea what they were waiting for. */}
+            <p className="text-sm text-muted-foreground">
+              Two things happen before you can sign in: you confirm your email with a code, and an administrator
+              on this instance approves your account. Sign-in keeps failing until both are done.
+            </p>
             <FormError message={error} />
             <Button type="submit" disabled={submitting}>
               Sign up
