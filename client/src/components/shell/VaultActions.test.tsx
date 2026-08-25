@@ -170,4 +170,48 @@ describe('VaultTrashSection', () => {
     await waitFor(() => expect(queryClient.getQueryState(VAULT_TRASH_QUERY_KEY)?.status).toBe('success'))
     expect(container).toBeEmptyDOMElement()
   })
+  it('states what is lost before purging, and purges only the row that was confirmed', async () => {
+    // Two trashed vaults on purpose: one row cannot tell a working handler from
+    // one that purges whatever it finds first.
+    const trashed: TrashedVault[] = [
+      { id: 'v3', name: 'Old Project', deletedAt: '2026-08-01T00:00:00.000Z' },
+      { id: 'v4', name: 'Scratch', deletedAt: '2026-08-02T00:00:00.000Z' },
+    ]
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return Promise.resolve(mockJsonResponse(200, { status: 'purged' }))
+      return Promise.resolve(mockJsonResponse(200, trashed))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderWithClient(<VaultTrashSection />)
+
+    await screen.findByText('Scratch')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Scratch permanently' }))
+
+    // The consequence, not "Are you sure?" — and nothing sent yet.
+    expect(screen.getByText(/including the ones already in the note trash/i)).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/vaults/v4/purge', expect.anything())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete forever' }))
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith('/api/vaults/v4/purge', expect.objectContaining({ method: 'POST' })),
+    )
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/vaults/v3/purge', expect.anything())
+  })
+
+  it('cancelling leaves the vault in the trash', async () => {
+    const trashed: TrashedVault[] = [{ id: 'v3', name: 'Old Project', deletedAt: '2026-08-01T00:00:00.000Z' }]
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return Promise.resolve(mockJsonResponse(200, { status: 'purged' }))
+      return Promise.resolve(mockJsonResponse(200, trashed))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderWithClient(<VaultTrashSection />)
+
+    await screen.findByText('Old Project')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Old Project permanently' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByText(/including the ones already in the note trash/i)).not.toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/vaults/v3/purge', expect.anything())
+  })
 })
