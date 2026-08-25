@@ -7,7 +7,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   `dev → prod` needs Taha's explicit OK each time. Backend complete + twelve
   UI-driven additions; `pnpm profile-graph` ≈500ms at 10k notes, **Louvain NOT
   the bottleneck**; semantic edges stored **directed** (purges clear them, no FK).
-- **Units 1–4 shipped** (detail in README + git log):
+- **Units 1–6 shipped** (detail in README + git log):
   - **1** graph Home (Canvas 2D + `d3-force`; SVG and cytoscape FAILED the
     probe), shell, vault lifecycle, ⌘K. **Louvain is seeded** — drill-down
     addresses communities by number, so ids must stay stable.
@@ -27,8 +27,15 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
     `mfaEnabledAt`+`mfaRequired` on `/me`, `/me/{password,email,preferences,
     export}`, `users.emailNotifications`. **Per-type notification prefs stay
     OUT of scope** (the notifications spec defers them).
-- **Current task**: none. Unit 4 open as a PR off `dev`. **Next**: 5
-  trash/history/import · 6 collab (yjs) · 7 repositories — no client UI yet.
+  - **6** collaboration: one Yjs doc per note over the existing relay, **no
+    autosave PUT** (the CRDT is the note — closes #66), pen-nib carets in five
+    inks, presence in the Editor top bar only, SSE live view for readers.
+    `POST /collab/ticket` returns a **path**, not a URL — the browser resolves
+    it, because behind any proxy the server's `host` is the proxy's.
+    **revoked ≠ offline**: revoked locks and keeps the doc (unsent text must
+    survive); offline shows the last saved copy read-only and retries.
+    Deploying needs `/collab` proxied to `COLLAB_PORT` — see README.
+- **Current task**: none. Units 5, 6, 7 open as PRs off `dev`.
 - **Mutation-verify every new test** (break impl, watch it fail, restore) AND
   click the unit in a real browser: `apiFetch` sent JSON with no body, 400'ing
   every bodyless DELETE/POST, and the stubbed-`fetch` suite never saw it (#110).

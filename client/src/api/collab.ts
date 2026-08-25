@@ -16,7 +16,14 @@ import { apiFetch } from '../lib/api.js'
 export interface CollabTicket {
   /** Opaque one-time credential passed as the Hocuspocus `token`. */
   token: string
-  /** Absolute `ws://` / `wss://` URL of the relay. */
+  /**
+   * The relay's PATH on this origin (`/collab`), not an absolute URL.
+   *
+   * The server cannot know the origin the browser used — behind vite in dev
+   * and nginx in production it sees the proxy's host, and handing that back
+   * produced `ws://localhost:3000/collab`, the API port, which has no relay
+   * and 404s the handshake. Resolve it with `collabSocketUrl()`.
+   */
   url: string
   /** ISO timestamp; a ticket is useless after it, so never cache one. */
   expiresAt: string
@@ -49,4 +56,15 @@ export interface LiveNoteState {
  */
 export function liveNoteUrl(vaultId: string, path: string): string {
   return `/api/vaults/${vaultId}/live/${path}`
+}
+
+/**
+ * Resolves a ticket's relay path against the page's own origin, swapping
+ * http(s) for ws(s). The origin the page loaded from is the one that is
+ * guaranteed to reach back through whatever proxy served it.
+ */
+export function collabSocketUrl(path: string, origin: string): string {
+  const url = new URL(path, origin)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  return url.toString().replace(/\/$/, '')
 }

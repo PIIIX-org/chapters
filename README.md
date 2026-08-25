@@ -101,7 +101,7 @@ panel, note create/rename/delete, and full live-preview) and Slice 2c
 (wikilinks — autocomplete, clickable navigation, link-to-create), Slice 3
 (Search — the ⌘K overlay), Slice 4/Unit 2 (Sharing & team — the vault
 settings modal stack and the Team page), Unit 3 (Admin & the onboarding path)
-and Unit 4 (Settings & MFA) are done — tracked in
+Unit 4 (Settings & MFA) and Unit 6 (Collaboration) are done — tracked in
 [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
@@ -210,6 +210,41 @@ notifications spec puts per-type preferences and digests explicitly out of
 scope, and the in-app feed is not switchable at all because it is the
 historical record that spec depends on. Turning the switch off stops the
 emails and nothing else.
+
+Unit 6 (Collaboration) turns the editor into a shared one. Everyone holding
+`edit` on a note joins a single Yjs document over the Hocuspocus relay: there
+is no autosave `PUT` any more and no local copy of the body — the CRDT *is* the
+note, which is what closes the lost-update race (#66) by construction rather
+than mitigating it. Collaborators' carets taper to a pen nib in one of five ink
+hues hashed from their id, with a name tag that fades after a moment of
+stillness, and their initials appear in the Editor top bar — there only, never
+a global "who's online" list. Sync state whispers in the breadcrumb, never a
+modal. Read-only viewers get the same content live over SSE without ever
+joining the document, so they broadcast no cursor and no identity.
+
+Two states are worth knowing about because they are easy to confuse. **Revoked**
+means access was taken away: the editor locks and says so, and the document is
+never destroyed, so anything typed but unsent is still on screen to copy out.
+**Offline** means the relay could not be reached — nothing was taken away, the
+note is shown read-only from the last saved copy, and it retries on its own.
+
+**Deploying it** needs one thing: the websocket path routed to the relay, which
+listens on `COLLAB_PORT` (default 3001) and must not be exposed publicly.
+
+```nginx
+location /collab {
+  proxy_pass http://127.0.0.1:3001;
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  proxy_read_timeout 1h;   # Yjs sockets are long-lived and usually idle
+}
+```
+
+The ticket endpoint returns the *path*, not an absolute URL — the browser
+resolves it against the origin it loaded from, which is the only origin
+guaranteed to reach back through the proxy. In development vite proxies
+`/collab` already, so nothing needs configuring.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —

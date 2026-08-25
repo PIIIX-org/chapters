@@ -104,26 +104,32 @@ describe('collab ticket', () => {
     const res = await mintTicket(ownerCookie)
     expect(res.statusCode).toBe(200)
     const ticket = res.json() as { token: string; url: string; expiresAt: string }
-    // The request's own origin, path appended. `ws://chapters.test:3001` — the
-    // relay's real listener — is unreachable behind the documented single-port
-    // reverse proxy: not exposed, no certificate, every editor fails to
-    // connect. The port is this process's business and never the browser's.
-    expect(ticket.url).toBe('ws://chapters.test:3000/collab')
+    // A PATH, not an absolute URL. The server cannot know the origin the
+    // browser used: behind vite in dev it sees `localhost:3000` and behind
+    // nginx it sees the proxy, and guessing produced `ws://localhost:3000` —
+    // the API port, which has no relay and 404s every handshake. The browser
+    // resolves this against the origin it loaded from, which is the one origin
+    // guaranteed to reach back through whatever served the page.
+    expect(ticket.url).toBe('/collab')
     expect(ticket.url).not.toContain(String(config.collabPort))
+    expect(ticket.url).not.toMatch(/^wss?:/)
     expect(ticket.token).toMatch(/^[0-9a-f]{64}$/)
     const ttl = new Date(ticket.expiresAt).getTime() - Date.now()
     expect(ttl).toBeGreaterThan(0)
     expect(ttl).toBeLessThanOrEqual(60_000)
   })
 
-  it('hands an https page a wss URL behind a TLS-terminating proxy', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/collab/ticket',
-      headers: { cookie: ownerCookie, host: 'chapters.test', 'x-forwarded-proto': 'https' },
-    })
-    const ticket = res.json() as { url: string }
-    expect(ticket.url).toBe('wss://chapters.test/collab')
+  it('names the same path whatever the proxy in front claims to be', async () => {
+    // Scheme and host are the client's business now (collabSocketUrl in
+    // client/src/api/collab.ts derives wss:// from an https page), so no
+    // header a proxy sets can change the answer here.
+    for (const headers of [
+      { cookie: ownerCookie, host: 'chapters.test', 'x-forwarded-proto': 'https' },
+      { cookie: ownerCookie, host: 'localhost:5173' },
+    ]) {
+      const res = await app.inject({ method: 'POST', url: '/api/collab/ticket', headers })
+      expect((res.json() as { url: string }).url).toBe('/collab')
+    }
   })
 
   it('authenticates over the /collab path a reverse proxy forwards', async () => {
@@ -132,9 +138,8 @@ describe('collab ticket', () => {
     // refused a non-root path the single-origin URL above would be a dead
     // letter — this is the end of that chain.
     const ticket = (await mintTicket(ownerCookie)).json() as { token: string; url: string }
-    const path = new URL(ticket.url).pathname
-    expect(path).toBe('/collab')
-    const proxied = connect(ticket.token, `ws://127.0.0.1:${collabPort}${path}`)
+    expect(ticket.url).toBe('/collab')
+    const proxied = connect(ticket.token, `ws://127.0.0.1:${collabPort}${ticket.url}`)
     await waitFor(() => proxied.document.getText('body').toString().includes('Ticketed content.'))
     expect(failures.get(proxied)).toBeUndefined()
   })

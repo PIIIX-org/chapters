@@ -35,17 +35,22 @@ import { issueTicket } from './tickets.js'
  * port stays on it (dev is `localhost:5173`, and vite forwards the Host header
  * unchanged).
  */
-function collabUrl(req: FastifyRequest): string {
-  const host = req.headers.host ?? `localhost:${config.port}`
-  // `x-forwarded-proto` ahead of `req.protocol`: the app does not enable
-  // `trustProxy`, so behind a TLS-terminating proxy `req.protocol` is `http`
-  // and an https:// page would be handed a `ws://` URL that the browser blocks
-  // as mixed content. Spoofing the header only breaks the spoofer's own
-  // connection, so it grants nothing.
-  const forwarded = req.headers['x-forwarded-proto']
-  const proto = String(forwarded ?? req.protocol).split(',')[0]!.trim()
-  return `${proto === 'https' ? 'wss' : 'ws'}://${host}/collab`
-}
+/**
+ * The relay's path, NOT an absolute URL — the client resolves it against its
+ * own origin.
+ *
+ * This used to build an absolute URL from the `host` header, which is wrong
+ * everywhere there is a proxy in front, and there always is: in dev, vite
+ * forwards `/api` to :3000 and fastify sees `localhost:3000`, so the browser
+ * was handed `ws://localhost:3000/collab` — the API port, which has no relay
+ * on it, and every editor got a 404 handshake. The same shape breaks behind
+ * nginx, and reading `x-forwarded-host` only moves the guess.
+ *
+ * The browser already knows the origin it loaded from, and that is the one
+ * origin guaranteed to reach back through whatever proxy served the page. So
+ * the server names the path and the client supplies the rest.
+ */
+export const COLLAB_PATH = '/collab'
 
 /**
  * Read-only live view: SSE stream of note states. Viewers get the same
@@ -63,7 +68,7 @@ export function syncRoutes(app: FastifyInstance) {
    */
   app.post('/collab/ticket', async (req) => {
     const { token, expiresAt } = issueTicket(req.user!.id)
-    return { token, url: collabUrl(req), expiresAt: expiresAt.toISOString() }
+    return { token, url: COLLAB_PATH, expiresAt: expiresAt.toISOString() }
   })
 
   app.get<{ Params: { id: string; '*': string } }>(

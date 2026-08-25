@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Y from 'yjs'
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider'
-import { collabDocName, getCollabTicket } from '../api/collab.js'
+import { collabDocName, collabSocketUrl, getCollabTicket } from '../api/collab.js'
 import type { CollabTicket } from '../api/collab.js'
 import { ApiError } from '../lib/api.js'
 import { inkFor } from '../lib/ink.js'
@@ -203,7 +203,8 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
       let firstToken: string | null = first.token
 
       provider = new HocuspocusProvider({
-        url: first.url,
+        // Resolved against this page's origin — see collabSocketUrl.
+        url: collabSocketUrl(first.url, window.location.href),
         name: docName,
         document: ydoc,
         // A ticket is single-use, so every reconnect needs a fresh one. The
