@@ -7,6 +7,7 @@ import rateLimit from '@fastify/rate-limit'
 import { config } from './config.js'
 import { authPlugin } from './auth/plugin.js'
 import { authRoutes } from './auth/routes.js'
+import { accountRoutes } from './auth/account-routes.js'
 import { adminRoutes } from './auth/admin-routes.js'
 import { adminDashboardRoutes } from './auth/admin-dashboard-routes.js'
 import { mfaRoutes } from './auth/mfa-routes.js'
@@ -52,6 +53,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(
     async (api) => {
       authRoutes(api, { isProd: config.isProd })
+      await api.register(async (a) => accountRoutes(a))
       await api.register(async (a) => notificationRoutes(a))
       await api.register(async (a) => mfaRoutes(a))
       await api.register(async (a) => vaultRoutes(a))

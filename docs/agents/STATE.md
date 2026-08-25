@@ -4,33 +4,36 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
 - **Phase**: UI, executing `specs/2026-08-22-remaining-ui-design.md` (10 locked
   decisions, 7 units). **PRs target `dev` directly, never stacked.** Promotion
-  `dev → prod` needs Taha's explicit OK each time.
-- **Backend**: complete + seven UI-driven additions. `pnpm profile-graph`
-  ≈500ms at 10k notes, **Louvain NOT the bottleneck**. Semantic edges stored
-  **directed**; purge paths clear them explicitly (no FK).
-- **Units 1–3 shipped** (detail in README + git log):
+  `dev → prod` needs Taha's explicit OK each time. Backend complete + twelve
+  UI-driven additions; `pnpm profile-graph` ≈500ms at 10k notes, **Louvain NOT
+  the bottleneck**; semantic edges stored **directed** (purges clear them, no FK).
+- **Units 1–4 shipped** (detail in README + git log):
   - **1** graph Home (Canvas 2D + `d3-force`; SVG and cytoscape FAILED the
-    probe), community aggregation + drill-down, shell, vault lifecycle, ⌘K,
-    notifications. **Louvain is seeded** — drill-down addresses communities by
-    number, so ids must stay stable.
-  - **2** vault settings **modal stack** (sharing, mergeable, vault MCP,
-    export), `/team`, `GET /users/lookup` (exact-match, non-enumerable),
-    `/teams/:id/stats` (aggregates only, scoped server-side).
-  - **3** `/admin`, admins only and gated *before* any query fires: approval
-    queue (shows whether the pending email is verified), user roster
-    (promote/deactivate, never yourself), vault+team oversight with owner
-    reassignment, access view (shares + MCP connections, force-revocable),
-    paginated security log + audit trail, stats, backup. Metadata only
-    — no endpoint behind it serves note text. Added
-    `GET /admin/mcp-connections`, `emailVerifiedAt` on `GET /admin/users`.
-    Signup/verify state the approval wait; **login stays generic on purpose**
-    (enumeration) — do not "fix" it.
-- **Current task**: none. Unit 3 open as a PR off `dev`. **Next**: 4
-  settings+MFA · 5 trash/history/import · 6 collab (yjs) · 7 repositories.
-- **Still no client UI**: everything units 4–7 cover. MCP needs none.
+    probe), shell, vault lifecycle, ⌘K. **Louvain is seeded** — drill-down
+    addresses communities by number, so ids must stay stable.
+  - **2** vault settings **modal stack**, `/team`, `/users/lookup`
+    (exact-match, non-enumerable), `/teams/:id/stats` (aggregates only).
+  - **3** `/admin`, admins only, gated *before* any query fires: approvals,
+    roster, vault+team oversight, access view (shares + MCP connections,
+    force-revocable), paginated security log + audit trail, stats, backup.
+    **Metadata only.** Signup/verify state the approval wait; **login stays
+    generic on purpose** (enumeration).
+  - **4** `/settings`: TOTP enrolment (backup codes once via `SecretReveal`),
+    change email (clears verification — sign-in fails until re-verified, and
+    the copy says so), change password (kills other sessions, spares yours),
+    ONE notification-email switch, account-scope `McpPanel` (same component as
+    the vault list, per spec), account export. Admin can mandate MFA
+    instance-wide; `RequireAuth` then routes unenrolled users to `/settings`
+    and the disable control is not rendered at all. Added to the API:
+    `mfaEnabledAt`+`mfaRequired` on `/me`, `/me/{password,email,preferences,
+    export}`, `users.emailNotifications`. **Per-type notification prefs stay
+    OUT of scope** (the notifications spec defers them).
+- **Current task**: none. Unit 4 open as a PR off `dev`. **Next**: 5
+  trash/history/import · 6 collab (yjs) · 7 repositories.
+- **Still no client UI**: everything units 5–7 cover. MCP needs none.
 - **`apiFetch` declared JSON with no body** → every bodyless DELETE/POST 400'd
-  in a browser across all three units; tests stub `fetch` (#110, fixed). Click
-  a unit in a real browser before calling it done.
+  in a browser; tests stub `fetch` (#110, fixed). Click a unit in a real
+  browser before calling it done.
 - **Test-that-cannot-fail: SEVEN times**, always a fixture too uniform to tell
   working from broken. Mutation-verify every new test.
 - **Deferred**: cloud backups, cli-visualizer (#9), symbol embeddings, partial
