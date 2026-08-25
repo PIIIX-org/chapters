@@ -99,8 +99,9 @@ Slice 2a (vault tree + read-only note view), and Slice 2b (the Editor —
 CodeMirror 6 editing, permission-aware lock, editable frontmatter property
 panel, note create/rename/delete, and full live-preview) and Slice 2c
 (wikilinks — autocomplete, clickable navigation, link-to-create), Slice 3
-(Search — the ⌘K overlay), and Slice 4/Unit 2 (Sharing & team — the vault
-settings modal stack and the Team page) are done — tracked in
+(Search — the ⌘K overlay), Slice 4/Unit 2 (Sharing & team — the vault
+settings modal stack and the Team page), and Unit 3 (Admin & the onboarding
+path) are done — tracked in
 [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
@@ -170,6 +171,24 @@ match only, active users only, never a directory listing — used to resolve
 an email to a user before adding them to a team) and
 `GET /api/teams/:id/stats` (aggregate counts only, scoped to vaults the
 caller can already see).
+
+Unit 3 (Admin & the onboarding path) closes the hole that kept anyone but
+the bootstrap admin out of an instance: signup leaves an account
+`pending_approval` with an unverified email, login requires both to be
+settled, and approval had no UI at all. `/admin` (admins only, reachable
+via ⌘K) now carries the approval queue, a user roster with promote and
+deactivate, vault and team oversight with ownership reassignment, an access
+view listing every share and every MCP connection on the instance with
+force-revoke on each, the security-event log and content audit trail (both
+paginated), aggregate instance stats, and the instance backup download.
+Everything there is metadata: it shows *who changed which note when*, never
+what the change said — no admin, on any instance, can read a note they have
+not been given access to, and no endpoint behind the page serves one.
+Restore stays a CLI (`pnpm restore-backup`) on purpose; restoring over a
+live instance is not a button. The signup and verify-email screens now say
+plainly that an administrator must approve the account, while the login
+error stays a generic "invalid credentials" — naming the reason there would
+tell a stranger whether an address has an account.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
