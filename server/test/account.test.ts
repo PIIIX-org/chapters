@@ -7,6 +7,9 @@ import { db } from '../src/db/client.js'
 import { users } from '../src/db/schema.js'
 import { ensureInstanceState } from '../src/auth/bootstrap.js'
 import { setInstanceMfaRequirement } from '../src/auth/mfa.js'
+import { sentMails } from '../src/email/mailer.js'
+import { notify } from '../src/notifications/notify.js'
+import { notifications } from '../src/db/schema.js'
 import { createActiveUser, loginCookie, uniqueEmail, TEST_PASSWORD } from './helpers.js'
 
 let app: FastifyInstance
@@ -266,5 +269,157 @@ describe('GET /me/export', () => {
     expect(names).toContain(`vaults/${ownedId}/people/ada.md`)
     expect(names).toContain(`vaults/${ownedId}/manifest.json`)
     expect(names.some((n) => n.startsWith(`vaults/${sharedId}/`))).toBe(false)
+  })
+})
+describe('holes the unit-4 review found', () => {
+  it('a superseded verification code cannot verify a later address', async () => {
+    // The attack this closes: tokens are bound to a USER, not to the address
+    // they were mailed to. Change to an address you control, keep that code,
+    // then change to someone else's — without superseding, the first code
+    // verifies the second address and you hold a verified account under an
+    // address that never received mail.
+    const user = await createActiveUser()
+    const cookie = await loginCookie(app, user.email)
+
+    const mine = uniqueEmail('mine')
+    await app.inject({
+      method: 'POST',
+      url: '/api/me/email',
+      headers: { cookie },
+      body: { email: mine, password: TEST_PASSWORD },
+    })
+    const firstCode = /code is (\S+)/.exec(
+      [...sentMails].reverse().find((m) => m.to === mine)!.text,
+    )![1]!
+
+    const someoneElse = uniqueEmail('victim')
+    await app.inject({
+      method: 'POST',
+      url: '/api/me/email',
+      headers: { cookie },
+      body: { email: someoneElse, password: TEST_PASSWORD },
+    })
+
+    const stolen = await app.inject({
+      method: 'POST',
+      url: '/api/verify-email',
+      body: { email: someoneElse, code: firstCode },
+    })
+    expect(stolen.statusCode).toBe(400)
+
+    const [row] = await db.select().from(users).where(eq(users.id, user.id))
+    expect(row!.emailVerifiedAt).toBeNull()
+  })
+
+  it('the code actually mailed for the new address still verifies it', async () => {
+    // The other side of the same coin: superseding must not break the real
+    // path. Without this, deleting the whole mail block from /me/email would
+    // leave the suite green while locking out everyone who changes an address.
+    const user = await createActiveUser()
+    const cookie = await loginCookie(app, user.email)
+    const next = uniqueEmail('next')
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/me/email',
+      headers: { cookie },
+      body: { email: next, password: TEST_PASSWORD },
+    })
+    const mail = [...sentMails].reverse().find((m) => m.to === next)
+    expect(mail, 'no verification mail was sent to the new address').toBeDefined()
+    const code = /code is (\S+)/.exec(mail!.text)![1]!
+
+    const verified = await app.inject({
+      method: 'POST',
+      url: '/api/verify-email',
+      body: { email: next, code },
+    })
+    expect(verified.statusCode).toBe(200)
+    expect((await login(next, TEST_PASSWORD)).statusCode).toBe(200)
+  })
+
+  it('an instance MFA mandate reaches every /me route, not just the ones past it', async () => {
+    // /api/me was prefix-matched in the exemption list, which quietly exempted
+    // /me/password, /me/email, /me/preferences and /me/export — letting an
+    // unenrolled user under a mandate change their address and download every
+    // note they own, the exact reach the mandate exists to stop.
+    const user = await createActiveUser()
+    const cookie = await loginCookie(app, user.email)
+    await setInstanceMfaRequirement(true)
+    try {
+      // Still reachable: reading who you are, and the enrolment surface itself.
+      expect(
+        (await app.inject({ method: 'GET', url: '/api/me', headers: { cookie } })).statusCode,
+      ).toBe(200)
+
+      // Bodies are schema-valid on purpose: Fastify validates before the
+      // preHandler runs, so an empty body would 400 without the mandate ever
+      // being consulted and this would pass for the wrong reason.
+      for (const req of [
+        { method: 'GET' as const, url: '/api/me/export', body: undefined },
+        { method: 'GET' as const, url: '/api/me/preferences', body: undefined },
+        {
+          method: 'POST' as const,
+          url: '/api/me/password',
+          body: { currentPassword: TEST_PASSWORD, newPassword: 'a-brand-new-password' },
+        },
+        {
+          method: 'POST' as const,
+          url: '/api/me/email',
+          body: { email: uniqueEmail('blocked'), password: TEST_PASSWORD },
+        },
+        {
+          method: 'PUT' as const,
+          url: '/api/me/preferences',
+          body: { emailNotifications: false },
+        },
+      ]) {
+        const res = await app.inject({
+          method: req.method,
+          url: req.url,
+          headers: { cookie },
+          ...(req.body ? { body: req.body } : {}),
+        })
+        expect(res.statusCode, `${req.method} ${req.url} escaped the mandate`).toBe(403)
+      }
+
+      // And the password really was not changed by that attempt.
+      expect((await login(user.email, TEST_PASSWORD)).statusCode).toBe(200)
+    } finally {
+      await setInstanceMfaRequirement(false)
+    }
+  })
+
+  it('the email opt-out actually stops the mail, and never the in-app row', async () => {
+    // Previously this was only tested as a column round-trip: reverting
+    // notify.ts to ignore the flag passed the whole suite, because nothing in
+    // server/test/ called notify() at all.
+    const optedOut = await createActiveUser()
+    const cookie = await loginCookie(app, optedOut.email)
+    await app.inject({
+      method: 'PUT',
+      url: '/api/me/preferences',
+      headers: { cookie },
+      body: { emailNotifications: false },
+    })
+
+    const before = sentMails.length
+    await notify({ recipientId: optedOut.id, type: 'vault_shared', message: 'quiet please' })
+    expect(sentMails.slice(before).some((m) => m.to === optedOut.email)).toBe(false)
+
+    // The in-app row is the activity feed and is never optional.
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.recipientId, optedOut.id))
+    expect(rows.some((r) => r.message === 'quiet please')).toBe(true)
+
+    // And someone who left it on still gets the mail — a fixture of one
+    // opted-out user cannot tell a working flag from a broken mailer.
+    const optedIn = await createActiveUser()
+    const mark = sentMails.length
+    await notify({ recipientId: optedIn.id, type: 'vault_shared', message: 'mail me' })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(sentMails.slice(mark).some((m) => m.to === optedIn.email)).toBe(true)
   })
 })

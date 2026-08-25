@@ -22,7 +22,7 @@ const credentialsSchema = {
   },
 } as const
 
-const strictRateLimit = {
+export const strictRateLimit = {
   // Per-IP throttle on the abuse-sensitive routes; effectively off under test
   // (tests exercise the per-account lockout instead).
   rateLimit: {

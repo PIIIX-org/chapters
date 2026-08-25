@@ -185,4 +185,63 @@ describe('MfaSection', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('not signed in')
     expect(screen.queryByRole('button', SETUP_BUTTON)).toBeNull()
   })
+  it('never shows the un-enrol button while the session is still catching up', async () => {
+    // The window this closes: enable succeeds, backup codes appear, but the
+    // session refetch has not landed, so a branch gated on mfaEnabledAt alone
+    // renders the not-enrolled panel under the codes — with a live Set-up
+    // button that POSTs /mfa/setup and silently un-enrols the user. The
+    // default stub hides it by resolving in the same microtask, so this one
+    // delays the post-enable /api/me deliberately.
+    let enabled = false
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const key = `${init?.method ?? 'GET'} ${url}`
+      if (key === 'GET /api/me') {
+        const body = enabled ? ENROLLED : NOT_ENROLLED
+        // Only the refetch is slow; the first read resolves immediately.
+        if (!enabled) return Promise.resolve(mockJsonResponse(200, body))
+        return new Promise<Response>((resolve) =>
+          setTimeout(() => resolve(mockJsonResponse(200, body)), 150),
+        )
+      }
+      if (key === 'POST /api/mfa/setup') return Promise.resolve(mockJsonResponse(200, SETUP))
+      if (key === 'POST /api/mfa/enable') {
+        enabled = true
+        return Promise.resolve(mockJsonResponse(200, { status: 'enabled', backupCodes: BACKUP_CODES }))
+      }
+      throw new Error(`unstubbed request: ${key}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithClient(<MfaSection />)
+    await userEvent.click(await screen.findByRole('button', SETUP_BUTTON))
+    await userEvent.type(await screen.findByLabelText(/6-digit code/i), '123456')
+    await userEvent.click(screen.getByRole('button', { name: 'Turn on two-factor authentication' }))
+
+    // The codes are on screen, so enrolment has definitely happened.
+    expect(await screen.findByText('aaaa-1111', { exact: false })).toBeInTheDocument()
+    // …and in that same moment the panel must already read as enrolled.
+    expect(screen.queryByRole('button', SETUP_BUTTON)).toBeNull()
+    expect(screen.queryByText(/Off\. Signing in asks for your password/i)).toBeNull()
+  })
+
+  it('tells someone under a mandate why they are being asked, not just that they can enrol', async () => {
+    // Without this the whole `mfaRequired` read in the not-enrolled branch can
+    // be deleted and every other test stays green: they only assert Set-up is
+    // present and Disable absent, which is equally true unmandated.
+    stubFetch({ 'GET /api/me': session(NOT_ENROLLED_MANDATED) })
+    renderWithClient(<MfaSection />)
+
+    expect(await screen.findByText(/An admin requires two-factor authentication/i)).toBeInTheDocument()
+  })
+
+  it('does not say that to someone the mandate does not apply to', async () => {
+    // The other half: without it the assertion above passes against hardcoded
+    // copy that ignores mfaRequired entirely. Separate test rather than a
+    // second render, because cleanup only runs between tests.
+    stubFetch({ 'GET /api/me': session(NOT_ENROLLED) })
+    renderWithClient(<MfaSection />)
+
+    await screen.findByRole('button', SETUP_BUTTON)
+    expect(screen.queryByText(/An admin requires two-factor authentication/i)).toBeNull()
+  })
 })

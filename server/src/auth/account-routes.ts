@@ -7,6 +7,7 @@ import { hashPassword, verifyPassword } from './passwords.js'
 import { destroyUserSessions } from './sessions.js'
 import { generateCode } from './tokens.js'
 import { createEmailToken } from './email-tokens.js'
+import { strictRateLimit } from './routes.js'
 import { logSecurityEvent } from './security-events.js'
 
 // Same floor as signup and reset-password — one minimum, not three.
@@ -19,6 +20,11 @@ export function accountRoutes(app: FastifyInstance) {
   app.post<{ Body: { currentPassword: string; newPassword: string } }>(
     '/me/password',
     {
+      // Both of these verify a password, so both are password-guessing
+      // oracles for anyone holding a stolen session cookie — the 400/200 split
+      // is the answer. Every other password-verifying route in this codebase
+      // is throttled; without this they fall back to the global 1000/min.
+      config: strictRateLimit,
       schema: {
         body: {
           type: 'object',
@@ -54,6 +60,7 @@ export function accountRoutes(app: FastifyInstance) {
   app.post<{ Body: { email: string; password: string } }>(
     '/me/email',
     {
+      config: strictRateLimit,
       schema: {
         body: {
           type: 'object',

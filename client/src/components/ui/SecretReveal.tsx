@@ -38,7 +38,13 @@ export function SecretReveal({ label, secret, note, onDismiss }: SecretRevealPro
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted p-3">
       <span className="text-sm font-medium text-foreground">{label}</span>
       <div className="flex items-center gap-2">
-        <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-border bg-card px-2 py-1 font-mono text-sm text-foreground">
+        {/* whitespace-pre-wrap, not nowrap: MFA backup codes arrive as one
+            newline-separated string, and nowrap collapsed all of them onto a
+            single horizontally-scrolling line — unreadable in exactly the
+            situation they exist for, someone copying them down by hand after
+            losing their phone. A long MCP token now wraps instead of
+            scrolling, which is no worse to read. */}
+        <code className="flex-1 whitespace-pre-wrap break-all rounded border border-border bg-card px-2 py-1 font-mono text-sm text-foreground">
           {secret}
         </code>
         <Button type="button" size="xs" variant="outline" onClick={handleCopy}>

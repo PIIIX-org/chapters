@@ -48,6 +48,16 @@ export function MfaSection() {
 
   const { mfaEnabledAt, mfaRequired } = session.data
 
+  // `enable.isSuccess` is part of this, not decoration. The mutation flips
+  // mfaEnabledAt server-side, but the session only catches up on an async
+  // refetch — and in that window a branch gated on mfaEnabledAt alone renders
+  // the not-enrolled panel *underneath the freshly issued backup codes*,
+  // complete with a live "Set up two-factor authentication" button. That
+  // button POSTs /mfa/setup, which clears mfaEnabledAt and issues a new
+  // secret: one click and the user is silently un-enrolled, holding codes that
+  // no longer work.
+  const enrolled = Boolean(mfaEnabledAt) || enable.isSuccess
+
   function handleEnable(e: FormEvent) {
     e.preventDefault()
     enable.mutate(code, {
@@ -88,12 +98,16 @@ export function MfaSection() {
         />
       )}
 
-      {mfaEnabledAt ? (
+      {enrolled ? (
         <>
           <p className="text-sm text-foreground">
             On. Signing in asks for a code from your authenticator app after your password.
           </p>
-          <p className="font-mono text-xs text-muted-foreground">Turned on {formatDate(mfaEnabledAt)}</p>
+          {mfaEnabledAt && (
+            <p className="font-mono text-xs text-muted-foreground">
+              Turned on {formatDate(mfaEnabledAt)}
+            </p>
+          )}
           {mfaRequired ? (
             // State C. The server 403s a disable while the mandate is on, so
             // there is no control here at all — a button that always fails is
@@ -166,7 +180,7 @@ export function MfaSection() {
           <div className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Setup key</span>
             <code className="overflow-x-auto rounded border border-border bg-muted px-2 py-1 font-mono text-sm break-all text-foreground">
-              {'ZZZZ'}
+              {start.data.secret}
             </code>
           </div>
           <div className="flex flex-col gap-1">

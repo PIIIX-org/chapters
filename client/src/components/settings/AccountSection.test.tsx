@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router'
 import { mockJsonResponse } from '../../lib/api.js'
 import { expectNoA11yViolations } from '../../test/axe.js'
 import type { SessionUser } from '../../api/auth.js'
@@ -19,11 +20,15 @@ const SESSION: SessionUser = {
   mfaRequired: false,
 }
 
+// MemoryRouter: the success state links to /verify-email, and a bare <Link>
+// throws outside a router.
 function renderWithClient() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
-      <AccountSection />
+      <MemoryRouter>
+        <AccountSection />
+      </MemoryRouter>
     </QueryClientProvider>,
   )
 }
@@ -83,7 +88,10 @@ describe('AccountSection', () => {
 
   it('surfaces the wrong-current-password error from the server', async () => {
     const fetchMock = stubFetch(() =>
-      mockJsonResponse(403, { error: 'current password is incorrect' }),
+      // 400, which is what the server actually returns for a wrong current
+      // password (account-routes.ts). A 403 fixture asserted a contract the
+      // server does not honour.
+      mockJsonResponse(400, { error: 'current password is incorrect' }),
     )
     renderWithClient()
 
@@ -149,5 +157,50 @@ describe('AccountSection', () => {
     // The 409 body carries no message, so anything status-blind renders
     // "Request failed (409)" here.
     expect(alert).not.toHaveTextContent(/Request failed/)
+  })
+  it('names the password length rule itself instead of relaying "Bad Request"', async () => {
+    // The server's schema rejection puts the literal string "Bad Request" in
+    // the `error` field, which is exactly what ApiError surfaces — so without
+    // a local check the person is told "Bad Request" and never learns the rule.
+    const fetchMock = stubFetch()
+    renderWithClient()
+
+    await userEvent.type(await screen.findByLabelText('Current password'), 'old-password')
+    await userEvent.type(screen.getByLabelText('New password'), 'secret')
+    await userEvent.type(screen.getByLabelText('Confirm new password'), 'secret')
+    await userEvent.click(screen.getByRole('button', { name: 'Change password' }))
+
+    expect(screen.getByRole('alert')).toHaveTextContent('at least 8 characters')
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/me/password', expect.anything())
+  })
+
+  it('rejects a malformed address before the lockout confirm, not after it', async () => {
+    // The server enforces `format: email` and its rejection also arrives as
+    // "Bad Request" — after the person has already read and accepted the
+    // lockout consequence. type="email" cannot help: ConfirmAction's button is
+    // type="button", so no native form validation ever fires.
+    const fetchMock = stubFetch()
+    renderWithClient()
+
+    await userEvent.type(await screen.findByLabelText('New email address'), 'sam')
+    await userEvent.type(screen.getByLabelText('Your password'), 'old-password')
+    await userEvent.click(screen.getByRole('button', { name: 'Change email address' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Change email' }))
+
+    expect(screen.getByRole('alert')).toHaveTextContent('does not look like an email address')
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/me/email', expect.anything())
+  })
+
+  it('offers a way to the screen that accepts the code it just told you about', async () => {
+    stubFetch(() => mockJsonResponse(200, { status: 'verification_sent' }))
+    renderWithClient()
+
+    await userEvent.type(await screen.findByLabelText('New email address'), 'new@example.com')
+    await userEvent.type(screen.getByLabelText('Your password'), 'old-password')
+    await userEvent.click(screen.getByRole('button', { name: 'Change email address' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Change email' }))
+
+    const link = await screen.findByRole('link', { name: /enter the code/i })
+    expect(link).toHaveAttribute('href', '/verify-email')
   })
 })

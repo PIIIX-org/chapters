@@ -7,11 +7,35 @@ const TTL_MS = 30 * 60 * 1000
 
 type Purpose = 'verify_email' | 'password_reset'
 
+/**
+ * Issues a token, superseding every outstanding one of the same purpose for
+ * that user.
+ *
+ * The superseding half is load-bearing, not tidiness. A token is bound to a
+ * *user*, not to the address it was mailed to — so without it, changing your
+ * email twice inside the TTL leaves the first code live and usable against the
+ * second address: request a change to an address you control, keep that code,
+ * change again to someone else's address, and submit the first code. The
+ * account ends up verified under an address that never received mail. Binding
+ * tokens to an address would need a column; making a new code kill the old one
+ * closes it outright, and "the latest code is the only one that works" is what
+ * a person already expects.
+ */
 export async function createEmailToken(
   userId: string,
   purpose: Purpose,
   raw: string,
 ): Promise<void> {
+  await db
+    .update(emailTokens)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(emailTokens.userId, userId),
+        eq(emailTokens.purpose, purpose),
+        isNull(emailTokens.usedAt),
+      ),
+    )
   await db.insert(emailTokens).values({
     userId,
     purpose,
