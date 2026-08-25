@@ -45,4 +45,17 @@ describe('apiFetch', () => {
       expect((err as ApiError).message).toBe('invalid setup token')
     }
   })
+  it('declares JSON only when it is actually sending JSON', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, {}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    // Fastify 400s (FST_ERR_CTP_EMPTY_JSON_BODY) on a request that declares
+    // application/json and sends no body — which is every DELETE and every
+    // bodyless POST in this client.
+    await apiFetch('/vaults/v1', { method: 'DELETE' })
+    expect(fetchMock.mock.calls[0]![1].headers).not.toHaveProperty('Content-Type')
+
+    await apiFetch('/vaults', { method: 'POST', body: JSON.stringify({ name: 'x' }) })
+    expect(fetchMock.mock.calls[1]![1].headers).toHaveProperty('Content-Type', 'application/json')
+  })
 })
