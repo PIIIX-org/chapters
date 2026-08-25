@@ -40,7 +40,9 @@ export function VerifyEmailPage() {
         <CardContent>
           {verified ? (
             <p className="text-sm text-muted-foreground">
-              Email verified. An admin needs to approve your account before you can log in.
+              Email verified. One thing left: an administrator on this instance has to approve your account.
+              Until they do, signing in will keep saying your credentials are wrong — that is the approval
+              waiting, not your password.
             </p>
           ) : (
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">

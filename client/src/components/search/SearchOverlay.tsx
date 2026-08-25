@@ -5,6 +5,7 @@ import { Input } from '../ui/input.js'
 import { useSearch } from '../../hooks/useSearch.js'
 import { useVaults } from '../../hooks/useVaults.js'
 import { useCreateVault } from '../../hooks/useVaultMutations.js'
+import { useSession } from '../../hooks/useSession.js'
 import { GraphFilters, graphFiltersFromSearchParams, type FilterableNode } from '../graph/GraphFilters.js'
 import { cn } from '../../lib/utils.js'
 import type { SearchResult } from '../../api/search.js'
@@ -60,6 +61,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const vaults = useVaults()
+  const session = useSession()
   const createVault = useCreateVault()
 
   // Same `vault` param the shell's ScopePicker owns (client/src/components/
@@ -154,9 +156,8 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   const lowerQuery = query.toLowerCase()
 
   // Command destinations are limited to routes that actually exist in
-  // router.tsx today. Do NOT add settings/admin/invite commands here until a
-  // later unit ships those pages — a command that goes nowhere is worse than
-  // no command at all.
+  // router.tsx today. Do NOT add a command for a page a later unit has not
+  // shipped yet — a command that goes nowhere is worse than no command at all.
   const navCommands: Command[] = [
     { id: 'home', label: 'Go to graph home', run: () => navigate('/') },
     ...(vaults.data ?? []).map((v) => ({
@@ -165,6 +166,11 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
       run: () => navigate(`/vaults/${v.id}`),
     })),
     { id: 'team', label: 'Go to team', run: () => navigate('/team') },
+    // Admins only: /admin renders a "this area is for admins" wall to everyone
+    // else, and offering a door that opens onto that is worse than no door.
+    ...(session.data?.role === 'admin'
+      ? [{ id: 'admin', label: 'Go to admin', run: () => navigate('/admin') }]
+      : []),
   ].filter((c) => c.label.toLowerCase().includes(lowerQuery))
 
   const commands: Command[] = [...navCommands]

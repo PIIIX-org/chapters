@@ -19,6 +19,10 @@ export function adminRoutes(app: FastifyInstance) {
           email: users.email,
           status: users.status,
           role: users.role,
+          // Login needs `active` AND a verified email (routes.ts:169).
+          // Without this column the approval queue cannot tell an admin that
+          // approving this row still leaves the person locked out.
+          emailVerifiedAt: users.emailVerifiedAt,
           createdAt: users.createdAt,
         })
         .from(users)
