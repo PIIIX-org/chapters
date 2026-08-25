@@ -127,9 +127,13 @@ function NoteEditor({ vaultId, path, vaultName, frontmatter, initialBody, readOn
       </div>
       <div className="flex min-h-0 flex-1">
         <div ref={editorRef} className="min-w-0 flex-1 overflow-auto" />
+        {/* The panel renders its own "History" heading, so the rail is
+            labelled by it rather than repeating the word above it. */}
         {showHistory && (
-          <aside className="w-80 shrink-0 overflow-auto border-l border-border px-4 py-4">
-            <h2 className="mb-2 font-display text-lg text-foreground">History</h2>
+          <aside
+            aria-label="Revision history"
+            className="w-80 shrink-0 overflow-auto border-l border-border px-4 py-4"
+          >
             <RevisionHistory vaultId={vaultId} path={path} access={access} />
           </aside>
         )}
