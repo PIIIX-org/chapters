@@ -74,7 +74,7 @@ export function AccountSection() {
 
   const emailError =
     emailFieldError ??
-    (changeEmail.error ? (changeEmail.error.message) : null)
+    (changeEmail.error ? (changeEmail.error.status === 409 ? TAKEN : changeEmail.error.message) : null)
 
   return (
     <div className="flex flex-col gap-8">

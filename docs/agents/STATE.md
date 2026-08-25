@@ -28,12 +28,10 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
     export}`, `users.emailNotifications`. **Per-type notification prefs stay
     OUT of scope** (the notifications spec defers them).
 - **Current task**: none. Unit 4 open as a PR off `dev`. **Next**: 5
-  trash/history/import · 6 collab (yjs) · 7 repositories.
-- **Still no client UI**: everything units 5–7 cover. MCP needs none.
-- **`apiFetch` declared JSON with no body** → every bodyless DELETE/POST 400'd
-  in a browser; tests stub `fetch` (#110, fixed). Click a unit in a real
-  browser before calling it done.
-- **Mutation-verify every new test** — break the impl, watch it fail, restore.
+  trash/history/import · 6 collab (yjs) · 7 repositories — no client UI yet.
+- **Mutation-verify every new test** (break impl, watch it fail, restore) AND
+  click the unit in a real browser: `apiFetch` sent JSON with no body, 400'ing
+  every bodyless DELETE/POST, and the stubbed-`fetch` suite never saw it (#110).
 - **Deferred**: cloud backups, cli-visualizer (#9), symbol embeddings, partial
   restore, single-process arch. **Decided against 2026-08-22, do NOT re-open**:
   Leiden, a graph DB, GraphRAG summaries, cross-file calls.

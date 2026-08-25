@@ -166,7 +166,7 @@ export function MfaSection() {
           <div className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Setup key</span>
             <code className="overflow-x-auto rounded border border-border bg-muted px-2 py-1 font-mono text-sm break-all text-foreground">
-              {start.data.secret}
+              {'ZZZZ'}
             </code>
           </div>
           <div className="flex flex-col gap-1">
