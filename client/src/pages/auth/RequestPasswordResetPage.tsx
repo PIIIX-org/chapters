@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { Link } from 'react-router'
 import { Button } from '../../components/ui/button.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js'
 import { Input } from '../../components/ui/input.js'
@@ -50,6 +51,11 @@ export function RequestPasswordResetPage() {
               <Button type="submit" disabled={submitting}>
                 Send reset link
               </Button>
+              <p className="text-center text-sm text-muted-foreground">
+                <Link to="/login" className="text-foreground underline">
+                  Back to sign in
+                </Link>
+              </p>
             </form>
           )}
         </CardContent>

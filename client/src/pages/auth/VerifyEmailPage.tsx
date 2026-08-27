@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { useLocation } from 'react-router'
+import { Link, useLocation } from 'react-router'
 import { Button } from '../../components/ui/button.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js'
 import { Input } from '../../components/ui/input.js'
@@ -7,6 +7,7 @@ import { Label } from '../../components/ui/label.js'
 import { FormError } from '../../components/FormError.js'
 import { verifyEmail } from '../../api/auth.js'
 import { ApiError } from '../../lib/api.js'
+import { AuthSteps } from '../../components/auth/AuthSteps.js'
 
 export function VerifyEmailPage() {
   const location = useLocation()
@@ -38,12 +39,26 @@ export function VerifyEmailPage() {
           <CardTitle className="font-display text-xl">Verify your email</CardTitle>
         </CardHeader>
         <CardContent>
+          <AuthSteps current={verified ? 'Admin approval' : 'Confirm your email'} />
           {verified ? (
-            <p className="text-sm text-muted-foreground">
-              Email verified. One thing left: an administrator on this instance has to approve your account.
-              Until they do, signing in will keep saying your credentials are wrong — that is the approval
-              waiting, not your password.
-            </p>
+            // Step 3, and the only step the person cannot act on. It does end
+            // by itself: the approve handler calls notify(), which writes the
+            // in-app row AND emails them — so "we'll email you" is a promise
+            // the server actually keeps, given SMTP is configured.
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-foreground">Email confirmed.</p>
+              <p className="text-sm text-muted-foreground">
+                One thing left, and it is not yours to do: an administrator on this instance has to approve
+                your account. We&rsquo;ll email you the moment they do.
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Until then, signing in will keep saying your email or password is wrong. That is the approval
+                waiting, not your password — nothing is broken and there is nothing to fix.
+              </p>
+              <Link to="/login" className="w-fit text-sm text-foreground underline">
+                Go to sign in
+              </Link>
+            </div>
           ) : (
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               <div className="flex flex-col gap-1.5">
@@ -58,6 +73,11 @@ export function VerifyEmailPage() {
               <Button type="submit" disabled={submitting}>
                 Verify
               </Button>
+              <p className="text-center text-sm text-muted-foreground">
+                <Link to="/login" className="text-foreground underline">
+                  Back to sign in
+                </Link>
+              </p>
             </form>
           )}
         </CardContent>
