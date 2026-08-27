@@ -30,9 +30,10 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   branch on nothing. See `implementation.md` "Product shape".
 - **Current task**: sign-in path (PR open). Next: serve client from the API +
   single-port `/collab` + a real image and compose.
-- **Mutation-verify every new test** (break impl, watch it fail, restore) AND
-  click the unit in a real browser: `apiFetch` sent JSON with no body, 400'ing
-  every bodyless DELETE/POST, and the stubbed-`fetch` suite never saw it (#110).
+- **Mutation-verify every new test** AND click it in a real browser. Two whole
+  features shipped green and broken: `apiFetch` sent JSON with no body (#110),
+  and unit 6's ticket built its ws URL from fastify's `host`, which is the
+  proxy's — 537 tests passed while every editor 404'd the handshake.
 - **Deferred**: cloud backups, cli-visualizer (#9), symbol embeddings, partial
   restore, single-process arch. **Decided against 2026-08-22, do NOT re-open**:
   Leiden, a graph DB, GraphRAG summaries, cross-file calls.
