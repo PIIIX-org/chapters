@@ -23,6 +23,14 @@
 #    you need it, not after.
 # 3. The `chapters-data` volume holds the notes. They are files on disk,
 #    not rows in Postgres. `docker compose down -v` deletes them.
+# 4. POSTGRES_PASSWORD is applied ONLY when the database volume is first
+#    created. Changing it later leaves the stored password untouched, the
+#    app's DATABASE_URL now disagrees with it, and you get a crash loop
+#    on `password authentication failed` while the db reports healthy.
+#    (Do not debug this from inside the db container: local connections
+#    are trusted there, so `psql` succeeds with ANY password and tells
+#    you nothing.) To change it, rotate it in Postgres — or start over
+#    with `docker compose down -v`, which also deletes the notes.
 
 services:
   app:
