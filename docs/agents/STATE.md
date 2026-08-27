@@ -9,24 +9,18 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   **Louvain NOT the bottleneck**; semantic edges **directed** (purges clear
   them, no FK).
 - **Units 1–7 shipped.** Detail in README + git log; only the traps live here:
-  - **1** Louvain is **seeded** — drill-down addresses communities by number,
-    so ids must stay stable. Graph is Canvas 2D + `d3-force`.
-  - **3** `/admin` is gated *before* any query fires and is **metadata only**;
+  - **1** Louvain is **seeded** — drill-down addresses communities by number.
+  - **3** `/admin` is gated *before* any query fires, **metadata only**;
     **login stays generic on purpose** (account enumeration).
-  - **4** **per-type notification prefs stay OUT of scope** (the notifications
-    spec defers them) — the one switch is the whole feature.
+  - **4** **per-type notification prefs stay OUT of scope.**
   - **5** `actorType` is `user|mcp|collab`, no 'system'; **collab is a PERSON**
-    (vermillion) and is the commonest value. `/history/*` is metadata-only and
-    paginated — **MCP `note_history` deliberately untouched**.
-  - **6** **no autosave PUT** — the CRDT is the note (closes #66).
-    `POST /collab/ticket` returns a **path**, not a URL: behind any proxy the
-    server's `host` is the proxy's, so the browser resolves it.
-    **revoked ≠ offline** — revoked locks and KEEPS the doc (unsent text must
-    survive); offline shows the last saved copy read-only and retries.
-    Deploying needs `/collab` proxied to `COLLAB_PORT` — see README.
-  - **7** viewer is read-only forever (git stays the record of truth). Local
-    folders are watched; **`gitUrl`/`localPath` are owner-only** — they leaked
-    to viewers and to MCP `list_repositories`.
+    and is the commonest. `/history/*` metadata-only — **MCP `note_history`
+    deliberately untouched**.
+  - **6** **no autosave PUT** — the CRDT is the note. `/collab/ticket` returns
+    a **path**: behind any proxy the server's `host` is the proxy's.
+    **revoked ≠ offline** — revoked KEEPS the doc (unsent text must survive).
+  - **7** viewer read-only forever; local folders watched;
+    **`gitUrl`/`localPath` are owner-only** (they leaked to viewers + MCP).
 - **Phase: DEPLOYABLE** (`plans/2026-08-27-deployable.md`). UI phase complete;
   the product still cannot be run by anyone — nothing serves the client,
   compose is Postgres alone, `/collab` is routed nowhere.
