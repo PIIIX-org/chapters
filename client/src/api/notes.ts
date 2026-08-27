@@ -83,3 +83,21 @@ export interface DeleteNoteResult {
 export function deleteNote(vaultId: string, path: string): Promise<DeleteNoteResult> {
   return apiFetch(`/vaults/${vaultId}/notes/${path}`, { method: 'DELETE' })
 }
+
+/** A soft-deleted note. Restorable until the vault itself is purged. */
+export interface TrashedNote {
+  id: string
+  path: string
+  type: string
+  name: string
+  deletedAt: string
+}
+
+/** Requires edit access — the server guards it, this is not a client rule. */
+export function listTrashedNotes(vaultId: string): Promise<TrashedNote[]> {
+  return apiFetch(`/vaults/${vaultId}/trash`)
+}
+
+export function restoreNote(vaultId: string, noteId: string): Promise<{ id: string; path: string }> {
+  return apiFetch(`/vaults/${vaultId}/trash/${noteId}/restore`, { method: 'POST' })
+}

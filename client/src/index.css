@@ -49,6 +49,15 @@
   --border: #D8D2C2;
   --input: #D8D2C2;
   --ring: #BA3B1D;
+  /* Collaborator inks (client/src/lib/ink.ts). One token per hue, switched in
+     .dark like every other colour here, because the reader's theme — not the
+     author's — decides how a peer's cursor is painted. */
+  --ink-vermillion: #BA3B1D;
+  --ink-indigo: #3B4C8C;
+  --ink-plum: #7A3B6B;
+  --ink-ochre: #856619;
+  --ink-forest: #3B6B4C;
+  --ink-teal: #2B6E6B;
 }
 
 .dark {
@@ -68,6 +77,14 @@
   --border: #322C22;
   --input: #322C22;
   --ring: #E2683F;
+  /* The same six hues, lifted until each clears AA on this canvas. Nothing
+     changes hue: a collaborator is the same colour in both themes. */
+  --ink-vermillion: #E2683F;
+  --ink-indigo: #7C8FD9;
+  --ink-plum: #C97FB0;
+  --ink-ochre: #D9B24C;
+  --ink-forest: #6FBF8A;
+  --ink-teal: #4FA39F;
 }
 
 body {

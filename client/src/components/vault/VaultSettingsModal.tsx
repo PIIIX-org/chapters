@@ -13,6 +13,7 @@ import { useUpdateVault } from '../../hooks/useVaultMutations.js'
 import { SharingPanel } from './SharingPanel.js'
 import { VaultMcpPanel } from './VaultMcpPanel.js'
 import { VaultExportPanel } from './VaultExportPanel.js'
+import { NoteTrashPanel } from './NoteTrashPanel.js'
 import type { Vault } from '../../api/vaults.js'
 
 interface VaultSettingsModalProps {
@@ -77,6 +78,8 @@ export function VaultSettingsModal({ vault, open, onOpenChange }: VaultSettingsM
         <SharingPanel vaultId={vault.id} />
 
         <VaultMcpPanel vaultId={vault.id} />
+
+        <NoteTrashPanel vaultId={vault.id} />
 
         <VaultExportPanel vaultId={vault.id} />
       </DialogContent>
