@@ -101,9 +101,9 @@ panel, note create/rename/delete, and full live-preview) and Slice 2c
 (wikilinks — autocomplete, clickable navigation, link-to-create), Slice 3
 (Search — the ⌘K overlay), Slice 4/Unit 2 (Sharing & team — the vault
 settings modal stack and the Team page), Unit 3 (Admin & the onboarding path)
-Unit 4 (Settings & MFA), Unit 5 (Trash, history & import) and Unit 6
-(Collaboration) are done — tracked in
-[`docs/agents/STATE.md`](docs/agents/STATE.md).
+Unit 4 (Settings & MFA), Unit 5 (Trash, history & import), Unit 6
+(Collaboration) and Unit 7 (Repositories) are done — the UI phase is complete.
+Tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
 real deployment — security headers on by default, CORS off (same-origin
@@ -263,6 +263,26 @@ The ticket endpoint returns the *path*, not an absolute URL — the browser
 resolves it against the origin it loaded from, which is the only origin
 guaranteed to reach back through the proxy. In development vite proxies
 `/collab` already, so nothing needs configuring.
+
+Unit 7 (Repositories) is the last of them, and it is what makes the codebase
+half of the product reachable. Connect a repository three ways — a git remote,
+a folder on this server, or an agent pushing files in over the API — and its
+files are indexed, parsed for symbols, and folded into the same graph and
+search as your notes.
+
+The viewer is **read-only, permanently**: Chapters never writes code back, so
+git stays the record of truth. Files open with syntax highlighting and a symbol
+outline down the side, and a git-sourced repository carries an "open on GitHub"
+link built from its detected default branch — local folders and agent-pushed
+repositories have no such URL, so they do not pretend to.
+
+A git remote gets a webhook card that reveals its secret once and shows the
+payload path to paste into the host; regenerating it says plainly that
+deliveries keep failing until the new secret is pasted in. A folder on this
+server is watched live — edit a file and the index follows within a second —
+and any repository can be re-indexed on demand rather than waiting for the
+poller. Sharing is owner/viewer only, because there is no edit level to grant
+when nothing is ever written back.
 
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —

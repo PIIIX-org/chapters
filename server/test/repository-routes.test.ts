@@ -540,4 +540,38 @@ describe('POST /repositories/:id/sync', () => {
     })
     expect(refused.statusCode).toBe(400)
   })
+  it('says which env var is missing instead of a bare Internal Server Error', async () => {
+    // Found by clicking "Set up webhook" in a browser. Storing a webhook secret
+    // needs CREDENTIALS_ENCRYPTION_KEY, a documented deployment prerequisite —
+    // but an uncaught throw reached the owner as the words "Internal Server
+    // Error" and nothing else, one env var away from working with no way to
+    // know which one.
+    const owner = await createActiveUser()
+    const cookie = await loginCookie(app, owner.email)
+    const repo = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/repositories',
+        headers: { cookie },
+        body: { name: 'Keyless', ingestionMethod: 'git', gitUrl: 'file:///nonexistent.git' },
+      })
+    ).json() as { id: string }
+
+    const original = config.credentialsEncryptionKey
+    ;(config as { credentialsEncryptionKey?: string }).credentialsEncryptionKey = undefined
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/repositories/${repo.id}/webhook-secret`,
+        headers: { cookie },
+      })
+      expect(res.statusCode).toBe(409)
+      const body = res.json() as { error: string }
+      // The name of the thing to set, in the field the client actually renders.
+      expect(body.error).toContain('CREDENTIALS_ENCRYPTION_KEY')
+      expect(body.error).not.toBe('Internal Server Error')
+    } finally {
+      ;(config as { credentialsEncryptionKey?: string }).credentialsEncryptionKey = original
+    }
+  })
 })

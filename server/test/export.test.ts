@@ -189,6 +189,14 @@ describe('export', () => {
     expect((teammateAccess.json() as { access: string }).access).toBe('edit')
   })
 
+  // These two build a zip of EVERY vault on the instance, so their cost grows
+  // with whatever the rest of the suite has already created — and the suite
+  // runs single-file-at-a-time, so by the time export.test.ts runs the corpus
+  // is the whole run's. At vitest's 5s default they pass alone and time out in
+  // a full run on a loaded machine (reproduced on dev, before this unit).
+  // The work is real, not a hang: give it room rather than chasing a flake.
+  const BACKUP_TIMEOUT_MS = 30_000
+
   it('admin backup bundles vaults + account dump; non-admins rejected', async () => {
     const denied = await app.inject({
       method: 'GET',
@@ -214,7 +222,7 @@ describe('export', () => {
       vaultShares: unknown[]
     }
     expect(dump.users.length).toBeGreaterThan(0)
-  })
+  }, BACKUP_TIMEOUT_MS)
 
   // createNote writes the row before the file, so a crash in between leaves a
   // live note with no file on disk — forever. That must not take the whole
@@ -251,5 +259,5 @@ describe('export', () => {
     )
     expect(entry).not.toBeNull()
     expect(entry!.getData().toString('utf8')).toContain('Row outlived the file.')
-  })
+  }, BACKUP_TIMEOUT_MS)
 })

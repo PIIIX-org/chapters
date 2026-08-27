@@ -12,7 +12,7 @@ import {
 } from '../db/schema.js'
 import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
-import { encryptCredential } from './credentials.js'
+import { EncryptionKeyMissingError, encryptCredential } from './credentials.js'
 import { generateToken } from '../auth/tokens.js'
 import {
   listAccessibleRepositories,
@@ -395,9 +395,25 @@ export function repositoryRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'webhooks only apply to git-sourced repositories' })
     }
     const secret = generateToken()
+    let encrypted: string
+    try {
+      encrypted = encryptCredential(secret)
+    } catch (err) {
+      // Not a fault: this instance simply has no encryption key, which is a
+      // documented deployment prerequisite. Left as a 500 it reached the owner
+      // as the word "Internal Server Error" and nothing else — a self-hoster
+      // one env var away from working, with no way to know which one.
+      if (err instanceof EncryptionKeyMissingError) {
+        return reply.code(409).send({
+          error:
+            'This instance cannot store webhook secrets: CREDENTIALS_ENCRYPTION_KEY is not set on the server. Set it to a 32-byte hex value and restart, then try again.',
+        })
+      }
+      throw err
+    }
     await db
       .update(repositories)
-      .set({ webhookSecretEncrypted: encryptCredential(secret) })
+      .set({ webhookSecretEncrypted: encrypted })
       .where(eq(repositories.id, req.params.id))
     // Shown exactly once — configure it on the git host's webhook settings now.
     return { secret, webhookPath: `/repositories/${req.params.id}/webhook` }

@@ -2,34 +2,32 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Phase**: UI, executing `specs/2026-08-22-remaining-ui-design.md` (10 locked
-  decisions, 7 units). **PRs target `dev` directly, never stacked.** Promotion
-  `dev → prod` needs Taha's explicit OK each time. Backend complete + twelve
-  UI-driven additions; `pnpm profile-graph` ≈500ms at 10k notes, **Louvain NOT
-  the bottleneck**; semantic edges stored **directed** (purges clear them, no FK).
-- **Units 1–6 shipped** (detail in README + git log):
-  - **1** graph Home (Canvas 2D + `d3-force`), shell, vault lifecycle, ⌘K.
-    **Louvain is seeded** — drill-down addresses communities by number.
-  - **2** vault settings modal stack, `/team`; `/users/lookup` exact-match,
-    `/teams/:id/stats` aggregates only.
-  - **3** `/admin` — admins only, gated *before* any query fires, **metadata
-    only**; **login stays generic on purpose** (enumeration).  - **4** `/settings`: TOTP (codes once), change email/password, ONE
-    notification-email switch, account `McpPanel`, account export. Admin can
-    mandate MFA. **Per-type notification prefs stay OUT of scope.**
-  - **5** note trash + restore, vault purge, Editor history rail (revert = a NEW
-    attributed revision; owner-only revision purge), import (ALWAYS a new
-    vault). Paginated `/history/*` (metadata only — **MCP `note_history`
-    deliberately untouched**) and `/trash`. `actorType` is `user|mcp|collab`,
-    no 'system'; **collab is a PERSON** (vermillion) and is the commonest.
-  - **6** collaboration: one Yjs doc per note over the existing relay, **no
-    autosave PUT** (the CRDT is the note — closes #66), pen-nib carets in five
-    inks, presence in the Editor top bar only, SSE live view for readers.
-    `POST /collab/ticket` returns a **path**, not a URL — behind any proxy the
+- **Phase**: **UI phase DONE** — all 7 units of
+  `specs/2026-08-22-remaining-ui-design.md` shipped. PRs target `dev` directly,
+  never stacked; `dev → prod` needs Taha's explicit OK each time. Backend
+  complete + ~16 UI-driven additions. `pnpm profile-graph` ≈500ms at 10k notes,
+  **Louvain NOT the bottleneck**; semantic edges **directed** (purges clear
+  them, no FK).
+- **Units 1–7 shipped.** Detail in README + git log; only the traps live here:
+  - **1** Louvain is **seeded** — drill-down addresses communities by number,
+    so ids must stay stable. Graph is Canvas 2D + `d3-force`.
+  - **3** `/admin` is gated *before* any query fires and is **metadata only**;
+    **login stays generic on purpose** (account enumeration).
+  - **4** **per-type notification prefs stay OUT of scope** (the notifications
+    spec defers them) — the one switch is the whole feature.
+  - **5** `actorType` is `user|mcp|collab`, no 'system'; **collab is a PERSON**
+    (vermillion) and is the commonest value. `/history/*` is metadata-only and
+    paginated — **MCP `note_history` deliberately untouched**.
+  - **6** **no autosave PUT** — the CRDT is the note (closes #66).
+    `POST /collab/ticket` returns a **path**, not a URL: behind any proxy the
     server's `host` is the proxy's, so the browser resolves it.
-    **revoked ≠ offline**: revoked locks and KEEPS the doc (unsent text must
+    **revoked ≠ offline** — revoked locks and KEEPS the doc (unsent text must
     survive); offline shows the last saved copy read-only and retries.
     Deploying needs `/collab` proxied to `COLLAB_PORT` — see README.
-- **Current task**: none. Units 6 and 7 open as PRs off `dev`.
+  - **7** viewer is read-only forever (git stays the record of truth). Local
+    folders are watched; **`gitUrl`/`localPath` are owner-only** — they leaked
+    to viewers and to MCP `list_repositories`.
+- **Current task**: none. **UI phase COMPLETE** — unit 7 open as a PR off `dev`.
 - **Mutation-verify every new test** (break impl, watch it fail, restore) AND
   click the unit in a real browser: `apiFetch` sent JSON with no body, 400'ing
   every bodyless DELETE/POST, and the stubbed-`fetch` suite never saw it (#110).
