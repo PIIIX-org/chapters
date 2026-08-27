@@ -12,6 +12,8 @@ function renderPage() {
     [
       { path: '/login', element: <LoginPage /> },
       { path: '/', element: <div>Home</div> },
+      { path: '/signup', element: <div>Sign-up page</div> },
+      { path: '/forgot-password', element: <div>Forgot password page</div> },
     ],
     { initialEntries: ['/login'] },
   )
@@ -20,6 +22,7 @@ function renderPage() {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   )
+  return router
 }
 
 describe('LoginPage', () => {
@@ -99,5 +102,24 @@ describe('LoginPage', () => {
 
     await waitFor(() => expect(screen.getByText('invalid totp code')).toBeInTheDocument())
     expect(screen.getByLabelText('Authentication code')).toBeInTheDocument()
+  })
+  it('offers a route to sign-up, without which a new person cannot reach it at all', async () => {
+    // There was no link to /signup anywhere in the app. The page existed and
+    // worked; you could only get to it by typing the URL. Same cold-start trap
+    // as vault creation (unit 1) and connecting a repository (unit 7).
+    const router = renderPage()
+
+    await userEvent.click(screen.getByRole('link', { name: /create an account/i }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/signup'))
+  })
+
+  it('routes to forgot-password instead of reloading the whole app', async () => {
+    // It was a raw <a href>, which throws away the SPA and reboots it.
+    const router = renderPage()
+
+    await userEvent.click(screen.getByRole('link', { name: /forgot your password/i }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/forgot-password'))
   })
 })

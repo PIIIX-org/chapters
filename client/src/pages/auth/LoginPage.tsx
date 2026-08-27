@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '../../components/ui/button.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js'
@@ -91,9 +91,20 @@ export function LoginPage() {
               <Button type="submit" disabled={submitting}>
                 Log in
               </Button>
-              <a href="/forgot-password" className="text-center text-sm text-muted-foreground underline">
+              <Link to="/forgot-password" className="text-center text-sm text-muted-foreground underline">
                 Forgot your password?
-              </a>
+              </Link>
+              {/* Until this existed there was no route to sign-up anywhere in
+                  the app — a new person could only reach it by typing the URL.
+                  Same cold-start trap as vault creation and connecting a
+                  repository: a surface reachable only from somewhere you can
+                  only get to if you already have what it creates. */}
+              <p className="text-center text-sm text-muted-foreground">
+                New here?{' '}
+                <Link to="/signup" className="text-foreground underline">
+                  Create an account
+                </Link>
+              </p>
             </form>
           )}
         </CardContent>
