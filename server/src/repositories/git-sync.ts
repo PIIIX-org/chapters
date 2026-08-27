@@ -51,9 +51,18 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     }
     await syncRepositoryFiles(repositoryId, files, currentPaths)
 
+    // A depth-1 clone checks out the remote's default branch, so the name of
+    // the clone's HEAD *is* the default branch — no extra network call.
+    const defaultBranch = (await simpleGit(workDir).revparse(['--abbrev-ref', 'HEAD'])).trim()
+
     await db
       .update(repositories)
-      .set({ syncStatus: 'idle', lastSyncedAt: new Date(), lastSyncError: null })
+      .set({
+        syncStatus: 'idle',
+        lastSyncedAt: new Date(),
+        lastSyncError: null,
+        defaultBranch,
+      })
       .where(eq(repositories.id, repositoryId))
   } catch (err) {
     await db
