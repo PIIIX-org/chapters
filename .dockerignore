@@ -5,3 +5,9 @@ data
 server/data
 **/.env
 *.log
+# A local `vite build` output must never be copied in — the image builds
+# the client itself, and a stale dist copied over the fresh one would
+# ship whatever was last built on someone's laptop.
+client/dist
+**/dist
+.DS_Store

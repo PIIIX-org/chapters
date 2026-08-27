@@ -8,23 +8,13 @@ import { issueTicket } from './tickets.js'
  * Where the browser should connect to the relay: **the page's own origin, at
  * `/collab`**.
  *
- * The relay really listens on its own port (`COLLAB_PORT`, default 3001), but
- * that port is an implementation detail of this process and must never appear
- * in a URL handed to a browser. The documented deployment shape is a single
- * reverse proxy on one public port: 3001 is not exposed there and holds no
- * certificate, so a `wss://host:3001` URL — which this used to return — fails
- * for every editor in every real deployment.
- *
- * A deployment therefore has exactly one thing to configure: route the
- * websocket upgrade for `/collab` to the relay port, path unchanged. nginx:
- *
- *     location /collab {
- *       proxy_pass http://127.0.0.1:3001;
- *       proxy_http_version 1.1;
- *       proxy_set_header Upgrade $http_upgrade;
- *       proxy_set_header Connection "upgrade";
- *       proxy_read_timeout 1h;   # Yjs sockets are long-lived and often idle
- *     }
+ * The relay rides this same HTTP server: the `upgrade` event on `/collab` is
+ * handed to Hocuspocus, so there is no second port and nothing to route. That
+ * is why this returns a path and not a URL — the server cannot know the origin
+ * the browser used (behind vite it sees `localhost:3000`, behind nginx it sees
+ * the proxy), and guessing produced `ws://localhost:3000/collab`: the API
+ * port, which 404'd every handshake. The browser resolves it against the
+ * origin it loaded from, which is the one origin guaranteed to reach back.
  *
  * Dev has the same route in `client/vite.config.ts`, so the one URL is correct
  * in both — `collab-ticket.test.ts` connects over `/collab` to prove the relay

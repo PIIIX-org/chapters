@@ -4,16 +4,16 @@ import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
-import type { Server } from '@hocuspocus/server'
+import { WebSocket } from 'ws'
 import { buildApp } from '../src/app.js'
-import { startCollabServer } from '../src/sync/collab-server.js'
+import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { config } from '../src/config.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
 let app: FastifyInstance
-let collab: Server
+let collab: CollabRelay
 let port: number
-let collabPort: number
+let collabUrl: string
 let ownerToken: string
 let ownerCookie: string
 let editor: Awaited<ReturnType<typeof createActiveUser>>
@@ -27,7 +27,7 @@ const providers: HocuspocusProvider[] = []
 
 function connect(token: string, name = docName): HocuspocusProvider {
   const provider = new HocuspocusProvider({
-    url: `ws://127.0.0.1:${collabPort}`,
+    url: collabUrl,
     name,
     token,
     document: new Y.Doc(),
@@ -49,8 +49,9 @@ beforeAll(async () => {
   await app.listen({ port: 0, host: '127.0.0.1' })
   const address = app.server.address()
   port = typeof address === 'object' && address ? address.port : 0
-  collab = await startCollabServer(0)
-  collabPort = collab.address.port
+  // One port: the relay now rides the app's own HTTP server on `/collab`.
+  collab = startCollabServer(app.server)
+  collabUrl = `ws://127.0.0.1:${port}/collab`
 
   const owner = await createActiveUser()
   editor = await createActiveUser()
@@ -127,7 +128,7 @@ describe('real-time collaboration', () => {
   it('read-only users cannot join the CRDT socket', async () => {
     let failed = false
     const provider = new HocuspocusProvider({
-      url: `ws://127.0.0.1:${collabPort}`,
+      url: collabUrl,
       name: docName,
       token: readerToken,
       document: new Y.Doc(),
@@ -166,10 +167,39 @@ describe('real-time collaboration', () => {
     await reader.cancel()
   })
 
+  it('releases the connection when the socket closes', async () => {
+    // Hocuspocus is not the one listening any more, so nothing tells it a
+    // socket died unless we forward the close. Without that the connection
+    // (and its document) leaks on every disconnect and the last editor
+    // leaving never triggers the store.
+    const before = collab.hocuspocus.getConnectionsCount()
+    const a = connect(ownerToken)
+    await waitFor(() => collab.hocuspocus.getConnectionsCount() === before + 1)
+    // Drop the socket without letting the provider say goodbye: a browser tab
+    // closing, a laptop lid, a proxy timeout. The close event is then the only
+    // signal there is.
+    const socket = a.configuration.websocketProvider
+    socket.shouldConnect = false
+    socket.webSocket?.close()
+    await waitFor(() => collab.hocuspocus.getConnectionsCount() === before, 3000)
+  })
+
+  it('refuses a websocket upgrade on any other path', async () => {
+    // Attaching to Fastify's server means Node stops auto-destroying upgrade
+    // sockets: without an explicit path check the relay would answer on every
+    // URL, including ones the SPA fallback is supposed to own.
+    const rejected = await new Promise<string>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/not-collab`)
+      ws.on('error', (err) => resolve(err.message))
+      ws.on('open', () => resolve('opened'))
+    })
+    expect(rejected).not.toBe('opened')
+  })
+
   it('revoking an editor mid-session kicks their connection immediately', async () => {
     let closed = false
     const b = new HocuspocusProvider({
-      url: `ws://127.0.0.1:${collabPort}`,
+      url: collabUrl,
       name: docName,
       token: editorToken,
       document: new Y.Doc(),
@@ -196,5 +226,41 @@ describe('real-time collaboration', () => {
 
     await waitFor(() => closed, 8000)
     expect(closed).toBe(true)
+  })
+  it('survives a malformed frame instead of taking the whole process down', async () => {
+    // Proven, not theorised: `ws` emits 'error' on a protocol violation, and an
+    // EventEmitter with no 'error' listener rethrows. Six raw bytes from anyone
+    // who can reach this path — no ticket, no session — would kill the server
+    // and every other person editing on it. Under one-container-per-customer
+    // that is one customer's whole instance.
+    const net = await import('node:net')
+    const before = collab.hocuspocus.getConnectionsCount()
+
+    await new Promise<void>((resolve, reject) => {
+      const socket = net.connect(port, '127.0.0.1', () => {
+        socket.write(
+          'GET /collab HTTP/1.1\r\n' +
+            `Host: 127.0.0.1:${port}\r\n` +
+            'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
+            'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n',
+        )
+      })
+      socket.once('data', () => {
+        // FIN + RSV1 set with no extension negotiated: a protocol violation.
+        socket.write(Buffer.from([0xc1, 0x80, 0x00, 0x00, 0x00, 0x00]))
+        setTimeout(() => {
+          socket.destroy()
+          resolve()
+        }, 300)
+      })
+      socket.on('error', reject)
+    })
+
+    // How this fails without the fix: not on an assertion, but as an
+    // UNHANDLED ERROR that exits the run non-zero (verified: exit 1 with the
+    // listener removed, 0 with it). That is the right signal for "this kills
+    // the process" — do not "fix" this test by making it assert instead.
+    expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200)
+    await waitFor(() => collab.hocuspocus.getConnectionsCount() <= before)
   })
 })

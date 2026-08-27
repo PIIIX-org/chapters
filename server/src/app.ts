@@ -5,6 +5,7 @@ import helmet from '@fastify/helmet'
 import multipart from '@fastify/multipart'
 import rateLimit from '@fastify/rate-limit'
 import { config } from './config.js'
+import { registerStatic } from './static.js'
 import { authPlugin } from './auth/plugin.js'
 import { authRoutes } from './auth/routes.js'
 import { accountRoutes } from './auth/account-routes.js'
@@ -26,10 +27,39 @@ import { repositoryPushRoutes } from './repositories/push-routes.js'
 import { repositoryWebhookRoutes } from './repositories/git-webhook-routes.js'
 import { repositoryFileContentRoutes } from './repositories/file-content-routes.js'
 
-export async function buildApp(): Promise<FastifyInstance> {
+export async function buildApp(
+  opts: { clientDist?: string } = {},
+): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
 
-  await app.register(helmet)
+  // The CSP is spelled out rather than left to helmet's defaults because this
+  // app now serves an HTML document, not just JSON. Two defaults are wrong for
+  // a self-hosted product:
+  //
+  // - `upgrade-insecure-requests` rewrites every request to https. On a LAN or
+  //   intranet instance served over plain http — the ordinary self-hosted
+  //   case — that turns a working deployment into a blank page.
+  // - `connect-src` must allow the websocket scheme, or the collaboration
+  //   relay is blocked by the very policy meant to protect it.
+  //
+  // Fonts come from Google Fonts (the design system's Petrona / Hanken Grotesk
+  // / IBM Plex Mono), so those two hosts are named explicitly rather than
+  // opened up with a wildcard.
+  await app.register(helmet, {
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        'default-src': ["'self'"],
+        'script-src': ["'self'"],
+        'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        'font-src': ["'self'", 'data:', 'https://fonts.gstatic.com'],
+        'img-src': ["'self'", 'data:', 'blob:'],
+        // ws: and wss: so the relay works on both http and https origins.
+        'connect-src': ["'self'", 'ws:', 'wss:'],
+        'upgrade-insecure-requests': null,
+      },
+    },
+  })
   // Same-origin only when unconfigured — no CORS registration at all is
   // the correct default for a self-hosted app whose UI is expected to be
   // reverse-proxied under the same origin as the API.
@@ -72,6 +102,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     },
     { prefix: '/api' },
   )
+
+  // Last, and only if a built client exists: the SPA fallback answers what the
+  // routes above did not. It never sees `/api/*` or `/collab` — see static.ts.
+  await registerStatic(app, opts.clientDist ?? config.clientDist)
 
   return app
 }

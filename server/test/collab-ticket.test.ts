@@ -2,16 +2,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
-import type { Server } from '@hocuspocus/server'
 import { buildApp } from '../src/app.js'
-import { startCollabServer } from '../src/sync/collab-server.js'
+import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { issueTicket } from '../src/sync/tickets.js'
-import { config } from '../src/config.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
-let collab: Server
-let collabPort: number
+let collab: CollabRelay
+let origin: string
+let collabUrl: string
 let owner: Awaited<ReturnType<typeof createActiveUser>>
 let reader: Awaited<ReturnType<typeof createActiveUser>>
 let ownerCookie: string
@@ -30,7 +29,7 @@ async function mintTicket(cookie: string, host = 'chapters.test:3000') {
   })
 }
 
-function connect(token: string, url = `ws://127.0.0.1:${collabPort}`): HocuspocusProvider {
+function connect(token: string, url = collabUrl): HocuspocusProvider {
   const provider = new HocuspocusProvider({
     url,
     name: docName,
@@ -54,8 +53,14 @@ async function waitFor(check: () => boolean, ms = 5000): Promise<void> {
 
 beforeAll(async () => {
   app = await buildApp()
-  collab = await startCollabServer(0)
-  collabPort = collab.address.port
+  // The relay has no port of its own any more: it answers `/collab` on the
+  // app's HTTP server, so the app has to be really listening for a real
+  // websocket to reach it.
+  await app.listen({ port: 0, host: '127.0.0.1' })
+  const address = app.server.address()
+  collab = startCollabServer(app.server)
+  origin = `ws://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+  collabUrl = `${origin}/collab`
 
   owner = await createActiveUser()
   reader = await createActiveUser()
@@ -111,7 +116,7 @@ describe('collab ticket', () => {
     // resolves this against the origin it loaded from, which is the one origin
     // guaranteed to reach back through whatever served the page.
     expect(ticket.url).toBe('/collab')
-    expect(ticket.url).not.toContain(String(config.collabPort))
+    expect(ticket.url).not.toMatch(/:\d+/)
     expect(ticket.url).not.toMatch(/^wss?:/)
     expect(ticket.token).toMatch(/^[0-9a-f]{64}$/)
     const ttl = new Date(ticket.expiresAt).getTime() - Date.now()
@@ -139,7 +144,7 @@ describe('collab ticket', () => {
     // letter — this is the end of that chain.
     const ticket = (await mintTicket(ownerCookie)).json() as { token: string; url: string }
     expect(ticket.url).toBe('/collab')
-    const proxied = connect(ticket.token, `ws://127.0.0.1:${collabPort}${ticket.url}`)
+    const proxied = connect(ticket.token, `${origin}${ticket.url}`)
     await waitFor(() => proxied.document.getText('body').toString().includes('Ticketed content.'))
     expect(failures.get(proxied)).toBeUndefined()
   })

@@ -23,7 +23,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
     server's `host` is the proxy's, so the browser resolves it.
     **revoked ≠ offline** — revoked locks and KEEPS the doc (unsent text must
     survive); offline shows the last saved copy read-only and retries.
-    Deploying needs `/collab` proxied to `COLLAB_PORT` — see README.
+    The relay rides the app's HTTP server on `/collab` — ONE port, no proxy.
   - **7** viewer is read-only forever (git stays the record of truth). Local
     folders are watched; **`gitUrl`/`localPath` are owner-only** — they leaked
     to viewers and to MCP `list_repositories`.

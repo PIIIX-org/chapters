@@ -6,12 +6,9 @@ import { apiFetch } from '../lib/api.js'
  * The session cookie is `httpOnly`, so the browser cannot read it and cannot
  * hand it to `HocuspocusProvider`'s `token` option the way the server tests do.
  * The client asks for a ticket instead: opaque, single-use, seconds-long TTL,
- * bound to the calling user. `url` comes back with it because the relay listens
- * on its own port (`COLLAB_PORT`, default 3001) and nothing else tells the
- * client where that is.
- *
- * Backend gap 1 + 2 — see the unit 6 plan. This module is the contract the
- * endpoint must satisfy.
+ * bound to the calling user. `url` comes back with it as a PATH — the relay
+ * rides the API's own HTTP server on `/collab`, so there is no second port,
+ * and the server cannot know which origin the browser used anyway.
  */
 export interface CollabTicket {
   /** Opaque one-time credential passed as the Hocuspocus `token`. */

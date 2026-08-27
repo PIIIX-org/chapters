@@ -1,4 +1,7 @@
+import type { IncomingMessage, Server as HttpServer } from 'node:http'
+import type { Duplex } from 'node:stream'
 import { Server, type Hocuspocus } from '@hocuspocus/server'
+import { WebSocketServer, type RawData } from 'ws'
 import type * as Y from 'yjs'
 import { getSessionUser } from '../auth/sessions.js'
 import { atLeast, resolveAccess } from '../vaults/permissions.js'
@@ -7,6 +10,7 @@ import { logSecurityEvent } from '../auth/security-events.js'
 import { affects, onPermissionChange } from './permission-events.js'
 import { publishNoteState } from './viewers.js'
 import { consumeTicket } from './tickets.js'
+import { COLLAB_PATH } from './routes.js'
 
 const DEBOUNCE_MS = Number(process.env.COLLAB_DEBOUNCE_MS ?? 2000)
 
@@ -31,22 +35,53 @@ function docState(document: Y.Doc): { frontmatter: Record<string, unknown>; body
 }
 
 /**
- * The sync relay (spec 5 + audit hardening), running as Hocuspocus's own
- * Server on a dedicated port in the same process. Editors only —
- * read-only live viewers are served via the SSE hub and never join here.
- * MCP writes (sub-project 6) use openDirectConnection on this instance,
+ * The sync relay (spec 5 + audit hardening). It has no listener of its own:
+ * it is attached to Fastify's HTTP server and answers websocket upgrades on
+ * `COLLAB_PATH` only, so the whole app is one process on one port. Editors
+ * only — read-only live viewers are served via the SSE hub and never join
+ * here. MCP writes (sub-project 6) use openDirectConnection on this instance,
  * so every AI edit is a visible participant in the same engine.
  */
 let currentInstance: Hocuspocus | null = null
+
+export interface CollabRelay {
+  /** The running Hocuspocus engine. */
+  hocuspocus: Hocuspocus
+  /** Detach, flush debounced note writes, drop remaining sockets. */
+  destroy(): Promise<void>
+}
+
+/**
+ * Hocuspocus hooks read `request.headers` and the query string, and the
+ * upstream (crossws) integration hands them a WHATWG Request. Build the same
+ * shape from the node upgrade request so hook payloads are unchanged.
+ */
+function toRequest(req: IncomingMessage): Request {
+  const host = req.headers.host ?? 'localhost'
+  return new Request(`http://${host}${req.url ?? '/'}`, {
+    headers: req.headers as Record<string, string>,
+  })
+}
+
+/** ws hands us Buffer (or fragments); Hocuspocus wants one Uint8Array view. */
+function toBytes(data: RawData): Uint8Array {
+  const buf = Array.isArray(data)
+    ? Buffer.concat(data)
+    : Buffer.isBuffer(data)
+      ? data
+      : Buffer.from(data as ArrayBuffer)
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+}
 
 /** The running relay instance, if any — MCP writes route through it. */
 export function getCollab(): Hocuspocus | null {
   return currentInstance
 }
 
-export async function startCollabServer(port: number): Promise<Server> {
+export function startCollabServer(httpServer: HttpServer): CollabRelay {
+  // Constructed but never `listen()`ed: we only want its hooks, its document
+  // lifecycle and its `destroy()` (which flushes pending note writes).
   const server = new Server({
-    port,
     debounce: DEBOUNCE_MS,
     maxDebounce: DEBOUNCE_MS * 5,
     quiet: true,
@@ -119,10 +154,50 @@ export async function startCollabServer(port: number): Promise<Server> {
     },
   })
 
-  await server.listen(port)
-  wireKick(server.hocuspocus)
-  currentInstance = server.hocuspocus
-  return server
+  const hocuspocus = server.hocuspocus
+  const wss = new WebSocketServer({ noServer: true })
+
+  const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
+    // Node destroys upgrade sockets itself only while nothing listens for the
+    // event. Once we listen, every path we do not serve is ours to refuse —
+    // handing an arbitrary path to the relay would make it answer everywhere.
+    if ((req.url ?? '').split('?')[0] !== COLLAB_PATH) {
+      socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      const connection = hocuspocus.handleConnection(ws, toRequest(req))
+      ws.on('message', (data) => connection.handleMessage(toBytes(data)))
+      ws.on('close', (code, reason) =>
+        connection.handleClose({ code, reason: reason.toString() }),
+      )
+      // Without this the process dies. A `ws` socket that hits a protocol
+      // error emits 'error', and an EventEmitter with no 'error' listener
+      // rethrows — so six malformed bytes from anyone who can reach this path,
+      // authenticated or not, take the whole server down and every other
+      // customer's session with it. `close` always follows, so the connection
+      // is cleaned up by the handler above; this only has to stop the throw.
+      ws.on('error', (err) => {
+        console.error('[collab] socket error:', err)
+      })
+    })
+  }
+  httpServer.on('upgrade', onUpgrade)
+
+  wireKick(hocuspocus)
+  currentInstance = hocuspocus
+
+  return {
+    hocuspocus,
+    destroy: async () => {
+      httpServer.off('upgrade', onUpgrade)
+      await server.destroy()
+      for (const client of wss.clients) client.terminate()
+      wss.close()
+      currentInstance = null
+    },
+  }
 }
 
 /** Event-driven kick: revocation closes affected sockets immediately. */
