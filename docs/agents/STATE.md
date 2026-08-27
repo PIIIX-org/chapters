@@ -27,7 +27,15 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   - **7** viewer is read-only forever (git stays the record of truth). Local
     folders are watched; **`gitUrl`/`localPath` are owner-only** — they leaked
     to viewers and to MCP `list_repositories`.
-- **Current task**: none. **UI phase COMPLETE** — unit 7 open as a PR off `dev`.
+- **Phase: DEPLOYABLE** (`plans/2026-08-27-deployable.md`). UI phase complete;
+  the product still cannot be run by anyone — nothing serves the client,
+  compose is Postgres alone, `/collab` is routed nowhere.
+- **Hosted = one container + one Postgres PER CUSTOMER**, and the app is **not
+  forked** for it: one repo, one branch line; the control plane is a separate
+  private repo the app must NEVER import or call. No edition flag — it would
+  branch on nothing. See `implementation.md` "Product shape".
+- **Current task**: sign-in path (PR open). Next: serve client from the API +
+  single-port `/collab` + a real image and compose.
 - **Mutation-verify every new test** (break impl, watch it fail, restore) AND
   click the unit in a real browser: `apiFetch` sent JSON with no body, 400'ing
   every bodyless DELETE/POST, and the stubbed-`fetch` suite never saw it (#110).
