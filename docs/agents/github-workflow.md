@@ -29,11 +29,12 @@ Every change — code, spec, doc — follows the same loop:
    when fixed, close the issue as solved (`closes #N` in the fixing
    commit/PR comment).
 6. **Merge** into `dev` (merge commit, delete branch) once review is
-   clean and CI is green. **As of 2026-07-20, the owner reviews and
-   merges every PR personally** — open the PR, confirm CI is green,
-   then stop and wait; do not run `gh pr merge`. (Auto-merge was
-   authorized 2026-07-15 and used through the backend and UI Slice 1;
-   that authorization is revoked going forward.)
+   clean and CI is green. **As of 2026-08-27 the agent merges its own
+   PRs again**: open the PR, wait for CI to pass, then merge. Do not
+   merge on red or pending CI. (History: auto-merge was authorized
+   2026-07-15, revoked 2026-07-20 with the owner merging personally,
+   and re-authorized 2026-08-27.) Promotion `dev → prod` still needs
+   the owner's explicit OK each time — that has never changed.
 7. **PRs are opened from `sadeqisaidmohaddes-star`'s GitHub account**
    (write-collaborator on this repo as of 2026-07-20), not
    `Taha-Mahmoodi` — switch the active `gh` account

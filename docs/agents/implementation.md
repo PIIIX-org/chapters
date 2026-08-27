@@ -31,7 +31,7 @@ Full decision + rationale: `docs/superpowers/specs/2026-07-17-tech-stack-decisio
   client colours nodes by. See
   `docs/superpowers/plans/2026-08-22-graph-engineering-findings.md`.
 - **MCP**: official MCP TypeScript SDK.
-- **Frontend (UI phase, later)**: React + Vite, CodeMirror 6 +
+- **Frontend**: React + Vite, CodeMirror 6 +
   y-codemirror.next, Tailwind CSS + **shadcn/ui** (fetched via the shadcn
   MCP server), **GSAP** (via the 21st.dev "magic" MCP for
   inspiration/refinement + official docs) and **anime.js** (installed as a
@@ -125,11 +125,34 @@ At 10k notes this sits at ~500ms, which is within the search budget above but
 is the slowest read path in the app. It is not currently on any user's
 critical path at that size.
 
+## Product shape (decided 2026-08-27 — read before proposing a fork)
+
+Chapters ships two ways and **is not forked to do it**:
+
+- **Self-hosted OSS** — someone runs the image themselves.
+- **Hosted** — one container and its own Postgres **per customer**, fully
+  separated, provisioned by a control plane.
+
+`2026-07-17-hosted-ui-structure-design.md` states the editions are identical
+except the Yildizim sky and achievements, and those live in their own private
+repo. So: **one repo, one branch line** (`dev` → `prod`), hosted-only layers
+stay in their own repos, and the **control plane** — provisioning, billing,
+routing, fleet updates — is a separate private repo.
+
+**The control plane sits above the app and the app must never know it exists.**
+Yildizim is a layer the app consumes; the control plane operates instances. If
+anything in `server/` or `client/` ever imports or calls it, self-hosting is
+dead and there are two products again.
+
+There is deliberately **no edition flag**: it would branch on nothing, since
+the only hosted-only surfaces are not in this repo. Add one when something
+actually differs.
+
 ## Phase discipline
 
-- **Now: backend only**, sub-projects 1 → 7 in spec order. No `client/`
-  code, no UI dependencies installed until the backend is done and the
-  page-by-page UI structure has been designed and approved.
+- **Now: the deployable phase** — see
+  `docs/superpowers/plans/2026-08-27-deployable.md`. The UI phase is complete
+  (7 units, all merged); the product still cannot be run by anyone.
 - Each sub-project: write its plan to `docs/superpowers/plans/` first,
   then implement task by task (TDD — failing test, minimal code, green,
   commit) per `handling-protocols.md`.
@@ -137,14 +160,18 @@ critical path at that size.
   merged per `github-workflow.md`, README + STATE.md updated if the
   change is meaningful.
 
-## Deployment topology: single process only (important, read before scaling)
+## Deployment topology: one process per instance (this is now a feature)
 
-This entire backend assumes exactly one running instance. Five
-subsystems hold state in process memory, not in Postgres or any shared
-store — none of them are broken for a single instance (the intended
-deployment target), but **every one of them silently misbehaves the
-moment a second instance runs against the same database**, whether
-that's for horizontal scale or just redundancy:
+This backend assumes exactly one running process per instance. That used to be
+a documented limitation; under the hosted model decided on 2026-08-27 — one
+container and one Postgres **per customer** — it is satisfied by construction,
+and the upgrade path below is not needed for the hosted product. It still
+matters for a self-hoster who tries to run two replicas.
+
+Five subsystems hold state in process memory, not in Postgres or any shared
+store. None are broken for a single instance (the intended deployment target),
+but **every one silently misbehaves the moment a second instance runs against
+the same database**, whether for horizontal scale or just redundancy:
 
 - `auth/lockout.ts` — brute-force lockout counters (per-process; a
   second instance has its own counter, so the shared lockout threshold
