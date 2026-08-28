@@ -246,43 +246,9 @@ never destroyed, so anything typed but unsent is still on screen to copy out.
 **Offline** means the relay could not be reached — nothing was taken away, the
 note is shown read-only from the last saved copy, and it retries on its own.
 
-**Deploying it** needs one thing: the websocket path routed to the relay, which
-listens on `COLLAB_PORT` (default 3001) and must not be exposed publicly.
-
-```nginx
-location /collab {
-  proxy_pass http://127.0.0.1:3001;
-  proxy_http_version 1.1;
-  proxy_set_header Upgrade $http_upgrade;
-  proxy_set_header Connection "upgrade";
-  proxy_read_timeout 1h;   # Yjs sockets are long-lived and usually idle
-}
-```
-
-The ticket endpoint returns the *path*, not an absolute URL — the browser
-resolves it against the origin it loaded from, which is the only origin
-guaranteed to reach back through the proxy. In development vite proxies
-`/collab` already, so nothing needs configuring.
-
-Unit 7 (Repositories) is the last of them, and it is what makes the codebase
-half of the product reachable. Connect a repository three ways — a git remote,
-a folder on this server, or an agent pushing files in over the API — and its
-files are indexed, parsed for symbols, and folded into the same graph and
-search as your notes.
-
-The viewer is **read-only, permanently**: Chapters never writes code back, so
-git stays the record of truth. Files open with syntax highlighting and a symbol
-outline down the side, and a git-sourced repository carries an "open on GitHub"
-link built from its detected default branch — local folders and agent-pushed
-repositories have no such URL, so they do not pretend to.
-
-A git remote gets a webhook card that reveals its secret once and shows the
-payload path to paste into the host; regenerating it says plainly that
-deliveries keep failing until the new secret is pasted in. A folder on this
-server is watched live — edit a file and the index follows within a second —
-and any repository can be re-indexed on demand rather than waiting for the
-poller. Sharing is owner/viewer only, because there is no edit level to grant
-when nothing is ever written back.
+**Deploying it** needs nothing in particular. The relay rides the app's own
+HTTP server on `/collab`, so there is one process listening on one port and no
+websocket routing to configure — in development or in production.
 
 **Getting in** is a four-step route, and the app shows you where you are on it:
 create an account, confirm your email, wait for an administrator on that
