@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { teamMemberships, users, vaults, vaultShares } from '../db/schema.js'
 import { destroyUserSessions } from './sessions.js'
+import { WELCOME_SUBJECT, WELCOME_TEXT } from '../email/welcome.js'
 import { logSecurityEvent } from './security-events.js'
 import { notify } from '../notifications/notify.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
@@ -49,6 +50,8 @@ export function adminRoutes(app: FastifyInstance) {
       recipientId: user.id,
       type: 'signup_approved',
       message: 'Your Chapters account has been approved. You can now log in.',
+      emailSubject: WELCOME_SUBJECT,
+      emailText: WELCOME_TEXT,
     })
     return { status: 'active' }
   })
