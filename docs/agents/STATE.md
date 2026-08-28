@@ -25,10 +25,22 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 - **Hosted = one container + one Postgres PER CUSTOMER**, and the app is **not
   forked** for it: one repo, one branch line; the control plane is a separate
   private repo the app must NEVER import or call. No edition flag — it would
-  branch on nothing. See `implementation.md` "Product shape".
+  branch on nothing. See `implementation.md` "Product shape". Control plane =
+  `PIIIX-org/chapters-cloud` (private, design approved 2026-08-28): OIDC
+  provider + Docker provisioner, and **it claims `/api/setup` per customer —
+  the setup token is the provisioning handshake, NOT a barrier to hosted
+  signup**. #127 (in-app multi-tenancy) was closed for contradicting this;
+  don't re-propose tenancy here. This repo owes it ONE PR: generic OIDC login
+  (`OIDC_ISSUER`/`_CLIENT_ID`/`_CLIENT_SECRET`/`OIDC_ONLY`), whose first
+  sign-in must LINK to the setup-created admin by verified email, not
+  duplicate it.
 - **Current task**: the cold walkthrough — `docker compose up` from no volumes
   on an image built from `dev`, walked as a stranger (sign up → verify →
   approve → sign in). Deployable and the sign-in path are both merged.
+  `chapters.piiix.org` is deployed but **unclaimed** — `/setup` never run.
+- **#126**: approval mails the welcome; `notify()`'s `emailSubject`/`emailText`
+  override the MAIL only, feed row stays short. **No SMTP = mail neither sent
+  NOR logged** (in-memory array), so nobody can pass verification.
 - **Mutation-verify every new test** AND click it in a real browser. Two whole
   features shipped green and broken: `apiFetch` sent JSON with no body (#110),
   and unit 6's ticket built its ws URL from fastify's `host`, which is the
