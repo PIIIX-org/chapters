@@ -35,21 +35,15 @@ Every change — code, spec, doc — follows the same loop:
    2026-07-15, revoked 2026-07-20 with the owner merging personally,
    and re-authorized 2026-08-27.) Promotion `dev → prod` still needs
    the owner's explicit OK each time — that has never changed.
-7. **Merge from `Taha-Mahmoodi`, not from the PR-opening account.** The CLA
-   bot's allowlist is `Taha-Mahmoodi,dependabot[bot]`, and a squash/merge
-   commit is authored by whoever merges. Merging from the collaborator account
-   puts an unsigned committer into history — invisible on the PR itself
-   (its commits carry their normal author) and surfacing later on the
-   promotion PR, where those merge commits finally enter the diff. That is
-   exactly how promotion #121 got blocked. Set by Taha, 2026-08-28.
+7. **Everything is done from the `Taha-Mahmoodi` account** — branches,
+   commits, PRs and merges. Set by Taha, 2026-08-28.
 
-8. **PRs are opened from `sadeqisaidmohaddes-star`'s GitHub account**
-   (write-collaborator on this repo as of 2026-07-20), not
-   `Taha-Mahmoodi` — switch the active `gh` account
-   (`gh auth switch --hostname github.com --user
-   sadeqisaidmohaddes-star`) before `git push`/`gh pr create`, and
-   switch back to `Taha-Mahmoodi` afterward. Commit authorship is
-   unaffected — commits still carry their normal author.
+   Previously PRs were opened from the `sadeqisaidmohaddes-star` collaborator
+   account. That account belongs to a different person, and merging from it
+   authored merge commits in his name. It stayed invisible on every PR, because
+   their commits carry their normal author, and only surfaced on promotion
+   #121, where those merge commits finally entered a diff and the CLA bot
+   refused them. Do not open or merge anything from that account again.
 
 ## Promotion to prod
 
