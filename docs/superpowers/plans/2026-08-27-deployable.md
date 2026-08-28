@@ -79,3 +79,29 @@ Existing suites stay green — the relay change in particular is a rewrite of a
 shipped, tested path. Every new behaviour gets a test that fails without it,
 mutation-verified. The final gate is task 6: the product running from a cold
 `docker compose up`, driven in a browser.
+
+## Task 6 result — walked, 2026-08-27
+
+`docker compose up` from no volumes on an image built from `dev`, driven in a
+browser with no vite and no proxy. The stranger journey end to end: land on `/`
+→ redirected to sign-in → **follow "Create an account"** (the link that did not
+exist a day ago) → sign up → **the verification email actually arrives** →
+enter the code → the waiting screen explains who has to act → an admin
+approves → **the "signup approved" email arrives** → sign in → lands in the
+app. No console errors.
+
+Two things this was the first ever test of:
+
+- **SMTP.** `mailer.ts` has existed since the backend phase and had never been
+  pointed at a real SMTP server — every test and every dev run took the
+  silently-records-it branch. It works. Walkthroughs should use a throwaway
+  catcher (`docker run --network <compose-net> axllent/mailpit`) and set
+  `SMTP_HOST` to it; without that, signup cannot be completed at all, because
+  the code is only ever in an email and the token is hashed in the database.
+- **The product running as an operator would run it**, rather than as two dev
+  servers with a proxy in front.
+
+One rough edge, not fixed: signing up on an instance where `/setup` has not run
+yet returns the bare string `instance setup is not complete`. Correct, and only
+reachable before the first admin exists, so it is recorded rather than dressed
+up.
