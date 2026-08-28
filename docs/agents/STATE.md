@@ -26,8 +26,9 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   forked** for it: one repo, one branch line; the control plane is a separate
   private repo the app must NEVER import or call. No edition flag — it would
   branch on nothing. See `implementation.md` "Product shape".
-- **Current task**: deployable (PR open). Sign-in path merged. Next: the cold
-  walkthrough on an image built from current `dev` (stranger → signed in).
+- **Current task**: the cold walkthrough — `docker compose up` from no volumes
+  on an image built from `dev`, walked as a stranger (sign up → verify →
+  approve → sign in). Deployable and the sign-in path are both merged.
 - **Mutation-verify every new test** AND click it in a real browser. Two whole
   features shipped green and broken: `apiFetch` sent JSON with no body (#110),
   and unit 6's ticket built its ws URL from fastify's `host`, which is the
