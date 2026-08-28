@@ -26,15 +26,16 @@ One deployment = one Node.js process = one organization. Two listeners:
 
 - **Main HTTP API** (Fastify) — `PORT`, default `3000`. Everything
   except live collaboration.
-- **Collaboration relay** (Hocuspocus/Yjs) — `COLLAB_PORT`, default
-  `3001`. Runs in the same process, started right after the HTTP server
+- **Collaboration relay** (Hocuspocus/Yjs) — **no port of its own**. It rides
+  the HTTP server above, taking the `upgrade` event on `/collab`. Started right
+  after the HTTP server
   (`server/src/index.ts`).
 
 ```
                  ┌─────────────────────────────────────┐
                  │            one Node process          │
   HTTP :3000 ───▶│  Fastify API (REST + MCP)             │
-                 │  Hocuspocus relay :3001 (Yjs CRDT)     │
+                 │  Hocuspocus relay on /collab (Yjs CRDT) │
                  │  in-process queues/buses (§9)          │
                  └───────────────┬───────────────────────┘
                                  │
@@ -531,22 +532,70 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
 
 ## 8. Deployment
 
-- **`Dockerfile`** (repo root): `node:24-slim` (Debian, not Alpine —
-  `onnxruntime-node` and `sharp` need prebuilt glibc binaries), installs
-  via `pnpm install --frozen-lockfile`, runs via `tsx` directly (no
-  separate build step — this is the *only* execution path this app has
-  ever used, dev and prod alike). Exposes `3000` and `3001`.
-- **`docker-compose.yml`**: Postgres (`pgvector/pgvector:pg17`) for
-  local dev/test. The app image itself isn't in this file yet — build
-  and run it directly (`docker build . && docker run ...`) or add a
-  service block if you want one-command full-stack startup.
-- **`server/.env.example`**: every environment variable, documented,
-  in one place — copy to `server/.env` (or set equivalently) before
-  running. Notable ones: `DATABASE_URL`, `DATA_DIR`,
-  `CREDENTIALS_ENCRYPTION_KEY` (required only once a private repo or
-  webhook secret is configured — `openssl rand -hex 32`), `SETUP_TOKEN`,
-  `SMTP_*` (optional — falls back to in-memory capture), `EMBEDDINGS`,
-  `CORS_ORIGIN`.
+- **`docker compose up -d`** is the whole thing: the app image and
+  Postgres, one published port, `depends_on: service_healthy` so the
+  server does not run migrations against a database that is not up yet,
+  and a named volume on `/data`.
+- **`Dockerfile`** (repo root): two stages, `node:24-slim` both (Debian,
+  not Alpine — `onnxruntime-node` and `sharp` need prebuilt glibc
+  binaries).
+  - *client stage*: `pnpm install --frozen-lockfile --filter
+    @chapters/client`, then `vite build`.
+  - *runtime stage*: `pnpm install --frozen-lockfile --filter
+    @chapters/server`, the server source, and the built client copied to
+    `/app/client/dist` — which is exactly where `config.clientDist`
+    (`../../client/dist` from `server/src`) looks, so `CLIENT_DIST` needs
+    no override. Filtering each install to one package keeps the client
+    toolchain out of the runtime image and the server's native
+    dependencies out of the build stage.
+  - Both stages copy **all three** workspace `package.json` files before
+    installing: pnpm validates `--frozen-lockfile` against the importers
+    it finds on disk, and a missing workspace directory fails the install
+    before it starts.
+  - Installs `git` **and `ca-certificates`** via apt: `node:24-slim`
+    ships neither, and `repositories/git-sync.ts` shells out to git for
+    every clone and fetch. Without them the image builds, boots, serves
+    the UI and reports healthy while every repository connection fails —
+    git without a CA bundle dies on `server certificate verification
+    failed. CAfile: none` for any https remote. Node's own fetch/TLS uses
+    a bundle compiled into node and is unaffected, which is what makes
+    this easy to miss.
+  - Installs *and* runs as the unprivileged `node` user, so `/app` is
+    owned by it without a `chown -R` layer duplicating the (large)
+    `node_modules` tree — and the Transformers.js model cache, which
+    lives under `node_modules`, stays writable at runtime.
+  - Runs via `tsx` — the *only* execution path this app has ever used,
+    dev and prod alike; there is no tsc-to-JS build. `node --import tsx`
+    rather than `pnpm start`, so the server is PID 1 and `SIGTERM`
+    reaches the shutdown handler in `index.ts` that flushes note edits
+    still inside the collab store debounce.
+  - `HEALTHCHECK` hits `/health` with `node -e` + `fetch` (no curl in
+    `node:*-slim`, and an apt layer for it is not worth it).
+  - Exposes **`3000` only**. The Yjs relay rides Fastify's own HTTP
+    server at `/collab`; there is no second port.
+- **`server/.env.example`**: every environment variable, documented, in
+  one place. For compose, copy it to `.env` at the **repo root** (that is
+  the file compose interpolates); for a direct run, `server/.env` with
+  `node --env-file`. Nothing in the app loads a `.env` by itself.
+  - ⚠ **`SMTP_HOST` unset means mail is never sent.**
+    `email/mailer.ts` pushes each message onto an in-process array and
+    returns success, so signup verification and password reset return
+    200 and are never delivered — silently, with no error anywhere. This
+    is the single most dangerous misconfiguration in the product.
+  - ⚠ **`DATA_DIR`** is where the notes are. They are files on disk, not
+    rows in Postgres; a database backup does not back them up, and the
+    default relative path lands in a container's writable layer.
+  - ⚠ **`CREDENTIALS_ENCRYPTION_KEY`** (`openssl rand -hex 32`): without
+    it private-repo credentials and webhook secrets cannot be stored, and
+    there is no rotation story.
+  - ⚠ **`SETUP_TOKEN` must be unset, not empty.** `bootstrap.ts` uses
+    `config.setupToken ?? generateToken()` and `??` does not catch `''`,
+    so an empty value becomes the real setup token. This is why
+    `docker-compose.yml` uses the list form (`- SETUP_TOKEN`), which
+    passes a variable through only when it is actually set, instead of
+    `${SETUP_TOKEN:-}`, which would always set it to the empty string.
+  - Others: `DATABASE_URL`, `PORT`, `CLIENT_DIST`, `EMBEDDINGS`,
+    `CORS_ORIGIN`, `LOCAL_REPOS_ROOT`.
 - **Migrations**: `drizzle-kit generate` produces SQL under
   `server/drizzle/`; a few migrations were hand-edited afterward for
   things Drizzle can't express directly (pgvector extension + HNSW

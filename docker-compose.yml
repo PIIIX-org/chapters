@@ -1,19 +1,127 @@
+# One-command Chapters: the app and its database.
+#
+#   cp server/.env.example .env      # then fill in the values below
+#   docker compose up -d             # http://localhost:3000
+#
+# Compose reads `./.env` (repo root) for the ${...} interpolation below.
+# The server itself does NOT read a .env file — it reads the process
+# environment — so `.env` at the root is the file that matters for
+# compose, and `server/.env` only matters if you run the server directly
+# with `node --env-file`.
+#
+# ⚠ READ THIS BEFORE YOU PUT REAL USERS ON IT ⚠
+#
+# 1. SMTP_HOST unset means mail is NOT SENT. server/src/email/mailer.ts
+#    pushes every message onto an in-process array instead. Signup
+#    verification and password reset return 200, the UI says "check your
+#    email", and nothing is ever delivered — to anyone, ever, with no
+#    error anywhere. New users cannot verify; locked-out users cannot
+#    reset. Set SMTP_HOST before this instance is real.
+# 2. CREDENTIALS_ENCRYPTION_KEY unset means private-repo credentials and
+#    webhook secrets cannot be stored at all. There is no rotation
+#    story: generate it (`openssl rand -hex 32`) and back it up BEFORE
+#    you need it, not after.
+# 3. The `chapters-data` volume holds the notes. They are files on disk,
+#    not rows in Postgres. `docker compose down -v` deletes them.
+# 4. POSTGRES_PASSWORD is applied ONLY when the database volume is first
+#    created. Changing it later leaves the stored password untouched, the
+#    app's DATABASE_URL now disagrees with it, and you get a crash loop
+#    on `password authentication failed` while the db reports healthy.
+#    (Do not debug this from inside the db container: local connections
+#    are trusted there, so `psql` succeeds with ANY password and tells
+#    you nothing.) To change it, rotate it in Postgres — or start over
+#    with `docker compose down -v`, which also deletes the notes.
+
 services:
+  app:
+    build: .
+    depends_on:
+      db:
+        # Not `service_started`: the server runs migrations on boot and
+        # exits(1) if it cannot connect, so it must not start before
+        # Postgres is accepting connections.
+        condition: service_healthy
+    # tini as PID 1, to reap the `git` processes simple-git spawns for
+    # every repository clone and fetch. It forwards SIGTERM, so index.ts
+    # still gets to flush debounced note edits on shutdown (verified: the
+    # container exits 0, immediately, not 137 after a 10s timeout).
+    init: true
+    restart: unless-stopped
+    ports:
+      # The only port this app needs. The Yjs collaboration relay shares
+      # this listener at /collab (websocket upgrade) — there is no second
+      # port to publish and no second route for a reverse proxy to add,
+      # beyond passing the Upgrade header through on /collab.
+      - '${APP_PORT:-3000}:3000'
+    # List form, not map form, deliberately. `SETUP_TOKEN: ${SETUP_TOKEN:-}`
+    # would set the variable to the EMPTY STRING when nobody configured
+    # one, and auth/bootstrap.ts reads it as `config.setupToken ??
+    # generateToken()` — `??` does not catch '', so the instance's
+    # one-time setup token would literally be the empty string and the
+    # first stranger to POST it owns the instance. A bare `- NAME` entry
+    # is passed through only when it is actually set (in the shell or in
+    # ./.env) and left genuinely unset otherwise, so the server's own
+    # defaults apply.
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # `db` is the compose service name; 5432 is the container port, not
+      # the published one.
+      - DATABASE_URL=postgres://${POSTGRES_USER:-chapters}:${POSTGRES_PASSWORD:-chapters}@db:5432/${POSTGRES_DB:-chapters}
+      # Must stay under the mounted volume — see `volumes:` below.
+      - DATA_DIR=/data/chapters
+      - LOCAL_REPOS_ROOT=/data/chapters/local-repos
+      # 'local' = real ONNX embeddings (the first request downloads the
+      # model). 'fake' = deterministic stub: search and graph relevance
+      # become meaningless. Never 'fake' here.
+      - EMBEDDINGS=local
+      # ⚠ Unset = MAIL IS NEVER SENT, silently. See the warning above.
+      - SMTP_HOST
+      - SMTP_PORT
+      - SMTP_USER
+      - SMTP_PASS
+      - SMTP_FROM
+      # ⚠ 64 hex chars (`openssl rand -hex 32`). Unset = private-repo
+      # credentials and webhook secrets cannot be stored at all.
+      - CREDENTIALS_ENCRYPTION_KEY
+      # Unset = generated on first boot and printed to `docker compose
+      # logs app`. That log line is the only plaintext copy.
+      - SETUP_TOKEN
+      # Unset = same-origin only, which is correct here: this one
+      # process serves the UI and the API on the single port above.
+      - CORS_ORIGIN
+    volumes:
+      # THE NOTES LIVE HERE. Vault content is markdown FILES ON DISK
+      # (plus local-path repository clones), not rows in Postgres — a
+      # database backup alone does not back this up, and losing this
+      # volume loses the notes.
+      #
+      # Not on it: the Transformers.js embedding model, which caches
+      # under node_modules inside the image. Recreating the container
+      # re-downloads it (~130MB, once, on the first embedding).
+      - chapters-data:/data
+
   db:
     image: pgvector/pgvector:pg17
     environment:
-      POSTGRES_USER: chapters
-      POSTGRES_PASSWORD: chapters
-      POSTGRES_DB: chapters
+      POSTGRES_USER: ${POSTGRES_USER:-chapters}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chapters}
+      POSTGRES_DB: ${POSTGRES_DB:-chapters}
+    restart: unless-stopped
     ports:
-      - '5432:5432'
+      # Published for local development and the test suite, which run on
+      # the host against this container (`docker compose up -d db`).
+      # Drop this line on a production host — nothing outside the compose
+      # network needs it.
+      - '${POSTGRES_PORT:-5432}:5432'
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U chapters']
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-chapters}']
       interval: 5s
       timeout: 3s
       retries: 10
 
 volumes:
   db-data:
+  chapters-data:

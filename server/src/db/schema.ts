@@ -39,6 +39,9 @@ export const users = pgTable('users', {
   emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
   totpSecret: text('totp_secret'),
   mfaEnabledAt: timestamp('mfa_enabled_at', { withTimezone: true }),
+  // Account-level switch for notification *emails* only; the in-app row is
+  // always written — it is the activity feed (notifications spec).
+  emailNotifications: boolean('email_notifications').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -415,6 +418,12 @@ export const repositories = pgTable(
     syncStatus: repositorySyncStatus('sync_status').notNull().default('idle'),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
     lastSyncError: text('last_sync_error'),
+    /**
+     * The remote's HEAD branch name, read from the shallow clone on each git
+     * sync — the ref GitHub deep links need. Null for local_path/agent_push
+     * (no branch exists) and for a git repo whose first sync has not landed.
+     */
+    defaultBranch: text('default_branch'),
     /** Staleness signal for the polling fallback scheduler. */
     lastWebhookAt: timestamp('last_webhook_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })

@@ -345,9 +345,14 @@ describe('SearchOverlay commands', () => {
     await waitFor(() =>
       expect(screen.getByRole('option', { name: 'Command: Go to graph home' })).toBeInTheDocument(),
     )
-    // 'team' is deliberately excluded here — the Team page exists now and has
-    // its own command, asserted in the "SearchOverlay team command" suite.
-    expect(screen.queryByRole('option', { name: /settings|admin|invite/i })).toBeNull()
+    // 'team' and 'settings' are deliberately excluded here — both pages exist
+    // now and have their own commands, asserted below. 'admin' stays on this
+    // list because it is role-gated and this fixture is a member.
+    // 'Open repository: …' left the list the same way when `/repos/:id/files/*`
+    // shipped (unit 7); it is asserted end-to-end, against the app's real route
+    // table, in pages/RepositoryPage.test.tsx. This fixture answers no
+    // /api/repositories call, so the overlay offers none of those commands here.
+    expect(screen.queryByRole('option', { name: /admin|invite/i })).toBeNull()
   })
 
   it('renders a "Go to team" command', async () => {
@@ -746,5 +751,97 @@ describe('SearchOverlay scope and filters', () => {
     // this passes just as well when nothing rendered.
     expect(await screen.findByRole('option', { name: 'Command: Go to team' })).toBeInTheDocument()
     expect(screen.queryByRole('option', { name: 'Command: Go to admin' })).toBeNull()
+  })
+  it('offers "Go to settings" to everyone, admin or not', async () => {
+    stubFetch(() => mockJsonResponse(200, []), 'member')
+    const { router } = renderOverlay()
+
+    // Unlike admin, settings is every account's own page — a member reaching
+    // it hits their settings, not a wall.
+    await userEvent.click(await screen.findByRole('option', { name: 'Command: Go to settings' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings'))
+  })
+})
+
+/**
+ * The connect flow's only other host is RepositoryPage, at `/repos/:id/files/*`,
+ * and the only way to that route is the `Open repository:` commands above —
+ * which are built from the repositories you already have. So the fixture here
+ * is deliberately zero repositories: with one, this proves nothing.
+ */
+describe('SearchOverlay connect-repository command', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  const CONNECTED = {
+    id: 'r7',
+    name: 'chapters',
+    ownerId: 'u1',
+    ingestionMethod: 'git',
+    gitUrl: 'https://github.com/PIIIX-org/chapters.git',
+    localPath: null,
+    defaultBranch: null,
+    mergeable: true,
+    syncStatus: 'idle',
+    lastSyncedAt: null,
+    lastSyncError: null,
+    lastWebhookAt: null,
+    webhookConfigured: false,
+    createdAt: '2026-08-25T09:00:00.000Z',
+  }
+
+  function stubNoRepositories() {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/search')) return Promise.resolve(mockJsonResponse(200, []))
+      if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, []))
+      if (url === '/api/repositories') {
+        return Promise.resolve(
+          init?.method === 'POST' ? mockJsonResponse(200, CONNECTED) : mockJsonResponse(200, []),
+        )
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('offers the command with no repositories at all, and opens the connect form', async () => {
+    stubNoRepositories()
+    const { onClose } = renderOverlay(true)
+
+    // No `Open repository: …` command exists to reach the page that used to be
+    // the dialog's only host — this command is the whole route in.
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: 'Command: Connect a repository' })).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('option', { name: /Command: Open repository/ })).toBeNull()
+
+    await userEvent.click(screen.getByRole('option', { name: 'Command: Connect a repository' }))
+
+    expect(await screen.findByLabelText('Repository name')).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Git remote' })).toBeInTheDocument()
+    // ⌘K gets out of the way; the dialog is a modal over whatever is behind it.
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('lands in the new repository’s viewer once it is connected', async () => {
+    stubNoRepositories()
+    const { router } = renderOverlay(true)
+
+    await userEvent.click(
+      await screen.findByRole('option', { name: 'Command: Connect a repository' }),
+    )
+    await userEvent.type(await screen.findByLabelText('Repository name'), 'chapters')
+    await userEvent.type(
+      screen.getByLabelText('Git remote URL'),
+      'https://github.com/PIIIX-org/chapters.git',
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Connect repository' }))
+
+    // The id comes from the response, not from anything typed — a hardcoded
+    // path would have to guess 'r7'.
+    await waitFor(() => expect(router.state.location.pathname).toBe('/repos/r7/files'))
   })
 })

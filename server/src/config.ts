@@ -1,11 +1,18 @@
+import { fileURLToPath } from 'node:url'
+
 const env = process.env
 
 export const config = {
   nodeEnv: env.NODE_ENV ?? 'development',
   isProd: env.NODE_ENV === 'production',
   port: Number(env.PORT ?? 3000),
-  /** Yjs sync relay port (same process, own listener). */
-  collabPort: Number(env.COLLAB_PORT ?? 3001),
+  /**
+   * Built client to serve from this process (`/collab` and `/api/*` excluded).
+   * Absolute by default so it resolves the same however the process is
+   * started; missing directory = API only, exactly as before.
+   */
+  clientDist:
+    env.CLIENT_DIST ?? fileURLToPath(new URL('../../client/dist', import.meta.url)),
   databaseUrl:
     env.DATABASE_URL ?? 'postgres://chapters:chapters@localhost:5432/chapters',
   /** Root directory for vault note files (OKF markdown on disk). */

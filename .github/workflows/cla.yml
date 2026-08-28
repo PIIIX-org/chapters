@@ -24,4 +24,10 @@ jobs:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/PIIIX-org/.github/blob/main/CLA.md'
           branch: 'main'
-          allowlist: Taha-Mahmoodi,dependabot[bot]
+          # sadeqisaidmohaddes-star is the collaborator account this repo's
+          # PRs are opened from (github-workflow.md step 8). Its commits carry
+          # their normal author, so it never appeared on a PR — it surfaced
+          # only on promotion #121, where the merge commits it created finally
+          # entered the diff. Merging now happens from Taha-Mahmoodi, but the
+          # four already in history still need it allowlisted.
+          allowlist: Taha-Mahmoodi,sadeqisaidmohaddes-star,dependabot[bot]

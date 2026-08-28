@@ -2,39 +2,41 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Phase**: UI, executing `specs/2026-08-22-remaining-ui-design.md` (10 locked
-  decisions, 7 units). **PRs target `dev` directly, never stacked.** Promotion
-  `dev → prod` needs Taha's explicit OK each time.
-- **Backend**: complete + seven UI-driven additions. `pnpm profile-graph`
-  ≈500ms at 10k notes, **Louvain NOT the bottleneck**. Semantic edges stored
-  **directed**; purge paths clear them explicitly (no FK).
-- **Units 1–3 shipped** (detail in README + git log):
-  - **1** graph Home (Canvas 2D + `d3-force`; SVG and cytoscape FAILED the
-    probe), community aggregation + drill-down, shell, vault lifecycle, ⌘K,
-    notifications. **Louvain is seeded** — drill-down addresses communities by
-    number, so ids must stay stable.
-  - **2** vault settings **modal stack** (sharing, mergeable, vault MCP,
-    export), `/team`, `GET /users/lookup` (exact-match, non-enumerable),
-    `/teams/:id/stats` (aggregates only, scoped server-side).
-  - **3** `/admin`, admins only and gated *before* any query fires: approval
-    queue (shows whether the pending email is verified), user roster
-    (promote/deactivate, never yourself), vault+team oversight with owner
-    reassignment, access view (shares + MCP connections, force-revocable),
-    paginated security log + audit trail, stats, backup. Metadata only
-    — no endpoint behind it serves note text. Added
-    `GET /admin/mcp-connections`, `emailVerifiedAt` on `GET /admin/users`.
-    Signup/verify state the approval wait; **login stays generic on purpose**
-    (enumeration) — do not "fix" it.
-- **Current task**: none. Unit 3 open as a PR off `dev`. **Next**: 4
-  settings+MFA · 5 trash/history/import · 6 collab (yjs) · 7 repositories.
-- **Still no client UI**: everything units 4–7 cover. MCP needs none.
-- **`apiFetch` declared JSON with no body** → every bodyless DELETE/POST 400'd
-  in a browser across all three units; tests stub `fetch` (#110, fixed). Click
-  a unit in a real browser before calling it done.
-- **Test-that-cannot-fail: SEVEN times**, always a fixture too uniform to tell
-  working from broken. Mutation-verify every new test.
+- **UI phase DONE** (all 7 units). PRs target `dev` directly, never stacked;
+  `dev → prod` needs Taha's explicit OK. `pnpm profile-graph` ≈500ms at 10k
+  notes, **Louvain NOT the bottleneck**; semantic edges **directed**.
+- **Units 1–7 shipped.** Detail in README + git log; only the traps live here:
+  - **1** Louvain is **seeded** — drill-down addresses communities by number.
+  - **3** `/admin` is gated *before* any query fires, **metadata only**;
+    **login stays generic on purpose** (account enumeration).
+  - **4** **per-type notification prefs stay OUT of scope.**
+  - **5** `actorType` is `user|mcp|collab`, no 'system'; **collab is a PERSON**
+    and is the commonest. `/history/*` metadata-only — **MCP `note_history`
+    deliberately untouched**.
+  - **6** **no autosave PUT** — the CRDT is the note. `/collab/ticket` returns
+    a **path**: behind any proxy the server's `host` is the proxy's. The relay
+    rides the app's own HTTP server on `/collab` — ONE port, no proxy anywhere.
+    **revoked ≠ offline** — revoked KEEPS the doc (unsent text must survive).
+  - **7** viewer read-only forever; local folders watched;
+    **`gitUrl`/`localPath` are owner-only** (they leaked to viewers + MCP).
+- **Phase: DEPLOYABLE** (`plans/2026-08-27-deployable.md`). The API now serves
+  the client and the relay shares its port; `docker compose up` from no volumes
+  was driven in a browser, two tabs co-editing over the one published port.
+- **Hosted = one container + one Postgres PER CUSTOMER**, and the app is **not
+  forked** for it: one repo, one branch line; the control plane is a separate
+  private repo the app must NEVER import or call. No edition flag — it would
+  branch on nothing. See `implementation.md` "Product shape".
+- **Current task**: the cold walkthrough — `docker compose up` from no volumes
+  on an image built from `dev`, walked as a stranger (sign up → verify →
+  approve → sign in). Deployable and the sign-in path are both merged.
+- **Mutation-verify every new test** AND click it in a real browser. Two whole
+  features shipped green and broken: `apiFetch` sent JSON with no body (#110),
+  and unit 6's ticket built its ws URL from fastify's `host`, which is the
+  proxy's — 537 tests passed while every editor 404'd the handshake.
 - **Deferred**: cloud backups, cli-visualizer (#9), symbol embeddings, partial
-  restore, single-process arch. **Decided against 2026-08-22, do not re-open**:
+  restore. Single-process is now a PROPERTY, not a gap (one container per
+  customer). **Decided against 2026-08-22, do NOT re-open**:
   Leiden, a graph DB, GraphRAG summaries, cross-file calls.
-- **Open issues**: #9; #66 (updateNote race); #101 (graph query-params, dead
-  overload, dangling notifications on purge).
+- **Open issues**: #9; #101 (graph query-params, dead overload, dangling
+  notifications on purge). #66 is closed by unit 6's CRDT. **Test-that-cannot-
+  fail: SEVEN times**, always a fixture too uniform to tell working from broken.

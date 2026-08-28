@@ -4,9 +4,11 @@ import { useNavigate, useSearchParams } from 'react-router'
 import { Input } from '../ui/input.js'
 import { useSearch } from '../../hooks/useSearch.js'
 import { useVaults } from '../../hooks/useVaults.js'
+import { useRepositories } from '../../hooks/useRepositories.js'
 import { useCreateVault } from '../../hooks/useVaultMutations.js'
 import { useSession } from '../../hooks/useSession.js'
 import { GraphFilters, graphFiltersFromSearchParams, type FilterableNode } from '../graph/GraphFilters.js'
+import { ConnectRepositoryDialog } from '../repositories/ConnectRepositoryDialog.js'
 import { cn } from '../../lib/utils.js'
 import type { SearchResult } from '../../api/search.js'
 
@@ -58,9 +60,11 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [activeIndex, setActiveIndex] = useState(0)
   const [prevEntriesKey, setPrevEntriesKey] = useState('')
+  const [connecting, setConnecting] = useState(false)
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const vaults = useVaults()
+  const repositories = useRepositories()
   const session = useSession()
   const createVault = useCreateVault()
 
@@ -158,6 +162,8 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   // Command destinations are limited to routes that actually exist in
   // router.tsx today. Do NOT add a command for a page a later unit has not
   // shipped yet — a command that goes nowhere is worse than no command at all.
+  // 'repo:' joined the list with `/repos/:id/files/*` (unit 7), the same way
+  // 'team' and 'settings' did when their pages shipped.
   const navCommands: Command[] = [
     { id: 'home', label: 'Go to graph home', run: () => navigate('/') },
     ...(vaults.data ?? []).map((v) => ({
@@ -165,7 +171,22 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
       label: `Open vault: ${v.name}`,
       run: () => navigate(`/vaults/${v.id}`),
     })),
+    // No `/repos` index exists (the shell design rejects a dashboard of
+    // cards), so a repository is only ever reachable by its own id — from
+    // here, and from the scope picker.
+    ...(repositories.data ?? []).map((r) => ({
+      id: `repo:${r.id}`,
+      label: `Open repository: ${r.name}`,
+      run: () => navigate(`/repos/${r.id}/files`),
+    })),
+    // Not a destination, and deliberately not conditioned on the list above.
+    // ConnectRepositoryDialog otherwise mounts only inside RepositoryPage, at
+    // `/repos/:id/files/*`, which is reachable only from the repository
+    // commands right above — so someone with no repositories had no route to
+    // their first one. Same cold start vault creation hit in unit 1.
+    { id: 'connect-repo', label: 'Connect a repository', run: () => setConnecting(true) },
     { id: 'team', label: 'Go to team', run: () => navigate('/team') },
+    { id: 'settings', label: 'Go to settings', run: () => navigate('/settings') },
     // Admins only: /admin renders a "this area is for admins" wall to everyone
     // else, and offering a door that opens onto that is worse than no door.
     ...(session.data?.role === 'admin'
@@ -251,187 +272,197 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     }
   }
 
-  if (!open) return null
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[15vh]"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
-      }}
-    >
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Search"
-        onKeyDown={onPanelKeyDown}
-        className="w-full max-w-xl overflow-hidden rounded-lg border border-border bg-background shadow-lg"
-      >
-        <div className="flex items-center gap-1.5 border-b border-border px-4 py-2">
-          <span className="text-xs font-medium text-muted-foreground">Search:</span>
-          <div role="radiogroup" aria-label="Search scope" className="flex flex-wrap gap-1">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={!vaultId}
-              onClick={() => selectScope(null)}
-              className={cn(
-                'rounded px-1.5 py-0.5 text-xs font-medium hover:bg-muted',
-                !vaultId && 'bg-muted text-foreground',
-              )}
-            >
-              Everywhere
-            </button>
-            {(vaults.data ?? []).map((v) => (
-              <button
-                key={v.id}
-                type="button"
-                role="radio"
-                aria-checked={vaultId === v.id}
-                onClick={() => selectScope(v.id)}
-                className={cn(
-                  'rounded px-1.5 py-0.5 text-xs font-medium hover:bg-muted',
-                  vaultId === v.id && 'bg-muted text-foreground',
-                )}
-              >
-                {v.name}
-              </button>
-            ))}
-          </div>
-        </div>
-        <Input
-          autoFocus
-          role="combobox"
-          aria-autocomplete="list"
-          aria-expanded={entries.length > 0}
-          aria-controls="search-listbox"
-          aria-activedescendant={entries[activeIndex]?.id}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="Search notes and code…"
-          className="h-11 rounded-none border-0 border-b border-border text-base focus-visible:ring-0"
-        />
-        <div className="border-b border-border p-2">
-          <GraphFilters nodes={filterNodes} paramPrefix="s_" />
-        </div>
-        {createVault.isError && (
-          <div role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
-            {createVault.error.message}
-          </div>
-        )}
-        <div id="search-listbox" role="listbox" aria-label="Search" className="max-h-[50vh] overflow-auto">
-          {commands.length > 0 && (
-            <div role="group" aria-label="Commands">
-              {commands.map((cmd, i) => (
+    <>
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[15vh]"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) onClose()
+          }}
+        >
+          <div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search"
+            onKeyDown={onPanelKeyDown}
+            className="w-full max-w-xl overflow-hidden rounded-lg border border-border bg-background shadow-lg"
+          >
+            <div className="flex items-center gap-1.5 border-b border-border px-4 py-2">
+              <span className="text-xs font-medium text-muted-foreground">Search:</span>
+              <div role="radiogroup" aria-label="Search scope" className="flex flex-wrap gap-1">
                 <button
-                  key={cmd.id}
-                  id={commandOptionId(cmd)}
                   type="button"
-                  role="option"
-                  aria-selected={activeIndex === i}
-                  aria-label={`Command: ${cmd.label}`}
-                  onClick={() => runCommand(cmd)}
+                  role="radio"
+                  aria-checked={!vaultId}
+                  onClick={() => selectScope(null)}
                   className={cn(
-                    'flex w-full items-center gap-2 px-4 py-2 text-left hover:bg-muted',
-                    activeIndex === i && 'bg-muted',
+                    'rounded px-1.5 py-0.5 text-xs font-medium hover:bg-muted',
+                    !vaultId && 'bg-muted text-foreground',
                   )}
                 >
-                  <span aria-hidden="true" className="text-muted-foreground">
-                    ›
-                  </span>
-                  <span className="truncate text-sm">{cmd.label}</span>
+                  Everywhere
                 </button>
-              ))}
+                {(vaults.data ?? []).map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={vaultId === v.id}
+                    onClick={() => selectScope(v.id)}
+                    className={cn(
+                      'rounded px-1.5 py-0.5 text-xs font-medium hover:bg-muted',
+                      vaultId === v.id && 'bg-muted text-foreground',
+                    )}
+                  >
+                    {v.name}
+                  </button>
+                ))}
+              </div>
             </div>
-          )}
-          {!results.isError && (
-            <div role="group" aria-label="Results">
-              <>
-                {items.map((r, i) => {
-                  const key = resultKey(r)
-                  const optionId = resultOptionId(r)
-                  const isActive = activeIndex === commands.length + i
-                  if (r.resourceType === 'code') {
-                    const isExpanded = expanded.has(key)
-                    return (
-                      <button
-                        key={key}
-                        id={optionId}
-                        type="button"
-                        role="option"
-                        aria-selected={isActive}
-                        onClick={() => toggleCode(key)}
-                        className={cn('block w-full px-4 py-2 text-left hover:bg-muted', isActive && 'bg-muted')}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">Code</span>
-                          <span className="truncate font-mono text-sm">{r.path}</span>
-                          {r.language && <Chip>{r.language}</Chip>}
-                          <span className="ml-auto font-mono text-xs text-muted-foreground">{r.score.toFixed(2)}</span>
-                        </div>
-                        {isExpanded && (
-                          <div className="mt-2 rounded bg-muted p-2">
-                            <div className="font-mono text-xs">{r.path}</div>
-                            <div className="text-xs text-muted-foreground">{r.language}</div>
-                            <pre className="mt-1 whitespace-pre-wrap font-mono text-xs">{r.snippet}</pre>
-                          </div>
-                        )}
-                      </button>
-                    )
-                  }
-
-                  const tags = tagsOf(r)
-                  return (
+            <Input
+              autoFocus
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={entries.length > 0}
+              aria-controls="search-listbox"
+              aria-activedescendant={entries[activeIndex]?.id}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Search notes and code…"
+              className="h-11 rounded-none border-0 border-b border-border text-base focus-visible:ring-0"
+            />
+            <div className="border-b border-border p-2">
+              <GraphFilters nodes={filterNodes} paramPrefix="s_" />
+            </div>
+            {createVault.isError && (
+              <div role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
+                {createVault.error.message}
+              </div>
+            )}
+            <div id="search-listbox" role="listbox" aria-label="Search" className="max-h-[50vh] overflow-auto">
+              {commands.length > 0 && (
+                <div role="group" aria-label="Commands">
+                  {commands.map((cmd, i) => (
                     <button
-                      key={key}
-                      id={optionId}
+                      key={cmd.id}
+                      id={commandOptionId(cmd)}
                       type="button"
                       role="option"
-                      aria-selected={isActive}
-                      onClick={() => go(r.containerId, r.path)}
-                      className={cn('block w-full px-4 py-2 text-left hover:bg-muted', isActive && 'bg-muted')}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="truncate font-mono text-sm">{r.path}</div>
-                        <span className="font-mono text-xs text-muted-foreground">{r.score.toFixed(2)}</span>
-                      </div>
-                      <div className="truncate text-xs text-muted-foreground">{r.snippet}</div>
-                      {(r.type || tags.length > 0) && (
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {r.type && <Chip>{r.type}</Chip>}
-                          {tags.map((tag) => (
-                            <Chip key={tag}>{tag}</Chip>
-                          ))}
-                        </div>
+                      aria-selected={activeIndex === i}
+                      aria-label={`Command: ${cmd.label}`}
+                      onClick={() => runCommand(cmd)}
+                      className={cn(
+                        'flex w-full items-center gap-2 px-4 py-2 text-left hover:bg-muted',
+                        activeIndex === i && 'bg-muted',
                       )}
+                    >
+                      <span aria-hidden="true" className="text-muted-foreground">
+                        ›
+                      </span>
+                      <span className="truncate text-sm">{cmd.label}</span>
                     </button>
-                  )
-                })}
-                {debounced.trim() && !results.isPending && items.length === 0 && (
-                  <div className="px-4 py-3 text-sm text-muted-foreground">No results found.</div>
-                )}
-              </>
+                  ))}
+                </div>
+              )}
+              {!results.isError && (
+                <div role="group" aria-label="Results">
+                  <>
+                    {items.map((r, i) => {
+                      const key = resultKey(r)
+                      const optionId = resultOptionId(r)
+                      const isActive = activeIndex === commands.length + i
+                      if (r.resourceType === 'code') {
+                        const isExpanded = expanded.has(key)
+                        return (
+                          <button
+                            key={key}
+                            id={optionId}
+                            type="button"
+                            role="option"
+                            aria-selected={isActive}
+                            onClick={() => toggleCode(key)}
+                            className={cn('block w-full px-4 py-2 text-left hover:bg-muted', isActive && 'bg-muted')}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">Code</span>
+                              <span className="truncate font-mono text-sm">{r.path}</span>
+                              {r.language && <Chip>{r.language}</Chip>}
+                              <span className="ml-auto font-mono text-xs text-muted-foreground">{r.score.toFixed(2)}</span>
+                            </div>
+                            {isExpanded && (
+                              <div className="mt-2 rounded bg-muted p-2">
+                                <div className="font-mono text-xs">{r.path}</div>
+                                <div className="text-xs text-muted-foreground">{r.language}</div>
+                                <pre className="mt-1 whitespace-pre-wrap font-mono text-xs">{r.snippet}</pre>
+                              </div>
+                            )}
+                          </button>
+                        )
+                      }
+
+                      const tags = tagsOf(r)
+                      return (
+                        <button
+                          key={key}
+                          id={optionId}
+                          type="button"
+                          role="option"
+                          aria-selected={isActive}
+                          onClick={() => go(r.containerId, r.path)}
+                          className={cn('block w-full px-4 py-2 text-left hover:bg-muted', isActive && 'bg-muted')}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="truncate font-mono text-sm">{r.path}</div>
+                            <span className="font-mono text-xs text-muted-foreground">{r.score.toFixed(2)}</span>
+                          </div>
+                          <div className="truncate text-xs text-muted-foreground">{r.snippet}</div>
+                          {(r.type || tags.length > 0) && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {r.type && <Chip>{r.type}</Chip>}
+                              {tags.map((tag) => (
+                                <Chip key={tag}>{tag}</Chip>
+                              ))}
+                            </div>
+                          )}
+                        </button>
+                      )
+                    })}
+                    {debounced.trim() && !results.isPending && items.length === 0 && (
+                      <div className="px-4 py-3 text-sm text-muted-foreground">No results found.</div>
+                    )}
+                  </>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        {results.isError && (
-          // Sibling of #search-listbox, not a descendant: role="listbox"
-          // permits only option/group children (aria-required-children), and
-          // this alert plus its focusable Retry button are neither.
-          <div role="alert" className="border-t border-border px-4 py-3 text-sm">
-            <p className="text-destructive">{results.error?.message ?? 'Search failed.'}</p>
-            <button
-              type="button"
-              onClick={() => results.refetch()}
-              className="mt-1 rounded bg-muted px-2 py-1 text-xs"
-            >
-              Retry
-            </button>
+            {results.isError && (
+              // Sibling of #search-listbox, not a descendant: role="listbox"
+              // permits only option/group children (aria-required-children), and
+              // this alert plus its focusable Retry button are neither.
+              <div role="alert" className="border-t border-border px-4 py-3 text-sm">
+                <p className="text-destructive">{results.error?.message ?? 'Search failed.'}</p>
+                <button
+                  type="button"
+                  onClick={() => results.refetch()}
+                  className="mt-1 rounded bg-muted px-2 py-1 text-xs"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+      {/* Outside the `open` branch on purpose: the command that opens this
+          closes ⌘K in the same tick, and a dialog living in the subtree that
+          just went away would close with it. */}
+      <ConnectRepositoryDialog
+        open={connecting}
+        onOpenChange={setConnecting}
+        onConnected={(created) => navigate(`/repos/${created.id}/files`)}
+      />
+    </>
   )
 }

@@ -29,18 +29,21 @@ Every change — code, spec, doc — follows the same loop:
    when fixed, close the issue as solved (`closes #N` in the fixing
    commit/PR comment).
 6. **Merge** into `dev` (merge commit, delete branch) once review is
-   clean and CI is green. **As of 2026-07-20, the owner reviews and
-   merges every PR personally** — open the PR, confirm CI is green,
-   then stop and wait; do not run `gh pr merge`. (Auto-merge was
-   authorized 2026-07-15 and used through the backend and UI Slice 1;
-   that authorization is revoked going forward.)
-7. **PRs are opened from `sadeqisaidmohaddes-star`'s GitHub account**
-   (write-collaborator on this repo as of 2026-07-20), not
-   `Taha-Mahmoodi` — switch the active `gh` account
-   (`gh auth switch --hostname github.com --user
-   sadeqisaidmohaddes-star`) before `git push`/`gh pr create`, and
-   switch back to `Taha-Mahmoodi` afterward. Commit authorship is
-   unaffected — commits still carry their normal author.
+   clean and CI is green. **As of 2026-08-27 the agent merges its own
+   PRs again**: open the PR, wait for CI to pass, then merge. Do not
+   merge on red or pending CI. (History: auto-merge was authorized
+   2026-07-15, revoked 2026-07-20 with the owner merging personally,
+   and re-authorized 2026-08-27.) Promotion `dev → prod` still needs
+   the owner's explicit OK each time — that has never changed.
+7. **Everything is done from the `Taha-Mahmoodi` account** — branches,
+   commits, PRs and merges. Set by Taha, 2026-08-28.
+
+   Previously PRs were opened from the `sadeqisaidmohaddes-star` collaborator
+   account. That account belongs to a different person, and merging from it
+   authored merge commits in his name. It stayed invisible on every PR, because
+   their commits carry their normal author, and only surfaced on promotion
+   #121, where those merge commits finally entered a diff and the CLA bot
+   refused them. Do not open or merge anything from that account again.
 
 ## Promotion to prod
 

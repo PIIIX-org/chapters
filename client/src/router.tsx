@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { createBrowserRouter } from 'react-router'
+import { createBrowserRouter, type RouteObject } from 'react-router'
 import { RequireAuth } from './components/RequireAuth.js'
 import { HomePage } from './pages/HomePage.js'
 import { GraphSkeleton } from './components/graph/GraphSkeleton.js'
@@ -23,8 +23,23 @@ const TeamPage = lazy(() => import('./pages/TeamPage.js').then((m) => ({ default
 // Same again, and doubly so: most people on an instance are not admins and
 // will never load this chunk at all.
 const AdminPage = lazy(() => import('./pages/AdminPage.js').then((m) => ({ default: m.AdminPage })))
+// Home never renders settings either, and an unenrolled user on an
+// MFA-mandating instance is sent straight here — one lazy chunk, not part of
+// the entry bundle.
+const SettingsPage = lazy(() => import('./pages/SettingsPage.js').then((m) => ({ default: m.SettingsPage })))
+// And again, hardest of all: this one pulls in a second CodeMirror stack (the
+// read-only code viewer) for people who have connected a repository at all.
+const RepositoryPage = lazy(() =>
+  import('./pages/RepositoryPage.js').then((m) => ({ default: m.RepositoryPage })),
+)
 
-export const router = createBrowserRouter([
+/**
+ * Exported separately from `router` so a test can mount the real route table
+ * in a memory router: `createBrowserRouter` binds to `window.location` when
+ * it is created (at import), which leaves no way to start a test anywhere but
+ * `/`. The app still gets exactly these routes.
+ */
+export const routes: RouteObject[] = [
   {
     element: <RequireAuth />,
     children: [
@@ -38,10 +53,29 @@ export const router = createBrowserRouter([
         ),
       },
       {
+        path: '/settings',
+        element: (
+          <Suspense fallback={<GraphSkeleton />}>
+            <SettingsPage />
+          </Suspense>
+        ),
+      },
+      {
         path: '/admin',
         element: (
           <Suspense fallback={<GraphSkeleton />}>
             <AdminPage />
+          </Suspense>
+        ),
+      },
+      {
+        // Splat, not a nested `:path` param: a file path has arbitrary depth
+        // and keeps its slashes. It also matches `/repos/:id/files` with an
+        // empty splat, which is the no-file-chosen state the page renders.
+        path: '/repos/:id/files/*',
+        element: (
+          <Suspense fallback={<GraphSkeleton />}>
+            <RepositoryPage />
           </Suspense>
         ),
       },
@@ -72,4 +106,6 @@ export const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   { path: '/forgot-password', element: <RequestPasswordResetPage /> },
   { path: '/reset-password', element: <ResetPasswordPage /> },
-])
+]
+
+export const router = createBrowserRouter(routes)
