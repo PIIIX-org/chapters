@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { Button } from '../../components/ui/button.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js'
 import { Input } from '../../components/ui/input.js'
@@ -7,6 +7,7 @@ import { Label } from '../../components/ui/label.js'
 import { FormError } from '../../components/FormError.js'
 import { signup } from '../../api/auth.js'
 import { ApiError } from '../../lib/api.js'
+import { AuthSteps } from '../../components/auth/AuthSteps.js'
 
 export function SignupPage() {
   const navigate = useNavigate()
@@ -36,6 +37,7 @@ export function SignupPage() {
           <CardTitle className="font-display text-xl">Create an account</CardTitle>
         </CardHeader>
         <CardContent>
+          <AuthSteps current="Create account" />
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="signup-email">Email</Label>
@@ -67,6 +69,12 @@ export function SignupPage() {
             <Button type="submit" disabled={submitting}>
               Sign up
             </Button>
+            <p className="text-center text-sm text-muted-foreground">
+              Already have an account?{' '}
+              <Link to="/login" className="text-foreground underline">
+                Sign in
+              </Link>
+            </p>
           </form>
         </CardContent>
       </Card>

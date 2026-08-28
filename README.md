@@ -250,6 +250,15 @@ note is shown read-only from the last saved copy, and it retries on its own.
 HTTP server on `/collab`, so there is one process listening on one port and no
 websocket routing to configure — in development or in production.
 
+**Getting in** is a four-step route, and the app shows you where you are on it:
+create an account, confirm your email, wait for an administrator on that
+instance to approve you, then sign in. The third step is the one you cannot do
+anything about, so the app says who has to act and that you will be emailed
+when they do — because the sign-in screen deliberately will not tell you. An
+unapproved account gets a plain "your email or password is wrong" there, since
+saying "pending approval" would confirm to a stranger that an address has an
+account on this instance.
+
 Development runs on a two-branch model — everything lands on **`dev`**
 (default) via reviewed PRs and is promoted to **`prod`** once verified —
 and is agent-driven: the working agreements (implementation prompt, file/

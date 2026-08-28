@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '../../components/ui/button.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js'
@@ -51,7 +51,11 @@ export function SetupPage() {
         <CardContent>
           {alreadySetUp ? (
             <p className="text-sm text-muted-foreground">
-              This instance is already set up. Go to <a href="/login" className="text-primary underline">login</a>.
+              This instance is already set up. Go to{' '}
+              <Link to="/login" className="text-primary underline">
+                sign in
+              </Link>
+              .
             </p>
           ) : (
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
