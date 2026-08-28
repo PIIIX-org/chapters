@@ -350,7 +350,11 @@ Beyond the core 7, additional cross-cutting specs closing tracked gaps:
 
 - **Notifications & activity feed** — five triggers (vault shared/revoked,
   team membership changes, note reverted, signup approved, team-share
-  changes), delivered in-app + email. See
+  changes), delivered in-app + email. The signup-approved mail is the
+  welcome: activation confirmation plus what else PIIIX makes, one mail
+  rather than a transactional one followed by a marketing one — copy in
+  [`server/src/email/welcome.ts`](server/src/email/welcome.ts), gated by the
+  same `emailNotifications` opt-out as every other mail. See
   [`2026-07-15-notifications-activity-feed-design.md`](docs/superpowers/specs/2026-07-15-notifications-activity-feed-design.md).
 - **Admin oversight dashboard** — metadata-only instance visibility
   (users, vaults, teams, storage, activity), unifies existing admin
