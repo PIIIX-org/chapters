@@ -5,6 +5,7 @@ import { and, eq, inArray, isNotNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import {
   notes,
+  notifications,
   teamMemberships,
   teams,
   users,
@@ -313,6 +314,12 @@ export function vaultRoutes(app: FastifyInstance) {
       await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, req.params.id))
     ).map((n) => n.id)
     await deleteSemanticEdgesFor('note', noteIds)
+    // notifications is the other polymorphic table with no FK (#101): a
+    // grantee's feed would otherwise keep `vault_shared` rows pointing at a
+    // vault that no longer exists.
+    await db
+      .delete(notifications)
+      .where(and(eq(notifications.entityType, 'vault'), eq(notifications.entityId, req.params.id)))
 
     // Everything else referencing the vault cascades via FK.
     await db.delete(vaults).where(eq(vaults.id, req.params.id))

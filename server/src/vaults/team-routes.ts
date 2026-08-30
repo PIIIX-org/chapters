@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { and, countDistinct, eq, inArray, max } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { noteRevisions, notes, teamMemberships, teams, users, vaults, vaultShares } from '../db/schema.js'
+import { noteRevisions, notes, notifications, teamMemberships, teams, users, vaults, vaultShares } from '../db/schema.js'
 import { listAccessibleVaults } from './permissions.js'
 import { notify } from '../notifications/notify.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
@@ -264,6 +264,10 @@ export function teamRoutes(app: FastifyInstance) {
       .delete(vaultShares)
       .where(and(eq(vaultShares.granteeType, 'team'), eq(vaultShares.granteeId, req.params.id)))
       .returning({ vaultId: vaultShares.vaultId })
+    // Same as vault purge (#101): notifications has no FK to cascade from.
+    await db
+      .delete(notifications)
+      .where(and(eq(notifications.entityType, 'team'), eq(notifications.entityId, req.params.id)))
     await db.delete(teams).where(eq(teams.id, req.params.id))
     if (removed.length > 0) emitPermissionChange({ vaultIds: removed.map((r) => r.vaultId) })
     return { status: 'deleted' }

@@ -49,6 +49,6 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   restore. Single-process is now a PROPERTY, not a gap (one container per
   customer). **Decided against 2026-08-22, do NOT re-open**:
   Leiden, a graph DB, GraphRAG summaries, cross-file calls.
-- **Open issues**: #9; #101 (graph query-params, dead overload, dangling
-  notifications on purge). #66 is closed by unit 6's CRDT. **Test-that-cannot-
+- **Open issues**: #9; #123 (semantic-edges flake: HNSW recall, not a
+  regression — see the issue). #66 is closed by unit 6's CRDT. **Test-that-cannot-
   fail: SEVEN times**, always a fixture too uniform to tell working from broken.
