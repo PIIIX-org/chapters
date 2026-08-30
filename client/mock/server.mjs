@@ -484,7 +484,7 @@ function seedRevisions(vault, note) {
 
 const RESEARCH = seedVault('Research', ME.id, 'owner', true, RESEARCH_NOTES)
 const PRODUCT = seedVault('Product', ADA.id, 'edit', true, PRODUCT_NOTES)
-const PERSONAL = seedVault('Personal', ME.id, 'owner', false, PERSONAL_NOTES)
+seedVault('Personal', ME.id, 'owner', false, PERSONAL_NOTES)
 
 // A trashed vault so the trash page has something in it.
 const ARCHIVE = { id: uuid(), name: 'Archive 2025', ownerId: ME.id, mergeable: false, access: 'owner', deletedAt: ago(6) }

@@ -24,3 +24,15 @@ $env:MOCK_PORT = 3000; pnpm --filter @chapters/client mock
 ```
 
 then `pnpm --filter @chapters/client dev` and open http://localhost:5173.
+
+## Layout check + screenshots
+
+`client/mock/qa.mjs` drives a headless Edge/Chrome over the DevTools
+protocol against the running client: one screenshot per route into
+`<outDir>`, plus a printed table of the shell regions (rail, top bar,
+tracks, main) and any overlap between sibling regions — the mechanical
+version of "no weird overlaps".
+
+```sh
+MSYS_NO_PATHCONV=1 node client/mock/qa.mjs ./shots http://localhost:5173 /,/vaults,/repos,/team --theme=light
+```
