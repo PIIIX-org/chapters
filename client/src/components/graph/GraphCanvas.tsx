@@ -446,11 +446,11 @@ export default function GraphCanvas() {
             so anything this component places at top-4 paints underneath it.
             Clearing that band is the only requirement — which corner stays
             unchanged. */}
-        <div className="absolute left-4 top-20 flex flex-col items-start gap-3">
+        <div className="absolute left-3 top-3 flex flex-col items-start gap-3">
           <ColorModeToggle />
           <GraphFilters nodes={filterableNodesOf(memberData ?? graph.data)} />
         </div>
-        <div className="absolute right-4 top-20">
+        <div className="absolute right-3 top-3">
           <PhysicsControls
             initialParams={DEFAULT_SIMULATION_PARAMS}
             onPhysicsChange={handlePhysicsChange}
@@ -482,7 +482,7 @@ export default function GraphCanvas() {
       {/* pt-16 clears AppShell's email + Log out row, which is painted as a
           later sibling at `absolute right-4 top-4` — directly over this
           pane's top-right corner otherwise. */}
-      <aside className="h-full w-80 shrink-0 overflow-y-auto border-l border-border bg-card pt-16">
+      <aside className="h-full w-80 shrink-0 overflow-y-auto border-l border-border bg-card">
         <GraphOutline
           communities={communities}
           expandedCommunity={expandedCommunity}

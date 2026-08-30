@@ -153,13 +153,18 @@ describe('TeamPage', () => {
     stubFetch({ statsStatus: 500 })
     const { container } = renderPage()
 
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent(/couldn.t load this team.s roster/i)
+    // By text, not the first role=alert on the page: the management panel
+    // beside the roster has its own queries and its own alerts.
+    const message = await screen.findByText(/couldn.t load this team.s roster/i)
+    expect(message.closest('[role="alert"]')).not.toBeNull()
 
     // The roster must not render at all — never fall back to treating a
     // failed fetch as "everyone has zero activity".
-    expect(screen.queryByText('ada@example.com')).toBeNull()
-    expect(screen.queryByText('No activity yet')).toBeNull()
+    // Scoped to the roster's own landmark: the management panel beside it
+    // legitimately lists members by email.
+    const roster = within(screen.getByRole('region', { name: 'Roster' }))
+    expect(roster.queryByText('ada@example.com')).toBeNull()
+    expect(roster.queryByText('No activity yet')).toBeNull()
 
     await expectNoA11yViolations(container)
   })

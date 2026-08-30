@@ -114,6 +114,7 @@ describe('HomePage', () => {
       vi.fn().mockImplementation((url: string) => {
         if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, [VAULT]))
         if (url === '/api/repositories') return Promise.resolve(mockJsonResponse(200, []))
+        if (url.startsWith('/api/notifications')) return Promise.resolve(mockJsonResponse(200, []))
         if (url.endsWith('/tree')) return Promise.resolve(mockJsonResponse(200, {}))
         if (url === '/api/vaults/v1/notes/foo') {
           return Promise.resolve(mockJsonResponse(200, { path: 'foo', frontmatter: {}, body: 'Foo body' }))

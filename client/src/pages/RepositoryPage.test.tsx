@@ -92,6 +92,7 @@ function stubApi(opts?: { repositories?: () => Response }) {
   const fetchMock = vi.fn().mockImplementation((url: string) => {
     if (url === '/api/me') return Promise.resolve(mockJsonResponse(200, SESSION))
     if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, []))
+    if (url.startsWith('/api/notifications')) return Promise.resolve(mockJsonResponse(200, []))
     if (url === '/api/repositories') {
       return Promise.resolve(opts?.repositories?.() ?? mockJsonResponse(200, [OWNED, SHARED]))
     }
@@ -174,8 +175,9 @@ describe('RepositoryPage route', () => {
     const { router } = renderAt('/')
 
     // Wait for the session first: RequireAuth renders nothing while it is
-    // pending, so ⌘K's own listener does not exist yet.
-    await screen.findByText(SESSION.email)
+    // pending, so ⌘K's own listener does not exist yet. The shell's command
+    // trigger is the first thing that proves the session resolved.
+    await screen.findByRole('button', { name: 'Open the command palette' })
     // The palette is bound to Cmd on macOS and Ctrl elsewhere; sending both
     // keeps the test off whatever `navigator.platform` happens to say here.
     fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true })
@@ -193,7 +195,7 @@ describe('RepositoryPage route', () => {
     stubApi()
     const { router } = renderAt('/')
 
-    await screen.findByText(SESSION.email)
+    await screen.findByRole('button', { name: 'Open the command palette' })
     fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true })
 
     const option = await screen.findByRole('option', { name: 'Command: Open repository: Atlas ERP' })

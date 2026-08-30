@@ -73,7 +73,9 @@ describe('VaultLayout', () => {
 
     await waitFor(() => expect(screen.getByRole('link', { name: 'jane' })).toBeInTheDocument())
     expect(screen.getByText('Empty state')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '← Vaults' })).toHaveAttribute('href', '/')
+    // The way back is the shell's breadcrumb now; the page's own job is the
+    // notes panel, rendered inline here because there is no shell around it.
+    expect(screen.getByRole('complementary', { name: 'Engineering' })).toBeInTheDocument()
   })
 
   it('shows a New note control for an edit-access vault', async () => {

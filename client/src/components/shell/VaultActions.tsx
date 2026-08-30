@@ -125,7 +125,8 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
   )
 }
 
-export function VaultTrashSection() {
+/** `heading` off when the caller already titles the section (the vaults page panel). */
+export function VaultTrashSection({ heading = true }: { heading?: boolean } = {}) {
   const trash = useTrashedVaults()
   const restoreVault = useRestoreVault()
   const purgeVault = usePurgeVault()
@@ -139,7 +140,7 @@ export function VaultTrashSection() {
   if (trash.isError) {
     return (
       <div className="border-t border-border px-3 py-2">
-        <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Trash</div>
+        {heading && <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Trash</div>}
         <p role="alert" className="text-xs text-destructive">
           Couldn&rsquo;t load the trash. Anything you deleted is still there — try again.
         </p>
@@ -150,7 +151,7 @@ export function VaultTrashSection() {
 
   return (
     <div className="border-t border-border px-3 py-2">
-      <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Trash</div>
+      {heading && <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Trash</div>}
       {trash.data.map((v) => (
         <div key={v.id} className="flex items-center justify-between gap-2 py-1">
           <div className="min-w-0 flex-1">
