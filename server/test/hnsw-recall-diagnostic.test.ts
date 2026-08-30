@@ -166,11 +166,15 @@ describe('#123 HNSW recall diagnostic', () => {
 
         let queryId: string, targetId: string
         if (order === 'target-first') {
-          ;[queryId, targetId] = await insertNotes(vaultId, [vec, vec], 'pair')
+          const pair = await insertNotes(vaultId, [vec, vec], 'pair')
+          queryId = pair[0]!
+          targetId = pair[1]!
           await insertNotes(vaultId, corpus, 'corpus')
         } else {
           await insertNotes(vaultId, corpus, 'corpus')
-          ;[queryId, targetId] = await insertNotes(vaultId, [vec, vec], 'pair')
+          const pair = await insertNotes(vaultId, [vec, vec], 'pair')
+          queryId = pair[0]!
+          targetId = pair[1]!
         }
 
         const found = await report(`n=${n} ${order}`, queryId!, targetId!, JSON.stringify(vec))
