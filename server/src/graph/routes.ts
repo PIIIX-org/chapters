@@ -4,61 +4,22 @@ import { db } from '../db/client.js'
 import { repositories, repositoryGraphPreferences, vaultGraphPreferences, vaults } from '../db/schema.js'
 import { atLeast, listAccessibleVaults, resolveAccess } from '../vaults/permissions.js'
 import { listAccessibleRepositories } from '../repositories/permissions.js'
-import { buildGraph, type GraphFilters } from './assemble.js'
-
-function parseFilters(q: {
-  types?: string
-  tags?: string
-  since?: string
-  until?: string
-  aggregate?: string
-  community?: string
-}): GraphFilters {
-  return {
-    types: q.types ? q.types.split(',').filter(Boolean) : undefined,
-    tags: q.tags ? q.tags.split(',').filter(Boolean) : undefined,
-    since: q.since,
-    until: q.until,
-    aggregate: q.aggregate === 'community' ? 'community' : undefined,
-    community:
-      q.community !== undefined && q.community !== '' && Number.isInteger(Number(q.community))
-        ? Number(q.community)
-        : undefined,
-  }
-}
-
-const filterQuerySchema = {
-  type: 'object',
-  properties: {
-    types: { type: 'string' },
-    tags: { type: 'string' },
-    since: { type: 'string' },
-    until: { type: 'string' },
-    aggregate: { type: 'string', enum: ['community'] },
-    community: { type: 'string' },
-  },
-} as const
+import { buildGraph } from './assemble.js'
+import { graphQuerySchema, parseGraphFilters, type GraphQuery } from './filters.js'
 
 export function graphRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAuth)
 
   app.get<{
     Params: { id: string }
-    Querystring: {
-      types?: string
-      tags?: string
-      since?: string
-      until?: string
-      aggregate?: string
-      community?: string
-    }
+    Querystring: GraphQuery
   }>(
     '/vaults/:id/graph',
-    { schema: { querystring: filterQuerySchema } },
+    { schema: { querystring: graphQuerySchema } },
     async (req, reply) => {
       const access = await resolveAccess(req.user!.id, req.params.id)
       if (!atLeast(access, 'read')) return reply.code(404).send({ error: 'not found' })
-      return buildGraph({ vaultIds: [req.params.id], repositoryIds: [] }, parseFilters(req.query))
+      return buildGraph({ vaultIds: [req.params.id], repositoryIds: [] }, parseGraphFilters(req.query))
     },
   )
 
@@ -68,17 +29,10 @@ export function graphRoutes(app: FastifyInstance) {
    * current access — a stale preference never surfaces anything.
    */
   app.get<{
-    Querystring: {
-      types?: string
-      tags?: string
-      since?: string
-      until?: string
-      aggregate?: string
-      community?: string
-    }
+    Querystring: GraphQuery
   }>(
     '/graph/merged',
-    { schema: { querystring: filterQuerySchema } },
+    { schema: { querystring: graphQuerySchema } },
     async (req) => {
       const accessibleVaults = await listAccessibleVaults(req.user!.id)
       const accessibleVaultIds = accessibleVaults.map((v) => v.id)
@@ -123,7 +77,7 @@ export function graphRoutes(app: FastifyInstance) {
           vaultIds: vaultPrefs.map((p) => p.vaultId),
           repositoryIds: repoPrefs.map((p) => p.repositoryId),
         },
-        parseFilters(req.query),
+        parseGraphFilters(req.query),
       )
     },
   )

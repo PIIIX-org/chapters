@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
+import { randomUUID } from 'node:crypto'
+import { eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
+import { db } from '../src/db/client.js'
+import { notifications } from '../src/db/schema.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -265,5 +269,31 @@ describe('GET /api/teams/:id/stats', () => {
       url: `/api/teams/${team.id}/stats`,
     })
     expect(unauth.statusCode).toBe(401)
+  })
+})
+
+describe('DELETE /api/teams/:id', () => {
+  it('removes the team and its notifications, and nothing else in the feed (#101)', async () => {
+    const owner = await createActiveUser()
+    const member = await createActiveUser()
+    const cookie = await loginCookie(app, owner.email)
+    const team = (
+      await app.inject({ method: 'POST', url: '/api/teams', headers: { cookie }, body: { name: 'Doomed team' } })
+    ).json() as { id: string }
+    const unrelatedTeam = randomUUID()
+    await db.insert(notifications).values([
+      { recipientId: member.id, type: 'team_added', entityType: 'team', entityId: team.id, message: 'doomed' },
+      { recipientId: member.id, type: 'team_added', entityType: 'team', entityId: unrelatedTeam, message: 'keep' },
+    ])
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/teams/${team.id}`, headers: { cookie } })
+    expect(res.statusCode).toBe(200)
+
+    const feed = await db
+      .select({ entityId: notifications.entityId })
+      .from(notifications)
+      .where(eq(notifications.recipientId, member.id))
+    expect(feed.map((n) => n.entityId)).not.toContain(team.id)
+    expect(feed.map((n) => n.entityId)).toContain(unrelatedTeam)
   })
 })

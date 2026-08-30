@@ -29,7 +29,8 @@ for best AI navigability, see
   listing and restore (`GET /api/vaults/trash`, `POST /api/vaults/:id/restore`,
   409 if not trashed), and hard purge (`POST /api/vaults/:id/purge`, only
   once trashed), matching the note purge contract: clears semantic edges
-  explicitly and removes the vault's directory from disk
+  and the vault's notifications explicitly (neither table has an FK to
+  cascade from) and removes the vault's directory from disk
 - **Graph & search** — save-time embedding index; extracted/structural/
   semantic edges with Louvain communities and an opt-in merged
   cross-vault view; hybrid keyword+semantic search, permission-filtered

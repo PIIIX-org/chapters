@@ -98,6 +98,27 @@ describe('graph', () => {
     expect(graph.nodes.every((n) => n.path.startsWith('people/'))).toBe(true)
   })
 
+  it('rejects an unknown aggregate and a non-numeric community (#101)', async () => {
+    const bad = [
+      `/api/vaults/${vaultId}/graph?aggregate=bogus`,
+      `/api/vaults/${vaultId}/graph?community=-1`,
+      `/api/vaults/${vaultId}/graph?community=abc`,
+      '/api/graph/merged?aggregate=bogus',
+      '/api/graph/merged?community=1.5',
+    ]
+    for (const url of bad) {
+      const res = await app.inject({ method: 'GET', url, headers: { cookie: ownerCookie } })
+      expect(res.statusCode, url).toBe(400)
+    }
+    // Control: the accepted shape on the same routes.
+    const ok = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/graph?aggregate=community&community=0`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(ok.statusCode).toBe(200)
+  })
+
   it('is invisible to strangers', async () => {
     const res = await app.inject({
       method: 'GET',

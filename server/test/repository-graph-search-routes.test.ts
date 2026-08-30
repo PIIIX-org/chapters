@@ -240,3 +240,36 @@ describe('repository-scoped and merged graph/search routes', () => {
     expect((res.json() as unknown[]).length).toBeGreaterThan(0)
   })
 })
+
+describe('repository graph querystring contract (#101)', () => {
+  it('rejects the same malformed params the vault route rejects', async () => {
+    const owner = await createActiveUser()
+    const cookie = await loginCookie(app, owner.email)
+    const repo = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/repositories',
+        headers: { cookie },
+        body: { name: 'contract-repo', ingestionMethod: 'agent_push' },
+      })
+    ).json() as { id: string }
+
+    // Before #101 this route had no querystring schema: `aggregate=bogus`
+    // returned 200 with the full graph while the vault route returned 400.
+    for (const qs of ['aggregate=bogus', 'community=-1', 'community=abc']) {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/repositories/${repo.id}/graph?${qs}`,
+        headers: { cookie },
+      })
+      expect(res.statusCode, qs).toBe(400)
+    }
+    const ok = await app.inject({
+      method: 'GET',
+      url: `/api/repositories/${repo.id}/graph?aggregate=community`,
+      headers: { cookie },
+    })
+    expect(ok.statusCode).toBe(200)
+    expect((ok.json() as { aggregated: boolean }).aggregated).toBe(true)
+  })
+})
