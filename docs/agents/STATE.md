@@ -19,7 +19,11 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
     **revoked ≠ offline** — revoked KEEPS the doc (unsent text must survive).
   - **7** viewer read-only forever; local folders watched;
     **`gitUrl`/`localPath` are owner-only** (they leaked to viewers + MCP).
-- **Phase: DEPLOYABLE** (`plans/2026-08-27-deployable.md`). The API now serves
+- **Phase: UI COMMAND REDESIGN** (owner-directed 2026-08-30): spec + plan of
+  the same date under `superpowers/`. Dark-first grid shell (rail · top bar ·
+  context · content · inspector) on every authed route; `/vaults`, `/repos`.
+  Slice 1 merged; slices 2–8 per plan. `client/mock/` = fixture API for QA.
+- **Previous phase: DEPLOYABLE** (`plans/2026-08-27-deployable.md`). The API now serves
   the client and the relay shares its port; `docker compose up` from no volumes
   was driven in a browser, two tabs co-editing over the one published port.
 - **Hosted = one container + one Postgres PER CUSTOMER**, and the app is **not

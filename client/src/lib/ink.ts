@@ -44,17 +44,17 @@ function ink(name: string, light: string, dark: string): Ink {
 }
 
 export const INKS: readonly Ink[] = [
-  ink('vermillion', '#BA3B1D', '#E2683F'),
-  ink('indigo', '#3B4C8C', '#7C8FD9'),
-  ink('plum', '#7A3B6B', '#C97FB0'),
+  ink('vermillion', '#c2472a', '#f07a5a'),
+  ink('indigo', '#3b4c8c', '#7c8fd9'),
+  ink('plum', '#7a3b6b', '#c97fb0'),
   // Light ochre is a shade darker than the spec's #8C6D1F, which measured
   // 4.31:1 on the paper canvas — the one ink that missed AA in *both* themes.
-  ink('ochre', '#856619', '#D9B24C'),
-  ink('forest', '#3B6B4C', '#6FBF8A'),
+  ink('ochre', '#856619', '#d9b24c'),
+  ink('forest', '#3b6b4c', '#6fbf8a'),
 ]
 
 /** Reserved for the AI/MCP's own live cursor. Excluded from the human hash. */
-export const AI_INK: Ink = ink('teal', '#2B6E6B', '#4FA39F')
+export const AI_INK: Ink = ink('teal', '#1f7770', '#3fb8ae')
 
 /** FNV-1a, 32-bit — stable across sessions and machines, which `Math.random`
  *  and object identity are not. */

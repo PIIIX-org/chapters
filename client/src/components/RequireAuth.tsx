@@ -1,6 +1,5 @@
 import { Navigate, Outlet, useLocation } from 'react-router'
 import { useSession } from '../hooks/useSession.js'
-import { GlobalSearch } from './search/GlobalSearch.js'
 
 export function RequireAuth() {
   const session = useSession()
@@ -17,10 +16,5 @@ export function RequireAuth() {
     session.data.mfaRequired && !session.data.mfaEnabledAt && location.pathname !== '/settings'
   if (mustEnrol) return <Navigate to="/settings" replace />
 
-  return (
-    <>
-      <Outlet />
-      <GlobalSearch />
-    </>
-  )
+  return <Outlet />
 }

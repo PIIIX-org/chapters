@@ -5,7 +5,11 @@ import { ConnectRepositoryDialog } from '../components/repositories/ConnectRepos
 import { RepositorySettingsDialog } from '../components/repositories/RepositorySettingsDialog.js'
 import { RepositorySyncCard } from '../components/repositories/RepositorySyncCard.js'
 import { WebhookSetupCard } from '../components/repositories/WebhookSetupCard.js'
+import { ContextPanel, Inspector } from '../components/shell/ShellPanels.js'
+import { useShellBreadcrumb } from '../components/shell/shell-context.js'
 import { Button } from '../components/ui/button.js'
+import { Eyebrow } from '../components/ui/eyebrow.js'
+import { Pill } from '../components/ui/pill.js'
 import { useRepository, useRepositoryFiles } from '../hooks/useRepositories.js'
 import { cn } from '../lib/utils.js'
 
@@ -101,8 +105,8 @@ export function RepositoryPage() {
         />
       )}
       <div className="flex min-h-0 flex-1">
-        <aside aria-label="Files" className="flex w-64 shrink-0 flex-col gap-2 overflow-auto border-r border-border p-3">
-          <h2 className="font-display text-sm text-foreground">Files</h2>
+        <ContextPanel label="Files" className="gap-2 p-3">
+          <Eyebrow as="h2">Files</Eyebrow>
           {/* isError first here too — an unreadable list is not an empty one. */}
           {files.isError ? (
             <p role="alert" className="text-sm text-destructive">
@@ -137,9 +141,9 @@ export function RepositoryPage() {
                 ))}
             </ul>
           )}
-        </aside>
+        </ContextPanel>
 
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-auto">
           {path ? (
             // Keyed on the file: the viewer mounts one document per file and
             // has no cursor or history worth carrying across a switch.
@@ -151,13 +155,13 @@ export function RepositoryPage() {
           )}
         </div>
 
-        <aside aria-label="Connection" className="flex w-72 shrink-0 flex-col gap-3 overflow-auto border-l border-border p-3">
+        <Inspector label="Connection" className="gap-3 p-3">
           <RepositorySyncCard repositoryId={repo.id} />
           {/* Owner-only: every control on it POSTs, and a viewer's POST is a
               404 by design. A disabled card would advertise a door that isn't
               theirs. */}
           {repo.access === 'owner' && <WebhookSetupCard repository={repo} />}
-        </aside>
+        </Inspector>
       </div>
     </Shell>
   )
@@ -174,21 +178,19 @@ interface ShellProps {
 }
 
 function Shell({ children, connectDialog, onConnect, title, subtitle, onSettings }: ShellProps) {
+  useShellBreadcrumb([{ label: 'Repositories', to: '/repos' }, { label: title ?? 'Repository' }])
   return (
-    <div className="flex h-dvh flex-col bg-background">
-      <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
-        <Link to="/" className="text-sm text-muted-foreground underline">
-          ← Home
-        </Link>
-        <h1 className="font-display text-lg text-foreground">{title ?? 'Repository'}</h1>
-        {subtitle && <span className="text-xs text-muted-foreground">{subtitle}</span>}
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex h-10 shrink-0 items-center gap-3 border-b border-border px-4">
+        <h1 className="truncate text-sm font-medium text-foreground">{title ?? 'Repository'}</h1>
+        {subtitle && <Pill>{subtitle}</Pill>}
         <div className="ml-auto flex items-center gap-2">
           {onSettings && (
-            <Button type="button" variant="secondary" size="sm" onClick={onSettings}>
+            <Button type="button" variant="outline" size="sm" onClick={onSettings}>
               Settings
             </Button>
           )}
-          <Button type="button" variant="secondary" size="sm" onClick={onConnect}>
+          <Button type="button" variant="outline" size="sm" onClick={onConnect}>
             Connect a repository
           </Button>
         </div>

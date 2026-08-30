@@ -1,92 +1,147 @@
-@import "tailwindcss";
-@import "tw-animate-css";
+@import 'tailwindcss';
+@import 'tw-animate-css';
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Control-room tokens — docs/superpowers/specs/2026-08-30-ui-command-redesign.md.
+ * Dark is the default and the brand's face; light is the same roles with
+ * other values. Colour still means *who*: `primary` is a person, `accent` is
+ * AI/MCP, and neither is ever a hover fill (that is `muted`).
+ */
 @theme inline {
-  --font-display: "Petrona", serif;
-  --font-sans: "Hanken Grotesk", sans-serif;
-  --font-mono: "IBM Plex Mono", monospace;
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono:
+    'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+  /* The console has no display face; pre-redesign `font-display` callers get the UI face. */
+  --font-display: var(--font-sans);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-faint: var(--faint);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
   --color-destructive: var(--destructive);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  --shadow-floating:
+    0 12px 32px -12px rgb(0 0 0 / 0.55), 0 0 0 1px var(--border);
 }
 
 :root {
-  --radius: 0.5rem;
-  /* Canvas / surface / ink, from the design system spec */
-  --background: #F4F1EA;
-  --foreground: #1C1A16;
-  --card: #FAF7F0;
-  --card-foreground: #1C1A16;
-  /* Human accent = primary (anything a person authored) */
-  --primary: #BA3B1D;
-  --primary-foreground: #FAF7F0;
-  --secondary: #EAE5D8;
-  --secondary-foreground: #1C1A16;
-  --muted: #EAE5D8;
-  --muted-foreground: #6B6558;
-  /* AI/machine accent used as the accent role */
-  --accent: #2B6E6B;
-  --accent-foreground: #FAF7F0;
-  --destructive: #BA3B1D;
-  --border: #D8D2C2;
-  --input: #D8D2C2;
-  --ring: #BA3B1D;
-  /* Collaborator inks (client/src/lib/ink.ts). One token per hue, switched in
-     .dark like every other colour here, because the reader's theme — not the
-     author's — decides how a peer's cursor is painted. */
-  --ink-vermillion: #BA3B1D;
-  --ink-indigo: #3B4C8C;
-  --ink-plum: #7A3B6B;
+  /* Light — the secondary theme. */
+  --background: #f5f6f8;
+  --card: #ffffff;
+  --popover: #ffffff;
+  --secondary: #eef0f4;
+  --muted: #e6e9ef;
+  --border: #d8dce4;
+  --input: #c9cfda;
+  --foreground: #161a22;
+  --muted-foreground: #5e6675;
+  --faint: #8c94a4;
+  --primary: #2f6fe0;
+  --primary-foreground: #ffffff;
+  --accent: #1f7770;
+  --accent-foreground: #ffffff;
+  --success: #1f7a4d;
+  --warning: #9a6b10;
+  --destructive: #c63b3b;
+  --ring: #2f6fe0;
+  /* Collaborator inks (client/src/lib/ink.ts): five human hues, teal is AI. */
+  --ink-vermillion: #c2472a;
+  --ink-indigo: #3b4c8c;
+  --ink-plum: #7a3b6b;
   --ink-ochre: #856619;
-  --ink-forest: #3B6B4C;
-  --ink-teal: #2B6E6B;
+  --ink-forest: #3b6b4c;
+  --ink-teal: #1f7770;
+  /* Shell geometry — read by the grid, never hard-coded in a page. */
+  --shell-rail: 52px;
+  --shell-topbar: 44px;
+  --shell-context: 264px;
+  --shell-inspector: 320px;
 }
 
 .dark {
-  --background: #17140F;
-  --foreground: #EDE8DD;
-  --card: #201C15;
-  --card-foreground: #EDE8DD;
-  --primary: #E2683F;
-  --primary-foreground: #17140F;
-  --secondary: #0F0D0A;
-  --secondary-foreground: #EDE8DD;
-  --muted: #0F0D0A;
-  --muted-foreground: #A39C8C;
-  --accent: #4FA39F;
-  --accent-foreground: #17140F;
-  --destructive: #E2683F;
-  --border: #322C22;
-  --input: #322C22;
-  --ring: #E2683F;
-  /* The same six hues, lifted until each clears AA on this canvas. Nothing
-     changes hue: a collaborator is the same colour in both themes. */
-  --ink-vermillion: #E2683F;
-  --ink-indigo: #7C8FD9;
-  --ink-plum: #C97FB0;
-  --ink-ochre: #D9B24C;
-  --ink-forest: #6FBF8A;
-  --ink-teal: #4FA39F;
+  --background: #0b0e14;
+  --card: #12161e;
+  --popover: #161b24;
+  --secondary: #0f1218;
+  --muted: #1a202b;
+  --border: #232a37;
+  --input: #2a3140;
+  --foreground: #e3e7ef;
+  --muted-foreground: #8a93a6;
+  --faint: #5b6475;
+  --primary: #5b8def;
+  --primary-foreground: #0b0e14;
+  --accent: #3fb8ae;
+  --accent-foreground: #0b0e14;
+  --success: #4cc38a;
+  --warning: #e6b455;
+  --destructive: #f26d6d;
+  --ring: #5b8def;
+  --ink-vermillion: #f07a5a;
+  --ink-indigo: #7c8fd9;
+  --ink-plum: #c97fb0;
+  --ink-ochre: #d9b24c;
+  --ink-forest: #6fbf8a;
+  --ink-teal: #3fb8ae;
+}
+
+html,
+body,
+#root {
+  height: 100%;
 }
 
 body {
   font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  background: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--primary) 32%, transparent);
+}
+
+/* Motion is opacity/transform only and short; none at all when asked. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

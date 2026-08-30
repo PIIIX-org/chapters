@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "mock": "node mock/server.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "6.20.3",
@@ -16,6 +17,7 @@
     "@codemirror/state": "6.7.1",
     "@codemirror/view": "6.43.9",
     "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.2.0",
     "@hocuspocus/provider": "^4.6.0",
     "@lezer/highlight": "1.2.3",
     "@tanstack/react-query": "^5.101.4",
