@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { mockJsonResponse } from '../../lib/api.js'
 import { expectNoA11yViolations } from '../../test/axe.js'
@@ -154,7 +154,8 @@ describe('VaultReachExpansion', () => {
     expect(await screen.findByText(/ada@example\.com/)).toBeInTheDocument()
     expect(screen.getByText(/bea@example\.com/)).toBeInTheDocument()
     expect(screen.getByText(/cal@example\.com/)).toBeInTheDocument()
-    expect(screen.getByText('You — owner')).toBeInTheDocument()
+    const youRow = screen.getByText('You').closest('tr')!
+    expect(within(youRow).getByText('owner')).toBeInTheDocument()
   })
 
   it('shows the no-shares empty state distinctly', async () => {
