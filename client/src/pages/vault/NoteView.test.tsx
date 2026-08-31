@@ -404,7 +404,9 @@ describe('NoteView — a session that cannot write is locked', () => {
     expect(stub.providers).toHaveLength(0)
     // The lock that a `status === 'revoked'` check would miss: offline is not
     // revoked, and an unlocked editor here is someone typing into nothing.
-    expect(contentEditable()).toBe('false')
+    // Async: the whisper and the readOnly reconfigure land in different
+    // renders, so waiting on the text alone raced the lock under CI load.
+    await waitFor(() => expect(contentEditable()).toBe('false'))
     expect(screen.getByPlaceholderText(/ISO date/)).toBeDisabled()
 
     // Same tab, different cause.
