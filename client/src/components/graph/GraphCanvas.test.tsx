@@ -554,6 +554,36 @@ describe('GraphCanvas', () => {
     expect(screen.getByRole('heading', { name: 'Community' })).toBeInTheDocument()
   })
 
+  it('hover and tap hit-test element-local coordinates when the canvas is offset in the viewport', async () => {
+    stubFetch()
+    stubMatchMedia(false)
+    stubCanvasContext()
+    const raf = stubManualRaf()
+    const { container } = renderGraphCanvas()
+
+    await waitFor(() => expect(raf.pending()).toBeGreaterThan(0))
+    const canvas = container.querySelector('canvas')!
+    // Inside the real grid shell the canvas sits ~316px right (rail +
+    // context panel) and ~80px down (top bar + stats strip) of the viewport
+    // origin. happy-dom's default all-zero rect makes client == local and
+    // hides raw-clientX/Y bugs, so pin a realistic offset explicitly.
+    canvas.getBoundingClientRect = () =>
+      ({ left: 316, top: 80, width: 600, height: 400, right: 916, bottom: 480, x: 316, y: 80, toJSON: () => ({}) }) as DOMRect
+
+    // Community 0 sits at world (0, 0) = local (0, 0) = client (316, 80).
+    // Raw client (0, 0) is local (-316, -80): off every node.
+    fireEvent.pointerMove(canvas, { clientX: 0, clientY: 0 })
+    expect(screen.queryByRole('heading', { name: 'Community 0' })).toBeNull()
+
+    fireEvent.pointerMove(canvas, { clientX: 316, clientY: 80 })
+    expect(await screen.findByRole('heading', { name: 'Community 0' })).toBeInTheDocument()
+
+    // A drift-free tap at the same client point expands the community.
+    fireEvent.pointerDown(canvas, { pointerId: 1, clientX: 316, clientY: 80 })
+    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 316, clientY: 80 })
+    expect(await screen.findByRole('button', { name: /Community 0/ })).toHaveAttribute('aria-expanded', 'true')
+  })
+
   it('the zoom buttons zoom the drawn transform in and out without ticking the simulation', async () => {
     stubFetch()
     stubMatchMedia(false)
