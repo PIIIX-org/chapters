@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { mockJsonResponse } from '../../lib/api.js'
 import { expectNoA11yViolations } from '../../test/axe.js'
@@ -60,8 +60,8 @@ describe('InstanceActivity', () => {
     vi.stubGlobal('fetch', fetchMock())
     const { container } = renderWithClient(<InstanceActivity />)
 
-    expect(await screen.findByText('docs/secret')).toBeInTheDocument()
-    expect(screen.getByText('by user')).toBeInTheDocument()
+    const row = (await screen.findByText('docs/secret')).closest('tr')!
+    expect(within(row).getByText('user')).toBeInTheDocument()
     // The spec's boundary, stated on screen rather than merely not violated.
     expect(container.textContent).toContain('Never what the change said')
 

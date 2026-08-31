@@ -154,7 +154,7 @@ export function TeamPage() {
               <PanelState status="loading" message="Loading team…" />
             ) : (
               <>
-                <PanelBody className="border-b border-border">
+                <PanelBody className="border-b border-border p-0">
                   <UserConstellation
                     people={roster.map((r) => ({
                       userId: r.userId,

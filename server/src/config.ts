@@ -44,4 +44,21 @@ export const config = {
     : null,
   /** Comma-separated allowed cross-origin callers; unset = same-origin only. */
   corsOrigins: env.CORS_ORIGIN ? env.CORS_ORIGIN.split(',').map((o) => o.trim()) : [],
+  /**
+   * Generic OIDC login — any spec-compliant issuer (Keycloak, Authentik, or
+   * the PIIIX control plane; the app cannot tell which and must never learn).
+   * A getter, not a snapshot, so tests can point it at a fake issuer whose
+   * port is only known after the config module was first imported.
+   * OIDC_ONLY=true also disables password login/signup/reset — a posture any
+   * self-hoster mandating their IdP wants, not a hosted-edition flag.
+   */
+  get oidc() {
+    if (!env.OIDC_ISSUER) return null
+    return {
+      issuer: env.OIDC_ISSUER.replace(/\/$/, ''),
+      clientId: env.OIDC_CLIENT_ID ?? '',
+      clientSecret: env.OIDC_CLIENT_SECRET ?? '',
+      only: env.OIDC_ONLY === 'true',
+    }
+  },
 }

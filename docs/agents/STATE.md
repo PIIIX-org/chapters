@@ -34,7 +34,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   provider + Docker provisioner, and **it claims `/api/setup` per customer —
   the setup token is the provisioning handshake, NOT a barrier to hosted
   signup**. #127 (in-app multi-tenancy) was closed for contradicting this;
-  don't re-propose tenancy here. This repo owes it ONE PR: generic OIDC login
+  don't re-propose tenancy here. That PR is now OPEN: #132 (feat/oidc-login) — generic OIDC login
   (`OIDC_ISSUER`/`_CLIENT_ID`/`_CLIENT_SECRET`/`OIDC_ONLY`), whose first
   sign-in must LINK to the setup-created admin by verified email, not
   duplicate it.

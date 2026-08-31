@@ -85,3 +85,14 @@ export function isMfaRequired(err: unknown): boolean {
     (err.body as { mfaRequired: unknown }).mfaRequired === true
   )
 }
+
+export interface AuthConfig {
+  /** An OIDC issuer is configured; offer single sign-on. */
+  oidc: boolean
+  /** Password login is disabled instance-wide; SSO is the only door. */
+  oidcOnly: boolean
+}
+
+export function getAuthConfig(): Promise<AuthConfig> {
+  return apiFetch('/auth-config')
+}
