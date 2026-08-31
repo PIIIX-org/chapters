@@ -74,7 +74,7 @@ describe('SettingsPage', () => {
 
   it('switches sections from the context list', async () => {
     stubFetch(BASE)
-    renderPage()
+    const { container } = renderPage()
     const user = userEvent.setup()
 
     await screen.findByRole('heading', { name: 'Password' })
@@ -82,10 +82,12 @@ describe('SettingsPage', () => {
     expect(await screen.findByRole('heading', { name: 'MCP connections' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Password' })).toBeNull()
 
-    // Appearance holds the theme switch.
+    // Appearance holds the theme switch — the one section the default-view axe
+    // run never sees, so it gets its own gate.
     await user.click(screen.getByRole('button', { name: 'Appearance' }))
     expect(await screen.findByRole('radiogroup', { name: 'Theme' })).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: 'Dark' })).toBeInTheDocument()
+    await expectNoA11yViolations(container)
 
     // Data pairs the export with the import.
     await user.click(screen.getByRole('button', { name: 'Data' }))
