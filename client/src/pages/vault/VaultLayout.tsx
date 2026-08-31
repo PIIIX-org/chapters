@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Outlet, useNavigate, useParams } from 'react-router'
-import { Plus } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import { useVaults } from '../../hooks/useVaults.js'
 import { useVaultTree } from '../../hooks/useVaultTree.js'
 import { FileTree } from '../../components/vault/FileTree.js'
+import { NoteTrashPanel } from '../../components/vault/NoteTrashPanel.js'
 import { canEdit } from '../../api/vaults.js'
 import { NewNoteForm } from '../../components/vault/NewNoteForm.js'
 import { ContextPanel } from '../../components/shell/ShellPanels.js'
@@ -18,6 +19,7 @@ export function VaultLayout() {
   const vault = vaults.data?.find((v) => v.id === vaultId)
   const navigate = useNavigate()
   const [creating, setCreating] = useState(false)
+  const [trashOpen, setTrashOpen] = useState(false)
   const existingTypes = Object.keys(tree.data ?? {})
   const editable = canEdit(vault?.access)
   useShellBreadcrumb([
@@ -62,6 +64,27 @@ export function VaultLayout() {
             <FileTree vaultId={vaultId!} tree={tree.data} canEdit={editable} />
           )}
         </div>
+        {/* Pinned under the tree: the way back for deleted notes. Restore
+            needs edit access server-side, so readers do not get a row that
+            can only ever 403. */}
+        {editable && (
+          <div className="shrink-0 border-t border-border">
+            <button
+              type="button"
+              aria-expanded={trashOpen}
+              onClick={() => setTrashOpen((o) => !o)}
+              className="flex h-9 w-full items-center gap-2 px-3 font-mono text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              <Trash2 aria-hidden="true" className="size-3.5" />
+              Trash
+            </button>
+            {trashOpen && (
+              <div className="max-h-72 overflow-y-auto border-t border-border p-3">
+                <NoteTrashPanel vaultId={vaultId!} heading={false} />
+              </div>
+            )}
+          </div>
+        )}
       </ContextPanel>
       <div className="h-full min-h-0">
         <Outlet context={vault} />

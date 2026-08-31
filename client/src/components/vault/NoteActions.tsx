@@ -12,7 +12,9 @@ const SLUG = /^[a-z0-9][a-z0-9-]*$/
 
 interface NoteActionsProps {
   vaultId: string
-  note: NoteSummary
+  /** Just the identity the actions need: FileTree hands over a full
+   *  NoteSummary; the note bar has only the path on hand. */
+  note: Pick<NoteSummary, 'path' | 'name'>
 }
 
 export function NoteActions({ vaultId, note }: NoteActionsProps) {
@@ -101,7 +103,7 @@ export function NoteActions({ vaultId, note }: NoteActionsProps) {
         type="button"
         onClick={() => setMode('renaming')}
         aria-label={`Rename ${note.name}`}
-        className="text-xs text-muted-foreground hover:text-foreground"
+        className="rounded-sm px-1 text-xs text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
       >
         Rename
       </button>
@@ -109,7 +111,7 @@ export function NoteActions({ vaultId, note }: NoteActionsProps) {
         type="button"
         onClick={() => setMode('confirmDelete')}
         aria-label={`Delete ${note.name}`}
-        className="text-xs text-muted-foreground hover:text-foreground"
+        className="rounded-sm px-1 text-xs text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
       >
         Delete
       </button>

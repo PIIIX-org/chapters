@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { Input } from '../ui/input.js'
 import { Button } from '../ui/button.js'
 import { Label } from '../ui/label.js'
+import { Eyebrow } from '../ui/eyebrow.js'
 import { FormError } from '../FormError.js'
 import { useCreateShare, useLookupUser, useRevokeShare, useShares, useTeams } from '../../hooks/useShares.js'
 import type { Share, SharePermission } from '../../api/shares.js'
@@ -239,7 +240,7 @@ export function SharingPanel({ vaultId }: SharingPanelProps) {
 
   return (
     <section className="flex flex-col gap-3">
-      <h3 className="font-display text-base text-foreground">Sharing</h3>
+      <Eyebrow as="h3">Sharing</Eyebrow>
       <p className="text-xs text-muted-foreground">
         Access is re-checked on every request — a change here takes effect immediately, including for anyone reading
         right now.
