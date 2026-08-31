@@ -88,7 +88,7 @@ search/MCP engines rather than a parallel one:
   type. See
   [`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
 
-The UI (React + CodeMirror 6) is underway — Slice 1 (Scaffold + Auth),
+The UI (React + CodeMirror 6) is complete — Slice 1 (Scaffold + Auth),
 Slice 2a (vault tree + read-only note view), and Slice 2b (the Editor —
 CodeMirror 6 editing, permission-aware lock, editable frontmatter property
 panel, note create/rename/delete, and full live-preview) and Slice 2c
@@ -461,8 +461,7 @@ below are tracked but not yet designed:
 
 ## Contributing
 
-The backend and Slice 1 of the UI (scaffold + auth) are implemented; the
-Editor and later slices haven't started. Design feedback on open specs
-(see "Known gaps" above) is useful at any time; code contributions should
-target gaps in the implemented backend/UI or wait for the next slice —
-check `docs/agents/STATE.md` for current status.
+The backend and the full UI are implemented and promoted to `prod`. Design
+feedback on open specs (see "Known gaps" above) is useful at any time; code
+contributions should target gaps in the implemented backend/UI — check
+`docs/agents/STATE.md` for current status.
