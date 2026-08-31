@@ -1,12 +1,16 @@
 import { useState } from 'react'
-import { Link } from 'react-router'
 import { AccessOversight } from '../components/admin/AccessOversight.js'
 import { ApprovalQueue } from '../components/admin/ApprovalQueue.js'
 import { InstanceActivity } from '../components/admin/InstanceActivity.js'
 import { InstanceOverview } from '../components/admin/InstanceOverview.js'
 import { UserRoster } from '../components/admin/UserRoster.js'
 import { VaultOversight } from '../components/admin/VaultOversight.js'
+import { ContextPanel } from '../components/shell/ShellPanels.js'
+import { useShellBreadcrumb } from '../components/shell/shell-context.js'
+import { PanelState } from '../components/ui/empty-state.js'
+import { Eyebrow } from '../components/ui/eyebrow.js'
 import { useSession } from '../hooks/useSession.js'
+import { cn } from '../lib/utils.js'
 
 const SECTIONS = [
   { id: 'overview', label: 'Overview', render: () => <InstanceOverview /> },
@@ -25,22 +29,21 @@ type SectionId = (typeof SECTIONS)[number]['id']
  *
  * Sections render one at a time rather than all down one page: each is a
  * separate query, and an admin opening the approval queue should not fire six
- * instance-wide table reads to get there.
+ * instance-wide table reads to get there. The section list is the page's
+ * context panel.
  */
 export function AdminPage() {
   const session = useSession()
   const [active, setActive] = useState<SectionId>('approvals')
+  const section = SECTIONS.find((s) => s.id === active) ?? SECTIONS[0]
+  useShellBreadcrumb([{ label: 'Admin' }, { label: section.label }])
 
   // Nothing below renders until the role is known. Checking `session.data &&
   // role !== 'admin'` instead would let every section mount during the one
   // pending tick and fire its instance-wide read — which is the six 403s this
   // gate exists to prevent, just too fast to see.
   if (session.isPending) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      </div>
-    )
+    return <PanelState status="loading" className="h-full" />
   }
 
   // RequireAuth has already established there is a session; this is the role
@@ -48,48 +51,43 @@ export function AdminPage() {
   // exists so a member sees an explanation instead of six failed requests.
   if (session.data?.role !== 'admin') {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
-        <h1 className="font-display text-2xl text-foreground">This area is for admins.</h1>
-        <p className="max-w-sm text-sm text-muted-foreground">
-          Ask an admin on this instance if you need something from it.
-        </p>
-        <Link to="/" className="text-sm text-foreground underline">
-          ← Back home
-        </Link>
-      </div>
+      <PanelState
+        status="empty"
+        title="This area is for admins."
+        message="Ask an admin on this instance if you need something from it."
+        className="h-full"
+      />
     )
   }
 
-  const section = SECTIONS.find((s) => s.id === active) ?? SECTIONS[0]
-
   return (
-    <div className="min-h-screen bg-background px-6 py-8">
-      <header className="mx-auto mb-6 max-w-4xl">
-        <Link to="/" className="mb-1 block text-sm text-muted-foreground underline">
-          ← Home
-        </Link>
-        <h1 className="font-display text-3xl text-foreground">Admin</h1>
-      </header>
-
-      <nav aria-label="Admin sections" className="mx-auto mb-6 flex max-w-4xl flex-wrap gap-1">
-        {SECTIONS.map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            aria-current={s.id === active ? 'page' : undefined}
-            onClick={() => setActive(s.id)}
-            className={
-              s.id === active
-                ? 'rounded-lg bg-muted px-3 py-1.5 text-sm text-foreground'
-                : 'rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground'
-            }
-          >
-            {s.label}
-          </button>
-        ))}
-      </nav>
-
-      <main className="mx-auto max-w-4xl">{section.render()}</main>
-    </div>
+    <>
+      <ContextPanel label="Admin sections">
+        <div className="flex h-9 shrink-0 items-center border-b border-border px-3">
+          <Eyebrow as="h2">Admin</Eyebrow>
+        </div>
+        <nav aria-label="Admin sections" className="flex flex-col gap-0.5 p-2">
+          {SECTIONS.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              aria-current={s.id === active ? 'page' : undefined}
+              onClick={() => setActive(s.id)}
+              className={cn(
+                'rounded-md px-2 py-1.5 text-left text-sm outline-none transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-ring/40',
+                s.id === active
+                  ? 'bg-muted text-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              {s.label}
+            </button>
+          ))}
+        </nav>
+      </ContextPanel>
+      <div className="h-full min-h-0 overflow-y-auto">
+        <div className="mx-auto max-w-4xl px-6 py-5">{section.render()}</div>
+      </div>
+    </>
   )
 }

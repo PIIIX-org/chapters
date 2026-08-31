@@ -1,17 +1,22 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { expectNoA11yViolations } from '../../test/axe'
 import { createMemoryRouter, Outlet, RouterProvider } from 'react-router'
 import * as Y from 'yjs'
 import { EditorView } from '@codemirror/view'
 import { mockJsonResponse } from '../../lib/api'
 import { getCollabTicket } from '../../api/collab.js'
 import type { Vault } from '../../api/vaults'
+import { ShellProvider } from '../../components/shell/ShellProvider'
+import { useShell } from '../../components/shell/shell-context'
 import { NoteView } from './NoteView'
 
 const EDIT_VAULT: Vault = { id: 'v1', name: 'V1', ownerId: 'u1', mergeable: false, access: 'edit' }
 const READ_VAULT: Vault = { id: 'v1', name: 'V1', ownerId: 'u1', mergeable: false, access: 'read' }
+const OWNER_VAULT: Vault = { id: 'v1', name: 'V1', ownerId: 'u1', mergeable: false, access: 'owner' }
 
 /* ------------------------------------------------------------------ *
  * The two transports, stubbed at the module/global boundary. Between
@@ -145,17 +150,29 @@ function putCalls(fetchMock: ReturnType<typeof vi.fn>) {
   return fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'PUT')
 }
 
+/** What the shell's top bar would render: the status a page published. */
+function ShellStatusProbe() {
+  const { status } = useShell()
+  return <div data-testid="shell-status">{status ? `${status.tone}:${status.label}` : 'none'}</div>
+}
+
 // No default: passing `undefined` must stay undefined (a value default would
 // swallow it), so the unknown-access → reader path can be tested for real.
-function renderNote(vault: Vault | undefined, initialPath = '/vaults/v1/notes/people/jane') {
+function renderNote(
+  vault: Vault | undefined,
+  initialPath = '/vaults/v1/notes/people/jane',
+  { shell = false } = {},
+) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   // The outlet context is stateful so a test can change the *reported* access
   // of an already-open note, which is what a window-focus refetch of
   // `useVaults` does after the owner revokes a share.
-  let publish: (next: Vault | undefined) => void = () => {}
+  const publish: { current: (next: Vault | undefined) => void } = { current: () => {} }
   function VaultContext() {
     const [current, setCurrent] = useState(vault)
-    publish = setCurrent
+    useEffect(() => {
+      publish.current = setCurrent
+    }, [])
     return <Outlet context={current} />
   }
   const router = createMemoryRouter(
@@ -168,12 +185,18 @@ function renderNote(vault: Vault | undefined, initialPath = '/vaults/v1/notes/pe
     ],
     { initialEntries: [initialPath] },
   )
-  const utils = render(
-    <QueryClientProvider client={queryClient}>
+  const page = shell ? (
+    // A real ShellProvider, not a stub: the probe reads the same context the
+    // top bar does, so this fails if the page stops publishing its status.
+    <ShellProvider>
+      <ShellStatusProbe />
       <RouterProvider router={router} />
-    </QueryClientProvider>,
+    </ShellProvider>
+  ) : (
+    <RouterProvider router={router} />
   )
-  return { ...utils, router, reportAccess: (next: Vault | undefined) => act(() => publish(next)) }
+  const utils = render(<QueryClientProvider client={queryClient}>{page}</QueryClientProvider>)
+  return { ...utils, router, reportAccess: (next: Vault | undefined) => act(() => publish.current(next)) }
 }
 
 /** The relay's side of the connection: the Y.Doc it loaded the note into. */
@@ -381,7 +404,9 @@ describe('NoteView — a session that cannot write is locked', () => {
     expect(stub.providers).toHaveLength(0)
     // The lock that a `status === 'revoked'` check would miss: offline is not
     // revoked, and an unlocked editor here is someone typing into nothing.
-    expect(contentEditable()).toBe('false')
+    // Async: the whisper and the readOnly reconfigure land in different
+    // renders, so waiting on the text alone raced the lock under CI load.
+    await waitFor(() => expect(contentEditable()).toBe('false'))
     expect(screen.getByPlaceholderText(/ISO date/)).toBeDisabled()
 
     // Same tab, different cause.
@@ -442,6 +467,33 @@ describe('NoteView — readers take the SSE path', () => {
   })
 })
 
+describe('NoteView — the shell top bar mirrors the page status', () => {
+  it("publishes the collab sync state as the shell's status pill", async () => {
+    stubFetch()
+    renderNote(EDIT_VAULT, undefined, { shell: true })
+
+    const doc = await relay()
+    // Connected but not yet synced: the handshake is still in flight.
+    await waitFor(() => expect(screen.getByTestId('shell-status')).toHaveTextContent('idle:Syncing…'))
+
+    doc.load('# Jane')
+    await waitFor(() => expect(screen.getByTestId('shell-status')).toHaveTextContent('live:Synced'))
+  })
+
+  it("publishes the reader's live-stream state, in a status tone, never the AI accent", async () => {
+    stubFetch()
+    renderNote(READ_VAULT, undefined, { shell: true })
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    expect(screen.getByTestId('shell-status')).toHaveTextContent('idle:Connecting…')
+
+    FakeEventSource.instances[0]!.open()
+    await waitFor(() => expect(screen.getByTestId('shell-status')).toHaveTextContent('live:Live'))
+    // A sync state is semantic status, not authorship: never the `ai` tone.
+    expect(screen.getByTestId('shell-status').textContent).not.toContain('ai:')
+  })
+})
+
 describe('NoteView', () => {
   it('shows a not-found message for a missing note, and opens no transport', async () => {
     stubFetch({ error: 'note not found' }, 404)
@@ -491,5 +543,53 @@ describe('NoteView', () => {
     expect(contentEditable()).toBe('false')
     // And it says why, without claiming access was taken away.
     expect(screen.queryByText(/access to this note was removed/i)).toBeNull()
+  })
+})
+
+describe('NoteView — the inspector tabs', () => {
+  function inspector(): HTMLElement {
+    // Outside an AppShell the Inspector renders inline as a labelled aside.
+    return document.querySelector('aside[data-shell-panel="inspector"]') as HTMLElement
+  }
+
+  it('folds properties, history and sharing into inspector tabs for the owner', async () => {
+    stubFetch()
+    renderNote(OWNER_VAULT)
+
+    const doc = await relay()
+    doc.load('body', { resource: 'https://kintsugi.test/ada' })
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Properties' })).toBeInTheDocument())
+    expect(screen.getByRole('tab', { name: 'History' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Sharing' })).toBeInTheDocument()
+    // Properties is the resting tab, bound to the live document.
+    expect(screen.getByDisplayValue('https://kintsugi.test/ada')).toBeInTheDocument()
+    // All three live in the inspector track, not over the editor.
+    expect(inspector()).toContainElement(screen.getByRole('tab', { name: 'Sharing' }))
+
+    await expectNoA11yViolations(inspector())
+  })
+
+  it('offers no Sharing tab below owner — shares are the owner’s to grant', async () => {
+    stubFetch()
+    renderNote(EDIT_VAULT)
+
+    await relay()
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'History' })).toBeInTheDocument())
+    expect(screen.queryByRole('tab', { name: 'Sharing' })).toBeNull()
+  })
+
+  it('gives a reader the same tabs, locked: history explains instead of 403ing', async () => {
+    stubFetch()
+    renderNote(READ_VAULT)
+
+    await screen.findByText(/read-only/i)
+    expect(screen.queryByRole('tab', { name: 'Sharing' })).toBeNull()
+
+    await userEvent.click(screen.getByRole('tab', { name: 'History' }))
+    expect(await screen.findByText(/needs edit access/i)).toBeInTheDocument()
+    // The reason, not a request that can only fail: nothing was fetched for it.
+    const fetchMock = vi.mocked(globalThis.fetch)
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/revisions'))).toBe(false)
   })
 })

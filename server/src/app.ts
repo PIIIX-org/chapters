@@ -8,6 +8,7 @@ import { config } from './config.js'
 import { registerStatic } from './static.js'
 import { authPlugin } from './auth/plugin.js'
 import { authRoutes } from './auth/routes.js'
+import { oidcRoutes } from './auth/oidc-routes.js'
 import { accountRoutes } from './auth/account-routes.js'
 import { adminRoutes } from './auth/admin-routes.js'
 import { adminDashboardRoutes } from './auth/admin-dashboard-routes.js'
@@ -80,6 +81,8 @@ export async function buildApp(
   mcpRoutes(app)
   repositoryPushRoutes(app)
   repositoryWebhookRoutes(app)
+  // Root-level, not under /api: issuers redirect back to /auth/callback.
+  oidcRoutes(app, { isProd: config.isProd })
 
   await app.register(
     async (api) => {

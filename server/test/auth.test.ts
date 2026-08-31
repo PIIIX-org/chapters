@@ -3,9 +3,10 @@ import type { FastifyInstance } from 'fastify'
 import { eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { instanceState, users } from '../src/db/schema.js'
+import { instanceState, notifications, users } from '../src/db/schema.js'
 import { ensureInstanceState } from '../src/auth/bootstrap.js'
 import { sentMails } from '../src/email/mailer.js'
+import { WELCOME_SUBJECT } from '../src/email/welcome.js'
 import { resetLockouts } from '../src/auth/lockout.js'
 import { createActiveUser, loginCookie, TEST_PASSWORD, uniqueEmail } from './helpers.js'
 
@@ -101,6 +102,17 @@ describe('signup → verify → approve → login', () => {
       headers: { cookie: adminCookie },
     })
     expect(approve.statusCode).toBe(200)
+
+    // Approval mails the welcome: activation confirmation plus what else we
+    // make. One mail, not two — and it must not leak into the in-app feed row.
+    const welcome = [...sentMails].reverse().find((m) => m.to === email)!
+    expect(welcome.subject).toBe(WELCOME_SUBJECT)
+    expect(welcome.text).toContain('has been approved')
+    expect(welcome.text).toContain('github.com/PIIIX-org')
+    const feed = (
+      await db.select().from(notifications).where(eq(notifications.recipientId, pendingUser.id))
+    )[0]!
+    expect(feed.message).not.toContain('github.com/PIIIX-org')
 
     login = await app.inject({
       method: 'POST',

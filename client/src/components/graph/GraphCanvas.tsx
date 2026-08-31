@@ -6,18 +6,23 @@
 // This file (plus panzoom.ts, draw.ts, simulation.ts) is loaded only via
 // HomePage's lazy() import, never statically from the shell — that's what
 // keeps d3-force out of the entry chunk (client/src/bundle.test.ts).
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router'
+import { Maximize, ZoomIn, ZoomOut } from 'lucide-react'
 import { useGraph } from '../../hooks/useGraph.js'
 import { useVaults } from '../../hooks/useVaults.js'
 import type { CommunityEdge, CommunityGraph, CommunityNode, GraphEdge, GraphNode, VaultGraph } from '../../api/graph.js'
+import { ContextPanel, Inspector } from '../shell/ShellPanels.js'
+import { Button } from '../ui/button.js'
+import { Eyebrow } from '../ui/eyebrow.js'
 import { GraphSkeleton } from './GraphSkeleton.js'
 import { GraphOutline } from './GraphOutline.js'
+import { CommunityDetail } from './CommunityDetail.js'
 import { ColorModeToggle } from './ColorModeToggle.js'
 import { PhysicsControls } from './PhysicsControls.js'
 import { GraphFilters, graphFiltersFromSearchParams, type FilterableNode } from './GraphFilters.js'
 import { CappedGroupsNotice, GraphEmptyState, GraphErrorState, TruncationNotice } from './GraphStates.js'
-import { createPanZoom, screenToWorld, type Transform } from './panzoom.js'
+import { createPanZoom, fitTransform, screenToWorld, type Transform } from './panzoom.js'
 import { drawGraph, type ColorMode, type DrawAggregatedEdge, type DrawMemberEdge } from './draw.js'
 import { createSimulation, DEFAULT_SIMULATION_PARAMS, type SimEdge, type SimNode, type SimulationParams } from './simulation.js'
 import { hitTest } from './hitTest.js'
@@ -122,6 +127,11 @@ export default function GraphCanvas() {
   // `setExpandedCommunity` with the same community id — neither input owns
   // a copy of its own.
   const [expandedCommunity, setExpandedCommunity] = useState<number | null>(null)
+  // Which community the cursor is over on the canvas — read only by the
+  // inspector's CommunityDetail. React bails out of re-rendering when a
+  // pointermove resolves to the value already set, so this is cheap to
+  // update per move event.
+  const [hoveredCommunity, setHoveredCommunity] = useState<number | null>(null)
 
   // Same URL, same router as ColorModeToggle — reading it here rather than
   // taking colorMode/filters as props makes the URL the one shared source
@@ -196,6 +206,11 @@ export default function GraphCanvas() {
   // reason: without this, changing a filter recentres the viewport back to
   // {x:0,y:0,k:1} out from under whatever the user had panned/zoomed to.
   const transformRef = useRef<Transform>({ x: 0, y: 0, k: 1 })
+
+  // The bottom-right zoom buttons live outside the effect that owns the
+  // panzoom instance; the effect publishes the two operations they need
+  // here (same pattern as requestRedrawRef above).
+  const zoomApiRef = useRef<{ zoomBy: (factor: number) => void; fit: () => void } | null>(null)
 
   function handlePhysicsChange(next: Partial<SimulationParams>) {
     updatePhysicsParamsRef.current?.(next)
@@ -316,6 +331,16 @@ export default function GraphCanvas() {
       }
     }
 
+    // First mount only: the simulation's forceCenter keeps the cluster
+    // centred on world (0,0), but the identity transform puts world (0,0) at
+    // the canvas's TOP-LEFT — the whole graph loaded cropped into the corner
+    // (slice-8 QA screenshots). Centring the origin once centres the cluster
+    // for the life of the mount; later rebuilds keep the user's own camera.
+    const t0 = transformRef.current
+    if (t0.x === 0 && t0.y === 0 && t0.k === 1) {
+      transformRef.current = { x: container.clientWidth / 2, y: container.clientHeight / 2, k: 1 }
+    }
+
     const panzoom = createPanZoom(
       canvas,
       (t) => {
@@ -367,9 +392,10 @@ export default function GraphCanvas() {
     // pointer that hasn't drifted more than TAP_MAX_SCREEN_DRIFT between
     // down and up is a tap; two pointers down at once means a pinch
     // started, which cancels the tap candidate outright. Coordinates are
-    // converted world-space with `screenToWorld` and this frame's
-    // transform BEFORE hit-testing — hit-testing raw screen coordinates
-    // only works at the identity transform and breaks after any pan/zoom.
+    // converted to element-local (raw clientX/Y minus the canvas rect,
+    // same convention as panzoom's localPoint — raw coordinates are off
+    // by the shell's rail/panel offsets), then world-space with
+    // `screenToWorld` and this frame's transform BEFORE hit-testing.
     let tap: { pointerId: number; x: number; y: number } | null = null
 
     function onPointerDownForTap(e: PointerEvent) {
@@ -382,7 +408,8 @@ export default function GraphCanvas() {
       if (!candidate || candidate.pointerId !== e.pointerId) return
       if (Math.hypot(e.clientX - candidate.x, e.clientY - candidate.y) > TAP_MAX_SCREEN_DRIFT) return
 
-      const world = screenToWorld(panzoom.transform, e.clientX, e.clientY)
+      const rect = canvas!.getBoundingClientRect()
+      const world = screenToWorld(panzoom.transform, e.clientX - rect.left, e.clientY - rect.top)
       const hitNode = hitTest(nodes, world.x, world.y, (n) => n.radius)
       if (hitNode) setExpandedCommunity(hitNode.community)
     }
@@ -391,9 +418,35 @@ export default function GraphCanvas() {
       tap = null
     }
 
+    // Hover: the inspector mirrors whatever community is under the cursor.
+    // Same coordinate convention as the tap handler above (screenToWorld
+    // before hit-testing, never raw screen coordinates).
+    function onPointerMoveForHover(e: PointerEvent) {
+      const rect = canvas!.getBoundingClientRect()
+      const world = screenToWorld(panzoom.transform, e.clientX - rect.left, e.clientY - rect.top)
+      const hitNode = hitTest(nodes, world.x, world.y, (n) => n.radius)
+      setHoveredCommunity(hitNode ? hitNode.community : null)
+    }
+    function onPointerLeaveForHover() {
+      setHoveredCommunity(null)
+    }
+
     canvas.addEventListener('pointerdown', onPointerDownForTap)
     canvas.addEventListener('pointerup', onPointerUpForTap)
     canvas.addEventListener('pointercancel', onPointerCancelForTap)
+    canvas.addEventListener('pointermove', onPointerMoveForHover)
+    canvas.addEventListener('pointerleave', onPointerLeaveForHover)
+
+    // The bottom-right zoom buttons. zoomBy zooms about the element centre;
+    // fit recentres the current node set in the viewport. Both emit through
+    // panzoom's onChange, which already schedules the redraw.
+    zoomApiRef.current = {
+      zoomBy: (factor) => panzoom.zoomBy(factor),
+      fit: () => {
+        const t = fitTransform(nodes, container!.clientWidth, container!.clientHeight)
+        if (t) panzoom.setTransform(t)
+      },
+    }
 
     requestFrame()
 
@@ -403,9 +456,12 @@ export default function GraphCanvas() {
       panzoom.destroy()
       requestRedrawRef.current = null
       updatePhysicsParamsRef.current = null
+      zoomApiRef.current = null
       canvas.removeEventListener('pointerdown', onPointerDownForTap)
       canvas.removeEventListener('pointerup', onPointerUpForTap)
       canvas.removeEventListener('pointercancel', onPointerCancelForTap)
+      canvas.removeEventListener('pointermove', onPointerMoveForHover)
+      canvas.removeEventListener('pointerleave', onPointerLeaveForHover)
       ro?.disconnect()
     }
   }, [graph.data, memberData, reducedMotion])
@@ -437,30 +493,36 @@ export default function GraphCanvas() {
   }
 
   return (
-    <div data-testid="graph-canvas" className="flex h-full w-full bg-background">
-      <div ref={containerRef} className="relative h-full flex-1">
+    <div data-testid="graph-canvas" className="flex h-full w-full flex-col bg-background">
+      {/* Stats strip under the top bar — mono numerals, always computed
+          from the aggregated graph even while drilled into a community. */}
+      {graph.data && isCommunityGraph(graph.data) && (
+        <StatsStrip vaultCount={vaults.data?.length ?? null} graph={graph.data} />
+      )}
+
+      <div ref={containerRef} className="relative min-h-0 w-full flex-1">
         <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 h-full w-full" />
-        {/* top-20, not top-4: AppShell renders its own chrome (ScopePicker,
-            top-left; email + Log out, top-right) as later siblings at
-            `absolute {left,right}-4 top-4` OVER this component's container,
-            so anything this component places at top-4 paints underneath it.
-            Clearing that band is the only requirement — which corner stays
-            unchanged. */}
-        <div className="absolute left-4 top-20 flex flex-col items-start gap-3">
+        {/* The only DOM allowed over the canvas, all inside this cell:
+            colour-mode pills top-left, zoom controls bottom-right, capped/
+            truncation notices bottom-left. Everything else lives in the
+            shell's context panel and inspector tracks. */}
+        <div className="absolute left-3 top-3">
           <ColorModeToggle />
-          <GraphFilters nodes={filterableNodesOf(memberData ?? graph.data)} />
         </div>
-        <div className="absolute right-4 top-20">
-          <PhysicsControls
-            initialParams={DEFAULT_SIMULATION_PARAMS}
-            onPhysicsChange={handlePhysicsChange}
-            onNodeSizeChange={handleNodeSizeChange}
-            onEdgeWidthChange={handleEdgeWidthChange}
-          />
+        <div className="absolute bottom-3 right-3 flex flex-col gap-1">
+          <Button type="button" variant="outline" size="icon-sm" aria-label="Zoom in" onClick={() => zoomApiRef.current?.zoomBy(1.4)}>
+            <ZoomIn aria-hidden="true" />
+          </Button>
+          <Button type="button" variant="outline" size="icon-sm" aria-label="Zoom out" onClick={() => zoomApiRef.current?.zoomBy(1 / 1.4)}>
+            <ZoomOut aria-hidden="true" />
+          </Button>
+          <Button type="button" variant="outline" size="icon-sm" aria-label="Fit graph to view" onClick={() => zoomApiRef.current?.fit()}>
+            <Maximize aria-hidden="true" />
+          </Button>
         </div>
         {/* Non-blocking: the graph loaded fine, these just name what the
             server capped rather than letting it look silently thinner. */}
-        <div className="absolute bottom-4 left-4 right-4 flex flex-col items-start gap-2">
+        <div className="absolute bottom-3 left-3 right-14 flex flex-col items-start gap-2">
           <CappedGroupsNotice groups={graph.data?.cappedGroups ?? []} />
           {expandedCommunity !== null && activeGraph.data && !isCommunityGraph(activeGraph.data) && (
             <TruncationNotice
@@ -470,27 +532,92 @@ export default function GraphCanvas() {
           )}
         </div>
         {/* The canvas is presentation-only (aria-hidden). It has zero
-            accessible content of its own — GraphOutline, beside it, is the
-            real keyboard-operable interface; this skeleton is the only
-            thing screen readers see from this half of the layout. */}
+            accessible content of its own — GraphOutline, in the context
+            panel, is the real keyboard-operable interface; this skeleton is
+            the only thing screen readers see from this half of the layout. */}
         {showSkeleton && (
           <div className="absolute inset-0">
             <GraphSkeleton />
           </div>
         )}
       </div>
-      {/* pt-16 clears AppShell's email + Log out row, which is painted as a
-          later sibling at `absolute right-4 top-4` — directly over this
-          pane's top-right corner otherwise. */}
-      <aside className="h-full w-80 shrink-0 overflow-y-auto border-l border-border bg-card pt-16">
+
+      <ContextPanel label="Outline">
         <GraphOutline
           communities={communities}
           expandedCommunity={expandedCommunity}
           onExpand={setExpandedCommunity}
           onCollapse={() => setExpandedCommunity(null)}
+        />
+      </ContextPanel>
+
+      <Inspector label="Graph detail" className="gap-3 p-3">
+        <CommunityDetail
+          communities={communities}
+          hoveredCommunity={hoveredCommunity}
+          expandedCommunity={expandedCommunity}
+          onCollapse={() => setExpandedCommunity(null)}
           filters={filters}
         />
-      </aside>
+        <CollapsibleSection title="Filters">
+          <GraphFilters nodes={filterableNodesOf(memberData ?? graph.data)} />
+        </CollapsibleSection>
+        {/* No initial* props: this stays mounted for the component's whole
+            life (a closed <details> keeps its children), so its own state
+            already tracks the sliders — while simParamsRef carries the same
+            values across simulation rebuilds. */}
+        <CollapsibleSection title="Physics">
+          <PhysicsControls
+            onPhysicsChange={handlePhysicsChange}
+            onNodeSizeChange={handleNodeSizeChange}
+            onEdgeWidthChange={handleEdgeWidthChange}
+          />
+        </CollapsibleSection>
+      </Inspector>
     </div>
+  )
+}
+
+/** Native-details collapsible panel for the inspector's Filters / Physics sections. */
+function CollapsibleSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <details open className="rounded-md border border-border bg-card">
+      <summary className="flex h-9 cursor-pointer select-none list-none items-center px-3 [&::-webkit-details-marker]:hidden">
+        <Eyebrow as="span">{title}</Eyebrow>
+      </summary>
+      <div className="border-t border-border p-3">{children}</div>
+    </details>
+  )
+}
+
+const statFormatter = new Intl.NumberFormat('en-US')
+
+function StatsStrip({ vaultCount, graph }: { vaultCount: number | null; graph: CommunityGraph }) {
+  let notes = 0
+  let codeFiles = 0
+  for (const n of graph.nodes) {
+    notes += n.noteCount
+    codeFiles += n.codeCount
+  }
+  const stats: [string, number | null][] = [
+    ['Vaults', vaultCount],
+    ['Notes', notes],
+    ['Code files', codeFiles],
+    ['Edges', graph.edges.length],
+    ['Communities', graph.nodes.length],
+  ]
+  return (
+    <dl aria-label="Graph statistics" className="flex h-9 shrink-0 items-center gap-5 overflow-x-auto border-b border-border px-3">
+      {stats.map(([label, value]) =>
+        value === null ? null : (
+          <div key={label} className="flex items-baseline gap-1.5">
+            <dt>
+              <Eyebrow>{label}</Eyebrow>
+            </dt>
+            <dd className="font-mono text-[13px] tabular-nums text-foreground">{statFormatter.format(value)}</dd>
+          </div>
+        ),
+      )}
+    </dl>
   )
 }

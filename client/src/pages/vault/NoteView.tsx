@@ -13,10 +13,17 @@ import { useSession } from '../../hooks/useSession.js'
 import { canEdit } from '../../api/vaults.js'
 import type { Vault, VaultAccess } from '../../api/vaults.js'
 import { CollabPropertyPanel, LivePropertyPanel } from '../../components/vault/PropertyPanel.js'
-import { CollabStatusLine } from '../../components/vault/CollabStatusLine.js'
+import { CollabStatusLine, collabShellStatus } from '../../components/vault/CollabStatusLine.js'
 import { CollaboratorAvatars } from '../../components/vault/CollaboratorAvatars.js'
+import { NoteActions } from '../../components/vault/NoteActions.js'
 import { RevokedNotice } from '../../components/vault/RevokedNotice.js'
 import { RevisionHistory } from '../../components/vault/RevisionHistory.js'
+import { SharingPanel } from '../../components/vault/SharingPanel.js'
+import { Inspector } from '../../components/shell/ShellPanels.js'
+import { useShellStatus } from '../../components/shell/shell-context.js'
+import type { ShellStatus } from '../../components/shell/shell-context.js'
+import { Pill } from '../../components/ui/pill.js'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js'
 import { handleWikilinkClick } from '../../lib/handleWikilinkClick.js'
 
 /**
@@ -105,29 +112,73 @@ export function NoteView() {
 }
 
 interface NoteFrameProps {
-  breadcrumb: ReactNode
-  /** Sits between the breadcrumb and the properties, in the flow — never over
+  /** The 40px note bar over the editor: path, status, presence, actions. */
+  bar: ReactNode
+  /** Sits between the note bar and the editor, in the flow — never over
    *  the document, which is where the unsent text is. */
   notice?: ReactNode
-  panel: ReactNode
   editorRef: RefObject<HTMLDivElement | null>
-  /** Unit 5's revision history, when the viewer is allowed one. */
-  rail?: ReactNode
+  /** The inspector tabs for this note (Properties · History · Sharing). */
+  inspector: ReactNode
 }
 
-function NoteFrame({ breadcrumb, notice, panel, editorRef, rail }: NoteFrameProps) {
+function NoteFrame({ bar, notice, editorRef, inspector }: NoteFrameProps) {
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-3 border-b border-border px-8 py-4 text-sm text-muted-foreground">
-        {breadcrumb}
+    <>
+      <div className="flex h-full min-h-0 flex-col">
+        {/* min-h-10, not h-10: an inline rename form wraps to a second row
+            instead of clipping inside the bar. */}
+        <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-1">
+          {bar}
+        </div>
+        {notice}
+        <div ref={editorRef} className="min-h-0 min-w-0 flex-1 overflow-auto" />
       </div>
-      {notice}
-      <div className="border-b border-border px-8 py-4">{panel}</div>
-      <div className="flex min-h-0 flex-1">
-        <div ref={editorRef} className="min-w-0 flex-1 overflow-auto" />
-        {rail}
-      </div>
-    </div>
+      <Inspector label="Note" className="min-h-0">
+        {inspector}
+      </Inspector>
+    </>
+  )
+}
+
+/** The note bar's path: `vault / path`, mono like every machine label. */
+function NotePath({ vaultName, vaultId, path }: { vaultName: string | undefined; vaultId: string; path: string }) {
+  return (
+    <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+      {vaultName ?? vaultId} / <span className="text-foreground">{path}</span>
+    </span>
+  )
+}
+
+interface NoteInspectorProps {
+  properties: ReactNode
+  history: ReactNode
+  /** Owner-only: shares are the owner's to grant, so nobody else gets the tab. */
+  sharing?: ReactNode
+}
+
+/** The note's detail, as inspector tabs — the property panel, the revision
+ *  history and (for the owner) sharing all fold in here. */
+function NoteInspector({ properties, history, sharing }: NoteInspectorProps) {
+  return (
+    <Tabs defaultValue="properties" className="flex min-h-0 flex-1 flex-col">
+      <TabsList>
+        <TabsTrigger value="properties">Properties</TabsTrigger>
+        <TabsTrigger value="history">History</TabsTrigger>
+        {sharing != null && <TabsTrigger value="sharing">Sharing</TabsTrigger>}
+      </TabsList>
+      <TabsContent value="properties" className="flex-1 overflow-y-auto p-3">
+        {properties}
+      </TabsContent>
+      <TabsContent value="history" className="flex-1 overflow-y-auto p-3">
+        {history}
+      </TabsContent>
+      {sharing != null && (
+        <TabsContent value="sharing" className="flex-1 overflow-y-auto p-3">
+          {sharing}
+        </TabsContent>
+      )}
+    </Tabs>
   )
 }
 
@@ -167,7 +218,8 @@ interface CollabNoteProps extends NoteIdentity {
   /** Only ever rendered when the relay could not be reached at all — see
    *  `strandedOffline`. Never seeded into the shared document. */
   initialBody: string
-  /** Drives unit 5's history rail: revision purge is owner-only. */
+  /** Drives the History tab (revision purge is owner-only) and the Sharing
+   *  tab (owner-only outright). */
   access: VaultAccess
 }
 
@@ -176,8 +228,6 @@ interface CollabNoteProps extends NoteIdentity {
  * No `PUT`, no local copy of the body — the `Y.Text` is the document.
  */
 function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, access }: CollabNoteProps) {
-  // Closed by default: the rail is a recovery tool, not part of writing.
-  const [showHistory, setShowHistory] = useState(false)
   const session = useSession()
   // isError before .data, as everywhere.
   const me = session.isPending || session.isError ? null : session.data
@@ -233,42 +283,38 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
     setMark({ synced: collab.synced, at: collab.synced ? new Date() : mark.at })
   }
 
+  // The note bar's pill, mirrored into the shell's top bar — same mapping,
+  // so the two can never disagree (spec: shell shows the page's live status).
+  useShellStatus(collabShellStatus(collab.status, collab.synced))
+
   return (
     <NoteFrame
       editorRef={editorRef}
-      breadcrumb={
+      bar={
         <>
-          <span>
-            {vaultName ?? vaultId} / <span className="text-foreground">{path}</span>
-          </span>
+          <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />
           <CollabStatusLine status={collab.status} synced={collab.synced} syncedAt={mark.at} />
           {/* Presence lives in this bar and nowhere else — never a global
               "who's online", which leaks who is working on what. */}
           <CollaboratorAvatars peers={collab.peers} />
-          {/* History needs edit access server-side (audit rule), so it is
-              offered on this path only — a reader would get a rail that can
-              only ever 403. */}
-          <button
-            type="button"
-            aria-pressed={showHistory}
-            onClick={() => setShowHistory((open) => !open)}
-            className="ml-auto rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:text-foreground"
-          >
-            History
-          </button>
+          {/* Rename/delete need edit server-side, and `locked` covers offline
+              too — a rename that cannot reach the API is a door to an error. */}
+          {!locked && (
+            <div className="ml-auto">
+              <NoteActions vaultId={vaultId} note={{ path, name: path.split('/').pop() ?? path }} />
+            </div>
+          )}
         </>
       }
       notice={revoked ? <RevokedNotice /> : null}
-      panel={<CollabPropertyPanel frontmatter={collab.ydoc.getMap('frontmatter')} readOnly={locked} />}
-      rail={
-        showHistory ? (
-          <aside
-            aria-label="Revision history"
-            className="w-80 shrink-0 overflow-auto border-l border-border px-4 py-4"
-          >
-            <RevisionHistory vaultId={vaultId} path={path} access={access} />
-          </aside>
-        ) : null
+      inspector={
+        <NoteInspector
+          properties={<CollabPropertyPanel frontmatter={collab.ydoc.getMap('frontmatter')} readOnly={locked} />}
+          // RevisionHistory explains itself to a downgraded (now read) viewer
+          // instead of firing a request that can only 403.
+          history={<RevisionHistory vaultId={vaultId} path={path} access={access} />}
+          sharing={access === 'owner' ? <SharingPanel vaultId={vaultId} /> : undefined}
+        />
       }
     />
   )
@@ -279,6 +325,15 @@ const LIVE_WHISPER: Record<LiveStatus, string> = {
   live: 'Live — updates as others type',
   reconnecting: 'Reconnecting…',
   ended: 'Live updates stopped — your access to this note may have changed',
+}
+
+/** The reader path's mirror of LIVE_WHISPER for the shell's top-bar pill:
+ *  same states, shortened to pill length. */
+const LIVE_SHELL: Record<LiveStatus, ShellStatus> = {
+  connecting: { tone: 'idle', label: 'Connecting…' },
+  live: { tone: 'live', label: 'Live' },
+  reconnecting: { tone: 'idle', label: 'Reconnecting' },
+  ended: { tone: 'error', label: 'Live ended' },
 }
 
 interface LiveNoteProps extends NoteIdentity {
@@ -292,6 +347,7 @@ interface LiveNoteProps extends NoteIdentity {
  */
 function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }: LiveNoteProps) {
   const live = useLiveNote({ vaultId, path, enabled: true })
+  useShellStatus(LIVE_SHELL[live.status])
   // The REST fetch is what is on screen until the first frame arrives.
   const state = live.state ?? { frontmatter: initialFrontmatter, body: initialBody }
   const wikilinks = useWikilinks(vaultId, false)
@@ -317,18 +373,23 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
   return (
     <NoteFrame
       editorRef={editorRef}
-      breadcrumb={
+      bar={
         <>
-          <span>
-            {vaultName ?? vaultId} / <span className="text-foreground">{path}</span>
-          </span>
-          <span className="text-xs uppercase tracking-wide">· read-only</span>
-          <span role="status" className="text-xs">
+          <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />
+          <Pill>Read-only</Pill>
+          <span role="status" className="truncate text-xs text-muted-foreground">
             {LIVE_WHISPER[live.status]}
           </span>
         </>
       }
-      panel={<LivePropertyPanel frontmatter={state.frontmatter} />}
+      inspector={
+        <NoteInspector
+          properties={<LivePropertyPanel frontmatter={state.frontmatter} />}
+          // Same layout as an editor's, locked: RevisionHistory says why a
+          // read-only viewer gets no list instead of rendering a 403.
+          history={<RevisionHistory vaultId={vaultId} path={path} access="read" />}
+        />
+      }
     />
   )
 }

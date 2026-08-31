@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { createBrowserRouter, type RouteObject } from 'react-router'
 import { RequireAuth } from './components/RequireAuth.js'
+import { AppShell } from './components/shell/AppShell.js'
 import { HomePage } from './pages/HomePage.js'
 import { GraphSkeleton } from './components/graph/GraphSkeleton.js'
 import { LoginPage } from './pages/auth/LoginPage.js'
@@ -15,86 +16,84 @@ import { NoteEmptyState } from './pages/vault/NoteEmptyState.js'
 // tree + note-create UI, and NoteView pulls in the whole CodeMirror/@lezer
 // editor stack. Home never renders either, so neither belongs in the entry
 // chunk — same reasoning as GraphCanvas in HomePage.tsx, applied one level up.
-const VaultLayout = lazy(() => import('./pages/vault/VaultLayout.js').then((m) => ({ default: m.VaultLayout })))
-const NoteView = lazy(() => import('./pages/vault/NoteView.js').then((m) => ({ default: m.NoteView })))
+const VaultLayout = lazy(() =>
+  import('./pages/vault/VaultLayout.js').then((m) => ({
+    default: m.VaultLayout,
+  })),
+)
+const NoteView = lazy(() =>
+  import('./pages/vault/NoteView.js').then((m) => ({ default: m.NoteView })),
+)
+const VaultsPage = lazy(() =>
+  import('./pages/VaultsPage.js').then((m) => ({ default: m.VaultsPage })),
+)
+const ReposPage = lazy(() =>
+  import('./pages/ReposPage.js').then((m) => ({ default: m.ReposPage })),
+)
 // Same reasoning as VaultLayout/NoteView above: Home never renders this, so
 // it doesn't belong in the entry chunk.
-const TeamPage = lazy(() => import('./pages/TeamPage.js').then((m) => ({ default: m.TeamPage })))
+const TeamPage = lazy(() =>
+  import('./pages/TeamPage.js').then((m) => ({ default: m.TeamPage })),
+)
 // Same again, and doubly so: most people on an instance are not admins and
 // will never load this chunk at all.
-const AdminPage = lazy(() => import('./pages/AdminPage.js').then((m) => ({ default: m.AdminPage })))
+const AdminPage = lazy(() =>
+  import('./pages/AdminPage.js').then((m) => ({ default: m.AdminPage })),
+)
 // Home never renders settings either, and an unenrolled user on an
 // MFA-mandating instance is sent straight here — one lazy chunk, not part of
 // the entry bundle.
-const SettingsPage = lazy(() => import('./pages/SettingsPage.js').then((m) => ({ default: m.SettingsPage })))
+const SettingsPage = lazy(() =>
+  import('./pages/SettingsPage.js').then((m) => ({ default: m.SettingsPage })),
+)
 // And again, hardest of all: this one pulls in a second CodeMirror stack (the
 // read-only code viewer) for people who have connected a repository at all.
 const RepositoryPage = lazy(() =>
-  import('./pages/RepositoryPage.js').then((m) => ({ default: m.RepositoryPage })),
+  import('./pages/RepositoryPage.js').then((m) => ({
+    default: m.RepositoryPage,
+  })),
 )
+
+function lazyPage(element: React.ReactNode) {
+  return <Suspense fallback={<GraphSkeleton />}>{element}</Suspense>
+}
 
 /**
  * Exported separately from `router` so a test can mount the real route table
  * in a memory router: `createBrowserRouter` binds to `window.location` when
  * it is created (at import), which leaves no way to start a test anywhere but
  * `/`. The app still gets exactly these routes.
+ *
+ * Every authenticated route renders inside <AppShell> — the rail, top bar and
+ * side tracks are the layout, not something each page assembles.
  */
 export const routes: RouteObject[] = [
   {
     element: <RequireAuth />,
     children: [
-      { path: '/', element: <HomePage /> },
       {
-        path: '/team',
-        element: (
-          <Suspense fallback={<GraphSkeleton />}>
-            <TeamPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: '/settings',
-        element: (
-          <Suspense fallback={<GraphSkeleton />}>
-            <SettingsPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: '/admin',
-        element: (
-          <Suspense fallback={<GraphSkeleton />}>
-            <AdminPage />
-          </Suspense>
-        ),
-      },
-      {
-        // Splat, not a nested `:path` param: a file path has arbitrary depth
-        // and keeps its slashes. It also matches `/repos/:id/files` with an
-        // empty splat, which is the no-file-chosen state the page renders.
-        path: '/repos/:id/files/*',
-        element: (
-          <Suspense fallback={<GraphSkeleton />}>
-            <RepositoryPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: '/vaults/:vaultId',
-        element: (
-          <Suspense fallback={<GraphSkeleton />}>
-            <VaultLayout />
-          </Suspense>
-        ),
+        element: <AppShell />,
         children: [
-          { index: true, element: <NoteEmptyState /> },
+          { path: '/', element: <HomePage /> },
+          { path: '/vaults', element: lazyPage(<VaultsPage />) },
+          { path: '/repos', element: lazyPage(<ReposPage />) },
+          { path: '/team', element: lazyPage(<TeamPage />) },
+          { path: '/settings', element: lazyPage(<SettingsPage />) },
+          { path: '/admin', element: lazyPage(<AdminPage />) },
           {
-            path: 'notes/*',
-            element: (
-              <Suspense fallback={<GraphSkeleton />}>
-                <NoteView />
-              </Suspense>
-            ),
+            // Splat, not a nested `:path` param: a file path has arbitrary depth
+            // and keeps its slashes. It also matches `/repos/:id/files` with an
+            // empty splat, which is the no-file-chosen state the page renders.
+            path: '/repos/:id/files/*',
+            element: lazyPage(<RepositoryPage />),
+          },
+          {
+            path: '/vaults/:vaultId',
+            element: lazyPage(<VaultLayout />),
+            children: [
+              { index: true, element: <NoteEmptyState /> },
+              { path: 'notes/*', element: lazyPage(<NoteView />) },
+            ],
           },
         ],
       },

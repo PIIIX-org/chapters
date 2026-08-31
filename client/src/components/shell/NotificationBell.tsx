@@ -55,13 +55,13 @@ export function NotificationBell() {
         aria-expanded={open}
         aria-label={label}
         onClick={() => setOpen((o) => !o)}
-        className="relative rounded-md p-2 hover:bg-muted"
+        className="relative flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors duration-100 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
       >
-        <Bell className="h-5 w-5" aria-hidden="true" />
+        <Bell className="size-4" aria-hidden="true" />
         {unreadCount > 0 && (
           <span
             aria-hidden="true"
-            className="absolute right-1 top-1 h-2 w-2 rounded-full bg-foreground"
+            className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary"
           />
         )}
       </button>
@@ -71,7 +71,7 @@ export function NotificationBell() {
           role="dialog"
           aria-label="Notifications"
           tabIndex={-1}
-          className="absolute right-0 top-full z-10 mt-1 w-80 rounded-md border border-border bg-popover py-1 shadow-md focus:outline-none"
+          className="absolute right-0 top-full z-40 mt-1.5 w-80 rounded-md border border-border bg-popover py-1 shadow-floating focus:outline-none"
         >
           {notifications.isError ? (
             // Ordered before any read of `.data`, same reasoning as

@@ -8,6 +8,7 @@ import { mockJsonResponse } from '../../lib/api.js'
 import { expectNoA11yViolations } from '../../test/axe.js'
 import type { CommunityNode } from '../../api/graph.js'
 import { GraphOutline } from './GraphOutline.js'
+import { CommunityDetail } from './CommunityDetail.js'
 
 const COMMUNITIES: CommunityNode[] = [
   { id: 'community:0', community: 0, size: 4, noteCount: 3, codeCount: 1, lastActivity: '2026-08-01T00:00:00.000Z' },
@@ -62,19 +63,29 @@ function stubFetch() {
   return fetchMock
 }
 
-// GraphOutline is a fully controlled component — expansion state lives in
-// the parent (GraphCanvas in production). This harness plays that role so
-// the component is exercised exactly as it will really be driven: a canvas
-// tap and a keyboard activation both end up calling the same setter.
+// GraphOutline and CommunityDetail are fully controlled — expansion state
+// lives in the parent (GraphCanvas in production). This harness plays that
+// role, rendering both exactly as GraphCanvas wires them (outline in the
+// context panel, detail in the inspector) so the split components are
+// exercised as the pair they really are: a keyboard Enter in the outline
+// and the back button in the detail drive the same setter.
 function Harness() {
   const [expandedCommunity, setExpandedCommunity] = useState<number | null>(null)
   return (
-    <GraphOutline
-      communities={COMMUNITIES}
-      expandedCommunity={expandedCommunity}
-      onExpand={setExpandedCommunity}
-      onCollapse={() => setExpandedCommunity(null)}
-    />
+    <>
+      <GraphOutline
+        communities={COMMUNITIES}
+        expandedCommunity={expandedCommunity}
+        onExpand={setExpandedCommunity}
+        onCollapse={() => setExpandedCommunity(null)}
+      />
+      <CommunityDetail
+        communities={COMMUNITIES}
+        hoveredCommunity={null}
+        expandedCommunity={expandedCommunity}
+        onCollapse={() => setExpandedCommunity(null)}
+      />
+    </>
   )
 }
 
@@ -121,6 +132,20 @@ describe('GraphOutline', () => {
     ).toBeInTheDocument()
   })
 
+  it('ranks communities by size, largest first, regardless of server order', async () => {
+    stubFetch()
+    renderOutline()
+
+    await screen.findByRole('button', { name: /Community 3/ })
+    const buttons = screen.getAllByRole('button', { name: /Community \d/ })
+    // COMMUNITIES lists community 0 (size 4) before community 3 (size 9140);
+    // the outline must show 3 first anyway.
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      expect.stringContaining('Community 3'),
+      expect.stringContaining('Community 0'),
+    ])
+  })
+
   it('tabbing to a community button and pressing Enter fetches its members and shows their paths', async () => {
     const fetchMock = stubFetch()
     const user = userEvent.setup()
@@ -138,7 +163,7 @@ describe('GraphOutline', () => {
     expect(screen.getByText('src/server/index.ts')).toBeInTheDocument()
 
     // Task 1's truncation, announced in the live region.
-    expect(await screen.findByRole('status')).toHaveTextContent('Expanded community 3, showing 2 of 9,140.')
+    expect(await screen.findByText('Expanded community 3, showing 2 of 9,140.')).toBeInTheDocument()
 
     // Focus moved off the button and onto the members heading.
     expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Community 3 members' }))

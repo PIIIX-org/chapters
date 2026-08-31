@@ -1,8 +1,20 @@
 import { useState } from 'react'
-import { Link } from 'react-router'
 import { TeamManagement } from '../components/team/TeamManagement.js'
 import { UserConstellation } from '../components/team/UserConstellation.js'
 import { VaultReachExpansion } from '../components/team/VaultReachExpansion.js'
+import { Inspector } from '../components/shell/ShellPanels.js'
+import { useShellBreadcrumb } from '../components/shell/shell-context.js'
+import { PanelState } from '../components/ui/empty-state.js'
+import { Eyebrow } from '../components/ui/eyebrow.js'
+import { Panel, PanelBody, PanelHeader } from '../components/ui/panel.js'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../components/ui/table.js'
 import { useTeamMembers, useTeams, useTeamStats } from '../hooks/useTeams.js'
 
 const lastActiveFormatter = new Intl.DateTimeFormat('en-GB', {
@@ -19,24 +31,31 @@ function formatLastActivity(iso: string | null): string {
 }
 
 const selectClassName =
-  'h-8 rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50'
+  'h-7 rounded-md border border-input bg-card px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
+
+function ManagementPanel() {
+  return (
+    <Inspector label="Team management" className="gap-4 p-3">
+      <div className="flex h-9 shrink-0 items-center border-b border-border">
+        <Eyebrow as="h2">Manage</Eyebrow>
+      </div>
+      <TeamManagement />
+      <VaultReachExpansion />
+    </Inspector>
+  )
+}
 
 function TeamEmptyState() {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
-      <h1 className="font-display text-2xl text-foreground">No teams yet</h1>
-      <p className="max-w-md text-sm text-muted-foreground">
-        Teams are how several people reach a set of vaults at once — share a vault with a team instead of one person
-        at a time, and everyone on the team gets the same access.
-      </p>
-      <Link to="/" className="text-sm text-foreground underline">
-        ← Back home
-      </Link>
-      <div className="mt-4 flex w-full max-w-md flex-col gap-6 text-left">
-        <TeamManagement />
-        <VaultReachExpansion />
-      </div>
-    </div>
+    <>
+      <PanelState
+        status="empty"
+        title="No teams yet"
+        message="Teams are how several people reach a set of vaults at once — share a vault with a team instead of one person at a time, and everyone on the team gets the same access. Create one from the panel on the right."
+        className="h-full"
+      />
+      <ManagementPanel />
+    </>
   )
 }
 
@@ -49,23 +68,28 @@ export function TeamPage() {
   const teamId = selectedTeamId ?? teams.data?.[0]?.id ?? ''
   const members = useTeamMembers(teamId)
   const stats = useTeamStats(teamId)
+  useShellBreadcrumb([{ label: 'Team' }])
 
   // Ordered the same way HomePage orders its vaults check: isPending, then
   // isError, before .data is ever read — `.data` on a pending or errored
   // query isn't the empty-state answer, it's undefined.
   if (teams.isPending) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <p className="text-sm text-muted-foreground">Loading teams…</p>
-      </div>
+      <PanelState
+        status="loading"
+        message="Loading teams…"
+        className="h-full"
+      />
     )
   }
   if (teams.isError) {
     return (
-      <div role="alert" className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
-        <h1 className="font-display text-2xl text-foreground">We couldn&rsquo;t load your teams.</h1>
-        <p className="max-w-sm text-sm text-muted-foreground">{teams.error.message}</p>
-      </div>
+      <PanelState
+        status="error"
+        title="We couldn’t load your teams."
+        message={teams.error.message}
+        className="h-full"
+      />
     )
   }
   if (teams.data.length === 0) return <TeamEmptyState />
@@ -90,87 +114,89 @@ export function TeamPage() {
   const loading = !failed && (members.isPending || stats.isPending)
 
   return (
-    <div className="min-h-screen bg-background px-6 py-8">
-      <header className="mx-auto mb-8 flex max-w-3xl items-end justify-between gap-4">
-        <div>
-          <Link to="/" className="mb-1 block text-sm text-muted-foreground underline">
-            ← Home
-          </Link>
-          <h1 className="font-display text-3xl text-foreground">Team</h1>
-        </div>
-        {teams.data.length > 1 && (
-          <select
-            aria-label="Team"
-            value={teamId}
-            onChange={(e) => setSelectedTeamId(e.target.value)}
-            className={selectClassName}
-          >
-            {teams.data.map((team) => (
-              <option key={team.id} value={team.id}>
-                {team.name}
-              </option>
-            ))}
-          </select>
-        )}
-      </header>
-
-      <main className="mx-auto flex max-w-3xl flex-col gap-8">
-        {failed ? (
-          <div
-            role="alert"
-            className="flex flex-col items-center gap-2 rounded-lg border border-destructive/40 bg-card px-4 py-6 text-center"
-          >
-            <p className="text-sm text-destructive">We couldn&rsquo;t load this team&rsquo;s roster.</p>
-            <p className="text-xs text-muted-foreground">
-              {(members.error ?? stats.error)?.message ?? 'Something went wrong.'}
-            </p>
-          </div>
-        ) : loading ? (
-          <p className="text-center text-sm text-muted-foreground">Loading team…</p>
-        ) : (
-          <>
-            <UserConstellation
-              people={roster.map((r) => ({ userId: r.userId, email: r.email, mass: r.notesTouched }))}
+    <>
+      <div className="h-full min-h-0 overflow-y-auto">
+        <div className="mx-auto flex max-w-4xl flex-col gap-4 px-6 py-5">
+          <Panel aria-label="Roster">
+            <PanelHeader
+              title="Roster"
+              actions={
+                teams.data.length > 1 ? (
+                  <select
+                    aria-label="Team"
+                    value={teamId}
+                    onChange={(e) => setSelectedTeamId(e.target.value)}
+                    className={selectClassName}
+                  >
+                    {teams.data.map((team) => (
+                      <option key={team.id} value={team.id}>
+                        {team.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="text-sm text-foreground">
+                    {teams.data[0]?.name}
+                  </span>
+                )
+              }
             />
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-                    <th scope="col" className="py-2 pr-4 font-normal">
-                      Member
-                    </th>
-                    <th scope="col" className="py-2 pr-4 font-normal">
-                      Notes touched
-                    </th>
-                    <th scope="col" className="py-2 pr-4 font-normal">
-                      Projects touched
-                    </th>
-                    <th scope="col" className="py-2 font-normal">
-                      Last activity
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {roster.map((r) => (
-                    <tr key={r.userId} className="border-b border-border">
-                      <td className="py-2 pr-4 text-foreground">{r.email}</td>
-                      <td className="py-2 pr-4 text-foreground">{r.notesTouched}</td>
-                      <td className="py-2 pr-4 text-foreground">{r.vaultsTouched}</td>
-                      <td className="py-2 font-mono text-xs text-muted-foreground">
-                        {formatLastActivity(r.lastActivityAt)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <TeamManagement />
-            <VaultReachExpansion />
-          </>
-        )}
-      </main>
-    </div>
+            {failed ? (
+              <PanelState
+                status="error"
+                title="We couldn’t load this team’s roster."
+                message={
+                  (members.error ?? stats.error)?.message ??
+                  'Something went wrong.'
+                }
+              />
+            ) : loading ? (
+              <PanelState status="loading" message="Loading team…" />
+            ) : (
+              <>
+                <PanelBody className="border-b border-border p-0">
+                  <UserConstellation
+                    people={roster.map((r) => ({
+                      userId: r.userId,
+                      email: r.email,
+                      mass: r.notesTouched,
+                    }))}
+                  />
+                </PanelBody>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead scope="col">Member</TableHead>
+                      <TableHead scope="col">Notes touched</TableHead>
+                      <TableHead scope="col">Projects touched</TableHead>
+                      <TableHead scope="col">Last activity</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {roster.map((r) => (
+                      <TableRow key={r.userId}>
+                        <TableCell className="text-foreground">
+                          {r.email}
+                        </TableCell>
+                        <TableCell className="font-mono tabular-nums text-foreground">
+                          {r.notesTouched}
+                        </TableCell>
+                        <TableCell className="font-mono tabular-nums text-foreground">
+                          {r.vaultsTouched}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">
+                          {formatLastActivity(r.lastActivityAt)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </>
+            )}
+          </Panel>
+        </div>
+      </div>
+      <ManagementPanel />
+    </>
   )
 }

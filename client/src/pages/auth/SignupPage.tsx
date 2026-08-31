@@ -1,13 +1,12 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
+import { AuthFrame } from '../../components/auth/AuthFrame.js'
 import { Button } from '../../components/ui/button.js'
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js'
 import { Input } from '../../components/ui/input.js'
 import { Label } from '../../components/ui/label.js'
 import { FormError } from '../../components/FormError.js'
 import { signup } from '../../api/auth.js'
 import { ApiError } from '../../lib/api.js'
-import { AuthSteps } from '../../components/auth/AuthSteps.js'
 
 export function SignupPage() {
   const navigate = useNavigate()
@@ -31,53 +30,45 @@ export function SignupPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="font-display text-xl">Create an account</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <AuthSteps current="Create account" />
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="signup-email">Email</Label>
-              <Input id="signup-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="signup-password">Password</Label>
-              <Input
-                id="signup-password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                minLength={8}
-                required
-              />
-            </div>
-            {/* Said here, and on verify-email, and deliberately NOT on the
-                login screen: an unapproved account gets a generic "invalid
-                credentials" there, because naming the real reason would tell
-                a stranger whether an address has an account. Here the visitor
-                is the one supplying the address, so there is nothing to leak
-                — and without this they would wait on a wrong-password error
-                forever with no idea what they were waiting for. */}
-            <p className="text-sm text-muted-foreground">
-              Two things happen before you can sign in: you confirm your email with a code, and an administrator
-              on this instance approves your account. Sign-in keeps failing until both are done.
-            </p>
-            <FormError message={error} />
-            <Button type="submit" disabled={submitting}>
-              Sign up
-            </Button>
-            <p className="text-center text-sm text-muted-foreground">
-              Already have an account?{' '}
-              <Link to="/login" className="text-foreground underline">
-                Sign in
-              </Link>
-            </p>
-          </form>
-        </CardContent>
-      </Card>
-    </div>
+    <AuthFrame eyebrow="new account" title="Create an account" step="Create account">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="signup-email">Email</Label>
+          <Input id="signup-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="signup-password">Password</Label>
+          <Input
+            id="signup-password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            minLength={8}
+            required
+          />
+        </div>
+        {/* Said here, and on verify-email, and deliberately NOT on the
+            login screen: an unapproved account gets a generic "invalid
+            credentials" there, because naming the real reason would tell
+            a stranger whether an address has an account. Here the visitor
+            is the one supplying the address, so there is nothing to leak
+            — and without this they would wait on a wrong-password error
+            forever with no idea what they were waiting for. */}
+        <p className="text-sm text-muted-foreground">
+          Two things happen before you can sign in: you confirm your email with a code, and an administrator
+          on this instance approves your account. Sign-in keeps failing until both are done.
+        </p>
+        <FormError message={error} />
+        <Button type="submit" disabled={submitting}>
+          Sign up
+        </Button>
+        <p className="text-center text-sm text-muted-foreground">
+          Already have an account?{' '}
+          <Link to="/login" className="text-foreground underline">
+            Sign in
+          </Link>
+        </p>
+      </form>
+    </AuthFrame>
   )
 }

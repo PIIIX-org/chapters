@@ -4,18 +4,20 @@ import type { FastifyInstance } from 'fastify'
 import { and, eq, or } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { notes, semanticEdges, vaults } from '../src/db/schema.js'
+import { notes, notifications, semanticEdges, vaults } from '../src/db/schema.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
 let ownerCookie: string
 let otherCookie: string
+let otherId: string
 
 beforeAll(async () => {
   app = await buildApp()
   await app.ready()
   const owner = await createActiveUser()
   const other = await createActiveUser()
+  otherId = other.id
   ownerCookie = await loginCookie(app, owner.email)
   otherCookie = await loginCookie(app, other.email)
 })
@@ -82,7 +84,7 @@ describe('vault purge', () => {
     expect(res.statusCode).toBe(409)
   })
 
-  it('removes the vault, its notes, and their semantic edges', async () => {
+  it('removes the vault, its notes, their semantic edges, and its notifications', async () => {
     const id = await makeVault(ownerCookie, 'Purge me')
     await app.inject({
       method: 'POST',
@@ -99,6 +101,14 @@ describe('vault purge', () => {
     await db.insert(semanticEdges).values([
       { sourceType: 'note', sourceId: noteId, targetType: 'note', targetId: other, similarity: 0.9 },
       { sourceType: 'note', sourceId: other, targetType: 'note', targetId: noteId, similarity: 0.9 },
+    ])
+    // notifications is polymorphic with no FK either (#101). One row points
+    // at the doomed vault and one at an unrelated vault id that must survive —
+    // a purge that wiped the recipient's whole feed would pass a one-row check.
+    const unrelatedVault = randomUUID()
+    await db.insert(notifications).values([
+      { recipientId: otherId, type: 'vault_shared', entityType: 'vault', entityId: id, message: 'doomed' },
+      { recipientId: otherId, type: 'vault_shared', entityType: 'vault', entityId: unrelatedVault, message: 'keep' },
     ])
 
     await app.inject({ method: 'DELETE', url: `/api/vaults/${id}`, headers: { cookie: ownerCookie } })
@@ -121,6 +131,12 @@ describe('vault purge', () => {
         ),
       )
     expect(edges).toEqual([])
+    const feed = await db
+      .select({ entityId: notifications.entityId })
+      .from(notifications)
+      .where(eq(notifications.recipientId, otherId))
+    expect(feed.map((n) => n.entityId)).not.toContain(id)
+    expect(feed.map((n) => n.entityId)).toContain(unrelatedVault)
   })
 })
 

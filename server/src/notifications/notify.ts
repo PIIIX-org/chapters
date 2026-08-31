@@ -15,8 +15,12 @@ export async function notify(input: {
   message: string
   entityType?: string
   entityId?: string
+  /** Overrides the mail subject/body only; the feed row keeps `message`. */
+  emailSubject?: string
+  emailText?: string
 }): Promise<void> {
-  await db.insert(notifications).values(input)
+  const { emailSubject, emailText, ...row } = input
+  await db.insert(notifications).values(row)
   const recipient = await db
     .select({ email: users.email, emailNotifications: users.emailNotifications })
     .from(users)
@@ -26,8 +30,8 @@ export async function notify(input: {
   if (email && recipient[0]!.emailNotifications) {
     void sendMail({
       to: email,
-      subject: `Chapters: ${input.type.replaceAll('_', ' ')}`,
-      text: input.message,
+      subject: emailSubject ?? `Chapters: ${input.type.replaceAll('_', ' ')}`,
+      text: emailText ?? input.message,
     }).catch(() => {})
   }
 }

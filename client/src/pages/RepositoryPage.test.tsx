@@ -92,6 +92,7 @@ function stubApi(opts?: { repositories?: () => Response }) {
   const fetchMock = vi.fn().mockImplementation((url: string) => {
     if (url === '/api/me') return Promise.resolve(mockJsonResponse(200, SESSION))
     if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, []))
+    if (url.startsWith('/api/notifications')) return Promise.resolve(mockJsonResponse(200, []))
     if (url === '/api/repositories') {
       return Promise.resolve(opts?.repositories?.() ?? mockJsonResponse(200, [OWNED, SHARED]))
     }
@@ -174,8 +175,9 @@ describe('RepositoryPage route', () => {
     const { router } = renderAt('/')
 
     // Wait for the session first: RequireAuth renders nothing while it is
-    // pending, so ⌘K's own listener does not exist yet.
-    await screen.findByText(SESSION.email)
+    // pending, so ⌘K's own listener does not exist yet. The shell's command
+    // trigger is the first thing that proves the session resolved.
+    await screen.findByRole('button', { name: 'Open the command palette' })
     // The palette is bound to Cmd on macOS and Ctrl elsewhere; sending both
     // keeps the test off whatever `navigator.platform` happens to say here.
     fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true })
@@ -193,7 +195,7 @@ describe('RepositoryPage route', () => {
     stubApi()
     const { router } = renderAt('/')
 
-    await screen.findByText(SESSION.email)
+    await screen.findByRole('button', { name: 'Open the command palette' })
     fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true })
 
     const option = await screen.findByRole('option', { name: 'Command: Open repository: Atlas ERP' })
@@ -205,13 +207,17 @@ describe('RepositoryPage route', () => {
     stubApi()
     renderAt('/repos/r1/files')
 
-    // Owner: the card is there, on a git repository with no secret yet.
-    expect(await screen.findByRole('heading', { level: 3, name: 'Webhook' })).toBeInTheDocument()
+    // Owner, git repository: the inspector offers the Webhook tab, and the
+    // card is behind it.
+    await userEvent.click(await screen.findByRole('tab', { name: 'Webhook' }))
+    expect(await screen.findByRole('heading', { level: 2, name: 'Webhook' })).toBeInTheDocument()
 
     vi.unstubAllGlobals()
     stubApi()
     const shared = renderAt('/repos/r2/files')
     expect(await screen.findByRole('heading', { level: 1, name: 'Atlas ERP' })).toBeInTheDocument()
+    // A viewer does not even get the tab, let alone the card.
+    expect(within(shared.container).queryByRole('tab', { name: 'Webhook' })).toBeNull()
     expect(within(shared.container).queryByRole('heading', { name: 'Webhook' })).toBeNull()
     expect(within(shared.container).getByText('Shared with you')).toBeInTheDocument()
   })

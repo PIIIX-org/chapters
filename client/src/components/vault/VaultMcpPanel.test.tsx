@@ -175,7 +175,7 @@ describe('VaultMcpPanel', () => {
     renderPanel()
 
     const nameNode = await screen.findByText('Claude')
-    const row = nameNode.closest('li') as HTMLElement
+    const row = nameNode.closest('tr') as HTMLElement
 
     await user.click(within(row).getByRole('button', { name: 'Revoke' }))
 

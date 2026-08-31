@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { mockJsonResponse } from '../lib/api.js'
 import { expectNoA11yViolations } from '../test/axe.js'
@@ -55,16 +56,42 @@ describe('SettingsPage', () => {
     vi.unstubAllGlobals()
   })
 
-  it('shows every panel to someone who is not being made to enrol', async () => {
+  it('lists the sections and opens on Account, one section at a time', async () => {
     stubFetch(BASE)
     const { container } = renderPage()
 
+    // Account renders (both its panels)…
     expect(await screen.findByRole('heading', { name: 'Password' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Email address' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Export your account' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'MCP connections' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Account' })).toHaveAttribute('aria-current', 'page')
+
+    // …and only Account: the other sections wait until they are asked for.
+    expect(screen.queryByRole('heading', { name: 'MCP connections' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Export your account' })).toBeNull()
 
     await expectNoA11yViolations(container)
+  })
+
+  it('switches sections from the context list', async () => {
+    stubFetch(BASE)
+    const { container } = renderPage()
+    const user = userEvent.setup()
+
+    await screen.findByRole('heading', { name: 'Password' })
+    await user.click(screen.getByRole('button', { name: 'MCP' }))
+    expect(await screen.findByRole('heading', { name: 'MCP connections' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Password' })).toBeNull()
+
+    // Appearance holds the theme switch — the one section the default-view axe
+    // run never sees, so it gets its own gate.
+    await user.click(screen.getByRole('button', { name: 'Appearance' }))
+    expect(await screen.findByRole('radiogroup', { name: 'Theme' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Dark' })).toBeInTheDocument()
+    await expectNoA11yViolations(container)
+
+    // Data pairs the export with the import.
+    await user.click(screen.getByRole('button', { name: 'Data' }))
+    expect(await screen.findByRole('heading', { name: 'Export your account' })).toBeInTheDocument()
   })
 
   it('shows enrolment alone under a mandate, not panels reading "MFA setup required"', async () => {
@@ -80,9 +107,9 @@ describe('SettingsPage', () => {
       screen.getByRole('button', { name: 'Set up two-factor authentication' }),
     ).toBeInTheDocument()
 
+    // No section list either: every other section is a dead door until MFA is on.
+    expect(screen.queryByRole('button', { name: 'Account' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Password' })).toBeNull()
-    expect(screen.queryByRole('heading', { name: 'Email address' })).toBeNull()
-    expect(screen.queryByRole('heading', { name: 'Export your account' })).toBeNull()
     expect(container.textContent).not.toContain('MFA setup required')
   })
 

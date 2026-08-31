@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
+import { AuthFrame } from '../../components/auth/AuthFrame.js'
 import { Button } from '../../components/ui/button.js'
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js'
 import { Input } from '../../components/ui/input.js'
 import { Label } from '../../components/ui/label.js'
 import { requestPasswordReset } from '../../api/auth.js'
@@ -26,40 +26,33 @@ export function RequestPasswordResetPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="font-display text-xl">Reset your password</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {submitted ? (
-            <p className="text-sm text-muted-foreground">
-              If an account exists for that email, a reset link is on its way.
-            </p>
-          ) : (
-            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="reset-request-email">Email</Label>
-                <Input
-                  id="reset-request-email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                />
-              </div>
-              <Button type="submit" disabled={submitting}>
-                Send reset link
-              </Button>
-              <p className="text-center text-sm text-muted-foreground">
-                <Link to="/login" className="text-foreground underline">
-                  Back to sign in
-                </Link>
-              </p>
-            </form>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+    <AuthFrame eyebrow="password reset" title="Reset your password">
+      {submitted ? (
+        <p className="text-sm text-muted-foreground">
+          If an account exists for that email, a reset link is on its way.
+        </p>
+      ) : (
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="reset-request-email">Email</Label>
+            <Input
+              id="reset-request-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </div>
+          <Button type="submit" disabled={submitting}>
+            Send reset link
+          </Button>
+          <p className="text-center text-sm text-muted-foreground">
+            <Link to="/login" className="text-foreground underline">
+              Back to sign in
+            </Link>
+          </p>
+        </form>
+      )}
+    </AuthFrame>
   )
 }

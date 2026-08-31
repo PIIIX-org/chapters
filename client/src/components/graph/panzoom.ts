@@ -4,7 +4,11 @@
 // task notes for the renderer decision.
 //
 // Convention: screen = world * k + offset, i.e. transform.{x,y} is the
-// screen-space offset and transform.k is the scale.
+// element-local screen-space offset and transform.k is the scale. Every
+// incoming pointer/wheel coordinate is converted from viewport client
+// coordinates to element-local ones first — inside the grid shell the canvas
+// sits 300+ px from the viewport origin, and anchoring zoom on raw clientX/Y
+// would zoom about a point far off the cursor.
 
 export interface Transform {
   x: number
@@ -27,20 +31,78 @@ function clampK(k: number): number {
   return Math.min(MAX_K, Math.max(MIN_K, k))
 }
 
+export interface FitOptions {
+  /** CSS px kept clear around the fitted bounds. */
+  padding?: number
+  /** Never zoom in past this — a two-node graph must not fill the screen. */
+  maxK?: number
+}
+
+/**
+ * The transform that centres the nodes' bounding box (node centres ± radius)
+ * in a `width`×`height` viewport. Pure and side-effect free so GraphCanvas's
+ * first paint, its "fit" button and the settle-follow camera all share one
+ * definition of "centred". Returns null when there is nothing to fit or the
+ * viewport has no size yet (first render before layout) — callers keep their
+ * current transform in that case rather than snapping to a garbage one.
+ */
+export function fitTransform(
+  points: readonly { x: number; y: number; radius: number }[],
+  width: number,
+  height: number,
+  { padding = 40, maxK = 2 }: FitOptions = {},
+): Transform | null {
+  if (points.length === 0 || width <= 0 || height <= 0) return null
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const p of points) {
+    minX = Math.min(minX, p.x - p.radius)
+    minY = Math.min(minY, p.y - p.radius)
+    maxX = Math.max(maxX, p.x + p.radius)
+    maxY = Math.max(maxY, p.y + p.radius)
+  }
+  const spanX = Math.max(1, maxX - minX)
+  const spanY = Math.max(1, maxY - minY)
+  const k = clampK(
+    Math.min(maxK, Math.max(0, width - padding * 2) / spanX, Math.max(0, height - padding * 2) / spanY),
+  )
+  return {
+    k,
+    x: width / 2 - ((minX + maxX) / 2) * k,
+    y: height / 2 - ((minY + maxY) / 2) * k,
+  }
+}
+
 interface PointerState {
   anchor: { x: number; y: number } // world position, fixed for the life of the gesture
-  screen: { x: number; y: number } // latest known screen position
+  screen: { x: number; y: number } // latest known element-local position
+}
+
+export interface PanZoom {
+  transform: Transform
+  /** Replace the transform wholesale (fit/centre); clamps k and emits onChange. */
+  setTransform(next: Transform): void
+  /** Zoom by a factor about the element's centre (the +/− buttons); emits onChange. */
+  zoomBy(factor: number): void
+  destroy(): void
 }
 
 export function createPanZoom(
   el: HTMLElement,
   onChange: (t: Transform) => void,
   initial: Transform = { x: 0, y: 0, k: 1 },
-): { transform: Transform; destroy(): void } {
+): PanZoom {
   const transform: Transform = { ...initial }
   const pointers = new Map<number, PointerState>()
 
   el.style.touchAction = 'none'
+
+  function localPoint(clientX: number, clientY: number): { x: number; y: number } {
+    const rect = el.getBoundingClientRect()
+    return { x: clientX - rect.left, y: clientY - rect.top }
+  }
 
   function emit() {
     onChange(transform)
@@ -86,14 +148,14 @@ export function createPanZoom(
 
   function onPointerDown(e: PointerEvent) {
     el.setPointerCapture?.(e.pointerId)
-    const screen = { x: e.clientX, y: e.clientY }
+    const screen = localPoint(e.clientX, e.clientY)
     pointers.set(e.pointerId, { anchor: screenToWorld(transform, screen.x, screen.y), screen })
   }
 
   function onPointerMove(e: PointerEvent) {
     const state = pointers.get(e.pointerId)
     if (!state) return
-    state.screen = { x: e.clientX, y: e.clientY }
+    state.screen = localPoint(e.clientX, e.clientY)
     recomputeFromPointers()
     emit()
   }
@@ -110,7 +172,8 @@ export function createPanZoom(
 
   function onWheel(e: WheelEvent) {
     e.preventDefault()
-    zoomAt(e.clientX, e.clientY, transform.k * Math.pow(2, -e.deltaY / 400))
+    const p = localPoint(e.clientX, e.clientY)
+    zoomAt(p.x, p.y, transform.k * Math.pow(2, -e.deltaY / 400))
     emit()
   }
 
@@ -122,6 +185,17 @@ export function createPanZoom(
 
   return {
     transform,
+    setTransform(next: Transform) {
+      transform.x = next.x
+      transform.y = next.y
+      transform.k = clampK(next.k)
+      emit()
+    },
+    zoomBy(factor: number) {
+      const rect = el.getBoundingClientRect()
+      zoomAt(rect.width / 2, rect.height / 2, transform.k * factor)
+      emit()
+    },
     destroy() {
       el.removeEventListener('pointerdown', onPointerDown)
       el.removeEventListener('pointermove', onPointerMove)
