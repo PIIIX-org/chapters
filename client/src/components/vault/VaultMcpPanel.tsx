@@ -3,7 +3,16 @@ import type { FormEvent } from 'react'
 import { Input } from '../ui/input.js'
 import { Button } from '../ui/button.js'
 import { Label } from '../ui/label.js'
+import { Panel, PanelBody, PanelHeader } from '../ui/panel.js'
 import { SecretReveal } from '../ui/SecretReveal.js'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../ui/table.js'
 import { FormError } from '../FormError.js'
 import { useCreateMcpConnection, useMcpConnections, useRevokeMcpConnection } from '../../hooks/useMcpConnections.js'
 import type { McpConnection, McpTarget } from '../../api/mcp.js'
@@ -50,38 +59,40 @@ function McpConnectionRow({ connection, reach }: { connection: McpConnection; re
   }
 
   return (
-    <li className="flex flex-col gap-1 border-b border-border py-2 last:border-b-0">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm text-foreground">{connection.name}</div>
-          <div className="flex flex-col gap-0.5 font-mono text-xs text-muted-foreground">
-            <span>Created {formatTimestamp(connection.createdAt)}</span>
-            <span>{connection.lastUsedAt ? `Last used ${formatTimestamp(connection.lastUsedAt)}` : 'Never used'}</span>
+    <TableRow>
+      <TableCell className="max-w-44 truncate text-foreground">{connection.name}</TableCell>
+      <TableCell className="font-mono text-xs text-muted-foreground">{connection.scope}</TableCell>
+      <TableCell className="font-mono text-xs text-muted-foreground">
+        {formatTimestamp(connection.createdAt)}
+      </TableCell>
+      <TableCell className="font-mono text-xs text-muted-foreground">
+        {connection.lastUsedAt ? formatTimestamp(connection.lastUsedAt) : 'Never used'}
+      </TableCell>
+      <TableCell className="text-right align-top">
+        {confirming ? (
+          // The consequence stays inside the row it is about — the design
+          // system's inline confirmation, not a dialog.
+          <div className="ml-auto flex w-60 flex-col gap-1 py-1 text-left whitespace-normal">
+            <p className="text-xs text-muted-foreground">
+              Revoke {connection.name}? Any agent using this token {reach}. This cannot be undone.
+            </p>
+            <div className="flex items-center gap-1">
+              <Button type="button" size="xs" variant="destructive" onClick={handleRevoke} disabled={revoke.isPending}>
+                Revoke
+              </Button>
+              <Button type="button" size="xs" variant="ghost" onClick={() => setConfirming(false)}>
+                Cancel
+              </Button>
+            </div>
+            <FormError message={error} />
           </div>
-        </div>
-        {!confirming && (
+        ) : (
           <Button type="button" size="xs" variant="ghost" onClick={() => setConfirming(true)}>
             Revoke
           </Button>
         )}
-      </div>
-      {confirming && (
-        <div className="flex flex-col gap-1">
-          <p className="text-xs text-muted-foreground">
-            Revoke {connection.name}? Any agent using this token {reach}. This cannot be undone.
-          </p>
-          <div className="flex items-center gap-1">
-            <Button type="button" size="xs" variant="destructive" onClick={handleRevoke} disabled={revoke.isPending}>
-              Revoke
-            </Button>
-            <Button type="button" size="xs" variant="ghost" onClick={() => setConfirming(false)}>
-              Cancel
-            </Button>
-          </div>
-          <FormError message={error} />
-        </div>
-      )}
-    </li>
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -143,37 +154,52 @@ export function McpPanel(target: McpTarget) {
   )
 
   return (
-    <section className="flex flex-col gap-3">
-      <h3 className="font-display text-base text-foreground">MCP connections</h3>
-      <p className="text-xs text-muted-foreground">{copy.blurb}</p>
+    <Panel>
+      <PanelHeader title="MCP connections" titleAs="h3" />
+      <PanelBody className="flex flex-col gap-3">
+        <p className="text-xs text-muted-foreground">{copy.blurb}</p>
 
-      {revealed && (
-        <SecretReveal
-          label={`Token for "${revealed.name}"`}
-          secret={revealed.token}
-          note="Paste it into the MCP client's config now."
-          onDismiss={() => setRevealed(null)}
-        />
-      )}
+        {revealed && (
+          <SecretReveal
+            label={`Token for "${revealed.name}"`}
+            secret={revealed.token}
+            note="Paste it into the MCP client's config now."
+            onDismiss={() => setRevealed(null)}
+          />
+        )}
 
-      {connectionsQuery.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {copy.loadError}
-        </p>
-      ) : connectionsQuery.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading connections…</p>
-      ) : connections.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{copy.empty}</p>
-      ) : (
-        <ul>
-          {connections.map((connection) => (
-            <McpConnectionRow key={connection.id} connection={connection} reach={copy.reach} />
-          ))}
-        </ul>
-      )}
+        {connectionsQuery.isError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {copy.loadError}
+          </p>
+        ) : connectionsQuery.isPending ? (
+          <p className="text-sm text-muted-foreground">Loading connections…</p>
+        ) : connections.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{copy.empty}</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Scope</TableHead>
+                <TableHead>Created</TableHead>
+                <TableHead>Last used</TableHead>
+                <TableHead className="text-right">
+                  <span className="sr-only">Revoke</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {connections.map((connection) => (
+                <McpConnectionRow key={connection.id} connection={connection} reach={copy.reach} />
+              ))}
+            </TableBody>
+          </Table>
+        )}
 
-      <CreateMcpConnectionForm target={target} onCreated={(token, name) => setRevealed({ token, name })} />
-    </section>
+        <CreateMcpConnectionForm target={target} onCreated={(token, name) => setRevealed({ token, name })} />
+      </PanelBody>
+    </Panel>
   )
 }
 

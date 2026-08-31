@@ -1,3 +1,4 @@
+import { Panel, PanelBody, PanelHeader } from '../ui/panel.js'
 import { FormError } from '../FormError.js'
 import {
   useNotificationPreferences,
@@ -29,27 +30,30 @@ export function NotificationPreferences() {
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
-      <label className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1 hover:bg-muted">
-        <input
-          type="checkbox"
-          className="mt-1"
-          checked={prefs.data.emailNotifications}
-          disabled={update.isPending}
-          onChange={(e) => update.mutate({ emailNotifications: e.target.checked })}
-        />
-        <span className="flex flex-col gap-0.5">
-          <span className="text-sm text-foreground">Email me about notifications</span>
-          <span className="text-xs text-muted-foreground">
-            Turning this off stops the emails and nothing else. The notification bell keeps recording
-            every mention, share and change either way — you read them here instead of in your inbox,
-            and nothing goes missing while it is off.
+    <Panel>
+      <PanelHeader title="Notifications" />
+      <PanelBody className="flex flex-col gap-2">
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-md px-1.5 py-1 transition-colors duration-100 hover:bg-muted">
+          <input
+            type="checkbox"
+            className="mt-1 accent-primary"
+            checked={prefs.data.emailNotifications}
+            disabled={update.isPending}
+            onChange={(e) => update.mutate({ emailNotifications: e.target.checked })}
+          />
+          <span className="flex flex-col gap-0.5">
+            <span className="text-sm text-foreground">Email me about notifications</span>
+            <span className="text-xs text-muted-foreground">
+              Turning this off stops the emails and nothing else. The notification bell keeps recording
+              every mention, share and change either way — you read them here instead of in your inbox,
+              and nothing goes missing while it is off.
+            </span>
           </span>
-        </span>
-      </label>
-      {/* A failed write leaves the box where it was, which on its own looks
-          like the click did nothing. Say why. */}
-      <FormError message={update.error?.message ?? null} />
-    </div>
+        </label>
+        {/* A failed write leaves the box where it was, which on its own looks
+            like the click did nothing. Say why. */}
+        <FormError message={update.error?.message ?? null} />
+      </PanelBody>
+    </Panel>
   )
 }
