@@ -2,7 +2,9 @@
 // type/tag colouring and community colouring and rejected it — so this is
 // a two-option radiogroup of native <input type="radio">, never checkboxes
 // and never a 'blend'/'both' option, which would make layering
-// representable again.
+// representable again. Visually it is the two small pills the redesign
+// allows in the canvas cell's top-left corner, plus a swatch-dot legend
+// whose labels are sr-only/title so the canvas stays uncluttered.
 //
 // Selection lives in the URL (`?color=community`, default omitted) rather
 // than component state — GraphCanvas reads the same `useSearchParams` from
@@ -44,15 +46,17 @@ export function ColorModeToggle() {
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-border bg-card p-2 text-sm shadow-sm">
-      <fieldset className="flex gap-1">
+    <div className="flex flex-col items-start gap-1.5">
+      <fieldset className="flex gap-0.5 rounded-md border border-border bg-popover/90 p-0.5">
         <legend className="sr-only">Colour mode</legend>
         {OPTIONS.map((opt) => (
           <label
             key={opt.value}
             className={cn(
-              'flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 hover:bg-muted',
-              colorMode === opt.value ? 'bg-muted text-foreground' : 'text-muted-foreground',
+              'flex h-6 cursor-pointer select-none items-center rounded-sm px-2 font-mono text-[11px] font-medium uppercase tracking-[0.04em] transition-colors duration-100 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/50',
+              colorMode === opt.value
+                ? 'bg-muted text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
             )}
           >
             <input
@@ -61,6 +65,7 @@ export function ColorModeToggle() {
               value={opt.value}
               checked={colorMode === opt.value}
               onChange={() => select(opt.value)}
+              className="sr-only"
             />
             {opt.label}
           </label>
@@ -68,11 +73,15 @@ export function ColorModeToggle() {
       </fieldset>
       {/* Legend for the active mode only — never both at once, matching the
           "never layered" rule for the modes themselves. */}
-      <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      <ul className="flex items-center gap-1.5 rounded-md border border-border bg-popover/90 px-2 py-1.5">
         {hues.map((hue, i) => (
-          <li key={hue} className="flex items-center gap-1.5">
-            <span aria-hidden="true" className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: hue }} />
-            <span>{`${LEGEND_NOUN[colorMode]} ${i + 1}`}</span>
+          <li key={hue} className="flex items-center" title={`${LEGEND_NOUN[colorMode]} ${i + 1}`}>
+            <span
+              aria-hidden="true"
+              className="inline-block h-2 w-2 shrink-0 rounded-full"
+              style={{ backgroundColor: hue }}
+            />
+            <span className="sr-only">{`${LEGEND_NOUN[colorMode]} ${i + 1}`}</span>
           </li>
         ))}
       </ul>

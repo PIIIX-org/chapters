@@ -8,6 +8,7 @@
 // button that only re-renders without refetching fails its test.
 import { Link } from 'react-router'
 import { Button } from '../ui/button.js'
+import { PanelState } from '../ui/empty-state.js'
 
 interface GraphErrorStateProps {
   message?: string
@@ -17,16 +18,13 @@ interface GraphErrorStateProps {
 /** A failed graph request — visibly distinct from an empty graph, never a blank canvas. */
 export function GraphErrorState({ message, onRetry }: GraphErrorStateProps) {
   return (
-    <div
-      role="alert"
-      className="flex h-full w-full flex-col items-center justify-center gap-3 bg-background px-4 text-center"
-    >
-      <h2 className="font-display text-xl text-foreground">We couldn&rsquo;t load the graph.</h2>
-      {message && <p className="max-w-sm text-sm text-muted-foreground">{message}</p>}
-      <Button type="button" onClick={onRetry}>
-        Retry
-      </Button>
-    </div>
+    <PanelState
+      status="error"
+      title="We couldn’t load the graph."
+      message={message}
+      onRetry={onRetry}
+      className="h-full"
+    />
   )
 }
 
@@ -37,17 +35,25 @@ interface GraphEmptyStateProps {
 /** A successful fetch with zero nodes — an empty graph is not an error. */
 export function GraphEmptyState({ createNoteHref }: GraphEmptyStateProps) {
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-background px-4 text-center">
-      <h2 className="font-display text-xl text-foreground">Nothing to draw yet</h2>
-      <p className="max-w-sm text-sm text-muted-foreground">
-        The graph draws the links between your notes — write one to see it grow.
-      </p>
-      <Button asChild>
-        <Link to={createNoteHref}>Create a note</Link>
-      </Button>
-    </div>
+    <PanelState
+      status="empty"
+      title="Nothing to draw yet"
+      message="The graph draws the links between your notes — write one to see it grow."
+      action={
+        <Button asChild>
+          <Link to={createNoteHref}>Create a note</Link>
+        </Button>
+      }
+      className="h-full"
+    />
   )
 }
+
+// Both notices sit in the canvas cell's bottom-left corner: small, bordered,
+// popover-toned so they read as instrumentation over the canvas — never a
+// floating card with its own shadow (shadows are for menus/dialogs only).
+const NOTICE_CLASS =
+  'max-w-sm rounded-md border border-border bg-popover/90 px-2.5 py-1.5 text-xs text-muted-foreground'
 
 interface CappedGroupsNoticeProps {
   groups: string[]
@@ -62,7 +68,7 @@ interface CappedGroupsNoticeProps {
 export function CappedGroupsNotice({ groups }: CappedGroupsNoticeProps) {
   if (groups.length === 0) return null
   return (
-    <div role="status" className="max-w-sm rounded-md border border-border bg-card px-3 py-2 text-sm text-muted-foreground shadow-sm">
+    <div role="status" className={NOTICE_CLASS}>
       Too large to link pairwise, so edges were skipped for: {groups.join(', ')}
     </div>
   )
@@ -77,7 +83,7 @@ interface TruncationNoticeProps {
 export function TruncationNotice({ shown, total }: TruncationNoticeProps) {
   if (total <= shown) return null
   return (
-    <div role="status" className="max-w-sm rounded-md border border-border bg-card px-3 py-2 text-sm text-muted-foreground shadow-sm">
+    <div role="status" className={NOTICE_CLASS}>
       Showing {shown.toLocaleString()} of {total.toLocaleString()} notes in this community
     </div>
   )
