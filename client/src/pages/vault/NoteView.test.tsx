@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, waitFor } from '@testing-library/react'
@@ -10,6 +10,8 @@ import { EditorView } from '@codemirror/view'
 import { mockJsonResponse } from '../../lib/api'
 import { getCollabTicket } from '../../api/collab.js'
 import type { Vault } from '../../api/vaults'
+import { ShellProvider } from '../../components/shell/ShellProvider'
+import { useShell } from '../../components/shell/shell-context'
 import { NoteView } from './NoteView'
 
 const EDIT_VAULT: Vault = { id: 'v1', name: 'V1', ownerId: 'u1', mergeable: false, access: 'edit' }
@@ -148,17 +150,29 @@ function putCalls(fetchMock: ReturnType<typeof vi.fn>) {
   return fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'PUT')
 }
 
+/** What the shell's top bar would render: the status a page published. */
+function ShellStatusProbe() {
+  const { status } = useShell()
+  return <div data-testid="shell-status">{status ? `${status.tone}:${status.label}` : 'none'}</div>
+}
+
 // No default: passing `undefined` must stay undefined (a value default would
 // swallow it), so the unknown-access → reader path can be tested for real.
-function renderNote(vault: Vault | undefined, initialPath = '/vaults/v1/notes/people/jane') {
+function renderNote(
+  vault: Vault | undefined,
+  initialPath = '/vaults/v1/notes/people/jane',
+  { shell = false } = {},
+) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   // The outlet context is stateful so a test can change the *reported* access
   // of an already-open note, which is what a window-focus refetch of
   // `useVaults` does after the owner revokes a share.
-  let publish: (next: Vault | undefined) => void = () => {}
+  const publish: { current: (next: Vault | undefined) => void } = { current: () => {} }
   function VaultContext() {
     const [current, setCurrent] = useState(vault)
-    publish = setCurrent
+    useEffect(() => {
+      publish.current = setCurrent
+    }, [])
     return <Outlet context={current} />
   }
   const router = createMemoryRouter(
@@ -171,12 +185,18 @@ function renderNote(vault: Vault | undefined, initialPath = '/vaults/v1/notes/pe
     ],
     { initialEntries: [initialPath] },
   )
-  const utils = render(
-    <QueryClientProvider client={queryClient}>
+  const page = shell ? (
+    // A real ShellProvider, not a stub: the probe reads the same context the
+    // top bar does, so this fails if the page stops publishing its status.
+    <ShellProvider>
+      <ShellStatusProbe />
       <RouterProvider router={router} />
-    </QueryClientProvider>,
+    </ShellProvider>
+  ) : (
+    <RouterProvider router={router} />
   )
-  return { ...utils, router, reportAccess: (next: Vault | undefined) => act(() => publish(next)) }
+  const utils = render(<QueryClientProvider client={queryClient}>{page}</QueryClientProvider>)
+  return { ...utils, router, reportAccess: (next: Vault | undefined) => act(() => publish.current(next)) }
 }
 
 /** The relay's side of the connection: the Y.Doc it loaded the note into. */
@@ -442,6 +462,33 @@ describe('NoteView — readers take the SSE path', () => {
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
     expect(stub.providers).toHaveLength(0)
     expect(contentEditable()).toBe('false')
+  })
+})
+
+describe('NoteView — the shell top bar mirrors the page status', () => {
+  it("publishes the collab sync state as the shell's status pill", async () => {
+    stubFetch()
+    renderNote(EDIT_VAULT, undefined, { shell: true })
+
+    const doc = await relay()
+    // Connected but not yet synced: the handshake is still in flight.
+    await waitFor(() => expect(screen.getByTestId('shell-status')).toHaveTextContent('idle:Syncing…'))
+
+    doc.load('# Jane')
+    await waitFor(() => expect(screen.getByTestId('shell-status')).toHaveTextContent('live:Synced'))
+  })
+
+  it("publishes the reader's live-stream state, in a status tone, never the AI accent", async () => {
+    stubFetch()
+    renderNote(READ_VAULT, undefined, { shell: true })
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    expect(screen.getByTestId('shell-status')).toHaveTextContent('idle:Connecting…')
+
+    FakeEventSource.instances[0]!.open()
+    await waitFor(() => expect(screen.getByTestId('shell-status')).toHaveTextContent('live:Live'))
+    // A sync state is semantic status, not authorship: never the `ai` tone.
+    expect(screen.getByTestId('shell-status').textContent).not.toContain('ai:')
   })
 })
 
