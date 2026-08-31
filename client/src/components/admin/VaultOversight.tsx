@@ -1,10 +1,29 @@
 import { useState } from 'react'
 import { Button } from '../ui/button.js'
 import { FormError } from '../FormError.js'
-import { useAdminTeams, useAdminUsers, useAdminVaults, useTransferVaultOwner } from '../../hooks/useAdmin.js'
+import { PanelState } from '../ui/empty-state.js'
+import { Panel, PanelHeader } from '../ui/panel.js'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../ui/table.js'
+import {
+  useAdminTeams,
+  useAdminUsers,
+  useAdminVaults,
+  useTransferVaultOwner,
+} from '../../hooks/useAdmin.js'
 import type { AdminVault } from '../../api/admin.js'
 
-const activity = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+const activity = new Intl.DateTimeFormat('en-GB', {
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric',
+})
 
 function formatActivity(iso: string | null): string {
   if (!iso) return 'No activity yet'
@@ -13,7 +32,7 @@ function formatActivity(iso: string | null): string {
 }
 
 const selectClassName =
-  'h-7 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50'
+  'h-7 rounded-md border border-input bg-card px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
 
 function TransferOwner({ vault }: { vault: AdminVault }) {
   const users = useAdminUsers()
@@ -21,9 +40,11 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
   const [open, setOpen] = useState(false)
   const [newOwnerId, setNewOwnerId] = useState('')
 
-  // The server rejects anyone who isn't active; offering them would just be a
-  // 400 with extra steps.
-  const candidates = (users.data ?? []).filter((u) => u.status === 'active' && u.email !== vault.ownerEmail)
+  // The server rejects anyone who is not active; offering them would just be
+  // a 400 with extra steps.
+  const candidates = (users.data ?? []).filter(
+    (u) => u.status === 'active' && u.email !== vault.ownerEmail,
+  )
 
   if (!open) {
     return (
@@ -41,8 +62,10 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
 
   if (candidates.length === 0) {
     return (
-      <div className="flex flex-col gap-1">
-        <p className="text-xs text-muted-foreground">No other active account to hand this vault to.</p>
+      <div className="flex flex-col items-start gap-1 whitespace-normal">
+        <p className="text-xs text-muted-foreground">
+          No other active account to hand this vault to.
+        </p>
         <Button type="button" size="xs" variant="ghost" onClick={() => setOpen(false)}>
           Cancel
         </Button>
@@ -54,7 +77,7 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
   const selectedEmail = candidates.find((c) => c.id === selected)?.email ?? ''
 
   return (
-    <div className="flex flex-col gap-1 rounded-md border border-border bg-muted/40 p-2">
+    <div className="flex max-w-md min-w-56 flex-col gap-1.5 rounded-md border border-border bg-muted/40 p-2 text-left whitespace-normal">
       <label className="sr-only" htmlFor={`owner-${vault.id}`}>
         New owner for {vault.name}
       </label>
@@ -71,8 +94,9 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
         ))}
       </select>
       <p className="text-xs text-muted-foreground">
-        {selectedEmail} becomes the owner of &ldquo;{vault.name}&rdquo;. {vault.ownerEmail} keeps no special
-        access — reshare it with them if they still need it.
+        {selectedEmail} becomes the owner of &ldquo;{vault.name}&rdquo;.{' '}
+        {vault.ownerEmail} keeps no special access — reshare it with them if
+        they still need it.
       </p>
       <div className="flex items-center gap-1">
         <Button
@@ -103,106 +127,92 @@ export function VaultOversight() {
   const teams = useAdminTeams()
 
   return (
-    <div className="flex flex-col gap-8">
-      <section className="flex flex-col gap-2">
-        <h3 className="font-display text-lg text-foreground">Vaults</h3>
+    <div className="flex flex-col gap-4">
+      <Panel>
+        <PanelHeader title="Vaults" />
         {vaults.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading vaults…</p>
+          <PanelState status="loading" compact message="Loading vaults…" />
         ) : vaults.isError ? (
-          <p role="alert" className="text-sm text-destructive">
-            {vaults.error.message}
-          </p>
+          <PanelState status="error" compact message={vaults.error.message} />
         ) : vaults.data.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No vaults on this instance yet.</p>
+          <PanelState status="empty" compact message="No vaults on this instance yet." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">Every vault on this instance — names and counts only</caption>
-              <thead>
-                <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Vault
-                  </th>
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Owner
-                  </th>
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Notes
-                  </th>
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Shares
-                  </th>
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Mergeable
-                  </th>
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Last activity
-                  </th>
-                  <th scope="col" className="py-2 font-normal">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {vaults.data.map((vault) => (
-                  <tr key={vault.id} className="border-b border-border align-top">
-                    <td className="py-2 pr-4 text-foreground">{vault.name}</td>
-                    <td className="py-2 pr-4 text-foreground">{vault.ownerEmail}</td>
-                    <td className="py-2 pr-4 text-foreground">{vault.noteCount}</td>
-                    <td className="py-2 pr-4 text-foreground">{vault.shareCount}</td>
-                    <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">
-                      {vault.mergeable ? 'yes' : 'no'}
-                    </td>
-                    <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">
-                      {formatActivity(vault.lastActivity)}
-                    </td>
-                    <td className="py-2">
-                      <TransferOwner vault={vault} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <caption className="sr-only">
+              Every vault on this instance — names and counts only
+            </caption>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col">Vault</TableHead>
+                <TableHead scope="col">Owner</TableHead>
+                <TableHead scope="col">Notes</TableHead>
+                <TableHead scope="col">Shares</TableHead>
+                <TableHead scope="col">Mergeable</TableHead>
+                <TableHead scope="col">Last activity</TableHead>
+                <TableHead scope="col">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {vaults.data.map((vault) => (
+                <TableRow key={vault.id}>
+                  <TableCell className="py-2.5 align-top text-foreground">
+                    {vault.name}
+                  </TableCell>
+                  <TableCell className="py-2.5 align-top text-muted-foreground">
+                    {vault.ownerEmail}
+                  </TableCell>
+                  <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-foreground">
+                    {vault.noteCount}
+                  </TableCell>
+                  <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-foreground">
+                    {vault.shareCount}
+                  </TableCell>
+                  <TableCell className="py-2.5 align-top font-mono text-xs text-muted-foreground">
+                    {vault.mergeable ? 'yes' : 'no'}
+                  </TableCell>
+                  <TableCell className="py-2.5 align-top font-mono text-xs text-muted-foreground">
+                    {formatActivity(vault.lastActivity)}
+                  </TableCell>
+                  <TableCell className="py-2 align-top">
+                    <TransferOwner vault={vault} />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </Panel>
 
-      <section className="flex flex-col gap-2">
-        <h3 className="font-display text-lg text-foreground">Teams</h3>
+      <Panel>
+        <PanelHeader title="Teams" />
         {teams.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading teams…</p>
+          <PanelState status="loading" compact message="Loading teams…" />
         ) : teams.isError ? (
-          <p role="alert" className="text-sm text-destructive">
-            {teams.error.message}
-          </p>
+          <PanelState status="error" compact message={teams.error.message} />
         ) : teams.data.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No teams on this instance yet.</p>
+          <PanelState status="empty" compact message="No teams on this instance yet." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">Every team on this instance</caption>
-              <thead>
-                <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Team
-                  </th>
-                  <th scope="col" className="py-2 font-normal">
-                    Members
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {teams.data.map((team) => (
-                  <tr key={team.id} className="border-b border-border">
-                    <td className="py-2 pr-4 text-foreground">{team.name}</td>
-                    <td className="py-2 text-foreground">{team.memberCount}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <caption className="sr-only">Every team on this instance</caption>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col">Team</TableHead>
+                <TableHead scope="col">Members</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {teams.data.map((team) => (
+                <TableRow key={team.id}>
+                  <TableCell className="text-foreground">{team.name}</TableCell>
+                  <TableCell className="font-mono text-xs tabular-nums text-foreground">
+                    {team.memberCount}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </Panel>
     </div>
   )
 }

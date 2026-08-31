@@ -58,8 +58,8 @@ describe('InstanceOverview', () => {
     stubFetch()
     const { container } = renderWithClient(<InstanceOverview />)
 
-    // parentElement, not closest('div'): the label is itself a div, so
-    // closest would return the label and match nothing but its own text.
+    // parentElement: StatTile wraps the label and the value in one tile div,
+    // so the label's parent is the tile whose text carries the number.
     const deactivated = (await screen.findByText('Deactivated')).parentElement!
     expect(deactivated.textContent).toContain('0')
     expect(container.textContent).not.toContain('undefined')

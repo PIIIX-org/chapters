@@ -1,5 +1,16 @@
 import { useState } from 'react'
 import { Button } from '../ui/button.js'
+import { PanelState } from '../ui/empty-state.js'
+import { Panel, PanelHeader } from '../ui/panel.js'
+import { Pill, type PillTone } from '../ui/pill.js'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../ui/table.js'
 import { useAuditTrail, useSecurityEvents } from '../../hooks/useAdmin.js'
 
 const PAGE_SIZE = 50
@@ -15,6 +26,14 @@ const stamp = new Intl.DateTimeFormat('en-GB', {
 function formatStamp(iso: string): string {
   const parsed = new Date(iso)
   return Number.isNaN(parsed.getTime()) ? '—' : stamp.format(parsed)
+}
+
+function actorTone(actorType: string): PillTone {
+  // The authorship rule: teal means AI/MCP touched it, the human accent means
+  // a person did. Anything unrecognised stays neutral.
+  if (actorType === 'mcp') return 'ai'
+  if (actorType === 'user') return 'human'
+  return 'neutral'
 }
 
 /**
@@ -34,11 +53,11 @@ function Pager({
   label: string
 }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1">
       <Button
         type="button"
-        size="xs"
-        variant="ghost"
+        size="sm"
+        variant="outline"
         aria-label={`Newer ${label}`}
         disabled={offset === 0}
         onClick={() => onChange(Math.max(0, offset - PAGE_SIZE))}
@@ -47,8 +66,8 @@ function Pager({
       </Button>
       <Button
         type="button"
-        size="xs"
-        variant="ghost"
+        size="sm"
+        variant="outline"
         aria-label={`Older ${label}`}
         disabled={count < PAGE_SIZE}
         onClick={() => onChange(offset + PAGE_SIZE)}
@@ -64,36 +83,52 @@ function SecurityEventLog() {
   const events = useSecurityEvents(PAGE_SIZE, offset)
 
   return (
-    <section className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-display text-lg text-foreground">Security events</h3>
-        <Pager
-          offset={offset}
-          count={events.data?.length ?? 0}
-          onChange={setOffset}
-          label="security events"
-        />
-      </div>
+    <Panel>
+      <PanelHeader
+        title="Security events"
+        actions={
+          <Pager
+            offset={offset}
+            count={events.data?.length ?? 0}
+            onChange={setOffset}
+            label="security events"
+          />
+        }
+      />
       {events.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading events…</p>
+        <PanelState status="loading" compact message="Loading events…" />
       ) : events.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {events.error.message}
-        </p>
+        <PanelState status="error" compact message={events.error.message} />
       ) : events.data.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Nothing recorded on this page.</p>
+        <PanelState status="empty" compact message="Nothing recorded on this page." />
       ) : (
-        <ul className="flex flex-col">
-          {events.data.map((event) => (
-            <li key={event.id} className="flex flex-wrap items-baseline gap-x-3 border-b border-border py-2">
-              <span className="font-mono text-xs text-muted-foreground">{formatStamp(event.createdAt)}</span>
-              <span className="text-sm text-foreground">{event.type.replace(/_/g, ' ')}</span>
-              {event.ip && <span className="font-mono text-xs text-muted-foreground">{event.ip}</span>}
-            </li>
-          ))}
-        </ul>
+        <Table>
+          <caption className="sr-only">Security events on this instance</caption>
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">Time</TableHead>
+              <TableHead scope="col">Event</TableHead>
+              <TableHead scope="col">IP</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {events.data.map((event) => (
+              <TableRow key={event.id}>
+                <TableCell className="h-8 font-mono text-xs text-muted-foreground">
+                  {formatStamp(event.createdAt)}
+                </TableCell>
+                <TableCell className="h-8 text-[13px] text-foreground">
+                  {event.type.replace(/_/g, ' ')}
+                </TableCell>
+                <TableCell className="h-8 font-mono text-xs text-muted-foreground">
+                  {event.ip ?? '—'}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       )}
-    </section>
+    </Panel>
   )
 }
 
@@ -102,44 +137,71 @@ function AuditTrail() {
   const entries = useAuditTrail(PAGE_SIZE, offset)
 
   return (
-    <section className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-display text-lg text-foreground">Content audit trail</h3>
-        <Pager offset={offset} count={entries.data?.length ?? 0} onChange={setOffset} label="audit entries" />
-      </div>
+    <Panel>
+      <PanelHeader
+        title="Content audit trail"
+        actions={
+          <Pager
+            offset={offset}
+            count={entries.data?.length ?? 0}
+            onChange={setOffset}
+            label="audit entries"
+          />
+        }
+      />
       {/* The spec's hard boundary, stated on screen so it reads as a promise
           rather than an omission someone might file as a missing feature. */}
-      <p className="text-sm text-muted-foreground">
-        Who changed which note, and when. Never what the change said — no admin, on any instance, can read a note
-        they have not been given access to.
+      <p className="border-b border-border px-3 py-2 text-[13px] text-muted-foreground">
+        Who changed which note, and when. Never what the change said — no
+        admin, on any instance, can read a note they have not been given
+        access to.
       </p>
       {entries.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading the trail…</p>
+        <PanelState status="loading" compact message="Loading the trail…" />
       ) : entries.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {entries.error.message}
-        </p>
+        <PanelState status="error" compact message={entries.error.message} />
       ) : entries.data.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Nothing recorded on this page.</p>
+        <PanelState status="empty" compact message="Nothing recorded on this page." />
       ) : (
-        <ul className="flex flex-col">
-          {entries.data.map((entry) => (
-            <li key={entry.id} className="flex flex-wrap items-baseline gap-x-3 border-b border-border py-2">
-              <span className="font-mono text-xs text-muted-foreground">{formatStamp(entry.createdAt)}</span>
-              <span className="text-sm text-foreground">{entry.action}</span>
-              <span className="font-mono text-xs text-muted-foreground">{entry.notePath}</span>
-              <span className="text-xs text-muted-foreground">by {entry.actorType}</span>
-            </li>
-          ))}
-        </ul>
+        <Table>
+          <caption className="sr-only">
+            Who changed which note, and when — never the change itself
+          </caption>
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">Time</TableHead>
+              <TableHead scope="col">Action</TableHead>
+              <TableHead scope="col">Note</TableHead>
+              <TableHead scope="col">Actor</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {entries.data.map((entry) => (
+              <TableRow key={entry.id}>
+                <TableCell className="h-8 font-mono text-xs text-muted-foreground">
+                  {formatStamp(entry.createdAt)}
+                </TableCell>
+                <TableCell className="h-8 text-[13px] text-foreground">
+                  {entry.action}
+                </TableCell>
+                <TableCell className="h-8 font-mono text-xs text-muted-foreground">
+                  {entry.notePath}
+                </TableCell>
+                <TableCell className="h-8">
+                  <Pill tone={actorTone(entry.actorType)}>{entry.actorType}</Pill>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       )}
-    </section>
+    </Panel>
   )
 }
 
 export function InstanceActivity() {
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-4">
       <SecurityEventLog />
       <AuditTrail />
     </div>
