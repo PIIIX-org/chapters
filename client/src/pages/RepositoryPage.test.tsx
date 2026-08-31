@@ -207,13 +207,17 @@ describe('RepositoryPage route', () => {
     stubApi()
     renderAt('/repos/r1/files')
 
-    // Owner: the card is there, on a git repository with no secret yet.
-    expect(await screen.findByRole('heading', { level: 3, name: 'Webhook' })).toBeInTheDocument()
+    // Owner, git repository: the inspector offers the Webhook tab, and the
+    // card is behind it.
+    await userEvent.click(await screen.findByRole('tab', { name: 'Webhook' }))
+    expect(await screen.findByRole('heading', { level: 2, name: 'Webhook' })).toBeInTheDocument()
 
     vi.unstubAllGlobals()
     stubApi()
     const shared = renderAt('/repos/r2/files')
     expect(await screen.findByRole('heading', { level: 1, name: 'Atlas ERP' })).toBeInTheDocument()
+    // A viewer does not even get the tab, let alone the card.
+    expect(within(shared.container).queryByRole('tab', { name: 'Webhook' })).toBeNull()
     expect(within(shared.container).queryByRole('heading', { name: 'Webhook' })).toBeNull()
     expect(within(shared.container).getByText('Shared with you')).toBeInTheDocument()
   })

@@ -62,7 +62,7 @@ function SyncTokenRow({ token, repositoryId }: { token: SyncToken; repositoryId:
  * the same component MCP tokens and the webhook secret use. Nothing here
  * caches it.
  */
-export function SyncTokenList({ repositoryId }: { repositoryId: string }) {
+export function SyncTokenList({ repositoryId, titleAs: Title = 'h3' }: { repositoryId: string; titleAs?: 'h2' | 'h3' }) {
   const tokensQuery = useSyncTokens(repositoryId)
   const createToken = useCreateSyncToken(repositoryId)
   const [revealed, setRevealed] = useState<string | null>(null)
@@ -81,7 +81,7 @@ export function SyncTokenList({ repositoryId }: { repositoryId: string }) {
 
   return (
     <section className="flex flex-col gap-3">
-      <h3 className="font-display text-base text-foreground">Sync tokens</h3>
+      <Title className="font-display text-base text-foreground">Sync tokens</Title>
       <p className="text-xs text-muted-foreground">
         A sync token lets an agent push this repository&rsquo;s files in over the API. It reaches this repository
         only, and it is the only credential that can write to its index.

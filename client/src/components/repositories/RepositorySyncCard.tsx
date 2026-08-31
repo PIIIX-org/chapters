@@ -1,6 +1,10 @@
+import type { ReactNode } from 'react'
 import { syncHealth } from '../../api/repositories.js'
 import type { AccessibleRepository, SyncHealth } from '../../api/repositories.js'
 import { useRepository, useRepositoryFiles } from '../../hooks/useRepositories.js'
+import { Panel, PanelBody, PanelHeader } from '../ui/panel.js'
+import { StatusDot, type PillTone } from '../ui/pill.js'
+import { cn } from '../../lib/utils.js'
 
 function formatTimestamp(iso: string): string {
   const parsed = new Date(iso)
@@ -28,6 +32,14 @@ const NEVER_SYNCED_NEXT: Record<AccessibleRepository['ingestionMethod'], string>
   agent_push: 'Nothing arrives until an agent holding a sync token pushes this repository.',
 }
 
+const HEALTH_TONE: Record<SyncHealth, PillTone> = {
+  syncing: 'idle',
+  error: 'error',
+  'never-synced': 'neutral',
+  'synced-empty': 'neutral',
+  synced: 'live',
+}
+
 function headline(health: SyncHealth, fileCount: number | undefined): string {
   switch (health) {
     case 'syncing':
@@ -43,13 +55,28 @@ function headline(health: SyncHealth, fileCount: number | undefined): string {
   }
 }
 
+interface RepositorySyncCardProps {
+  repositoryId: string
+  /** h3 inside a dialog that already has an h2 title; h2 in the inspector. */
+  titleAs?: 'h2' | 'h3'
+}
+
+function Frame({ titleAs, children }: { titleAs: 'h2' | 'h3'; children: ReactNode }) {
+  return (
+    <Panel>
+      <PanelHeader title="Sync" titleAs={titleAs} />
+      <PanelBody className="flex flex-col gap-1.5">{children}</PanelBody>
+    </Panel>
+  )
+}
+
 /**
  * Sync health for one repository, in the five states `syncHealth` separates.
  * "Never synced" and "synced and empty" get different words because they need
  * different next actions, and a file list that failed to load reports itself
  * as unknown rather than as zero.
  */
-export function RepositorySyncCard({ repositoryId }: { repositoryId: string }) {
+export function RepositorySyncCard({ repositoryId, titleAs = 'h3' }: RepositorySyncCardProps) {
   const repository = useRepository(repositoryId)
   const files = useRepositoryFiles(repositoryId)
 
@@ -57,21 +84,28 @@ export function RepositorySyncCard({ repositoryId }: { repositoryId: string }) {
   // as "synced, 0 files".
   if (repository.isError) {
     return (
-      <section className="flex flex-col gap-1 rounded-lg border border-border bg-card p-3">
-        <h3 className="font-display text-base text-foreground">Sync</h3>
+      <Frame titleAs={titleAs}>
         <p role="alert" className="text-sm text-destructive">
           {repository.error.message || 'Could not load this repository.'}
         </p>
-      </section>
+      </Frame>
     )
   }
   if (repository.isPending) {
-    return <p className="text-sm text-muted-foreground">Loading sync status…</p>
+    return (
+      <Frame titleAs={titleAs}>
+        <p className="text-sm text-muted-foreground">Loading sync status…</p>
+      </Frame>
+    )
   }
 
   const repo = repository.data
   if (!repo) {
-    return <p className="text-sm text-muted-foreground">That repository is not available to you.</p>
+    return (
+      <Frame titleAs={titleAs}>
+        <p className="text-sm text-muted-foreground">That repository is not available to you.</p>
+      </Frame>
+    )
   }
 
   // An unreadable file list is not an empty one — leave `fileCount` undefined
@@ -80,9 +114,14 @@ export function RepositorySyncCard({ repositoryId }: { repositoryId: string }) {
   const health = syncHealth(repo, fileCount)
 
   return (
-    <section className="flex flex-col gap-1 rounded-lg border border-border bg-card p-3">
-      <h3 className="font-display text-base text-foreground">Sync</h3>
-      <p className={health === 'error' ? 'text-sm text-destructive' : 'text-sm text-foreground'}>
+    <Frame titleAs={titleAs}>
+      <p
+        className={cn(
+          'flex items-center gap-2 text-sm',
+          health === 'error' ? 'text-destructive' : 'text-foreground',
+        )}
+      >
+        <StatusDot tone={HEALTH_TONE[health]} />
         {headline(health, fileCount)}
       </p>
 
@@ -129,6 +168,6 @@ export function RepositorySyncCard({ repositoryId }: { repositoryId: string }) {
             take minutes to appear.
           </p>
         ))}
-    </section>
+    </Frame>
   )
 }

@@ -198,7 +198,7 @@ function ShareRow({
  *
  * Owner-only, like every other call on this route.
  */
-export function RepositoryShareList({ repositoryId }: { repositoryId: string }) {
+export function RepositoryShareList({ repositoryId, titleAs: Title = 'h3' }: { repositoryId: string; titleAs?: 'h2' | 'h3' }) {
   const sharesQuery = useRepositoryShares(repositoryId)
   const teamsQuery = useTeams()
 
@@ -208,7 +208,7 @@ export function RepositoryShareList({ repositoryId }: { repositoryId: string }) 
 
   return (
     <section className="flex flex-col gap-3">
-      <h3 className="font-display text-base text-foreground">Sharing</h3>
+      <Title className="font-display text-base text-foreground">Sharing</Title>
       <p className="text-xs text-muted-foreground">
         Everyone here can read this repository&rsquo;s files — there is no edit level, because Chapters never
         writes code back. Access is re-checked on every request, so a change here takes effect immediately.
