@@ -6,7 +6,32 @@ import { createMemoryRouter, RouterProvider } from 'react-router'
 import { mockJsonResponse } from '../../lib/api'
 import { LoginPage } from './LoginPage'
 
-function renderPage() {
+/**
+ * Route-aware fetch stub: the page now asks /api/auth-config on mount, and a
+ * real Response body is single-read, so one shared mockResolvedValue would be
+ * consumed by whichever call got there second. Auth-config is answered by
+ * shape; everything else takes the next response factory in order.
+ */
+function stubFetch(
+  authConfig: { oidc: boolean; oidcOnly: boolean },
+  ...responses: Array<() => Response>
+) {
+  let i = 0
+  const fetchMock = vi.fn().mockImplementation((url: unknown) => {
+    if (String(url).includes('/auth-config')) {
+      return Promise.resolve(mockJsonResponse(200, authConfig))
+    }
+    const make = responses[Math.min(i, responses.length - 1)]
+    i += 1
+    return Promise.resolve(make ? make() : mockJsonResponse(500, { error: 'unexpected call' }))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+const NO_SSO = { oidc: false, oidcOnly: false }
+
+function renderPage(initialEntry = '/login') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const router = createMemoryRouter(
     [
@@ -15,7 +40,7 @@ function renderPage() {
       { path: '/signup', element: <div>Sign-up page</div> },
       { path: '/forgot-password', element: <div>Forgot password page</div> },
     ],
-    { initialEntries: ['/login'] },
+    { initialEntries: [initialEntry] },
   )
   render(
     <QueryClientProvider client={queryClient}>
@@ -31,10 +56,7 @@ describe('LoginPage', () => {
   })
 
   it('logs in and navigates home on success', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(mockJsonResponse(200, { id: 'u1', email: 'a@b.com', role: 'member' })),
-    )
+    stubFetch(NO_SSO, () => mockJsonResponse(200, { id: 'u1', email: 'a@b.com', role: 'member' }))
     renderPage()
     const user = userEvent.setup()
 
@@ -46,7 +68,7 @@ describe('LoginPage', () => {
   })
 
   it('shows an error for invalid credentials', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockJsonResponse(401, { error: 'invalid credentials' })))
+    stubFetch(NO_SSO, () => mockJsonResponse(401, { error: 'invalid credentials' }))
     renderPage()
     const user = userEvent.setup()
 
@@ -58,11 +80,11 @@ describe('LoginPage', () => {
   })
 
   it('shows an inline TOTP field when MFA is required, then completes login', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(mockJsonResponse(401, { error: 'totp code required', mfaRequired: true }))
-      .mockResolvedValueOnce(mockJsonResponse(200, { id: 'u1', email: 'a@b.com', role: 'member' }))
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = stubFetch(
+      NO_SSO,
+      () => mockJsonResponse(401, { error: 'totp code required', mfaRequired: true }),
+      () => mockJsonResponse(200, { id: 'u1', email: 'a@b.com', role: 'member' }),
+    )
     renderPage()
     const user = userEvent.setup()
 
@@ -84,11 +106,11 @@ describe('LoginPage', () => {
   })
 
   it('shows an error and stays on the TOTP field when the code is wrong', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(mockJsonResponse(401, { error: 'totp code required', mfaRequired: true }))
-      .mockResolvedValueOnce(mockJsonResponse(401, { error: 'invalid totp code', mfaRequired: true }))
-    vi.stubGlobal('fetch', fetchMock)
+    stubFetch(
+      NO_SSO,
+      () => mockJsonResponse(401, { error: 'totp code required', mfaRequired: true }),
+      () => mockJsonResponse(401, { error: 'invalid totp code', mfaRequired: true }),
+    )
     renderPage()
     const user = userEvent.setup()
 
@@ -107,6 +129,7 @@ describe('LoginPage', () => {
     // There was no link to /signup anywhere in the app. The page existed and
     // worked; you could only get to it by typing the URL. Same cold-start trap
     // as vault creation (unit 1) and connecting a repository (unit 7).
+    stubFetch(NO_SSO)
     const router = renderPage()
 
     await userEvent.click(screen.getByRole('link', { name: /create an account/i }))
@@ -116,10 +139,38 @@ describe('LoginPage', () => {
 
   it('routes to forgot-password instead of reloading the whole app', async () => {
     // It was a raw <a href>, which throws away the SPA and reboots it.
+    stubFetch(NO_SSO)
     const router = renderPage()
 
     await userEvent.click(screen.getByRole('link', { name: /forgot your password/i }))
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/forgot-password'))
+  })
+
+  it('offers single sign-on alongside the password form when OIDC is configured', async () => {
+    stubFetch({ oidc: true, oidcOnly: false })
+    renderPage()
+
+    const sso = await screen.findByRole('link', { name: /single sign-on/i })
+    expect(sso).toHaveAttribute('href', '/api/oidc/login')
+    // Password login is still a door.
+    expect(screen.getByLabelText('Email')).toBeInTheDocument()
+  })
+
+  it('hides every password surface when the instance is OIDC-only', async () => {
+    stubFetch({ oidc: true, oidcOnly: true })
+    renderPage()
+
+    await screen.findByRole('link', { name: /single sign-on/i })
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /create an account/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /forgot your password/i })).not.toBeInTheDocument()
+  })
+
+  it('surfaces a failed SSO round-trip', async () => {
+    stubFetch({ oidc: true, oidcOnly: true })
+    renderPage('/login?error=sso')
+
+    await waitFor(() => expect(screen.getByText(/single sign-on failed/i)).toBeInTheDocument())
   })
 })

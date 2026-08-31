@@ -1,6 +1,61 @@
 import { useState, type ReactNode } from 'react'
 import { Button } from '../ui/button.js'
 import { FormError } from '../FormError.js'
+import { cn } from '../../lib/utils.js'
+
+interface ConfirmStepProps {
+  /** The committing button's text, e.g. "Revoke". */
+  label: string
+  /** What happens to whom, in plain language. */
+  consequence: ReactNode
+  onConfirm: () => void
+  onCancel: () => void
+  pending?: boolean
+  error?: string | null
+  destructive?: boolean
+}
+
+/**
+ * The consequence step of an inline confirmation: the copy in plain language,
+ * then the committing button (destructive-styled when the action takes
+ * something away) and Cancel. Shared by ConfirmAction and the MFA requirement
+ * switch, whose resting control is a Switch rather than a button.
+ */
+export function ConfirmStep({
+  label,
+  consequence,
+  onConfirm,
+  onCancel,
+  pending = false,
+  error = null,
+  destructive = false,
+}: ConfirmStepProps) {
+  return (
+    <div
+      className={cn(
+        'flex max-w-md min-w-56 flex-col gap-1.5 rounded-md border p-2 text-left whitespace-normal',
+        destructive ? 'border-destructive/40 bg-destructive/5' : 'border-border bg-muted/40',
+      )}
+    >
+      <p className="text-xs text-muted-foreground">{consequence}</p>
+      <div className="flex items-center gap-1">
+        <Button
+          type="button"
+          size="xs"
+          variant={destructive ? 'destructive' : 'default'}
+          disabled={pending}
+          onClick={onConfirm}
+        >
+          {label}
+        </Button>
+        <Button type="button" size="xs" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+      <FormError message={error} />
+    </div>
+  )
+}
 
 interface ConfirmActionProps {
   /** The resting button's text, e.g. "Revoke". */
@@ -49,23 +104,14 @@ export function ConfirmAction({
   }
 
   return (
-    <div className="flex flex-col gap-1 rounded-md border border-border bg-muted/40 p-2 text-left">
-      <p className="text-xs text-muted-foreground">{consequence}</p>
-      <div className="flex items-center gap-1">
-        <Button
-          type="button"
-          size="xs"
-          variant={destructive ? 'destructive' : 'default'}
-          disabled={pending}
-          onClick={onConfirm}
-        >
-          {label}
-        </Button>
-        <Button type="button" size="xs" variant="ghost" onClick={() => setConfirming(false)}>
-          Cancel
-        </Button>
-      </div>
-      <FormError message={error} />
-    </div>
+    <ConfirmStep
+      label={label}
+      consequence={consequence}
+      destructive={destructive}
+      pending={pending}
+      error={error}
+      onConfirm={onConfirm}
+      onCancel={() => setConfirming(false)}
+    />
   )
 }
