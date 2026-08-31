@@ -68,6 +68,15 @@ export interface DrawGraphOptions {
   // defaulted to 1 so every existing caller/test is unaffected.
   nodeSizeScale?: number
   edgeWidthScale?: number
+  /**
+   * The expanded/selected community: its nodes get a `--primary` ring so
+   * the canvas answers "which one is open" the same way the outline's
+   * highlighted row does. `null`/undefined draws no ring. Only meaningful
+   * for the aggregated view — in a member view every node shares the one
+   * expanded community and a ring on everything is noise, so the caller
+   * passes null there.
+   */
+  highlightCommunity?: number | null
 }
 
 const DAY_MS = 86_400_000
@@ -93,14 +102,17 @@ export function decayAlpha(timestamp: string | null, now: number): number {
 }
 
 // The five approved categorical hues for type/tag colour, one array per
-// theme. Vermillion (#BA3B1D/#E2683F) and teal (#2B6E6B/#4FA39F) are both
-// excluded on purpose: those two are the dual-accent AUTHORSHIP tokens
-// (person / AI-MCP respectively), not ordinary categories, so a node whose
-// type string happens to hash to a given slot must never borrow either of
-// them. Exported so ColorModeToggle's legend swatches come from this same
+// theme. The dark set is tuned for the #0B0E14 control-room canvas —
+// aligned with the collaborator ink tokens (indigo/plum/ochre/forest in
+// index.css) and lifted just enough to read over it without going neon.
+// The human token (primary blue / the old vermillion) and teal are both
+// excluded on purpose: those are AUTHORSHIP tokens (person / AI-MCP
+// respectively), not ordinary categories, so a node whose type string
+// happens to hash to a given slot must never borrow either of them.
+// Exported so ColorModeToggle's legend swatches come from this same
 // source of truth instead of a second hardcoded copy.
 export const CATEGORY_HUES_LIGHT = ['#5B3B8C', '#3B4C8C', '#7A3B6B', '#8C6D1F', '#3B6B4C']
-export const CATEGORY_HUES_DARK = ['#9B7FD1', '#7C8FD9', '#C97FB0', '#D9B24C', '#6FBF8A']
+export const CATEGORY_HUES_DARK = ['#A78BDB', '#8B9DE8', '#D492BD', '#DDB95C', '#7CC796']
 /** @deprecated theme-blind alias kept only for consumers that just need the length; prefer `categoryHuesFor`. */
 export const CATEGORY_HUES = CATEGORY_HUES_LIGHT
 
@@ -165,6 +177,18 @@ function strokeBatch(ctx: CanvasRenderingContext2D, edges: DrawEdge[], color: st
   ctx.stroke()
 }
 
+// Edge inks. Aggregated community edges have mixed provenance, so they get
+// the neutral border-like grey the spec asks for; member edges keep the
+// authorship split — teal (the AI/MCP token, with alpha so dense graphs
+// stay calm) for machine-derived structural/semantic edges, foreground-grey
+// "ink" for human-authored wikilinks. Colour still means *who*.
+const MACHINE_EDGE_DARK = 'rgba(63,184,174,0.55)'
+const MACHINE_EDGE_LIGHT = 'rgba(31,119,112,0.55)'
+const HUMAN_EDGE_DARK = 'rgba(227,231,239,0.38)'
+const HUMAN_EDGE_LIGHT = 'rgba(22,26,34,0.38)'
+const AGGREGATED_EDGE_DARK = 'rgba(138,147,166,0.32)'
+const AGGREGATED_EDGE_LIGHT = 'rgba(94,102,117,0.32)'
+
 /**
  * Draws the whole graph in exactly three possible stroke() calls (one per
  * edge provenance batch, skipped if that batch is empty) plus one fill per
@@ -178,9 +202,14 @@ export function drawGraph(ctx: CanvasRenderingContext2D, opts: DrawGraphOptions)
   const { nodes, edges, transform, colorMode, isDark, now } = opts
   const nodeScale = opts.nodeSizeScale ?? 1
   const edgeScale = opts.edgeWidthScale ?? 1
-  const ink = isDark ? '#EDE8DD' : '#1C1A16'
-  const teal = isDark ? '#4FA39F' : '#2B6E6B'
-  const muted = isDark ? '#A39C8C' : '#6B6558'
+  const teal = isDark ? MACHINE_EDGE_DARK : MACHINE_EDGE_LIGHT
+  const ink = isDark ? HUMAN_EDGE_DARK : HUMAN_EDGE_LIGHT
+  const aggregatedInk = isDark ? AGGREGATED_EDGE_DARK : AGGREGATED_EDGE_LIGHT
+  // Matches --muted-foreground per theme: the "no attribute to show" node
+  // fill and the colour stale nodes decay toward.
+  const muted = isDark ? '#8A93A6' : '#5E6675'
+  // --primary per theme: the selected/expanded community's ring.
+  const highlight = isDark ? '#5B8DEF' : '#2F6FE0'
 
   // Clear the full backing store in device space, then apply the pan/zoom
   // transform once for everything drawn after it. The caller has already
@@ -204,7 +233,7 @@ export function drawGraph(ctx: CanvasRenderingContext2D, opts: DrawGraphOptions)
     // true per-edge width — splitting into weight buckets would trade the
     // one-call guarantee for a handful of calls if this ever needs to be
     // truer to individual weights.
-    strokeBatch(ctx, aggregated, muted, (edgeScale * Math.min(6, 0.5 + avgWeight * 0.5)) / transform.k)
+    strokeBatch(ctx, aggregated, aggregatedInk, (edgeScale * Math.min(6, 0.5 + avgWeight * 0.5)) / transform.k)
   }
 
   ctx.globalAlpha = 1
@@ -218,4 +247,20 @@ export function drawGraph(ctx: CanvasRenderingContext2D, opts: DrawGraphOptions)
     ctx.fill()
   }
   ctx.globalAlpha = 1
+
+  // The expanded community's ring, drawn last so it sits over neighbouring
+  // fills. One batched stroke for however many nodes carry the community.
+  if (opts.highlightCommunity !== null && opts.highlightCommunity !== undefined) {
+    const ringOffset = 1.5 / transform.k
+    ctx.strokeStyle = highlight
+    ctx.lineWidth = 1.5 / transform.k
+    ctx.beginPath()
+    for (const node of nodes) {
+      if (node.community !== opts.highlightCommunity) continue
+      const r = node.radius * nodeScale + ringOffset
+      ctx.moveTo(node.x + r, node.y)
+      ctx.arc(node.x, node.y, r, 0, Math.PI * 2)
+    }
+    ctx.stroke()
+  }
 }

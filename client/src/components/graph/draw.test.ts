@@ -65,7 +65,9 @@ describe('drawGraph — edge batching', () => {
     // instead of 2 — this is the 40x-cost regression the batching exists to
     // prevent, and it is the first thing this assertion would catch.
     expect(strokes).toHaveLength(2)
-    expect(strokes.map((s) => s.strokeStyle)).toEqual(expect.arrayContaining(['#2B6E6B', '#1C1A16']))
+    expect(strokes.map((s) => s.strokeStyle)).toEqual(
+      expect.arrayContaining(['rgba(31,119,112,0.55)', 'rgba(22,26,34,0.38)']),
+    )
     expect((ctx.moveTo as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(6)
   })
 
@@ -82,7 +84,7 @@ describe('drawGraph — edge batching', () => {
 
     const strokes = calls.filter((c) => c.op === 'stroke')
     expect(strokes).toHaveLength(1)
-    expect(strokes[0]?.strokeStyle).toBe('#6B6558')
+    expect(strokes[0]?.strokeStyle).toBe('rgba(94,102,117,0.32)')
   })
 })
 
@@ -235,7 +237,7 @@ describe('drawGraph — teal is never a node fill', () => {
       { id: 'b', type: 'code', tags: [], updatedAt: '2020-01-01T00:00:00.000Z', community: 3, radius: 5, x: 1, y: 1 },
       { id: 'c', community: 2, lastActivity: null, radius: 8, x: 2, y: 2 },
     ]
-    const teals = ['#2B6E6B', '#4FA39F']
+    const teals = ['#2B6E6B', '#4FA39F', '#1F7770', '#3FB8AE']
 
     for (const isDark of [false, true]) {
       for (const colorMode of ['attribute', 'community'] as const) {
@@ -246,6 +248,48 @@ describe('drawGraph — teal is never a node fill', () => {
           expect(teals).not.toContain(fill)
         }
       }
+    }
+  })
+})
+
+describe('drawGraph — expanded community ring', () => {
+  const nodes: DrawNode[] = [
+    { id: 'a', community: 0, lastActivity: null, radius: 8, x: 0, y: 0 },
+    { id: 'b', community: 1, lastActivity: null, radius: 8, x: 40, y: 0 },
+  ]
+
+  it('strokes only the highlighted community, in the primary token for the theme', () => {
+    const { ctx, calls } = createFakeCtx()
+    drawGraph(ctx, {
+      nodes,
+      edges: [],
+      transform: IDENTITY,
+      colorMode: 'community',
+      isDark: true,
+      now: NOW,
+      highlightCommunity: 1,
+    })
+
+    const strokes = calls.filter((c) => c.op === 'stroke')
+    expect(strokes).toHaveLength(1)
+    expect(strokes[0]?.strokeStyle).toBe('#5B8DEF')
+    // One arc per node fill plus exactly one more for the single ringed node.
+    expect((ctx.arc as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3)
+  })
+
+  it('draws no ring at all when highlightCommunity is null or omitted', () => {
+    for (const highlightCommunity of [null, undefined]) {
+      const { ctx, calls } = createFakeCtx()
+      drawGraph(ctx, {
+        nodes,
+        edges: [],
+        transform: IDENTITY,
+        colorMode: 'community',
+        isDark: false,
+        now: NOW,
+        highlightCommunity,
+      })
+      expect(calls.filter((c) => c.op === 'stroke')).toHaveLength(0)
     }
   })
 })

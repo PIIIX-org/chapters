@@ -106,13 +106,12 @@ export function GraphFilters({ nodes, paramPrefix = '' }: GraphFiltersProps) {
   }
 
   return (
-    <div className="flex w-64 flex-col gap-3 rounded-md border border-border bg-card p-3 text-sm shadow-sm">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="font-display text-sm text-foreground">Filters</h2>
-        <span className="text-xs text-muted-foreground">
-          {activeCount === 0 ? 'No filters active' : `${activeCount} filter${activeCount === 1 ? '' : 's'} active`}
-        </span>
-      </div>
+    // Flat on purpose: since the command redesign this renders inside the
+    // inspector's Filters section, which owns the border and the title.
+    <div className="flex flex-col gap-3 text-sm">
+      <span className="text-xs text-muted-foreground">
+        {activeCount === 0 ? 'No filters active' : `${activeCount} filter${activeCount === 1 ? '' : 's'} active`}
+      </span>
 
       {availableTypes.length > 0 && (
         <fieldset className="flex flex-col gap-1">

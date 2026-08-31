@@ -7,18 +7,6 @@ import { expectNoA11yViolations } from '../../test/axe.js'
 import { createSimulation, type SimNode } from './simulation.js'
 import { PhysicsControls } from './PhysicsControls.js'
 
-function stubMatchMedia(matchesMinWidth640: boolean) {
-  vi.stubGlobal(
-    'matchMedia',
-    vi.fn().mockImplementation((query: string) => ({
-      matches: matchesMinWidth640,
-      media: query,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    })),
-  )
-}
-
 // A real, tiny simulation — not a mock — so "setParams was called with the
 // new link distance AND sim.alpha was re-heated" is checked against the
 // actual production wiring in simulation.ts, not a stand-in that could
@@ -56,7 +44,6 @@ describe('PhysicsControls', () => {
   })
 
   it('the link-distance slider calls setParams with the new distance and actually re-heats the real simulation', async () => {
-    stubMatchMedia(true)
     const { sim, setParams } = makeRealSimulation()
     const setParamsSpy = vi.fn(setParams)
     const alphaSpy = vi.spyOn(sim, 'alpha')
@@ -80,7 +67,6 @@ describe('PhysicsControls', () => {
   })
 
   it('the node-size slider redraws (DRAW-only) and never touches physics or re-heats the simulation', async () => {
-    stubMatchMedia(true)
     const { sim, setParams } = makeRealSimulation()
     const setParamsSpy = vi.fn(setParams)
     const alphaSpy = vi.spyOn(sim, 'alpha')
@@ -102,7 +88,6 @@ describe('PhysicsControls', () => {
   })
 
   it('the edge-width slider also redraws without touching physics', async () => {
-    stubMatchMedia(true)
     const onPhysicsChange = vi.fn()
     const onEdgeWidthChange = vi.fn()
     const user = userEvent.setup()
@@ -116,44 +101,7 @@ describe('PhysicsControls', () => {
     expect(onPhysicsChange).not.toHaveBeenCalled()
   })
 
-  it('on viewports narrower than 640px, the panel is a bottom sheet: absent until opened, closed by Escape wherever focus actually is, with focus returned to the opener', async () => {
-    stubMatchMedia(false)
-    const user = userEvent.setup()
-    renderControls()
-
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-
-    const opener = screen.getByRole('button', { name: /physics controls/i })
-    await user.click(opener)
-
-    expect(screen.getByRole('dialog', { name: /physics controls/i })).toBeInTheDocument()
-
-    // Escape is driven from wherever a real click actually leaves focus —
-    // clicking the opener does not move focus into the sheet — and is
-    // never dispatched on the panel element directly. An Escape listener
-    // bound only to the panel (this project's ScopePicker bug, before its
-    // fix) would leave the sheet open here.
-    await user.keyboard('{Escape}')
-
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(document.activeElement).toBe(opener)
-  })
-
-  it('the close button also closes the sheet and returns focus to the opener', async () => {
-    stubMatchMedia(false)
-    const user = userEvent.setup()
-    renderControls()
-
-    const opener = screen.getByRole('button', { name: /physics controls/i })
-    await user.click(opener)
-    await user.click(screen.getByRole('button', { name: /close physics controls/i }))
-
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(document.activeElement).toBe(opener)
-  })
-
-  it('at 640px and up, the panel is always inline — no open button, no dialog', () => {
-    stubMatchMedia(true)
+  it('renders inline, always — the command redesign hosts it in the inspector, so there is no open button and no dialog', () => {
     renderControls()
 
     expect(screen.queryByRole('button', { name: /physics controls/i })).not.toBeInTheDocument()
@@ -162,7 +110,6 @@ describe('PhysicsControls', () => {
   })
 
   it('every one of the five sliders has a real accessible name from an associated label', () => {
-    stubMatchMedia(true)
     renderControls()
 
     expect(screen.getByRole('slider', { name: /force strength/i })).toBeInTheDocument()
@@ -174,7 +121,6 @@ describe('PhysicsControls', () => {
   })
 
   it('shows a live value readout next to each slider', () => {
-    stubMatchMedia(true)
     renderControls()
 
     expect(screen.getByText('-120')).toBeInTheDocument() // force strength
@@ -191,16 +137,8 @@ describe('PhysicsControls', () => {
   })
 
   it('has no accessibility violations in the inline layout', async () => {
-    stubMatchMedia(true)
     const { container } = renderControls()
     await expectNoA11yViolations(container)
   })
 
-  it('has no accessibility violations in the open bottom-sheet layout', async () => {
-    stubMatchMedia(false)
-    const user = userEvent.setup()
-    const { container } = renderControls()
-    await user.click(screen.getByRole('button', { name: /physics controls/i }))
-    await expectNoA11yViolations(container)
-  })
 })
