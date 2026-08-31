@@ -3,6 +3,7 @@ import { Link } from 'react-router'
 import { Button } from '../ui/button.js'
 import { Input } from '../ui/input.js'
 import { Label } from '../ui/label.js'
+import { Panel, PanelBody, PanelHeader } from '../ui/panel.js'
 import { FormError } from '../FormError.js'
 import { useImportVault } from '../../hooks/useImportVault.js'
 import type { ImportResult } from '../../api/import.js'
@@ -20,7 +21,7 @@ function plural(count: number, singular: string): string {
 function ImportSummary({ result }: { result: ImportResult }) {
   const unmatched = result.unmatchedShares
   return (
-    <div role="status" className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3">
+    <div role="status" className="flex flex-col gap-2 rounded-md border border-border bg-muted/40 p-3">
       <p className="text-sm text-foreground">
         {plural(result.imported, 'note')} imported, {plural(result.skipped.length, 'note')} skipped.
       </p>
@@ -68,7 +69,7 @@ function ImportSummary({ result }: { result: ImportResult }) {
           Everyone the archive listed as a collaborator has an account here and got access again.
         </p>
       )}
-      <Link to={`/vaults/${result.vaultId}`} className="w-fit underline">
+      <Link to={`/vaults/${result.vaultId}`} className="w-fit text-primary underline underline-offset-4">
         Open the new vault
       </Link>
     </div>
@@ -80,42 +81,44 @@ export function VaultImport() {
   const importVault = useImportVault()
 
   return (
-    <section className="flex flex-col gap-2">
-      <h2 className="font-display text-lg text-foreground">Import a vault</h2>
-      <p className="text-sm text-muted-foreground">
-        Importing always creates a new vault that you own. It never merges into a vault you already
-        have and never touches notes you already have — importing the same archive twice leaves you
-        with two vaults.
-      </p>
-      <p className="text-sm text-muted-foreground">
-        Collaborators named in the archive get access again only where their email already has an
-        account on this instance. Anyone else is left out silently, so read the list below before you
-        assume the vault came across whole.
-      </p>
-      <div className="flex flex-col gap-1">
-        <Label htmlFor="vault-import-archive">Vault archive (.zip)</Label>
-        <Input
-          id="vault-import-archive"
-          type="file"
-          accept=".zip,application/zip"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        />
-      </div>
-      <Button
-        type="button"
-        className="w-fit"
-        disabled={file === null || importVault.isPending}
-        onClick={() => file !== null && importVault.mutate(file)}
-      >
-        {importVault.isPending ? 'Importing…' : 'Import as a new vault'}
-      </Button>
-      {/* isError before data, always: a failed import must never fall through
-          to a summary rendering zeroes as if nothing had gone wrong. */}
-      {importVault.isError ? (
-        <FormError message={importVault.error.message} />
-      ) : importVault.data ? (
-        <ImportSummary result={importVault.data} />
-      ) : null}
-    </section>
+    <Panel>
+      <PanelHeader title="Import a vault" />
+      <PanelBody className="flex flex-col gap-2">
+        <p className="text-sm text-muted-foreground">
+          Importing always creates a new vault that you own. It never merges into a vault you already
+          have and never touches notes you already have — importing the same archive twice leaves you
+          with two vaults.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Collaborators named in the archive get access again only where their email already has an
+          account on this instance. Anyone else is left out silently, so read the list below before you
+          assume the vault came across whole.
+        </p>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="vault-import-archive">Vault archive (.zip)</Label>
+          <Input
+            id="vault-import-archive"
+            type="file"
+            accept=".zip,application/zip"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+        </div>
+        <Button
+          type="button"
+          className="w-fit"
+          disabled={file === null || importVault.isPending}
+          onClick={() => file !== null && importVault.mutate(file)}
+        >
+          {importVault.isPending ? 'Importing…' : 'Import as a new vault'}
+        </Button>
+        {/* isError before data, always: a failed import must never fall through
+            to a summary rendering zeroes as if nothing had gone wrong. */}
+        {importVault.isError ? (
+          <FormError message={importVault.error.message} />
+        ) : importVault.data ? (
+          <ImportSummary result={importVault.data} />
+        ) : null}
+      </PanelBody>
+    </Panel>
   )
 }

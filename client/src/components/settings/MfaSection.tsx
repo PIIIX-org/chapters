@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Button } from '../ui/button.js'
 import { Input } from '../ui/input.js'
 import { Label } from '../ui/label.js'
+import { Panel, PanelBody, PanelHeader } from '../ui/panel.js'
 import { SecretReveal } from '../ui/SecretReveal.js'
 import { FormError } from '../FormError.js'
 import { useDisableMfa, useEnableMfa, useStartMfaSetup } from '../../hooks/useAccount.js'
@@ -82,153 +83,158 @@ export function MfaSection() {
   }
 
   return (
-    <section className="flex flex-col gap-2">
-      <h2 className="font-display text-lg text-foreground">Two-factor authentication</h2>
+    <Panel>
+      <PanelHeader title="Two-factor authentication" />
+      <PanelBody className="flex flex-col gap-2">
+        {backupCodes && (
+          // ponytail: one string, newline-separated, so Copy puts one code per
+          // line on the clipboard. SecretReveal is shared with MCP tokens and is
+          // not mine to reflow; if the single-line display ever bothers anyone,
+          // that is a change to SecretReveal, not a second reveal component.
+          <SecretReveal
+            label={`Your ${backupCodes.length} backup codes`}
+            secret={backupCodes.join('\n')}
+            note="Keep these somewhere other than the phone your authenticator app is on. If you lose that device, a backup code is the only way back into your account. Each one works once, and they will not be shown again."
+            onDismiss={() => setBackupCodes(null)}
+          />
+        )}
 
-      {backupCodes && (
-        // ponytail: one string, newline-separated, so Copy puts one code per
-        // line on the clipboard. SecretReveal is shared with MCP tokens and is
-        // not mine to reflow; if the single-line display ever bothers anyone,
-        // that is a change to SecretReveal, not a second reveal component.
-        <SecretReveal
-          label={`Your ${backupCodes.length} backup codes`}
-          secret={backupCodes.join('\n')}
-          note="Keep these somewhere other than the phone your authenticator app is on. If you lose that device, a backup code is the only way back into your account. Each one works once, and they will not be shown again."
-          onDismiss={() => setBackupCodes(null)}
-        />
-      )}
-
-      {enrolled ? (
-        <>
-          <p className="text-sm text-foreground">
-            On. Signing in asks for a code from your authenticator app after your password.
-          </p>
-          {mfaEnabledAt && (
-            <p className="font-mono text-xs text-muted-foreground">
-              Turned on {formatDate(mfaEnabledAt)}
+        {enrolled ? (
+          <>
+            <p className="text-sm text-foreground">
+              On. Signing in asks for a code from your authenticator app after your password.
             </p>
-          )}
-          {mfaRequired ? (
-            // State C. The server 403s a disable while the mandate is on, so
-            // there is no control here at all — a button that always fails is
-            // worse than no button.
-            <p className="text-sm text-muted-foreground">
-              An admin requires two-factor authentication on this instance, so it cannot be turned
-              off from here.
-            </p>
-          ) : disabling ? (
-            <form
-              onSubmit={handleDisable}
-              className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3"
-            >
-              <p className="text-sm text-muted-foreground">
-                Turning this off means signing in stops asking for a second factor — your password
-                alone gets into your account. Your existing backup codes stop working, and setting
-                it up again issues a new key and a new set of codes.
+            {mfaEnabledAt && (
+              <p className="font-mono text-xs text-muted-foreground">
+                Turned on {formatDate(mfaEnabledAt)}
               </p>
+            )}
+            {mfaRequired ? (
+              // State C. The server 403s a disable while the mandate is on, so
+              // there is no control here at all — a button that always fails is
+              // worse than no button.
+              <p className="text-sm text-muted-foreground">
+                An admin requires two-factor authentication on this instance, so it cannot be turned
+                off from here.
+              </p>
+            ) : disabling ? (
+              <form
+                onSubmit={handleDisable}
+                className="flex flex-col gap-2 rounded-md border border-border bg-muted/40 p-3"
+              >
+                <p className="text-sm text-muted-foreground">
+                  Turning this off means signing in stops asking for a second factor — your password
+                  alone gets into your account. Your existing backup codes stop working, and setting
+                  it up again issues a new key and a new set of codes.
+                </p>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="mfa-disable-code">
+                    Code from your authenticator app, or one of your backup codes
+                  </Label>
+                  <Input
+                    id="mfa-disable-code"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    autoComplete="one-time-code"
+                    required
+                    autoFocus
+                  />
+                </div>
+                <FormError message={disable.error?.message ?? null} />
+                <div className="flex items-center gap-2">
+                  <Button type="submit" size="sm" variant="destructive" disabled={disable.isPending}>
+                    Turn off two-factor authentication
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setDisabling(false)
+                      setCode('')
+                      disable.reset()
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="w-fit"
+                aria-label="Disable two-factor authentication"
+                onClick={() => setDisabling(true)}
+              >
+                Disable
+              </Button>
+            )}
+          </>
+        ) : start.data ? (
+          <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/40 p-3">
+            <p className="text-sm text-muted-foreground">
+              Add Chapters to your authenticator app, either by typing the key in or by opening the
+              link below on the device the app is on. Then enter the 6-digit code it shows.
+            </p>
+            <div className="flex flex-col gap-1">
+              <span className="font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                Setup key
+              </span>
+              <code className="overflow-x-auto rounded-sm border border-border bg-card px-2 py-1 font-mono text-sm break-all text-foreground">
+                {start.data.secret}
+              </code>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                Or open this link on that device
+              </span>
+              <a
+                href={start.data.uri}
+                className="overflow-x-auto rounded-sm border border-border bg-card px-2 py-1 font-mono text-xs break-all text-foreground underline"
+              >
+                {start.data.uri}
+              </a>
+            </div>
+            <form onSubmit={handleEnable} className="flex flex-col gap-2">
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="mfa-disable-code">
-                  Code from your authenticator app, or one of your backup codes
-                </Label>
+                <Label htmlFor="mfa-enable-code">6-digit code from your authenticator app</Label>
                 <Input
-                  id="mfa-disable-code"
+                  id="mfa-enable-code"
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
+                  inputMode="numeric"
                   autoComplete="one-time-code"
                   required
-                  autoFocus
                 />
               </div>
-              <FormError message={disable.error?.message ?? null} />
-              <div className="flex items-center gap-2">
-                <Button type="submit" size="sm" variant="destructive" disabled={disable.isPending}>
-                  Turn off two-factor authentication
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setDisabling(false)
-                    setCode('')
-                    disable.reset()
-                  }}
-                >
-                  Cancel
-                </Button>
-              </div>
+              <FormError message={enable.error?.message ?? null} />
+              <Button type="submit" size="sm" className="w-fit" disabled={enable.isPending}>
+                Turn on two-factor authentication
+              </Button>
             </form>
-          ) : (
+          </div>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              {mfaRequired
+                ? 'An admin requires two-factor authentication on this instance. Set it up to carry on using Chapters.'
+                : 'Off. Signing in asks for your password and nothing else.'}
+            </p>
+            <FormError message={start.error?.message ?? null} />
             <Button
               type="button"
               size="sm"
-              variant="ghost"
               className="w-fit"
-              aria-label="Disable two-factor authentication"
-              onClick={() => setDisabling(true)}
+              disabled={start.isPending}
+              onClick={() => start.mutate()}
             >
-              Disable
+              Set up two-factor authentication
             </Button>
-          )}
-        </>
-      ) : start.data ? (
-        <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">
-            Add Chapters to your authenticator app, either by typing the key in or by opening the
-            link below on the device the app is on. Then enter the 6-digit code it shows.
-          </p>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">Setup key</span>
-            <code className="overflow-x-auto rounded border border-border bg-muted px-2 py-1 font-mono text-sm break-all text-foreground">
-              {start.data.secret}
-            </code>
-          </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">Or open this link on that device</span>
-            <a
-              href={start.data.uri}
-              className="overflow-x-auto rounded border border-border bg-muted px-2 py-1 font-mono text-xs break-all text-foreground underline"
-            >
-              {start.data.uri}
-            </a>
-          </div>
-          <form onSubmit={handleEnable} className="flex flex-col gap-2">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="mfa-enable-code">6-digit code from your authenticator app</Label>
-              <Input
-                id="mfa-enable-code"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                required
-              />
-            </div>
-            <FormError message={enable.error?.message ?? null} />
-            <Button type="submit" size="sm" className="w-fit" disabled={enable.isPending}>
-              Turn on two-factor authentication
-            </Button>
-          </form>
-        </div>
-      ) : (
-        <>
-          <p className="text-sm text-muted-foreground">
-            {mfaRequired
-              ? 'An admin requires two-factor authentication on this instance. Set it up to carry on using Chapters.'
-              : 'Off. Signing in asks for your password and nothing else.'}
-          </p>
-          <FormError message={start.error?.message ?? null} />
-          <Button
-            type="button"
-            size="sm"
-            className="w-fit"
-            disabled={start.isPending}
-            onClick={() => start.mutate()}
-          >
-            Set up two-factor authentication
-          </Button>
-        </>
-      )}
-    </section>
+          </>
+        )}
+      </PanelBody>
+    </Panel>
   )
 }
