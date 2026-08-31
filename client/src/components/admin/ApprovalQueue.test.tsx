@@ -46,8 +46,8 @@ describe('ApprovalQueue', () => {
     )
     const { container } = renderWithClient(<ApprovalQueue />)
 
-    const unverifiedRow = (await screen.findByText('unverified@example.com')).closest('li')!
-    const verifiedRow = screen.getByText('verified@example.com').closest('li')!
+    const unverifiedRow = (await screen.findByText('unverified@example.com')).closest('tr')!
+    const verifiedRow = screen.getByText('verified@example.com').closest('tr')!
 
     expect(unverifiedRow.textContent).toContain('Email not verified yet')
     // The load-bearing half: the warning must be per-row, not page-wide.

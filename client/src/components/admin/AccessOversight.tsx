@@ -1,4 +1,15 @@
 import { ConfirmAction } from './ConfirmAction.js'
+import { PanelState } from '../ui/empty-state.js'
+import { Panel, PanelHeader } from '../ui/panel.js'
+import { Pill } from '../ui/pill.js'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../ui/table.js'
 import {
   useAdminMcpConnections,
   useAdminShares,
@@ -52,148 +63,142 @@ export function AccessOversight() {
   }
 
   return (
-    <div className="flex flex-col gap-8">
-      <section className="flex flex-col gap-2">
-        <h3 className="font-display text-lg text-foreground">Shares</h3>
-        <p className="text-sm text-muted-foreground">
-          Every grant on the instance. Revoking one cuts that person or team off the vault immediately — access is
-          re-checked on every request, so there is no session to wait out.
+    <div className="flex flex-col gap-4">
+      <Panel>
+        <PanelHeader title="Shares" />
+        <p className="border-b border-border px-3 py-2 text-[13px] text-muted-foreground">
+          Every grant on the instance. Revoking one cuts that person or team
+          off the vault immediately — access is re-checked on every request,
+          so there is no session to wait out.
         </p>
         {shares.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading shares…</p>
+          <PanelState status="loading" compact message="Loading shares…" />
         ) : shares.isError ? (
-          <p role="alert" className="text-sm text-destructive">
-            {shares.error.message}
-          </p>
+          <PanelState status="error" compact message={shares.error.message} />
         ) : shares.data.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nothing is shared on this instance yet.</p>
+          <PanelState
+            status="empty"
+            compact
+            message="Nothing is shared on this instance yet."
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">Every vault share on this instance</caption>
-              <thead>
-                <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Vault
-                  </th>
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Shared with
-                  </th>
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Permission
-                  </th>
-                  <th scope="col" className="py-2 font-normal">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {shares.data.map((share) => {
-                  const vault = vaultName.get(share.vaultId) ?? 'deleted vault'
-                  const grantee = granteeLabel(share.granteeType, share.granteeId)
-                  return (
-                    <tr key={share.id} className="border-b border-border align-top">
-                      <td className="py-2 pr-4 text-foreground">{vault}</td>
-                      <td className="py-2 pr-4 text-foreground">
-                        {grantee}
-                        <span className="ml-1 font-mono text-xs text-muted-foreground">{share.granteeType}</span>
-                      </td>
-                      <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{share.permission}</td>
-                      <td className="py-2">
-                        <ConfirmAction
-                          label="Revoke"
-                          destructive
-                          ariaLabel={`Revoke ${grantee}'s access to ${vault}`}
-                          consequence={`${grantee} loses access to "${vault}" on their very next request. Any note they have open stops saving. The owner can share it again afterwards.`}
-                          pending={revokeShare.isPending}
-                          error={revokeShare.error?.message ?? null}
-                          onConfirm={() => revokeShare.mutate(share.id)}
-                        />
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <caption className="sr-only">Every vault share on this instance</caption>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col">Vault</TableHead>
+                <TableHead scope="col">Shared with</TableHead>
+                <TableHead scope="col">Permission</TableHead>
+                <TableHead scope="col">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {shares.data.map((share) => {
+                const vault = vaultName.get(share.vaultId) ?? 'deleted vault'
+                const grantee = granteeLabel(share.granteeType, share.granteeId)
+                return (
+                  <TableRow key={share.id}>
+                    <TableCell className="py-2.5 align-top text-foreground">
+                      {vault}
+                    </TableCell>
+                    <TableCell className="py-2 align-top">
+                      <span className="mr-1.5 text-foreground">{grantee}</span>
+                      <Pill tone="neutral">{share.granteeType}</Pill>
+                    </TableCell>
+                    <TableCell className="py-2.5 align-top font-mono text-xs text-muted-foreground">
+                      {share.permission}
+                    </TableCell>
+                    <TableCell className="py-2 align-top">
+                      <ConfirmAction
+                        label="Revoke"
+                        destructive
+                        ariaLabel={`Revoke ${grantee}'s access to ${vault}`}
+                        consequence={`${grantee} loses access to "${vault}" on their very next request. Any note they have open stops saving. The owner can share it again afterwards.`}
+                        pending={revokeShare.isPending}
+                        error={revokeShare.error?.message ?? null}
+                        onConfirm={() => revokeShare.mutate(share.id)}
+                      />
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </Panel>
 
-      <section className="flex flex-col gap-2">
-        <h3 className="font-display text-lg text-foreground">MCP connections</h3>
-        <p className="text-sm text-muted-foreground">
-          Tokens AI clients use to reach this instance. Revoking one kills that token only — the account keeps
-          working, which is the point of having this next to Deactivate rather than instead of it.
+      <Panel>
+        <PanelHeader title="MCP connections" />
+        <p className="border-b border-border px-3 py-2 text-[13px] text-muted-foreground">
+          Tokens AI clients use to reach this instance. Revoking one kills
+          that token only — the account keeps working, which is the point of
+          having this next to Deactivate rather than instead of it.
         </p>
         {connections.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading connections…</p>
+          <PanelState status="loading" compact message="Loading connections…" />
         ) : connections.isError ? (
-          <p role="alert" className="text-sm text-destructive">
-            {connections.error.message}
-          </p>
+          <PanelState status="error" compact message={connections.error.message} />
         ) : connections.data.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No MCP connections on this instance yet.</p>
+          <PanelState
+            status="empty"
+            compact
+            message="No MCP connections on this instance yet."
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">Every MCP connection on this instance</caption>
-              <thead>
-                <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Connection
-                  </th>
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Account
-                  </th>
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Scope
-                  </th>
-                  <th scope="col" className="py-2 pr-4 font-normal">
-                    Last used
-                  </th>
-                  <th scope="col" className="py-2 font-normal">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {connections.data.map((connection) => (
-                  <tr key={connection.id} className="border-b border-border align-top">
-                    <td className="py-2 pr-4 text-foreground">{connection.name}</td>
-                    <td className="py-2 pr-4 text-foreground">{connection.userEmail}</td>
-                    <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">
-                      {connection.scope}
-                      {connection.vaultId && (
-                        <span className="block">{vaultName.get(connection.vaultId) ?? 'deleted vault'}</span>
-                      )}
-                    </td>
-                    <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">
-                      {formatStamp(connection.lastUsedAt)}
-                    </td>
-                    <td className="py-2">
-                      {connection.revokedAt ? (
-                        <span className="font-mono text-xs text-muted-foreground">
-                          revoked {formatStamp(connection.revokedAt)}
-                        </span>
-                      ) : (
-                        <ConfirmAction
-                          label="Revoke"
-                          destructive
-                          ariaLabel={`Revoke the MCP connection ${connection.name}`}
-                          consequence={`The token behind "${connection.name}" stops working immediately, for every vault it could reach. ${connection.userEmail} keeps their account and can issue a new one.`}
-                          pending={revokeConnection.isPending}
-                          error={revokeConnection.error?.message ?? null}
-                          onConfirm={() => revokeConnection.mutate(connection.id)}
-                        />
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <caption className="sr-only">Every MCP connection on this instance</caption>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col">Connection</TableHead>
+                <TableHead scope="col">Account</TableHead>
+                <TableHead scope="col">Scope</TableHead>
+                <TableHead scope="col">Last used</TableHead>
+                <TableHead scope="col">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {connections.data.map((connection) => (
+                <TableRow key={connection.id}>
+                  <TableCell className="py-2.5 align-top text-foreground">
+                    {connection.name}
+                  </TableCell>
+                  <TableCell className="py-2.5 align-top text-muted-foreground">
+                    {connection.userEmail}
+                  </TableCell>
+                  <TableCell className="py-2.5 align-top font-mono text-xs text-muted-foreground">
+                    {connection.scope}
+                    {connection.vaultId && (
+                      <span className="block">
+                        {vaultName.get(connection.vaultId) ?? 'deleted vault'}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="py-2.5 align-top font-mono text-xs text-muted-foreground">
+                    {formatStamp(connection.lastUsedAt)}
+                  </TableCell>
+                  <TableCell className="py-2 align-top">
+                    {connection.revokedAt ? (
+                      <span className="font-mono text-xs text-muted-foreground">
+                        revoked {formatStamp(connection.revokedAt)}
+                      </span>
+                    ) : (
+                      <ConfirmAction
+                        label="Revoke"
+                        destructive
+                        ariaLabel={`Revoke the MCP connection ${connection.name}`}
+                        consequence={`The token behind "${connection.name}" stops working immediately, for every vault it could reach. ${connection.userEmail} keeps their account and can issue a new one.`}
+                        pending={revokeConnection.isPending}
+                        error={revokeConnection.error?.message ?? null}
+                        onConfirm={() => revokeConnection.mutate(connection.id)}
+                      />
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </Panel>
     </div>
   )
 }
