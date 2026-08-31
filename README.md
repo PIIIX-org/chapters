@@ -108,8 +108,14 @@ check at two sizes in both themes.
 Tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
-real deployment — security headers on by default, CORS off (same-origin
-only) unless `CORS_ORIGIN` is set, Dependabot watching dependencies. One
+real deployment. That same root image is published to
+`ghcr.io/piiix-org/chapters` (`:latest` from `prod`, `:vX.Y.Z` from tags)
+by [`.github/workflows/publish.yml`](.github/workflows/publish.yml), and it is
+what every **hosted** instance runs — `chapters-cloud` provisions customers by
+pulling it. `Dockerfile.client` and the two-container `compose.deploy.yml`
+split are the older single-tenant shape. Security headers are on by default,
+CORS off (same-origin only) unless `CORS_ORIGIN` is set, Dependabot watching
+dependencies. One
 real constraint worth knowing before scaling: this backend assumes a
 single running instance (lockout counters, the embedding/extraction
 queues, the live-collaboration permission-kick bus, MCP rate limiting,
