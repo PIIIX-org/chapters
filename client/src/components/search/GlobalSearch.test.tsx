@@ -1,13 +1,27 @@
 import { describe, expect, it } from 'vitest'
+import type { ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { GlobalSearch } from './GlobalSearch'
 
-function renderGlobal() {
+function renderGlobal(extra?: ReactNode) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const router = createMemoryRouter([{ path: '/', element: <GlobalSearch /> }], { initialEntries: ['/'] })
+  const router = createMemoryRouter(
+    [
+      {
+        path: '/',
+        element: (
+          <>
+            {extra}
+            <GlobalSearch />
+          </>
+        ),
+      },
+    ],
+    { initialEntries: ['/'] },
+  )
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -38,5 +52,41 @@ describe('GlobalSearch', () => {
     renderGlobal()
     fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true, shiftKey: true })
     expect(screen.queryByPlaceholderText(/search/i)).toBeNull()
+  })
+
+  it('opens the overlay on a bare `/`', () => {
+    renderGlobal()
+    expect(screen.queryByPlaceholderText(/search/i)).toBeNull()
+
+    fireEvent.keyDown(window, { key: '/' })
+    expect(screen.getByPlaceholderText(/search/i)).toBeInTheDocument()
+  })
+
+  it('leaves `/` alone while something editable has focus — the slash belongs to the text', () => {
+    renderGlobal(<input aria-label="Note title" />)
+    const field = screen.getByRole('textbox', { name: 'Note title' })
+    field.focus()
+
+    fireEvent.keyDown(field, { key: '/' })
+    expect(screen.queryByPlaceholderText(/search/i)).toBeNull()
+  })
+
+  it('ignores `/` with a modifier held (Ctrl+/ and friends are other tools’ shortcuts)', () => {
+    renderGlobal()
+    fireEvent.keyDown(window, { key: '/', ctrlKey: true })
+    fireEvent.keyDown(window, { key: '/', altKey: true })
+    expect(screen.queryByPlaceholderText(/search/i)).toBeNull()
+  })
+
+  it('typing `/` into the open palette does not re-trigger or close anything', async () => {
+    renderGlobal()
+    fireEvent.keyDown(window, { key: '/' })
+    const input = screen.getByPlaceholderText(/search/i)
+
+    const user = userEvent.setup()
+    await user.type(input, 'people/jane')
+
+    expect(input).toHaveValue('people/jane')
+    expect(screen.getByPlaceholderText(/search/i)).toBeInTheDocument()
   })
 })
