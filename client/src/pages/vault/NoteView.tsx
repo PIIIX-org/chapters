@@ -13,13 +13,15 @@ import { useSession } from '../../hooks/useSession.js'
 import { canEdit } from '../../api/vaults.js'
 import type { Vault, VaultAccess } from '../../api/vaults.js'
 import { CollabPropertyPanel, LivePropertyPanel } from '../../components/vault/PropertyPanel.js'
-import { CollabStatusLine } from '../../components/vault/CollabStatusLine.js'
+import { CollabStatusLine, collabShellStatus } from '../../components/vault/CollabStatusLine.js'
 import { CollaboratorAvatars } from '../../components/vault/CollaboratorAvatars.js'
 import { NoteActions } from '../../components/vault/NoteActions.js'
 import { RevokedNotice } from '../../components/vault/RevokedNotice.js'
 import { RevisionHistory } from '../../components/vault/RevisionHistory.js'
 import { SharingPanel } from '../../components/vault/SharingPanel.js'
 import { Inspector } from '../../components/shell/ShellPanels.js'
+import { useShellStatus } from '../../components/shell/shell-context.js'
+import type { ShellStatus } from '../../components/shell/shell-context.js'
 import { Pill } from '../../components/ui/pill.js'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js'
 import { handleWikilinkClick } from '../../lib/handleWikilinkClick.js'
@@ -281,6 +283,10 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
     setMark({ synced: collab.synced, at: collab.synced ? new Date() : mark.at })
   }
 
+  // The note bar's pill, mirrored into the shell's top bar — same mapping,
+  // so the two can never disagree (spec: shell shows the page's live status).
+  useShellStatus(collabShellStatus(collab.status, collab.synced))
+
   return (
     <NoteFrame
       editorRef={editorRef}
@@ -321,6 +327,15 @@ const LIVE_WHISPER: Record<LiveStatus, string> = {
   ended: 'Live updates stopped — your access to this note may have changed',
 }
 
+/** The reader path's mirror of LIVE_WHISPER for the shell's top-bar pill:
+ *  same states, shortened to pill length. */
+const LIVE_SHELL: Record<LiveStatus, ShellStatus> = {
+  connecting: { tone: 'idle', label: 'Connecting…' },
+  live: { tone: 'live', label: 'Live' },
+  reconnecting: { tone: 'idle', label: 'Reconnecting' },
+  ended: { tone: 'error', label: 'Live ended' },
+}
+
 interface LiveNoteProps extends NoteIdentity {
   initialFrontmatter: Record<string, unknown>
   initialBody: string
@@ -332,6 +347,7 @@ interface LiveNoteProps extends NoteIdentity {
  */
 function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }: LiveNoteProps) {
   const live = useLiveNote({ vaultId, path, enabled: true })
+  useShellStatus(LIVE_SHELL[live.status])
   // The REST fetch is what is on screen until the first frame arrives.
   const state = live.state ?? { frontmatter: initialFrontmatter, body: initialBody }
   const wikilinks = useWikilinks(vaultId, false)

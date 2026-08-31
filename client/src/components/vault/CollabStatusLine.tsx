@@ -1,4 +1,5 @@
 import type { CollabStatus } from '../../hooks/useCollabDoc.js'
+import type { ShellStatus } from '../shell/shell-context.js'
 import { Pill } from '../ui/pill.js'
 import type { PillTone } from '../ui/pill.js'
 
@@ -29,6 +30,18 @@ const WHISPER: Record<
   reconnecting: { tone: 'idle', label: 'Reconnecting', detail: 'edits keep merging in this tab' },
   offline: { tone: 'error', label: 'Offline', detail: 'your edits are staying in this tab' },
   revoked: { tone: 'error', label: 'Access removed', detail: 'this note stopped syncing' },
+}
+
+/**
+ * The same words and tones, shaped for the shell's top-bar pill — one mapping,
+ * so the mirror can never disagree with the note bar it mirrors.
+ */
+export function collabShellStatus(status: CollabStatus, synced: boolean): ShellStatus {
+  if (status === 'connected') {
+    return synced ? { tone: 'live', label: 'Synced' } : { tone: 'idle', label: 'Syncing…' }
+  }
+  const { tone, label } = WHISPER[status]
+  return { tone, label }
 }
 
 /**
