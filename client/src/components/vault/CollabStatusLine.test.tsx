@@ -57,12 +57,13 @@ describe('CollabStatusLine', () => {
     expect(screen.getByRole('status').textContent).toMatch(/^Reconnecting/)
   })
 
-  it('whispers in muted text, not in an accent colour', () => {
+  it('whispers in semantic status tones, never the AI accent', () => {
     render(<CollabStatusLine status="connecting" synced={false} syncedAt={null} />)
     const line = screen.getByRole('status')
-    expect(line.className).toContain('text-muted-foreground')
-    // `accent` is the teal AI token; a sync status is not an AI signal.
-    expect(line.className).not.toContain('accent')
+    // The pill carries a status tone (idle = warning); `accent` is the teal
+    // AI token, and a sync status is not an authorship signal.
+    expect(line.querySelector('[class*="warning"]')).not.toBeNull()
+    expect(line.innerHTML).not.toContain('accent')
   })
 
   it('has no accessibility violations', async () => {

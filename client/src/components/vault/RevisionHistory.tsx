@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Button } from '../ui/button.js'
+import { Eyebrow } from '../ui/eyebrow.js'
 import { FormError } from '../FormError.js'
 import { ConfirmAction } from '../admin/ConfirmAction.js'
 import { usePurgeRevision, useRevertNote, useRevisions } from '../../hooks/useRevisions.js'
@@ -59,7 +60,7 @@ export function RevisionHistory({ vaultId, path, access }: RevisionHistoryProps)
   if (access === 'read') {
     return (
       <section className="flex flex-col gap-2">
-        <h3 className="font-display text-base text-foreground">History</h3>
+        <Eyebrow as="h3">History</Eyebrow>
         <p className="text-sm text-muted-foreground">
           Read access shows you the note as it is now. Seeing who changed it, and when, needs edit access.
         </p>
@@ -70,7 +71,7 @@ export function RevisionHistory({ vaultId, path, access }: RevisionHistoryProps)
   return (
     <section className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-display text-base text-foreground">History</h3>
+        <Eyebrow as="h3">History</Eyebrow>
         <div className="flex items-center gap-2">
           <Button
             type="button"

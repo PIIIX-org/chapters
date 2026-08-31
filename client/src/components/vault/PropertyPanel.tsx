@@ -16,6 +16,10 @@ function asStringArray(value: unknown): string[] {
  *  and everything else is preserved OKF, shown but not touched. */
 const EDITABLE = new Set(['resource', 'tags', 'timestamp'])
 
+/** The inspector's field-name column: mono eyebrow, like every machine label
+ *  in the console. Applied to Label too — `cn` merges the size override in. */
+const KEY = 'font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground'
+
 interface PropertyFieldsProps {
   frontmatter: Record<string, unknown>
   readOnly: boolean
@@ -30,25 +34,26 @@ function PropertyFields({ frontmatter, readOnly, onSet }: PropertyFieldsProps) {
   )
 
   return (
-    <dl className="grid grid-cols-[6rem_1fr] items-center gap-x-4 gap-y-2 text-sm">
-      <dt className="font-medium text-muted-foreground">type</dt>
-      <dd className="text-foreground">{asString(frontmatter.type) || '—'}</dd>
+    <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2 text-sm">
+      <dt className={KEY}>type</dt>
+      <dd className="font-mono text-xs text-foreground">{asString(frontmatter.type) || '—'}</dd>
 
       {/* A <dl> may only contain dt/dd/div directly — a bare <label>/<input>
           pair in here is a definition-list violation, and axe says so. */}
       <dt>
-        <Label htmlFor="pp-resource" className="text-muted-foreground">resource</Label>
+        <Label htmlFor="pp-resource" className={KEY}>resource</Label>
       </dt>
       <dd>
         <Input
           id="pp-resource"
+          className="h-7"
           value={asString(frontmatter.resource)}
           disabled={readOnly}
           onChange={(e) => onSet('resource', e.target.value)}
         />
       </dd>
 
-      <dt className="font-medium text-muted-foreground">tags</dt>
+      <dt className={KEY}>tags</dt>
       <dd>
         <TagInput
           value={asStringArray(frontmatter.tags)}
@@ -58,11 +63,12 @@ function PropertyFields({ frontmatter, readOnly, onSet }: PropertyFieldsProps) {
       </dd>
 
       <dt>
-        <Label htmlFor="pp-timestamp" className="text-muted-foreground">timestamp</Label>
+        <Label htmlFor="pp-timestamp" className={KEY}>timestamp</Label>
       </dt>
       <dd>
         <Input
           id="pp-timestamp"
+          className="h-7"
           value={asString(frontmatter.timestamp)}
           disabled={readOnly}
           placeholder="ISO date (e.g. 2026-01-01)"
@@ -71,9 +77,11 @@ function PropertyFields({ frontmatter, readOnly, onSet }: PropertyFieldsProps) {
       </dd>
 
       {extraKeys.map(([key, value]) => (
-        <div key={key} className="col-span-2 flex gap-2">
-          <dt className="font-medium text-muted-foreground">{key}:</dt>
-          <dd>{typeof value === 'string' ? value : JSON.stringify(value)}</dd>
+        <div key={key} className="col-span-2 flex min-w-0 items-baseline gap-2">
+          <dt className={KEY}>{key}:</dt>
+          <dd className="min-w-0 truncate text-xs text-foreground">
+            {typeof value === 'string' ? value : JSON.stringify(value)}
+          </dd>
         </div>
       ))}
     </dl>

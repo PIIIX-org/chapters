@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { expectNoA11yViolations } from '../../test/axe'
 import { createMemoryRouter, Outlet, RouterProvider } from 'react-router'
 import * as Y from 'yjs'
 import { EditorView } from '@codemirror/view'
@@ -12,6 +14,7 @@ import { NoteView } from './NoteView'
 
 const EDIT_VAULT: Vault = { id: 'v1', name: 'V1', ownerId: 'u1', mergeable: false, access: 'edit' }
 const READ_VAULT: Vault = { id: 'v1', name: 'V1', ownerId: 'u1', mergeable: false, access: 'read' }
+const OWNER_VAULT: Vault = { id: 'v1', name: 'V1', ownerId: 'u1', mergeable: false, access: 'owner' }
 
 /* ------------------------------------------------------------------ *
  * The two transports, stubbed at the module/global boundary. Between
@@ -491,5 +494,53 @@ describe('NoteView', () => {
     expect(contentEditable()).toBe('false')
     // And it says why, without claiming access was taken away.
     expect(screen.queryByText(/access to this note was removed/i)).toBeNull()
+  })
+})
+
+describe('NoteView — the inspector tabs', () => {
+  function inspector(): HTMLElement {
+    // Outside an AppShell the Inspector renders inline as a labelled aside.
+    return document.querySelector('aside[data-shell-panel="inspector"]') as HTMLElement
+  }
+
+  it('folds properties, history and sharing into inspector tabs for the owner', async () => {
+    stubFetch()
+    renderNote(OWNER_VAULT)
+
+    const doc = await relay()
+    doc.load('body', { resource: 'https://kintsugi.test/ada' })
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Properties' })).toBeInTheDocument())
+    expect(screen.getByRole('tab', { name: 'History' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Sharing' })).toBeInTheDocument()
+    // Properties is the resting tab, bound to the live document.
+    expect(screen.getByDisplayValue('https://kintsugi.test/ada')).toBeInTheDocument()
+    // All three live in the inspector track, not over the editor.
+    expect(inspector()).toContainElement(screen.getByRole('tab', { name: 'Sharing' }))
+
+    await expectNoA11yViolations(inspector())
+  })
+
+  it('offers no Sharing tab below owner — shares are the owner’s to grant', async () => {
+    stubFetch()
+    renderNote(EDIT_VAULT)
+
+    await relay()
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'History' })).toBeInTheDocument())
+    expect(screen.queryByRole('tab', { name: 'Sharing' })).toBeNull()
+  })
+
+  it('gives a reader the same tabs, locked: history explains instead of 403ing', async () => {
+    stubFetch()
+    renderNote(READ_VAULT)
+
+    await screen.findByText(/read-only/i)
+    expect(screen.queryByRole('tab', { name: 'Sharing' })).toBeNull()
+
+    await userEvent.click(screen.getByRole('tab', { name: 'History' }))
+    expect(await screen.findByText(/needs edit access/i)).toBeInTheDocument()
+    // The reason, not a request that can only fail: nothing was fetched for it.
+    const fetchMock = vi.mocked(globalThis.fetch)
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/revisions'))).toBe(false)
   })
 })
