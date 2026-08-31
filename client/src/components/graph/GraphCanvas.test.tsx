@@ -443,7 +443,6 @@ describe('GraphCanvas', () => {
     stubMatchMedia(true)
     stubCanvasContext()
     const raf = stubManualRaf()
-    const user = userEvent.setup()
     renderGraphCanvas()
 
     await waitFor(() => expect(raf.pending()).toBeGreaterThan(0))
@@ -451,7 +450,6 @@ describe('GraphCanvas', () => {
     expect(raf.pending()).toBe(0) // settled
 
     tickSpy.mockClear()
-    await user.click(screen.getByRole('button', { name: /physics controls/i }))
     const slider = screen.getByRole('slider', { name: /force strength/i })
     fireEvent.change(slider, { target: { value: '-200' } })
 
@@ -481,7 +479,6 @@ describe('GraphCanvas', () => {
       { keys: '[/MouseLeft]' },
     ])
 
-    await user.click(screen.getByRole('button', { name: /physics controls/i }))
     const linkSlider = screen.getByRole('slider', { name: /link distance/i })
     fireEvent.change(linkSlider, { target: { value: '250' } })
     expect(linkSlider).toHaveValue('250')
@@ -506,5 +503,85 @@ describe('GraphCanvas', () => {
     // pan applied, not a fresh identity transform.
     const lastOpts = drawOptsSpy.mock.calls.at(-1)?.[0]
     expect(lastOpts.transform.x).not.toBe(0)
+  })
+
+  it('shows the stats strip with mono numerals computed from the aggregated graph', async () => {
+    stubFetch()
+    stubMatchMedia(false)
+    stubCanvasContext()
+    renderGraphCanvas()
+
+    // <dl> has no implicit `list` role, so anchor on its label directly.
+    await screen.findByText('Communities', { selector: 'dt > *' })
+    const strip = document.querySelector('dl[aria-label="Graph statistics"]')!
+    expect(strip).not.toBeNull()
+    // GRAPH: 3+5 notes, 1+4 code files, 1 aggregated edge, 2 communities.
+    const rows = Object.fromEntries(
+      [...strip.querySelectorAll('div')].map((row) => [
+        row.querySelector('dt')?.textContent,
+        row.querySelector('dd')?.textContent,
+      ]),
+    )
+    expect(rows).toMatchObject({
+      Notes: '8',
+      'Code files': '5',
+      Edges: '1',
+      Communities: '2',
+    })
+  })
+
+  it("hovering a node on the canvas shows that community's detail in the inspector, and leaving clears it", async () => {
+    stubFetch()
+    stubMatchMedia(false)
+    stubCanvasContext()
+    const raf = stubManualRaf()
+    const { container } = renderGraphCanvas()
+
+    await waitFor(() => expect(raf.pending()).toBeGreaterThan(0))
+    const canvas = container.querySelector('canvas')!
+
+    // Nothing hovered or expanded yet: the detail panel shows its hint.
+    expect(screen.getByRole('heading', { name: 'Community' })).toBeInTheDocument()
+
+    // Never flush a frame, so GRAPH's community 0 sits at world (0, 0)
+    // (golden-angle spiral index 0) — same technique as the tap tests.
+    fireEvent.pointerMove(canvas, { clientX: 0, clientY: 0 })
+    expect(await screen.findByRole('heading', { name: 'Community 0' })).toBeInTheDocument()
+
+    // Off every node (community 0's radius is 4): back to the hint.
+    fireEvent.pointerMove(canvas, { clientX: 200, clientY: 200 })
+    expect(screen.queryByRole('heading', { name: 'Community 0' })).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Community' })).toBeInTheDocument()
+  })
+
+  it('the zoom buttons zoom the drawn transform in and out without ticking the simulation', async () => {
+    stubFetch()
+    stubMatchMedia(false)
+    stubCanvasContext()
+    const raf = stubManualRaf()
+    const user = userEvent.setup()
+    renderGraphCanvas()
+
+    await waitFor(() => expect(raf.pending()).toBeGreaterThan(0))
+    for (let i = 0; i < 400 && raf.pending() > 0; i++) raf.flush()
+    expect(raf.pending()).toBe(0) // settled
+
+    const ticksAtIdle = tickSpy.mock.calls.length
+    drawOptsSpy.mockClear()
+
+    await user.click(screen.getByRole('button', { name: 'Zoom in' }))
+    expect(raf.pending()).toBeGreaterThan(0)
+    raf.flush()
+
+    let lastOpts = drawOptsSpy.mock.calls.at(-1)?.[0]
+    expect(lastOpts.transform.k).toBeCloseTo(1.4)
+
+    await user.click(screen.getByRole('button', { name: 'Zoom out' }))
+    raf.flush()
+    lastOpts = drawOptsSpy.mock.calls.at(-1)?.[0]
+    expect(lastOpts.transform.k).toBeCloseTo(1)
+
+    // Zooming is paint-only: the settled simulation never re-heated.
+    expect(tickSpy.mock.calls.length).toBe(ticksAtIdle)
   })
 })

@@ -80,7 +80,9 @@ describe('HomePage', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Loading the graph')
     expect(screen.queryByTestId('graph-canvas')).toBeNull()
 
-    expect(await screen.findByTestId('graph-canvas')).toBeInTheDocument()
+    // 5s, not the 1s default: under vitest the lazy chunk's first import in
+    // a worker (lucide-react's barrel included) can exceed a second.
+    expect(await screen.findByTestId('graph-canvas', {}, { timeout: 5000 })).toBeInTheDocument()
   })
 
   it('loads the graph renderer via lazy(), never a static import of GraphCanvas', () => {
