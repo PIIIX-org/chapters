@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { createRef } from 'react'
+import { act, render, screen } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
 import { mockJsonResponse } from '../../lib/api.js'
 import { expectNoA11yViolations } from '../../test/axe.js'
 import type { Repository, RepositoryFileContent } from '../../api/repositories.js'
-import { CodeViewer } from './CodeViewer.js'
+import { CodeViewer, type CodeViewerHandle } from './CodeViewer.js'
 
 type RepoProp = Pick<Repository, 'id' | 'ingestionMethod' | 'gitUrl' | 'defaultBranch'>
 
@@ -103,13 +103,14 @@ describe('CodeViewer', () => {
     vi.unstubAllGlobals()
   })
 
-  it('shows the file’s code with no way to edit it, and the outline from the same response', async () => {
+  it('shows the file’s code with no way to edit it', async () => {
+    // The symbol outline no longer renders here — it is an inspector tab on
+    // RepositoryPage, wired back through the revealLine handle below.
     stubFile(TS_FILE)
     const { container } = renderWithClient(<CodeViewer repository={GIT_REPO} path={TS_FILE.path} />)
 
-    expect(await screen.findByRole('button', { name: 'alpha, function, line 2' })).toBeInTheDocument()
     // CM6's content element is an ARIA textbox; it needs a name of its own.
-    const content = screen.getByRole('textbox', { name: `${TS_FILE.path} (read-only)` })
+    const content = await screen.findByRole('textbox', { name: `${TS_FILE.path} (read-only)` })
     expect(content.textContent).toContain('export class Beta {}')
     // Read-only is the whole design boundary: no caret, no edit transactions.
     expect(content.getAttribute('contenteditable')).toBe('false')
@@ -153,11 +154,13 @@ describe('CodeViewer', () => {
     expect(screen.queryByRole('navigation', { name: 'Symbol outline' })).toBeNull()
   })
 
-  it('moves the viewer to the symbol that was clicked', async () => {
+  it('moves the viewer to the line the outline asks for, via its handle', async () => {
     stubFile(TS_FILE)
-    renderWithClient(<CodeViewer repository={GIT_REPO} path={TS_FILE.path} />)
+    const handle = createRef<CodeViewerHandle>()
+    renderWithClient(<CodeViewer repository={GIT_REPO} path={TS_FILE.path} ref={handle} />)
+    await screen.findByRole('textbox', { name: `${TS_FILE.path} (read-only)` })
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Beta, class, line 5' }))
+    act(() => handle.current!.revealLine(5))
 
     const view = editorView()
     expect(view.state.selection.main.head).toBe(view.state.doc.line(5).from)

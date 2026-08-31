@@ -9,7 +9,6 @@ import {
   type StringStream,
 } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
-import { categoryHuesFor } from '../components/graph/draw.js'
 
 /**
  * The read-only code viewer's editor: a non-editable CodeMirror plus the
@@ -25,7 +24,7 @@ interface ModeSpec {
   keywords: string
   /** `#` for Python, `//` for the C-family three. */
   lineComment: string
-  /** Only the C-family three have `/* … *\/`. */
+  /** Only the C-family three have block comments. */
   blockComment: boolean
   quotes: string
 }
@@ -129,18 +128,54 @@ function languageExtension(language: string | null) {
   return spec ? StreamLanguage.define(parserFor(spec)) : null
 }
 
-/**
- * Token colour comes from the graph's approved categorical hues, which exist
- * precisely because vermillion and teal are the authorship tokens (person /
- * AI-MCP) and must never be borrowed for something that is neither. A keyword
- * did not author anything.
- */
 const codeHighlight = HighlightStyle.define([
   { tag: tags.keyword, class: 'cm-code-keyword' },
   { tag: tags.comment, class: 'cm-code-comment' },
   { tag: tags.string, class: 'cm-code-string' },
   { tag: tags.number, class: 'cm-code-number' },
 ])
+
+/**
+ * An editor-console theme written entirely in CSS variables, so it follows the
+ * active theme live — no colour is read at mount, which is what let the old
+ * version show stale token colours after a theme switch. The background stays
+ * transparent over the viewer's own `bg-card`; gutter numbers sit in
+ * `--faint`; the syntax palette is three restrained ink hues plus faint
+ * comments — the collaborator inks exist precisely because `--primary`
+ * (human) and `--accent` (AI/MCP) are authorship tokens and a keyword did not
+ * author anything. Selection is the one place `--primary` appears: selecting
+ * is something the person is doing.
+ */
+const viewerTheme = EditorView.theme({
+  '&': {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '13px',
+    height: '100%',
+    backgroundColor: 'transparent',
+    color: 'var(--foreground)',
+  },
+  '&.cm-focused': { outline: 'none' },
+  '.cm-content': { fontFamily: 'var(--font-mono)', caretColor: 'transparent' },
+  '.cm-scroller': { overflow: 'auto', lineHeight: '1.6' },
+  '.cm-gutters': {
+    backgroundColor: 'transparent',
+    color: 'var(--faint)',
+    border: 'none',
+  },
+  '.cm-lineNumbers .cm-gutterElement': { minWidth: '3ch', padding: '0 12px 0 10px' },
+  '.cm-activeLine': { backgroundColor: 'transparent' },
+  '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--muted-foreground)' },
+  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
+    backgroundColor: 'color-mix(in srgb, var(--primary) 24%, transparent)',
+  },
+  '.cm-content ::selection': {
+    backgroundColor: 'color-mix(in srgb, var(--primary) 24%, transparent)',
+  },
+  '.cm-code-keyword': { color: 'var(--ink-indigo)' },
+  '.cm-code-comment': { color: 'var(--faint)', fontStyle: 'italic' },
+  '.cm-code-string': { color: 'var(--ink-forest)' },
+  '.cm-code-number': { color: 'var(--ink-ochre)' },
+})
 
 /**
  * Mounts a non-editable CodeMirror over `doc`, and remounts when the document
@@ -153,9 +188,6 @@ export function useCodeViewer(doc: string | undefined, label: string, language: 
   useEffect(() => {
     if (!containerRef.current || doc === undefined) return
     const mode = languageExtension(language)
-    // ponytail: theme read once at mount, like GraphCanvas. Toggling light/dark
-    // with a file open keeps the old token colours until the next file.
-    const hues = categoryHuesFor(document.documentElement.classList.contains('dark'))
     const view = new EditorView({
       state: EditorState.create({
         doc,
@@ -171,20 +203,7 @@ export function useCodeViewer(doc: string | undefined, label: string, language: 
           // is no caret to type into.
           EditorState.readOnly.of(true),
           EditorView.editable.of(false),
-          EditorView.theme({
-            '&': { fontFamily: 'var(--font-mono)', fontSize: '13px', height: '100%' },
-            '.cm-content': { fontFamily: 'var(--font-mono)' },
-            '.cm-scroller': { overflow: 'auto' },
-            '.cm-gutters': {
-              backgroundColor: 'transparent',
-              color: 'var(--muted-foreground)',
-              border: 'none',
-            },
-            '.cm-code-keyword': { color: hues[0]! },
-            '.cm-code-comment': { color: 'var(--muted-foreground)', fontStyle: 'italic' },
-            '.cm-code-string': { color: hues[4]! },
-            '.cm-code-number': { color: hues[3]! },
-          }),
+          viewerTheme,
         ],
       }),
       parent: containerRef.current,
