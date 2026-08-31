@@ -331,6 +331,16 @@ export default function GraphCanvas() {
       }
     }
 
+    // First mount only: the simulation's forceCenter keeps the cluster
+    // centred on world (0,0), but the identity transform puts world (0,0) at
+    // the canvas's TOP-LEFT — the whole graph loaded cropped into the corner
+    // (slice-8 QA screenshots). Centring the origin once centres the cluster
+    // for the life of the mount; later rebuilds keep the user's own camera.
+    const t0 = transformRef.current
+    if (t0.x === 0 && t0.y === 0 && t0.k === 1) {
+      transformRef.current = { x: container.clientWidth / 2, y: container.clientHeight / 2, k: 1 }
+    }
+
     const panzoom = createPanZoom(
       canvas,
       (t) => {

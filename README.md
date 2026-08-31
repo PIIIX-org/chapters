@@ -4,16 +4,9 @@ An open-source, self-hostable "second brain" platform: a team knowledge base
 built on plain markdown files, a live-preview editor, and an AI-navigable
 knowledge graph.
 
-**Status: backend complete; UI phase underway. Slice 1 (Scaffold + Auth),
-Slice 2a (vault tree + read-only view), Slice 2b (Editor — CodeMirror 6
-editing, permission-aware lock, editable frontmatter property panel, note
-create/rename/delete, and full live-preview), Slice 2c (wikilinks —
-`[[` autocomplete, clickable navigation, and link-to-create), Slice 3
-(Search — a ⌘K overlay with vault-scoped and everywhere search, type/tag/
-date filters, navigation and vault-create commands, code results with an
-inline preview toggle, and full keyboard navigation), and Slice 4/Unit 2
-(Sharing & team — the vault settings modal stack and a dedicated Team
-page, both reachable from ⌘K) are done.** All specs
+**Status: backend and UI complete, including the 2026-08-30 command
+redesign (dark command-console shell, all 8 slices merged and QA'd) and
+generic OIDC login for hosted or self-hosted SSO.** All specs
 ([`docs/superpowers/specs/`](docs/superpowers/specs/)) are implemented
 server-side on the decided stack (TypeScript end to end: Node/Fastify +
 Yjs/Hocuspocus + PostgreSQL/pgvector + local ONNX embeddings — chosen
@@ -104,6 +97,14 @@ panel, note create/rename/delete, and full live-preview) and Slice 2c
 settings modal stack and the Team page), Unit 3 (Admin & the onboarding path)
 Unit 4 (Settings & MFA), Unit 5 (Trash, history & import), Unit 6
 (Collaboration) and Unit 7 (Repositories) are done — the UI phase is complete.
+On top of that, the **command redesign**
+([spec](docs/superpowers/specs/2026-08-30-ui-command-redesign.md)) rebuilt the
+client as a dark-first command console: a grid shell (rail · top bar · context
+panel · content · inspector) on every authed route, a grouped command palette
+with recents, and every page's controls living in the shell's panels instead
+of floating over the content. All eight slices are merged, QA'd against the
+fixture API (`client/mock/`) with headless screenshots and a shell-overlap
+check at two sizes in both themes.
 Tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a

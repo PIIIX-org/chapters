@@ -175,6 +175,38 @@ describe('GraphCanvas', () => {
     expect(flushes).toBeGreaterThan(1) // this graph needed more than one batch
   })
 
+  it('opens with world origin at the viewport centre, not the top-left corner', async () => {
+    // forceCenter keeps the cluster on world (0,0); an identity first
+    // transform put (0,0) at the canvas corner and the whole graph loaded
+    // cropped (slice-8 QA screenshots). happy-dom reports clientWidth 0, so
+    // give the container a real size for this test.
+    const sized = { clientWidth: 800, clientHeight: 600 }
+    const cw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    const ch = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => sized.clientWidth })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => sized.clientHeight })
+    try {
+      stubFetch()
+      stubMatchMedia(false)
+      stubCanvasContext()
+      const raf = stubManualRaf()
+      renderGraphCanvas()
+
+      await waitFor(() => expect(raf.pending()).toBeGreaterThan(0))
+      raf.flush()
+
+      expect(drawOptsSpy).toHaveBeenCalled()
+      const { transform } = drawOptsSpy.mock.calls[0]![0] as { transform: { x: number; y: number; k: number } }
+      // dpr is 1 under happy-dom, so the draw transform is the camera as-is.
+      expect(transform.x).toBe(400)
+      expect(transform.y).toBe(300)
+      expect(transform.k).toBe(1)
+    } finally {
+      if (cw) Object.defineProperty(HTMLElement.prototype, 'clientWidth', cw)
+      if (ch) Object.defineProperty(HTMLElement.prototype, 'clientHeight', ch)
+    }
+  })
+
   it('runs the tick+draw loop until alpha decays below alphaMin, then stops drawing', async () => {
     stubFetch()
     stubMatchMedia(false)

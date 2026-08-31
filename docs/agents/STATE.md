@@ -22,7 +22,12 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 - **Phase: UI COMMAND REDESIGN** (owner-directed 2026-08-30): spec + plan of
   the same date under `superpowers/`. Dark-first grid shell (rail · top bar ·
   context · content · inspector) on every authed route; `/vaults`, `/repos`.
-  Slice 1 merged; slices 2–8 per plan. `client/mock/` = fixture API for QA.
+  **All 8 slices DONE** (2026-08-31): 1–7 merged; slice 8 QA ran the mock API
+  + headless-Edge screenshot/overlap pass over 12 routes × 2 sizes × 2 themes
+  — zero overlaps/scroll-x; it caught ONE real bug, the graph loading cropped
+  into the canvas corner (identity camera vs forceCenter(0,0) — fixed by
+  centring world origin on first mount, test pins it). `client/mock/` =
+  fixture API for QA (`MOCK_PORT=3000` to sit behind vite).
 - **Previous phase: DEPLOYABLE** (`plans/2026-08-27-deployable.md`). The API now serves
   the client and the relay shares its port; `docker compose up` from no volumes
   was driven in a browser, two tabs co-editing over the one published port.
