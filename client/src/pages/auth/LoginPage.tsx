@@ -1,12 +1,12 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router'
-import { useQueryClient } from '@tanstack/react-query'
+import { Link, useNavigate, useSearchParams } from 'react-router'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '../../components/ui/button.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js'
 import { Input } from '../../components/ui/input.js'
 import { Label } from '../../components/ui/label.js'
 import { FormError } from '../../components/FormError.js'
-import { isMfaRequired, login } from '../../api/auth.js'
+import { getAuthConfig, isMfaRequired, login } from '../../api/auth.js'
 import { ApiError } from '../../lib/api.js'
 import { SESSION_QUERY_KEY } from '../../hooks/useSession.js'
 
@@ -19,6 +19,11 @@ export function LoginPage() {
   const [mfaChallenge, setMfaChallenge] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // What doors this instance offers. Until the answer arrives, render the
+  // password form — the wrong guess is a flash, not a lockout.
+  const { data: authConfig } = useQuery({ queryKey: ['auth-config'], queryFn: getAuthConfig })
+  const [searchParams] = useSearchParams()
+  const ssoFailed = searchParams.get('error') === 'sso'
 
   async function attemptLogin(withTotp: boolean) {
     setError(null)
@@ -60,7 +65,18 @@ export function LoginPage() {
           <CardTitle className="font-display text-xl">Log in</CardTitle>
         </CardHeader>
         <CardContent>
-          {mfaChallenge ? (
+          {authConfig?.oidc ? (
+            <div className="mb-4 flex flex-col gap-4">
+              {ssoFailed ? <FormError message="Single sign-on failed. Try again." /> : null}
+              <Button asChild>
+                <a href="/api/oidc/login">Continue with single sign-on</a>
+              </Button>
+              {!authConfig.oidcOnly && (
+                <p className="text-center text-sm text-muted-foreground">or use your password</p>
+              )}
+            </div>
+          ) : null}
+          {authConfig?.oidcOnly ? null : mfaChallenge ? (
             <form onSubmit={handleTotpSubmit} className="flex flex-col gap-4">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="login-totp">Authentication code</Label>

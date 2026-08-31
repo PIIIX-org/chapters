@@ -1,5 +1,6 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply } from 'fastify'
 import { eq } from 'drizzle-orm'
+import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { instanceState, users } from '../db/schema.js'
 import { sendMail } from '../email/mailer.js'
@@ -31,7 +32,7 @@ export const strictRateLimit = {
   },
 } as const
 
-function sessionCookieOptions(isProd: boolean) {
+export function sessionCookieOptions(isProd: boolean) {
   return {
     path: '/',
     httpOnly: true,
@@ -39,6 +40,17 @@ function sessionCookieOptions(isProd: boolean) {
     sameSite: 'lax' as const,
     maxAge: 30 * 24 * 60 * 60,
   }
+}
+
+/**
+ * With OIDC_ONLY=true every password-credential surface answers 403. /setup
+ * stays open — it is the provisioning handshake, and it runs before the
+ * instance has its OIDC config at all.
+ */
+function passwordAuthDisabled(reply: FastifyReply): boolean {
+  if (!config.oidc?.only) return false
+  void reply.code(403).send({ error: 'password login is disabled on this instance; use single sign-on' })
+  return true
 }
 
 export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
@@ -92,6 +104,7 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
     '/signup',
     { config: strictRateLimit, schema: { body: credentialsSchema } },
     async (req, reply) => {
+      if (passwordAuthDisabled(reply)) return
       if (!(await isSetupComplete())) {
         return reply.code(403).send({ error: 'instance setup is not complete' })
       }
@@ -157,6 +170,7 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
       },
     },
     async (req, reply) => {
+      if (passwordAuthDisabled(reply)) return
       const email = req.body.email.toLowerCase()
       const accountKey = `acct:${email}`
       const ipKey = `ip:${req.ip}`
@@ -226,6 +240,7 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
       },
     },
     async (req, reply) => {
+      if (passwordAuthDisabled(reply)) return
       const email = req.body.email.toLowerCase()
       const user = (await db.select().from(users).where(eq(users.email, email)))[0]
       if (user && user.emailVerifiedAt) {
@@ -258,6 +273,7 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
       },
     },
     async (req, reply) => {
+      if (passwordAuthDisabled(reply)) return
       const userId = await consumeEmailToken('password_reset', req.body.token)
       if (!userId) return reply.code(400).send({ error: 'invalid or expired token' })
       await db
