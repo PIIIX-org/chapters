@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
+import { AuthFrame } from '../../components/auth/AuthFrame.js'
 import { Button } from '../../components/ui/button.js'
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js'
 import { Input } from '../../components/ui/input.js'
 import { Label } from '../../components/ui/label.js'
 import { FormError } from '../../components/FormError.js'
@@ -43,49 +43,42 @@ export function SetupPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="font-display text-xl">Set up Chapters</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {alreadySetUp ? (
-            <p className="text-sm text-muted-foreground">
-              This instance is already set up. Go to{' '}
-              <Link to="/login" className="text-primary underline">
-                sign in
-              </Link>
-              .
-            </p>
-          ) : (
-            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="setup-token">Setup token</Label>
-                <Input id="setup-token" value={token} onChange={(e) => setToken(e.target.value)} required />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="setup-email">Email</Label>
-                <Input id="setup-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="setup-password">Password</Label>
-                <Input
-                  id="setup-password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  minLength={8}
-                  required
-                />
-              </div>
-              <FormError message={error} />
-              <Button type="submit" disabled={submitting}>
-                Create admin account
-              </Button>
-            </form>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+    <AuthFrame eyebrow="first run" title="Set up Chapters">
+      {alreadySetUp ? (
+        <p className="text-sm text-muted-foreground">
+          This instance is already set up. Go to{' '}
+          <Link to="/login" className="text-primary underline">
+            sign in
+          </Link>
+          .
+        </p>
+      ) : (
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="setup-token">Setup token</Label>
+            <Input id="setup-token" value={token} onChange={(e) => setToken(e.target.value)} required />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="setup-email">Email</Label>
+            <Input id="setup-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="setup-password">Password</Label>
+            <Input
+              id="setup-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              minLength={8}
+              required
+            />
+          </div>
+          <FormError message={error} />
+          <Button type="submit" disabled={submitting}>
+            Create admin account
+          </Button>
+        </form>
+      )}
+    </AuthFrame>
   )
 }
