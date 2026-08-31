@@ -382,9 +382,10 @@ export default function GraphCanvas() {
     // pointer that hasn't drifted more than TAP_MAX_SCREEN_DRIFT between
     // down and up is a tap; two pointers down at once means a pinch
     // started, which cancels the tap candidate outright. Coordinates are
-    // converted world-space with `screenToWorld` and this frame's
-    // transform BEFORE hit-testing — hit-testing raw screen coordinates
-    // only works at the identity transform and breaks after any pan/zoom.
+    // converted to element-local (raw clientX/Y minus the canvas rect,
+    // same convention as panzoom's localPoint — raw coordinates are off
+    // by the shell's rail/panel offsets), then world-space with
+    // `screenToWorld` and this frame's transform BEFORE hit-testing.
     let tap: { pointerId: number; x: number; y: number } | null = null
 
     function onPointerDownForTap(e: PointerEvent) {
@@ -397,7 +398,8 @@ export default function GraphCanvas() {
       if (!candidate || candidate.pointerId !== e.pointerId) return
       if (Math.hypot(e.clientX - candidate.x, e.clientY - candidate.y) > TAP_MAX_SCREEN_DRIFT) return
 
-      const world = screenToWorld(panzoom.transform, e.clientX, e.clientY)
+      const rect = canvas!.getBoundingClientRect()
+      const world = screenToWorld(panzoom.transform, e.clientX - rect.left, e.clientY - rect.top)
       const hitNode = hitTest(nodes, world.x, world.y, (n) => n.radius)
       if (hitNode) setExpandedCommunity(hitNode.community)
     }
@@ -410,7 +412,8 @@ export default function GraphCanvas() {
     // Same coordinate convention as the tap handler above (screenToWorld
     // before hit-testing, never raw screen coordinates).
     function onPointerMoveForHover(e: PointerEvent) {
-      const world = screenToWorld(panzoom.transform, e.clientX, e.clientY)
+      const rect = canvas!.getBoundingClientRect()
+      const world = screenToWorld(panzoom.transform, e.clientX - rect.left, e.clientY - rect.top)
       const hitNode = hitTest(nodes, world.x, world.y, (n) => n.radius)
       setHoveredCommunity(hitNode ? hitNode.community : null)
     }
