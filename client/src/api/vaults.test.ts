@@ -4,10 +4,12 @@ import {
   canEdit,
   createVault,
   deleteVault,
+  getVaultGraphPreference,
   listTrashedVaults,
   listVaults,
   renameVault,
   restoreVault,
+  setVaultGraphPreference,
 } from './vaults'
 
 describe('vaults api', () => {
@@ -105,5 +107,34 @@ describe('vaults api', () => {
     expect(canEdit('edit')).toBe(true)
     expect(canEdit('read')).toBe(false)
     expect(canEdit(undefined)).toBe(false)
+  })
+
+  it('getVaultGraphPreference calls GET /api/vaults/:id/graph-preference', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, { include: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const pref = await getVaultGraphPreference('v1')
+
+    expect(pref).toEqual({ include: true })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/vaults/v1/graph-preference',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+  })
+
+  it('setVaultGraphPreference calls PUT /api/vaults/:id/graph-preference', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, { include: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const pref = await setVaultGraphPreference('v1', true)
+
+    expect(pref).toEqual({ include: true })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/vaults/v1/graph-preference',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ include: true }),
+      }),
+    )
   })
 })

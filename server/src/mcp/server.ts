@@ -6,10 +6,12 @@ import { db } from '../db/client.js'
 import {
   notifications,
   repositories,
+  repositoryGraphPreferences,
   repositoryShares,
   teamMemberships,
   teams,
   users,
+  vaultGraphPreferences,
   vaults,
   vaultShares,
 } from '../db/schema.js'
@@ -204,7 +206,58 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         .where(eq(vaults.id, target))
         .returning()
       if (!vault) throw new McpToolError('vault not found')
+      if (args.mergeable === true) {
+        await db
+          .insert(vaultGraphPreferences)
+          .values({ userId: auth.user.id, vaultId: target, include: true })
+          .onConflictDoNothing()
+      }
       return vault
+    }),
+  )
+
+  server.registerTool(
+    'get_vault_graph_preference',
+    {
+      description: 'Get the graph preference for a vault (whether to include it in the merged graph view). Requires read access.',
+      inputSchema: { vaultId: z.string().uuid().optional() },
+    },
+    wrap(async ({ vaultId }: { vaultId?: string }) => {
+      const target = vaultFor(vaultId)
+      await requireAccess(target, 'read')
+      const rows = await db
+        .select({ include: vaultGraphPreferences.include })
+        .from(vaultGraphPreferences)
+        .where(
+          and(
+            eq(vaultGraphPreferences.userId, auth.user.id),
+            eq(vaultGraphPreferences.vaultId, target),
+          ),
+        )
+      return { include: rows[0]?.include ?? false }
+    }),
+  )
+
+  server.registerTool(
+    'set_vault_graph_preference',
+    {
+      description: 'Set the graph preference for a vault (whether to include it in your merged graph view). Requires read access.',
+      inputSchema: {
+        vaultId: z.string().uuid().optional(),
+        include: z.boolean(),
+      },
+    },
+    wrap(async ({ vaultId, include }: { vaultId?: string; include: boolean }) => {
+      const target = vaultFor(vaultId)
+      await requireAccess(target, 'read')
+      await db
+        .insert(vaultGraphPreferences)
+        .values({ userId: auth.user.id, vaultId: target, include })
+        .onConflictDoUpdate({
+          target: [vaultGraphPreferences.userId, vaultGraphPreferences.vaultId],
+          set: { include },
+        })
+      return { include }
     }),
   )
 
@@ -816,7 +869,58 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         .where(eq(repositories.id, target))
         .returning()
       if (!repo) throw new McpToolError('repository not found')
+      if (args.mergeable === true) {
+        await db
+          .insert(repositoryGraphPreferences)
+          .values({ userId: auth.user.id, repositoryId: target, include: true })
+          .onConflictDoNothing()
+      }
       return repositoryView(repo)
+    }),
+  )
+
+  server.registerTool(
+    'get_repository_graph_preference',
+    {
+      description: 'Get the graph preference for a repository (whether to include it in the merged graph view). Requires repository access.',
+      inputSchema: { repositoryId: z.string().uuid().optional() },
+    },
+    wrap(async ({ repositoryId }: { repositoryId?: string }) => {
+      const target = repositoryFor(repositoryId)
+      await requireRepositoryAccess(target)
+      const rows = await db
+        .select({ include: repositoryGraphPreferences.include })
+        .from(repositoryGraphPreferences)
+        .where(
+          and(
+            eq(repositoryGraphPreferences.userId, auth.user.id),
+            eq(repositoryGraphPreferences.repositoryId, target),
+          ),
+        )
+      return { include: rows[0]?.include ?? false }
+    }),
+  )
+
+  server.registerTool(
+    'set_repository_graph_preference',
+    {
+      description: 'Set the graph preference for a repository (whether to include it in your merged graph view). Requires repository access.',
+      inputSchema: {
+        repositoryId: z.string().uuid().optional(),
+        include: z.boolean(),
+      },
+    },
+    wrap(async ({ repositoryId, include }: { repositoryId?: string; include: boolean }) => {
+      const target = repositoryFor(repositoryId)
+      await requireRepositoryAccess(target)
+      await db
+        .insert(repositoryGraphPreferences)
+        .values({ userId: auth.user.id, repositoryId: target, include })
+        .onConflictDoUpdate({
+          target: [repositoryGraphPreferences.userId, repositoryGraphPreferences.repositoryId],
+          set: { include },
+        })
+      return { include }
     }),
   )
 

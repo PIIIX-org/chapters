@@ -475,6 +475,8 @@ export default function GraphCanvas() {
   // empty vault) — not the same thing as `graph.isError`, and must not
   // render the two-pane canvas layout over either.
   const isEmpty = !!graph.data && isCommunityGraph(graph.data) && graph.data.nodes.length === 0
+  const isMergedView = !searchParams.get('vault')
+  const hasVaults = (vaults.data?.length ?? 0) > 0
 
   if (graph.isError) {
     return (
@@ -487,7 +489,15 @@ export default function GraphCanvas() {
   if (isEmpty) {
     return (
       <div data-testid="graph-canvas" className="h-full w-full">
-        <GraphEmptyState createNoteHref={createNoteHref} />
+        <GraphEmptyState
+          createNoteHref={createNoteHref}
+          title={isMergedView && hasVaults ? 'No notes in merged view' : undefined}
+          message={
+            isMergedView && hasVaults
+              ? 'To fold your notes into this view, turn on merging in vault settings, or pick a specific vault from the scope picker above.'
+              : undefined
+          }
+        />
       </div>
     )
   }

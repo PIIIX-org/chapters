@@ -30,15 +30,21 @@ export function GraphErrorState({ message, onRetry }: GraphErrorStateProps) {
 
 interface GraphEmptyStateProps {
   createNoteHref: string
+  title?: string
+  message?: string
 }
 
 /** A successful fetch with zero nodes — an empty graph is not an error. */
-export function GraphEmptyState({ createNoteHref }: GraphEmptyStateProps) {
+export function GraphEmptyState({
+  createNoteHref,
+  title = 'Nothing to draw yet',
+  message = 'The graph draws the links between your notes — write one to see it grow.',
+}: GraphEmptyStateProps) {
   return (
     <PanelState
       status="empty"
-      title="Nothing to draw yet"
-      message="The graph draws the links between your notes — write one to see it grow."
+      title={title}
+      message={message}
       action={
         <Button asChild>
           <Link to={createNoteHref}>Create a note</Link>
