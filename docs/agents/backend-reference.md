@@ -384,11 +384,15 @@ re-resolved live.
   never silently narrowed or widened. Account-only tools
   (`list_vaults`, `list_repositories`, unscoped `search`) hard-reject
   non-account tokens.
-- **Tools**: `list_vaults`, `browse_vault`, `read_note`, `create_note`,
-  `edit_note`, `delete_note`, `search`, `graph`, `note_history`,
-  `revert_note`, `list_repositories`, `browse_repository`,
-  `read_file` (includes a symbol outline), `repository_status`. Every
-  handler is wrapped so thrown errors become a structured `isError`
+- **Tools**:
+  - *Vaults*: `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.
+  - *Notes*: `read_note`, `create_note`, `edit_note`, `rename_note`, `delete_note`, `list_trash`, `restore_note`, `purge_note`, `note_history`, `revert_note`, `purge_revision`.
+  - *Repositories*: `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
+  - *Teams & Users*: `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
+  - *Export & Notifications*: `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`.
+  - *Search & Graph*: `search` (with `everywhere` mode), `graph` (nodes, extracted/structural/semantic edges, Louvain communities).
+  *(Security invariant: MCP connections cannot create new MCP connections or mint tokens).*
+  Every handler is wrapped so thrown errors become a structured `isError`
   result instead of an uncaught exception. `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.

@@ -42,7 +42,7 @@ async function requireOwner(userId: string, repositoryId: string): Promise<boole
  * needs to await them. `agent_push` has no puller — an agent is the only thing
  * that can move its files — and never reaches this.
  */
-function startSync(repo: typeof repositories.$inferSelect): void {
+export function startSync(repo: typeof repositories.$inferSelect): void {
   const fail = (err: unknown) => console.error(`sync failed for repository ${repo.id}:`, err)
   if (repo.ingestionMethod !== 'local_path') {
     void syncGitRepository(repo.id).catch(fail)
@@ -64,7 +64,7 @@ function startSync(repo: typeof repositories.$inferSelect): void {
     })
 }
 
-function isWithinLocalReposRoot(candidate: string): boolean {
+export function isWithinLocalReposRoot(candidate: string): boolean {
   const root = resolve(config.localReposRoot)
   const resolved = resolve(root, candidate)
   return resolved === root || resolved.startsWith(root + '/')

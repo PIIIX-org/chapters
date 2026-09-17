@@ -6,7 +6,7 @@ import { listAccessibleVaults } from './permissions.js'
 import { notify } from '../notifications/notify.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 
-async function isTeamOwner(userId: string, teamId: string): Promise<boolean> {
+export async function isTeamOwner(userId: string, teamId: string): Promise<boolean> {
   const row = (
     await db
       .select()
@@ -26,7 +26,7 @@ async function isTeamOwner(userId: string, teamId: string): Promise<boolean> {
  * Hardening (sub-project 1): when a team's membership changes, notify the
  * owners of every vault currently shared with that team.
  */
-async function notifyVaultOwnersOfMembershipChange(
+export async function notifyVaultOwnersOfMembershipChange(
   teamId: string,
   message: string,
 ): Promise<void> {
