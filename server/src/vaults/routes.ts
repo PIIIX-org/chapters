@@ -25,6 +25,25 @@ async function requireOwner(userId: string, vaultId: string) {
   return access === 'owner'
 }
 
+export async function purgeVaultRecord(vaultId: string): Promise<void> {
+  // semanticEdges is polymorphic with no FK, so it does not cascade (#92).
+  // Collect note ids BEFORE deleting the vault row.
+  const noteIds = (
+    await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, vaultId))
+  ).map((n) => n.id)
+  await deleteSemanticEdgesFor('note', noteIds)
+  // notifications is the other polymorphic table with no FK (#101): a
+  // grantee's feed would otherwise keep `vault_shared` rows pointing at a
+  // vault that no longer exists.
+  await db
+    .delete(notifications)
+    .where(and(eq(notifications.entityType, 'vault'), eq(notifications.entityId, vaultId)))
+
+  // Everything else referencing the vault cascades via FK.
+  await db.delete(vaults).where(eq(vaults.id, vaultId))
+  await rm(join(config.dataDir, 'vaults', vaultId), { recursive: true, force: true })
+}
+
 export function vaultRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAuth)
 
@@ -308,22 +327,7 @@ export function vaultRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: 'vault is not trashed' })
     }
 
-    // semanticEdges is polymorphic with no FK, so it does not cascade (#92).
-    // Collect note ids BEFORE deleting the vault row.
-    const noteIds = (
-      await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, req.params.id))
-    ).map((n) => n.id)
-    await deleteSemanticEdgesFor('note', noteIds)
-    // notifications is the other polymorphic table with no FK (#101): a
-    // grantee's feed would otherwise keep `vault_shared` rows pointing at a
-    // vault that no longer exists.
-    await db
-      .delete(notifications)
-      .where(and(eq(notifications.entityType, 'vault'), eq(notifications.entityId, req.params.id)))
-
-    // Everything else referencing the vault cascades via FK.
-    await db.delete(vaults).where(eq(vaults.id, req.params.id))
-    await rm(join(config.dataDir, 'vaults', req.params.id), { recursive: true, force: true })
+    await purgeVaultRecord(req.params.id)
 
     return { status: 'purged', id: req.params.id }
   })

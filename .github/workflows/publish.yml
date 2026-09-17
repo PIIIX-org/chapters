@@ -1,0 +1,58 @@
+# Publishes the hosted-instance image. chapters-cloud's provisioner pulls
+# ghcr.io/piiix-org/chapters:<version> for every customer it boots, so without
+# this workflow the provisioner's `up` step dies on `pull access denied`.
+#
+# The ROOT Dockerfile is the right one: client + API + /mcp + /collab in one
+# Fastify process on :3000, which is the single-container shape renderCompose
+# and caddy.ts assume. Dockerfile.client and the two-container
+# compose.deploy.yml split are the legacy single-tenant deployment.
+name: Publish image
+
+on:
+  push:
+    # `prod` is the production branch in this repo, not `main`.
+    branches: [prod]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/piiix-org/chapters
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/prod' }}
+            type=semver,pattern=v{{version}}
+            type=sha,format=short
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # The runtime stage installs onnxruntime-node and sharp. Uncached,
+          # that build is slow enough to time out patience, not CI.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
