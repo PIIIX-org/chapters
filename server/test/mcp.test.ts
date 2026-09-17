@@ -193,4 +193,162 @@ describe('MCP integration', () => {
       client.callTool({ name: 'read_note', arguments: { vaultId, path: 'docs/readme' } }),
     ).rejects.toThrow()
   })
+
+  it('exposes expanded system tools and forbids mcp connection creation', async () => {
+    const client = await mcpClient(accountToken)
+    const tools = await client.listTools()
+    const names = tools.tools.map((t) => t.name)
+
+    // Vault tools
+    expect(names).toContain('create_vault')
+    expect(names).toContain('update_vault')
+    expect(names).toContain('delete_vault')
+    expect(names).toContain('restore_vault')
+    expect(names).toContain('purge_vault')
+    expect(names).toContain('list_vault_shares')
+    expect(names).toContain('share_vault')
+    expect(names).toContain('revoke_vault_share')
+
+    // Note tools
+    expect(names).toContain('rename_note')
+    expect(names).toContain('list_trash')
+    expect(names).toContain('restore_note')
+    expect(names).toContain('purge_note')
+    expect(names).toContain('purge_revision')
+    expect(names).toContain('export_note')
+
+    // Repository tools
+    expect(names).toContain('connect_repository')
+    expect(names).toContain('update_repository')
+    expect(names).toContain('delete_repository')
+    expect(names).toContain('sync_repository')
+    expect(names).toContain('list_repository_shares')
+    expect(names).toContain('share_repository')
+    expect(names).toContain('revoke_repository_share')
+
+    // Team & user tools
+    expect(names).toContain('list_teams')
+    expect(names).toContain('create_team')
+    expect(names).toContain('list_team_members')
+    expect(names).toContain('add_team_member')
+    expect(names).toContain('remove_team_member')
+    expect(names).toContain('delete_team')
+    expect(names).toContain('lookup_user')
+
+    // Export & Notification tools
+    expect(names).toContain('export_vault')
+    expect(names).toContain('list_notifications')
+    expect(names).toContain('mark_notification_read')
+
+    // Security invariant: MCP cannot create new MCP connections
+    expect(names).not.toContain('create_mcp_connection')
+  })
+
+  it('creates, updates, soft-deletes, and restores vaults via MCP', async () => {
+    const client = await mcpClient(accountToken)
+    const createdRes = await client.callTool({
+      name: 'create_vault',
+      arguments: { name: 'AI Generated Vault' },
+    })
+    expect(createdRes.isError).toBeFalsy()
+    const created = JSON.parse(textOf(createdRes)) as { id: string; name: string }
+    expect(created.name).toBe('AI Generated Vault')
+
+    const updatedRes = await client.callTool({
+      name: 'update_vault',
+      arguments: { vaultId: created.id, name: 'Renamed AI Vault' },
+    })
+    expect(updatedRes.isError).toBeFalsy()
+    const updated = JSON.parse(textOf(updatedRes)) as { id: string; name: string }
+    expect(updated.name).toBe('Renamed AI Vault')
+
+    const deleteRes = await client.callTool({
+      name: 'delete_vault',
+      arguments: { vaultId: created.id },
+    })
+    expect(deleteRes.isError).toBeFalsy()
+
+    const restoreRes = await client.callTool({
+      name: 'restore_vault',
+      arguments: { vaultId: created.id },
+    })
+    expect(restoreRes.isError).toBeFalsy()
+    const restored = JSON.parse(textOf(restoreRes)) as { id: string; name: string }
+    expect(restored.name).toBe('Renamed AI Vault')
+  })
+
+  it('manages note lifecycles (rename, export, trash, restore) via MCP', async () => {
+    const client = await mcpClient(accountToken)
+
+    const createdRes = await client.callTool({
+      name: 'create_note',
+      arguments: { vaultId, type: 'ideas', name: 'quantum-ai', body: 'AI generated content.' },
+    })
+    expect(createdRes.isError).toBeFalsy()
+
+    const renamedRes = await client.callTool({
+      name: 'rename_note',
+      arguments: { vaultId, from: 'ideas/quantum-ai', toName: 'quantum-hyperdrive' },
+    })
+    expect(renamedRes.isError).toBeFalsy()
+
+    const exportRes = await client.callTool({
+      name: 'export_note',
+      arguments: { vaultId, path: 'ideas/quantum-hyperdrive' },
+    })
+    expect(exportRes.isError).toBeFalsy()
+    expect(textOf(exportRes)).toContain('AI generated content.')
+
+    const deleteRes = await client.callTool({
+      name: 'delete_note',
+      arguments: { vaultId, path: 'ideas/quantum-hyperdrive' },
+    })
+    expect(deleteRes.isError).toBeFalsy()
+
+    const trashRes = await client.callTool({
+      name: 'list_trash',
+      arguments: { vaultId },
+    })
+    expect(trashRes.isError).toBeFalsy()
+    const trash = JSON.parse(textOf(trashRes)) as Array<{ id: string; path: string }>
+    const trashedNote = trash.find((n) => n.path === 'ideas/quantum-hyperdrive')
+    expect(trashedNote).toBeDefined()
+
+    const restoreRes = await client.callTool({
+      name: 'restore_note',
+      arguments: { vaultId, noteId: trashedNote!.id },
+    })
+    expect(restoreRes.isError).toBeFalsy()
+  })
+
+  it('manages teams and user lookups via MCP', async () => {
+    const client = await mcpClient(accountToken)
+
+    const teamRes = await client.callTool({
+      name: 'create_team',
+      arguments: { name: 'AI Core Team' },
+    })
+    expect(teamRes.isError).toBeFalsy()
+    const team = JSON.parse(textOf(teamRes)) as { id: string; name: string }
+
+    const listTeamsRes = await client.callTool({
+      name: 'list_teams',
+      arguments: {},
+    })
+    expect(listTeamsRes.isError).toBeFalsy()
+    const teamsList = JSON.parse(textOf(listTeamsRes)) as Array<{ id: string; name: string }>
+    expect(teamsList.some((t) => t.id === team.id)).toBe(true)
+
+    const membersRes = await client.callTool({
+      name: 'list_team_members',
+      arguments: { teamId: team.id },
+    })
+    expect(membersRes.isError).toBeFalsy()
+
+    const deleteTeamRes = await client.callTool({
+      name: 'delete_team',
+      arguments: { teamId: team.id },
+    })
+    expect(deleteTeamRes.isError).toBeFalsy()
+  })
 })
