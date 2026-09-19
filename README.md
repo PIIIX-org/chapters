@@ -511,6 +511,21 @@ cp -r skills/chapters .agents/skills/chapters
   mkdir -p .agents/skills/chapters && cp -r skills/chapters/* .agents/skills/chapters/
   ```
 
+### Keeping the Skill Always Active (Always-On Mode)
+
+To make your AI agent keep Chapters **permanently active** across all sessions without requiring trigger words or manual reminders, install the persistent rule:
+
+```bash
+# Run one-command setup for your agent:
+./skills/chapters/scripts/install-always-on.sh all
+# Or target: antigravity | claude | cursor | windsurf
+```
+
+- **Google Gemini / Antigravity**: Adds [`skills/chapters/rules/chapters.md`](skills/chapters/rules/chapters.md) to `~/.gemini/config/rules/chapters.md` (loaded in every conversation).
+- **Anthropic Claude**: Appends rule to `~/.claude/CLAUDE.md` or workspace `CLAUDE.md`.
+- **Cursor**: Creates `.cursor/rules/chapters.mdc` with `alwaysApply: true`.
+- **Windsurf**: Appends rule to `.windsurfrules`.
+
 See [`skills/chapters/SKILL.md`](skills/chapters/SKILL.md) for full instructions and [`skills/chapters/references/mcp-tools.md`](skills/chapters/references/mcp-tools.md) for tool schemas.
 
 ## Known gaps / future work
