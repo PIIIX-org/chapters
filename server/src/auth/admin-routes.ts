@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { teamMemberships, users, vaults, vaultShares } from '../db/schema.js'
+import { teamMemberships, users, vaults, vaultShares, type UserRole } from '../db/schema.js'
 import { destroyUserSessions } from './sessions.js'
 import { WELCOME_SUBJECT, WELCOME_TEXT } from '../email/welcome.js'
 import { logSecurityEvent } from './security-events.js'
@@ -56,10 +56,11 @@ export function adminRoutes(app: FastifyInstance) {
     return { status: 'active' }
   })
 
-  app.post<{ Params: { id: string } }>('/users/:id/promote', async (req, reply) => {
+  app.post<{ Params: { id: string }; Body: { role?: UserRole } }>('/users/:id/promote', async (req, reply) => {
+    const targetRole = req.body?.role || 'admin'
     const [user] = await db
       .update(users)
-      .set({ role: 'admin' })
+      .set({ role: targetRole })
       .where(eq(users.id, req.params.id))
       .returning()
     if (!user) return reply.code(404).send({ error: 'user not found' })
@@ -67,8 +68,51 @@ export function adminRoutes(app: FastifyInstance) {
       type: 'admin_promoted',
       actorUserId: req.user!.id,
       subjectUserId: user.id,
+      detail: { role: targetRole },
     })
-    return { role: 'admin' }
+    return { role: user.role }
+  })
+
+  app.post<{ Params: { id: string }; Body: { role?: UserRole } }>('/users/:id/demote', async (req, reply) => {
+    if (req.params.id === req.user!.id) {
+      return reply.code(400).send({ error: 'cannot demote yourself' })
+    }
+    const targetRole = req.body?.role || 'member'
+    const [user] = await db
+      .update(users)
+      .set({ role: targetRole })
+      .where(eq(users.id, req.params.id))
+      .returning()
+    if (!user) return reply.code(404).send({ error: 'user not found' })
+    await logSecurityEvent({
+      type: 'admin_demoted',
+      actorUserId: req.user!.id,
+      subjectUserId: user.id,
+      detail: { role: targetRole },
+    })
+    return { role: user.role }
+  })
+
+  app.post<{ Params: { id: string }; Body: { role: UserRole } }>('/users/:id/role', async (req, reply) => {
+    if (req.params.id === req.user!.id && req.body?.role && req.body.role !== req.user!.role) {
+      return reply.code(400).send({ error: 'cannot change your own role' })
+    }
+    if (!req.body?.role) {
+      return reply.code(400).send({ error: 'role is required' })
+    }
+    const [user] = await db
+      .update(users)
+      .set({ role: req.body.role })
+      .where(eq(users.id, req.params.id))
+      .returning()
+    if (!user) return reply.code(404).send({ error: 'user not found' })
+    await logSecurityEvent({
+      type: 'user_role_changed',
+      actorUserId: req.user!.id,
+      subjectUserId: user.id,
+      detail: { role: req.body.role },
+    })
+    return { role: user.role }
   })
 
   app.post<{ Params: { id: string } }>('/users/:id/deactivate', async (req, reply) => {

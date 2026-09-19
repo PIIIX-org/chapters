@@ -59,7 +59,7 @@ function toggled(list: string[] | undefined, value: string): string[] {
   return [...set]
 }
 
-export function GraphFilters({ nodes, paramPrefix = '' }: GraphFiltersProps) {
+export function GraphFilters({ nodes = [], paramPrefix = '' }: GraphFiltersProps) {
   const [searchParams, setSearchParams] = useSearchParams()
   const filters = graphFiltersFromSearchParams(searchParams, paramPrefix)
 

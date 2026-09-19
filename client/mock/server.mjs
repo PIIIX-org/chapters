@@ -2032,12 +2032,29 @@ post('/admin/users/:id/approve', ({ params }) => {
   u.status = 'active'
   return { status: 'active' }
 })
-post('/admin/users/:id/promote', ({ params }) => {
+post('/admin/users/:id/promote', ({ params, body }) => {
   requireAdmin()
   const u = userById(params.id)
   if (!u) throw notFound('user not found')
-  u.role = 'admin'
-  return { role: 'admin' }
+  u.role = body?.role || 'admin'
+  return { role: u.role }
+})
+post('/admin/users/:id/demote', ({ params, body }) => {
+  requireAdmin()
+  const u = userById(params.id)
+  if (!u) throw notFound('user not found')
+  if (u.id === ME.id) throw bad('cannot demote yourself')
+  u.role = body?.role || 'member'
+  return { role: u.role }
+})
+post('/admin/users/:id/role', ({ params, body }) => {
+  requireAdmin()
+  const u = userById(params.id)
+  if (!u) throw notFound('user not found')
+  if (u.id === ME.id && body?.role && body.role !== u.role) throw bad('cannot change your own role')
+  if (!body?.role) throw bad('role is required')
+  u.role = body.role
+  return { role: u.role }
 })
 post('/admin/users/:id/deactivate', ({ params }) => {
   requireAdmin()

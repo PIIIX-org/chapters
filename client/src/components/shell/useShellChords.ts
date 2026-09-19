@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router'
 import { useShell } from './shell-context.js'
 import { useSession } from '../../hooks/useSession.js'
 import { isEditableTarget } from '../../lib/platform.js'
+import { isAdminRole } from '../../api/admin.js'
 
 /** `g` then one of these, within the chord window. */
 export const CHORDS: Record<
@@ -27,7 +28,7 @@ export function useShellChords(): void {
   const shell = useShell()
   const navigate = useNavigate()
   const session = useSession()
-  const isAdmin = session.data?.role === 'admin'
+  const isAdmin = isAdminRole(session.data?.role)
   const { togglePanel } = shell
 
   useEffect(() => {

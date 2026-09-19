@@ -99,6 +99,13 @@
       "when": 1787669160153,
       "tag": "0013_jazzy_domino",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789828800000,
+      "tag": "0014_chubby_user_roles",
+      "breakpoints": true
     }
   ]
 }

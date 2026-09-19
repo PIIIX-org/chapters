@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { X } from 'lucide-react'
 import { TeamManagement } from '../components/team/TeamManagement.js'
 import { UserConstellation } from '../components/team/UserConstellation.js'
 import { VaultReachExpansion } from '../components/team/VaultReachExpansion.js'
@@ -7,6 +8,8 @@ import { useShellBreadcrumb } from '../components/shell/shell-context.js'
 import { PanelState } from '../components/ui/empty-state.js'
 import { Eyebrow } from '../components/ui/eyebrow.js'
 import { Panel, PanelBody, PanelHeader } from '../components/ui/panel.js'
+import { Pill } from '../components/ui/pill.js'
+import { Input } from '../components/ui/input.js'
 import {
   Table,
   TableBody,
@@ -32,6 +35,44 @@ function formatLastActivity(iso: string | null): string {
 
 const selectClassName =
   'h-7 rounded-md border border-input bg-card px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
+
+function TeamIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  )
+}
+
+function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16z" />
+      <path d="m21 21-4.35-4.35" />
+    </svg>
+  )
+}
 
 function ManagementPanel() {
   return (
@@ -62,6 +103,8 @@ function TeamEmptyState() {
 export function TeamPage() {
   const teams = useTeams()
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+
   // '' while the team list is still loading (or there is none) — the member
   // and stats queries below are disabled for an empty id, so this never
   // fires a request for a team that doesn't exist yet.
@@ -69,6 +112,35 @@ export function TeamPage() {
   const members = useTeamMembers(teamId)
   const stats = useTeamStats(teamId)
   useShellBreadcrumb([{ label: 'Team' }])
+
+  const selectedTeam = teams.data?.find((t) => t.id === teamId) ?? teams.data?.[0]
+
+  // Aggregate stats, keyed for the merge below — members is the roster's
+  // source of truth (who is on the team, including someone with zero
+  // activity), stats overlays the numbers onto it. Never drop a member who
+  // has no matching stats row into silence: that's how idle members vanish.
+  const statsById = useMemo(() => {
+    return new Map((stats.data ?? []).map((row) => [row.userId, row]))
+  }, [stats.data])
+
+  const roster = useMemo(() => {
+    return (members.data ?? []).map((member) => {
+      const agg = statsById.get(member.userId)
+      return {
+        userId: member.userId,
+        email: member.email,
+        notesTouched: agg?.notesTouched ?? 0,
+        vaultsTouched: agg?.vaultsTouched ?? 0,
+        lastActivityAt: agg?.lastActivityAt ?? null,
+      }
+    })
+  }, [members.data, statsById])
+
+  const filteredRoster = useMemo(() => {
+    if (!search.trim()) return roster
+    const q = search.toLowerCase()
+    return roster.filter((r) => r.email.toLowerCase().includes(q))
+  }, [roster, search])
 
   // Ordered the same way HomePage orders its vaults check: isPending, then
   // isError, before .data is ever read — `.data` on a pending or errored
@@ -94,53 +166,116 @@ export function TeamPage() {
   }
   if (teams.data.length === 0) return <TeamEmptyState />
 
-  // Aggregate stats, keyed for the merge below — members is the roster's
-  // source of truth (who is on the team, including someone with zero
-  // activity), stats overlays the numbers onto it. Never drop a member who
-  // has no matching stats row into silence: that's how idle members vanish.
-  const statsById = new Map((stats.data ?? []).map((row) => [row.userId, row]))
-  const roster = (members.data ?? []).map((member) => {
-    const agg = statsById.get(member.userId)
-    return {
-      userId: member.userId,
-      email: member.email,
-      notesTouched: agg?.notesTouched ?? 0,
-      vaultsTouched: agg?.vaultsTouched ?? 0,
-      lastActivityAt: agg?.lastActivityAt ?? null,
-    }
-  })
-
   const failed = members.isError || stats.isError
   const loading = !failed && (members.isPending || stats.isPending)
 
   return (
     <>
       <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto flex max-w-4xl flex-col gap-4 px-6 py-5">
+        <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 px-4 py-5">
+          {/* Teams Navigation Shelf */}
+          {teams.data.length > 1 && (
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+              <span className="text-muted-foreground font-medium text-[11px] uppercase tracking-wider shrink-0 mr-1">
+                Teams:
+              </span>
+              {teams.data.map((t) => {
+                const isSelected = t.id === teamId
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setSelectedTeamId(t.id)}
+                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs transition-colors shrink-0 ${
+                      isSelected
+                        ? 'border-primary bg-primary text-primary-foreground font-medium'
+                        : 'border-border bg-card text-muted-foreground hover:text-foreground hover:bg-muted'
+                    }`}
+                  >
+                    <TeamIcon className="size-3.5 shrink-0" />
+                    <span>{t.name}</span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                        isSelected
+                          ? 'bg-primary-foreground/20 text-primary-foreground'
+                          : 'bg-muted text-muted-foreground'
+                      }`}
+                    >
+                      {t.role}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
           <Panel aria-label="Roster">
             <PanelHeader
-              title="Roster"
+              title={
+                filteredRoster.length !== roster.length
+                  ? `Roster (${filteredRoster.length} of ${roster.length})`
+                  : 'Roster'
+              }
               actions={
-                teams.data.length > 1 ? (
-                  <select
-                    aria-label="Team"
-                    value={teamId}
-                    onChange={(e) => setSelectedTeamId(e.target.value)}
-                    className={selectClassName}
-                  >
-                    {teams.data.map((team) => (
-                      <option key={team.id} value={team.id}>
-                        {team.name}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <span className="text-sm text-foreground">
-                    {teams.data[0]?.name}
-                  </span>
-                )
+                <div className="flex items-center gap-2">
+                  {teams.data.length > 1 ? (
+                    <select
+                      aria-label="Team"
+                      value={teamId}
+                      onChange={(e) => setSelectedTeamId(e.target.value)}
+                      className={selectClassName}
+                    >
+                      {teams.data.map((team) => (
+                        <option key={team.id} value={team.id}>
+                          {team.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-sm font-medium text-foreground">
+                        {teams.data[0]?.name}
+                      </span>
+                      {selectedTeam && (
+                        <Pill tone={selectedTeam.role === 'owner' ? 'human' : 'neutral'}>
+                          {selectedTeam.role}
+                        </Pill>
+                      )}
+                    </div>
+                  )}
+                </div>
               }
             />
+
+            {/* Member Search */}
+            {!failed && !loading && roster.length > 0 && (
+              <div className="border-b border-border px-3 py-2 bg-muted/10">
+                <div className="relative max-w-sm">
+                  <SearchIcon
+                    className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none"
+                    aria-hidden="true"
+                  />
+                  <Input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search members by email..."
+                    aria-label="Search members"
+                    className="pl-8 h-7 text-xs"
+                  />
+                  {search && (
+                    <button
+                      type="button"
+                      onClick={() => setSearch('')}
+                      aria-label="Clear member search"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="size-3.5" aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {failed ? (
               <PanelState
                 status="error"
@@ -173,7 +308,7 @@ export function TeamPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {roster.map((r) => (
+                    {filteredRoster.map((r) => (
                       <TableRow key={r.userId}>
                         <TableCell className="text-foreground">
                           {r.email}

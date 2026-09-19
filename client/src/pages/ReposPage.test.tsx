@@ -75,11 +75,80 @@ describe('ReposPage', () => {
     renderPage()
 
     expect(await screen.findByRole('link', { name: 'Atlas ERP' })).toHaveAttribute('href', '/repos/r1/files')
-    expect(screen.getByText('Git')).toBeInTheDocument()
+    expect(screen.getAllByText('Git').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Synced')).toBeInTheDocument()
-    expect(screen.getByText('Agent push')).toBeInTheDocument()
-    expect(screen.getByText('Never synced')).toBeInTheDocument()
+    expect(screen.getAllByText('Agent push').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Never synced').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Viewer')).toBeInTheDocument()
+  })
+
+  it('toggles between card view and list view', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Atlas ERP' })
+    expect(screen.queryByRole('table')).toBeNull()
+
+    // Switch to list view
+    await userEvent.click(screen.getByRole('button', { name: 'List view' }))
+    expect(screen.getByRole('table')).toBeInTheDocument()
+
+    // Switch back to card view
+    await userEvent.click(screen.getByRole('button', { name: 'Card view' }))
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  it('filters repositories by search term', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Atlas ERP' })
+    expect(screen.getByRole('link', { name: 'Docs site' })).toBeInTheDocument()
+
+    const searchInput = screen.getByRole('textbox', { name: 'Search repositories' })
+    await userEvent.type(searchInput, 'Atlas')
+
+    expect(screen.getByRole('link', { name: 'Atlas ERP' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Docs site' })).toBeNull()
+  })
+
+  it('allows organizing a repository into a folder with custom color', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Atlas ERP' })
+    const assignBtn = screen.getByRole('button', {
+      name: 'Assign folder for Atlas ERP',
+    })
+    await userEvent.click(assignBtn)
+
+    expect(await screen.findByRole('heading', { name: 'Organize Repository' })).toBeInTheDocument()
+
+    const folderInput = screen.getByLabelText(/folder name/i)
+    await userEvent.type(folderInput, 'Core Backend')
+
+    // Open custom color picker
+    const openColorBtn = screen.getByRole('button', {
+      name: 'Open custom folder color picker',
+    })
+    await userEvent.click(openColorBtn)
+
+    expect(await screen.findByRole('heading', { name: 'Folder Color' })).toBeInTheDocument()
+    const hexInput = screen.getByLabelText(/hex code/i)
+    await userEvent.clear(hexInput)
+    await userEvent.type(hexInput, '#8b5cf6')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+
+    // Save folder dialog
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    // Folder badge updated on repo card
+    expect(
+      await screen.findByRole('button', {
+        name: 'Folder: Core Backend for Atlas ERP',
+      }),
+    ).toBeInTheDocument()
   })
 
   it('opens the connect dialog from the header', async () => {

@@ -10,7 +10,6 @@ import { ResetPasswordPage } from './pages/auth/ResetPasswordPage.js'
 import { SetupPage } from './pages/auth/SetupPage.js'
 import { SignupPage } from './pages/auth/SignupPage.js'
 import { VerifyEmailPage } from './pages/auth/VerifyEmailPage.js'
-import { NoteEmptyState } from './pages/vault/NoteEmptyState.js'
 
 // Lazy at the route level, not just the graph: VaultLayout pulls in the file
 // tree + note-create UI, and NoteView pulls in the whole CodeMirror/@lezer
@@ -23,6 +22,9 @@ const VaultLayout = lazy(() =>
 )
 const NoteView = lazy(() =>
   import('./pages/vault/NoteView.js').then((m) => ({ default: m.NoteView })),
+)
+const VaultNotesPage = lazy(() =>
+  import('./pages/vault/VaultNotesPage.js').then((m) => ({ default: m.VaultNotesPage })),
 )
 const VaultsPage = lazy(() =>
   import('./pages/VaultsPage.js').then((m) => ({ default: m.VaultsPage })),
@@ -91,7 +93,7 @@ export const routes: RouteObject[] = [
             path: '/vaults/:vaultId',
             element: lazyPage(<VaultLayout />),
             children: [
-              { index: true, element: <NoteEmptyState /> },
+              { index: true, element: lazyPage(<VaultNotesPage />) },
               { path: 'notes/*', element: lazyPage(<NoteView />) },
             ],
           },
