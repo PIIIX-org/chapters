@@ -39,11 +39,13 @@ export function VaultCard({
       className={`relative flex flex-col justify-between overflow-hidden transition-all hover:border-foreground/30 ${
         vColorDef ? vColorDef.cardBorder : ''
       }`}
+      style={vColorDef?.style?.cardBorder}
     >
       {/* Top color bar if vault has color */}
       {vColorDef && (
         <div
           className={`h-1 w-full ${vColorDef.cardTopBar}`}
+          style={vColorDef.style?.cardTopBar}
           aria-hidden="true"
         />
       )}
@@ -59,9 +61,11 @@ export function VaultCard({
                 ? fColorDef.badge
                 : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
             }`}
+            style={fColorDef?.style?.badge}
           >
             <Folder
               className={`size-3 ${fColorDef ? fColorDef.folderIcon : 'text-muted-foreground'}`}
+              style={fColorDef?.style?.folderIcon}
               aria-hidden="true"
             />
             <span className="truncate max-w-[120px]">
@@ -103,6 +107,7 @@ export function VaultCard({
               className={`size-4 transition-colors shrink-0 ${
                 vColorDef ? vColorDef.folderIcon : 'text-muted-foreground group-hover:text-foreground'
               }`}
+              style={vColorDef?.style?.folderIcon}
               aria-hidden="true"
             />
             <span className="truncate">{vault.name}</span>

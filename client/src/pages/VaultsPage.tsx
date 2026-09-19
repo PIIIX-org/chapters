@@ -457,6 +457,13 @@ export function VaultsPage() {
                               ? colorDef.accent + ' opacity-40'
                               : 'bg-muted/60 border-border'
                         }`}
+                        style={
+                          isSelected
+                            ? colorDef?.style?.cardTopBar
+                            : colorDef?.style?.accent
+                              ? { ...colorDef.style.accent, opacity: 0.4 }
+                              : undefined
+                        }
                       />
                       {/* Folder tab body */}
                       <button
@@ -471,9 +478,11 @@ export function VaultsPage() {
                               ? `${colorDef.badge} border-border hover:border-current`
                               : 'border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted'
                         }`}
+                        style={colorDef?.style?.badge}
                       >
                         <Folder
                           className={`size-3.5 ${colorDef ? colorDef.folderIcon : ''}`}
+                          style={colorDef?.style?.folderIcon}
                           aria-hidden="true"
                         />
                         <span>{folder}</span>
@@ -536,6 +545,7 @@ export function VaultsPage() {
                             ? colorDef.folderTab
                             : 'bg-muted/80 border-border text-foreground'
                         }`}
+                        style={colorDef?.style?.folderTab}
                       >
                         <button
                           type="button"
@@ -549,6 +559,7 @@ export function VaultsPage() {
                           )}
                           <Folder
                             className={`size-3.5 ${colorDef ? colorDef.folderIcon : ''}`}
+                            style={colorDef?.style?.folderIcon}
                             aria-hidden="true"
                           />
                           <span>{group.folder}</span>
@@ -564,6 +575,7 @@ export function VaultsPage() {
                       className={`rounded-b-lg rounded-tr-lg border border-border p-4 transition-colors ${
                         colorDef ? colorDef.folderBg : 'bg-muted/10'
                       } ${isCollapsed ? 'hidden' : ''}`}
+                      style={colorDef?.style?.folderBg}
                     >
                       {viewMode === 'card' ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -622,6 +634,7 @@ export function VaultsPage() {
                                       {vColor && (
                                         <span
                                           className={`size-2 rounded-full shrink-0 ${vColor.accent}`}
+                                          style={vColor.style?.accent}
                                           title={`Color: ${vColor.label}`}
                                         />
                                       )}
@@ -643,9 +656,11 @@ export function VaultsPage() {
                                           ? fColor.badge
                                           : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
                                       }`}
+                                      style={fColor?.style?.badge}
                                     >
                                       <Folder
                                         className={`size-3 ${fColor ? fColor.folderIcon : 'text-muted-foreground'}`}
+                                        style={fColor?.style?.folderIcon}
                                         aria-hidden="true"
                                       />
                                       <span>{folder || 'Add folder'}</span>
@@ -732,6 +747,7 @@ export function VaultsPage() {
                           {vColor && (
                             <span
                               className={`size-2 rounded-full shrink-0 ${vColor.accent}`}
+                              style={vColor.style?.accent}
                               title={`Color: ${vColor.label}`}
                             />
                           )}
@@ -753,9 +769,11 @@ export function VaultsPage() {
                               ? fColor.badge
                               : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
                           }`}
+                          style={fColor?.style?.badge}
                         >
                           <Folder
                             className={`size-3 ${fColor ? fColor.folderIcon : 'text-muted-foreground'}`}
+                            style={fColor?.style?.folderIcon}
                             aria-hidden="true"
                           />
                           <span>{folder || 'Add folder'}</span>

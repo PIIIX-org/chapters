@@ -191,5 +191,36 @@ describe('VaultsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   })
+
+  it('allows picking a custom color via color wheel in the folder dialog', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+    const addFolderBtn = screen.getAllByRole('button', { name: 'Add folder' })[0]
+    expect(addFolderBtn).toBeDefined()
+    fireEvent.click(addFolderBtn!)
+
+    expect(await screen.findByRole('heading', { name: 'Organize Vault' })).toBeInTheDocument()
+
+    // Type folder name to reveal folder color picker
+    const folderInput = await screen.findByLabelText(/folder name/i)
+    fireEvent.change(folderInput, { target: { value: 'Design' } })
+
+    // Find custom color pickers
+    const folderColorInput = screen.getByLabelText('Custom folder color')
+    expect(folderColorInput).toBeInTheDocument()
+    fireEvent.change(folderColorInput, { target: { value: '#e11d48' } })
+
+    const vaultColorInput = screen.getByLabelText('Custom vault accent color')
+    expect(vaultColorInput).toBeInTheDocument()
+    fireEvent.change(vaultColorInput, { target: { value: '#8b5cf6' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    // Now Engineering should show "Design" folder button
+    const designBadge = await screen.findByRole('button', { name: 'Design' })
+    expect(designBadge).toBeInTheDocument()
+  })
 })
 

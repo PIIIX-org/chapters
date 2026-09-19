@@ -32,6 +32,48 @@ interface VaultFolderDialogProps {
   ) => void
 }
 
+function CustomColorWheel({
+  value,
+  onChange,
+  label,
+}: {
+  value?: VaultColor
+  onChange: (color: string) => void
+  label: string
+}) {
+  const isCustom = Boolean(value && !COLOR_PALETTE.some((c) => c.id === value))
+  const hexValue = isCustom && value?.startsWith('#') ? value : '#6366f1'
+
+  return (
+    <label
+      title={isCustom ? `Custom color: ${value}` : `Custom ${label}`}
+      className={`relative size-6 rounded-full cursor-pointer flex items-center justify-center transition-transform hover:scale-110 shadow-sm ${
+        isCustom
+          ? 'ring-2 ring-primary ring-offset-2 ring-offset-background scale-105'
+          : 'opacity-80 hover:opacity-100'
+      }`}
+      style={{
+        background:
+          'conic-gradient(from 90deg, #ff0000, #ff8000, #ffff00, #00ff00, #00ffff, #0000ff, #8000ff, #ff0080, #ff0000)',
+      }}
+    >
+      <input
+        type="color"
+        value={hexValue}
+        onChange={(e) => onChange(e.target.value)}
+        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+        aria-label={`Custom ${label}`}
+      />
+      {isCustom && (
+        <span
+          className="size-2.5 rounded-full border border-white/80 shadow-xs pointer-events-none"
+          style={{ backgroundColor: hexValue }}
+        />
+      )}
+    </label>
+  )
+}
+
 export function VaultFolderDialog({
   open,
   onOpenChange,
@@ -103,7 +145,6 @@ export function VaultFolderDialog({
               </div>
             </div>
           )}
-
           {/* Folder Color Picker */}
           {folderName.trim() && (
             <div className="flex flex-col gap-1.5">
@@ -134,6 +175,11 @@ export function VaultFolderDialog({
                     }`}
                   />
                 ))}
+                <CustomColorWheel
+                  value={folderColor}
+                  onChange={setFolderColor}
+                  label="folder color"
+                />
               </div>
             </div>
           )}
@@ -167,6 +213,11 @@ export function VaultFolderDialog({
                   }`}
                 />
               ))}
+              <CustomColorWheel
+                value={vaultColor}
+                onChange={setVaultColor}
+                label="vault accent color"
+              />
             </div>
           </div>
 
