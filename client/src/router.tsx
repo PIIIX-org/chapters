@@ -10,6 +10,7 @@ import { ResetPasswordPage } from './pages/auth/ResetPasswordPage.js'
 import { SetupPage } from './pages/auth/SetupPage.js'
 import { SignupPage } from './pages/auth/SignupPage.js'
 import { VerifyEmailPage } from './pages/auth/VerifyEmailPage.js'
+import { PendingApprovalPage } from './pages/auth/PendingApprovalPage.js'
 
 // Lazy at the route level, not just the graph: VaultLayout pulls in the file
 // tree + note-create UI, and NoteView pulls in the whole CodeMirror/@lezer
@@ -104,6 +105,7 @@ export const routes: RouteObject[] = [
   { path: '/setup', element: <SetupPage /> },
   { path: '/signup', element: <SignupPage /> },
   { path: '/verify-email', element: <VerifyEmailPage /> },
+  { path: '/pending-approval', element: <PendingApprovalPage /> },
   { path: '/login', element: <LoginPage /> },
   { path: '/forgot-password', element: <RequestPasswordResetPage /> },
   { path: '/reset-password', element: <ResetPasswordPage /> },

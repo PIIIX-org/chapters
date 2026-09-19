@@ -46,9 +46,12 @@ function RailLink({ item }: { item: RailItem }) {
           aria-label={item.label}
           className={({ isActive }) =>
             cn(
-              'relative flex size-9 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors duration-100 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40',
+              'relative flex size-9 items-center justify-center rounded-md text-muted-foreground outline-none transition-all duration-150',
+              'hover:bg-muted hover:text-foreground hover:scale-105',
+              'active:scale-95 active:bg-muted/80',
+              'focus-visible:ring-2 focus-visible:ring-ring/40',
               isActive &&
-                'bg-muted text-foreground before:absolute before:top-2 before:bottom-2 before:-left-2 before:w-0.5 before:rounded-full before:bg-primary',
+                'bg-muted text-foreground before:absolute before:top-2 before:bottom-2 before:-left-2 before:w-0.5 before:rounded-full before:bg-primary shadow-xs',
             )
           }
         >
@@ -77,7 +80,7 @@ export function Rail() {
       <Link
         to="/"
         aria-label="Chapters"
-        className="mb-3 flex size-8 items-center justify-center rounded-md bg-foreground font-mono text-[12px] font-semibold text-background outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="mb-3 flex size-8 items-center justify-center rounded-md bg-foreground font-mono text-[12px] font-semibold text-background outline-none transition-all duration-150 hover:scale-105 hover:opacity-90 active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40"
       >
         Ch
       </Link>
