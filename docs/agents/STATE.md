@@ -20,7 +20,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
     **`gitUrl`/`localPath` are owner-only** (they leaked to viewers + MCP).
 - **`prod` == `dev` as of 2026-09-19 (#163, #167)** — Chapters Agent Skill,
   /chapters-map, multi-AI setup guides, and always-active mode.
-- **Current task**: none. Pick from Open issues.
+- **Current task**: #169 — Enhance codebase mapping protocol for flawless, multi-pass architecture extraction.
 - **Phase: UI COMMAND REDESIGN** (owner-directed 2026-08-30): spec + plan of
   the same date under `superpowers/`. Dark-first grid shell (rail · top bar ·
   context · content · inspector) on every authed route; `/vaults`, `/repos`.

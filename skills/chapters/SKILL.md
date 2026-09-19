@@ -109,16 +109,22 @@ Manages vaults and sharing:
 - `/chapters-vault preference <vault-id> [include true|false]`: View or set merged-graph preference.
 
 ### `/chapters-map <repo-id-or-path> [--vault <vault-id>] [--name <vault-name>]`
-Maps an entire project or codebase repository into structured OKF notes within a Chapters vault, generating an interconnected, AI-navigable knowledge graph.
-- **Workflow for Agents**:
-  1. **Select or Create Target Vault**: If `--vault <vault-id>` is provided, target it. Otherwise, search for a vault named after the project (`list_vaults`) or create a new one (`create_vault`).
-  2. **Inspect Codebase Structure**: Browse repository directories (`browse_repository` or filesystem inspection) and inspect entrypoints, dependencies, and configuration.
-  3. **Generate Architecture Index (`index.md` or `architecture.md`)**:
-     Create the root note with `type: concept`, an architectural overview, module inventory, and direct `[[repo:<repo-id>/path/to/file]]` links.
-  4. **Generate Component & Module Notes**:
-     Create detailed notes under `components/<name>.md` or `concepts/<name>.md` documenting purpose, public interfaces, dependencies, and linking to related component notes via `[[wikilinks]]` and implementation files via `[[repo:...]]`.
-  5. **Fuse into Knowledge Graph**:
-     Call `graph` to verify that the generated notes and code nodes form cohesive Louvain community clusters, making the project effortlessly navigable for AI and humans.
+Maps an entire project or codebase repository into structured OKF notes within a Chapters vault following the **4-Pass Flawless Mapping Protocol** ([`references/codebase-mapping-protocol.md`](references/codebase-mapping-protocol.md)), generating an interconnected, AI-navigable knowledge graph.
+- **Workflow for Agents (The 4-Pass Protocol)**:
+  1. **Pass 1 — Discovery & Manifest Analysis**:
+     - Inspect project manifests (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `Dockerfile`).
+     - Detect frameworks, runtimes, database layers, and top-level entrypoints (HTTP server, CLI, MCP server, background workers).
+  2. **Pass 2 — Architectural Domain Partitioning**:
+     - Partition the codebase into 4 to 8 cohesive architectural domains (e.g. Auth/Security, Data/Storage, API/Routes, Core Domain Logic, UI/Client).
+     - Identify key exported interfaces, lead implementation files, and invariants for each domain.
+  3. **Pass 3 — Structured OKF Note Generation in Vault**:
+     - Select or create the target vault (`list_vaults` / `create_vault`).
+     - **Root Index (`index.md`)**: System overview, architecture diagram, domain inventory, tech stack table, and entrypoint list with `[[repo:...]]` links.
+     - **Domain Concept Notes (`concepts/<domain>.md`)**: Deep architectural documentation, responsibilities, invariants, key files linked with `[[repo:<repo-id>/path/to/file]]`, and cross-domain `[[wikilinks]]`.
+     - **Critical Flow Specs (`specs/<flow>.md`)**: Sequence steps, state transitions, and trust boundaries for critical paths (e.g. data ingestion, live collaboration, auth lifecycle).
+  4. **Pass 4 — Graph Validation & Edge Audit**:
+     - Verify zero broken links: all `[[wikilinks]]` must point to existing notes, and all `[[repo:...]]` links must match real files.
+     - Call `graph` with `aggregate: "community"` to confirm that the generated notes and code nodes form cohesive, interconnected Louvain community clusters with zero orphan notes.
 
 ### `/chapters-export <vault-id|note-path>`
 Exports a vault or note archive.
