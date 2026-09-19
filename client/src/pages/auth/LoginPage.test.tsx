@@ -79,6 +79,27 @@ describe('LoginPage', () => {
     await waitFor(() => expect(screen.getByText('invalid credentials')).toBeInTheDocument())
   })
 
+  it('shows pending approval error when account is waiting for approval', async () => {
+    stubFetch(NO_SSO, () =>
+      mockJsonResponse(401, {
+        error: 'Wait for approval or contact your manager to speed up the process.',
+        code: 'pending_approval',
+      }),
+    )
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.type(screen.getByLabelText('Email'), 'pending@example.com')
+    await user.type(screen.getByLabelText('Password'), 'password123')
+    await user.click(screen.getByRole('button', { name: 'Log in' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Wait for approval or contact your manager to speed up the process.'),
+      ).toBeInTheDocument(),
+    )
+  })
+
   it('shows an inline TOTP field when MFA is required, then completes login', async () => {
     const fetchMock = stubFetch(
       NO_SSO,

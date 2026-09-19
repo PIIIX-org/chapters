@@ -19,12 +19,21 @@ import { NoteActions } from '../../components/vault/NoteActions.js'
 import { RevokedNotice } from '../../components/vault/RevokedNotice.js'
 import { RevisionHistory } from '../../components/vault/RevisionHistory.js'
 import { SharingPanel } from '../../components/vault/SharingPanel.js'
+import {
+  NoteRichToolbar,
+  NoteFloatingSelectionToolbar,
+} from '../../components/vault/NoteRichToolbar.js'
+import {
+  useNoteWidth,
+  NOTE_WIDTH_CLASSES,
+} from '../../components/vault/note-toolbar-utils.js'
 import { Inspector } from '../../components/shell/ShellPanels.js'
 import { useShellStatus } from '../../components/shell/shell-context.js'
 import type { ShellStatus } from '../../components/shell/shell-context.js'
 import { Pill } from '../../components/ui/pill.js'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js'
 import { handleWikilinkClick } from '../../lib/handleWikilinkClick.js'
+import { cn } from '../../lib/utils.js'
 
 /**
  * Neither path saves through the notes API any more. Editors' keystrokes go
@@ -120,9 +129,13 @@ interface NoteFrameProps {
   editorRef: RefObject<HTMLDivElement | null>
   /** The inspector tabs for this note (Properties · History · Sharing). */
   inspector: ReactNode
+  view?: EditorView | null
+  readOnly?: boolean
 }
 
-function NoteFrame({ bar, notice, editorRef, inspector }: NoteFrameProps) {
+function NoteFrame({ bar, notice, editorRef, inspector, view = null, readOnly = false }: NoteFrameProps) {
+  const [width, setWidth] = useNoteWidth()
+
   return (
     <>
       <div className="flex h-full min-h-0 flex-col">
@@ -132,7 +145,22 @@ function NoteFrame({ bar, notice, editorRef, inspector }: NoteFrameProps) {
           {bar}
         </div>
         {notice}
-        <div ref={editorRef} className="min-h-0 min-w-0 flex-1 overflow-auto" />
+        <NoteRichToolbar
+          view={view}
+          readOnly={readOnly}
+          width={width}
+          onWidthChange={setWidth}
+        />
+        <NoteFloatingSelectionToolbar view={view} readOnly={readOnly} />
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4">
+          <div
+            ref={editorRef}
+            className={cn(
+              'mx-auto h-full min-h-0 w-full transition-all duration-150',
+              NOTE_WIDTH_CLASSES[width],
+            )}
+          />
+        </div>
       </div>
       <Inspector label="Note" className="min-h-0">
         {inspector}
@@ -263,6 +291,8 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
   // while offline, so nothing can be typed into this and lost on the swap.
   const strandedOffline = collab.status === 'offline' && !collab.synced
 
+  const [editorView, setEditorView] = useState<EditorView | null>(null)
+
   const editorRef = useCodeMirrorEditor({
     // Ignored under collab (the hook seeds from the Y.Text): a REST body would
     // be inserted a second time when the document loads.
@@ -272,6 +302,7 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
     wikilinkTargets: wikilinks.targets,
     onWikilinkClick: wikilinks.onClick,
     collab: strandedOffline ? undefined : { ytext, awareness: collab.awareness },
+    onView: setEditorView,
   })
 
   // "Synced 10:04" needs the moment `synced` last became true. Tracked with
@@ -290,6 +321,8 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
   return (
     <NoteFrame
       editorRef={editorRef}
+      view={editorView}
+      readOnly={locked}
       bar={
         <>
           <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />
@@ -352,12 +385,15 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
   const state = live.state ?? { frontmatter: initialFrontmatter, body: initialBody }
   const wikilinks = useWikilinks(vaultId, false)
 
+  const [editorView, setEditorView] = useState<EditorView | null>(null)
+
   const editorRef = useCodeMirrorEditor({
     doc: state.body,
     onChange: NO_SAVE,
     readOnly: true,
     wikilinkTargets: wikilinks.targets,
     onWikilinkClick: wikilinks.onClick,
+    onView: setEditorView,
   })
 
   // The editor is built once, around the first body it is given. Later frames
@@ -373,6 +409,8 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
   return (
     <NoteFrame
       editorRef={editorRef}
+      view={editorView}
+      readOnly={true}
       bar={
         <>
           <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />

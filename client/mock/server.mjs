@@ -1573,6 +1573,13 @@ post('/verify-email', ({ body }) => {
 })
 post('/login', ({ body }) => {
   if (!body?.email || !body?.password) throw bad('email and password required')
+  const u = users.find((x) => x.email.toLowerCase() === body.email.toLowerCase())
+  if (u && u.status === 'pending_approval') {
+    throw new HttpError(401, {
+      error: 'Wait for approval or contact your manager to speed up the process.',
+      code: 'pending_approval',
+    })
+  }
   loggedIn = true
   return { id: ME.id, email: ME.email, role: ME.role }
 })
