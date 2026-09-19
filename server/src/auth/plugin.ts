@@ -63,7 +63,7 @@ export const authPlugin = fp(async (app) => {
       await reply.code(401).send({ error: 'authentication required' })
       return
     }
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== 'admin' && req.user.role !== 'owner' && req.user.role !== 'superadmin') {
       await logSecurityEvent({
         type: 'permission_denied',
         actorUserId: req.user.id,

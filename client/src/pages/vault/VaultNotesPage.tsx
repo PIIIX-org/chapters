@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate, useParams } from 'react-router'
 import {
   ArrowUpDown,
   ChevronDown,
   ChevronRight,
+  FileText,
   Folder,
   FolderTree,
   LayoutGrid,
@@ -13,11 +14,11 @@ import {
   Star,
   X,
 } from 'lucide-react'
-import { Button } from '../components/ui/button.js'
-import { PanelState } from '../components/ui/empty-state.js'
-import { Panel, PanelBody, PanelHeader } from '../components/ui/panel.js'
-import { Pill } from '../components/ui/pill.js'
-import { Input } from '../components/ui/input.js'
+import { Panel, PanelHeader } from '../../components/ui/panel.js'
+import { PanelState } from '../../components/ui/empty-state.js'
+import { Button } from '../../components/ui/button.js'
+import { Input } from '../../components/ui/input.js'
+import { Pill } from '../../components/ui/pill.js'
 import {
   Table,
   TableBody,
@@ -25,92 +26,83 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '../components/ui/table.js'
-import { NewVaultForm } from '../components/vault/NewVaultForm.js'
-import { VaultCard } from '../components/vault/VaultCard.js'
-import { VaultFolderDialog } from '../components/vault/VaultFolderDialog.js'
-import {
-  getColorDef,
-  useVaultFolders,
-  type VaultColor,
-} from '../components/vault/useVaultFolders.js'
-import {
-  VaultRowActions,
-  VaultTrashSection,
-} from '../components/shell/VaultActions.js'
-import { useShellBreadcrumb } from '../components/shell/shell-context.js'
-import { useVaults } from '../hooks/useVaults.js'
-import type { Vault, VaultAccess } from '../api/vaults.js'
-
-const ACCESS_LABEL: Record<VaultAccess, string> = {
-  owner: 'Owner',
-  edit: 'Can edit',
-  read: 'Read only',
-}
+} from '../../components/ui/table.js'
+import { useVaults } from '../../hooks/useVaults.js'
+import { useVaultTree } from '../../hooks/useVaultTree.js'
+import { canEdit } from '../../api/vaults.js'
+import { getColorDef, type VaultColor } from '../../components/vault/useVaultFolders.js'
+import { useNoteFolders } from '../../components/vault/useNoteFolders.js'
+import { NoteCard } from '../../components/vault/NoteCard.js'
+import { NoteFolderDialog } from '../../components/vault/NoteFolderDialog.js'
+import { NoteActions } from '../../components/vault/NoteActions.js'
+import { NewNoteForm } from '../../components/vault/NewNoteForm.js'
+import type { NoteSummary } from '../../api/notes.js'
 
 type ViewMode = 'card' | 'list'
-type SortOption = 'name-asc' | 'name-desc' | 'access' | 'merged'
+type SortOption = 'name-asc' | 'name-desc' | 'updated' | 'type'
 
-/**
- * `/vaults` — every vault this person can reach, in Card or List view,
- * with folder organization, visual folder styling, color coding, and favorites.
- */
-export function VaultsPage() {
-  const vaults = useVaults()
+export function VaultNotesPage() {
+  const { vaultId } = useParams<{ vaultId: string }>()
   const navigate = useNavigate()
-  const {
-    allFolders,
-    getVaultFolder,
-    setVaultFolder,
-    getFolderColor,
-    setFolderColor,
-    getVaultColor,
-    setVaultColor,
-    toggleFavorite,
-    isFavorite,
-  } = useVaultFolders()
+  const vaults = useVaults()
+  const tree = useVaultTree(vaultId!)
+  const vault = vaults.data?.find((v) => v.id === vaultId)
+  const editable = canEdit(vault?.access)
 
-  const [creating, setCreating] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    try {
-      return (localStorage.getItem('chapters_vaults_view') as ViewMode) || 'card'
-    } catch {
-      return 'card'
-    }
+    return (localStorage.getItem('chapters_notes_view_mode') as ViewMode) || 'card'
   })
   const [groupByFolder, setGroupByFolder] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('chapters_vaults_group_by_folder') === 'true'
-    } catch {
-      return false
-    }
+    return localStorage.getItem('chapters_notes_group_by_folder') === 'true'
   })
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({})
-  const [search, setSearch] = useState('')
   const [selectedFolder, setSelectedFolder] = useState<string>('all')
-  const [accessFilter, setAccessFilter] = useState<string>('all')
-  const [sortBy, setSortBy] = useState<SortOption>('name-asc')
-  const [folderModalVault, setFolderModalVault] = useState<Vault | null>(null)
+  const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState<string>('all')
+  const [sortBy, setSortBy] = useState<SortOption>('updated')
+  const [creating, setCreating] = useState(false)
+  const [folderModalNote, setFolderModalNote] = useState<NoteSummary | null>(null)
 
-  useShellBreadcrumb([{ label: 'Vaults' }])
+  const {
+    getNoteFolder,
+    getFolderColor,
+    getNoteColor,
+    setNoteFolder,
+    isFavorite,
+    toggleFavorite,
+    allFolders: customFolders,
+  } = useNoteFolders(vaultId!)
+
+  // Flatten all notes from tree
+  const allNotes = useMemo(() => {
+    if (!tree.data) return []
+    return Object.values(tree.data).flat()
+  }, [tree.data])
+
+  const allFolders = useMemo(() => {
+    const set = new Set(customFolders)
+    for (const n of allNotes) {
+      const f = getNoteFolder(n.id, n.path, n.type)
+      if (f) set.add(f)
+    }
+    return Array.from(set)
+  }, [customFolders, allNotes, getNoteFolder])
+
+  const existingTypes = useMemo(() => {
+    return Object.keys(tree.data ?? {})
+  }, [tree.data])
 
   function handleViewModeChange(mode: ViewMode) {
     setViewMode(mode)
-    try {
-      localStorage.setItem('chapters_vaults_view', mode)
-    } catch {
-      // Ignore
-    }
+    localStorage.setItem('chapters_notes_view_mode', mode)
   }
 
   function handleToggleGroupByFolder() {
-    const next = !groupByFolder
-    setGroupByFolder(next)
-    try {
-      localStorage.setItem('chapters_vaults_group_by_folder', String(next))
-    } catch {
-      // Ignore
-    }
+    setGroupByFolder((prev) => {
+      const next = !prev
+      localStorage.setItem('chapters_notes_group_by_folder', String(next))
+      return next
+    })
   }
 
   function toggleFolderCollapse(folder: string) {
@@ -121,26 +113,21 @@ export function VaultsPage() {
   }
 
   function handleSaveFolder(
-    vaultId: string,
+    noteId: string,
     folder: string,
-    vaultColor?: VaultColor,
+    noteColor?: VaultColor,
     folderColor?: VaultColor,
   ) {
-    setVaultFolder(vaultId, folder)
-    setVaultColor(vaultId, vaultColor)
-    if (folder) {
-      setFolderColor(folder, folderColor)
-    }
+    setNoteFolder(noteId, folder, noteColor, folderColor)
   }
 
-  // Folder counts computation
+  // Folder Counts
   const folderCounts = useMemo(() => {
-    if (!vaults.data) return { all: 0, uncategorized: 0, byFolder: {} as Record<string, number> }
     let uncategorized = 0
     const byFolder: Record<string, number> = {}
 
-    for (const v of vaults.data) {
-      const f = getVaultFolder(v.id, v.name)
+    for (const n of allNotes) {
+      const f = getNoteFolder(n.id, n.path, n.type)
       if (!f) {
         uncategorized++
       } else {
@@ -149,77 +136,77 @@ export function VaultsPage() {
     }
 
     return {
-      all: vaults.data.length,
+      all: allNotes.length,
       uncategorized,
       byFolder,
     }
-  }, [vaults.data, getVaultFolder])
+  }, [allNotes, getNoteFolder])
 
   // Filter & Sort
-  const filteredVaults = useMemo(() => {
-    if (!vaults.data) return []
-
-    return vaults.data
-      .filter((v) => {
+  const filteredNotes = useMemo(() => {
+    return allNotes
+      .filter((n) => {
         // Search filter
         if (search.trim()) {
           const q = search.toLowerCase()
-          const folder = getVaultFolder(v.id, v.name).toLowerCase()
-          if (!v.name.toLowerCase().includes(q) && !folder.includes(q)) {
+          const folder = getNoteFolder(n.id, n.path, n.type).toLowerCase()
+          if (
+            !n.name.toLowerCase().includes(q) &&
+            !n.path.toLowerCase().includes(q) &&
+            !folder.includes(q)
+          ) {
             return false
           }
         }
 
         // Folder filter
-        const vFolder = getVaultFolder(v.id, v.name)
+        const nFolder = getNoteFolder(n.id, n.path, n.type)
         if (selectedFolder === 'uncategorized') {
-          if (vFolder) return false
+          if (nFolder) return false
         } else if (selectedFolder !== 'all') {
-          if (vFolder.toLowerCase() !== selectedFolder.toLowerCase()) return false
+          if (nFolder.toLowerCase() !== selectedFolder.toLowerCase()) return false
         }
 
-        // Access filter
-        if (accessFilter !== 'all' && v.access !== accessFilter) {
+        // Type filter
+        if (typeFilter !== 'all' && n.type !== typeFilter) {
           return false
         }
 
         return true
       })
       .sort((a, b) => {
-        // Pinned vaults come first if not sorting by a specific property
+        // Pinned notes come first
         const aFav = isFavorite(a.id) ? 1 : 0
         const bFav = isFavorite(b.id) ? 1 : 0
         if (aFav !== bFav) return bFav - aFav
 
         if (sortBy === 'name-asc') return a.name.localeCompare(b.name)
         if (sortBy === 'name-desc') return b.name.localeCompare(a.name)
-        if (sortBy === 'access') {
-          const priority: Record<VaultAccess, number> = { owner: 1, edit: 2, read: 3 }
-          return (priority[a.access] || 99) - (priority[b.access] || 99)
+        if (sortBy === 'updated') {
+          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
         }
-        if (sortBy === 'merged') {
-          return (b.mergeable ? 1 : 0) - (a.mergeable ? 1 : 0)
+        if (sortBy === 'type') {
+          return (a.type || '').localeCompare(b.type || '')
         }
         return 0
       })
-  }, [vaults.data, search, selectedFolder, accessFilter, sortBy, getVaultFolder, isFavorite])
+  }, [allNotes, search, selectedFolder, typeFilter, sortBy, getNoteFolder, isFavorite])
 
   // Grouped by folder data
-  const groupedVaults = useMemo(() => {
+  const groupedNotes = useMemo(() => {
     if (!groupByFolder) return null
-    const groups: { folder: string; color?: VaultColor; vaults: Vault[] }[] = []
+    const groups: { folder: string; color?: VaultColor; notes: NoteSummary[] }[] = []
 
-    // Group matching vaults by their folder
-    const folderMap: Record<string, Vault[]> = {}
-    const uncategorized: Vault[] = []
+    const folderMap: Record<string, NoteSummary[]> = {}
+    const uncategorized: NoteSummary[] = []
 
-    for (const v of filteredVaults) {
-      const f = getVaultFolder(v.id, v.name)
+    for (const n of filteredNotes) {
+      const f = getNoteFolder(n.id, n.path, n.type)
       if (f) {
         if (!folderMap[f]) folderMap[f] = []
-        folderMap[f].push(v)
+        folderMap[f].push(n)
       } else {
-        uncategorized.push(v)
+        uncategorized.push(n)
       }
     }
 
@@ -228,7 +215,7 @@ export function VaultsPage() {
         groups.push({
           folder: f,
           color: getFolderColor(f),
-          vaults: folderMap[f],
+          notes: folderMap[f],
         })
       }
     }
@@ -236,15 +223,15 @@ export function VaultsPage() {
     if (uncategorized.length > 0) {
       groups.push({
         folder: 'Uncategorized',
-        vaults: uncategorized,
+        notes: uncategorized,
       })
     }
 
     return groups
-  }, [groupByFolder, filteredVaults, allFolders, getVaultFolder, getFolderColor])
+  }, [groupByFolder, filteredNotes, allFolders, getNoteFolder, getFolderColor])
 
   const hasActiveFilters =
-    search.trim() !== '' || selectedFolder !== 'all' || accessFilter !== 'all'
+    search.trim() !== '' || selectedFolder !== 'all' || typeFilter !== 'all'
 
   return (
     <div className="h-full min-h-0 overflow-y-auto">
@@ -252,9 +239,9 @@ export function VaultsPage() {
         <Panel>
           <PanelHeader
             title={
-              vaults.data && vaults.data.length > 0 && filteredVaults.length !== vaults.data.length
-                ? `Vaults (${filteredVaults.length} of ${vaults.data.length})`
-                : 'Vaults'
+              allNotes.length > 0 && filteredNotes.length !== allNotes.length
+                ? `Notes (${filteredNotes.length} of ${allNotes.length})`
+                : 'Notes'
             }
             actions={
               <div className="flex items-center gap-2">
@@ -300,33 +287,37 @@ export function VaultsPage() {
                   </Button>
                 </div>
 
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setCreating((c) => !c)}
-                  aria-expanded={creating}
-                >
-                  <Plus aria-hidden="true" />
-                  New vault
-                </Button>
+                {editable && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setCreating((c) => !c)}
+                    aria-expanded={creating}
+                  >
+                    <Plus aria-hidden="true" />
+                    New note
+                  </Button>
+                )}
               </div>
             }
           />
 
-          {creating && (
+          {editable && creating && (
             <div className="border-b border-border p-3">
-              <NewVaultForm
-                onCreated={(vault: Vault) => {
+              <NewNoteForm
+                vaultId={vaultId!}
+                existingTypes={existingTypes}
+                onCreated={(note) => {
                   setCreating(false)
-                  navigate(`/vaults/${vault.id}`)
+                  navigate(`/vaults/${vaultId}/notes/${note.path}`)
                 }}
               />
             </div>
           )}
 
           {/* Search, Filter, and Sort Toolbar */}
-          {vaults.data && vaults.data.length > 0 && (
+          {allNotes.length > 0 && (
             <div className="border-b border-border p-3 flex flex-col gap-3 bg-muted/10">
               <div className="flex flex-wrap items-center gap-2">
                 {/* Search */}
@@ -338,8 +329,8 @@ export function VaultsPage() {
                   <Input
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search vaults by name or folder..."
-                    aria-label="Search vaults"
+                    placeholder="Search notes by name, path, or folder..."
+                    aria-label="Search notes"
                     className="pl-8 h-8 text-xs"
                   />
                   {search && (
@@ -354,18 +345,22 @@ export function VaultsPage() {
                   )}
                 </div>
 
-                {/* Access filter */}
-                <select
-                  value={accessFilter}
-                  onChange={(e) => setAccessFilter(e.target.value)}
-                  aria-label="Filter by access"
-                  className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  <option value="all">All access</option>
-                  <option value="owner">Role: Owner</option>
-                  <option value="edit">Role: Can edit</option>
-                  <option value="read">Role: Read only</option>
-                </select>
+                {/* Type filter */}
+                {existingTypes.length > 0 && (
+                  <select
+                    value={typeFilter}
+                    onChange={(e) => setTypeFilter(e.target.value)}
+                    aria-label="Filter by type"
+                    className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="all">All types</option>
+                    {existingTypes.map((t) => (
+                      <option key={t} value={t}>
+                        Type: {t}
+                      </option>
+                    ))}
+                  </select>
+                )}
 
                 {/* Sort */}
                 <div className="flex items-center gap-1">
@@ -373,13 +368,13 @@ export function VaultsPage() {
                   <select
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value as SortOption)}
-                    aria-label="Sort vaults"
+                    aria-label="Sort notes"
                     className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   >
+                    <option value="updated">Recently updated</option>
                     <option value="name-asc">Name (A–Z)</option>
                     <option value="name-desc">Name (Z–A)</option>
-                    <option value="access">Access level</option>
-                    <option value="merged">Merged view first</option>
+                    <option value="type">Type</option>
                   </select>
                 </div>
               </div>
@@ -495,24 +490,24 @@ export function VaultsPage() {
             </div>
           )}
 
-          {vaults.isError ? (
+          {tree.isError ? (
             <PanelState
               status="error"
-              title="We couldn’t load your vaults."
-              message={vaults.error.message}
-              onRetry={() => vaults.refetch()}
+              title="We couldn’t load notes."
+              message={tree.error.message}
+              onRetry={() => tree.refetch()}
             />
-          ) : vaults.isPending ? (
+          ) : tree.isPending ? (
             <PanelState status="loading" />
-          ) : vaults.data.length === 0 ? (
+          ) : allNotes.length === 0 ? (
             <PanelState
               status="empty"
-              title="No vaults yet"
-              message="A vault holds your notes, and the graph draws the links between them."
+              title="No notes yet"
+              message="Create a note to start writing and connecting ideas."
             />
-          ) : filteredVaults.length === 0 ? (
+          ) : filteredNotes.length === 0 ? (
             <div className="p-8 text-center flex flex-col items-center gap-2">
-              <p className="text-sm text-muted-foreground">No vaults match the current filter.</p>
+              <p className="text-sm text-muted-foreground">No notes match the current filter.</p>
               {hasActiveFilters && (
                 <Button
                   type="button"
@@ -521,17 +516,17 @@ export function VaultsPage() {
                   onClick={() => {
                     setSearch('')
                     setSelectedFolder('all')
-                    setAccessFilter('all')
+                    setTypeFilter('all')
                   }}
                 >
                   Clear filters
                 </Button>
               )}
             </div>
-          ) : groupByFolder && groupedVaults ? (
+          ) : groupByFolder && groupedNotes ? (
             /* Grouped by Folder View */
             <div className="flex flex-col gap-6 p-4">
-              {groupedVaults.map((group) => {
+              {groupedNotes.map((group) => {
                 const colorDef = getColorDef(group.color)
                 const isCollapsed = Boolean(collapsedFolders[group.folder])
 
@@ -564,7 +559,7 @@ export function VaultsPage() {
                           />
                           <span>{group.folder}</span>
                           <span className="text-[10px] opacity-75">
-                            ({group.vaults.length})
+                            ({group.notes.length})
                           </span>
                         </button>
                       </div>
@@ -579,16 +574,20 @@ export function VaultsPage() {
                     >
                       {viewMode === 'card' ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                          {group.vaults.map((vault) => (
-                            <VaultCard
-                              key={vault.id}
-                              vault={vault}
-                              folder={getVaultFolder(vault.id, vault.name)}
-                              vaultColor={getVaultColor(vault.id)}
-                              folderColor={getFolderColor(getVaultFolder(vault.id, vault.name))}
-                              isFavorite={isFavorite(vault.id)}
+                          {group.notes.map((note) => (
+                            <NoteCard
+                              key={note.id}
+                              note={note}
+                              vaultId={vaultId!}
+                              folder={getNoteFolder(note.id, note.path, note.type)}
+                              noteColor={getNoteColor(note.id)}
+                              folderColor={getFolderColor(
+                                getNoteFolder(note.id, note.path, note.type),
+                              )}
+                              isFavorite={isFavorite(note.id)}
                               onToggleFavorite={toggleFavorite}
-                              onOrganizeFolder={setFolderModalVault}
+                              onOrganizeFolder={setFolderModalNote}
+                              canEdit={editable}
                             />
                           ))}
                         </div>
@@ -598,28 +597,32 @@ export function VaultsPage() {
                             <TableRow>
                               <TableHead>Name</TableHead>
                               <TableHead>Folder</TableHead>
-                              <TableHead>Access</TableHead>
-                              <TableHead>Merged view</TableHead>
+                              <TableHead>Type</TableHead>
+                              <TableHead>Updated</TableHead>
                               <TableHead className="w-0">
                                 <span className="sr-only">Actions</span>
                               </TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {group.vaults.map((vault) => {
-                              const folder = getVaultFolder(vault.id, vault.name)
-                              const vColor = getColorDef(getVaultColor(vault.id))
+                            {group.notes.map((note) => {
+                              const folder = getNoteFolder(note.id, note.path, note.type)
+                              const nColor = getColorDef(getNoteColor(note.id))
                               const fColor = getColorDef(getFolderColor(folder))
-                              const isFav = isFavorite(vault.id)
+                              const isFav = isFavorite(note.id)
 
                               return (
-                                <TableRow key={vault.id}>
+                                <TableRow key={note.id}>
                                   <TableCell>
                                     <div className="flex items-center gap-2">
                                       <button
                                         type="button"
-                                        onClick={() => toggleFavorite(vault.id)}
-                                        aria-label={isFav ? `Unfavorite ${vault.name}` : `Favorite ${vault.name}`}
+                                        onClick={() => toggleFavorite(note.id)}
+                                        aria-label={
+                                          isFav
+                                            ? `Unfavorite ${note.name}`
+                                            : `Favorite ${note.name}`
+                                        }
                                         className={`p-0.5 rounded transition-colors ${
                                           isFav
                                             ? 'text-amber-500'
@@ -631,26 +634,31 @@ export function VaultsPage() {
                                           aria-hidden="true"
                                         />
                                       </button>
-                                      {vColor && (
+                                      {nColor && (
                                         <span
-                                          className={`size-2 rounded-full shrink-0 ${vColor.accent}`}
-                                          style={vColor.style?.accent}
-                                          title={`Color: ${vColor.label}`}
+                                          className={`size-2 rounded-full shrink-0 ${nColor.accent}`}
+                                          style={nColor.style?.accent}
+                                          title={`Color: ${nColor.label}`}
                                         />
                                       )}
                                       <Link
-                                        to={`/vaults/${vault.id}`}
+                                        to={`/vaults/${vaultId}/notes/${note.path}`}
                                         className="font-medium text-foreground hover:underline"
                                       >
-                                        {vault.name}
+                                        {note.name}
                                       </Link>
                                     </div>
                                   </TableCell>
                                   <TableCell>
                                     <button
                                       type="button"
-                                      onClick={() => setFolderModalVault(vault)}
+                                      onClick={() => setFolderModalNote(note)}
                                       title={folder ? `Folder: ${folder}` : 'Assign folder'}
+                                      aria-label={
+                                        folder
+                                          ? `Folder: ${folder} for ${note.name}`
+                                          : `Assign folder for ${note.name}`
+                                      }
                                       className={`flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded border transition-colors ${
                                         fColor
                                           ? fColor.badge
@@ -667,15 +675,17 @@ export function VaultsPage() {
                                     </button>
                                   </TableCell>
                                   <TableCell>
-                                    <Pill tone={vault.access === 'owner' ? 'human' : 'neutral'}>
-                                      {ACCESS_LABEL[vault.access]}
-                                    </Pill>
+                                    {note.type && <Pill tone="neutral">{note.type}</Pill>}
                                   </TableCell>
-                                  <TableCell className="text-muted-foreground">
-                                    {vault.mergeable ? 'Included' : 'Excluded'}
+                                  <TableCell className="text-xs text-muted-foreground">
+                                    {note.updatedAt
+                                      ? new Date(note.updatedAt).toLocaleDateString()
+                                      : '—'}
                                   </TableCell>
                                   <TableCell className="text-right">
-                                    {vault.access === 'owner' && <VaultRowActions vault={vault} />}
+                                    {editable && (
+                                      <NoteActions vaultId={vaultId!} note={note} />
+                                    )}
                                   </TableCell>
                                 </TableRow>
                               )
@@ -691,16 +701,20 @@ export function VaultsPage() {
           ) : viewMode === 'card' ? (
             /* Flat Card View */
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4">
-              {filteredVaults.map((vault) => (
-                <VaultCard
-                  key={vault.id}
-                  vault={vault}
-                  folder={getVaultFolder(vault.id, vault.name)}
-                  vaultColor={getVaultColor(vault.id)}
-                  folderColor={getFolderColor(getVaultFolder(vault.id, vault.name))}
-                  isFavorite={isFavorite(vault.id)}
+              {filteredNotes.map((note) => (
+                <NoteCard
+                  key={note.id}
+                  note={note}
+                  vaultId={vaultId!}
+                  folder={getNoteFolder(note.id, note.path, note.type)}
+                  noteColor={getNoteColor(note.id)}
+                  folderColor={getFolderColor(
+                    getNoteFolder(note.id, note.path, note.type),
+                  )}
+                  isFavorite={isFavorite(note.id)}
                   onToggleFavorite={toggleFavorite}
-                  onOrganizeFolder={setFolderModalVault}
+                  onOrganizeFolder={setFolderModalNote}
+                  canEdit={editable}
                 />
               ))}
             </div>
@@ -711,28 +725,32 @@ export function VaultsPage() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Folder</TableHead>
-                  <TableHead>Access</TableHead>
-                  <TableHead>Merged view</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Updated</TableHead>
                   <TableHead className="w-0">
                     <span className="sr-only">Actions</span>
                   </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredVaults.map((vault) => {
-                  const folder = getVaultFolder(vault.id, vault.name)
-                  const vColor = getColorDef(getVaultColor(vault.id))
+                {filteredNotes.map((note) => {
+                  const folder = getNoteFolder(note.id, note.path, note.type)
+                  const nColor = getColorDef(getNoteColor(note.id))
                   const fColor = getColorDef(getFolderColor(folder))
-                  const isFav = isFavorite(vault.id)
+                  const isFav = isFavorite(note.id)
 
                   return (
-                    <TableRow key={vault.id}>
+                    <TableRow key={note.id}>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
-                            onClick={() => toggleFavorite(vault.id)}
-                            aria-label={isFav ? `Unfavorite ${vault.name}` : `Favorite ${vault.name}`}
+                            onClick={() => toggleFavorite(note.id)}
+                            aria-label={
+                              isFav
+                                ? `Unfavorite ${note.name}`
+                                : `Favorite ${note.name}`
+                            }
                             className={`p-0.5 rounded transition-colors ${
                               isFav
                                 ? 'text-amber-500'
@@ -744,26 +762,32 @@ export function VaultsPage() {
                               aria-hidden="true"
                             />
                           </button>
-                          {vColor && (
+                          {nColor && (
                             <span
-                              className={`size-2 rounded-full shrink-0 ${vColor.accent}`}
-                              style={vColor.style?.accent}
-                              title={`Color: ${vColor.label}`}
+                              className={`size-2 rounded-full shrink-0 ${nColor.accent}`}
+                              style={nColor.style?.accent}
+                              title={`Color: ${nColor.label}`}
                             />
                           )}
                           <Link
-                            to={`/vaults/${vault.id}`}
-                            className="font-medium text-foreground hover:underline"
+                            to={`/vaults/${vaultId}/notes/${note.path}`}
+                            className="font-medium text-foreground hover:underline flex items-center gap-1.5"
                           >
-                            {vault.name}
+                            <FileText className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                            <span>{note.name}</span>
                           </Link>
                         </div>
                       </TableCell>
                       <TableCell>
                         <button
                           type="button"
-                          onClick={() => setFolderModalVault(vault)}
+                          onClick={() => setFolderModalNote(note)}
                           title={folder ? `Folder: ${folder}` : 'Assign folder'}
+                          aria-label={
+                            folder
+                              ? `Folder: ${folder} for ${note.name}`
+                              : `Assign folder for ${note.name}`
+                          }
                           className={`flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded border transition-colors ${
                             fColor
                               ? fColor.badge
@@ -780,15 +804,15 @@ export function VaultsPage() {
                         </button>
                       </TableCell>
                       <TableCell>
-                        <Pill tone={vault.access === 'owner' ? 'human' : 'neutral'}>
-                          {ACCESS_LABEL[vault.access]}
-                        </Pill>
+                        {note.type && <Pill tone="neutral">{note.type}</Pill>}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {vault.mergeable ? 'Included' : 'Excluded'}
+                      <TableCell className="text-xs text-muted-foreground">
+                        {note.updatedAt
+                          ? new Date(note.updatedAt).toLocaleDateString()
+                          : '—'}
                       </TableCell>
                       <TableCell className="text-right">
-                        {vault.access === 'owner' && <VaultRowActions vault={vault} />}
+                        {editable && <NoteActions vaultId={vaultId!} note={note} />}
                       </TableCell>
                     </TableRow>
                   )
@@ -797,26 +821,26 @@ export function VaultsPage() {
             </Table>
           )}
         </Panel>
-
-        <Panel>
-          <PanelHeader title="Trash" />
-          <PanelBody dense>
-            <VaultTrashSection heading={false} />
-          </PanelBody>
-        </Panel>
       </div>
 
-      {folderModalVault && (
-        <VaultFolderDialog
-          key={folderModalVault.id}
-          open={Boolean(folderModalVault)}
-          onOpenChange={(open) => !open && setFolderModalVault(null)}
-          vault={folderModalVault}
-          currentFolder={getVaultFolder(folderModalVault.id, folderModalVault.name)}
-          currentFolderColor={getFolderColor(
-            getVaultFolder(folderModalVault.id, folderModalVault.name),
+      {folderModalNote && (
+        <NoteFolderDialog
+          open={Boolean(folderModalNote)}
+          onOpenChange={(open) => !open && setFolderModalNote(null)}
+          note={folderModalNote}
+          currentFolder={getNoteFolder(
+            folderModalNote.id,
+            folderModalNote.path,
+            folderModalNote.type,
           )}
-          currentVaultColor={getVaultColor(folderModalVault.id)}
+          currentFolderColor={getFolderColor(
+            getNoteFolder(
+              folderModalNote.id,
+              folderModalNote.path,
+              folderModalNote.type,
+            ),
+          )}
+          currentNoteColor={getNoteColor(folderModalNote.id)}
           allFolders={allFolders}
           onSave={handleSaveFolder}
         />
@@ -824,4 +848,3 @@ export function VaultsPage() {
     </div>
   )
 }
-

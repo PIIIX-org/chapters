@@ -191,5 +191,46 @@ describe('VaultsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   })
+
+  it('allows picking a custom color via in-app color picker dialog', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+    const addFolderBtn = screen.getAllByRole('button', { name: 'Add folder' })[0]
+    expect(addFolderBtn).toBeDefined()
+    fireEvent.click(addFolderBtn!)
+
+    expect(await screen.findByRole('heading', { name: 'Organize Vault' })).toBeInTheDocument()
+
+    // Type folder name to reveal folder color picker
+    const folderInput = await screen.findByLabelText(/folder name/i)
+    fireEvent.change(folderInput, { target: { value: 'Design' } })
+
+    // Open custom in-app folder color picker dialog
+    const openFolderColorBtn = screen.getByRole('button', { name: 'Open custom folder color picker' })
+    expect(openFolderColorBtn).toBeInTheDocument()
+    fireEvent.click(openFolderColorBtn)
+
+    // In-app Color Picker Dialog is open
+    expect(await screen.findByRole('heading', { name: 'Folder Color' })).toBeInTheDocument()
+    const hexInput = screen.getByLabelText(/hex code/i)
+    fireEvent.change(hexInput, { target: { value: '#e11d48' } })
+
+    // Click "Save" to add to palette
+    const saveToPaletteBtn = screen.getByRole('button', { name: 'Add to saved palette' })
+    fireEvent.click(saveToPaletteBtn)
+
+    // Click "Confirm" to close color picker dialog and apply
+    const confirmBtn = screen.getByRole('button', { name: 'Confirm' })
+    fireEvent.click(confirmBtn)
+
+    // Save folder dialog
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    // Now Engineering should show "Design" folder button
+    const designBadge = await screen.findByRole('button', { name: 'Design' })
+    expect(designBadge).toBeInTheDocument()
+  })
 })
 

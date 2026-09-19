@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import type { CSSProperties } from 'react'
 
 export type VaultColor =
   | 'blue'
@@ -9,9 +10,10 @@ export type VaultColor =
   | 'cyan'
   | 'orange'
   | 'slate'
+  | (string & {})
 
 export interface ColorDef {
-  id: VaultColor
+  id: string
   label: string
   accent: string // e.g. solid color for dots/bars
   badge: string // for pills/badges
@@ -20,6 +22,15 @@ export interface ColorDef {
   folderTab: string // for folder tabs
   folderBg: string // for folder container background
   folderIcon: string // for folder icon text color
+  style?: {
+    accent?: CSSProperties
+    badge?: CSSProperties
+    cardBorder?: CSSProperties
+    cardTopBar?: CSSProperties
+    folderTab?: CSSProperties
+    folderBg?: CSSProperties
+    folderIcon?: CSSProperties
+  }
 }
 
 export const COLOR_PALETTE: ColorDef[] = [
@@ -115,7 +126,47 @@ export const COLOR_PALETTE: ColorDef[] = [
 
 export function getColorDef(color?: VaultColor | null): ColorDef | null {
   if (!color) return null
-  return COLOR_PALETTE.find((c) => c.id === color) ?? null
+  const found = COLOR_PALETTE.find((c) => c.id === color)
+  if (found) return found
+  if (color.startsWith('#')) {
+    return {
+      id: color,
+      label: color,
+      accent: '',
+      badge: 'border',
+      cardBorder: 'border',
+      cardTopBar: '',
+      folderTab: 'border',
+      folderBg: '',
+      folderIcon: '',
+      style: {
+        accent: { backgroundColor: color },
+        badge: {
+          backgroundColor: `${color}1a`,
+          color: color,
+          borderColor: `${color}4d`,
+        },
+        cardBorder: {
+          borderColor: `${color}4d`,
+        },
+        cardTopBar: {
+          backgroundColor: color,
+        },
+        folderTab: {
+          backgroundColor: `${color}26`,
+          color: color,
+          borderColor: `${color}66`,
+        },
+        folderBg: {
+          backgroundColor: `${color}0d`,
+        },
+        folderIcon: {
+          color: color,
+        },
+      },
+    }
+  }
+  return null
 }
 
 const STORAGE_KEY_FOLDERS = 'chapters_vault_folders'

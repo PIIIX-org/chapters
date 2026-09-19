@@ -20,7 +20,20 @@ export const userStatus = pgEnum('user_status', [
   'active',
   'deactivated',
 ])
-export const userRole = pgEnum('user_role', ['member', 'admin'])
+export const USER_ROLES = [
+  'owner',
+  'superadmin',
+  'admin',
+  'moderator',
+  'manager',
+  'editor',
+  'contributor',
+  'member',
+  'viewer',
+  'guest',
+] as const
+export type UserRole = (typeof USER_ROLES)[number]
+export const userRole = pgEnum('user_role', USER_ROLES)
 export const teamRole = pgEnum('team_role', ['owner', 'member'])
 export const granteeType = pgEnum('grantee_type', ['user', 'team'])
 export const permission = pgEnum('permission', ['read', 'edit'])

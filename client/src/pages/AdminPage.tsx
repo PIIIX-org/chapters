@@ -11,6 +11,7 @@ import { PanelState } from '../components/ui/empty-state.js'
 import { Eyebrow } from '../components/ui/eyebrow.js'
 import { useSession } from '../hooks/useSession.js'
 import { cn } from '../lib/utils.js'
+import { isAdminRole } from '../api/admin.js'
 
 const SECTIONS = [
   { id: 'overview', label: 'Overview', render: () => <InstanceOverview /> },
@@ -49,7 +50,7 @@ export function AdminPage() {
   // RequireAuth has already established there is a session; this is the role
   // gate. The server enforces it too (403 on every /api/admin route) — this
   // exists so a member sees an explanation instead of six failed requests.
-  if (session.data?.role !== 'admin') {
+  if (!isAdminRole(session.data?.role)) {
     return (
       <PanelState
         status="empty"

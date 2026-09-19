@@ -10,9 +10,21 @@ import {
   TableHeader,
   TableRow,
 } from '../ui/table.js'
-import { useAdminUsers, useDeactivateUser, usePromoteUser } from '../../hooks/useAdmin.js'
+import {
+  useAdminUsers,
+  useDeactivateUser,
+  useDemoteUser,
+  usePromoteUser,
+  useUpdateUserRole,
+} from '../../hooks/useAdmin.js'
 import { useSession } from '../../hooks/useSession.js'
-import type { AdminUser } from '../../api/admin.js'
+import {
+  ROLE_LABELS,
+  USER_ROLES,
+  isAdminRole,
+  type AdminUser,
+  type UserRole,
+} from '../../api/admin.js'
 
 const STATUS_TONE: Record<AdminUser['status'], PillTone> = {
   active: 'live',
@@ -20,14 +32,30 @@ const STATUS_TONE: Record<AdminUser['status'], PillTone> = {
   deactivated: 'neutral',
 }
 
+const ROLE_TONE: Record<UserRole, PillTone> = {
+  owner: 'human',
+  superadmin: 'human',
+  admin: 'human',
+  moderator: 'live',
+  manager: 'live',
+  editor: 'idle',
+  contributor: 'idle',
+  member: 'neutral',
+  viewer: 'neutral',
+  guest: 'neutral',
+}
+
 /**
- * Every account on the instance, with the two structural levers from the
- * oversight spec: promote to admin, deactivate. Neither reads any content.
+ * Every account on the instance, with granular permission levels (owner,
+ * admin, moderator, manager, editor, contributor, member, viewer, guest)
+ * and levers: promote to admin, demote to member, change role, and deactivate.
  */
 export function UserRoster() {
   const users = useAdminUsers()
   const session = useSession()
   const promote = usePromoteUser()
+  const demote = useDemoteUser()
+  const updateRole = useUpdateUserRole()
   const deactivate = useDeactivateUser()
 
   return (
@@ -50,7 +78,7 @@ export function UserRoster() {
           </TableHeader>
           <TableBody>
             {users.data.map((user) => {
-              // Deactivating yourself would destroy your own session and, on a
+              // Deactivating or demoting yourself would destroy your own session and, on a
               // single-admin instance, lock the instance out of its own admin
               // area. The server has no such guard, so it belongs here.
               const isSelf = user.id === session.data?.id
@@ -70,20 +98,53 @@ export function UserRoster() {
                     )}
                   </TableCell>
                   <TableCell className="py-2 align-top">
-                    <Pill tone={user.role === 'admin' ? 'human' : 'neutral'}>
-                      {user.role}
-                    </Pill>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Pill tone={ROLE_TONE[user.role] ?? 'neutral'}>
+                        {ROLE_LABELS[user.role] ?? user.role}
+                      </Pill>
+                      {!isSelf && user.status === 'active' && (
+                        <select
+                          aria-label={`Change role for ${user.email}`}
+                          value={user.role}
+                          disabled={updateRole.isPending}
+                          onChange={(e) =>
+                            updateRole.mutate({
+                              id: user.id,
+                              role: e.target.value as UserRole,
+                            })
+                          }
+                          className="text-xs bg-muted/60 border border-border/80 rounded px-1.5 py-0.5 text-foreground hover:border-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer"
+                        >
+                          {USER_ROLES.map((r) => (
+                            <option key={r} value={r}>
+                              {ROLE_LABELS[r]}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="py-2 align-top">
                     <div className="flex flex-wrap items-center gap-1 whitespace-normal">
-                      {user.role !== 'admin' && user.status === 'active' && (
+                      {!isAdminRole(user.role) && user.status === 'active' && (
                         <ConfirmAction
                           label="Promote"
                           ariaLabel={`Promote ${user.email} to admin`}
-                          consequence={`${user.email} gets the whole admin area: the approval queue, every oversight table, force-revoke, and the instance backup. It cannot be undone from here.`}
+                          consequence={`${user.email} gets administrative privileges: the approval queue, every oversight table, force-revoke, and the instance backup.`}
                           pending={promote.isPending}
                           error={promote.error?.message ?? null}
-                          onConfirm={() => promote.mutate(user.id)}
+                          onConfirm={() => promote.mutate({ id: user.id, role: 'admin' })}
+                        />
+                      )}
+                      {isAdminRole(user.role) && !isSelf && user.status === 'active' && (
+                        <ConfirmAction
+                          label="Demote"
+                          destructive
+                          ariaLabel={`Demote ${user.email}`}
+                          consequence={`${user.email} will lose administrative privileges and be demoted to member.`}
+                          pending={demote.isPending}
+                          error={demote.error?.message ?? null}
+                          onConfirm={() => demote.mutate({ id: user.id, role: 'member' })}
                         />
                       )}
                       {user.status !== 'deactivated' && !isSelf && (

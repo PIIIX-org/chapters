@@ -12,6 +12,7 @@ import { Kbd } from '../ui/kbd.js'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.js'
 import { useSession } from '../../hooks/useSession.js'
 import { cn } from '../../lib/utils.js'
+import { isAdminRole } from '../../api/admin.js'
 
 interface RailItem {
   to: string
@@ -65,7 +66,7 @@ function RailLink({ item }: { item: RailItem }) {
 /** The always-present left rail. Icons only; names live in tooltips and aria. */
 export function Rail() {
   const session = useSession()
-  const isAdmin = session.data?.role === 'admin'
+  const isAdmin = isAdminRole(session.data?.role)
   const primary = PRIMARY.filter((item) => !item.admin || isAdmin)
 
   return (
