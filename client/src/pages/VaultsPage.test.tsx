@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { mockJsonResponse } from '../lib/api'
 import { expectNoA11yViolations } from '../test/axe'
@@ -70,4 +70,74 @@ describe('VaultsPage', () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/vaults/trash', expect.anything()))
     await expectNoA11yViolations(container)
   })
+
+  it('can toggle between card view and list view', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+    // In card view (default), cards are rendered
+    expect(screen.queryByRole('table')).toBeNull()
+
+    // Switch to list view
+    fireEvent.click(screen.getByRole('button', { name: 'List view' }))
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Folder' })).toBeInTheDocument()
+
+    // Switch back to card view
+    fireEvent.click(screen.getByRole('button', { name: 'Card view' }))
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  it('filters vaults by search term', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+    expect(screen.getByRole('link', { name: 'Recipes' })).toBeInTheDocument()
+
+    // Search for "Eng"
+    const searchInput = screen.getByRole('textbox', { name: 'Search vaults' })
+    fireEvent.change(searchInput, { target: { value: 'Eng' } })
+
+    expect(screen.getByRole('link', { name: 'Engineering' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Recipes' })).toBeNull()
+
+    // Clear search
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+    expect(screen.getByRole('link', { name: 'Recipes' })).toBeInTheDocument()
+  })
+
+  it('allows organizing a vault into a folder and filtering by folder', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+
+    // Open folder dialog for Engineering (button says "Add folder" initially)
+    const addFolderBtn = screen.getAllByRole('button', { name: 'Add folder' })[0]
+    expect(addFolderBtn).toBeDefined()
+    fireEvent.click(addFolderBtn!)
+
+    // Modal opens
+    expect(await screen.findByRole('heading', { name: 'Organize Vault' })).toBeInTheDocument()
+
+    // Type folder name
+    const folderInput = await screen.findByLabelText(/folder name/i)
+    fireEvent.change(folderInput, { target: { value: 'Work' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    // Now Engineering should show "Work" folder badge
+    expect(await screen.findByRole('button', { name: 'Work' })).toBeInTheDocument()
+
+    // Folder filter chip "Work" should appear in toolbar
+    const workFilterChip = screen.getByRole('button', { name: /Work\s*\(1\)/ })
+    expect(workFilterChip).toBeInTheDocument()
+
+    // Click filter chip to filter by "Work"
+    fireEvent.click(workFilterChip)
+    expect(screen.getByRole('link', { name: 'Engineering' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Recipes' })).toBeNull()
+  })
 })
+
