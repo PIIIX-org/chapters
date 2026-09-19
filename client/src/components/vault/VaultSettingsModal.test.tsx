@@ -13,14 +13,18 @@ const VAULT: Vault = { id: 'v1', name: 'Engineering', ownerId: 'u1', mergeable: 
 // VaultMcpPanel fires GET /mcp-connections; stub them all to a quiet empty
 // state by default so tests aimed at the mergeable toggle aren't tripped up
 // by an unrelated section's fetches.
-function stubFetch(makePatchResponse: () => Response) {
-  const fetchMock = vi.fn().mockImplementation((url: string) => {
+function stubFetch(makePatchResponse: () => Response, graphPreferenceResponse?: () => Response) {
+  const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     if (url.includes('/shares')) return Promise.resolve(mockJsonResponse(200, []))
     if (url.includes('/teams')) return Promise.resolve(mockJsonResponse(200, []))
     if (url.includes('/mcp-connections')) return Promise.resolve(mockJsonResponse(200, []))
     // The modal now also carries the note-trash panel; without this its query
     // falls through to the PATCH response and the panel maps over a non-array.
     if (url.includes('/trash')) return Promise.resolve(mockJsonResponse(200, []))
+    if (url.endsWith('/graph-preference')) {
+      if (init?.method === 'PUT') return Promise.resolve(mockJsonResponse(200, JSON.parse(init.body as string)))
+      return Promise.resolve(graphPreferenceResponse ? graphPreferenceResponse() : mockJsonResponse(200, { include: false }))
+    }
     return Promise.resolve(makePatchResponse())
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -101,6 +105,40 @@ describe('VaultSettingsModal', () => {
     ).toBeInTheDocument()
 
     await expectNoA11yViolations(container)
+  })
+
+  it('says the graph preference has no effect while merging is off, and PUTs the new value', async () => {
+    const fetchMock = stubFetch(() => mockJsonResponse(200, VAULT))
+    const user = userEvent.setup()
+    renderModal({ ...VAULT, mergeable: false })
+
+    expect(
+      await screen.findByText(/Merging is off for this vault, so this has no effect/),
+    ).toBeInTheDocument()
+
+    const toggle = screen.getByRole('switch', { name: 'Include in my merged graph' })
+    await user.click(toggle)
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'PUT')).toBe(true),
+    )
+    const [, init] = fetchMock.mock.calls.find((c) => (c[1] as RequestInit)?.method === 'PUT') as [
+      string,
+      RequestInit,
+    ]
+    expect(JSON.parse(init.body as string)).toEqual({ include: true })
+  })
+
+  it('shows nothing rather than a guessed "off" when the preference cannot be read', async () => {
+    stubFetch(
+      () => mockJsonResponse(200, VAULT),
+      () => mockJsonResponse(500, { error: 'database is down' }),
+    )
+    renderModal({ ...VAULT, mergeable: true })
+
+    expect(await screen.findByText(/showing nothing rather than guessing/)).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Include in my merged graph' })).toBeDisabled()
+    expect(screen.queryByText(/Merging is off for this vault/)).toBeNull()
   })
 
   it('has no accessibility violations in the open, happy-path state', async () => {

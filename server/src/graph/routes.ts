@@ -44,38 +44,62 @@ export function graphRoutes(app: FastifyInstance) {
 
       const vaultPrefs = accessibleVaultIds.length
         ? await db
-            .select({ vaultId: vaultGraphPreferences.vaultId })
-            .from(vaultGraphPreferences)
-            .innerJoin(vaults, eq(vaults.id, vaultGraphPreferences.vaultId))
+            .select({
+              vaultId: vaults.id,
+              ownerId: vaults.ownerId,
+              include: vaultGraphPreferences.include,
+            })
+            .from(vaults)
+            .leftJoin(
+              vaultGraphPreferences,
+              and(
+                eq(vaultGraphPreferences.vaultId, vaults.id),
+                eq(vaultGraphPreferences.userId, req.user!.id),
+              ),
+            )
             .where(
               and(
-                eq(vaultGraphPreferences.userId, req.user!.id),
-                eq(vaultGraphPreferences.include, true),
                 eq(vaults.mergeable, true),
-                inArray(vaultGraphPreferences.vaultId, accessibleVaultIds),
+                inArray(vaults.id, accessibleVaultIds),
               ),
             )
         : []
       // Same preference ∩ mergeable ∩ live-access rule as vaults (spec 8).
       const repoPrefs = accessibleRepoIds.length
         ? await db
-            .select({ repositoryId: repositoryGraphPreferences.repositoryId })
-            .from(repositoryGraphPreferences)
-            .innerJoin(repositories, eq(repositories.id, repositoryGraphPreferences.repositoryId))
+            .select({
+              repositoryId: repositories.id,
+              ownerId: repositories.ownerId,
+              include: repositoryGraphPreferences.include,
+            })
+            .from(repositories)
+            .leftJoin(
+              repositoryGraphPreferences,
+              and(
+                eq(repositoryGraphPreferences.repositoryId, repositories.id),
+                eq(repositoryGraphPreferences.userId, req.user!.id),
+              ),
+            )
             .where(
               and(
-                eq(repositoryGraphPreferences.userId, req.user!.id),
-                eq(repositoryGraphPreferences.include, true),
                 eq(repositories.mergeable, true),
-                inArray(repositoryGraphPreferences.repositoryId, accessibleRepoIds),
+                inArray(repositories.id, accessibleRepoIds),
               ),
             )
         : []
 
+      const includedVaultIds = vaultPrefs
+        .filter((v) => v.include === true || (v.include === null && v.ownerId === req.user!.id))
+        .map((v) => v.vaultId)
+
+      const includedRepoIds = repoPrefs
+        .filter((r) => r.include === true || (r.include === null && r.ownerId === req.user!.id))
+        .map((r) => r.repositoryId)
+
       return buildGraph(
         {
-          vaultIds: vaultPrefs.map((p) => p.vaultId),
-          repositoryIds: repoPrefs.map((p) => p.repositoryId),
+          vaultIds: includedVaultIds,
+          repositoryIds: includedRepoIds,
         },
         parseGraphFilters(req.query),
       )

@@ -176,6 +176,12 @@ export function repositoryRoutes(app: FastifyInstance) {
         .set(req.body)
         .where(eq(repositories.id, req.params.id))
         .returning()
+      if (req.body.mergeable === true) {
+        await db
+          .insert(repositoryGraphPreferences)
+          .values({ userId: req.user!.id, repositoryId: req.params.id, include: true })
+          .onConflictDoNothing()
+      }
       return repositoryView(repo!)
     },
   )

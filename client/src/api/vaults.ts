@@ -57,3 +57,14 @@ export function canEdit(access: VaultAccess | undefined): boolean {
 export function purgeVault(id: string): Promise<{ status: 'purged' }> {
   return apiFetch(`/vaults/${id}/purge`, { method: 'POST' })
 }
+
+export function getVaultGraphPreference(id: string): Promise<{ include: boolean }> {
+  return apiFetch(`/vaults/${id}/graph-preference`)
+}
+
+export function setVaultGraphPreference(id: string, include: boolean): Promise<{ include: boolean }> {
+  return apiFetch(`/vaults/${id}/graph-preference`, {
+    method: 'PUT',
+    body: JSON.stringify({ include }),
+  })
+}

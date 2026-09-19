@@ -208,6 +208,8 @@ describe('MCP integration', () => {
     expect(names).toContain('list_vault_shares')
     expect(names).toContain('share_vault')
     expect(names).toContain('revoke_vault_share')
+    expect(names).toContain('get_vault_graph_preference')
+    expect(names).toContain('set_vault_graph_preference')
 
     // Note tools
     expect(names).toContain('rename_note')
@@ -225,6 +227,8 @@ describe('MCP integration', () => {
     expect(names).toContain('list_repository_shares')
     expect(names).toContain('share_repository')
     expect(names).toContain('revoke_repository_share')
+    expect(names).toContain('get_repository_graph_preference')
+    expect(names).toContain('set_repository_graph_preference')
 
     // Team & user tools
     expect(names).toContain('list_teams')

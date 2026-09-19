@@ -107,6 +107,12 @@ export function vaultRoutes(app: FastifyInstance) {
         .set(req.body)
         .where(eq(vaults.id, req.params.id))
         .returning()
+      if (req.body.mergeable === true) {
+        await db
+          .insert(vaultGraphPreferences)
+          .values({ userId: req.user!.id, vaultId: req.params.id, include: true })
+          .onConflictDoNothing()
+      }
       return vault
     },
   )
