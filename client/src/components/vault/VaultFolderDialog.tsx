@@ -10,6 +10,10 @@ import {
 import { Input } from '../ui/input.js'
 import { Label } from '../ui/label.js'
 import { Button } from '../ui/button.js'
+import {
+  COLOR_PALETTE,
+  type VaultColor,
+} from './useVaultFolders.js'
 import type { Vault } from '../../api/vaults.js'
 
 interface VaultFolderDialogProps {
@@ -17,8 +21,15 @@ interface VaultFolderDialogProps {
   onOpenChange: (open: boolean) => void
   vault: Vault | null
   currentFolder: string
+  currentFolderColor?: VaultColor
+  currentVaultColor?: VaultColor
   allFolders: string[]
-  onSave: (vaultId: string, folder: string) => void
+  onSave: (
+    vaultId: string,
+    folder: string,
+    vaultColor?: VaultColor,
+    folderColor?: VaultColor,
+  ) => void
 }
 
 export function VaultFolderDialog({
@@ -26,21 +37,25 @@ export function VaultFolderDialog({
   onOpenChange,
   vault,
   currentFolder,
+  currentFolderColor,
+  currentVaultColor,
   allFolders,
   onSave,
 }: VaultFolderDialogProps) {
   const [folderName, setFolderName] = useState(currentFolder)
+  const [folderColor, setFolderColor] = useState<VaultColor | undefined>(currentFolderColor)
+  const [vaultColor, setVaultColor] = useState<VaultColor | undefined>(currentVaultColor)
 
   if (!vault) return null
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    onSave(vault!.id, folderName.trim())
+    onSave(vault!.id, folderName.trim(), vaultColor, folderColor)
     onOpenChange(false)
   }
 
   function handleRemove() {
-    onSave(vault!.id, '')
+    onSave(vault!.id, '', vaultColor, folderColor)
     onOpenChange(false)
   }
 
@@ -50,8 +65,7 @@ export function VaultFolderDialog({
         <DialogHeader>
           <DialogTitle>Organize Vault</DialogTitle>
           <DialogDescription>
-            Assign &ldquo;{vault.name}&rdquo; to a folder to keep your vaults
-            organized.
+            Assign &ldquo;{vault.name}&rdquo; to a folder and customize color coding.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -89,6 +103,72 @@ export function VaultFolderDialog({
               </div>
             </div>
           )}
+
+          {/* Folder Color Picker */}
+          {folderName.trim() && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs text-muted-foreground font-medium">
+                Folder Color ({folderName.trim()}):
+              </span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setFolderColor(undefined)}
+                  title="Default color"
+                  className={`size-6 rounded-full border border-border flex items-center justify-center text-[10px] text-muted-foreground hover:border-foreground/40 transition-colors ${
+                    !folderColor ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''
+                  }`}
+                >
+                  ✕
+                </button>
+                {COLOR_PALETTE.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setFolderColor(c.id)}
+                    title={c.label}
+                    className={`size-6 rounded-full ${c.accent} transition-transform hover:scale-110 ${
+                      folderColor === c.id
+                        ? 'ring-2 ring-primary ring-offset-2 ring-offset-background scale-105'
+                        : 'opacity-80 hover:opacity-100'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Vault Accent Color Picker */}
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs text-muted-foreground font-medium">
+              Vault Accent Color:
+            </span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setVaultColor(undefined)}
+                title="Default (no color)"
+                className={`size-6 rounded-full border border-border flex items-center justify-center text-[10px] text-muted-foreground hover:border-foreground/40 transition-colors ${
+                  !vaultColor ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''
+                }`}
+              >
+                ✕
+              </button>
+              {COLOR_PALETTE.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setVaultColor(c.id)}
+                  title={c.label}
+                  className={`size-6 rounded-full ${c.accent} transition-transform hover:scale-110 ${
+                    vaultColor === c.id
+                      ? 'ring-2 ring-primary ring-offset-2 ring-offset-background scale-105'
+                      : 'opacity-80 hover:opacity-100'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
 
           <div className="flex items-center justify-between sm:justify-between pt-2">
             {currentFolder ? (

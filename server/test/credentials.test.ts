@@ -18,7 +18,8 @@ describe('credential encryption', () => {
   it('rejects a tampered blob', () => {
     const blob = encryptCredential('secret')
     const [iv, authTag, ciphertext] = blob.split(':')
-    const tampered = [iv, authTag, ciphertext!.slice(0, -2) + '00'].join(':')
+    const replacement = ciphertext!.endsWith('00') ? 'ff' : '00'
+    const tampered = [iv, authTag, ciphertext!.slice(0, -2) + replacement].join(':')
     expect(() => decryptCredential(tampered)).toThrow()
   })
 })
