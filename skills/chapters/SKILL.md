@@ -289,4 +289,33 @@ Chapters exposes 49 tools across 6 functional domains:
   mkdir -p .agents/skills/chapters && cp -r skills/chapters/* .agents/skills/chapters/
   ```
 
+---
+
+## Keeping the Skill Always Active (Always-On Mode)
+
+If you want your AI agent to keep Chapters **permanently active** across every session without needing keyword triggers or manual reminders:
+
+### One-Command Setup
+Run the included installer script from the repository root:
+```bash
+# Install for all agents:
+./skills/chapters/scripts/install-always-on.sh all
+
+# Or for a specific tool:
+./skills/chapters/scripts/install-always-on.sh antigravity  # Gemini / Antigravity
+./skills/chapters/scripts/install-always-on.sh claude       # Anthropic Claude
+./skills/chapters/scripts/install-always-on.sh cursor       # Cursor
+./skills/chapters/scripts/install-always-on.sh windsurf     # Windsurf
+```
+
+### Manual Setup
+- **Google Gemini / Antigravity**:
+  Copy [`skills/chapters/rules/chapters.md`](rules/chapters.md) to `~/.gemini/config/rules/chapters.md`. It will be automatically injected into every conversation.
+- **Anthropic Claude (Claude Code / Desktop)**:
+  Append the contents of [`skills/chapters/rules/chapters.md`](rules/chapters.md) to `~/.claude/CLAUDE.md` or your project's `CLAUDE.md`.
+- **Cursor**:
+  Create `.cursor/rules/chapters.mdc` with `alwaysApply: true` and the contents of `rules/chapters.md`.
+- **Windsurf**:
+  Append the contents of `rules/chapters.md` to `.windsurfrules`.
+
 *Note: Generate an MCP bearer token in the Chapters UI at `/settings` (Settings > MCP Connections) or through the Admin panel.*
