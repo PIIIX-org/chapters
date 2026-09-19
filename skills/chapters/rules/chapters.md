@@ -12,7 +12,8 @@ You are connected to **Chapters**, an open-source, self-hostable second brain an
    - **Traverse graph**: Run `graph` (with `aggregate: "community"` or specific `community` id) to inspect high-level architectural clusters and backlinks.
    - **Targeted reading**: Read specific notes (`read_note`) and code files (`read_file`) discovered through the graph.
 3. **Project Mapping (`/chapters-map`)**:
-   - When asked to map, document, or analyze a project into Chapters, create structured OKF notes in the target vault. Link to code using `[[repo:<repo-id>/path]]` and interconnect concepts via `[[wikilinks]]`.
+   - Follow the 4-Pass Flawless Mapping Protocol (`skills/chapters/references/codebase-mapping-protocol.md`): Discovery → Architectural Domain Partitioning → Structured OKF Generation (`index.md`, `concepts/`, `specs/`) → Graph Topology Validation.
+   - Link directly to source files using `[[repo:<repo-id>/path]]` and establish dense bidirectional `[[wikilinks]]` between concepts. Ensure zero orphan notes and zero broken links.
 4. **Note Writing Standards (OKF)**:
    - Always format notes with YAML frontmatter (`title`, `type: concept|spec|guide|decision`, `tags`, `created`).
    - Use `[[note-title]]` for cross-note links and `[[repo:repo-id/path/to/file]]` for code references.
