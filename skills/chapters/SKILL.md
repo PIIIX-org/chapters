@@ -108,6 +108,18 @@ Manages vaults and sharing:
 - `/chapters-vault create <name> [description]`: Create a new vault.
 - `/chapters-vault preference <vault-id> [include true|false]`: View or set merged-graph preference.
 
+### `/chapters-map <repo-id-or-path> [--vault <vault-id>] [--name <vault-name>]`
+Maps an entire project or codebase repository into structured OKF notes within a Chapters vault, generating an interconnected, AI-navigable knowledge graph.
+- **Workflow for Agents**:
+  1. **Select or Create Target Vault**: If `--vault <vault-id>` is provided, target it. Otherwise, search for a vault named after the project (`list_vaults`) or create a new one (`create_vault`).
+  2. **Inspect Codebase Structure**: Browse repository directories (`browse_repository` or filesystem inspection) and inspect entrypoints, dependencies, and configuration.
+  3. **Generate Architecture Index (`index.md` or `architecture.md`)**:
+     Create the root note with `type: concept`, an architectural overview, module inventory, and direct `[[repo:<repo-id>/path/to/file]]` links.
+  4. **Generate Component & Module Notes**:
+     Create detailed notes under `components/<name>.md` or `concepts/<name>.md` documenting purpose, public interfaces, dependencies, and linking to related component notes via `[[wikilinks]]` and implementation files via `[[repo:...]]`.
+  5. **Fuse into Knowledge Graph**:
+     Call `graph` to verify that the generated notes and code nodes form cohesive Louvain community clusters, making the project effortlessly navigable for AI and humans.
+
 ### `/chapters-export <vault-id|note-path>`
 Exports a vault or note archive.
 - **Tools called**: `export_vault`, `export_note`
@@ -193,40 +205,88 @@ Chapters exposes 49 tools across 6 functional domains:
 
 ---
 
-## MCP Server Configuration
+## Platform Installation & Configuration Guides
 
-To connect an AI assistant (Claude Code, Antigravity, Cursor, Windsurf) to Chapters:
-
-### Option A: HTTP Streamable Transport (Recommended for Web/Remote)
-Add to your client's MCP configuration (e.g. `claude_desktop_config.json`, `.mcp.json`, or agent settings):
-
-```json
-{
-  "mcpServers": {
-    "chapters": {
-      "url": "http://localhost:3000/mcp",
-      "headers": {
-        "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
+### 1. Anthropic Claude (Claude Desktop & Claude Code)
+- **Claude Desktop**:
+  Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+  ```json
+  {
+    "mcpServers": {
+      "chapters": {
+        "url": "http://localhost:3000/mcp",
+        "headers": {
+          "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
+        }
       }
     }
   }
-}
-```
+  ```
+- **Claude Code**:
+  Add MCP server via CLI:
+  ```bash
+  claude mcp add chapters http://localhost:3000/mcp --header "Authorization: Bearer YOUR_CHAPTERS_MCP_TOKEN"
+  ```
+  Install skill:
+  ```bash
+  mkdir -p ~/.claude/skills/chapters && cp -r skills/chapters/* ~/.claude/skills/chapters/
+  ```
 
-### Option B: Stdio Transport (Local Development)
-```json
-{
-  "mcpServers": {
-    "chapters": {
-      "command": "pnpm",
-      "args": ["--silent", "mcp:stdio"],
-      "cwd": "/path/to/chapters",
-      "env": {
-        "CHAPTERS_TOKEN": "YOUR_CHAPTERS_MCP_TOKEN"
+### 2. Cursor & Windsurf
+- **Cursor**:
+  1. Open **Cursor Settings** > **Features** > **MCP**.
+  2. Click **+ Add New MCP Server**.
+  3. Set Name: `chapters`, Type: `sse` or `http`, URL: `http://localhost:3000/mcp`.
+  4. Add Header: `Authorization: Bearer YOUR_CHAPTERS_MCP_TOKEN`.
+  5. Install skill for Cursor rules:
+     ```bash
+     mkdir -p .cursor/rules && cp skills/chapters/SKILL.md .cursor/rules/chapters.mdc
+     ```
+- **Windsurf (Codeium)**:
+  Configure `~/.codeium/windsurf/mcp_config.json`:
+  ```json
+  {
+    "mcpServers": {
+      "chapters": {
+        "url": "http://localhost:3000/mcp",
+        "headers": {
+          "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
+        }
       }
     }
   }
-}
-```
+  ```
 
-*Note: Generate an MCP bearer token from the Chapters UI at `/settings` (Settings > MCP Connections) or through the Admin panel.*
+### 3. Google Gemini & Antigravity
+- **Antigravity CLI**:
+  Add to `~/.gemini/antigravity-cli/mcp/chapters.json` or through MCP configuration:
+  ```json
+  {
+    "url": "http://localhost:3000/mcp",
+    "headers": {
+      "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
+    }
+  }
+  ```
+  Install the agent skill:
+  ```bash
+  mkdir -p ~/.agents/skills/chapters && cp -r skills/chapters/* ~/.agents/skills/chapters/
+  ```
+- **Gemini CLI / Extensions**:
+  Set environment variables:
+  ```bash
+  export CHAPTERS_URL="http://localhost:3000/mcp"
+  export CHAPTERS_TOKEN="YOUR_CHAPTERS_MCP_TOKEN"
+  ```
+
+### 4. OpenAI Codex & Open Agent Frameworks
+- **Skills CLI (`npx skills`)**:
+  ```bash
+  npx skills add PIIIX-org/chapters@skills/chapters
+  ```
+- **Workspace-level installation**:
+  ```bash
+  mkdir -p .agents/skills/chapters && cp -r skills/chapters/* .agents/skills/chapters/
+  ```
+
+*Note: Generate an MCP bearer token in the Chapters UI at `/settings` (Settings > MCP Connections) or through the Admin panel.*
