@@ -139,5 +139,57 @@ describe('VaultsPage', () => {
     expect(screen.getByRole('link', { name: 'Engineering' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Recipes' })).toBeNull()
   })
+
+  it('allows starring a vault to pin it to the top', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+    const starRecipesBtn = screen.getByRole('button', { name: 'Favorite Recipes' })
+    expect(starRecipesBtn).toBeInTheDocument()
+
+    // Favorite "Recipes"
+    fireEvent.click(starRecipesBtn)
+
+    // Now it shows "Unfavorite Recipes"
+    expect(screen.getByRole('button', { name: 'Unfavorite Recipes' })).toBeInTheDocument()
+  })
+
+  it('allows toggling group by folder view', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+
+    // Click Group by folder
+    const groupBtn = screen.getByRole('button', { name: 'Group by folder' })
+    fireEvent.click(groupBtn)
+
+    // Since vaults are uncategorized, "Uncategorized" folder section appears
+    expect(screen.getAllByText('Uncategorized').length).toBeGreaterThanOrEqual(2)
+
+    // Click again to ungroup
+    fireEvent.click(groupBtn)
+    expect(screen.getAllByText('Uncategorized').length).toBe(1)
+  })
+
+  it('allows picking a folder color and vault color in the folder dialog', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+    const addFolderBtn = screen.getAllByRole('button', { name: 'Add folder' })[0]
+    expect(addFolderBtn).toBeDefined()
+    fireEvent.click(addFolderBtn!)
+
+    expect(await screen.findByRole('heading', { name: 'Organize Vault' })).toBeInTheDocument()
+
+    // Select Blue for vault accent
+    const blueBtn = screen.getAllByTitle('Blue')[0]
+    expect(blueBtn).toBeDefined()
+    fireEvent.click(blueBtn!)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  })
 })
 

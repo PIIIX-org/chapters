@@ -1,8 +1,9 @@
 import { Link } from 'react-router'
-import { BookOpen, Folder, Network } from 'lucide-react'
+import { BookOpen, Folder, Network, Star } from 'lucide-react'
 import { Card, CardContent, CardFooter, CardHeader } from '../ui/card.js'
 import { Pill } from '../ui/pill.js'
 import { VaultRowActions } from '../shell/VaultActions.js'
+import { getColorDef, type VaultColor } from './useVaultFolders.js'
 import type { Vault, VaultAccess } from '../../api/vaults.js'
 
 const ACCESS_LABEL: Record<VaultAccess, string> = {
@@ -14,32 +15,83 @@ const ACCESS_LABEL: Record<VaultAccess, string> = {
 interface VaultCardProps {
   vault: Vault
   folder: string
+  vaultColor?: VaultColor
+  folderColor?: VaultColor
+  isFavorite?: boolean
+  onToggleFavorite?: (vaultId: string) => void
   onOrganizeFolder: (vault: Vault) => void
 }
 
 export function VaultCard({
   vault,
   folder,
+  vaultColor,
+  folderColor,
+  isFavorite,
+  onToggleFavorite,
   onOrganizeFolder,
 }: VaultCardProps) {
+  const vColorDef = getColorDef(vaultColor)
+  const fColorDef = getColorDef(folderColor)
+
   return (
-    <Card className="flex flex-col justify-between hover:border-foreground/30 transition-colors">
+    <Card
+      className={`relative flex flex-col justify-between overflow-hidden transition-all hover:border-foreground/30 ${
+        vColorDef ? vColorDef.cardBorder : ''
+      }`}
+    >
+      {/* Top color bar if vault has color */}
+      {vColorDef && (
+        <div
+          className={`h-1 w-full ${vColorDef.cardTopBar}`}
+          aria-hidden="true"
+        />
+      )}
+
       <CardHeader className="gap-2">
         <div className="flex items-center justify-between gap-2">
           <button
             type="button"
             onClick={() => onOrganizeFolder(vault)}
             title={folder ? `Folder: ${folder}` : 'Assign to folder'}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground font-mono bg-muted/40 hover:bg-muted px-2 py-0.5 rounded border border-border/60 transition-colors"
+            className={`flex items-center gap-1.5 text-xs font-mono px-2 py-0.5 rounded border transition-colors ${
+              fColorDef
+                ? fColorDef.badge
+                : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
+            }`}
           >
-            <Folder className="size-3 text-muted-foreground" aria-hidden="true" />
+            <Folder
+              className={`size-3 ${fColorDef ? fColorDef.folderIcon : 'text-muted-foreground'}`}
+              aria-hidden="true"
+            />
             <span className="truncate max-w-[120px]">
               {folder || 'Add folder'}
             </span>
           </button>
-          <Pill tone={vault.access === 'owner' ? 'human' : 'neutral'}>
-            {ACCESS_LABEL[vault.access]}
-          </Pill>
+
+          <div className="flex items-center gap-1.5">
+            {onToggleFavorite && (
+              <button
+                type="button"
+                onClick={() => onToggleFavorite(vault.id)}
+                title={isFavorite ? 'Unfavorite' : 'Favorite'}
+                aria-label={isFavorite ? `Unfavorite ${vault.name}` : `Favorite ${vault.name}`}
+                className={`p-1 rounded transition-colors ${
+                  isFavorite
+                    ? 'text-amber-500 hover:text-amber-600'
+                    : 'text-muted-foreground/40 hover:text-amber-500'
+                }`}
+              >
+                <Star
+                  className={`size-3.5 ${isFavorite ? 'fill-amber-500 text-amber-500' : ''}`}
+                  aria-hidden="true"
+                />
+              </button>
+            )}
+            <Pill tone={vault.access === 'owner' ? 'human' : 'neutral'}>
+              {ACCESS_LABEL[vault.access]}
+            </Pill>
+          </div>
         </div>
 
         <div>
@@ -48,7 +100,9 @@ export function VaultCard({
             className="text-base font-medium text-foreground hover:underline flex items-center gap-2 group"
           >
             <BookOpen
-              className="size-4 text-muted-foreground group-hover:text-foreground transition-colors shrink-0"
+              className={`size-4 transition-colors shrink-0 ${
+                vColorDef ? vColorDef.folderIcon : 'text-muted-foreground group-hover:text-foreground'
+              }`}
               aria-hidden="true"
             />
             <span className="truncate">{vault.name}</span>
@@ -78,3 +132,4 @@ export function VaultCard({
     </Card>
   )
 }
+
