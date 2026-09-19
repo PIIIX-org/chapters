@@ -396,6 +396,11 @@ re-resolved live.
   result instead of an uncaught exception. `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
+- **Chapters Agent Skill (`skills/chapters/SKILL.md`)**: Equips AI assistants
+  with graph-first navigation, the full 49-tool MCP catalog, slash commands
+  (`/chapters-status`, `/chapters-search`, `/chapters-graph`, `/chapters-map`,
+  `/chapters-note`, `/chapters-repo`, `/chapters-vault`, `/chapters-export`),
+  and an always-active mode (`skills/chapters/rules/chapters.md`).
 
 ### 5.9 Export & backup (`server/src/export/`)
 
