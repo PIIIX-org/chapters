@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { mockJsonResponse } from '../lib/api.js'
 import { expectNoA11yViolations } from '../test/axe.js'
 import { TeamPage } from './TeamPage.js'
@@ -177,6 +177,21 @@ describe('TeamPage', () => {
     expect(
       screen.getByText(/teams are how several people reach a set of vaults at once/i),
     ).toBeInTheDocument()
+  })
+
+  it('filters roster members by email search input', async () => {
+    stubFetch()
+    renderPage()
+
+    const table = await screen.findByRole('table')
+    expect(within(table).getByText('ada@example.com')).toBeInTheDocument()
+    expect(within(table).getByText('grace@example.com')).toBeInTheDocument()
+
+    const searchInput = screen.getByLabelText('Search members')
+    fireEvent.change(searchInput, { target: { value: 'ada' } })
+
+    expect(within(table).getByText('ada@example.com')).toBeInTheDocument()
+    expect(within(table).queryByText('grace@example.com')).toBeNull()
   })
 
   it('has no accessibility violations once loaded', async () => {

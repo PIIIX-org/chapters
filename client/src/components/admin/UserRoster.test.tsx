@@ -57,21 +57,77 @@ describe('UserRoster', () => {
     expect(within(rowFor('member@example.com')).getByRole('button', { name: /^Promote/ })).toBeInTheDocument()
     expect(within(rowFor('member@example.com')).getByRole('button', { name: /^Deactivate/ })).toBeInTheDocument()
 
-    // Already an admin: nothing to promote to.
+    // Already an admin: demote is available, but not promote.
     expect(within(rowFor('other-admin@example.com')).queryByRole('button', { name: /^Promote/ })).toBeNull()
+    expect(within(rowFor('other-admin@example.com')).getByRole('button', { name: /^Demote/ })).toBeInTheDocument()
     expect(within(rowFor('other-admin@example.com')).getByRole('button', { name: /^Deactivate/ })).toBeInTheDocument()
 
-    // Yourself: deactivating would sign you out and, alone, lock the instance
+    // Yourself: deactivating or demoting would sign you out and, alone, lock the instance
     // out of its own admin area.
     await waitFor(() =>
       expect(within(rowFor('me@example.com')).queryByRole('button', { name: /^Deactivate/ })).toBeNull(),
     )
+    expect(within(rowFor('me@example.com')).queryByRole('button', { name: /^Demote/ })).toBeNull()
     expect(within(rowFor('me@example.com')).getByText('This is you')).toBeInTheDocument()
 
     // Already deactivated: nothing left to take.
     expect(within(rowFor('gone@example.com')).queryByRole('button', { name: /^Deactivate/ })).toBeNull()
+    expect(within(rowFor('gone@example.com')).queryByRole('button', { name: /^Demote/ })).toBeNull()
+
+    // Role selector is present for active accounts other than self.
+    expect(
+      within(rowFor('member@example.com')).getByRole('combobox', {
+        name: 'Change role for member@example.com',
+      }),
+    ).toBeInTheDocument()
 
     await expectNoA11yViolations(container)
+  })
+
+  it('states the consequence before demoting, and only acts on confirm', async () => {
+    const fetch = fetchMock()
+    vi.stubGlobal('fetch', fetch)
+    renderWithClient(<UserRoster />)
+
+    await screen.findByText('other-admin@example.com')
+    await userEvent.click(
+      within(rowFor('other-admin@example.com')).getByRole('button', {
+        name: 'Demote other-admin@example.com',
+      }),
+    )
+
+    expect(screen.getByText(/will lose administrative privileges/)).toBeInTheDocument()
+    expect(fetch).not.toHaveBeenCalledWith('/api/admin/users/a2/demote', expect.anything())
+
+    await userEvent.click(screen.getByRole('button', { name: 'Demote' }))
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/admin/users/a2/demote',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    )
+  })
+
+  it('allows changing role via role selector', async () => {
+    const fetch = fetchMock()
+    vi.stubGlobal('fetch', fetch)
+    renderWithClient(<UserRoster />)
+
+    await screen.findByText('member@example.com')
+    const roleSelect = within(rowFor('member@example.com')).getByRole('combobox', {
+      name: 'Change role for member@example.com',
+    })
+
+    await userEvent.selectOptions(roleSelect, 'moderator')
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/admin/users/m1/role',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ role: 'moderator' }),
+        }),
+      ),
+    )
   })
 
   it('states the consequence before deactivating, and only acts on confirm', async () => {

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   approveUser,
   deactivateUser,
+  demoteUser,
   forceRevokeMcpConnection,
   forceRevokeShare,
   getAdminStats,
@@ -14,6 +15,7 @@ import {
   listSecurityEvents,
   promoteUser,
   transferVaultOwner,
+  updateUserRole,
 } from '../api/admin.js'
 import type {
   AdminMcpConnection,
@@ -24,6 +26,7 @@ import type {
   AdminVault,
   AuditEntry,
   SecurityEvent,
+  UserRole,
 } from '../api/admin.js'
 import type { ApiError } from '../lib/api.js'
 
@@ -100,7 +103,38 @@ export function useApproveUser() {
 }
 
 export function usePromoteUser() {
-  return useUserMutation(promoteUser)
+  const queryClient = useQueryClient()
+  return useMutation<{ role: UserRole }, ApiError, string | { id: string; role?: UserRole }>({
+    mutationFn: (args) =>
+      typeof args === 'string' ? promoteUser(args) : promoteUser(args.id, args.role),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ADMIN_USERS_KEY })
+      void queryClient.invalidateQueries({ queryKey: ADMIN_STATS_KEY })
+    },
+  })
+}
+
+export function useDemoteUser() {
+  const queryClient = useQueryClient()
+  return useMutation<{ role: UserRole }, ApiError, string | { id: string; role?: UserRole }>({
+    mutationFn: (args) =>
+      typeof args === 'string' ? demoteUser(args) : demoteUser(args.id, args.role),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ADMIN_USERS_KEY })
+      void queryClient.invalidateQueries({ queryKey: ADMIN_STATS_KEY })
+    },
+  })
+}
+
+export function useUpdateUserRole() {
+  const queryClient = useQueryClient()
+  return useMutation<{ role: UserRole }, ApiError, { id: string; role: UserRole }>({
+    mutationFn: ({ id, role }) => updateUserRole(id, role),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ADMIN_USERS_KEY })
+      void queryClient.invalidateQueries({ queryKey: ADMIN_STATS_KEY })
+    },
+  })
 }
 
 // Deactivation cascades server-side into sessions, team memberships and

@@ -1,10 +1,11 @@
 import { apiFetch, ApiError } from '../lib/api.js'
+import type { UserRole } from './admin.js'
 
 export interface SessionUser {
   id: string
   email: string
   status: string
-  role: 'member' | 'admin'
+  role: UserRole
   createdAt: string
   /** null when TOTP is not enrolled. */
   mfaEnabledAt: string | null
@@ -56,7 +57,7 @@ export interface LoginInput {
 export interface LoginResult {
   id: string
   email: string
-  role: 'member' | 'admin'
+  role: UserRole
 }
 
 export function login(input: LoginInput): Promise<LoginResult> {

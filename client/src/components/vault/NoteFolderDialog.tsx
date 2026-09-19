@@ -15,20 +15,20 @@ import {
   type VaultColor,
 } from './useVaultFolders.js'
 import { CustomColorPickerDialog } from './CustomColorPickerDialog.js'
-import type { Vault } from '../../api/vaults.js'
+import type { NoteSummary } from '../../api/notes.js'
 
-interface VaultFolderDialogProps {
+interface NoteFolderDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  vault: Vault | null
+  note: NoteSummary | null
   currentFolder: string
   currentFolderColor?: VaultColor
-  currentVaultColor?: VaultColor
+  currentNoteColor?: VaultColor
   allFolders: string[]
   onSave: (
-    vaultId: string,
+    noteId: string,
     folder: string,
-    vaultColor?: VaultColor,
+    noteColor?: VaultColor,
     folderColor?: VaultColor,
   ) => void
 }
@@ -71,31 +71,31 @@ function CustomColorWheel({
   )
 }
 
-export function VaultFolderDialog({
+export function NoteFolderDialog({
   open,
   onOpenChange,
-  vault,
+  note,
   currentFolder,
   currentFolderColor,
-  currentVaultColor,
+  currentNoteColor,
   allFolders,
   onSave,
-}: VaultFolderDialogProps) {
+}: NoteFolderDialogProps) {
   const [folderName, setFolderName] = useState(currentFolder)
   const [folderColor, setFolderColor] = useState<VaultColor | undefined>(currentFolderColor)
-  const [vaultColor, setVaultColor] = useState<VaultColor | undefined>(currentVaultColor)
-  const [colorPickerTarget, setColorPickerTarget] = useState<'folder' | 'vault' | null>(null)
+  const [noteColor, setNoteColor] = useState<VaultColor | undefined>(currentNoteColor)
+  const [colorPickerTarget, setColorPickerTarget] = useState<'folder' | 'note' | null>(null)
 
-  if (!vault) return null
+  if (!note) return null
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    onSave(vault!.id, folderName.trim(), vaultColor, folderColor)
+    onSave(note!.id, folderName.trim(), noteColor, folderColor)
     onOpenChange(false)
   }
 
   function handleRemove() {
-    onSave(vault!.id, '', vaultColor, folderColor)
+    onSave(note!.id, '', noteColor, folderColor)
     onOpenChange(false)
   }
 
@@ -103,19 +103,19 @@ export function VaultFolderDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Organize Vault</DialogTitle>
+          <DialogTitle>Organize Note</DialogTitle>
           <DialogDescription>
-            Assign &ldquo;{vault.name}&rdquo; to a folder and customize color coding.
+            Assign &ldquo;{note.name}&rdquo; to a folder and customize color coding.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
-            <Label htmlFor="folder-input">Folder Name</Label>
+            <Label htmlFor="note-folder-input">Folder Name</Label>
             <Input
-              id="folder-input"
+              id="note-folder-input"
               value={folderName}
               onChange={(e) => setFolderName(e.target.value)}
-              placeholder="e.g. Work, Personal, Research"
+              placeholder="e.g. Work, Meetings, Ideas"
               autoFocus
             />
           </div>
@@ -143,6 +143,7 @@ export function VaultFolderDialog({
               </div>
             </div>
           )}
+
           {/* Folder Color Picker */}
           {folderName.trim() && (
             <div className="flex flex-col gap-1.5">
@@ -182,18 +183,18 @@ export function VaultFolderDialog({
             </div>
           )}
 
-          {/* Vault Accent Color Picker */}
+          {/* Note Accent Color Picker */}
           <div className="flex flex-col gap-1.5">
             <span className="text-xs text-muted-foreground font-medium">
-              Vault Accent Color:
+              Note Accent Color:
             </span>
             <div className="flex items-center gap-1.5 flex-wrap">
               <button
                 type="button"
-                onClick={() => setVaultColor(undefined)}
+                onClick={() => setNoteColor(undefined)}
                 title="Default (no color)"
                 className={`size-6 rounded-full border border-border flex items-center justify-center text-[10px] text-muted-foreground hover:border-foreground/40 transition-colors ${
-                  !vaultColor ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''
+                  !noteColor ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''
                 }`}
               >
                 ✕
@@ -202,19 +203,19 @@ export function VaultFolderDialog({
                 <button
                   key={c.id}
                   type="button"
-                  onClick={() => setVaultColor(c.id)}
+                  onClick={() => setNoteColor(c.id)}
                   title={c.label}
                   className={`size-6 rounded-full ${c.accent} transition-transform hover:scale-110 ${
-                    vaultColor === c.id
+                    noteColor === c.id
                       ? 'ring-2 ring-primary ring-offset-2 ring-offset-background scale-105'
                       : 'opacity-80 hover:opacity-100'
                   }`}
                 />
               ))}
               <CustomColorWheel
-                value={vaultColor}
-                onClick={() => setColorPickerTarget('vault')}
-                label="vault accent color"
+                value={noteColor}
+                onClick={() => setColorPickerTarget('note')}
+                label="note accent color"
               />
             </div>
           </div>
@@ -258,16 +259,16 @@ export function VaultFolderDialog({
             ? folderColor?.startsWith('#')
               ? folderColor
               : '#3b82f6'
-            : vaultColor?.startsWith('#')
-              ? vaultColor
+            : noteColor?.startsWith('#')
+              ? noteColor
               : '#3b82f6'
         }
-        title={colorPickerTarget === 'folder' ? 'Folder Color' : 'Vault Accent Color'}
+        title={colorPickerTarget === 'folder' ? 'Folder Color' : 'Note Accent Color'}
         onConfirm={(hex) => {
           if (colorPickerTarget === 'folder') {
             setFolderColor(hex)
-          } else if (colorPickerTarget === 'vault') {
-            setVaultColor(hex)
+          } else if (colorPickerTarget === 'note') {
+            setNoteColor(hex)
           }
         }}
       />

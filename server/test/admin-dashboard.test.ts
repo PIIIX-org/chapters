@@ -6,6 +6,7 @@ import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
 let adminCookie: string
+let adminUser: { id: string; email: string }
 let ownerCookie: string
 let granteeCookie: string
 let vaultId: string
@@ -17,6 +18,7 @@ beforeAll(async () => {
   app = await buildApp()
   await app.ready()
   const admin = await createActiveUser({ role: 'admin' })
+  adminUser = admin
   const owner = await createActiveUser()
   const grantee = await createActiveUser()
   adminCookie = await loginCookie(app, admin.email)
@@ -264,5 +266,45 @@ describe('admin oversight dashboard', () => {
       const res = await app.inject({ method: 'GET', url, headers: { cookie: ownerCookie } })
       expect(res.statusCode).toBe(403)
     }
+  })
+
+  it('allows promoting, demoting, and changing user roles across permission levels', async () => {
+    const user = await createActiveUser({ role: 'member' })
+
+    // Promote to admin
+    const promoteRes = await app.inject({
+      method: 'POST',
+      url: `/api/admin/users/${user.id}/promote`,
+      headers: { cookie: adminCookie },
+    })
+    expect(promoteRes.statusCode).toBe(200)
+    expect(promoteRes.json()).toEqual({ role: 'admin' })
+
+    // Demote back to member
+    const demoteRes = await app.inject({
+      method: 'POST',
+      url: `/api/admin/users/${user.id}/demote`,
+      headers: { cookie: adminCookie },
+    })
+    expect(demoteRes.statusCode).toBe(200)
+    expect(demoteRes.json()).toEqual({ role: 'member' })
+
+    // Change to moderator
+    const modRes = await app.inject({
+      method: 'POST',
+      url: `/api/admin/users/${user.id}/role`,
+      headers: { cookie: adminCookie },
+      body: { role: 'moderator' },
+    })
+    expect(modRes.statusCode).toBe(200)
+    expect(modRes.json()).toEqual({ role: 'moderator' })
+
+    // Cannot demote self
+    const selfDemote = await app.inject({
+      method: 'POST',
+      url: `/api/admin/users/${adminUser.id}/demote`,
+      headers: { cookie: adminCookie },
+    })
+    expect(selfDemote.statusCode).toBe(400)
   })
 })

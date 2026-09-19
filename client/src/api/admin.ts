@@ -7,11 +7,43 @@ import { apiFetch } from '../lib/api.js'
  * endpoint behind it serves one.
  */
 
+export const USER_ROLES = [
+  'owner',
+  'superadmin',
+  'admin',
+  'moderator',
+  'manager',
+  'editor',
+  'contributor',
+  'member',
+  'viewer',
+  'guest',
+] as const
+
+export type UserRole = (typeof USER_ROLES)[number]
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+  owner: 'Owner',
+  superadmin: 'Super Admin',
+  admin: 'Admin',
+  moderator: 'Moderator',
+  manager: 'Manager',
+  editor: 'Editor',
+  contributor: 'Contributor',
+  member: 'Member',
+  viewer: 'Viewer',
+  guest: 'Guest',
+}
+
+export function isAdminRole(role?: string): boolean {
+  return role === 'admin' || role === 'owner' || role === 'superadmin'
+}
+
 export interface AdminUser {
   id: string
   email: string
   status: 'pending_approval' | 'active' | 'deactivated'
-  role: 'member' | 'admin'
+  role: UserRole
   /** Login needs an approved status AND this — see the approval queue copy. */
   emailVerifiedAt: string | null
   createdAt: string
@@ -93,8 +125,25 @@ export function approveUser(id: string): Promise<{ status: 'active' }> {
   return apiFetch(`/admin/users/${id}/approve`, { method: 'POST' })
 }
 
-export function promoteUser(id: string): Promise<{ role: 'admin' }> {
-  return apiFetch(`/admin/users/${id}/promote`, { method: 'POST' })
+export function promoteUser(id: string, role: UserRole = 'admin'): Promise<{ role: UserRole }> {
+  return apiFetch(`/admin/users/${id}/promote`, {
+    method: 'POST',
+    body: JSON.stringify({ role }),
+  })
+}
+
+export function demoteUser(id: string, role: UserRole = 'member'): Promise<{ role: UserRole }> {
+  return apiFetch(`/admin/users/${id}/demote`, {
+    method: 'POST',
+    body: JSON.stringify({ role }),
+  })
+}
+
+export function updateUserRole(id: string, role: UserRole): Promise<{ role: UserRole }> {
+  return apiFetch(`/admin/users/${id}/role`, {
+    method: 'POST',
+    body: JSON.stringify({ role }),
+  })
 }
 
 export function deactivateUser(id: string): Promise<{ status: 'deactivated' }> {

@@ -28,6 +28,7 @@ import { useCreateVault } from '../../hooks/useVaultMutations.js'
 import { useCreateNote } from '../../hooks/useCreateNote.js'
 import { useSession } from '../../hooks/useSession.js'
 import { useTheme } from '../../hooks/useTheme.js'
+import { isAdminRole } from '../../api/admin.js'
 import { GraphFilters, graphFiltersFromSearchParams, type FilterableNode } from '../graph/GraphFilters.js'
 import { ConnectRepositoryDialog } from '../repositories/ConnectRepositoryDialog.js'
 import { cn } from '../../lib/utils.js'
@@ -328,7 +329,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   // ---- Go to ---------------------------------------------------------------
   // Destinations are limited to routes that exist in router.tsx today. Do NOT
   // add a row for a page a later unit has not shipped yet.
-  const isAdmin = session.data?.role === 'admin'
+  const isAdmin = isAdminRole(session.data?.role)
   const areaCommands: Command[] = AREAS.filter((a) => !a.admin || isAdmin).map((a) => ({
     id: a.id,
     name: `Go to ${a.label.toLowerCase()}`,
