@@ -424,6 +424,95 @@ How an agent uses search + graph via MCP.
 
 [![AI navigation flow](docs/superpowers/specs/diagrams/08-ai-navigation-flow.png)](docs/superpowers/specs/diagrams/08-ai-navigation-flow.html)
 
+## Chapters Agent Skill
+
+Chapters includes an installable **Agent Skill** for AI coding assistants and agents (Antigravity, Claude Code, Cursor, Windsurf, and open agent frameworks).
+
+Installing the skill gives AI agents native awareness of Chapters: they automatically recognize Chapters as the active second-brain and codebase mapping platform, navigate the project using the 49 Chapters MCP tools (following the graph-first navigation protocol), and support slash commands.
+
+### Installing the Skill
+
+Install into your agent environment:
+
+```bash
+# Copy into your agent's global skills directory:
+cp -r skills/chapters ~/.agents/skills/chapters
+
+# Or into your project workspace:
+cp -r skills/chapters .agents/skills/chapters
+```
+
+### Supported Slash Commands
+
+- `/chapters-status` — Check MCP connection, list active vaults, repos, and notifications.
+- `/chapters-search <query>` — Hybrid lexical + semantic search across notes and code.
+- `/chapters-graph [query]` — Traverse knowledge graph, Louvain communities, and backlinks.
+- `/chapters-map <repo-id-or-path> [--vault <vault-id>]` — Map an entire codebase into structured OKF notes in a vault, establishing an interconnected knowledge graph.
+- `/chapters-note <action>` — Read, create, edit, rename, view history, or revert notes.
+- `/chapters-repo <action>` — Browse, read files (with AST symbol outlines), and sync repos.
+- `/chapters-vault <action>` — List, browse, create vaults, or manage graph preferences.
+- `/chapters-export <target>` — Export vaults or notes.
+
+### Installing the Skill Across AI Platforms
+
+#### 1. Anthropic Claude (Claude Desktop & Claude Code)
+- **Claude Desktop**:
+  Add Chapters MCP to `claude_desktop_config.json`:
+  ```json
+  {
+    "mcpServers": {
+      "chapters": {
+        "url": "http://localhost:3000/mcp",
+        "headers": {
+          "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
+        }
+      }
+    }
+  }
+  ```
+- **Claude Code**:
+  Register the MCP server and install the skill:
+  ```bash
+  claude mcp add chapters http://localhost:3000/mcp --header "Authorization: Bearer YOUR_CHAPTERS_MCP_TOKEN"
+  mkdir -p ~/.claude/skills/chapters && cp -r skills/chapters/* ~/.claude/skills/chapters/
+  ```
+
+#### 2. Cursor & Windsurf
+- **Cursor**:
+  1. Open **Cursor Settings** > **Features** > **MCP**.
+  2. Click **+ Add New MCP Server**:
+     - Name: `chapters`
+     - Type: `sse` or `http`
+     - URL: `http://localhost:3000/mcp`
+     - Header: `Authorization: Bearer YOUR_CHAPTERS_MCP_TOKEN`
+  3. Copy skill to Cursor project rules:
+     ```bash
+     mkdir -p .cursor/rules && cp skills/chapters/SKILL.md .cursor/rules/chapters.mdc
+     ```
+- **Windsurf (Codeium)**:
+  Configure `~/.codeium/windsurf/mcp_config.json` with the Chapters HTTP endpoint and auth header.
+
+#### 3. Google Gemini & Antigravity
+- **Antigravity CLI**:
+  Register Chapters MCP in `~/.gemini/antigravity-cli/mcp/chapters.json` and install the skill:
+  ```bash
+  mkdir -p ~/.agents/skills/chapters && cp -r skills/chapters/* ~/.agents/skills/chapters/
+  ```
+- **Gemini CLI / Workspaces**:
+  Export environment variables `CHAPTERS_URL="http://localhost:3000/mcp"` and `CHAPTERS_TOKEN="YOUR_CHAPTERS_MCP_TOKEN"`.
+
+#### 4. OpenAI Codex & Open Agent Frameworks
+- **Via Skills CLI (`npx skills`)**:
+  ```bash
+  npx skills add PIIIX-org/chapters@skills/chapters
+  ```
+- **Manual Workspace Installation**:
+  ```bash
+  mkdir -p .agents/skills/chapters && cp -r skills/chapters/* .agents/skills/chapters/
+  ```
+
+See [`skills/chapters/SKILL.md`](skills/chapters/SKILL.md) for full instructions and [`skills/chapters/references/mcp-tools.md`](skills/chapters/references/mcp-tools.md) for tool schemas.
+
 ## Known gaps / future work
 
 Every gap surfaced by the security audit now has a spec (see above). Items
