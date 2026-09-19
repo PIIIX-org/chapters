@@ -32,6 +32,8 @@ interface UseCodeMirrorEditorOptions {
   wikilinkTargets?: string[]
   onWikilinkClick?: (target: string) => void
   collab?: EditorCollab
+  onView?: (view: EditorView | null) => void
+  onSelectionChange?: (view: EditorView) => void
 }
 
 const markdownHighlight = HighlightStyle.define([
@@ -61,6 +63,8 @@ export function useCodeMirrorEditor({
   wikilinkTargets = [],
   onWikilinkClick,
   collab,
+  onView,
+  onSelectionChange,
 }: UseCodeMirrorEditorOptions) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -75,6 +79,14 @@ export function useCodeMirrorEditor({
   const onWikilinkClickRef = useRef(onWikilinkClick)
   useEffect(() => {
     onWikilinkClickRef.current = onWikilinkClick
+  })
+  const onViewRef = useRef(onView)
+  useEffect(() => {
+    onViewRef.current = onView
+  })
+  const onSelectionChangeRef = useRef(onSelectionChange)
+  useEffect(() => {
+    onSelectionChangeRef.current = onSelectionChange
   })
 
   // Two things change after mount and must not cost a rebuild: the collab
@@ -104,6 +116,7 @@ export function useCodeMirrorEditor({
         // anything inside it goes with the old value.
         ...(ytext ? [collabCompartment.of(yCollab(ytext, awareness)), penNibCursor] : []),
         markdown(),
+        EditorView.lineWrapping,
         // CM6 marks `.cm-content` role="textbox"; an ARIA input field with no
         // accessible name fails axe, and a screen reader announces nothing.
         EditorView.contentAttributes.of({ 'aria-label': 'Note body' }),
@@ -116,11 +129,23 @@ export function useCodeMirrorEditor({
           // relay persists it. Feeding remote edits back to NoteView's
           // debounced PUT is issue #66 aimed at the engine that fixes it.
           if (update.docChanged && !ytext) onChangeRef.current(update.state.doc.toString())
+          if (update.selectionSet) onSelectionChangeRef.current?.(update.view)
         }),
         EditorView.theme({
-          '&': { fontFamily: 'var(--font-mono)', fontSize: '14px', height: '100%' },
-          '.cm-content': { fontFamily: 'var(--font-mono)' },
-          '.cm-scroller': { overflow: 'auto' },
+          '&': { fontFamily: 'var(--font-mono)', fontSize: '14px', height: '100%', maxWidth: '100%' },
+          '.cm-content': {
+            fontFamily: 'var(--font-mono)',
+            wordBreak: 'break-word',
+            overflowWrap: 'break-word',
+            whiteSpace: 'pre-wrap',
+            maxWidth: '100%',
+          },
+          '.cm-line': {
+            wordBreak: 'break-word',
+            overflowWrap: 'break-word',
+            maxWidth: '100%',
+          },
+          '.cm-scroller': { overflow: 'auto', maxWidth: '100%' },
           '.cm-md-h1': { fontSize: '1.6em', fontWeight: '700', lineHeight: '1.3' },
           '.cm-md-h2': { fontSize: '1.35em', fontWeight: '700', lineHeight: '1.3' },
           '.cm-md-h3': { fontSize: '1.15em', fontWeight: '700' },
@@ -139,8 +164,10 @@ export function useCodeMirrorEditor({
 
     const view = new EditorView({ state, parent: containerRef.current })
     viewRef.current = view
+    onViewRef.current?.(view)
 
     return () => {
+      onViewRef.current?.(null)
       viewRef.current = null
       view.destroy()
     }

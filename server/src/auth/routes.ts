@@ -180,7 +180,19 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
       }
       const user = (await db.select().from(users).where(eq(users.email, email)))[0]
       const valid = user && (await verifyPassword(user.passwordHash, req.body.password))
-      if (!valid || user.status !== 'active' || !user.emailVerifiedAt) {
+      if (!valid) {
+        recordFailure(accountKey)
+        recordFailure(ipKey)
+        await logSecurityEvent({ type: 'login_failed', ip: req.ip, detail: { email } })
+        return reply.code(401).send({ error: 'invalid credentials' })
+      }
+      if (user.status === 'pending_approval') {
+        return reply.code(401).send({
+          error: 'Wait for approval or contact your manager to speed up the process.',
+          code: 'pending_approval',
+        })
+      }
+      if (user.status !== 'active' || !user.emailVerifiedAt) {
         recordFailure(accountKey)
         recordFailure(ipKey)
         await logSecurityEvent({ type: 'login_failed', ip: req.ip, detail: { email } })
