@@ -18,12 +18,9 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
     **revoked ≠ offline** — revoked KEEPS the doc (unsent text must survive).
   - **7** viewer read-only forever; local folders watched;
     **`gitUrl`/`localPath` are owner-only** (they leaked to viewers + MCP).
-- **`prod` == `dev` as of 2026-08-31 (#142)** — the redesign, OIDC login
-  (#132), the welcome mail (#126), the graph querystring fix (#129). `prod`
-  runs 21 merge commits ahead with 0 non-merge commits of its own; check it
-  that way, the raw ahead/behind count means nothing. Prod branch is `prod`,
-  **not `main`** (`main` holds only the CLA commit and is dead).
-- **Current task**: #161 — Add /chapters-map command and multi-agent installation guides (Claude, Cursor, Gemini, Codex).
+- **`prod` == `dev` as of 2026-09-19 (#163, #167)** — Chapters Agent Skill,
+  /chapters-map, multi-AI setup guides, and always-active mode.
+- **Current task**: none. Pick from Open issues.
 - **Phase: UI COMMAND REDESIGN** (owner-directed 2026-08-30): spec + plan of
   the same date under `superpowers/`. Dark-first grid shell (rail · top bar ·
   context · content · inspector) on every authed route; `/vaults`, `/repos`.
