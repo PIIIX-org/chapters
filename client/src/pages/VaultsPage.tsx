@@ -248,7 +248,7 @@ export function VaultsPage() {
 
   return (
     <div className="h-full min-h-0 overflow-y-auto">
-      <div className="mx-auto flex max-w-5xl flex-col gap-4 px-6 py-5">
+      <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 px-4 py-5">
         <Panel>
           <PanelHeader
             title={
@@ -578,7 +578,7 @@ export function VaultsPage() {
                       style={colorDef?.style?.folderBg}
                     >
                       {viewMode === 'card' ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                           {group.vaults.map((vault) => (
                             <VaultCard
                               key={vault.id}
@@ -690,7 +690,7 @@ export function VaultsPage() {
             </div>
           ) : viewMode === 'card' ? (
             /* Flat Card View */
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4">
               {filteredVaults.map((vault) => (
                 <VaultCard
                   key={vault.id}
