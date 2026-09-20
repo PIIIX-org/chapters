@@ -1530,6 +1530,7 @@ class HttpError extends Error {
 const notFound = (what = 'not found') => new HttpError(404, { error: what })
 const forbidden = (what = 'forbidden') => new HttpError(403, { error: what })
 const bad = (what) => new HttpError(400, { error: what })
+const conflict = (what = 'conflict') => new HttpError(409, { error: what })
 const requireAdmin = () => {
   if (ME.role !== 'admin') throw forbidden('admin only')
 }
@@ -1950,6 +1951,19 @@ del('/repositories/:id', ({ params }) => {
   filesByRepo.delete(r.id)
   syncTokensByRepo.delete(r.id)
   return { status: 'deleted' }
+})
+post('/repositories/:id/sync', ({ params, body, query }) => {
+  const r = repoOr404(params.id)
+  if (r.ingestionMethod === 'agent_push') throw bad('agent-push repositories are updated by the agent, not by a sync')
+  const force = Boolean(body?.force ?? (query?.get('force') === 'true'))
+  if (r.syncStatus === 'syncing' && !force) throw conflict('a sync is already running')
+  r.syncStatus = 'syncing'
+  setTimeout(() => {
+    r.syncStatus = 'idle'
+    r.lastSyncedAt = now()
+    r.lastSyncError = null
+  }, 2000)
+  return { status: 'syncing' }
 })
 get('/repositories/:id/files', ({ params }) => (filesByRepo.get(repoOr404(params.id).id) ?? []).map(({ id, path, language, size, updatedAt }) => ({ id, path, language, size, updatedAt })))
 get('/repositories/:id/files/content', ({ params, query }) => {

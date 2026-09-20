@@ -3,7 +3,7 @@ import { startCollabServer } from './sync/collab-server.js'
 import { runMigrations } from './db/migrate.js'
 import { ensureInstanceState } from './auth/bootstrap.js'
 import { scheduleMissingEmbeddings } from './search/embedding-queue.js'
-import { startLocalWatchers, startPollingScheduler } from './repositories/scheduler.js'
+import { startLocalWatchers, startPollingScheduler, reconcileOrphanedSyncs } from './repositories/scheduler.js'
 import { config } from './config.js'
 import { COLLAB_PATH } from './sync/routes.js'
 
@@ -13,6 +13,8 @@ try {
   await runMigrations()
   const missing = await scheduleMissingEmbeddings()
   if (missing > 0) console.log(`embedding catch-up scheduled for ${missing} notes`)
+  const reconciled = await reconcileOrphanedSyncs()
+  if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)
   const { setupPending, setupToken } = await ensureInstanceState()
   if (setupPending && setupToken) {
     // The only place the setup token ever appears in plaintext.
