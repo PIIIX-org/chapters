@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
+import { Cloud, HardDrive } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -13,6 +14,7 @@ import { Button } from '../ui/button.js'
 import {
   COLOR_PALETTE,
   type VaultColor,
+  type VaultStorageMode,
 } from './useVaultFolders.js'
 import { CustomColorPickerDialog } from './CustomColorPickerDialog.js'
 import type { Vault } from '../../api/vaults.js'
@@ -25,6 +27,7 @@ interface VaultFolderDialogProps {
   currentFolderColor?: VaultColor
   currentVaultColor?: VaultColor
   allFolders: string[]
+  storageMode?: VaultStorageMode
   onSave: (
     vaultId: string,
     folder: string,
@@ -79,6 +82,7 @@ export function VaultFolderDialog({
   currentFolderColor,
   currentVaultColor,
   allFolders,
+  storageMode = 'online',
   onSave,
 }: VaultFolderDialogProps) {
   const [folderName, setFolderName] = useState(currentFolder)
@@ -217,6 +221,21 @@ export function VaultFolderDialog({
                 label="vault accent color"
               />
             </div>
+          </div>
+
+          {/* Storage indicator */}
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/40 px-2.5 py-1.5 rounded-md border border-border/50">
+            {storageMode === 'online' ? (
+              <>
+                <Cloud className="size-3.5 text-primary shrink-0" aria-hidden="true" />
+                <span>Folders and colors sync with your account across devices.</span>
+              </>
+            ) : (
+              <>
+                <HardDrive className="size-3.5 text-amber-500 shrink-0" aria-hidden="true" />
+                <span>Folders and colors are kept in this browser only.</span>
+              </>
+            )}
           </div>
 
           <div className="flex items-center justify-between sm:justify-between pt-2">

@@ -11,6 +11,7 @@ import {
   teamMemberships,
   teams,
   users,
+  userVaultPreferences,
   vaultGraphPreferences,
   vaults,
   vaultShares,
@@ -259,6 +260,100 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         })
       return { include }
     }),
+  )
+
+  server.registerTool(
+    'get_vault_preferences',
+    {
+      description: 'Get user vault preferences including storage mode (online/local), folders, colors, and favorites.',
+    },
+    wrap(async () => {
+      const rows = await db
+        .select({
+          storageMode: userVaultPreferences.storageMode,
+          folders: userVaultPreferences.folders,
+          folderColors: userVaultPreferences.folderColors,
+          vaultColors: userVaultPreferences.vaultColors,
+          favorites: userVaultPreferences.favorites,
+        })
+        .from(userVaultPreferences)
+        .where(eq(userVaultPreferences.userId, auth.user.id))
+
+      const pref = rows[0]
+      return {
+        storageMode: (pref?.storageMode as 'online' | 'local') || 'online',
+        folders: pref?.folders || {},
+        folderColors: pref?.folderColors || {},
+        vaultColors: pref?.vaultColors || {},
+        favorites: pref?.favorites || {},
+      }
+    }),
+  )
+
+  server.registerTool(
+    'update_vault_preferences',
+    {
+      description: 'Update user vault preferences including storage mode, folders, colors, and favorites.',
+      inputSchema: {
+        storageMode: z.enum(['online', 'local']).optional(),
+        folders: z.record(z.string(), z.string()).optional(),
+        folderColors: z.record(z.string(), z.string()).optional(),
+        vaultColors: z.record(z.string(), z.string()).optional(),
+        favorites: z.record(z.string(), z.boolean()).optional(),
+      },
+    },
+    wrap(
+      async (args: {
+        storageMode?: 'online' | 'local'
+        folders?: Record<string, string>
+        folderColors?: Record<string, string>
+        vaultColors?: Record<string, string>
+        favorites?: Record<string, boolean>
+      }) => {
+        const existing = await db
+          .select()
+          .from(userVaultPreferences)
+          .where(eq(userVaultPreferences.userId, auth.user.id))
+
+        const current = existing[0]
+        const storageMode = args.storageMode ?? current?.storageMode ?? 'online'
+        const folders = args.folders ?? current?.folders ?? {}
+        const folderColors = args.folderColors ?? current?.folderColors ?? {}
+        const vaultColors = args.vaultColors ?? current?.vaultColors ?? {}
+        const favorites = args.favorites ?? current?.favorites ?? {}
+
+        await db
+          .insert(userVaultPreferences)
+          .values({
+            userId: auth.user.id,
+            storageMode,
+            folders,
+            folderColors,
+            vaultColors,
+            favorites,
+            updatedAt: new Date(),
+          })
+          .onConflictDoUpdate({
+            target: [userVaultPreferences.userId],
+            set: {
+              storageMode,
+              folders,
+              folderColors,
+              vaultColors,
+              favorites,
+              updatedAt: new Date(),
+            },
+          })
+
+        return {
+          storageMode,
+          folders,
+          folderColors,
+          vaultColors,
+          favorites,
+        }
+      },
+    ),
   )
 
   server.registerTool(

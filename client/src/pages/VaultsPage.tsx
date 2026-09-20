@@ -4,16 +4,26 @@ import {
   ArrowUpDown,
   ChevronDown,
   ChevronRight,
+  Cloud,
   Folder,
   FolderTree,
+  HardDrive,
   LayoutGrid,
   List,
   Plus,
+  RefreshCw,
   Search,
   Star,
   X,
 } from 'lucide-react'
 import { Button } from '../components/ui/button.js'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '../components/ui/dialog.js'
 import { PanelState } from '../components/ui/empty-state.js'
 import { Panel, PanelBody, PanelHeader } from '../components/ui/panel.js'
 import { Pill } from '../components/ui/pill.js'
@@ -68,7 +78,13 @@ export function VaultsPage() {
     setVaultColor,
     toggleFavorite,
     isFavorite,
+    storageMode,
+    setStorageMode,
+    syncStatus,
+    syncNow,
   } = useVaultFolders()
+
+  const [storageDialogOpen, setStorageDialogOpen] = useState(false)
 
   const [creating, setCreating] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
@@ -270,6 +286,33 @@ export function VaultsPage() {
                 >
                   <FolderTree className="size-3.5" aria-hidden="true" />
                   <span className="hidden sm:inline">Group</span>
+                </Button>
+
+                {/* Storage mode toggle / settings */}
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => setStorageDialogOpen(true)}
+                  title={
+                    storageMode === 'online'
+                      ? 'Folders sync across devices (Online). Click to configure.'
+                      : 'Folders stored in this browser only (Local). Click to configure.'
+                  }
+                  aria-label="Vault folders storage settings"
+                  className="h-7 px-2 gap-1 text-xs"
+                >
+                  {storageMode === 'online' ? (
+                    <Cloud className="size-3.5 text-primary" aria-hidden="true" />
+                  ) : (
+                    <HardDrive className="size-3.5 text-amber-500" aria-hidden="true" />
+                  )}
+                  <span className="hidden md:inline">
+                    {storageMode === 'online' ? 'Cloud' : 'Local'}
+                  </span>
+                  {syncStatus === 'syncing' && (
+                    <RefreshCw className="size-3 animate-spin text-muted-foreground ml-0.5" aria-hidden="true" />
+                  )}
                 </Button>
 
                 {/* View toggle */}
@@ -818,9 +861,105 @@ export function VaultsPage() {
           )}
           currentVaultColor={getVaultColor(folderModalVault.id)}
           allFolders={allFolders}
+          storageMode={storageMode}
           onSave={handleSaveFolder}
         />
       )}
+
+      <Dialog open={storageDialogOpen} onOpenChange={setStorageDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Vault Folders &amp; Group Storage</DialogTitle>
+            <DialogDescription>
+              Choose whether your vault folders, groups, and color coding are stored on the server or kept only in this browser.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 py-2">
+            <button
+              type="button"
+              onClick={() => setStorageMode('online')}
+              className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
+                storageMode === 'online'
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                  : 'border-border hover:bg-muted/40'
+              }`}
+            >
+              <Cloud
+                className={`size-5 mt-0.5 shrink-0 ${
+                  storageMode === 'online' ? 'text-primary' : 'text-muted-foreground'
+                }`}
+              />
+              <div className="flex flex-col gap-0.5">
+                <span className="text-sm font-medium text-foreground flex items-center gap-2">
+                  Online (Cloud Synced)
+                  {storageMode === 'online' && (
+                    <span className="text-[10px] font-semibold uppercase px-1.5 py-0.2 rounded bg-primary/10 text-primary border border-primary/20">
+                      Active
+                    </span>
+                  )}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Folders, groups, and colors are saved to your Chapters account and automatically stay in sync across your Mac, Windows laptop, and all browsers.
+                </span>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStorageMode('local')}
+              className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
+                storageMode === 'local'
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                  : 'border-border hover:bg-muted/40'
+              }`}
+            >
+              <HardDrive
+                className={`size-5 mt-0.5 shrink-0 ${
+                  storageMode === 'local' ? 'text-amber-500' : 'text-muted-foreground'
+                }`}
+              />
+              <div className="flex flex-col gap-0.5">
+                <span className="text-sm font-medium text-foreground flex items-center gap-2">
+                  Local (This Browser Only)
+                  {storageMode === 'local' && (
+                    <span className="text-[10px] font-semibold uppercase px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                      Active
+                    </span>
+                  )}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Folders and colors remain strictly in this browser&rsquo;s local storage and are never uploaded or synced to the server.
+                </span>
+              </div>
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between pt-2">
+            {storageMode === 'online' ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => syncNow()}
+                disabled={syncStatus === 'syncing'}
+                className="gap-1.5 text-xs"
+              >
+                <RefreshCw className={`size-3.5 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+                {syncStatus === 'syncing' ? 'Syncing...' : 'Sync Now'}
+              </Button>
+            ) : (
+              <div />
+            )}
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => setStorageDialogOpen(false)}
+            >
+              Done
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

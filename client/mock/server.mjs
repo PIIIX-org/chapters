@@ -1158,6 +1158,13 @@ const notifications = [
 ]
 
 const preferences = { emailNotifications: true }
+let vaultPreferences = {
+  storageMode: 'online',
+  folders: {},
+  folderColors: {},
+  vaultColors: {},
+  favorites: {},
+}
 const exportLinks = new Map() // vaultId -> ExportLink[]
 
 const securityEvents = []
@@ -1622,6 +1629,18 @@ get('/me/preferences', () => ({ ...preferences }))
 put('/me/preferences', ({ body }) => {
   preferences.emailNotifications = Boolean(body?.emailNotifications)
   return { ...preferences }
+})
+get('/me/vault-preferences', () => ({ ...vaultPreferences }))
+put('/me/vault-preferences', ({ body }) => {
+  vaultPreferences = {
+    ...vaultPreferences,
+    ...(body?.storageMode ? { storageMode: body.storageMode } : {}),
+    ...(body?.folders !== undefined ? { folders: body.folders } : {}),
+    ...(body?.folderColors !== undefined ? { folderColors: body.folderColors } : {}),
+    ...(body?.vaultColors !== undefined ? { vaultColors: body.vaultColors } : {}),
+    ...(body?.favorites !== undefined ? { favorites: body.favorites } : {}),
+  }
+  return { ...vaultPreferences }
 })
 get('/me/export', () => zip())
 
