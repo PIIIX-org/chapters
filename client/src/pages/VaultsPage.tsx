@@ -264,16 +264,17 @@ export function VaultsPage() {
 
   return (
     <div className="h-full min-h-0 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 px-4 py-5">
+      <div className="mx-auto flex w-full max-w-full sm:max-w-[94%] md:max-w-[88%] lg:max-w-[80%] flex-col gap-3 sm:gap-4 px-2.5 sm:px-4 py-3 sm:py-5">
         <Panel>
           <PanelHeader
+            className="min-h-9 h-auto py-2 sm:h-9 sm:py-0 flex-wrap sm:flex-nowrap gap-y-2"
             title={
               vaults.data && vaults.data.length > 0 && filteredVaults.length !== vaults.data.length
                 ? `Vaults (${filteredVaults.length} of ${vaults.data.length})`
                 : 'Vaults'
             }
             actions={
-              <div className="flex items-center gap-2">
+              <div className="flex items-center flex-wrap gap-1.5 sm:gap-2">
                 {/* Group by folder toggle */}
                 <Button
                   type="button"
@@ -349,9 +350,10 @@ export function VaultsPage() {
                   variant="outline"
                   onClick={() => setCreating((c) => !c)}
                   aria-expanded={creating}
+                  className="h-7 sm:h-8 px-2 sm:px-3 text-xs gap-1"
                 >
-                  <Plus aria-hidden="true" />
-                  New vault
+                  <Plus aria-hidden="true" className="size-3.5" />
+                  <span>New vault</span>
                 </Button>
               </div>
             }
@@ -370,10 +372,10 @@ export function VaultsPage() {
 
           {/* Search, Filter, and Sort Toolbar */}
           {vaults.data && vaults.data.length > 0 && (
-            <div className="border-b border-border p-3 flex flex-col gap-3 bg-muted/10">
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="border-b border-border p-2.5 sm:p-3 flex flex-col gap-2.5 sm:gap-3 bg-muted/10">
+              <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2">
                 {/* Search */}
-                <div className="relative flex-1 min-w-[200px]">
+                <div className="relative w-full sm:flex-1 sm:min-w-[200px]">
                   <Search
                     className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none"
                     aria-hidden="true"
@@ -383,52 +385,55 @@ export function VaultsPage() {
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search vaults by name or folder..."
                     aria-label="Search vaults"
-                    className="pl-8 h-8 text-xs"
+                    className="pl-8 pr-8 h-8 text-xs w-full"
                   />
                   {search && (
                     <button
                       type="button"
                       onClick={() => setSearch('')}
                       aria-label="Clear search"
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
                     >
                       <X className="size-3.5" aria-hidden="true" />
                     </button>
                   )}
                 </div>
 
-                {/* Access filter */}
-                <select
-                  value={accessFilter}
-                  onChange={(e) => setAccessFilter(e.target.value)}
-                  aria-label="Filter by access"
-                  className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  <option value="all">All access</option>
-                  <option value="owner">Role: Owner</option>
-                  <option value="edit">Role: Can edit</option>
-                  <option value="read">Role: Read only</option>
-                </select>
-
-                {/* Sort */}
-                <div className="flex items-center gap-1">
-                  <ArrowUpDown className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                {/* Filters row on mobile, inline on desktop */}
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  {/* Access filter */}
                   <select
-                    value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as SortOption)}
-                    aria-label="Sort vaults"
-                    className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={accessFilter}
+                    onChange={(e) => setAccessFilter(e.target.value)}
+                    aria-label="Filter by access"
+                    className="h-8 flex-1 sm:flex-none rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   >
-                    <option value="name-asc">Name (A–Z)</option>
-                    <option value="name-desc">Name (Z–A)</option>
-                    <option value="access">Access level</option>
-                    <option value="merged">Merged view first</option>
+                    <option value="all">All access</option>
+                    <option value="owner">Role: Owner</option>
+                    <option value="edit">Role: Can edit</option>
+                    <option value="read">Role: Read only</option>
                   </select>
+
+                  {/* Sort */}
+                  <div className="flex items-center gap-1 flex-1 sm:flex-none">
+                    <ArrowUpDown className="size-3.5 text-muted-foreground shrink-0 hidden sm:inline-block" aria-hidden="true" />
+                    <select
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value as SortOption)}
+                      aria-label="Sort vaults"
+                      className="h-8 w-full sm:w-auto rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <option value="name-asc">Name (A–Z)</option>
+                      <option value="name-desc">Name (Z–A)</option>
+                      <option value="access">Access level</option>
+                      <option value="merged">Merged view first</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
               {/* Visual Folder Tabs / Shelf */}
-              <div className="flex items-end gap-2 overflow-x-auto pt-2 pb-1 text-xs">
+              <div className="flex items-end gap-2 overflow-x-auto pt-2 pb-1.5 text-xs -mx-2.5 px-2.5 sm:mx-0 sm:px-0 scroll-smooth">
                 <span className="text-muted-foreground font-medium text-[11px] uppercase tracking-wider shrink-0 mb-1.5 mr-1">
                   Folders:
                 </span>
@@ -573,7 +578,7 @@ export function VaultsPage() {
             </div>
           ) : groupByFolder && groupedVaults ? (
             /* Grouped by Folder View */
-            <div className="flex flex-col gap-6 p-4">
+            <div className="flex flex-col gap-4 sm:gap-6 p-2.5 sm:p-4">
               {groupedVaults.map((group) => {
                 const colorDef = getColorDef(group.color)
                 const isCollapsed = Boolean(collapsedFolders[group.folder])
@@ -583,7 +588,7 @@ export function VaultsPage() {
                     {/* Visual Folder Tab Protrusion */}
                     <div className="flex items-end">
                       <div
-                        className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-t-lg border-t border-x text-xs font-medium transition-colors ${
+                        className={`inline-flex items-center gap-2 px-3 sm:px-3.5 py-1.5 rounded-t-lg border-t border-x text-xs font-medium transition-colors ${
                           colorDef
                             ? colorDef.folderTab
                             : 'bg-muted/80 border-border text-foreground'
@@ -593,7 +598,7 @@ export function VaultsPage() {
                         <button
                           type="button"
                           onClick={() => toggleFolderCollapse(group.folder)}
-                          className="flex items-center gap-1.5 hover:underline"
+                          className="flex items-center gap-1.5 hover:underline touch-manipulation"
                         >
                           {isCollapsed ? (
                             <ChevronRight className="size-3.5" aria-hidden="true" />
@@ -615,13 +620,13 @@ export function VaultsPage() {
 
                     {/* Folder Body */}
                     <div
-                      className={`rounded-b-lg rounded-tr-lg border border-border p-4 transition-colors ${
+                      className={`rounded-b-lg rounded-tr-lg border border-border p-3 sm:p-4 transition-colors ${
                         colorDef ? colorDef.folderBg : 'bg-muted/10'
                       } ${isCollapsed ? 'hidden' : ''}`}
                       style={colorDef?.style?.folderBg}
                     >
                       {viewMode === 'card' ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
                           {group.vaults.map((vault) => (
                             <VaultCard
                               key={vault.id}
@@ -733,7 +738,7 @@ export function VaultsPage() {
             </div>
           ) : viewMode === 'card' ? (
             /* Flat Card View */
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4 p-2.5 sm:p-4">
               {filteredVaults.map((vault) => (
                 <VaultCard
                   key={vault.id}
@@ -867,7 +872,7 @@ export function VaultsPage() {
       )}
 
       <Dialog open={storageDialogOpen} onOpenChange={setStorageDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="w-[calc(100vw-1.5rem)] sm:max-w-md max-h-[90vh] overflow-y-auto p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle>Vault Folders &amp; Group Storage</DialogTitle>
             <DialogDescription>
@@ -878,7 +883,7 @@ export function VaultsPage() {
             <button
               type="button"
               onClick={() => setStorageMode('online')}
-              className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
+              className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all touch-manipulation ${
                 storageMode === 'online'
                   ? 'border-primary bg-primary/5 ring-1 ring-primary'
                   : 'border-border hover:bg-muted/40'
@@ -907,7 +912,7 @@ export function VaultsPage() {
             <button
               type="button"
               onClick={() => setStorageMode('local')}
-              className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
+              className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all touch-manipulation ${
                 storageMode === 'local'
                   ? 'border-primary bg-primary/5 ring-1 ring-primary'
                   : 'border-border hover:bg-muted/40'
@@ -942,7 +947,7 @@ export function VaultsPage() {
                 size="sm"
                 onClick={() => syncNow()}
                 disabled={syncStatus === 'syncing'}
-                className="gap-1.5 text-xs"
+                className="gap-1.5 text-xs h-9 sm:h-8"
               >
                 <RefreshCw className={`size-3.5 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
                 {syncStatus === 'syncing' ? 'Syncing...' : 'Sync Now'}
@@ -954,6 +959,7 @@ export function VaultsPage() {
               type="button"
               size="sm"
               onClick={() => setStorageDialogOpen(false)}
+              className="h-9 sm:h-8 px-4"
             >
               Done
             </Button>

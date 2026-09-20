@@ -40,12 +40,16 @@ function PanelToggle({ kind }: { kind: PanelKind }) {
 export function TopBar() {
   const shell = useShell()
   return (
-    <header className="grid h-[var(--shell-topbar)] grid-cols-[minmax(0,1fr)_minmax(0,520px)_minmax(0,1fr)] items-center gap-3 border-b border-border bg-secondary px-3">
-      <Breadcrumb items={shell.breadcrumb} />
-      <CommandTrigger />
-      <div className="flex items-center justify-end gap-1">
+    <header className="flex sm:grid h-[var(--shell-topbar)] sm:grid-cols-[minmax(0,1fr)_minmax(0,520px)_minmax(0,1fr)] items-center justify-between gap-2 sm:gap-3 border-b border-border bg-secondary px-2.5 sm:px-3 overflow-hidden">
+      <div className="min-w-0 max-w-[110px] sm:max-w-none shrink-0 sm:shrink">
+        <Breadcrumb items={shell.breadcrumb} />
+      </div>
+      <div className="flex-1 min-w-0 max-w-[280px] sm:max-w-none">
+        <CommandTrigger />
+      </div>
+      <div className="flex items-center justify-end gap-0.5 sm:gap-1 shrink-0">
         {shell.status && (
-          <Pill tone={shell.status.tone} dot role="status" className="mr-1">
+          <Pill tone={shell.status.tone} dot role="status" className="mr-1 hidden sm:inline-flex">
             {shell.status.label}
           </Pill>
         )}

@@ -272,7 +272,7 @@ function ColorPickerContent({
   }
 
   return (
-    <DialogContent className="sm:max-w-sm">
+    <DialogContent className="w-[calc(100vw-1.5rem)] sm:max-w-sm max-h-[90vh] overflow-y-auto p-4 sm:p-6">
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription>
@@ -320,7 +320,7 @@ function ColorPickerContent({
             value={hue}
             onChange={(e) => handleHueChange(Number(e.target.value))}
             aria-label="Hue slider"
-            className="w-full h-3 rounded-lg appearance-none cursor-pointer focus-visible:outline-none"
+            className="w-full h-3.5 sm:h-3 rounded-lg appearance-none cursor-pointer focus-visible:outline-none touch-manipulation"
             style={{
               background:
                 'linear-gradient(to right, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%)',
@@ -329,13 +329,13 @@ function ColorPickerContent({
         </div>
 
         {/* Hex Input & Preview */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap sm:flex-nowrap">
           <div
             className="size-9 rounded-md border border-border shadow-xs shrink-0"
             style={{ backgroundColor: currentHex }}
             title={`Preview: ${currentHex}`}
           />
-          <div className="flex-1 flex flex-col gap-1">
+          <div className="flex-1 min-w-[110px] flex flex-col gap-1">
             <Label htmlFor="hex-code-input" className="text-xs">
               Hex Code
             </Label>
@@ -347,7 +347,7 @@ function ColorPickerContent({
               className="font-mono text-xs uppercase h-8"
             />
           </div>
-          <div className="flex flex-col justify-end">
+          <div className="flex flex-col justify-end self-end">
             <Button
               type="button"
               variant="outline"
@@ -355,7 +355,7 @@ function ColorPickerContent({
               onClick={handleAddToPalette}
               title="Add to saved palette"
               aria-label="Add to saved palette"
-              className="h-8 gap-1 text-xs px-2.5 mt-5"
+              className="h-8 gap-1 text-xs px-2.5"
             >
               <Plus className="size-3.5" aria-hidden="true" />
               <span>Save</span>
@@ -369,7 +369,7 @@ function ColorPickerContent({
             <span className="text-xs text-muted-foreground font-medium">
               Saved Palette:
             </span>
-            <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
               {savedColors.map((color) => {
                 const isSelected = currentHex.toLowerCase() === color.toLowerCase()
                 return (
@@ -378,7 +378,7 @@ function ColorPickerContent({
                       type="button"
                       onClick={() => handleSelectSavedColor(color)}
                       title={`Select ${color}`}
-                      className={`size-6 rounded-full border border-border/80 transition-transform hover:scale-110 shadow-xs ${
+                      className={`size-6.5 sm:size-6 rounded-full border border-border/80 transition-transform hover:scale-110 shadow-xs touch-manipulation ${
                         isSelected
                           ? 'ring-2 ring-primary ring-offset-2 ring-offset-background scale-105'
                           : ''
@@ -390,9 +390,9 @@ function ColorPickerContent({
                       onClick={(e) => handleRemoveFromPalette(color, e)}
                       title={`Remove ${color}`}
                       aria-label={`Remove ${color} from saved palette`}
-                      className="absolute -top-1 -right-1 size-3.5 bg-background border border-border rounded-full flex items-center justify-center text-[8px] text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute -top-1.5 -right-1.5 sm:-top-1 sm:-right-1 size-4 sm:size-3.5 bg-background border border-border rounded-full flex items-center justify-center text-[8px] text-muted-foreground hover:text-destructive opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity touch-manipulation"
                     >
-                      <X className="size-2" />
+                      <X className="size-2 sm:size-2" />
                     </button>
                   </div>
                 )
@@ -408,6 +408,7 @@ function ColorPickerContent({
             variant="ghost"
             size="sm"
             onClick={handleCancel}
+            className="flex-1 sm:flex-none h-9 sm:h-8"
           >
             Cancel
           </Button>
@@ -415,6 +416,7 @@ function ColorPickerContent({
             type="button"
             size="sm"
             onClick={handleConfirm}
+            className="flex-1 sm:flex-none h-9 sm:h-8"
           >
             Confirm
           </Button>
