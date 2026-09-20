@@ -8,7 +8,7 @@ import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
 import { repositories } from '../src/db/schema.js'
 import { resolveSyncToken } from '../src/repositories/sync-tokens.js'
-import { startLocalWatchers, stopWatchingLocalRepository } from '../src/repositories/scheduler.js'
+import { startLocalWatchers, stopWatchingLocalRepository, reconcileOrphanedSyncs } from '../src/repositories/scheduler.js'
 import { listRepositoryFiles } from '../src/repositories/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -532,6 +532,15 @@ describe('POST /repositories/:id/sync', () => {
     })
     expect(accepted.statusCode).toBe(200)
 
+    // With force=true, an in-flight 'syncing' status can be reclaimed
+    await db.update(repositories).set({ syncStatus: 'syncing' }).where(eq(repositories.id, row!.id))
+    const forced = await app.inject({
+      method: 'POST',
+      url: `/api/repositories/${row!.id}/sync?force=true`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(forced.statusCode).toBe(200)
+
     const agent = await makeAgentRepo(ownerCookie)
     const refused = await app.inject({
       method: 'POST',
@@ -573,5 +582,49 @@ describe('POST /repositories/:id/sync', () => {
     } finally {
       ;(config as { credentialsEncryptionKey?: string }).credentialsEncryptionKey = original
     }
+  })
+
+  it('reconcileOrphanedSyncs resets stranded syncing repositories to idle if previously synced, or error if never synced', async () => {
+    const owner = await createActiveUser()
+    const [synced] = await db
+      .insert(repositories)
+      .values({
+        name: 'was-synced',
+        ownerId: owner.id,
+        ingestionMethod: 'git',
+        gitUrl: 'file:///nonexistent.git',
+        syncStatus: 'syncing',
+        lastSyncedAt: new Date(),
+      })
+      .returning()
+
+    const [neverSynced] = await db
+      .insert(repositories)
+      .values({
+        name: 'never-synced',
+        ownerId: owner.id,
+        ingestionMethod: 'git',
+        gitUrl: 'file:///nonexistent.git',
+        syncStatus: 'syncing',
+        lastSyncedAt: null,
+      })
+      .returning()
+
+    const count = await reconcileOrphanedSyncs()
+    expect(count).toBeGreaterThanOrEqual(2)
+
+    const [syncedRow] = await db
+      .select()
+      .from(repositories)
+      .where(eq(repositories.id, synced!.id))
+    expect(syncedRow!.syncStatus).toBe('idle')
+    expect(syncedRow!.lastSyncError).toBeNull()
+
+    const [neverSyncedRow] = await db
+      .select()
+      .from(repositories)
+      .where(eq(repositories.id, neverSynced!.id))
+    expect(neverSyncedRow!.syncStatus).toBe('error')
+    expect(neverSyncedRow!.lastSyncError).toContain('Sync interrupted')
   })
 })

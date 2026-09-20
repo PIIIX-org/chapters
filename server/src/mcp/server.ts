@@ -823,9 +823,12 @@ export function buildMcpServer(auth: McpAuth): McpServer {
     'sync_repository',
     {
       description: 'Trigger a re-sync and indexing of a repository. Requires repository access.',
-      inputSchema: { repositoryId: z.string().uuid().optional() },
+      inputSchema: {
+        repositoryId: z.string().uuid().optional(),
+        force: z.boolean().optional(),
+      },
     },
-    wrap(async ({ repositoryId }: { repositoryId?: string }) => {
+    wrap(async ({ repositoryId, force }: { repositoryId?: string; force?: boolean }) => {
       const target = repositoryFor(repositoryId)
       await requireRepositoryAccess(target)
       const repo = (await db.select().from(repositories).where(eq(repositories.id, target)))[0]
@@ -836,10 +839,14 @@ export function buildMcpServer(auth: McpAuth): McpServer {
       if (!(repo.ingestionMethod === 'git' ? repo.gitUrl : repo.localPath)) {
         throw new McpToolError('this repository has no source to read')
       }
+      const claimFilter = force
+        ? eq(repositories.id, repo.id)
+        : and(eq(repositories.id, repo.id), ne(repositories.syncStatus, 'syncing'))
+
       const [claimed] = await db
         .update(repositories)
         .set({ syncStatus: 'syncing' })
-        .where(and(eq(repositories.id, repo.id), ne(repositories.syncStatus, 'syncing')))
+        .where(claimFilter)
         .returning()
       if (!claimed) throw new McpToolError('a sync is already running')
       startSync(claimed)

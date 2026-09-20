@@ -27,6 +27,48 @@ export function shouldPoll(
   return !lastSyncedAt || lastSyncedAt < lastWebhookAt
 }
 
+/**
+ * Boot pass: if the server was restarted or crashed while a repository was
+ * syncing, its row in Postgres was left as `syncStatus = 'syncing'`.
+ * Without this pass, that row stays locked in 'syncing' forever: the UI spins,
+ * the poller skips it, and manual/MCP sync requests get rejected with 409
+ * Conflict ("a sync is already running").
+ *
+ * This reconciles any stranded 'syncing' state:
+ * - Repositories with a previous successful sync (`lastSyncedAt != null`) are
+ *   restored to `syncStatus = 'idle'`.
+ * - Repositories that were interrupted during their very first sync
+ *   (`lastSyncedAt == null`) are set to `syncStatus = 'error'` with
+ *   `lastSyncError = 'Sync interrupted by server restart before initial completion'`.
+ *
+ * Returns the count of reconciled repositories.
+ */
+export async function reconcileOrphanedSyncs(): Promise<number> {
+  const stranded = await db
+    .select()
+    .from(repositories)
+    .where(eq(repositories.syncStatus, 'syncing'))
+
+  for (const repo of stranded) {
+    if (repo.lastSyncedAt) {
+      await db
+        .update(repositories)
+        .set({ syncStatus: 'idle', lastSyncError: null })
+        .where(eq(repositories.id, repo.id))
+    } else {
+      await db
+        .update(repositories)
+        .set({
+          syncStatus: 'error',
+          lastSyncError: 'Sync interrupted by server restart before initial completion',
+        })
+        .where(eq(repositories.id, repo.id))
+    }
+  }
+
+  return stranded.length
+}
+
 /** Fallback freshness for git repositories a webhook can't reach (spec 8). */
 export function startPollingScheduler(intervalMs: number, thresholdMs: number): () => void {
   const timer = setInterval(() => {

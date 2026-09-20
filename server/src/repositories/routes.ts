@@ -338,7 +338,11 @@ export function repositoryRoutes(app: FastifyInstance) {
    * poller's tick, an agent's push — so without this there is no way to answer
    * "index it now".
    */
-  app.post<{ Params: { id: string } }>('/repositories/:id/sync', async (req, reply) => {
+  app.post<{
+    Params: { id: string }
+    Querystring: { force?: boolean | string }
+    Body?: { force?: boolean }
+  }>('/repositories/:id/sync', async (req, reply) => {
     if (!(await requireOwner(req.user!.id, req.params.id))) {
       return reply.code(404).send({ error: 'not found' })
     }
@@ -353,12 +357,20 @@ export function repositoryRoutes(app: FastifyInstance) {
     if (!(repo.ingestionMethod === 'git' ? repo.gitUrl : repo.localPath)) {
       return reply.code(400).send({ error: 'this connection has no source to read' })
     }
+    const force = Boolean(
+      req.body?.force ??
+      (req.query?.force === true || req.query?.force === 'true'),
+    )
+    const claimFilter = force
+      ? eq(repositories.id, repo.id)
+      : and(eq(repositories.id, repo.id), ne(repositories.syncStatus, 'syncing'))
+
     // Claiming the row is the 409 check: a plain read-then-dispatch lets two
     // simultaneous requests both see 'idle' and both start a clone.
     const [claimed] = await db
       .update(repositories)
       .set({ syncStatus: 'syncing' })
-      .where(and(eq(repositories.id, repo.id), ne(repositories.syncStatus, 'syncing')))
+      .where(claimFilter)
       .returning()
     if (!claimed) return reply.code(409).send({ error: 'a sync is already running' })
     startSync(claimed)
