@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
+import {
+  getVaultUserPreferences,
+  updateVaultUserPreferences,
+} from '../../api/vaults.js'
 
 export type VaultColor =
   | 'blue'
@@ -169,6 +173,9 @@ export function getColorDef(color?: VaultColor | null): ColorDef | null {
   return null
 }
 
+export type VaultStorageMode = 'online' | 'local'
+
+const STORAGE_KEY_STORAGE_MODE = 'chapters_vault_storage_mode'
 const STORAGE_KEY_FOLDERS = 'chapters_vault_folders'
 const STORAGE_KEY_FOLDER_COLORS = 'chapters_folder_colors'
 const STORAGE_KEY_VAULT_COLORS = 'chapters_vault_colors'
@@ -185,10 +192,16 @@ function readStorage<T>(key: string, fallback: T): T {
 
 /**
  * Hook to manage folder assignments, colors, and favorites for vaults.
- * Persists user assignments in localStorage and supports parsing
- * folder names from `folder/vault-name` patterns.
+ * Persists user assignments in localStorage and (optionally) on the server,
+ * supporting online cloud sync across devices or local browser-only storage.
  */
 export function useVaultFolders() {
+  const [storageMode, setStorageModeState] = useState<VaultStorageMode>(() =>
+    readStorage<VaultStorageMode>(STORAGE_KEY_STORAGE_MODE, 'online'),
+  )
+
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'saved' | 'error'>('idle')
+
   const [folders, setFolders] = useState<Record<string, string>>(() =>
     readStorage<Record<string, string>>(STORAGE_KEY_FOLDERS, {}),
   )
@@ -204,6 +217,19 @@ export function useVaultFolders() {
   const [favorites, setFavorites] = useState<Record<string, boolean>>(() =>
     readStorage<Record<string, boolean>>(STORAGE_KEY_FAVORITES, {}),
   )
+
+  const foldersRef = useRef(folders)
+  foldersRef.current = folders
+  const folderColorsRef = useRef(folderColors)
+  folderColorsRef.current = folderColors
+  const vaultColorsRef = useRef(vaultColors)
+  vaultColorsRef.current = vaultColors
+  const favoritesRef = useRef(favorites)
+  favoritesRef.current = favorites
+  const storageModeRef = useRef(storageMode)
+  storageModeRef.current = storageMode
+
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Sync to localStorage on change
   useEffect(() => {
@@ -238,18 +264,140 @@ export function useVaultFolders() {
     }
   }, [favorites])
 
-  const setVaultFolder = useCallback((vaultId: string, folder: string) => {
-    const trimmed = folder.trim()
-    setFolders((prev) => {
-      const next = { ...prev }
-      if (trimmed) {
-        next[vaultId] = trimmed
-      } else {
-        delete next[vaultId]
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_STORAGE_MODE, JSON.stringify(storageMode))
+    } catch {
+      // ignore
+    }
+  }, [storageMode])
+
+  // Schedule remote debounce push when online
+  const triggerRemoteSync = useCallback(
+    (
+      newFolders: Record<string, string>,
+      newFolderColors: Record<string, VaultColor>,
+      newVaultColors: Record<string, VaultColor>,
+      newFavorites: Record<string, boolean>,
+    ) => {
+      if (storageModeRef.current !== 'online') return
+
+      setSyncStatus('syncing')
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
       }
-      return next
-    })
-  }, [])
+      debounceTimerRef.current = setTimeout(async () => {
+        try {
+          await updateVaultUserPreferences({
+            storageMode: 'online',
+            folders: newFolders,
+            folderColors: newFolderColors,
+            vaultColors: newVaultColors,
+            favorites: newFavorites,
+          })
+          setSyncStatus('saved')
+        } catch {
+          setSyncStatus('error')
+        }
+      }, 500)
+    },
+    [],
+  )
+
+  // Initial load from server if online
+  useEffect(() => {
+    let active = true
+    if (storageMode !== 'online') return
+
+    async function initRemote() {
+      try {
+        setSyncStatus('syncing')
+        const remote = await getVaultUserPreferences()
+        if (!active) return
+
+        if (remote.storageMode && remote.storageMode !== storageModeRef.current) {
+          setStorageModeState(remote.storageMode)
+          try {
+            localStorage.setItem(STORAGE_KEY_STORAGE_MODE, JSON.stringify(remote.storageMode))
+          } catch {
+            // ignore
+          }
+          if (remote.storageMode === 'local') {
+            setSyncStatus('idle')
+            return
+          }
+        }
+
+        const remoteFolders = remote.folders || {}
+        const remoteFolderColors = (remote.folderColors || {}) as Record<string, VaultColor>
+        const remoteVaultColors = (remote.vaultColors || {}) as Record<string, VaultColor>
+        const remoteFavorites = remote.favorites || {}
+
+        // Merge: keep local items that remote might not have yet (e.g. created on this device while offline)
+        const localFolders = foldersRef.current
+        const localFolderColors = folderColorsRef.current
+        const localVaultColors = vaultColorsRef.current
+        const localFavorites = favoritesRef.current
+
+        let hasNewLocalData = false
+        for (const [id, f] of Object.entries(localFolders)) {
+          if (f && !remoteFolders[id]) {
+            hasNewLocalData = true
+            break
+          }
+        }
+
+        const mergedFolders = { ...localFolders, ...remoteFolders }
+        const mergedFolderColors = { ...localFolderColors, ...remoteFolderColors }
+        const mergedVaultColors = { ...localVaultColors, ...remoteVaultColors }
+        const mergedFavorites = { ...localFavorites, ...remoteFavorites }
+
+        setFolders(mergedFolders)
+        setFolderColors(mergedFolderColors)
+        setVaultColors(mergedVaultColors)
+        setFavorites(mergedFavorites)
+
+        if (hasNewLocalData) {
+          await updateVaultUserPreferences({
+            storageMode: 'online',
+            folders: mergedFolders,
+            folderColors: mergedFolderColors,
+            vaultColors: mergedVaultColors,
+            favorites: mergedFavorites,
+          })
+        }
+        setSyncStatus('saved')
+      } catch {
+        if (!active) return
+        setSyncStatus('error')
+      }
+    }
+
+    initRemote()
+    return () => {
+      active = false
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
+      }
+    }
+  }, [storageMode])
+
+  const setVaultFolder = useCallback(
+    (vaultId: string, folder: string) => {
+      const trimmed = folder.trim()
+      setFolders((prev) => {
+        const next = { ...prev }
+        if (trimmed) {
+          next[vaultId] = trimmed
+        } else {
+          delete next[vaultId]
+        }
+        triggerRemoteSync(next, folderColorsRef.current, vaultColorsRef.current, favoritesRef.current)
+        return next
+      })
+    },
+    [triggerRemoteSync],
+  )
 
   const getVaultFolder = useCallback(
     (vaultId: string, vaultName?: string): string => {
@@ -267,17 +415,21 @@ export function useVaultFolders() {
     [folders],
   )
 
-  const setFolderColor = useCallback((folderName: string, color?: VaultColor) => {
-    setFolderColors((prev) => {
-      const next = { ...prev }
-      if (color) {
-        next[folderName] = color
-      } else {
-        delete next[folderName]
-      }
-      return next
-    })
-  }, [])
+  const setFolderColor = useCallback(
+    (folderName: string, color?: VaultColor) => {
+      setFolderColors((prev) => {
+        const next = { ...prev }
+        if (color) {
+          next[folderName] = color
+        } else {
+          delete next[folderName]
+        }
+        triggerRemoteSync(foldersRef.current, next, vaultColorsRef.current, favoritesRef.current)
+        return next
+      })
+    },
+    [triggerRemoteSync],
+  )
 
   const getFolderColor = useCallback(
     (folderName: string): VaultColor | undefined => {
@@ -286,17 +438,21 @@ export function useVaultFolders() {
     [folderColors],
   )
 
-  const setVaultColor = useCallback((vaultId: string, color?: VaultColor) => {
-    setVaultColors((prev) => {
-      const next = { ...prev }
-      if (color) {
-        next[vaultId] = color
-      } else {
-        delete next[vaultId]
-      }
-      return next
-    })
-  }, [])
+  const setVaultColor = useCallback(
+    (vaultId: string, color?: VaultColor) => {
+      setVaultColors((prev) => {
+        const next = { ...prev }
+        if (color) {
+          next[vaultId] = color
+        } else {
+          delete next[vaultId]
+        }
+        triggerRemoteSync(foldersRef.current, folderColorsRef.current, next, favoritesRef.current)
+        return next
+      })
+    },
+    [triggerRemoteSync],
+  )
 
   const getVaultColor = useCallback(
     (vaultId: string): VaultColor | undefined => {
@@ -305,17 +461,21 @@ export function useVaultFolders() {
     [vaultColors],
   )
 
-  const toggleFavorite = useCallback((vaultId: string) => {
-    setFavorites((prev) => {
-      const next = { ...prev }
-      if (next[vaultId]) {
-        delete next[vaultId]
-      } else {
-        next[vaultId] = true
-      }
-      return next
-    })
-  }, [])
+  const toggleFavorite = useCallback(
+    (vaultId: string) => {
+      setFavorites((prev) => {
+        const next = { ...prev }
+        if (next[vaultId]) {
+          delete next[vaultId]
+        } else {
+          next[vaultId] = true
+        }
+        triggerRemoteSync(foldersRef.current, folderColorsRef.current, vaultColorsRef.current, next)
+        return next
+      })
+    },
+    [triggerRemoteSync],
+  )
 
   const isFavorite = useCallback(
     (vaultId: string): boolean => {
@@ -323,6 +483,64 @@ export function useVaultFolders() {
     },
     [favorites],
   )
+
+  const setStorageMode = useCallback(
+    async (mode: VaultStorageMode) => {
+      setStorageModeState(mode)
+      try {
+        localStorage.setItem(STORAGE_KEY_STORAGE_MODE, JSON.stringify(mode))
+      } catch {
+        // ignore
+      }
+
+      if (mode === 'online') {
+        setSyncStatus('syncing')
+        try {
+          await updateVaultUserPreferences({
+            storageMode: 'online',
+            folders: foldersRef.current,
+            folderColors: folderColorsRef.current,
+            vaultColors: vaultColorsRef.current,
+            favorites: favoritesRef.current,
+          })
+          setSyncStatus('saved')
+        } catch {
+          setSyncStatus('error')
+        }
+      } else {
+        setSyncStatus('idle')
+        try {
+          await updateVaultUserPreferences({
+            storageMode: 'local',
+          })
+        } catch {
+          // ignore
+        }
+      }
+    },
+    [],
+  )
+
+  const syncNow = useCallback(async () => {
+    if (storageModeRef.current !== 'online') return
+    setSyncStatus('syncing')
+    try {
+      const res = await updateVaultUserPreferences({
+        storageMode: 'online',
+        folders: foldersRef.current,
+        folderColors: folderColorsRef.current,
+        vaultColors: vaultColorsRef.current,
+        favorites: favoritesRef.current,
+      })
+      if (res.folders) setFolders(res.folders)
+      if (res.folderColors) setFolderColors(res.folderColors as Record<string, VaultColor>)
+      if (res.vaultColors) setVaultColors(res.vaultColors as Record<string, VaultColor>)
+      if (res.favorites) setFavorites(res.favorites)
+      setSyncStatus('saved')
+    } catch {
+      setSyncStatus('error')
+    }
+  }, [])
 
   const allFolders = Array.from(
     new Set(Object.values(folders).filter(Boolean)),
@@ -342,6 +560,10 @@ export function useVaultFolders() {
     favorites,
     toggleFavorite,
     isFavorite,
+    storageMode,
+    setStorageMode,
+    syncStatus,
+    syncNow,
   }
 }
 
