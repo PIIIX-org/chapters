@@ -42,7 +42,7 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       ? decryptCredential(repo.gitCredentialEncrypted)
       : null
     const cloneUrl = authenticatedUrl(repo.gitUrl, credential)
-    await simpleGit().clone(cloneUrl, workDir, ['--depth', '1'])
+    await simpleGit({ timeout: { block: 300_000 } }).clone(cloneUrl, workDir, ['--depth', '1'])
 
     const currentPaths = await listFilesRecursive(workDir, IGNORED)
     const files: FileUpdate[] = []
