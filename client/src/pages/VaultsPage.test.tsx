@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
@@ -45,6 +45,10 @@ function renderPage() {
 }
 
 describe('VaultsPage', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
   afterEach(() => {
     vi.unstubAllGlobals()
   })
@@ -269,6 +273,34 @@ describe('VaultsPage', () => {
 
     // Button should now reflect Local
     expect(storageBtn).toHaveTextContent(/local/i)
+  })
+
+  it('renders responsive layout container and mobile-friendly touch targets', async () => {
+    stubFetch()
+    const { container } = renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+
+    // Fluid responsive container
+    const layoutContainer = container.querySelector('.max-w-full')
+    expect(layoutContainer).toBeInTheDocument()
+    expect(layoutContainer?.className).toContain('sm:max-w-[94%]')
+    expect(layoutContainer?.className).toContain('lg:max-w-[80%]')
+
+    // Mobile touch targets on cards
+    const starBtn = screen.getByRole('button', { name: 'Favorite Recipes' })
+    expect(starBtn.className).toContain('touch-manipulation')
+
+    const folderBtn = screen.getAllByRole('button', { name: 'Add folder' })[0]
+    expect(folderBtn).toBeDefined()
+    expect(folderBtn!.className).toContain('touch-manipulation')
+
+    // Open organize dialog and check mobile dialog container styling
+    fireEvent.click(folderBtn!)
+    const dialogContent = document.querySelector('[data-slot="dialog-content"]')
+    expect(dialogContent).toBeInTheDocument()
+    expect(dialogContent?.className).toContain('w-[calc(100vw-1.5rem)]')
+    expect(dialogContent?.className).toContain('sm:max-w-md')
   })
 })
 

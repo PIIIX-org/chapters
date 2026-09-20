@@ -54,7 +54,7 @@ function CustomColorWheel({
       onClick={onClick}
       title={isCustom ? `Custom color: ${value}` : `Custom ${label}`}
       aria-label={`Open custom ${label} picker`}
-      className={`relative size-6 rounded-full cursor-pointer flex items-center justify-center transition-transform hover:scale-110 shadow-sm ${
+      className={`relative size-6.5 sm:size-6 rounded-full cursor-pointer flex items-center justify-center transition-transform hover:scale-110 shadow-sm touch-manipulation ${
         isCustom
           ? 'ring-2 ring-primary ring-offset-2 ring-offset-background scale-105'
           : 'opacity-80 hover:opacity-100'
@@ -105,7 +105,7 @@ export function VaultFolderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="w-[calc(100vw-1.5rem)] sm:max-w-md max-h-[90vh] overflow-y-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle>Organize Vault</DialogTitle>
           <DialogDescription>
@@ -135,7 +135,7 @@ export function VaultFolderDialog({
                     key={f}
                     type="button"
                     onClick={() => setFolderName(f)}
-                    className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                    className={`text-xs px-2.5 py-1 sm:py-0.5 rounded border transition-colors touch-manipulation ${
                       folderName.toLowerCase() === f.toLowerCase()
                         ? 'border-primary bg-primary/10 text-primary font-medium'
                         : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -153,12 +153,12 @@ export function VaultFolderDialog({
               <span className="text-xs text-muted-foreground font-medium">
                 Folder Color ({folderName.trim()}):
               </span>
-              <div className="flex items-center gap-1.5 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
                   onClick={() => setFolderColor(undefined)}
                   title="Default color"
-                  className={`size-6 rounded-full border border-border flex items-center justify-center text-[10px] text-muted-foreground hover:border-foreground/40 transition-colors ${
+                  className={`size-6.5 sm:size-6 rounded-full border border-border flex items-center justify-center text-[10px] text-muted-foreground hover:border-foreground/40 transition-colors touch-manipulation ${
                     !folderColor ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''
                   }`}
                 >
@@ -170,7 +170,7 @@ export function VaultFolderDialog({
                     type="button"
                     onClick={() => setFolderColor(c.id)}
                     title={c.label}
-                    className={`size-6 rounded-full ${c.accent} transition-transform hover:scale-110 ${
+                    className={`size-6.5 sm:size-6 rounded-full ${c.accent} transition-transform hover:scale-110 touch-manipulation ${
                       folderColor === c.id
                         ? 'ring-2 ring-primary ring-offset-2 ring-offset-background scale-105'
                         : 'opacity-80 hover:opacity-100'
@@ -191,12 +191,12 @@ export function VaultFolderDialog({
             <span className="text-xs text-muted-foreground font-medium">
               Vault Accent Color:
             </span>
-            <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
                 onClick={() => setVaultColor(undefined)}
                 title="Default (no color)"
-                className={`size-6 rounded-full border border-border flex items-center justify-center text-[10px] text-muted-foreground hover:border-foreground/40 transition-colors ${
+                className={`size-6.5 sm:size-6 rounded-full border border-border flex items-center justify-center text-[10px] text-muted-foreground hover:border-foreground/40 transition-colors touch-manipulation ${
                   !vaultColor ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''
                 }`}
               >
@@ -208,11 +208,11 @@ export function VaultFolderDialog({
                   type="button"
                   onClick={() => setVaultColor(c.id)}
                   title={c.label}
-                  className={`size-6 rounded-full ${c.accent} transition-transform hover:scale-110 ${
+                  className={`size-6.5 sm:size-6 rounded-full ${c.accent} transition-transform hover:scale-110 touch-manipulation ${
                     vaultColor === c.id
                       ? 'ring-2 ring-primary ring-offset-2 ring-offset-background scale-105'
                       : 'opacity-80 hover:opacity-100'
-                  }`}
+                    }`}
                 />
               ))}
               <CustomColorWheel
@@ -238,14 +238,14 @@ export function VaultFolderDialog({
             )}
           </div>
 
-          <div className="flex items-center justify-between sm:justify-between pt-2">
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2 pt-2">
             {currentFolder ? (
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
                 onClick={handleRemove}
-                className="text-muted-foreground hover:text-destructive"
+                className="text-muted-foreground hover:text-destructive h-9 sm:h-8"
               >
                 Remove from folder
               </Button>
@@ -258,10 +258,11 @@ export function VaultFolderDialog({
                 variant="ghost"
                 size="sm"
                 onClick={() => onOpenChange(false)}
+                className="flex-1 sm:flex-none h-9 sm:h-8"
               >
                 Cancel
               </Button>
-              <Button type="submit" size="sm">
+              <Button type="submit" size="sm" className="flex-1 sm:flex-none h-9 sm:h-8">
                 Save
               </Button>
             </div>

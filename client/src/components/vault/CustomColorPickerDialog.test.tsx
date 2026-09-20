@@ -86,4 +86,23 @@ describe('CustomColorPickerDialog component', () => {
     expect(onConfirm).not.toHaveBeenCalled()
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
+
+  it('includes mobile-responsive modal constraints and touch-friendly controls', () => {
+    render(
+      <CustomColorPickerDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        initialColor="#3b82f6"
+        onConfirm={vi.fn()}
+      />,
+    )
+
+    const dialogContent = document.querySelector('[data-slot="dialog-content"]')
+    expect(dialogContent).toBeInTheDocument()
+    expect(dialogContent?.className).toContain('w-[calc(100vw-1.5rem)]')
+    expect(dialogContent?.className).toContain('sm:max-w-sm')
+
+    const hueSlider = screen.getByRole('slider', { name: 'Hue slider' })
+    expect(hueSlider.className).toContain('touch-manipulation')
+  })
 })
