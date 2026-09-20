@@ -169,6 +169,20 @@ export const vaultGraphPreferences = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.vaultId] })],
 )
 
+export const userVaultPreferences = pgTable('user_vault_preferences', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  storageMode: text('storage_mode').notNull().default('online'),
+  folders: jsonb('folders').$type<Record<string, string>>().notNull().default({}),
+  folderColors: jsonb('folder_colors').$type<Record<string, string>>().notNull().default({}),
+  vaultColors: jsonb('vault_colors').$type<Record<string, string>>().notNull().default({}),
+  favorites: jsonb('favorites').$type<Record<string, boolean>>().notNull().default({}),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+})
+
 export const mcpConnections = pgTable(
   'mcp_connections',
   {

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { and, eq, ne } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { users } from '../db/schema.js'
+import { users, userVaultPreferences } from '../db/schema.js'
 import { sendMail } from '../email/mailer.js'
 import { hashPassword, verifyPassword } from './passwords.js'
 import { destroyUserSessions } from './sessions.js'
@@ -124,6 +124,99 @@ export function accountRoutes(app: FastifyInstance) {
         .where(eq(users.id, req.user!.id))
         .returning({ emailNotifications: users.emailNotifications })
       return saved!
+    },
+  )
+
+  app.get('/me/vault-preferences', async (req) => {
+    const rows = await db
+      .select({
+        storageMode: userVaultPreferences.storageMode,
+        folders: userVaultPreferences.folders,
+        folderColors: userVaultPreferences.folderColors,
+        vaultColors: userVaultPreferences.vaultColors,
+        favorites: userVaultPreferences.favorites,
+      })
+      .from(userVaultPreferences)
+      .where(eq(userVaultPreferences.userId, req.user!.id))
+
+    const pref = rows[0]
+    return {
+      storageMode: (pref?.storageMode as 'online' | 'local') || 'online',
+      folders: pref?.folders || {},
+      folderColors: pref?.folderColors || {},
+      vaultColors: pref?.vaultColors || {},
+      favorites: pref?.favorites || {},
+    }
+  })
+
+  app.put<{
+    Body: {
+      storageMode?: 'online' | 'local'
+      folders?: Record<string, string>
+      folderColors?: Record<string, string>
+      vaultColors?: Record<string, string>
+      favorites?: Record<string, boolean>
+    }
+  }>(
+    '/me/vault-preferences',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          properties: {
+            storageMode: { type: 'string', enum: ['online', 'local'] },
+            folders: { type: 'object', additionalProperties: { type: 'string' } },
+            folderColors: { type: 'object', additionalProperties: { type: 'string' } },
+            vaultColors: { type: 'object', additionalProperties: { type: 'string' } },
+            favorites: { type: 'object', additionalProperties: { type: 'boolean' } },
+          },
+        },
+      },
+    },
+    async (req) => {
+      const existing = await db
+        .select()
+        .from(userVaultPreferences)
+        .where(eq(userVaultPreferences.userId, req.user!.id))
+
+      const current = existing[0]
+
+      const storageMode = req.body.storageMode ?? current?.storageMode ?? 'online'
+      const folders = req.body.folders ?? current?.folders ?? {}
+      const folderColors = req.body.folderColors ?? current?.folderColors ?? {}
+      const vaultColors = req.body.vaultColors ?? current?.vaultColors ?? {}
+      const favorites = req.body.favorites ?? current?.favorites ?? {}
+
+      await db
+        .insert(userVaultPreferences)
+        .values({
+          userId: req.user!.id,
+          storageMode,
+          folders,
+          folderColors,
+          vaultColors,
+          favorites,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: [userVaultPreferences.userId],
+          set: {
+            storageMode,
+            folders,
+            folderColors,
+            vaultColors,
+            favorites,
+            updatedAt: new Date(),
+          },
+        })
+
+      return {
+        storageMode,
+        folders,
+        folderColors,
+        vaultColors,
+        favorites,
+      }
     },
   )
 }

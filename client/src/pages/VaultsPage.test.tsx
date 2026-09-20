@@ -17,6 +17,17 @@ function stubFetch(vaults: unknown = VAULTS, status = 200) {
     vi.fn().mockImplementation((url: string) => {
       if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(status, vaults))
       if (url === '/api/vaults/trash') return Promise.resolve(mockJsonResponse(200, []))
+      if (url === '/api/me/vault-preferences') {
+        return Promise.resolve(
+          mockJsonResponse(200, {
+            storageMode: 'online',
+            folders: {},
+            folderColors: {},
+            vaultColors: {},
+            favorites: {},
+          }),
+        )
+      }
       return Promise.resolve(mockJsonResponse(404, { error: 'not found' }))
     }),
   )
@@ -232,5 +243,33 @@ describe('VaultsPage', () => {
     const designBadge = await screen.findByRole('button', { name: 'Design' })
     expect(designBadge).toBeInTheDocument()
   })
+
+  it('allows opening storage settings and toggling between Online and Local storage', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+
+    const storageBtn = screen.getByRole('button', { name: 'Vault folders storage settings' })
+    expect(storageBtn).toBeInTheDocument()
+    expect(storageBtn).toHaveTextContent(/cloud/i)
+
+    // Open storage settings modal
+    fireEvent.click(storageBtn)
+    expect(await screen.findByText(/Vault Folders & Group Storage/i)).toBeInTheDocument()
+    expect(screen.getByText(/Online \(Cloud Synced\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/Local \(This Browser Only\)/i)).toBeInTheDocument()
+
+    // Select Local mode
+    fireEvent.click(screen.getByText(/Local \(This Browser Only\)/i))
+
+    // Click Done to close
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.queryByText(/Vault Folders & Group Storage/i)).toBeNull()
+
+    // Button should now reflect Local
+    expect(storageBtn).toHaveTextContent(/local/i)
+  })
 })
+
 

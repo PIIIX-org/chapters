@@ -68,3 +68,25 @@ export function setVaultGraphPreference(id: string, include: boolean): Promise<{
     body: JSON.stringify({ include }),
   })
 }
+
+export interface VaultUserPreferences {
+  storageMode: 'online' | 'local'
+  folders: Record<string, string>
+  folderColors: Record<string, string>
+  vaultColors: Record<string, string>
+  favorites: Record<string, boolean>
+}
+
+export function getVaultUserPreferences(): Promise<VaultUserPreferences> {
+  return apiFetch('/me/vault-preferences')
+}
+
+export function updateVaultUserPreferences(
+  patch: Partial<VaultUserPreferences>,
+): Promise<VaultUserPreferences> {
+  return apiFetch('/me/vault-preferences', {
+    method: 'PUT',
+    body: JSON.stringify(patch),
+  })
+}
+
