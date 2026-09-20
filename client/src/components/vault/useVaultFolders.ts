@@ -219,20 +219,16 @@ export function useVaultFolders() {
   )
 
   const foldersRef = useRef(folders)
-  foldersRef.current = folders
   const folderColorsRef = useRef(folderColors)
-  folderColorsRef.current = folderColors
   const vaultColorsRef = useRef(vaultColors)
-  vaultColorsRef.current = vaultColors
   const favoritesRef = useRef(favorites)
-  favoritesRef.current = favorites
   const storageModeRef = useRef(storageMode)
-  storageModeRef.current = storageMode
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Sync to localStorage on change
+  // Sync to localStorage and refs on change
   useEffect(() => {
+    foldersRef.current = folders
     try {
       localStorage.setItem(STORAGE_KEY_FOLDERS, JSON.stringify(folders))
     } catch {
@@ -241,6 +237,7 @@ export function useVaultFolders() {
   }, [folders])
 
   useEffect(() => {
+    folderColorsRef.current = folderColors
     try {
       localStorage.setItem(STORAGE_KEY_FOLDER_COLORS, JSON.stringify(folderColors))
     } catch {
@@ -249,6 +246,7 @@ export function useVaultFolders() {
   }, [folderColors])
 
   useEffect(() => {
+    vaultColorsRef.current = vaultColors
     try {
       localStorage.setItem(STORAGE_KEY_VAULT_COLORS, JSON.stringify(vaultColors))
     } catch {
@@ -257,6 +255,7 @@ export function useVaultFolders() {
   }, [vaultColors])
 
   useEffect(() => {
+    favoritesRef.current = favorites
     try {
       localStorage.setItem(STORAGE_KEY_FAVORITES, JSON.stringify(favorites))
     } catch {
@@ -265,6 +264,7 @@ export function useVaultFolders() {
   }, [favorites])
 
   useEffect(() => {
+    storageModeRef.current = storageMode
     try {
       localStorage.setItem(STORAGE_KEY_STORAGE_MODE, JSON.stringify(storageMode))
     } catch {
