@@ -24,6 +24,10 @@ for best AI navigability, see
   once trashed), matching the note purge contract: clears semantic edges
   and the vault's notifications explicitly (neither table has an FK to
   cascade from) and removes the vault's directory from disk
+- **Vault Organization & Cloud Sync** — organize vaults into folders, groups,
+  and custom colors with favorites pinning. Synced across devices via
+  `GET`/`PUT /api/me/vault-preferences` (or kept strictly local to the browser
+  via the user's storage mode preference).
 - **Graph & search** — save-time embedding index; extracted/structural/
   semantic edges with Louvain communities and an opt-in merged
   cross-vault view; hybrid keyword+semantic search, permission-filtered
