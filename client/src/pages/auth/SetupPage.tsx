@@ -56,11 +56,11 @@ export function SetupPage() {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="setup-token">Setup token</Label>
-            <Input id="setup-token" value={token} onChange={(e) => setToken(e.target.value)} required />
+            <Input id="setup-token" value={token} onChange={(e) => setToken(e.target.value)} required className="rounded-[var(--radius-sm,2px)] font-mono" />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="setup-email">Email</Label>
-            <Input id="setup-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <Input id="setup-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="rounded-[var(--radius-sm,2px)]" />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="setup-password">Password</Label>
@@ -71,10 +71,11 @@ export function SetupPage() {
               onChange={(e) => setPassword(e.target.value)}
               minLength={8}
               required
+              className="rounded-[var(--radius-sm,2px)]"
             />
           </div>
           <FormError message={error} />
-          <Button type="submit" disabled={submitting}>
+          <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
             Create admin account
           </Button>
         </form>

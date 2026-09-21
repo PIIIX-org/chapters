@@ -24,7 +24,7 @@ export function MfaRequirementToggle() {
   const required = session.data.mfaRequired
 
   return (
-    <Panel>
+    <Panel className="rounded-[var(--radius-md,4px)]">
       <PanelHeader
         title="Two-factor authentication"
         actions={
