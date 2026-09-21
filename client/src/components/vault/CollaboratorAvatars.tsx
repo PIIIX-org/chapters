@@ -43,7 +43,7 @@ export function CollaboratorAvatars({ peers }: CollaboratorAvatarsProps) {
   const hidden = peers.length - shown.length
 
   return (
-    <ul aria-label="In this note now" className="flex items-center gap-1">
+    <ul aria-label="In this note now" className="flex items-center gap-1.5">
       {shown.map((peer) => (
         <li
           key={peer.clientId}
@@ -52,7 +52,7 @@ export function CollaboratorAvatars({ peers }: CollaboratorAvatarsProps) {
           // The ink is a theme-resolved variable, so the peer's identity goes in
           // as a custom property and the paint stays in one static class list.
           style={{ '--ink': peer.ink.color, '--ink-wash': peer.ink.colorLight } as CSSProperties}
-          className="flex h-6 w-6 items-center justify-center rounded-full border border-[color:var(--ink)] bg-[color:var(--ink-wash)] text-xs font-medium tracking-wide text-[color:var(--ink)] uppercase"
+          className="flex h-6 w-6 items-center justify-center rounded-full border border-[color:var(--ink)] bg-[color:var(--ink-wash)] text-xs font-medium tracking-wide text-[color:var(--ink)] uppercase ring-1 ring-[color:var(--ink)]/40 ring-offset-1 ring-offset-background"
         >
           {initials(peer.name)}
         </li>
@@ -60,7 +60,7 @@ export function CollaboratorAvatars({ peers }: CollaboratorAvatarsProps) {
       {hidden > 0 && (
         <li
           aria-label={`${hidden} more editing this note`}
-          className="flex h-6 items-center rounded-full border border-border bg-muted px-1.5 text-xs font-medium text-muted-foreground"
+          className="flex h-6 items-center rounded-full border border-border bg-muted px-1.5 font-mono text-xs font-medium text-muted-foreground ring-1 ring-border/40 ring-offset-1 ring-offset-background"
         >
           +{hidden}
         </li>
