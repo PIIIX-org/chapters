@@ -85,9 +85,9 @@ function Slider(spec: SliderSpec) {
   }
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-3">
-        <label htmlFor={spec.id} className="text-[13px] text-foreground">
+        <label htmlFor={spec.id} className="text-[12px] font-medium text-foreground select-none">
           {spec.label}
         </label>
         <span className="font-mono text-[11px] tabular-nums text-muted-foreground">{spec.format(spec.value)}</span>
@@ -101,7 +101,7 @@ function Slider(spec: SliderSpec) {
         value={spec.value}
         onChange={(e) => spec.onChange(Number(e.currentTarget.value))}
         onKeyDown={handleKeyDown}
-        className="w-full"
+        className="h-1.5 w-full cursor-pointer accent-muted-foreground"
         style={{ accentColor: 'var(--muted-foreground)' }}
       />
     </div>

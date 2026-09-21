@@ -510,7 +510,10 @@ export default function GraphCanvas() {
         <StatsStrip vaultCount={vaults.data?.length ?? null} graph={graph.data} />
       )}
 
-      <div ref={containerRef} className="relative min-h-0 w-full flex-1">
+      <div
+        ref={containerRef}
+        className="relative min-h-0 w-full flex-1 overflow-hidden bg-background bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] bg-[size:48px_48px] [background-position:center]"
+      >
         <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 h-full w-full" />
         {/* The only DOM allowed over the canvas, all inside this cell:
             colour-mode pills top-left, zoom controls bottom-right, capped/
@@ -520,13 +523,34 @@ export default function GraphCanvas() {
           <ColorModeToggle />
         </div>
         <div className="absolute bottom-3 right-3 flex flex-col gap-1">
-          <Button type="button" variant="outline" size="icon-sm" aria-label="Zoom in" onClick={() => zoomApiRef.current?.zoomBy(1.4)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label="Zoom in"
+            onClick={() => zoomApiRef.current?.zoomBy(1.4)}
+            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-xs text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
+          >
             <ZoomIn aria-hidden="true" />
           </Button>
-          <Button type="button" variant="outline" size="icon-sm" aria-label="Zoom out" onClick={() => zoomApiRef.current?.zoomBy(1 / 1.4)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label="Zoom out"
+            onClick={() => zoomApiRef.current?.zoomBy(1 / 1.4)}
+            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-xs text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
+          >
             <ZoomOut aria-hidden="true" />
           </Button>
-          <Button type="button" variant="outline" size="icon-sm" aria-label="Fit graph to view" onClick={() => zoomApiRef.current?.fit()}>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label="Fit graph to view"
+            onClick={() => zoomApiRef.current?.fit()}
+            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-xs text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
+          >
             <Maximize aria-hidden="true" />
           </Button>
         </div>
@@ -591,7 +615,7 @@ export default function GraphCanvas() {
 /** Native-details collapsible panel for the inspector's Filters / Physics sections. */
 function CollapsibleSection({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <details open className="rounded-md border border-border bg-card">
+    <details open className="rounded-[var(--radius-md,4px)] border border-border bg-card">
       <summary className="flex h-9 cursor-pointer select-none list-none items-center px-3 [&::-webkit-details-marker]:hidden">
         <Eyebrow as="span">{title}</Eyebrow>
       </summary>
@@ -617,14 +641,17 @@ function StatsStrip({ vaultCount, graph }: { vaultCount: number | null; graph: C
     ['Communities', graph.nodes.length],
   ]
   return (
-    <dl aria-label="Graph statistics" className="flex h-9 shrink-0 items-center gap-5 overflow-x-auto border-b border-border px-3">
+    <dl
+      aria-label="Graph statistics"
+      className="flex h-9 shrink-0 items-center gap-5 overflow-x-auto border-b border-border bg-secondary px-3"
+    >
       {stats.map(([label, value]) =>
         value === null ? null : (
           <div key={label} className="flex items-baseline gap-1.5">
             <dt>
               <Eyebrow>{label}</Eyebrow>
             </dt>
-            <dd className="font-mono text-[13px] tabular-nums text-foreground">{statFormatter.format(value)}</dd>
+            <dd className="font-mono text-[12px] tabular-nums text-foreground">{statFormatter.format(value)}</dd>
           </div>
         ),
       )}
