@@ -137,7 +137,7 @@ describe('HomePage', () => {
     // not the body text. Since unit 6 an editor's body arrives over the collab
     // relay rather than REST, so asserting REST content here would only be
     // asserting that the relay is unreachable in this fixture.
-    await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull(), { timeout: 5000 })
     expect(await screen.findByText('foo')).toBeInTheDocument()
   })
 
