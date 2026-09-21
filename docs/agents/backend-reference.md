@@ -159,6 +159,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | `vaults` | note container, owner, `mergeable` flag (opt into the cross-vault merged graph) |
 | `vaultShares` | direct-user or team grants on a vault, `read`/`edit`, unique on `(vaultId, granteeType, granteeId)` |
 | `vaultGraphPreferences` | per-user opt-in for a vault in the merged graph view |
+| `userVaultPreferences` | per-user vault organization preferences: storage mode ('online'/'local'), folders, colors, and favorites |
 | `mcpConnections` | issued MCP bearer tokens, scoped `account`/`vault`/`repository`, hashed |
 | `instanceState` | singleton row: setup-token lifecycle, instance-wide MFA requirement |
 | `securityEvents` | append-only audit log (login failures, permission denials, admin actions, MFA events, export/backup access) |

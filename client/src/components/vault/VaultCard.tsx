@@ -50,13 +50,13 @@ export function VaultCard({
         />
       )}
 
-      <CardHeader className="gap-2">
+      <CardHeader className="p-3.5 sm:p-4 gap-2">
         <div className="flex items-center justify-between gap-2">
           <button
             type="button"
             onClick={() => onOrganizeFolder(vault)}
             title={folder ? `Folder: ${folder}` : 'Assign to folder'}
-            className={`flex items-center gap-1.5 text-xs font-mono px-2 py-0.5 rounded border transition-colors ${
+            className={`flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 sm:py-0.5 min-h-[28px] sm:min-h-0 rounded border transition-colors touch-manipulation ${
               fColorDef
                 ? fColorDef.badge
                 : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
@@ -64,11 +64,11 @@ export function VaultCard({
             style={fColorDef?.style?.badge}
           >
             <Folder
-              className={`size-3 ${fColorDef ? fColorDef.folderIcon : 'text-muted-foreground'}`}
+              className={`size-3.5 sm:size-3 ${fColorDef ? fColorDef.folderIcon : 'text-muted-foreground'}`}
               style={fColorDef?.style?.folderIcon}
               aria-hidden="true"
             />
-            <span className="truncate max-w-[120px]">
+            <span className="truncate max-w-[140px] sm:max-w-[120px]">
               {folder || 'Add folder'}
             </span>
           </button>
@@ -80,14 +80,14 @@ export function VaultCard({
                 onClick={() => onToggleFavorite(vault.id)}
                 title={isFavorite ? 'Unfavorite' : 'Favorite'}
                 aria-label={isFavorite ? `Unfavorite ${vault.name}` : `Favorite ${vault.name}`}
-                className={`p-1 rounded transition-colors ${
+                className={`p-1.5 sm:p-1 rounded transition-colors touch-manipulation ${
                   isFavorite
                     ? 'text-amber-500 hover:text-amber-600'
                     : 'text-muted-foreground/40 hover:text-amber-500'
                 }`}
               >
                 <Star
-                  className={`size-3.5 ${isFavorite ? 'fill-amber-500 text-amber-500' : ''}`}
+                  className={`size-4 sm:size-3.5 ${isFavorite ? 'fill-amber-500 text-amber-500' : ''}`}
                   aria-hidden="true"
                 />
               </button>
@@ -119,14 +119,14 @@ export function VaultCard({
         </div>
       </CardHeader>
 
-      <CardContent className="pt-0">
+      <CardContent className="pt-0 px-3.5 sm:px-4">
         {/* Additional metadata or stats can slot here */}
       </CardContent>
 
-      <CardFooter className="flex items-center justify-between border-t border-border bg-muted/20 px-4 py-2.5">
+      <CardFooter className="flex items-center justify-between border-t border-border bg-muted/20 px-3.5 sm:px-4 py-2 sm:py-2.5 min-h-[42px]">
         <Link
           to={`/vaults/${vault.id}`}
-          className="text-xs text-primary hover:underline font-medium"
+          className="text-xs text-primary hover:underline font-medium py-1"
         >
           Open vault &rarr;
         </Link>
