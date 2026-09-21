@@ -18,8 +18,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
     **revoked ≠ offline** — revoked KEEPS the doc (unsent text must survive).
   - **7** viewer read-only forever; local folders watched;
     **`gitUrl`/`localPath` are owner-only** (they leaked to viewers + MCP).
-- **`prod` == `dev` as of 2026-09-21 (#184, #187)** — Repository sync recovery & startup reconciliation (#182), Vault folders/groups server persistence with user local/online toggle (#185).
-- **`dev` ahead of `prod`**: #188 (PR #189) — Vault organization, vaults page, and shell navigation fully responsive for mobile phones. Ready for prod promotion when directed.
+- **`prod` == `dev` as of 2026-09-21 (#184, #187, #190)** — Repository sync recovery & startup reconciliation (#182), Vault folders/groups server persistence with user local/online toggle (#185), Mobile responsiveness for vault organization, vaults page, and shell navigation (#188).
 - **Phase: UI COMMAND REDESIGN** (owner-directed 2026-08-30): spec + plan of
   the same date under `superpowers/`. Dark-first grid shell (rail · top bar ·
   context · content · inspector) on every authed route; `/vaults`, `/repos`.
