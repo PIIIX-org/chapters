@@ -39,24 +39,24 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
 
   --shadow-floating:
-    0 12px 32px -12px rgb(0 0 0 / 0.55), 0 0 0 1px var(--border);
+    0 16px 36px -12px rgb(0 0 0 / 0.7), 0 0 0 1px var(--border);
 }
 
 :root {
-  /* Light — the secondary theme. */
-  --background: #f5f6f8;
+  /* Light (Vellum secondary theme) */
+  --background: #f7f6f2;
   --card: #ffffff;
   --popover: #ffffff;
-  --secondary: #eef0f4;
-  --muted: #e6e9ef;
-  --border: #d8dce4;
-  --input: #c9cfda;
+  --secondary: #efece6;
+  --muted: #e6e2d8;
+  --border: #ddd8ce;
+  --input: #d2cdc1;
   --foreground: #161a22;
   --muted-foreground: #5e6675;
   --faint: #8c94a4;
@@ -75,32 +75,33 @@
   --ink-ochre: #856619;
   --ink-forest: #3b6b4c;
   --ink-teal: #1f7770;
-  /* Shell geometry — read by the grid, never hard-coded in a page. */
+  /* Shell geometry — Observatory Bridge calibrated tracks */
   --shell-rail: 52px;
   --shell-topbar: 44px;
-  --shell-context: 264px;
-  --shell-inspector: 320px;
+  --shell-context: 240px;
+  --shell-inspector: 300px;
 }
 
 .dark {
-  --background: #0b0e14;
-  --card: #12161e;
-  --popover: #161b24;
-  --secondary: #0f1218;
-  --muted: #1a202b;
-  --border: #232a37;
-  --input: #2a3140;
-  --foreground: #e3e7ef;
-  --muted-foreground: #8a93a6;
-  --faint: #5b6475;
+  /* Dark (Observatory Bridge default theme) */
+  --background: #070a0f;
+  --card: #0f141f;
+  --popover: #141824;
+  --secondary: #0a0d14;
+  --muted: #161d2b;
+  --border: #1c2433;
+  --input: #1a2230;
+  --foreground: #e2e8f4;
+  --muted-foreground: #8b9bb4;
+  --faint: #526077;
   --primary: #5b8def;
-  --primary-foreground: #0b0e14;
+  --primary-foreground: #070a0f;
   --accent: #3fb8ae;
-  --accent-foreground: #0b0e14;
-  --success: #4cc38a;
+  --accent-foreground: #070a0f;
+  --success: #38c77f;
   --warning: #e6b455;
   --destructive: #f26d6d;
-  --ring: #5b8def;
+  --ring: #3fb8ae;
   --ink-vermillion: #f07a5a;
   --ink-indigo: #7c8fd9;
   --ink-plum: #c97fb0;
