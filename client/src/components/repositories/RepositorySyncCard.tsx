@@ -63,7 +63,7 @@ interface RepositorySyncCardProps {
 
 function Frame({ titleAs, children }: { titleAs: 'h2' | 'h3'; children: ReactNode }) {
   return (
-    <Panel>
+    <Panel className="rounded-[var(--radius-md,4px)] border-border bg-card">
       <PanelHeader title="Sync" titleAs={titleAs} />
       <PanelBody className="flex flex-col gap-1.5">{children}</PanelBody>
     </Panel>
@@ -121,7 +121,21 @@ export function RepositorySyncCard({ repositoryId, titleAs = 'h3' }: RepositoryS
           health === 'error' ? 'text-destructive' : 'text-foreground',
         )}
       >
-        <StatusDot tone={HEALTH_TONE[health]} />
+        <span className="relative flex size-2 shrink-0 items-center justify-center">
+          {health === 'syncing' && (
+            <span
+              aria-hidden="true"
+              className="absolute size-3.5 animate-ping rounded-full bg-warning/50 motion-reduce:hidden"
+            />
+          )}
+          {health === 'synced' && (
+            <span
+              aria-hidden="true"
+              className="absolute size-2.5 animate-pulse rounded-full bg-success/40 motion-reduce:hidden"
+            />
+          )}
+          <StatusDot tone={HEALTH_TONE[health]} />
+        </span>
         {headline(health, fileCount)}
       </p>
 
@@ -147,7 +161,9 @@ export function RepositorySyncCard({ repositoryId, titleAs = 'h3' }: RepositoryS
       )}
 
       {repo.lastSyncedAt && (
-        <p className="font-mono text-xs text-muted-foreground">Last synced {formatTimestamp(repo.lastSyncedAt)}</p>
+        <p className="font-mono text-xs tabular-nums text-muted-foreground">
+          Last synced {formatTimestamp(repo.lastSyncedAt)}
+        </p>
       )}
 
       {files.isError && (
@@ -159,7 +175,7 @@ export function RepositorySyncCard({ repositoryId, titleAs = 'h3' }: RepositoryS
       {/* Git only: the other two methods have no webhook to deliver anything. */}
       {repo.ingestionMethod === 'git' &&
         (repo.lastWebhookAt ? (
-          <p className="font-mono text-xs text-muted-foreground">
+          <p className="font-mono text-xs tabular-nums text-muted-foreground">
             Webhook delivering — last push received {formatTimestamp(repo.lastWebhookAt)}
           </p>
         ) : (
