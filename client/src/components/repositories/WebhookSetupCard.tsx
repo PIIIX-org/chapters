@@ -41,7 +41,7 @@ export function WebhookSetupCard({ repository, titleAs = 'h3' }: WebhookSetupCar
   }
 
   return (
-    <Panel>
+    <Panel className="rounded-[var(--radius-md,4px)] border-border bg-card">
       <PanelHeader title="Webhook" titleAs={titleAs} />
       <PanelBody className="flex flex-col gap-2">
         {revealed ? (
@@ -52,9 +52,9 @@ export function WebhookSetupCard({ repository, titleAs = 'h3' }: WebhookSetupCar
               note="Paste it into the git host's webhook settings now, together with the path below."
               onDismiss={() => setRevealed(null)}
             />
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-1.5 rounded-[var(--radius-md,4px)] border border-border bg-muted/40 p-3">
               <span className="text-sm font-medium text-foreground">Payload path</span>
-              <code className="break-all rounded-sm border border-border bg-muted px-2 py-1 font-mono text-sm text-foreground">
+              <code className="break-all rounded-[var(--radius-sm,2px)] border border-border bg-card px-2.5 py-1.5 font-mono text-xs text-foreground">
                 {revealed.webhookPath}
               </code>
               <p className="text-xs text-muted-foreground">
@@ -90,7 +90,7 @@ export function WebhookSetupCard({ repository, titleAs = 'h3' }: WebhookSetupCar
               aria-label="Set up the webhook"
               disabled={createSecret.isPending}
               onClick={handleCreate}
-              className="self-start"
+              className="self-start rounded-[var(--radius-md,4px)] font-medium"
             >
               {createSecret.isPending ? 'Generating…' : 'Set up webhook'}
             </Button>

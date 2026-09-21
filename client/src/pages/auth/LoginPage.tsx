@@ -63,7 +63,7 @@ export function LoginPage() {
       {authConfig?.oidc ? (
         <div className="mb-4 flex flex-col gap-4">
           {ssoFailed ? <FormError message="Single sign-on failed. Try again." /> : null}
-          <Button asChild>
+          <Button asChild className="rounded-[var(--radius-sm,2px)]">
             <a href="/api/oidc/login">Continue with single sign-on</a>
           </Button>
           {!authConfig.oidcOnly && (
@@ -74,35 +74,50 @@ export function LoginPage() {
       {authConfig?.oidcOnly ? null : mfaChallenge ? (
         <form onSubmit={handleTotpSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="login-totp">Authentication code</Label>
-            <Input id="login-totp" value={totp} onChange={(e) => setTotp(e.target.value)} required autoFocus />
+            <Label htmlFor="login-totp" className="text-xs font-medium text-foreground">Authentication code</Label>
+            <Input
+              id="login-totp"
+              value={totp}
+              onChange={(e) => setTotp(e.target.value)}
+              required
+              autoFocus
+              className="rounded-[var(--radius-sm,2px)] font-mono"
+            />
           </div>
           <FormError message={error} />
-          <Button type="submit" disabled={submitting}>
+          <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
             Verify code
           </Button>
         </form>
       ) : (
         <form onSubmit={handlePasswordSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="login-email">Email</Label>
-            <Input id="login-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <Label htmlFor="login-email" className="text-xs font-medium text-foreground">Email</Label>
+            <Input
+              id="login-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className="rounded-[var(--radius-sm,2px)]"
+            />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="login-password">Password</Label>
+            <Label htmlFor="login-password" className="text-xs font-medium text-foreground">Password</Label>
             <Input
               id="login-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
+              className="rounded-[var(--radius-sm,2px)]"
             />
           </div>
           <FormError message={error} />
-          <Button type="submit" disabled={submitting}>
+          <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
             Log in
           </Button>
-          <Link to="/forgot-password" className="text-center text-sm text-muted-foreground underline">
+          <Link to="/forgot-password" className="text-center text-sm text-muted-foreground hover:text-foreground underline underline-offset-4 transition-colors">
             Forgot your password?
           </Link>
           {/* Until this existed there was no route to sign-up anywhere in
@@ -112,7 +127,7 @@ export function LoginPage() {
               only get to if you already have what it creates. */}
           <p className="text-center text-sm text-muted-foreground">
             New here?{' '}
-            <Link to="/signup" className="text-foreground underline">
+            <Link to="/signup" className="text-foreground underline underline-offset-4 hover:text-primary transition-colors">
               Create an account
             </Link>
           </p>

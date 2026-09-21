@@ -158,13 +158,18 @@ const viewerTheme = EditorView.theme({
   '.cm-content': { fontFamily: 'var(--font-mono)', caretColor: 'transparent' },
   '.cm-scroller': { overflow: 'auto', lineHeight: '1.6' },
   '.cm-gutters': {
-    backgroundColor: 'transparent',
-    color: 'var(--faint)',
-    border: 'none',
+    backgroundColor: '#070A0F',
+    color: 'var(--muted-foreground)',
+    borderRight: '1px solid var(--border)',
   },
-  '.cm-lineNumbers .cm-gutterElement': { minWidth: '3ch', padding: '0 12px 0 10px' },
+  '.cm-lineNumbers .cm-gutterElement': {
+    fontFamily: 'var(--font-mono)',
+    fontVariantNumeric: 'tabular-nums',
+    minWidth: '3.5ch',
+    padding: '0 12px 0 10px',
+  },
   '.cm-activeLine': { backgroundColor: 'transparent' },
-  '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--muted-foreground)' },
+  '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--foreground)' },
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
     backgroundColor: 'color-mix(in srgb, var(--primary) 24%, transparent)',
   },

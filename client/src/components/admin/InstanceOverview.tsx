@@ -39,23 +39,49 @@ export function InstanceOverview() {
           <StatTile
             label="Awaiting approval"
             value={byStatus.get('pending_approval') ?? 0}
+            className="rounded-[var(--radius-md,4px)]"
           />
-          <StatTile label="Active users" value={byStatus.get('active') ?? 0} />
-          <StatTile label="Deactivated" value={byStatus.get('deactivated') ?? 0} />
-          <StatTile label="Vaults" value={stats.data.vaults} />
-          <StatTile label="Teams" value={stats.data.teams} />
-          <StatTile label="Notes" value={stats.data.notes} />
-          <StatTile label="Stored" value={formatBytes(stats.data.storageBytes)} />
+          <StatTile
+            label="Active users"
+            value={byStatus.get('active') ?? 0}
+            className="rounded-[var(--radius-md,4px)]"
+          />
+          <StatTile
+            label="Deactivated"
+            value={byStatus.get('deactivated') ?? 0}
+            className="rounded-[var(--radius-md,4px)]"
+          />
+          <StatTile
+            label="Vaults"
+            value={stats.data.vaults}
+            className="rounded-[var(--radius-md,4px)]"
+          />
+          <StatTile
+            label="Teams"
+            value={stats.data.teams}
+            className="rounded-[var(--radius-md,4px)]"
+          />
+          <StatTile
+            label="Notes"
+            value={stats.data.notes}
+            className="rounded-[var(--radius-md,4px)]"
+          />
+          <StatTile
+            label="Stored"
+            value={formatBytes(stats.data.storageBytes)}
+            className="rounded-[var(--radius-md,4px)]"
+          />
           <StatTile
             label="Live MCP connections"
             value={stats.data.activeMcpConnections}
+            className="rounded-[var(--radius-md,4px)]"
           />
         </div>
       )}
 
       <MfaRequirementToggle />
 
-      <Panel>
+      <Panel className="rounded-[var(--radius-md,4px)]">
         <PanelHeader title="Instance backup" />
         <PanelBody className="flex flex-col items-start gap-2">
           <p className="text-sm text-muted-foreground">
@@ -72,7 +98,7 @@ export function InstanceOverview() {
           {/* A zip, not JSON: a plain same-origin link carries the session
               cookie and streams straight to disk, where apiFetch would try to
               parse it. */}
-          <Button asChild size="sm" variant="outline">
+          <Button asChild size="sm" variant="outline" className="rounded-[var(--radius-md,4px)]">
             <a href={INSTANCE_BACKUP_URL} download>
               Download backup
             </a>

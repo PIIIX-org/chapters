@@ -65,7 +65,7 @@ export function CollabStatusLine({ status, synced, syncedAt }: CollabStatusLineP
         </Pill>
         {synced && syncedAt && (
           <time
-            className="font-mono text-xs text-muted-foreground"
+            className="font-mono text-xs tabular-nums text-muted-foreground"
             dateTime={syncedAt.toISOString()}
           >
             {syncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -82,7 +82,7 @@ export function CollabStatusLine({ status, synced, syncedAt }: CollabStatusLineP
         {whisper.label}
       </Pill>
       {whisper.detail && (
-        <span className="truncate text-xs text-muted-foreground">{whisper.detail}</span>
+        <span className="truncate font-mono text-xs tabular-nums text-muted-foreground">{whisper.detail}</span>
       )}
     </span>
   )

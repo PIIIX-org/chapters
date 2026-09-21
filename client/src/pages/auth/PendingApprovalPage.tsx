@@ -12,7 +12,7 @@ export function PendingApprovalPage() {
       step="Admin approval"
     >
       <div className="flex flex-col gap-4">
-        <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+        <div className="rounded-[var(--radius-md,4px)] border border-primary/20 bg-primary/5 p-4">
           <h3 className="font-semibold text-foreground">Email confirmed.</h3>
           <p className="mt-1 text-sm text-muted-foreground">
             Welcome to Chapters{email ? `, ${email}` : ''}! Your account has been created and your email is verified.
@@ -25,7 +25,7 @@ export function PendingApprovalPage() {
             An administrator on this instance has to approve your account before you can sign in.
             We&rsquo;ll email you the moment they do.
           </p>
-          <p className="rounded-md bg-muted/60 p-3 text-xs text-foreground/90 border border-border">
+          <p className="rounded-[var(--radius-sm,2px)] bg-muted/60 p-3 text-xs text-foreground/90 border border-border">
             Wait for approval or contact your manager to speed up the process.
           </p>
         </div>

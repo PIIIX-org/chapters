@@ -47,13 +47,13 @@ export function ColorModeToggle() {
 
   return (
     <div className="flex flex-col items-start gap-1.5">
-      <fieldset className="flex gap-0.5 rounded-md border border-border bg-popover/90 p-0.5">
+      <fieldset className="flex gap-0.5 rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-xs p-0.5">
         <legend className="sr-only">Colour mode</legend>
         {OPTIONS.map((opt) => (
           <label
             key={opt.value}
             className={cn(
-              'flex h-6 cursor-pointer select-none items-center rounded-sm px-2 font-mono text-[11px] font-medium uppercase tracking-[0.04em] transition-colors duration-100 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/50',
+              'flex h-6 cursor-pointer select-none items-center rounded-[var(--radius-sm,2px)] px-2 font-mono text-[11px] font-medium uppercase tracking-[0.04em] transition-colors duration-100 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/50',
               colorMode === opt.value
                 ? 'bg-muted text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
@@ -73,7 +73,7 @@ export function ColorModeToggle() {
       </fieldset>
       {/* Legend for the active mode only — never both at once, matching the
           "never layered" rule for the modes themselves. */}
-      <ul className="flex items-center gap-1.5 rounded-md border border-border bg-popover/90 px-2 py-1.5">
+      <ul className="flex items-center gap-1.5 rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-xs px-2 py-1.5">
         {hues.map((hue, i) => (
           <li key={hue} className="flex items-center" title={`${LEGEND_NOUN[colorMode]} ${i + 1}`}>
             <span

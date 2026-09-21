@@ -41,9 +41,10 @@ export function RequestPasswordResetPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
+              className="rounded-[var(--radius-sm,2px)]"
             />
           </div>
-          <Button type="submit" disabled={submitting}>
+          <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
             Send reset link
           </Button>
           <p className="text-center text-sm text-muted-foreground">

@@ -25,6 +25,7 @@ function PanelToggle({ kind }: { kind: PanelKind }) {
           aria-label={`Toggle ${label.toLowerCase()}`}
           aria-pressed={panel.open}
           onClick={() => shell.togglePanel(kind)}
+          className="rounded-[var(--radius-md)] focus-visible:ring-2 focus-visible:ring-ring/40"
         >
           <Icon aria-hidden="true" />
         </Button>
@@ -40,7 +41,7 @@ function PanelToggle({ kind }: { kind: PanelKind }) {
 export function TopBar() {
   const shell = useShell()
   return (
-    <header className="flex sm:grid h-[var(--shell-topbar)] sm:grid-cols-[minmax(0,1fr)_minmax(0,520px)_minmax(0,1fr)] items-center justify-between gap-2 sm:gap-3 border-b border-border bg-secondary px-2.5 sm:px-3 overflow-hidden">
+    <header className="flex sm:grid h-[var(--shell-topbar,44px)] sm:grid-cols-[minmax(0,1fr)_minmax(0,520px)_minmax(0,1fr)] items-center justify-between gap-2 sm:gap-3 border-b border-border bg-secondary px-2.5 sm:px-3 overflow-hidden">
       <div className="min-w-0 max-w-[110px] sm:max-w-none shrink-0 sm:shrink">
         <Breadcrumb items={shell.breadcrumb} />
       </div>

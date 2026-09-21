@@ -34,7 +34,7 @@ export function ApprovalQueue() {
   const approve = useApproveUser()
 
   return (
-    <Panel>
+    <Panel className="rounded-[var(--radius-md,4px)]">
       <PanelHeader title="Approvals" />
       {pending.isPending ? (
         <PanelState status="loading" compact message="Loading the queue…" />
@@ -53,7 +53,7 @@ export function ApprovalQueue() {
               <FormError message={approve.error.message} />
             </div>
           )}
-          <Table>
+          <Table className="rounded-[var(--radius-md,4px)]">
             <caption className="sr-only">
               Accounts waiting for approval on this instance
             </caption>
@@ -84,16 +84,16 @@ export function ApprovalQueue() {
                       </p>
                     )}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top font-mono text-xs text-muted-foreground">
+                  <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground">
                     {formatDate(user.createdAt)}
                   </TableCell>
                   <TableCell className="py-2.5 align-top">
                     {user.emailVerifiedAt ? (
-                      <Pill tone="live" dot>
+                      <Pill tone="live" dot className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">
                         Verified
                       </Pill>
                     ) : (
-                      <Pill tone="idle" dot>
+                      <Pill tone="idle" dot className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">
                         Unverified
                       </Pill>
                     )}
@@ -102,6 +102,7 @@ export function ApprovalQueue() {
                     <Button
                       type="button"
                       size="xs"
+                      className="rounded-[var(--radius-sm,2px)]"
                       aria-label={`Approve ${user.email}`}
                       disabled={approve.isPending}
                       onClick={() => approve.mutate(user.id)}

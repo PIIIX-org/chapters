@@ -16,6 +16,7 @@ import type { CommunityNode } from '../../api/graph.js'
 import { buttonVariants } from '../ui/button-variants.js'
 import { Eyebrow } from '../ui/eyebrow.js'
 import { cn } from '../../lib/utils.js'
+import { communityHue } from './draw.js'
 
 const lastActiveFormatter = new Intl.DateTimeFormat('en-GB', {
   day: 'numeric',
@@ -65,6 +66,8 @@ export function GraphOutline({ communities, expandedCommunity, onExpand, onColla
   // Ranked by size, largest first (spec: "communities ranked by size").
   const ranked = [...communities].sort((a, b) => b.size - a.size)
 
+  const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+
   return (
     <div className="flex h-full flex-col gap-2 overflow-y-auto p-3">
       <Eyebrow as="h2">Communities</Eyebrow>
@@ -77,15 +80,24 @@ export function GraphOutline({ communities, expandedCommunity, onExpand, onColla
                 else buttonRefs.current.delete(c.community)
               }}
               type="button"
+              aria-label={communityLabel(c)}
               aria-expanded={expandedCommunity === c.community}
               onClick={() => (expandedCommunity === c.community ? onCollapse() : onExpand(c.community))}
               className={cn(
                 buttonVariants({ variant: 'ghost' }),
-                'h-auto w-full justify-start whitespace-normal px-3 py-2 text-left',
-                expandedCommunity === c.community && 'bg-muted',
+                'h-7 sm:h-8 w-full justify-start gap-2 px-2 text-left rounded-[var(--radius-sm,2px)] transition-colors duration-100',
+                expandedCommunity === c.community ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
               )}
             >
-              {communityLabel(c)}
+              <span
+                aria-hidden="true"
+                className="size-2 shrink-0 rounded-full"
+                style={{ backgroundColor: communityHue(c.community, isDark) }}
+              />
+              <span className="truncate font-medium text-[13px] text-foreground">Community {c.community}</span>
+              <span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">
+                {countWithNoun(c.size, 'member')}
+              </span>
             </button>
           </li>
         ))}

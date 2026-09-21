@@ -21,7 +21,7 @@ export function TagInput({ value, onChange, disabled }: TagInputProps) {
       {value.map((tag) => (
         <span
           key={tag}
-          className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs"
+          className="inline-flex items-center gap-1 rounded-[var(--radius-sm,2px)] border border-border/50 bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground"
         >
           {tag}
           {!disabled && (
@@ -29,7 +29,7 @@ export function TagInput({ value, onChange, disabled }: TagInputProps) {
               type="button"
               onClick={() => onChange(value.filter((t) => t !== tag))}
               aria-label={`Remove ${tag}`}
-              className="text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40 rounded-[var(--radius-sm,2px)]"
             >
               ×
             </button>
@@ -48,7 +48,7 @@ export function TagInput({ value, onChange, disabled }: TagInputProps) {
           }}
           placeholder="Add tag…"
           aria-label="Add tag"
-          className="h-6 w-28 flex-1"
+          className="h-6 w-28 flex-1 font-mono text-xs rounded-[var(--radius-sm,2px)]"
         />
       )}
     </div>

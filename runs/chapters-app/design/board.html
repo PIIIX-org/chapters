@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapters — Gate A Review Board</title>
+<style>
+  :root {
+    --font-sans: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --bg-page: #080a0f;
+    --card-bg: #0f131a;
+    --border-color: #1e2533;
+    --text-primary: #e6ebf5;
+    --text-secondary: #8895ab;
+    --text-faint: #4e5a70;
+    --brand-blue: #5b8def;
+    --brand-teal: #3fb8ae;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-page);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.5;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    height: 52px;
+    border-bottom: 1px solid var(--border-color);
+    background: #0b0e14;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    flex-shrink: 0;
+  }
+  .brand-lockup {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .logo-mark {
+    width: 28px;
+    height: 28px;
+    background: #e6ebf5;
+    color: #080a0f;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    letter-spacing: -0.02em;
+  }
+  .title-group h1 {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .title-group span {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+  }
+  .nav-group {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .pill-selector {
+    display: flex;
+    background: #141824;
+    padding: 3px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+  }
+  .pill-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .pill-btn:hover {
+    color: var(--text-primary);
+  }
+  .pill-btn.active {
+    background: var(--brand-blue);
+    color: #080a0f;
+    font-weight: 600;
+  }
+  .theme-toggle {
+    background: #141824;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .theme-toggle:hover { color: var(--text-primary); }
+
+  .layout-body {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    height: calc(100vh - 52px);
+    overflow: hidden;
+  }
+  .sidebar-spec {
+    border-right: 1px solid var(--border-color);
+    background: #090c12;
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .spec-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 16px;
+  }
+  .spec-card h2 {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--brand-teal);
+    margin-bottom: 8px;
+  }
+  .collision-box {
+    font-size: 13px;
+    font-style: italic;
+    color: var(--text-primary);
+    line-height: 1.45;
+  }
+  .palette-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .swatch {
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+  }
+  .contrast-badge {
+    display: inline-block;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 9px;
+    margin-top: 4px;
+    background: rgba(0,0,0,0.4);
+  }
+  .surface-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+  }
+  .surface-tab {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: #111520;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.15s ease;
+  }
+  .surface-tab:hover {
+    color: var(--text-primary);
+    background: #161c2b;
+  }
+  .surface-tab.active {
+    border-color: var(--brand-blue);
+    background: #161d2d;
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .kbd-key {
+    background: rgba(255,255,255,0.08);
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+  }
+
+  .canvas-stage {
+    background: #040508;
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 30px;
+    position: relative;
+  }
+  .frame-wrapper {
+    width: 1280px;
+    height: 800px;
+    background: #0b0e14;
+    border: 1px solid #232a37;
+    border-radius: 8px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+  .frame-viewport-tag {
+    position: absolute;
+    top: -24px;
+    left: 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-faint);
+  }
+
+  /* RENDERED CLIENT CHROME INSIDE FRAME */
+  .mock-shell {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    grid-template-columns: 52px 1fr;
+    grid-template-rows: 44px 1fr;
+    background: #070a0f;
+    color: #e2e8f4;
+  }
+  .mock-rail {
+    grid-row: 1 / -1;
+    background: #0a0d14;
+    border-right: 1px solid #1c2433;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 0;
+    gap: 12px;
+  }
+  .mock-rail-logo {
+    width: 32px;
+    height: 32px;
+    background: #e2e8f4;
+    color: #070a0f;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    margin-bottom: 8px;
+  }
+  .mock-rail-icon {
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #8b9bb4;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.15s;
+  }
+  .mock-rail-icon:hover { background: #161d2b; color: #e2e8f4; }
+  .mock-rail-icon.active {
+    background: #161d2b;
+    color: var(--brand-blue);
+    border-left: 2px solid var(--brand-blue);
+    border-radius: 0 6px 6px 0;
+  }
+
+  .mock-topbar {
+    grid-column: 2;
+    background: #0a0d14;
+    border-bottom: 1px solid #1c2433;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+  }
+  .mock-breadcrumbs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: #8b9bb4;
+  }
+  .mock-breadcrumbs strong { color: #e2e8f4; }
+  .mock-omni-input {
+    background: #121722;
+    border: 1px solid #1c2433;
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: #8b9bb4;
+    width: 360px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .mock-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #0f1c19;
+    border: 1px solid #1a423a;
+    color: #3fb8ae;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #3fb8ae;
+    box-shadow: 0 0 6px #3fb8ae;
+  }
+
+  .mock-workspace {
+    grid-column: 2;
+    display: grid;
+    grid-template-columns: 240px 1fr 300px;
+    overflow: hidden;
+    position: relative;
+  }
+  .mock-sidebar-tree {
+    background: #090c12;
+    border-right: 1px solid #1c2433;
+    padding: 14px;
+    overflow-y: auto;
+  }
+  .tree-section-header {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #526077;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+  .tree-node {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #8b9bb4;
+    cursor: pointer;
+    font-family: var(--font-mono);
+  }
+  .tree-node:hover { background: #131924; color: #e2e8f4; }
+  .tree-node.active { background: #161d2b; color: #5b8def; font-weight: 500; }
+
+  .mock-center-view {
+    background: #070a0f;
+    overflow-y: auto;
+    position: relative;
+  }
+  .mock-inspector {
+    background: #090c12;
+    border-left: 1px solid #1c2433;
+    padding: 16px;
+    overflow-y: auto;
+  }
+
+  /* SURFACE SPECIFIC CONTENT */
+  /* 01-GRAPH */
+  .graph-canvas-mock {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    background: radial-gradient(circle at center, #0f1522 0%, #070a0f 70%);
+    overflow: hidden;
+  }
+  .graph-hud-controls {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(15, 20, 31, 0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid #1c2433;
+    border-radius: 24px;
+    padding: 4px 14px;
+    display: flex;
+    gap: 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #8b9bb4;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  .graph-hud-item { cursor: pointer; }
+  .graph-hud-item.active { color: #5b8def; font-weight: 600; }
+  .node-bubble {
+    position: absolute;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 12px rgba(0,0,0,0.5);
+    cursor: pointer;
+  }
+  .node-label {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--font-sans);
+    font-size: 10px;
+    white-space: nowrap;
+    color: #e2e8f4;
+    margin-top: 4px;
+    text-shadow: 0 1px 4px #070a0f;
+  }
+
+  /* 02-NOTE */
+  .note-editor-container {
+    max-width: 720px;
+    margin: 40px auto;
+    padding: 0 30px;
+  }
+  .yaml-frontmatter {
+    background: #0d121b;
+    border: 1px solid #1c2433;
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: #8b9bb4;
+    margin-bottom: 28px;
+    line-height: 1.6;
+  }
+  .yaml-key { color: #5b8def; }
+  .yaml-tag { background: #161d2b; color: #3fb8ae; padding: 1px 6px; border-radius: 3px; margin-right: 4px; }
+  .note-h1 {
+    font-size: 26px;
+    font-weight: 600;
+    color: #e2e8f4;
+    margin-bottom: 16px;
+    letter-spacing: -0.02em;
+  }
+  .note-p {
+    font-size: 14px;
+    line-height: 1.75;
+    color: #cdd6e5;
+    margin-bottom: 16px;
+  }
+  .wikilink {
+    color: #5b8def;
+    text-decoration: none;
+    border-bottom: 1.5px solid rgba(91, 141, 239, 0.4);
+    padding-bottom: 1px;
+    cursor: pointer;
+  }
+  .wikilink:hover {
+    border-bottom-color: #5b8def;
+  }
+
+  /* 03-REPO */
+  .repo-code-container {
+    padding: 24px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.65;
+  }
+  .code-line { display: flex; gap: 16px; }
+  .code-num { width: 32px; text-align: right; color: #526077; user-select: none; }
+  .code-text { flex: 1; color: #d4ddee; }
+  .kw { color: #3fb8ae; font-weight: 500; }
+  .fn { color: #5b8def; }
+  .str { color: #6fbf8a; }
+  .cmt { color: #65748b; font-style: italic; }
+
+  /* 04-COMMAND */
+  .modal-scrim {
+    position: absolute;
+    inset: 0;
+    background: rgba(7, 10, 15, 0.75);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .command-palette {
+    width: 580px;
+    background: #0f141f;
+    border: 1px solid #1c2433;
+    border-radius: 8px;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.85);
+    overflow: hidden;
+  }
+  .palette-search {
+    padding: 14px 18px;
+    border-bottom: 1px solid #1c2433;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .palette-input {
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 15px;
+    font-family: var(--font-sans);
+    color: #e2e8f4;
+    width: 100%;
+  }
+  .palette-list {
+    padding: 8px 0;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .palette-category {
+    padding: 6px 18px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #526077;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .palette-row {
+    padding: 8px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+  }
+  .palette-row:hover, .palette-row.active {
+    background: #161d2b;
+  }
+  .palette-row-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .row-title { font-size: 13px; color: #e2e8f4; font-weight: 500; }
+  .row-meta { font-size: 11px; color: #8b9bb4; font-family: var(--font-mono); }
+  .palette-footer {
+    padding: 8px 18px;
+    border-top: 1px solid #1c2433;
+    background: #090c12;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #526077;
+  }
+
+  /* SCRIPTORIUM THEME OVERRIDES */
+  .scriptorium-mode {
+    --bg-page: #101216;
+    --card-bg: #171a20;
+    --border-color: #2c3038;
+    --text-primary: #edebe8;
+    --text-secondary: #a8a39d;
+    --brand-blue: #7c8fd9;
+    --brand-teal: #d4a359;
+  }
+  .scriptorium-mode .mock-shell { background: #101216; }
+  .scriptorium-mode .mock-rail, .scriptorium-mode .mock-topbar, .scriptorium-mode .mock-sidebar-tree, .scriptorium-mode .mock-inspector {
+    background: #13161c;
+    border-color: #2c3038;
+  }
+  .scriptorium-mode .mock-center-view { background: #101216; }
+
+  /* COCKPIT THEME OVERRIDES */
+  .cockpit-mode {
+    --bg-page: #050507;
+    --card-bg: #0e1015;
+    --border-color: #1f2430;
+    --text-primary: #f0f3f8;
+    --text-secondary: #788296;
+    --brand-blue: #38c77f;
+    --brand-teal: #e6b455;
+  }
+  .cockpit-mode .mock-shell { background: #050507; font-family: var(--font-mono); }
+  .cockpit-mode .mock-rail, .cockpit-mode .mock-topbar, .cockpit-mode .mock-sidebar-tree, .cockpit-mode .mock-inspector {
+    background: #08090d;
+    border-color: #1f2430;
+  }
+  .cockpit-mode .mock-center-view { background: #050507; }
+</style>
+</head>
+<body id="board-root">
+
+  <header>
+    <div class="brand-lockup">
+      <div class="logo-mark">Ch</div>
+      <div class="title-group">
+        <h1>Chapters — Gate A Direction Board</h1>
+        <span>tool-shaped / 1440×900 baseline</span>
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="pill-selector">
+        <button class="pill-btn active" onclick="selectConcept('observatory')">observatory</button>
+        <button class="pill-btn" onclick="selectConcept('scriptorium')">scriptorium</button>
+        <button class="pill-btn" onclick="selectConcept('cockpit')">cockpit</button>
+      </div>
+
+      <button class="theme-toggle" onclick="toggleLightDark()">Mode: <span id="mode-label">Dark</span></button>
+    </div>
+  </header>
+
+  <div class="layout-body">
+    <!-- SPEC SIDEBAR -->
+    <aside class="sidebar-spec">
+      <div class="spec-card">
+        <h2>Concept Direction</h2>
+        <div id="concept-name" style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">Observatory</div>
+        <div id="concept-subtitle" style="font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary); margin-bottom: 12px;">Optical Astronomic Cartography</div>
+        <div id="concept-collision" class="collision-box">"High-precision scientific telemetry colliding with minimalist Swiss typographic discipline."</div>
+      </div>
+
+      <div class="spec-card">
+        <h2>Surfaces Flow</h2>
+        <div class="surface-nav">
+          <button class="surface-tab active" onclick="selectSurface('01-graph')">
+            <span>01 Knowledge Graph</span>
+            <span class="kbd-key">1</span>
+          </button>
+          <button class="surface-tab" onclick="selectSurface('02-note')">
+            <span>02 Note Workspace</span>
+            <span class="kbd-key">2</span>
+          </button>
+          <button class="surface-tab" onclick="selectSurface('03-repo')">
+            <span>03 Codebase AST</span>
+            <span class="kbd-key">3</span>
+          </button>
+          <button class="surface-tab" onclick="selectSurface('04-command')">
+            <span>04 Command Hub</span>
+            <span class="kbd-key">4</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="spec-card">
+        <h2>Palette & Contrast Pairs</h2>
+        <div class="palette-grid">
+          <div class="swatch" style="background: #5b8def; color: #080a0f;">
+            <strong>Human Primary</strong>
+            <div>#5B8DEF</div>
+            <span class="contrast-badge">5.6:1 AAA</span>
+          </div>
+          <div class="swatch" style="background: #3fb8ae; color: #080a0f;">
+            <strong>AI/MCP Accent</strong>
+            <div>#3FB8AE</div>
+            <span class="contrast-badge">6.8:1 AAA</span>
+          </div>
+          <div class="swatch" style="background: #0f141f; color: #e2e8f4;">
+            <strong>Card Elevation</strong>
+            <div>#0F141F</div>
+            <span class="contrast-badge">14.1:1 AAA</span>
+          </div>
+          <div class="swatch" style="background: #1c2433; color: #8b9bb4;">
+            <strong>Border Matrix</strong>
+            <div>#1C2433</div>
+            <span class="contrast-badge">4.8:1 AA</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="spec-card">
+        <h2>Typography Tokens</h2>
+        <div style="font-family: var(--font-mono); font-size: 11px; line-height: 1.6; color: var(--text-secondary);">
+          <div>UI Sans: <strong>Geist Variable</strong></div>
+          <div>Code/Mono: <strong>Geist Mono Variable</strong></div>
+          <div style="margin-top: 6px; color: var(--brand-teal);">✓ Tabular figures declared</div>
+          <div>✓ Self-hosted, zero CDN</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- LIVE FRAME STAGE -->
+    <main class="canvas-stage">
+      <div class="frame-wrapper">
+        <span class="frame-viewport-tag">Viewport: 1440 × 900 (Scaled 88%)</span>
+
+        <div class="mock-shell">
+          <!-- SHELL RAIL -->
+          <nav class="mock-rail">
+            <div class="mock-rail-logo">Ch</div>
+            <div class="mock-rail-icon active" title="Knowledge Graph">⊙</div>
+            <div class="mock-rail-icon" title="Vaults">◫</div>
+            <div class="mock-rail-icon" title="Repositories">⑂</div>
+            <div class="mock-rail-icon" title="Team">👥</div>
+            <div class="mock-rail-icon" style="margin-top: auto;" title="Settings">⚙</div>
+          </nav>
+
+          <!-- SHELL TOPBAR -->
+          <header class="mock-topbar">
+            <div class="mock-breadcrumbs">
+              <span>chapters</span>
+              <span>/</span>
+              <strong id="breadcrumb-active">knowledge-graph</strong>
+            </div>
+
+            <div class="mock-omni-input">
+              <span>Search notes, code symbols, or run MCP tools...</span>
+              <span class="kbd-key">⌘K</span>
+            </div>
+
+            <div class="mock-topbar-actions">
+              <div class="status-pill">
+                <span class="status-dot"></span>
+                <span>MCP Agent Active</span>
+              </div>
+              <div style="width: 26px; height: 26px; border-radius: 50%; background: #5b8def; color: #070a0f; font-weight: bold; display: flex; align-items: center; justify-content: center; font-size: 11px;">U</div>
+            </div>
+          </header>
+
+          <!-- WORKSPACE CHROME & CENTER VIEW -->
+          <div class="mock-workspace">
+            <!-- CONTEXT TREE -->
+            <aside class="mock-sidebar-tree">
+              <div class="tree-section-header">Vault Notes (OKF)</div>
+              <div class="tree-node active">📄 knowledge-graph.md</div>
+              <div class="tree-node">📄 collaborative-crdt.md</div>
+              <div class="tree-node">📄 repo-ingestion.md</div>
+              <div class="tree-node">📄 mcp-architecture.md</div>
+
+              <div class="tree-section-header" style="margin-top: 20px;">Repositories</div>
+              <div class="tree-node">📦 PIIIX-org/chapters</div>
+              <div class="tree-node">📦 Alkharazmi/MetalV2</div>
+            </aside>
+
+            <!-- CENTER MAIN CONTENT (DYNAMIC PER SURFACE) -->
+            <main class="mock-center-view" id="center-surface-view">
+              <!-- Default Surface: 01-graph -->
+              <div class="graph-canvas-mock">
+                <!-- Node: knowledge-graph -->
+                <div class="node-bubble" style="top: 38%; left: 45%; width: 38px; height: 38px; background: #5b8def;">
+                  <span style="font-size: 16px; color: #070a0f;">✦</span>
+                  <span class="node-label">knowledge-graph.md</span>
+                </div>
+                <!-- Node: assemble.ts -->
+                <div class="node-bubble" style="top: 25%; left: 62%; width: 28px; height: 28px; background: #1c2433; border: 2px solid #5b8def;">
+                  <span class="node-label">assemble.ts (code)</span>
+                </div>
+                <!-- Node: mcp-server -->
+                <div class="node-bubble" style="top: 58%; left: 32%; width: 32px; height: 32px; background: #3fb8ae;">
+                  <span style="font-size: 14px; color: #070a0f;">⚙</span>
+                  <span class="node-label">mcp/server.ts</span>
+                </div>
+                <!-- Node: crdt.ts -->
+                <div class="node-bubble" style="top: 60%; left: 55%; width: 26px; height: 26px; background: #1c2433; border: 2px solid #8b9bb4;">
+                  <span class="node-label">crdt-sync.ts</span>
+                </div>
+
+                <!-- SVG Connecting Edges -->
+                <svg style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;">
+                  <line x1="46%" y1="40%" x2="63%" y2="27%" stroke="#5b8def" stroke-width="1.5" stroke-opacity="0.6"/>
+                  <line x1="46%" y1="40%" x2="34%" y2="60%" stroke="#3fb8ae" stroke-width="1.5" stroke-dasharray="4 3" stroke-opacity="0.7"/>
+                  <line x1="46%" y1="40%" x2="56%" y2="62%" stroke="#5b8def" stroke-width="1.2" stroke-opacity="0.4"/>
+                </svg>
+
+                <div class="graph-hud-controls">
+                  <span class="graph-hud-item active">All Nodes</span>
+                  <span class="graph-hud-item">Notes Only</span>
+                  <span class="graph-hud-item">Code Nodes</span>
+                  <span class="graph-hud-item" style="color: #3fb8ae;">Inferred (ONNX)</span>
+                  <span style="opacity: 0.3;">|</span>
+                  <span class="graph-hud-item">Physics settled (12 ticks)</span>
+                </div>
+              </div>
+            </main>
+
+            <!-- INSPECTOR PANEL -->
+            <aside class="mock-inspector">
+              <div class="tree-section-header">Node Telemetry</div>
+              <div style="font-size: 14px; font-weight: 600; color: #e2e8f4; margin-bottom: 4px;">knowledge-graph.md</div>
+              <div style="font-family: var(--font-mono); font-size: 11px; color: var(--brand-teal); margin-bottom: 16px;">Community: Core Architecture</div>
+
+              <div class="tree-section-header">Incoming Wikilinks (3)</div>
+              <div style="font-family: var(--font-mono); font-size: 12px; color: #8b9bb4; line-height: 1.8;">
+                <div>← [[project/chapters]]</div>
+                <div>← [[codebase/chapters]]</div>
+                <div>← [[specs/graph-engine]]</div>
+              </div>
+
+              <div class="tree-section-header" style="margin-top: 20px;">Inferred Neighbors (Top 2)</div>
+              <div style="font-family: var(--font-mono); font-size: 11px; color: #3fb8ae; line-height: 1.8;">
+                <div>≈ assemble.ts <span style="color: #526077;">(0.92 sim)</span></div>
+                <div>≈ search.ts <span style="color: #526077;">(0.87 sim)</span></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script>
+  const concepts = {
+    observatory: {
+      name: "Observatory",
+      subtitle: "Optical Astronomic Cartography",
+      collision: '"High-precision scientific telemetry colliding with minimalist Swiss typographic discipline."',
+      bodyClass: ""
+    },
+    scriptorium: {
+      name: "Scriptorium",
+      subtitle: "Modern Archival Codex",
+      collision: '"Rare-book archival folio colliding with a live distributed compiler interface."',
+      bodyClass: "scriptorium-mode"
+    },
+    cockpit: {
+      name: "Cockpit",
+      subtitle: "Mission Telemetry Control Deck",
+      collision: '"Real-time mission telemetry bridge colliding with zero-distraction engineer workstation."',
+      bodyClass: "cockpit-mode"
+    }
+  };
+
+  let activeConcept = 'observatory';
+  let activeSurface = '01-graph';
+  let isLight = false;
+
+  function selectConcept(id) {
+    activeConcept = id;
+    document.querySelectorAll('.pill-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.innerText.toLowerCase() === id);
+    });
+    const c = concepts[id];
+    document.getElementById('concept-name').innerText = c.name;
+    document.getElementById('concept-subtitle').innerText = c.subtitle;
+    document.getElementById('concept-collision').innerText = c.collision;
+    document.getElementById('board-root').className = c.bodyClass;
+    renderSurface();
+  }
+
+  function selectSurface(sId) {
+    activeSurface = sId;
+    document.querySelectorAll('.surface-tab').forEach(tab => {
+      tab.classList.toggle('active', tab.onclick.toString().includes(sId));
+    });
+    renderSurface();
+  }
+
+  function toggleLightDark() {
+    isLight = !isLight;
+    document.getElementById('mode-label').innerText = isLight ? 'Light' : 'Dark';
+    if (isLight) {
+      document.querySelector('.frame-wrapper').style.background = '#f5f6f8';
+      document.querySelector('.frame-wrapper').style.color = '#161a22';
+      document.querySelector('.mock-shell').style.background = '#f5f6f8';
+    } else {
+      document.querySelector('.frame-wrapper').style.background = '#0b0e14';
+      document.querySelector('.frame-wrapper').style.color = '#e2e8f4';
+      document.querySelector('.mock-shell').style.background = '#070a0f';
+    }
+  }
+
+  function renderSurface() {
+    const container = document.getElementById('center-surface-view');
+    const bc = document.getElementById('breadcrumb-active');
+
+    if (activeSurface === '01-graph') {
+      bc.innerText = 'knowledge-graph';
+      container.innerHTML = `
+        <div class="graph-canvas-mock">
+          <div class="node-bubble" style="top: 38%; left: 45%; width: 38px; height: 38px; background: var(--brand-blue);">
+            <span style="font-size: 16px; color: #070a0f;">✦</span>
+            <span class="node-label">knowledge-graph.md</span>
+          </div>
+          <div class="node-bubble" style="top: 25%; left: 62%; width: 28px; height: 28px; background: #1c2433; border: 2px solid var(--brand-blue);">
+            <span class="node-label">assemble.ts (code)</span>
+          </div>
+          <div class="node-bubble" style="top: 58%; left: 32%; width: 32px; height: 32px; background: var(--brand-teal);">
+            <span style="font-size: 14px; color: #070a0f;">⚙</span>
+            <span class="node-label">mcp/server.ts</span>
+          </div>
+          <div class="node-bubble" style="top: 60%; left: 55%; width: 26px; height: 26px; background: #1c2433; border: 2px solid #8b9bb4;">
+            <span class="node-label">crdt-sync.ts</span>
+          </div>
+          <svg style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;">
+            <line x1="46%" y1="40%" x2="63%" y2="27%" stroke="var(--brand-blue)" stroke-width="1.5" stroke-opacity="0.6"/>
+            <line x1="46%" y1="40%" x2="34%" y2="60%" stroke="var(--brand-teal)" stroke-width="1.5" stroke-dasharray="4 3" stroke-opacity="0.7"/>
+            <line x1="46%" y1="40%" x2="56%" y2="62%" stroke="var(--brand-blue)" stroke-width="1.2" stroke-opacity="0.4"/>
+          </svg>
+          <div class="graph-hud-controls">
+            <span class="graph-hud-item active">All Nodes</span>
+            <span class="graph-hud-item">Notes Only</span>
+            <span class="graph-hud-item">Code Nodes</span>
+            <span class="graph-hud-item" style="color: var(--brand-teal);">Inferred (ONNX)</span>
+            <span style="opacity: 0.3;">|</span>
+            <span class="graph-hud-item">Physics settled (12 ticks)</span>
+          </div>
+        </div>
+      `;
+    } else if (activeSurface === '02-note') {
+      bc.innerText = 'notes / knowledge-graph.md';
+      container.innerHTML = `
+        <div class="note-editor-container">
+          <div class="yaml-frontmatter">
+            <div><span class="yaml-key">title:</span> "Knowledge Graph Architecture"</div>
+            <div><span class="yaml-key">type:</span> concept</div>
+            <div><span class="yaml-key">tags:</span> <span class="yaml-tag">graph</span><span class="yaml-tag">okf</span><span class="yaml-tag">mcp</span></div>
+            <div><span class="yaml-key">author:</span> Sarah L. (AI Reviewer: Antigravity)</div>
+          </div>
+          <h1 class="note-h1">Knowledge Graph Architecture</h1>
+          <p class="note-p">Chapters combines plain-text OKF notes with an AI-navigable knowledge graph. Bidirectional links like <a class="wikilink">[[codebase/chapters]]</a> establish explicit structural relationships across the team archive.</p>
+          <p class="note-p">Simultaneously, local ONNX embeddings cluster concepts in high-dimensional vector space without transmitting private intellectual property outside your self-hosted infrastructure. Refer to <a class="wikilink">[[repo:chapters/server/src/graph/assemble.ts]]</a> for the assembly pipeline.</p>
+        </div>
+      `;
+    } else if (activeSurface === '03-repo') {
+      bc.innerText = 'chapters / server / src / graph / assemble.ts';
+      container.innerHTML = `
+        <div class="repo-code-container">
+          <div class="code-line"><span class="code-num">1</span><span class="code-text"><span class="cmt">// Chapters AST Symbol Extraction & Graph Assembly</span></span></div>
+          <div class="code-line"><span class="code-num">2</span><span class="code-text"><span class="kw">import</span> { extractWikilinks } <span class="kw">from</span> <span class="str">'../notes/okf.js'</span>;</span></div>
+          <div class="code-line"><span class="code-num">3</span><span class="code-text"><span class="kw">import</span> { queryVectorStore } <span class="kw">from</span> <span class="str">'../search/embeddings.js'</span>;</span></div>
+          <div class="code-line"><span class="code-num">4</span><span class="code-text"></span></div>
+          <div class="code-line"><span class="code-num">5</span><span class="code-text"><span class="kw">export async function</span> <span class="fn">assembleGraph</span>(vaultId: <span class="kw">string</span>, repoIds: <span class="kw">string</span>[]) {</span></div>
+          <div class="code-line"><span class="code-num">6</span><span class="code-text">&nbsp;&nbsp;<span class="kw">const</span> extractedEdges = <span class="kw">await</span> <span class="fn">extractWikilinks</span>(vaultId);</span></div>
+          <div class="code-line"><span class="code-num">7</span><span class="code-text">&nbsp;&nbsp;<span class="kw">const</span> semanticNeighbors = <span class="kw">await</span> <span class="fn">queryVectorStore</span>(vaultId, { topK: 5 });</span></div>
+          <div class="code-line"><span class="code-num">8</span><span class="code-text">&nbsp;&nbsp;<span class="kw">return</span> <span class="fn">clusterLouvain</span>([...extractedEdges, ...semanticNeighbors]);</span></div>
+          <div class="code-line"><span class="code-num">9</span><span class="code-text">}</span></div>
+        </div>
+      `;
+    } else if (activeSurface === '04-command') {
+      bc.innerText = 'omni-command';
+      container.innerHTML = `
+        <div class="modal-scrim">
+          <div class="command-palette">
+            <div class="palette-search">
+              <span style="color: var(--brand-blue); font-weight: bold;">⌘</span>
+              <input class="palette-input" type="text" value="assemble" autofocus>
+              <span class="kbd-key">ESC</span>
+            </div>
+            <div class="palette-list">
+              <div class="palette-category">Code Repositories</div>
+              <div class="palette-row active">
+                <div class="palette-row-left">
+                  <span style="color: #3fb8ae;">⚙</span>
+                  <div>
+                    <div class="row-title">assembleGraph()</div>
+                    <div class="row-meta">server/src/graph/assemble.ts • 14 callers</div>
+                  </div>
+                </div>
+                <span class="kbd-key">↵</span>
+              </div>
+              <div class="palette-category">Vault Notes</div>
+              <div class="palette-row">
+                <div class="palette-row-left">
+                  <span style="color: #5b8def;">📄</span>
+                  <div>
+                    <div class="row-title">concepts/knowledge-graph.md</div>
+                    <div class="row-meta">Vault: Chapters • Mentions graph assembly</div>
+                  </div>
+                </div>
+              </div>
+              <div class="palette-category">MCP Tools</div>
+              <div class="palette-row">
+                <div class="palette-row-left">
+                  <span style="color: #f07a5a;">⚡</span>
+                  <div>
+                    <div class="row-title">graph --aggregate</div>
+                    <div class="row-meta">Compute high-level Louvain community clusters</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="palette-footer">
+              <span>↑↓ to navigate • ↵ to select • TAB filter category</span>
+              <span>483 files indexed</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  // Keyboard shortcut switching: 1..4 for surfaces
+  window.addEventListener('keydown', (e) => {
+    if (e.key === '1') selectSurface('01-graph');
+    if (e.key === '2') selectSurface('02-note');
+    if (e.key === '3') selectSurface('03-repo');
+    if (e.key === '4') selectSurface('04-command');
+  });
+
+  renderSurface();
+</script>
+</body>
+</html>

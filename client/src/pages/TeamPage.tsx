@@ -34,7 +34,7 @@ function formatLastActivity(iso: string | null): string {
 }
 
 const selectClassName =
-  'h-7 rounded-md border border-input bg-card px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
+  'h-7 rounded-[var(--radius-sm,2px)] border border-input bg-card px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
 
 function TeamIcon({ className }: { className?: string }) {
   return (
@@ -186,7 +186,7 @@ export function TeamPage() {
                     key={t.id}
                     type="button"
                     onClick={() => setSelectedTeamId(t.id)}
-                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs transition-colors shrink-0 ${
+                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-sm,2px)] border text-xs transition-colors shrink-0 ${
                       isSelected
                         ? 'border-primary bg-primary text-primary-foreground font-medium'
                         : 'border-border bg-card text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -195,7 +195,7 @@ export function TeamPage() {
                     <TeamIcon className="size-3.5 shrink-0" />
                     <span>{t.name}</span>
                     <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                      className={`text-[10px] px-1.5 py-0.2 rounded-[var(--radius-sm,2px)] font-mono tabular-nums ${
                         isSelected
                           ? 'bg-primary-foreground/20 text-primary-foreground'
                           : 'bg-muted text-muted-foreground'
@@ -209,7 +209,7 @@ export function TeamPage() {
             </div>
           )}
 
-          <Panel aria-label="Roster">
+          <Panel aria-label="Roster" className="rounded-[var(--radius-sm,2px)]">
             <PanelHeader
               title={
                 filteredRoster.length !== roster.length
@@ -237,7 +237,7 @@ export function TeamPage() {
                         {teams.data[0]?.name}
                       </span>
                       {selectedTeam && (
-                        <Pill tone={selectedTeam.role === 'owner' ? 'human' : 'neutral'}>
+                        <Pill tone={selectedTeam.role === 'owner' ? 'human' : 'neutral'} className="font-mono tabular-nums rounded-[var(--radius-sm,2px)]">
                           {selectedTeam.role}
                         </Pill>
                       )}
@@ -260,7 +260,7 @@ export function TeamPage() {
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search members by email..."
                     aria-label="Search members"
-                    className="pl-8 h-7 text-xs"
+                    className="pl-8 h-7 text-xs rounded-[var(--radius-sm,2px)]"
                   />
                   {search && (
                     <button
@@ -298,12 +298,12 @@ export function TeamPage() {
                     }))}
                   />
                 </PanelBody>
-                <Table>
+                <Table className="rounded-[var(--radius-sm,2px)]">
                   <TableHeader>
                     <TableRow>
                       <TableHead scope="col">Member</TableHead>
-                      <TableHead scope="col">Notes touched</TableHead>
-                      <TableHead scope="col">Projects touched</TableHead>
+                      <TableHead scope="col" className="font-mono tabular-nums">Notes touched</TableHead>
+                      <TableHead scope="col" className="font-mono tabular-nums">Projects touched</TableHead>
                       <TableHead scope="col">Last activity</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -319,7 +319,7 @@ export function TeamPage() {
                         <TableCell className="font-mono tabular-nums text-foreground">
                           {r.vaultsTouched}
                         </TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">
+                        <TableCell className="font-mono tabular-nums text-xs text-muted-foreground">
                           {formatLastActivity(r.lastActivityAt)}
                         </TableCell>
                       </TableRow>

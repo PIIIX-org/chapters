@@ -35,8 +35,8 @@ function ReachRow({ person, permission }: { person: React.ReactNode; permission:
       <TableCell className="h-8 min-w-0 max-w-40 truncate text-[13px] text-foreground">
         {person}
       </TableCell>
-      <TableCell className="h-8">
-        <Pill tone={permission === 'owner' ? 'human' : 'neutral'}>{permission}</Pill>
+      <TableCell className="h-8 font-mono tabular-nums">
+        <Pill tone={permission === 'owner' ? 'human' : 'neutral'} className="font-mono tabular-nums rounded-[var(--radius-sm,2px)]">{permission}</Pill>
       </TableCell>
     </TableRow>
   )
@@ -52,18 +52,18 @@ function VaultReachList({ shares }: { shares: Share[] }) {
   }
   return (
     <div className="flex flex-col gap-1 pb-1">
-      <p className="px-2 text-xs whitespace-normal text-muted-foreground">
+      <p className="px-2 text-xs whitespace-normal text-muted-foreground tabular-nums">
         {reachablePeopleCount(shares)} people can reach this vault right now.
         Adding someone to a team it is shared with gives them access
         immediately — access is re-checked on every request.
       </p>
-      <Table>
+      <Table className="rounded-[var(--radius-sm,2px)]">
         <TableHeader>
           <TableRow>
             <TableHead scope="col" className="h-7">
               Person
             </TableHead>
-            <TableHead scope="col" className="h-7">
+            <TableHead scope="col" className="h-7 font-mono tabular-nums">
               Access
             </TableHead>
           </TableRow>
@@ -158,7 +158,7 @@ export function VaultReachExpansion() {
   return (
     <section aria-label="Vault reach" className="flex flex-col gap-2">
       <Eyebrow as="h3">Vault reach</Eyebrow>
-      <ul className="flex flex-col overflow-hidden rounded-md border border-border bg-card">
+      <ul className="flex flex-col overflow-hidden rounded-[var(--radius-sm,2px)] border border-border bg-card">
         {owned.map((vault) => (
           <VaultReachRow key={vault.id} vault={vault} />
         ))}

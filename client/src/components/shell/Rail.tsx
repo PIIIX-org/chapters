@@ -39,25 +39,27 @@ function RailLink({ item }: { item: RailItem }) {
   const Icon = item.icon
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <NavLink
-          to={item.to}
-          end={item.end}
-          aria-label={item.label}
-          className={({ isActive }) =>
-            cn(
-              'relative flex size-9 items-center justify-center rounded-md text-muted-foreground outline-none transition-all duration-150',
-              'hover:bg-muted hover:text-foreground hover:scale-105',
-              'active:scale-95 active:bg-muted/80',
-              'focus-visible:ring-2 focus-visible:ring-ring/40',
-              isActive &&
-                'bg-muted text-foreground before:absolute before:top-2 before:bottom-2 before:-left-2 before:w-0.5 before:rounded-full before:bg-primary shadow-xs',
-            )
-          }
-        >
-          <Icon className="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
-        </NavLink>
-      </TooltipTrigger>
+      <NavLink
+        to={item.to}
+        end={item.end}
+        aria-label={item.label}
+        className={({ isActive }) =>
+          cn(
+            'relative flex size-9 items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
+            'hover:bg-muted hover:text-foreground hover:scale-105',
+            'active:scale-95 active:bg-muted/80',
+            'focus-visible:ring-2 focus-visible:ring-ring/40',
+            isActive &&
+              'bg-muted text-foreground before:absolute before:top-2 before:bottom-2 before:-left-2 before:w-0.5 before:rounded-[var(--radius-sm)] before:bg-primary shadow-xs',
+          )
+        }
+      >
+        <TooltipTrigger asChild>
+          <span className="flex size-full items-center justify-center">
+            <Icon className="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
+          </span>
+        </TooltipTrigger>
+      </NavLink>
       <TooltipContent side="right">
         {item.label}
         <Kbd aria-hidden="true">g {item.chord}</Kbd>
@@ -75,12 +77,12 @@ export function Rail() {
   return (
     <nav
       aria-label="Primary"
-      className="row-span-2 flex flex-col items-center border-r border-border bg-secondary px-2 py-2"
+      className="row-span-2 flex w-[52px] flex-col items-center border-r border-border bg-secondary px-2 py-2"
     >
       <Link
         to="/"
         aria-label="Chapters"
-        className="mb-3 flex size-8 items-center justify-center rounded-md bg-foreground font-mono text-[12px] font-semibold text-background outline-none transition-all duration-150 hover:scale-105 hover:opacity-90 active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="mb-3 flex size-8 items-center justify-center rounded-[var(--radius-md)] bg-foreground font-mono text-[12px] font-semibold text-background outline-none transition-all duration-150 hover:scale-105 hover:opacity-90 active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40"
       >
         Ch
       </Link>

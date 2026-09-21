@@ -39,19 +39,32 @@ export function VerifyEmailPage() {
     >
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="verify-email">Email</Label>
-          <Input id="verify-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <Label htmlFor="verify-email" className="text-xs font-medium text-foreground">Email</Label>
+          <Input
+            id="verify-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="rounded-[var(--radius-sm,2px)]"
+          />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="verify-code">Verification code</Label>
-          <Input id="verify-code" value={code} onChange={(e) => setCode(e.target.value)} required />
+          <Label htmlFor="verify-code" className="text-xs font-medium text-foreground">Verification code</Label>
+          <Input
+            id="verify-code"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            required
+            className="rounded-[var(--radius-sm,2px)] font-mono"
+          />
         </div>
         <FormError message={error} />
-        <Button type="submit" disabled={submitting}>
+        <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
           Verify
         </Button>
         <p className="text-center text-sm text-muted-foreground">
-          <Link to="/login" className="text-foreground underline">
+          <Link to="/login" className="text-foreground underline underline-offset-4 hover:text-primary transition-colors">
             Back to sign in
           </Link>
         </p>

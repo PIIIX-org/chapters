@@ -58,6 +58,7 @@ function Pager({
         type="button"
         size="sm"
         variant="outline"
+        className="rounded-[var(--radius-sm,2px)]"
         aria-label={`Newer ${label}`}
         disabled={offset === 0}
         onClick={() => onChange(Math.max(0, offset - PAGE_SIZE))}
@@ -68,6 +69,7 @@ function Pager({
         type="button"
         size="sm"
         variant="outline"
+        className="rounded-[var(--radius-sm,2px)]"
         aria-label={`Older ${label}`}
         disabled={count < PAGE_SIZE}
         onClick={() => onChange(offset + PAGE_SIZE)}
@@ -83,7 +85,7 @@ function SecurityEventLog() {
   const events = useSecurityEvents(PAGE_SIZE, offset)
 
   return (
-    <Panel>
+    <Panel className="rounded-[var(--radius-md,4px)]">
       <PanelHeader
         title="Security events"
         actions={
@@ -102,7 +104,7 @@ function SecurityEventLog() {
       ) : events.data.length === 0 ? (
         <PanelState status="empty" compact message="Nothing recorded on this page." />
       ) : (
-        <Table>
+        <Table className="rounded-[var(--radius-md,4px)]">
           <caption className="sr-only">Security events on this instance</caption>
           <TableHeader>
             <TableRow>
@@ -114,13 +116,13 @@ function SecurityEventLog() {
           <TableBody>
             {events.data.map((event) => (
               <TableRow key={event.id}>
-                <TableCell className="h-8 font-mono text-xs text-muted-foreground">
+                <TableCell className="h-8 font-mono text-xs tabular-nums text-muted-foreground">
                   {formatStamp(event.createdAt)}
                 </TableCell>
                 <TableCell className="h-8 text-[13px] text-foreground">
                   {event.type.replace(/_/g, ' ')}
                 </TableCell>
-                <TableCell className="h-8 font-mono text-xs text-muted-foreground">
+                <TableCell className="h-8 font-mono text-xs tabular-nums text-muted-foreground">
                   {event.ip ?? '—'}
                 </TableCell>
               </TableRow>
@@ -137,7 +139,7 @@ function AuditTrail() {
   const entries = useAuditTrail(PAGE_SIZE, offset)
 
   return (
-    <Panel>
+    <Panel className="rounded-[var(--radius-md,4px)]">
       <PanelHeader
         title="Content audit trail"
         actions={
@@ -163,7 +165,7 @@ function AuditTrail() {
       ) : entries.data.length === 0 ? (
         <PanelState status="empty" compact message="Nothing recorded on this page." />
       ) : (
-        <Table>
+        <Table className="rounded-[var(--radius-md,4px)]">
           <caption className="sr-only">
             Who changed which note, and when — never the change itself
           </caption>
@@ -178,7 +180,7 @@ function AuditTrail() {
           <TableBody>
             {entries.data.map((entry) => (
               <TableRow key={entry.id}>
-                <TableCell className="h-8 font-mono text-xs text-muted-foreground">
+                <TableCell className="h-8 font-mono text-xs tabular-nums text-muted-foreground">
                   {formatStamp(entry.createdAt)}
                 </TableCell>
                 <TableCell className="h-8 text-[13px] text-foreground">
@@ -188,7 +190,7 @@ function AuditTrail() {
                   {entry.notePath}
                 </TableCell>
                 <TableCell className="h-8">
-                  <Pill tone={actorTone(entry.actorType)}>{entry.actorType}</Pill>
+                  <Pill tone={actorTone(entry.actorType)} className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">{entry.actorType}</Pill>
                 </TableCell>
               </TableRow>
             ))}

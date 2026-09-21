@@ -58,13 +58,13 @@ export function CommunityDetail({
       : ''
 
   return (
-    <Panel>
+    <Panel className="rounded-[var(--radius-md,4px)]">
       <PanelHeader
         title={active === null ? 'Community' : `Community ${active}`}
         titleAs="h3"
         actions={
           expandedCommunity !== null && (
-            <Button type="button" variant="outline" size="xs" onClick={onCollapse}>
+            <Button type="button" variant="outline" size="xs" onClick={onCollapse} className="rounded-[var(--radius-sm,2px)]">
               Back to all communities
             </Button>
           )

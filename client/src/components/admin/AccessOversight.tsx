@@ -64,7 +64,7 @@ export function AccessOversight() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Panel>
+      <Panel className="rounded-[var(--radius-md,4px)]">
         <PanelHeader title="Shares" />
         <p className="border-b border-border px-3 py-2 text-[13px] text-muted-foreground">
           Every grant on the instance. Revoking one cuts that person or team
@@ -82,10 +82,10 @@ export function AccessOversight() {
             message="Nothing is shared on this instance yet."
           />
         ) : (
-          <Table>
+          <Table className="rounded-[var(--radius-md,4px)]">
             <caption className="sr-only">Every vault share on this instance</caption>
             <TableHeader>
-              <TableRow>
+              <TableRow className="border-b border-border">
                 <TableHead scope="col">Vault</TableHead>
                 <TableHead scope="col">Shared with</TableHead>
                 <TableHead scope="col">Permission</TableHead>
@@ -97,15 +97,15 @@ export function AccessOversight() {
                 const vault = vaultName.get(share.vaultId) ?? 'deleted vault'
                 const grantee = granteeLabel(share.granteeType, share.granteeId)
                 return (
-                  <TableRow key={share.id}>
+                  <TableRow key={share.id} className="border-b border-border last:border-b-0">
                     <TableCell className="py-2.5 align-top text-foreground">
                       {vault}
                     </TableCell>
                     <TableCell className="py-2 align-top">
                       <span className="mr-1.5 text-foreground">{grantee}</span>
-                      <Pill tone="neutral">{share.granteeType}</Pill>
+                      <Pill tone="neutral" className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">{share.granteeType}</Pill>
                     </TableCell>
-                    <TableCell className="py-2.5 align-top font-mono text-xs text-muted-foreground">
+                    <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground">
                       {share.permission}
                     </TableCell>
                     <TableCell className="py-2 align-top">
@@ -127,7 +127,7 @@ export function AccessOversight() {
         )}
       </Panel>
 
-      <Panel>
+      <Panel className="rounded-[var(--radius-md,4px)]">
         <PanelHeader title="MCP connections" />
         <p className="border-b border-border px-3 py-2 text-[13px] text-muted-foreground">
           Tokens AI clients use to reach this instance. Revoking one kills
@@ -145,10 +145,10 @@ export function AccessOversight() {
             message="No MCP connections on this instance yet."
           />
         ) : (
-          <Table>
+          <Table className="rounded-[var(--radius-md,4px)]">
             <caption className="sr-only">Every MCP connection on this instance</caption>
             <TableHeader>
-              <TableRow>
+              <TableRow className="border-b border-border">
                 <TableHead scope="col">Connection</TableHead>
                 <TableHead scope="col">Account</TableHead>
                 <TableHead scope="col">Scope</TableHead>
@@ -158,14 +158,14 @@ export function AccessOversight() {
             </TableHeader>
             <TableBody>
               {connections.data.map((connection) => (
-                <TableRow key={connection.id}>
+                <TableRow key={connection.id} className="border-b border-border last:border-b-0">
                   <TableCell className="py-2.5 align-top text-foreground">
                     {connection.name}
                   </TableCell>
                   <TableCell className="py-2.5 align-top text-muted-foreground">
                     {connection.userEmail}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top font-mono text-xs text-muted-foreground">
+                  <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground">
                     {connection.scope}
                     {connection.vaultId && (
                       <span className="block">
@@ -173,12 +173,12 @@ export function AccessOversight() {
                       </span>
                     )}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top font-mono text-xs text-muted-foreground">
+                  <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground">
                     {formatStamp(connection.lastUsedAt)}
                   </TableCell>
                   <TableCell className="py-2 align-top">
                     {connection.revokedAt ? (
-                      <span className="font-mono text-xs text-muted-foreground">
+                      <span className="font-mono text-xs tabular-nums text-muted-foreground">
                         revoked {formatStamp(connection.revokedAt)}
                       </span>
                     ) : (

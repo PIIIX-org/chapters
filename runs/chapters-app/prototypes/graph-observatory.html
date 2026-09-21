@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Observatory Bridge Graph Prototype</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #070A0F; color: #E2E8F4; font-family: ui-monospace, monospace; overflow: hidden; }
+    canvas { display: block; }
+    #overlay { position: absolute; top: 16px; left: 16px; pointer-events: none; }
+    .telemetry { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #526077; }
+    .hud { position: absolute; bottom: 16px; right: 16px; font-size: 11px; color: #3FB8AE; text-align: right; }
+    .hud-line { margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div class="telemetry">SECTOR 7G :: LOUVAIN HULLS</div>
+    <div class="telemetry" id="fps-counter" style="color: #3FB8AE;">FPS: --</div>
+  </div>
+  <div class="hud">
+    <div class="hud-line">OPTICAL ASTRONOMIC CARTOGRAPHY</div>
+    <div class="hud-line">CANVAS 2D PRECISION ENGINE</div>
+  </div>
+  <canvas id="graphCanvas"></canvas>
+  <script>
+    const canvas = document.getElementById('graphCanvas');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+
+    const nodes = [];
+    const NUM_NODES = 250;
+    const NUM_HULLS = 5;
+
+    function resize() {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = width;
+      canvas.height = height;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Init nodes
+    for(let i=0; i<NUM_NODES; i++) {
+      nodes.push({
+        x: Math.random() * width,
+        y: Math.random() * height,
+        vx: (Math.random() - 0.5) * 0.5,
+        vy: (Math.random() - 0.5) * 0.5,
+        hull: Math.floor(Math.random() * NUM_HULLS)
+      });
+    }
+
+    let lastTime = performance.now();
+    let frameCount = 0;
+    const fpsCounter = document.getElementById('fps-counter');
+
+    function draw() {
+      const now = performance.now();
+      const dt = now - lastTime;
+      frameCount++;
+      if (dt > 500) {
+        fpsCounter.innerText = `FPS: ${Math.round((frameCount * 1000) / dt)}`;
+        frameCount = 0;
+        lastTime = now;
+      }
+
+      ctx.fillStyle = '#070A0F';
+      ctx.fillRect(0, 0, width, height);
+
+      // Grid
+      ctx.strokeStyle = '#1C2433';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for(let x=0; x<width; x+=50) { ctx.moveTo(x, 0); ctx.lineTo(x, height); }
+      for(let y=0; y<height; y+=50) { ctx.moveTo(0, y); ctx.lineTo(width, y); }
+      ctx.stroke();
+
+      // Nodes
+      for(let i=0; i<NUM_NODES; i++) {
+        let n = nodes[i];
+        n.x += n.vx;
+        n.y += n.vy;
+        if(n.x < 0 || n.x > width) n.vx *= -1;
+        if(n.y < 0 || n.y > height) n.vy *= -1;
+
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 2, 0, Math.PI*2);
+        ctx.fillStyle = n.hull === 0 ? '#3FB8AE' : '#E2E8F4';
+        ctx.fill();
+
+        // Lines to close nodes
+        for(let j=i+1; j<NUM_NODES; j++) {
+          let n2 = nodes[j];
+          let dist = Math.hypot(n.x - n2.x, n.y - n2.y);
+          if (dist < 40) {
+            ctx.beginPath();
+            ctx.moveTo(n.x, n.y);
+            ctx.lineTo(n2.x, n2.y);
+            ctx.strokeStyle = n.hull === n2.hull ? 'rgba(63, 184, 174, 0.3)' : 'rgba(28, 36, 51, 0.5)';
+            ctx.stroke();
+          }
+        }
+      }
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+  </script>
+</body>
+</html>
