@@ -110,26 +110,38 @@ export function CodeViewer({ repository, path, meta, ref }: CodeViewerProps) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-card">
+    <div className="flex h-full min-h-0 flex-col border border-border bg-[#070A0F]">
       {/* The 40px file bar: path, language, size, provenance — all machine
           text, all mono — and the one outward action there is. */}
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-[#070A0F] px-3">
         <span className="min-w-0 truncate font-mono text-xs text-foreground" title={path}>
           {path}
         </span>
-        {language && <Pill>{language}</Pill>}
+        {language && (
+          <Pill className="rounded-[var(--radius-sm,2px)] font-mono text-[10px]">
+            {language}
+          </Pill>
+        )}
         {size !== undefined && (
-          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+          <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
             {formatBytes(size)}
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {/* Permanent, not a mode: git stays the record of truth. */}
-          <Pill title="Chapters never writes code back — git stays the record of truth.">
+          <Pill
+            className="rounded-[var(--radius-sm,2px)] font-mono text-[10px]"
+            title="Chapters never writes code back — git stays the record of truth."
+          >
             Read-only
           </Pill>
           {gitHubUrl && (
-            <Button asChild variant="ghost" size="xs">
+            <Button
+              asChild
+              variant="ghost"
+              size="xs"
+              className="h-6 rounded-[var(--radius-sm,2px)] font-mono text-xs"
+            >
               <a
                 href={gitHubUrl}
                 target="_blank"

@@ -88,7 +88,15 @@ function TreeRow({
   if (node.kind === 'file') {
     const active = node.path === activePath
     return (
-      <li>
+      <li className="relative">
+        {Array.from({ length: depth }).map((_, i) => (
+          <span
+            key={i}
+            aria-hidden="true"
+            className="pointer-events-none absolute bottom-0 top-0 z-10 w-px bg-border/40"
+            style={{ left: `${14 + i * 14}px` }}
+          />
+        ))}
         <Link
           to={`/repos/${repositoryId}/files/${node.path}`}
           aria-current={active ? 'page' : undefined}
@@ -98,10 +106,10 @@ function TreeRow({
           title={node.path}
           style={indent}
           className={cn(
-            'flex items-center rounded-md py-1 pr-2 font-mono text-xs outline-none transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-ring/40',
+            'group relative flex h-6 w-full items-center rounded-[var(--radius-sm,2px)] pr-2 font-mono text-xs outline-none transition-colors duration-100 select-none focus-visible:ring-2 focus-visible:ring-ring/40',
             active
-              ? 'bg-muted text-foreground'
-              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+              ? 'bg-muted font-medium text-foreground before:absolute before:bottom-0.5 before:left-0 before:top-0.5 before:w-0.5 before:rounded-[var(--radius-sm,2px)] before:bg-primary'
+              : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
           )}
         >
           <span className="truncate">{node.name}</span>
@@ -112,7 +120,15 @@ function TreeRow({
 
   const open = expanded.has(node.path)
   return (
-    <li>
+    <li className="relative">
+      {Array.from({ length: depth }).map((_, i) => (
+        <span
+          key={i}
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-0 top-0 z-10 w-px bg-border/40"
+          style={{ left: `${14 + i * 14}px` }}
+        />
+      ))}
       <button
         type="button"
         aria-expanded={open}
@@ -129,7 +145,7 @@ function TreeRow({
             onSetOpen(node.path, false)
           }
         }}
-        className="flex w-full items-center gap-1 rounded-md py-1 pr-2 text-left font-mono text-xs text-muted-foreground outline-none transition-colors duration-100 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="group relative flex h-6 w-full items-center gap-1 rounded-[var(--radius-sm,2px)] pr-2 text-left font-mono text-xs text-muted-foreground outline-none transition-colors duration-100 select-none hover:bg-muted/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
       >
         <ChevronRight
           aria-hidden="true"
