@@ -20,28 +20,28 @@ interface AuthFrameProps {
  */
 export function AuthFrame({ eyebrow, title, step, children }: AuthFrameProps) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-background p-6">
+    <div className="relative flex min-h-screen items-center justify-center bg-[#070A0F] text-foreground font-sans p-6 selection:bg-primary/30">
       {/* The spec's sanctioned backdrop: dotted grid in the hairline colour,
           drawn behind the card, invisible to assistive tech. */}
       <div
         aria-hidden="true"
-        className="absolute inset-0 [background-image:radial-gradient(var(--border)_1px,transparent_1px)] [background-size:24px_24px]"
+        className="absolute inset-0 [background-image:radial-gradient(var(--border)_1px,transparent_1px)] [background-size:24px_24px] pointer-events-none"
       />
-      <main className="relative flex w-[360px] max-w-full flex-col gap-4">
+      <main className="relative flex w-[360px] max-w-full flex-col gap-4 z-10">
         <p className="flex items-center gap-2.5">
           {/* Same mark as the shell rail, so the door matches the house. */}
           <span
             aria-hidden="true"
-            className="flex size-8 items-center justify-center rounded-md bg-foreground font-mono text-[12px] font-semibold text-background"
+            className="flex size-8 items-center justify-center rounded-[var(--radius-sm,2px)] bg-foreground font-mono text-[12px] font-semibold text-background"
           >
             Ch
           </span>
-          <span className="text-sm font-medium text-foreground">Chapters</span>
+          <span className="text-sm font-medium text-foreground tracking-tight">Chapters</span>
         </p>
-        <Card className="w-full">
+        <Card className="w-full rounded-[var(--radius-md,4px)] border border-border bg-card shadow-none">
           <CardHeader>
             <Eyebrow as="p">{eyebrow}</Eyebrow>
-            <h1 className="text-xl leading-7 font-semibold text-foreground">
+            <h1 className="text-xl leading-7 font-semibold text-foreground tracking-tight">
               {title}
             </h1>
           </CardHeader>

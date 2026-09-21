@@ -33,7 +33,7 @@ export function ConfirmStep({
   return (
     <div
       className={cn(
-        'flex max-w-md min-w-56 flex-col gap-1.5 rounded-md border p-2 text-left whitespace-normal',
+        'flex max-w-md min-w-56 flex-col gap-1.5 rounded-[var(--radius-sm,2px)] border p-2 text-left whitespace-normal',
         destructive ? 'border-destructive/40 bg-destructive/5' : 'border-border bg-muted/40',
       )}
     >
@@ -43,12 +43,13 @@ export function ConfirmStep({
           type="button"
           size="xs"
           variant={destructive ? 'destructive' : 'default'}
+          className="rounded-[var(--radius-sm,2px)]"
           disabled={pending}
           onClick={onConfirm}
         >
           {label}
         </Button>
-        <Button type="button" size="xs" variant="ghost" onClick={onCancel}>
+        <Button type="button" size="xs" variant="ghost" className="rounded-[var(--radius-sm,2px)]" onClick={onCancel}>
           Cancel
         </Button>
       </div>
@@ -95,6 +96,7 @@ export function ConfirmAction({
         type="button"
         size="xs"
         variant="ghost"
+        className="rounded-[var(--radius-sm,2px)]"
         aria-label={ariaLabel}
         onClick={() => setConfirming(true)}
       >

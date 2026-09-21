@@ -34,7 +34,7 @@ export function SignupPage() {
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="signup-email">Email</Label>
-          <Input id="signup-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <Input id="signup-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="rounded-[var(--radius-sm,2px)]" />
         </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="signup-password">Password</Label>
@@ -45,6 +45,7 @@ export function SignupPage() {
             onChange={(e) => setPassword(e.target.value)}
             minLength={8}
             required
+            className="rounded-[var(--radius-sm,2px)]"
           />
         </div>
         {/* Said here, and on verify-email, and deliberately NOT on the
@@ -59,7 +60,7 @@ export function SignupPage() {
           on this instance approves your account. Sign-in keeps failing until both are done.
         </p>
         <FormError message={error} />
-        <Button type="submit" disabled={submitting}>
+        <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
           Sign up
         </Button>
         <p className="text-center text-sm text-muted-foreground">

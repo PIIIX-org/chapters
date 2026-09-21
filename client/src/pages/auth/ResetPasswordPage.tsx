@@ -42,10 +42,11 @@ export function ResetPasswordPage() {
             onChange={(e) => setPassword(e.target.value)}
             minLength={8}
             required
+            className="rounded-[var(--radius-sm,2px)]"
           />
         </div>
         <FormError message={error} />
-        <Button type="submit" disabled={submitting}>
+        <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
           Reset password
         </Button>
       </form>

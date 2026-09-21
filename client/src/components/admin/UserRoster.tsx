@@ -59,14 +59,14 @@ export function UserRoster() {
   const deactivate = useDeactivateUser()
 
   return (
-    <Panel>
+    <Panel className="rounded-[var(--radius-sm,2px)]">
       <PanelHeader title="People" />
       {users.isPending ? (
         <PanelState status="loading" compact message="Loading users…" />
       ) : users.isError ? (
         <PanelState status="error" compact message={users.error.message} />
       ) : (
-        <Table>
+        <Table className="rounded-[var(--radius-sm,2px)]">
           <caption className="sr-only">Every account on this instance</caption>
           <TableHeader>
             <TableRow>
@@ -88,7 +88,7 @@ export function UserRoster() {
                     {user.email}
                   </TableCell>
                   <TableCell className="py-2 align-top">
-                    <Pill tone={STATUS_TONE[user.status]} dot>
+                    <Pill tone={STATUS_TONE[user.status]} dot className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">
                       {user.status.replace('_', ' ')}
                     </Pill>
                     {!user.emailVerifiedAt && (
@@ -99,7 +99,7 @@ export function UserRoster() {
                   </TableCell>
                   <TableCell className="py-2 align-top">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <Pill tone={ROLE_TONE[user.role] ?? 'neutral'}>
+                      <Pill tone={ROLE_TONE[user.role] ?? 'neutral'} className="rounded-[var(--radius-sm,2px)] font-mono text-[11px] uppercase tracking-[0.04em]">
                         {ROLE_LABELS[user.role] ?? user.role}
                       </Pill>
                       {!isSelf && user.status === 'active' && (
@@ -113,7 +113,7 @@ export function UserRoster() {
                               role: e.target.value as UserRole,
                             })
                           }
-                          className="text-xs bg-muted/60 border border-border/80 rounded px-1.5 py-0.5 text-foreground hover:border-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer"
+                          className="text-xs bg-muted/60 border border-border/80 rounded-[var(--radius-sm,2px)] px-1.5 py-0.5 text-foreground hover:border-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer font-mono"
                         >
                           {USER_ROLES.map((r) => (
                             <option key={r} value={r}>

@@ -24,6 +24,11 @@ function massLabel(mass: number): string {
   return `${mass} note${mass === 1 ? '' : 's'} touched`
 }
 
+/** SVG path data for a closed circle of radius `r` at `(cx, cy)` */
+function circlePath(cx: number, cy: number, r: number): string {
+  return `M ${cx} ${cy - r} A ${r} ${r} 0 1 0 ${cx} ${cy + r} A ${r} ${r} 0 1 0 ${cx} ${cy - r}`
+}
+
 // One inline <svg>, one <circle> per person. This is presentation only — the
 // roster table below is the accessible equivalent of the picture (each circle
 // still carries a <title> so a pointer or screen-magnifier user gets the
@@ -48,6 +53,26 @@ export function UserConstellation({ people }: UserConstellationProps) {
         aria-label={`Team constellation: ${people.length} member${people.length === 1 ? '' : 's'}, sized by notes touched`}
         className="mx-auto block h-64 w-64 max-w-full"
       >
+        {/* Concentric constellation rings (Observatory Bridge optical cartography) */}
+        <g data-slot="constellation-rings" aria-hidden="true">
+          {[35, 70, 95].map((ringRadius) => (
+            <path
+              key={ringRadius}
+              d={circlePath(CENTER, CENTER, ringRadius)}
+              fill="none"
+              stroke="var(--border)"
+              strokeWidth={1}
+              strokeDasharray={ringRadius === 70 ? '2 3' : '1 4'}
+              opacity={ringRadius === 70 ? 0.7 : 0.4}
+            />
+          ))}
+          {/* Central reticle dot */}
+          <path
+            d={circlePath(CENTER, CENTER, 1.5)}
+            fill="var(--faint)"
+            opacity={0.6}
+          />
+        </g>
         {people.length > 1 &&
           people.map((person, index) => {
             const { x, y } = positionFor(index, people.length)

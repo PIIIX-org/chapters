@@ -32,7 +32,7 @@ function formatActivity(iso: string | null): string {
 }
 
 const selectClassName =
-  'h-7 rounded-md border border-input bg-card px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
+  'h-7 rounded-[var(--radius-sm,2px)] border border-input bg-card px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
 
 function TransferOwner({ vault }: { vault: AdminVault }) {
   const users = useAdminUsers()
@@ -52,6 +52,7 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
         type="button"
         size="xs"
         variant="ghost"
+        className="rounded-[var(--radius-sm,2px)]"
         aria-label={`Reassign ownership of ${vault.name}`}
         onClick={() => setOpen(true)}
       >
@@ -66,7 +67,7 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
         <p className="text-xs text-muted-foreground">
           No other active account to hand this vault to.
         </p>
-        <Button type="button" size="xs" variant="ghost" onClick={() => setOpen(false)}>
+        <Button type="button" size="xs" variant="ghost" className="rounded-[var(--radius-sm,2px)]" onClick={() => setOpen(false)}>
           Cancel
         </Button>
       </div>
@@ -77,7 +78,7 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
   const selectedEmail = candidates.find((c) => c.id === selected)?.email ?? ''
 
   return (
-    <div className="flex max-w-md min-w-56 flex-col gap-1.5 rounded-md border border-border bg-muted/40 p-2 text-left whitespace-normal">
+    <div className="flex max-w-md min-w-56 flex-col gap-1.5 rounded-[var(--radius-sm,2px)] border border-border bg-muted/40 p-2 text-left whitespace-normal">
       <label className="sr-only" htmlFor={`owner-${vault.id}`}>
         New owner for {vault.name}
       </label>
@@ -102,6 +103,7 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
         <Button
           type="button"
           size="xs"
+          className="rounded-[var(--radius-sm,2px)]"
           disabled={transfer.isPending}
           onClick={() =>
             transfer.mutate(
@@ -112,7 +114,7 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
         >
           Reassign
         </Button>
-        <Button type="button" size="xs" variant="ghost" onClick={() => setOpen(false)}>
+        <Button type="button" size="xs" variant="ghost" className="rounded-[var(--radius-sm,2px)]" onClick={() => setOpen(false)}>
           Cancel
         </Button>
       </div>
@@ -128,7 +130,7 @@ export function VaultOversight() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Panel>
+      <Panel className="rounded-[var(--radius-md,4px)]">
         <PanelHeader title="Vaults" />
         {vaults.isPending ? (
           <PanelState status="loading" compact message="Loading vaults…" />
@@ -137,7 +139,7 @@ export function VaultOversight() {
         ) : vaults.data.length === 0 ? (
           <PanelState status="empty" compact message="No vaults on this instance yet." />
         ) : (
-          <Table>
+          <Table className="rounded-[var(--radius-md,4px)]">
             <caption className="sr-only">
               Every vault on this instance — names and counts only
             </caption>
@@ -183,7 +185,7 @@ export function VaultOversight() {
         )}
       </Panel>
 
-      <Panel>
+      <Panel className="rounded-[var(--radius-md,4px)]">
         <PanelHeader title="Teams" />
         {teams.isPending ? (
           <PanelState status="loading" compact message="Loading teams…" />
@@ -192,7 +194,7 @@ export function VaultOversight() {
         ) : teams.data.length === 0 ? (
           <PanelState status="empty" compact message="No teams on this instance yet." />
         ) : (
-          <Table>
+          <Table className="rounded-[var(--radius-md,4px)]">
             <caption className="sr-only">Every team on this instance</caption>
             <TableHeader>
               <TableRow>
