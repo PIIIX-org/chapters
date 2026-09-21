@@ -46,7 +46,7 @@ function PropertyFields({ frontmatter, readOnly, onSet }: PropertyFieldsProps) {
       <dd>
         <Input
           id="pp-resource"
-          className="h-7"
+          className="h-7 font-mono text-xs"
           value={asString(frontmatter.resource)}
           disabled={readOnly}
           onChange={(e) => onSet('resource', e.target.value)}
@@ -68,7 +68,7 @@ function PropertyFields({ frontmatter, readOnly, onSet }: PropertyFieldsProps) {
       <dd>
         <Input
           id="pp-timestamp"
-          className="h-7"
+          className="h-7 font-mono text-xs tabular-nums"
           value={asString(frontmatter.timestamp)}
           disabled={readOnly}
           placeholder="ISO date (e.g. 2026-01-01)"
@@ -79,7 +79,7 @@ function PropertyFields({ frontmatter, readOnly, onSet }: PropertyFieldsProps) {
       {extraKeys.map(([key, value]) => (
         <div key={key} className="col-span-2 flex min-w-0 items-baseline gap-2">
           <dt className={KEY}>{key}:</dt>
-          <dd className="min-w-0 truncate text-xs text-foreground">
+          <dd className="min-w-0 truncate font-mono text-xs tabular-nums text-foreground">
             {typeof value === 'string' ? value : JSON.stringify(value)}
           </dd>
         </div>
