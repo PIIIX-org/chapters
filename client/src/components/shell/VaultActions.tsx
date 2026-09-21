@@ -109,7 +109,7 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
         type="button"
         onClick={() => setMode('renaming')}
         aria-label={`Rename ${vault.name}`}
-        className="text-xs text-muted-foreground hover:text-foreground"
+        className="text-xs text-muted-foreground hover:text-foreground px-1.5 py-1 rounded hover:bg-muted/50 transition-colors touch-manipulation"
       >
         Rename
       </button>
@@ -117,7 +117,7 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
         type="button"
         onClick={() => setMode('confirmDelete')}
         aria-label={`Delete ${vault.name}`}
-        className="text-xs text-muted-foreground hover:text-foreground"
+        className="text-xs text-muted-foreground hover:text-foreground px-1.5 py-1 rounded hover:bg-muted/50 transition-colors touch-manipulation"
       >
         Delete
       </button>
