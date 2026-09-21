@@ -1,6 +1,6 @@
 import type { CollabStatus } from '../../hooks/useCollabDoc.js'
 import type { ShellStatus } from '../shell/shell-context.js'
-import { Pill, StatusDot } from '../ui/pill.js'
+import { Pill } from '../ui/pill.js'
 import type { PillTone } from '../ui/pill.js'
 
 interface CollabStatusLineProps {
