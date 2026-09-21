@@ -59,7 +59,7 @@ export function GraphEmptyState({
 // popover-toned so they read as instrumentation over the canvas — never a
 // floating card with its own shadow (shadows are for menus/dialogs only).
 const NOTICE_CLASS =
-  'max-w-sm rounded-md border border-border bg-popover/90 px-2.5 py-1.5 text-xs text-muted-foreground'
+  'max-w-sm rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-xs px-2.5 py-1.5 text-xs text-muted-foreground'
 
 interface CappedGroupsNoticeProps {
   groups: string[]

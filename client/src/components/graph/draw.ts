@@ -133,6 +133,10 @@ function hueAt(n: number, isDark: boolean): string {
   return palette[((n % palette.length) + palette.length) % palette.length]!
 }
 
+export function communityHue(community: number, isDark: boolean): string {
+  return hueAt(community, isDark)
+}
+
 function isCommunityNode(node: DrawNode): node is DrawCommunityNode {
   return 'lastActivity' in node
 }
