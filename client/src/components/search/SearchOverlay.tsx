@@ -133,8 +133,8 @@ function repoHint(r: AccessibleRepository): string {
 // shape the server's create-note route accepts.
 const NOTE_PATH = /^([a-z0-9][a-z0-9-]*)\/([a-z0-9][a-z0-9-]*)$/
 
-function Hint({ children }: { children: ReactNode }) {
-  return <span className="max-w-[40%] shrink-0 truncate font-mono text-[11px] text-faint">{children}</span>
+function Hint({ children, className }: { children: ReactNode; className?: string }) {
+  return <span className={cn('max-w-[40%] shrink-0 truncate font-mono text-[11px] text-faint', className)}>{children}</span>
 }
 
 export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
@@ -447,7 +447,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     <>
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-4 pt-[12vh]"
+          className="fixed inset-0 z-50 flex items-start justify-center bg-[#070a0f]/80 backdrop-blur-md px-4 pt-[12vh]"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) onClose()
           }}
@@ -458,7 +458,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
             aria-modal="true"
             aria-label="Command palette"
             onKeyDown={onPanelKeyDown}
-            className="flex w-full max-w-xl flex-col overflow-hidden rounded-lg border border-border bg-popover text-foreground shadow-floating"
+            className="flex w-full max-w-xl flex-col overflow-hidden rounded-[var(--radius-lg,8px)] border border-border bg-popover text-foreground shadow-floating"
           >
             <div className="flex h-11 items-center gap-2.5 border-b border-border px-3">
               <Search aria-hidden="true" strokeWidth={1.75} className="size-4 shrink-0 text-muted-foreground" />
@@ -497,7 +497,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                 aria-controls="search-filters"
                 onClick={() => setFiltersOpen((o) => !o)}
                 className={cn(
-                  'ml-auto inline-flex h-6 items-center gap-1 rounded-sm border border-transparent px-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-muted-foreground transition-colors duration-100 hover:bg-muted hover:text-foreground',
+                  'ml-auto inline-flex h-6 items-center gap-1 rounded-[var(--radius-sm,2px)] border border-transparent px-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-muted-foreground transition-colors duration-100 hover:bg-muted hover:text-foreground',
                   (filtersOpen || activeFilterCount > 0) && 'border-border bg-muted text-foreground',
                 )}
               >
@@ -567,16 +567,19 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                           role="option"
                           aria-selected={isActive}
                           onClick={() => toggleCode(key)}
-                          className={cn('block w-full px-3 py-2 text-left hover:bg-muted', isActive && 'bg-muted')}
+                          className={cn(
+                            'block w-full min-h-9 px-3 py-1.5 text-left hover:bg-muted',
+                            isActive && 'bg-muted',
+                          )}
                         >
                           <div className="flex items-center gap-2.5">
                             <Code aria-hidden="true" strokeWidth={1.75} className="size-4 shrink-0 text-muted-foreground" />
                             <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{r.path}</span>
                             {r.language && <Pill>{r.language}</Pill>}
-                            <Hint>{r.score.toFixed(2)}</Hint>
+                            <Hint className="tabular-nums">{r.score.toFixed(2)}</Hint>
                           </div>
                           {isExpanded && (
-                            <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-card p-2 font-mono text-xs text-muted-foreground">
+                            <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-[var(--radius-md,4px)] border border-border bg-card p-2 font-mono text-xs text-muted-foreground">
                               {r.snippet}
                             </pre>
                           )}
@@ -593,7 +596,10 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                         role="option"
                         aria-selected={isActive}
                         onClick={() => go(r.containerId, r.path)}
-                        className={cn('block w-full px-3 py-2 text-left hover:bg-muted', isActive && 'bg-muted')}
+                        className={cn(
+                          'block w-full min-h-9 px-3 py-1.5 text-left hover:bg-muted',
+                          isActive && 'bg-muted',
+                        )}
                       >
                         <div className="flex items-center gap-2.5">
                           <FileText aria-hidden="true" strokeWidth={1.75} className="size-4 shrink-0 text-muted-foreground" />
@@ -602,9 +608,11 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                           {tags.map((tag) => (
                             <Pill key={tag}>{tag}</Pill>
                           ))}
-                          <Hint>{r.score.toFixed(2)}</Hint>
+                          <span className="shrink-0 font-mono text-[11px] tabular-nums text-faint">{r.score.toFixed(2)}</span>
                         </div>
-                        <div className="truncate pl-[26px] text-xs text-muted-foreground">{r.snippet}</div>
+                        {r.snippet && (
+                          <div className="truncate pl-[26px] text-xs text-muted-foreground">{r.snippet}</div>
+                        )}
                       </button>
                     )
                   })}
@@ -626,7 +634,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                 <button
                   type="button"
                   onClick={() => results.refetch()}
-                  className="mt-1 rounded-sm border border-border bg-muted px-2 py-0.5 font-mono text-[11px] uppercase tracking-[0.04em] text-foreground hover:border-input"
+                  className="mt-1 rounded-[var(--radius-sm,2px)] border border-border bg-muted px-2 py-0.5 font-mono text-[11px] uppercase tracking-[0.04em] text-foreground hover:border-input"
                 >
                   Retry
                 </button>
@@ -669,7 +677,7 @@ function ScopeChip({ checked, onClick, children }: { checked: boolean; onClick: 
       aria-checked={checked}
       onClick={onClick}
       className={cn(
-        'inline-flex h-6 items-center rounded-sm border px-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.04em] transition-colors duration-100',
+        'inline-flex h-6 items-center rounded-[var(--radius-sm,2px)] border px-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.04em] transition-colors duration-100',
         checked
           ? 'border-border bg-muted text-foreground'
           : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground',
