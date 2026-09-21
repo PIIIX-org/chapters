@@ -44,7 +44,12 @@ function ShellPanel({
       data-shell-panel={kind}
       data-shell-fallback=""
       aria-label={label}
-      className={className}
+      className={cn(
+        kind === 'context'
+          ? 'w-[var(--shell-context,240px)] border-r border-border bg-secondary'
+          : 'w-[var(--shell-inspector,300px)] border-l border-border bg-card',
+        className,
+      )}
     >
       {children}
     </aside>
