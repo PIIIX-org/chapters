@@ -14,21 +14,21 @@ export function Breadcrumb({ items }: { items: BreadcrumbItem[] }) {
               className="flex min-w-0 items-center gap-1.5"
             >
               {i > 0 && (
-                <span aria-hidden="true" className="text-faint">
+                <span aria-hidden="true" className="text-faint select-none">
                   /
                 </span>
               )}
               {item.to && !last ? (
                 <Link
                   to={item.to}
-                  className="truncate text-muted-foreground hover:text-foreground"
+                  className="truncate text-muted-foreground transition-colors duration-100 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40 rounded-[var(--radius-sm)]"
                 >
                   {item.label}
                 </Link>
               ) : (
                 <span
                   aria-current={last ? 'page' : undefined}
-                  className="truncate text-foreground"
+                  className="truncate font-medium text-foreground"
                 >
                   {item.label}
                 </span>

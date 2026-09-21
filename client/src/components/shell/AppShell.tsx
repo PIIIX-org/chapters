@@ -29,7 +29,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
 }
 
 const TRACK =
-  'min-h-0 overflow-y-auto bg-card max-lg:absolute max-lg:inset-y-0 max-lg:z-30 max-lg:shadow-floating'
+  'min-h-0 overflow-y-auto max-lg:absolute max-lg:inset-y-0 max-lg:z-30 max-lg:shadow-floating'
 
 function ShellFrame({ children }: { children?: ReactNode }) {
   const shell = useShell()
@@ -55,11 +55,12 @@ function ShellFrame({ children }: { children?: ReactNode }) {
       <div className="relative grid min-h-0 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto]">
         <aside
           ref={contextRef}
+          data-shell-panel="context"
           aria-label="Context panel"
           hidden={!contextVisible}
           className={cn(
             TRACK,
-            'col-start-1 w-[var(--shell-context)] border-r border-border max-lg:left-0',
+            'col-start-1 w-[var(--shell-context)] border-r border-border bg-secondary max-lg:left-0',
           )}
         />
         <main className="col-start-2 min-h-0 min-w-0 overflow-hidden">
@@ -67,11 +68,12 @@ function ShellFrame({ children }: { children?: ReactNode }) {
         </main>
         <aside
           ref={inspectorRef}
+          data-shell-panel="inspector"
           aria-label="Inspector"
           hidden={!inspectorVisible}
           className={cn(
             TRACK,
-            'col-start-3 w-[var(--shell-inspector)] border-l border-border max-lg:right-0',
+            'col-start-3 w-[var(--shell-inspector)] border-l border-border bg-card max-lg:right-0',
           )}
         />
       </div>
