@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/GoogleCloudPlatform/open-knowledge-format/main/schemas/bundle.schema.json",
+  "title": "OKF v0.2 Knowledge Bundle Schema",
+  "description": "JSON Schema specification for an Open Knowledge Format (OKF v0.2) Knowledge Bundle root descriptor or manifest.",
+  "type": "object",
+  "required": ["okf_version"],
+  "properties": {
+    "okf_version": {
+      "type": "string",
+      "enum": ["0.2", "0.2.0"],
+      "description": "The OKF specification version implemented by this bundle."
+    },
+    "name": {
+      "type": "string",
+      "description": "Identifier name of the knowledge bundle."
+    },
+    "title": {
+      "type": "string",
+      "description": "Display title for the bundle."
+    },
+    "description": {
+      "type": "string",
+      "description": "Overview description of the system or domain covered by this bundle."
+    },
+    "domains": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Primary architectural domains or subsystem directories in the bundle."
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "updated_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    }
+  },
+  "additionalProperties": true
+}

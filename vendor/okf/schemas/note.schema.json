@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/GoogleCloudPlatform/open-knowledge-format/main/schemas/note.schema.json",
+  "title": "OKF v0.2 Note Schema",
+  "description": "JSON Schema specification for an Open Knowledge Format (OKF v0.2) parsed note containing frontmatter and markdown body.",
+  "type": "object",
+  "required": ["frontmatter", "body"],
+  "properties": {
+    "frontmatter": {
+      "$ref": "./concept.schema.json"
+    },
+    "body": {
+      "type": "string",
+      "description": "Markdown body content of the note."
+    }
+  },
+  "additionalProperties": false
+}

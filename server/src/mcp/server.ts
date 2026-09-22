@@ -1,4 +1,5 @@
-import { resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm'
@@ -36,9 +37,12 @@ import {
   restoreNote,
   revertNote,
   softDeleteNote,
+  vaultDir,
   type Actor,
 } from '../notes/store.js'
 import { serializeNote } from '../notes/okf.js'
+import { resolveNotePath } from '../notes/okf/paths.js'
+import { auditVaultConformance } from '../notes/audit.js'
 import { getRepositoryFile, listFileSymbols, listRepositoryFiles } from '../repositories/store.js'
 import { encryptCredential } from '../repositories/credentials.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
@@ -175,14 +179,65 @@ export function buildMcpServer(auth: McpAuth): McpServer {
   server.registerTool(
     'browse_vault',
     {
-      description: 'List the notes of a vault as its OKF type tree.',
-      inputSchema: { vaultId: z.string().uuid().optional() },
+      description: 'List the notes of a vault as its OKF type tree, or browse a directory with progressive disclosure.',
+      inputSchema: {
+        vaultId: z.string().uuid().optional(),
+        path: z.string().optional(),
+        recursive: z.boolean().optional(),
+      },
     },
-    wrap(async ({ vaultId }: { vaultId?: string }) => {
-      const target = vaultFor(vaultId)
-      await requireAccess(target, 'read')
-      return listNotes(target)
-    }),
+    wrap(
+      async (args: {
+        vaultId?: string
+        path?: string
+        recursive?: boolean
+      }) => {
+        const target = vaultFor(args.vaultId)
+        await requireAccess(target, 'read')
+        if (args.path && args.recursive !== true) {
+          const resolved = resolveNotePath(args.path)
+          const dir = resolved.fullPath
+          const prefix = `${dir}/`
+          const allNotes = await listNotes(target)
+          const directNotes: typeof allNotes = []
+          const subdirCounts = new Map<string, number>()
+
+          for (const note of allNotes) {
+            if (!note.path.startsWith(prefix)) continue
+            const remainder = note.path.slice(prefix.length)
+            if (!remainder) continue
+            const slashIndex = remainder.indexOf('/')
+            if (slashIndex === -1) {
+              directNotes.push(note)
+            } else {
+              const subdir = remainder.slice(0, slashIndex)
+              subdirCounts.set(subdir, (subdirCounts.get(subdir) ?? 0) + 1)
+            }
+          }
+
+          const subdirectories = [...subdirCounts.entries()]
+            .map(([name, count]) => ({ name, count }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+
+          const indexPath = join(vaultDir(target), dir, 'index.md')
+          let indexContent: string | null = null
+          try {
+            indexContent = await readFile(indexPath, 'utf8')
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+            indexContent = null
+          }
+
+          return {
+            directory: resolved.fullPath,
+            subdirectories,
+            notes: directNotes,
+            indexContent,
+          }
+        }
+        return listNotes(target)
+      },
+    ),
   )
 
   server.registerTool(
@@ -591,11 +646,12 @@ export function buildMcpServer(auth: McpAuth): McpServer {
     'create_note',
     {
       description:
-        'Create an OKF note (type-first: path becomes <type>/<name>). Requires edit access.',
+        'Create an OKF note. Specify either `path` (hierarchical path like concepts/sub/name) or `type` and `name`. Requires edit access.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
-        type: z.string(),
-        name: z.string(),
+        path: z.string().optional(),
+        type: z.string().optional(),
+        name: z.string().optional(),
         frontmatter: z.record(z.string(), z.unknown()).optional(),
         body: z.string().optional(),
       },
@@ -603,13 +659,17 @@ export function buildMcpServer(auth: McpAuth): McpServer {
     wrap(
       async (args: {
         vaultId?: string
-        type: string
-        name: string
+        path?: string
+        type?: string
+        name?: string
         frontmatter?: Record<string, unknown>
         body?: string
       }) => {
         const target = vaultFor(args.vaultId)
         await requireAccess(target, 'edit')
+        if (!args.path && (!args.type || !args.name)) {
+          throw new McpToolError('either `path` or both `type` and `name` must be provided')
+        }
         return createNote(target, args, actor)
       },
     ),
@@ -1464,19 +1524,44 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         repositoryId: z.string().uuid().optional(),
         types: z.array(z.string()).optional(),
         tags: z.array(z.string()).optional(),
+        aggregate: z.enum(['community']).optional(),
+        community: z.number().int().optional(),
       },
     },
     wrap(
       async (args: {
         vaultId?: string
         repositoryId?: string
-        types?: string[];
+        types?: string[]
         tags?: string[]
+        aggregate?: 'community'
+        community?: number
       }) => {
         const resources = await resolveResourceSet(args)
-        return buildGraph(resources, { types: args.types, tags: args.tags })
+        return buildGraph(resources, {
+          types: args.types,
+          tags: args.tags,
+          aggregate: args.aggregate,
+          community: args.community,
+        })
       },
     ),
+  )
+
+  server.registerTool(
+    'audit_okf_conformance',
+    {
+      description:
+        'Audit an OKF Knowledge Bundle vault for OKF v0.2 conformance: strict ISO 8601 offset compliance, wikilink integrity, repo deep-links, progressive disclosure index presence, and orphan notes.',
+      inputSchema: {
+        vaultId: z.string().uuid().optional(),
+      },
+    },
+    wrap(async (args: { vaultId?: string }) => {
+      const target = vaultFor(args.vaultId)
+      await requireAccess(target, 'read')
+      return auditVaultConformance(target, auth.user.id)
+    }),
   )
 
   return server
