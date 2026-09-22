@@ -312,6 +312,24 @@ describe('NoteView — editors take the collab path', () => {
 
     expect(screen.getByLabelText('ada.lovelace is editing this note')).toBeInTheDocument()
   })
+
+  it('toggles direction between LTR and RTL via toolbar', async () => {
+    stubFetch()
+    renderNote(EDIT_VAULT)
+    await relay()
+
+    const rtlBtn = screen.getByRole('button', { name: 'Right-to-Left (RTL)' })
+    expect(rtlBtn).toHaveAttribute('aria-pressed', 'false')
+
+    await userEvent.click(rtlBtn)
+    expect(rtlBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(document.querySelector('.direction-rtl')).toBeInTheDocument()
+
+    const ltrBtn = screen.getByRole('button', { name: 'Left-to-Right (LTR)' })
+    await userEvent.click(ltrBtn)
+    expect(ltrBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(document.querySelector('.direction-ltr')).toBeInTheDocument()
+  })
 })
 
 describe('NoteView — a session that cannot write is locked', () => {

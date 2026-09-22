@@ -146,3 +146,14 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* Bidirectional text support */
+.direction-rtl {
+  direction: rtl;
+  text-align: right;
+}
+
+.direction-ltr {
+  direction: ltr;
+  text-align: left;
+}

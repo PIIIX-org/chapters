@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Compartment, EditorState } from '@codemirror/state'
 import type { Extension } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
+import { EditorView, keymap, drawSelection, dropCursor } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
@@ -11,6 +11,8 @@ import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next'
 import type * as Y from 'yjs'
 import type { HocuspocusProvider } from '@hocuspocus/provider'
 import { penNibCursor } from '../components/vault/penNibCursor.js'
+import { terminalCursor } from '../components/vault/terminalCursor.js'
+import type { NoteDirection } from '../components/vault/note-toolbar-utils.js'
 import { markdownMarkerHiding } from './markdownMarkerHiding.js'
 import { wikilinkCompletions } from './wikilinkCompletions.js'
 import { wikilinkExtension } from './wikilinkDecorations.js'
@@ -34,6 +36,7 @@ interface UseCodeMirrorEditorOptions {
   collab?: EditorCollab
   onView?: (view: EditorView | null) => void
   onSelectionChange?: (view: EditorView) => void
+  direction?: NoteDirection
 }
 
 const markdownHighlight = HighlightStyle.define([
@@ -56,6 +59,28 @@ function lockExtensions(readOnly: boolean): Extension {
   return readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []
 }
 
+function getDirectionExtensions(direction: NoteDirection): Extension {
+  return [
+    EditorView.theme({
+      '&': {
+        direction,
+        textAlign: direction === 'rtl' ? 'right' : 'left',
+      },
+      '.cm-content': {
+        direction,
+        textAlign: direction === 'rtl' ? 'right' : 'left',
+      },
+      '.cm-line': {
+        direction,
+        textAlign: direction === 'rtl' ? 'right' : 'left',
+      },
+    }),
+    EditorView.editorAttributes.of({ dir: direction }),
+    EditorView.contentAttributes.of({ dir: direction }),
+    EditorView.perLineTextDirection.of(true),
+  ]
+}
+
 export function useCodeMirrorEditor({
   doc,
   onChange,
@@ -65,6 +90,7 @@ export function useCodeMirrorEditor({
   collab,
   onView,
   onSelectionChange,
+  direction = 'ltr',
 }: UseCodeMirrorEditorOptions) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -94,6 +120,7 @@ export function useCodeMirrorEditor({
   // revoked share freezes the editor around text the user hasn't sent yet).
   const [collabCompartment] = useState(() => new Compartment())
   const [lockCompartment] = useState(() => new Compartment())
+  const [directionCompartment] = useState(() => new Compartment())
 
   const ytext = collab?.ytext
   const awareness = collab?.awareness ?? null
@@ -115,6 +142,9 @@ export function useCodeMirrorEditor({
         // reconfigured to a bare `yCollab(...)` when awareness arrives, and
         // anything inside it goes with the old value.
         ...(ytext ? [collabCompartment.of(yCollab(ytext, awareness)), penNibCursor] : []),
+        drawSelection({ cursorBlinkRate: 1200 }),
+        dropCursor(),
+        terminalCursor,
         markdown(),
         EditorView.lineWrapping,
         // CM6 marks `.cm-content` role="textbox"; an ARIA input field with no
@@ -159,6 +189,7 @@ export function useCodeMirrorEditor({
           '.cm-wikilink': { color: 'var(--primary)', textDecoration: 'underline', cursor: 'pointer' },
         }),
         lockCompartment.of(lockExtensions(readOnly)),
+        directionCompartment.of(getDirectionExtensions(direction)),
       ],
     })
 
@@ -188,6 +219,13 @@ export function useCodeMirrorEditor({
   useEffect(() => {
     viewRef.current?.dispatch({ effects: lockCompartment.reconfigure(lockExtensions(readOnly)) })
   }, [lockCompartment, readOnly])
+
+  // Direction reconfiguration preserves cursor and document state
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: directionCompartment.reconfigure(getDirectionExtensions(direction)),
+    })
+  }, [directionCompartment, direction])
 
   return containerRef
 }
