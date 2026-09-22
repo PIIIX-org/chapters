@@ -109,22 +109,29 @@ Manages vaults and sharing:
 - `/chapters-vault preference <vault-id> [include true|false]`: View or set merged-graph preference.
 
 ### `/chapters-map <repo-id-or-path> [--vault <vault-id>] [--name <vault-name>]`
-Maps an entire project or codebase repository into structured OKF notes within a Chapters vault following the **4-Pass Flawless Mapping Protocol** ([`references/codebase-mapping-protocol.md`](references/codebase-mapping-protocol.md)), generating an interconnected, AI-navigable knowledge graph.
-- **Workflow for Agents (The 4-Pass Protocol)**:
-  1. **Pass 1 — Discovery & Manifest Analysis**:
-     - Inspect project manifests (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `Dockerfile`).
-     - Detect frameworks, runtimes, database layers, and top-level entrypoints (HTTP server, CLI, MCP server, background workers).
-  2. **Pass 2 — Architectural Domain Partitioning**:
-     - Partition the codebase into 4 to 8 cohesive architectural domains (e.g. Auth/Security, Data/Storage, API/Routes, Core Domain Logic, UI/Client).
-     - Identify key exported interfaces, lead implementation files, and invariants for each domain.
-  3. **Pass 3 — Structured OKF Note Generation in Vault**:
-     - Select or create the target vault (`list_vaults` / `create_vault`).
-     - **Root Index (`index.md`)**: System overview, architecture diagram, domain inventory, tech stack table, and entrypoint list with `[[repo:...]]` links.
-     - **Domain Concept Notes (`concepts/<domain>.md`)**: Deep architectural documentation, responsibilities, invariants, key files linked with `[[repo:<repo-id>/path/to/file]]`, and cross-domain `[[wikilinks]]`.
-     - **Critical Flow Specs (`specs/<flow>.md`)**: Sequence steps, state transitions, and trust boundaries for critical paths (e.g. data ingestion, live collaboration, auth lifecycle).
-  4. **Pass 4 — Graph Validation & Edge Audit**:
-     - Verify zero broken links: all `[[wikilinks]]` must point to existing notes, and all `[[repo:...]]` links must match real files.
-     - Call `graph` with `aggregate: "community"` to confirm that the generated notes and code nodes form cohesive, interconnected Louvain community clusters with zero orphan notes.
+Maps an entire project or codebase repository into an interconnected, Open Knowledge Format (OKF v0.2) Knowledge Bundle within Chapters following the **5-Phase Flawless OKF Mapping Protocol** ([`references/codebase-mapping-protocol.md`](references/codebase-mapping-protocol.md)), engineered from Google's Open Knowledge Format standards ([`references/okf-format.md`](references/okf-format.md)).
+
+- **Workflow for Agents (The 5-Phase OKF Protocol)**:
+  1. **Phase 0 — Target Binding**: Check repository connection (`list_repositories` / `connect_repository`) and locate or initialize the target vault (`list_vaults` / `create_vault`).
+  2. **Phase 1 — Discovery & Manifest Analysis**:
+     - Parse build manifests (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `Dockerfile`).
+     - Detect runtime engines, primary web/API frameworks, database/ORM layers, and all ingress boundaries (HTTP, WebSockets, CLI binaries, MCP servers, background worker queues).
+  3. **Phase 2 — Architectural Domain Partitioning**:
+     - Decompose the codebase into 4 to 8 cohesive bounded domains (e.g. Auth/Security, Data/Storage, API/Ingress, Core Domain Engine, Client/UI).
+     - Identify lead implementation files, exported symbol interfaces, and hard architectural invariants.
+  4. **Phase 3 — Structured OKF Note Synthesis**:
+     - Create notes via Chapters MCP `create_note` conforming to OKF v0.2 schemas:
+       - **Root System Index (`index.md`)**: High-level overview, architecture blueprint, domain roster, entrypoints, and technology stack table with `[[repo:...]]` links.
+       - **Domain Concept Notes (`domains/<domain>/index.md`)**: Architectural responsibilities, invariants, and implementation files.
+       - **End-to-End Workflow Specs (`specs/<flow>.md`)**: Sequence steps, trust boundaries, and error recovery contracts.
+       - **Data Model Notes (`models/<entity>.md`)**: Entity schemas, relationships, and code definitions.
+       - **Architecture Decisions (`decisions/ADR-<nnn>-<title>.md`)**: Context, decisions, trade-offs, and alternatives considered.
+  5. **Phase 4 — Progressive Disclosure Synthesis**:
+     - Ensure every directory level contains an `index.md` summarizing child concepts, allowing AI agents to navigate progressively without overflowing context windows.
+  6. **Phase 5 — Knowledge Graph Audit & Validation**:
+     - Audit link integrity: zero broken `[[wikilinks]]` and valid `[[repo:...]]` code targets.
+     - Call Chapters MCP `graph` with `aggregate: "community"` to verify cohesive Louvain community clusters and confirm zero orphan notes.
+     - Call Chapters MCP `search` to verify top-k hybrid search retrieval across all mapped domains.
 
 ### `/chapters-export <vault-id|note-path>`
 Exports a vault or note archive.
