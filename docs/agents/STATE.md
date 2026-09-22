@@ -19,6 +19,11 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   - **7** viewer read-only forever; local folders watched;
     **`gitUrl`/`localPath` are owner-only** (they leaked to viewers + MCP).
 - **`prod` == `dev` as of 2026-09-21 (#184, #187, #190)** — Repository sync recovery & startup reconciliation (#182), Vault folders/groups server persistence with user local/online toggle (#185), Mobile responsiveness for vault organization, vaults page, and shell navigation (#188).
+- **Phase: OKF v0.2 ALIGNMENT & UPSTREAM SYNC (2026-09-22)**: Master plan implementing Google Cloud OKF v0.2 spec (`GoogleCloudPlatform/open-knowledge-format`, Commit `3dc3029`).
+  - **Phase 1 (#209)**: Strict ISO 8601 UTC offsets (`Z`/`[+-]HH:MM`), v0.2 frontmatter families (`generated`, `sources`, `verified`, `usage_window`, `properties`), rejection of date-only strings.
+  - **Phase 2 (#210)**: Arbitrary directory hierarchy (1-8 segments), progressive disclosure table generation in `index.md`, zero-loss zip backup restore.
+  - **Phase 3 (#211)**: MCP tool parity (`create_note` unified path, progressive `browse_vault`, community `graph`, `audit_okf_conformance`), code drift detection worker, upstream schema vendoring (`vendor/okf/`), weekly sync workflow (`.github/workflows/okf-sync.yml`).
+  - **Phase 4**: UI PropertyPanel trust badges (`human-reviewed`, `machine-confirmed`, `unverified`), status pills, real-time ISO UTC validation and "NOW" button, and agent skill synchronization.
 - **Phase: UI COMMAND REDESIGN** (owner-directed 2026-08-30): spec + plan of
   the same date under `superpowers/`. Dark-first grid shell (rail · top bar ·
   context · content · inspector) on every authed route; `/vaults`, `/repos`.

@@ -103,13 +103,80 @@ describe('CollabPropertyPanel (editors)', () => {
 
     expect(screen.getByDisplayValue('https://kintsugi.test/ada')).toBeDisabled()
     expect(screen.getByPlaceholderText(/ISO date/)).toBeDisabled()
-    // TagInput hides both its draft field and its per-tag remove buttons.
-    expect(screen.queryByRole('button')).toBeNull()
+    // NOW button is disabled, and TagInput hides its remove buttons.
+    expect(screen.getByRole('button', { name: 'NOW' })).toBeDisabled()
     expect(screen.getByText('research')).toBeInTheDocument()
+  })
+
+  it('updates timestamp to an ISO string when clicking NOW button', () => {
+    const map = seededDoc()
+    render(<CollabPropertyPanel frontmatter={map} readOnly={false} />)
+
+    const nowButton = screen.getByRole('button', { name: 'NOW' })
+    fireEvent.click(nowButton)
+
+    const timestamp = map.get('timestamp') as string
+    expect(timestamp).toBeDefined()
+    expect(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(timestamp),
+    ).toBe(true)
+    expect(Number.isNaN(Date.parse(timestamp))).toBe(false)
+  })
+
+  it('highlights timestamp input with border-destructive when invalid ISO string is entered', () => {
+    const map = seededDoc({ ...SEED, timestamp: 'invalid-date' })
+    render(<CollabPropertyPanel frontmatter={map} readOnly={false} />)
+
+    const input = screen.getByPlaceholderText(/ISO date/)
+    expect(input.className).toContain('border-destructive/60')
+  })
+
+  it('renders status pill correctly for status: active', () => {
+    const map = seededDoc({ ...SEED, status: 'active' })
+    render(<CollabPropertyPanel frontmatter={map} readOnly={false} />)
+
+    expect(screen.getByText('active')).toBeInTheDocument()
+  })
+
+  it('renders trust badges correctly for verified metadata', () => {
+    const map = seededDoc({
+      ...SEED,
+      verified: { tier: 'human-reviewed', by: 'alice' },
+    })
+    render(<CollabPropertyPanel frontmatter={map} readOnly={false} />)
+
+    expect(screen.getByText('human-reviewed by alice')).toBeInTheDocument()
+  })
+
+  it('renders sources list correctly', () => {
+    const map = seededDoc({
+      ...SEED,
+      sources: [{ resource: 'repo:chapters/app.ts', title: 'Main App' }],
+    })
+    render(<CollabPropertyPanel frontmatter={map} readOnly={false} />)
+
+    expect(screen.getByText('Main App')).toBeInTheDocument()
+    expect(screen.getByText('repo:chapters/app.ts')).toBeInTheDocument()
   })
 
   it('has no accessibility violations', async () => {
     const { container } = render(<CollabPropertyPanel frontmatter={seededDoc()} readOnly={false} />)
+    await expectNoA11yViolations(container)
+  })
+
+  it('has no accessibility violations with all OKF v0.2 fields present', async () => {
+    const map = seededDoc({
+      ...SEED,
+      status: 'active',
+      verified: [{ tier: 'human-reviewed', by: 'alice' }, { tier: 'machine-confirmed' }],
+      generated: { by: 'gemini-2.5', at: '2026-09-22T12:00:00Z' },
+      sources: [
+        { resource: 'repo:chapters/app.ts', title: 'Main App', last_modified: '2026-09-22T10:00:00Z' },
+        { resource: 'https://example.com/docs', title: 'External Docs' },
+      ],
+      timestamp: '2026-09-22T14:00:00Z',
+    })
+    const { container } = render(<CollabPropertyPanel frontmatter={map} readOnly={false} />)
     await expectNoA11yViolations(container)
   })
 })
@@ -122,7 +189,7 @@ describe('LivePropertyPanel (readers)', () => {
     expect(screen.getByDisplayValue('https://kintsugi.test/ada')).toBeDisabled()
     expect(screen.getByPlaceholderText(/ISO date/)).toBeDisabled()
     expect(screen.getByText('research')).toBeInTheDocument()
-    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.getByRole('button', { name: 'NOW' })).toBeDisabled()
   })
 
   it('follows the frames: locked is not frozen', () => {
