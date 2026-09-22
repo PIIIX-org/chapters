@@ -6,18 +6,32 @@ Chapters was engineered specifically to store, link, and serve notes in OKF so t
 
 Specification references:
 - [GoogleCloudPlatform/open-knowledge-format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
-- [GoogleCloudPlatform/knowledge-catalog](https://github.com/GoogleCloudPlatform/knowledge-catalog)
 
 ---
 
-## 1. Core Principles of OKF
+## 1. Core Principles & OKF v0.2 Updates
 
-1. **Plain Markdown on Disk**: Notes are stored directly on the filesystem as standard UTF-8 `.md` files under the vault's directory. No proprietary database or binary format holds your knowledge hostage.
-2. **Standard YAML Frontmatter**: Every note begins with a YAML frontmatter block delimited by `---` on its own line at the start of the file and a closing `---` on its own line.
-3. **Decentralized & Vendor-Neutral**: There is no required central schema registry. Any tool capable of reading markdown and YAML (Obsidian, MkDocs, Hugo, Git, terminal utilities) can read and edit OKF notes.
-4. **Hierarchical Progressive Disclosure**: Notes are organized into logical directory trees where every directory contains an `index.md`. AI agents navigate progressively level-by-level without exhausting context windows.
-5. **First-Class Provenance, Trust & Lifecycle**: OKF notes explicitly record what source artifacts they were derived from (`sources`), who or what generated them (`generated`), and their verification tier (`verified`).
-6. **Dual Knowledge Graph Integration**: Explicit wikilinks (`[[target]]` and `[[repo:...]]`) are compiled into explicit `EXTRACTED` edges, frontmatter metadata generates `STRUCTURAL` edges, and vector embeddings form `INFERRED` semantic edges in the Chapters knowledge graph.
+OKF v0.2 introduces four major architectural pillars to standard markdown knowledge bases:
+
+1. **Mandatory Strict ISO 8601 UTC / Offset Datetimes**:
+   All datetime fields (`timestamp`, `stale_after`, `generated.at`, `verified.at`, `sources[].last_modified`, `usage_window.from`, `usage_window.to`) MUST be formatted with an explicit UTC or timezone offset:
+   - Pattern: `/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/`
+   - Valid examples: `2026-09-22T12:00:00Z`, `2026-09-22T08:30:00+00:00`, `2026-09-22T17:30:00+03:30`
+   - Bare calendar dates (e.g. `2026-09-22`) and timestamps without explicit timezone offsets are rejected by server validation and flagged in UI inspection.
+
+2. **8-Level Arbitrary Directory Hierarchy**:
+   Rather than being constrained to a single flat `type/name` folder structure, OKF v0.2 notes support arbitrary nested directory structures up to 8 levels deep (e.g. `domains/storage/crdt/vectors/clock.md`). Path segments must be valid slugs (`^[a-z0-9][a-z0-9-]*$`), guaranteeing safe filesystem mapping and preventing path traversal.
+
+3. **Progressive Disclosure Index Tables**:
+   Every directory level in an OKF bundle must contain an `index.md` file that summarizes the immediate directory, lists child subdirectories with counts, and provides a markdown summary table of child concepts. AI agents can traverse deep knowledge trees progressively via `browse_vault` (`path` and `recursive: false`) without overflowing LLM context windows.
+
+4. **Structured Provenance, Trust & Lifecycle**:
+   OKF v0.2 establishes first-class frontmatter schemas for tracking provenance, trust, and lifecycles:
+   - **`status`**: Lifecycle state of the note (`draft`, `active`, `stable`, `deprecated`, `superseded`, `archived`).
+   - **`verified`**: Trust tier metadata (`unverified`, `machine-confirmed`, `human-reviewed`), including reviewer identity (`by`) and verification timestamp (`at`).
+   - **`generated`**: Agent or automated pipeline attribution (`by`) and generation timestamp (`at`).
+   - **`sources`**: Dependency list of underlying source artifacts (`id`, `resource`, `title`, `last_modified`, `hash`, `author`) for automated staleness tracking.
+   - **`usage_window`**: Temporal validity interval (`from`, `to`).
 
 ---
 
@@ -31,7 +45,7 @@ In Chapters, a vault represents an **OKF Knowledge Bundle**: a self-contained, v
 vault-root/
 ├── index.md                      # Bundle Root Index: High-level system overview & domain catalog
 ├── log.md                        # Optional: Chronological changelog of updates and agent sessions
-├── domains/                      # Architectural domains and subsystem concept notes
+├── domains/                      # Architectural domains and subsystem concept notes (up to 8 levels)
 │   ├── index.md                  # Domain index (progressive disclosure)
 │   ├── auth-security/
 │   │   ├── index.md              # Domain overview note
@@ -61,16 +75,32 @@ vault-root/
 
 | Filename | Purpose & Rules |
 | :--- | :--- |
-| `index.md` | **Directory Listing & Progressive Disclosure**: Summarizes the immediate folder, lists child concepts with descriptions, and provides structured links. Never used for leaf concept documentation. |
+| `index.md` | **Directory Listing & Progressive Disclosure**: Summarizes the immediate folder, lists child concepts with descriptions in markdown index tables, and provides links to child subdirectories. Never used for leaf concept documentation. |
 | `log.md` | **Update History & Audit Trail**: Chronological record of bundle updates, agent mapping sessions, and milestone revisions. |
 
 All other `.md` files represent **Concept Documents**.
+
+### 2.3 Progressive Disclosure Index Tables
+
+Every `index.md` summarizes child concepts using structured markdown tables so AI agents can query high-density summaries before loading individual notes:
+
+```markdown
+# Authentication & Security Domain
+
+## Child Concepts
+
+| Concept | Description | Status | Resource |
+| :--- | :--- | :--- | :--- |
+| [[session-lifecycle]] | Session validation and cookie encryption lifecycle | active | `repo:chapters/server/src/auth/session.ts` |
+| [[permissions-matrix]] | RBAC permission evaluation across vaults and repos | stable | `repo:chapters/server/src/auth/permissions.ts` |
+| [[mfa-spec]] | TOTP authentication and backup code management | active | `repo:chapters/server/src/auth/mfa.ts` |
+```
 
 ---
 
 ## 3. Concept Document Frontmatter Schema
 
-Every concept document must contain a YAML frontmatter block at the very top:
+Every concept document must contain a YAML frontmatter block at the very top conforming to OKF v0.2:
 
 ```yaml
 ---
@@ -79,16 +109,18 @@ type: Architectural Domain          # REQUIRED. Short string naming the concept 
 title: "Authentication & Security"  # Recommended display title.
 description: "Handles user sessions, MFA verification, and RBAC token resolution." # Single-sentence summary for indices and agent search.
 
-# === Resource Binding (Optional) ===
+# === Resource Binding & Timestamp ===
 resource: "repo:chapters/server/src/auth" # Canonical URI or repo deep-link identifying the underlying code asset.
 tags: [auth, security, sessions, rbac]     # Cross-cutting categorization tags.
+timestamp: "2026-09-22T05:00:00Z"          # REQUIRED ISO 8601 UTC timestamp with explicit offset.
+stale_after: "2026-12-31T23:59:59Z"        # Optional ISO 8601 UTC expiration timestamp.
 
 # === Lifecycle & Trust (Optional) ===
-status: active                      # draft | active | deprecated | superseded | archived
+status: active                      # draft | active | deprecated | superseded | archived | stable
 verified:
   tier: human-reviewed              # unverified | machine-confirmed | human-reviewed
   by: "human:taha"                  # Actor convention (human:<id>, agent:<name>, process:<id>)
-  at: "2026-09-22T05:00:00Z"
+  at: "2026-09-22T05:00:00Z"        # ISO 8601 UTC timestamp
 
 # === Provenance & Attribution (Optional) ===
 generated:
@@ -98,12 +130,15 @@ sources:
   - id: auth-session-ts
     resource: "repo:chapters/server/src/auth/session.ts"
     title: "Session Manager Implementation"
-    last_modified: "2026-09-21T18:00:00Z"
+    last_modified: "2026-09-21T18:00:00Z" # ISO 8601 UTC timestamp
   - id: mfa-spec
     resource: "docs/superpowers/specs/2026-07-15-mfa-design.md"
     title: "MFA Architecture Specification"
 
-# === Custom Domain Properties (Optional) ===
+# === Temporal Window & Custom Properties (Optional) ===
+usage_window:
+  from: "2026-09-22T00:00:00Z"
+  to: "2027-09-22T00:00:00Z"
 properties:
   complexity: high
   layer: backend
@@ -125,23 +160,29 @@ Identifies the kind of concept for routing, search filtering, and graph communit
 - `Reference`: Environment configurations, operational runbooks, or cheat sheets.
 
 #### `description` (RECOMMENDED)
-A single, high-density sentence summarizing what the concept is and does.
-- **Why it matters**: Chapters uses this field for search snippet previews, `index.md` progressive disclosure tables, and prompt injection for LLM context windows.
+A single, high-density sentence summarizing what the concept is and does. Chapters uses this field for search snippet previews, `index.md` progressive disclosure tables, and prompt injection for LLM context windows.
 
 #### `resource` (RECOMMENDED FOR CODE-LINKED CONCEPTS)
 A URI that uniquely identifies the underlying asset the concept describes:
 - Repository file or folder: `repo:<repo-id>/server/src/auth/session.ts`
-- External specification: `https://github.com/PIIIX-org/chapters`
+- External specification: `https://github.com/GoogleCloudPlatform/open-knowledge-format`
+
+#### `timestamp` (STRICT ISO 8601 WITH OFFSET)
+Records creation or modification datetime. Must match `/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/`.
+
+#### `status` (LIFECYCLE)
+One of `draft`, `active`, `stable`, `deprecated`, `superseded`, `archived`. Rendered in UI as semantic status badge with color-coded dot.
 
 #### `generated` & `sources` (PROVENANCE FAMILY)
-- `generated`: Records who produced the note (`by: "agent:<name>"`, `by: "human:<id>"`) and when (`at: "<ISO-8601>"`).
-- `sources`: An array of concrete artifacts (code files, specs, configs) that the note was synthesized from, allowing automated verification of staleness when code changes.
+- `generated`: Records who produced the note (`by`) and when (`at: "<ISO-8601 UTC>"`).
+- `sources`: An array of concrete artifacts (code files, specs, configs) that the note was synthesized from, each with `id`, `resource`, `title`, and optional `last_modified` (ISO 8601 UTC).
 
 #### `verified` (TRUST TIER FAMILY)
 Records how much trust an agent or human can place in the note:
 - `unverified`: Machine-extracted without verification.
 - `machine-confirmed`: Validated against test runs, linter, or compiler output.
 - `human-reviewed`: Explicitly reviewed and signed off by a human engineer.
+Can be specified as a single object or an array of verification records.
 
 ---
 

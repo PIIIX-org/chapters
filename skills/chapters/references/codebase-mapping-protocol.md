@@ -4,7 +4,6 @@ This document defines the deterministic, 5-phase protocol for AI agents mapping 
 
 Specification standards:
 - [GoogleCloudPlatform/open-knowledge-format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
-- [GoogleCloudPlatform/knowledge-catalog](https://github.com/GoogleCloudPlatform/knowledge-catalog)
 - [Chapters OKF Specification](okf-format.md)
 
 ---

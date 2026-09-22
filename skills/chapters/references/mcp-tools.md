@@ -1,6 +1,6 @@
 # Chapters MCP Tool Reference
 
-This document provides exact parameter details, response structures, and usage examples for all 49 Chapters Model Context Protocol (MCP) tools.
+This document provides exact parameter details, response structures, and usage examples for all 50 Chapters Model Context Protocol (MCP) tools.
 
 ---
 
@@ -22,9 +22,10 @@ This document provides exact parameter details, response structures, and usage e
 ### `browse_vault`
 - **Scope**: Vault or Account.
 - **Parameters**:
-  - `vaultId` (string, required): ID of the vault.
-  - `path` (string, optional): Directory path within the vault (defaults to root `""`).
-- **Returns**: Array of file and directory items with `name`, `path`, `type` (`"file"` or `"directory"`).
+  - `vaultId` (string, optional): ID of the vault.
+  - `path` (string, optional): Directory path within the vault for progressive disclosure (defaults to root `""`).
+  - `recursive` (boolean, optional): If `true`, returns all notes recursively across the vault or subdirectory. If `false` (default when `path` is provided), returns progressive disclosure object with `directory`, `subdirectories` (with child counts), direct `notes`, and immediate `indexContent`.
+- **Returns**: Array of notes, or when `path` is specified without `recursive: true`: `{ directory: string, subdirectories: [{ name: string, count: number }], notes: [...], indexContent: string | null }`.
 
 ### `update_vault`
 - **Scope**: Vault or Account (requires owner permission).
@@ -103,10 +104,20 @@ This document provides exact parameter details, response structures, and usage e
 ### `create_note`
 - **Scope**: Vault or Account (requires edit permission).
 - **Parameters**:
-  - `vaultId` (string, required): ID of the vault.
-  - `path` (string, required): Path of the new note (must end with `.md`).
-  - `content` (string, required): Full markdown content with YAML frontmatter.
+  - `vaultId` (string, optional): ID of the vault.
+  - `path` (string, optional): Unified hierarchical note path (e.g., `domains/auth/session-lifecycle.md` or `specs/crdt.md`, up to 8 directory levels). Must be provided if `type` and `name` are omitted.
+  - `type` (string, optional): Note category slug (used with `name` if `path` is omitted).
+  - `name` (string, optional): Note slug name (used with `type` if `path` is omitted).
+  - `frontmatter` (object, optional): OKF v0.2 frontmatter object (with `title`, `tags`, `timestamp`, `status`, `verified`, `generated`, `sources`, etc.).
+  - `body` (string, optional): Markdown note body.
+  - `content` (string, optional): Full markdown content with YAML frontmatter.
 - **Returns**: Created note metadata.
+
+### `audit_okf_conformance`
+- **Scope**: Vault or Account (requires read permission).
+- **Parameters**:
+  - `vaultId` (string, optional): ID of the vault to audit.
+- **Returns**: `{ vaultId: string, totalNotes: number, passed: boolean, score: number, checks: { isoTimestamps: { passed: boolean, failures: [...] }, wikilinks: { passed: boolean, broken: [...] }, repoLinks: { passed: boolean, unresolved: [...] }, progressiveDisclosure: { passed: boolean, missingIndices: [...] }, orphanNotes: { passed: boolean, orphans: [...] } } }`.
 
 ### `edit_note`
 - **Scope**: Vault or Account (requires edit permission).
@@ -242,7 +253,9 @@ This document provides exact parameter details, response structures, and usage e
 - **Parameters**:
   - `vaultId` (string, optional): Restrict to specific vault.
   - `repositoryId` (string, optional): Restrict to specific repo.
-  - `aggregate` (string, optional): Set to `"community"` for Louvain community clustering.
-  - `community` (number, optional): Filter to members of a single community.
+  - `types` (array of strings, optional): Filter by note or symbol types.
+  - `tags` (array of strings, optional): Filter by tags.
+  - `aggregate` (string, optional): Set to `"community"` for Louvain community clustering (collapsing the graph into community super-nodes).
+  - `community` (number, optional): Filter to members of a single Louvain community.
   - `limit` (number, optional): Maximum nodes to return.
 - **Returns**: `{ nodes: [...], edges: [...], communities: [...] }`.
