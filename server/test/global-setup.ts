@@ -12,6 +12,9 @@ const TEST_URL =
 
 export default async function setup(): Promise<void> {
   await rm(join(tmpdir(), 'chapters-test-data'), { recursive: true, force: true })
+  if (process.env.SKIP_DB_SETUP === '1' || process.env.SKIP_DB_SETUP?.trim() === '1') {
+    return
+  }
   const admin = postgres(ADMIN_URL, { max: 1 })
   try {
     await admin.unsafe('CREATE DATABASE chapters_test')
