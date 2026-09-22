@@ -179,12 +179,14 @@ export async function regenProgressiveIndices(
       ]
       for (const child of childNotes) {
         const fm = child.frontmatter
-        const title =
-          typeof fm.title === 'string' && fm.title.trim() ? fm.title.trim() : child.baseName
         const type = typeof fm.type === 'string' && fm.type ? String(fm.type) : child.type
         const status = fm.status !== undefined && fm.status !== null ? String(fm.status) : ''
         const description = typeof fm.description === 'string' ? fm.description : ''
-        lines.push(`| [[${child.path}|${title}]] | \`${type}\` | ${status} | ${description} |`)
+        const link =
+          typeof fm.title === 'string' && fm.title.trim() && fm.title.trim() !== child.baseName
+            ? `[[${child.path}|${fm.title.trim()}]]`
+            : `[[${child.path}]]`
+        lines.push(`| ${link} | \`${type}\` | ${status} | ${description} |`)
       }
       sections.push(lines.join('\n'))
     }
