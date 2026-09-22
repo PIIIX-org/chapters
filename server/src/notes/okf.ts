@@ -77,7 +77,10 @@ export function validateNote(
   body: string,
 ): void {
   if (!isSlug(type)) throw new OkfValidationError(`invalid type slug: ${type}`)
-  if (!isSlug(name)) throw new OkfValidationError(`invalid name slug: ${name}`)
+  const nameSegments = name.split('/')
+  if (nameSegments.length === 0 || nameSegments.some((seg) => !isSlug(seg))) {
+    throw new OkfValidationError(`invalid name slug: ${name}`)
+  }
   if (frontmatter.type !== type) {
     throw new OkfValidationError(
       `frontmatter type "${String(frontmatter.type)}" does not match path type "${type}"`,

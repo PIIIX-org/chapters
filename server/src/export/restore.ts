@@ -12,7 +12,8 @@ import {
   vaults,
   vaultShares,
 } from '../db/schema.js'
-import { createNote, splitPath } from '../notes/store.js'
+import { createNote } from '../notes/store.js'
+import { resolveNotePath } from '../notes/okf/paths.js'
 import { parseNote, OkfValidationError } from '../notes/okf.js'
 
 export interface RestoreResult {
@@ -125,16 +126,24 @@ export async function restoreBackup(zipBuffer: Buffer): Promise<RestoreResult> {
   let notesImported = 0
   const notesSkipped: string[] = []
   for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) continue
     const match = /^vaults\/([0-9a-f-]+)\/(.+)\.md$/.exec(entry.entryName)
     if (!match) continue
     const [, vaultId, path] = match
+    if (!path || path === 'index' || path.endsWith('/index')) continue
     try {
-      const { type, name } = splitPath(path!)
+      const resolved = resolveNotePath(path)
       const parsed = parseNote(entry.getData().toString('utf8'))
       const owner = dump.vaults.find((v) => v.id === vaultId)?.ownerId as string | undefined
       await createNote(
         vaultId!,
-        { type, name, frontmatter: parsed.frontmatter, body: parsed.body },
+        {
+          path: resolved.fullPath,
+          type: resolved.type,
+          name: resolved.name,
+          frontmatter: parsed.frontmatter,
+          body: parsed.body,
+        },
         { type: 'user', id: owner },
       )
       notesImported += 1

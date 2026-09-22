@@ -6,7 +6,8 @@ import { exportLinks, users, vaults, vaultShares } from '../db/schema.js'
 import { generateToken, hashToken } from '../auth/tokens.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { resolveAccess, atLeast } from '../vaults/permissions.js'
-import { createNote, readNote, splitPath } from '../notes/store.js'
+import { createNote, readNote } from '../notes/store.js'
+import { resolveNotePath } from '../notes/okf/paths.js'
 import { parseNote, serializeNote, OkfValidationError } from '../notes/okf.js'
 import {
   addVaultToZip,
@@ -54,15 +55,15 @@ export function exportRoutes(app: FastifyInstance) {
         if (!(await guardExport(req.user!.id, req.params.id))) {
           return reply.code(404).send({ error: 'not found' })
         }
-        splitPath(req.params['*'])
-        const note = await readNote(req.params.id, req.params['*'])
+        const resolved = resolveNotePath(req.params['*'])
+        const note = await readNote(req.params.id, resolved.fullPath)
         if (!note) return reply.code(404).send({ error: 'note not found' })
         // Exactly as stored: frontmatter + body, no transformation.
         return reply
           .header('content-type', 'text/markdown')
           .header(
             'content-disposition',
-            `attachment; filename="${req.params['*'].split('/')[1]}.md"`,
+            `attachment; filename="${resolved.baseName}.md"`,
           )
           .send(serializeNote({ frontmatter: note.frontmatter, body: note.body }))
       },
@@ -148,13 +149,20 @@ export function exportRoutes(app: FastifyInstance) {
       for (const entry of zip.getEntries()) {
         if (entry.isDirectory || !entry.entryName.endsWith('.md')) continue
         const path = entry.entryName.replace(/\.md$/, '')
+        if (path === 'index' || path.endsWith('/index')) continue
         try {
-          const { type, name } = splitPath(path)
+          const resolved = resolveNotePath(path)
           const parsed = parseNote(entry.getData().toString('utf8'))
           // Same shared validation write path as every other write.
           await createNote(
             vault!.id,
-            { type, name, frontmatter: parsed.frontmatter, body: parsed.body },
+            {
+              path: resolved.fullPath,
+              type: resolved.type,
+              name: resolved.name,
+              frontmatter: parsed.frontmatter,
+              body: parsed.body,
+            },
             { type: 'user', id: req.user!.id },
           )
           imported += 1

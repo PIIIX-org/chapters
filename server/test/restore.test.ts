@@ -167,19 +167,77 @@ describe('restoreBackup', () => {
     }
     const zip = new AdmZip()
     zip.addFile('account-dump.json', Buffer.from(JSON.stringify(dump), 'utf8'))
-    // Extra path nesting fails the OKF type/name slug convention
-    // (splitPath requires exactly one segment of each) — createNote
-    // itself forces frontmatter.type to match the path, so a path-shape
-    // violation is the failure this loop can actually hit.
+    // Paths exceeding the maximum depth of 8 segments fail OKF validation
     zip.addFile(
-      `vaults/${vaultId}/nested/too/deep.md`,
-      Buffer.from(serializeNote({ frontmatter: { type: 'nested' }, body: 'x' }), 'utf8'),
+      `vaults/${vaultId}/1/2/3/4/5/6/7/8/9.md`,
+      Buffer.from(serializeNote({ frontmatter: { type: '1' }, body: 'x' }), 'utf8'),
     )
 
     const result = await restoreBackup(zip.toBuffer())
     expect(result.notesImported).toBe(0)
     expect(result.notesSkipped).toHaveLength(1)
-    expect(result.notesSkipped[0]).toContain('nested/too/deep')
+    expect(result.notesSkipped[0]).toContain('1/2/3/4/5/6/7/8/9')
+  })
+
+  it('restores nested notes (3-8 segments) cleanly without being skipped', async () => {
+    const userId = randomUUID()
+    const vaultId = randomUUID()
+    const now = new Date().toISOString()
+    const dump = {
+      users: [
+        {
+          id: userId,
+          email: uniqueEmail('restore-nested'),
+          passwordHash: 'x',
+          status: 'active',
+          role: 'member',
+          emailVerifiedAt: now,
+          totpSecret: null,
+          mfaEnabledAt: null,
+          createdAt: now,
+        },
+      ],
+      teams: [],
+      teamMemberships: [],
+      vaults: [{ id: vaultId, name: 'Nested Vault', ownerId: userId, mergeable: false, createdAt: now }],
+      vaultShares: [],
+      mcpConnections: [],
+      securityEvents: [],
+      notifications: [],
+    }
+    const zip = new AdmZip()
+    zip.addFile('account-dump.json', Buffer.from(JSON.stringify(dump), 'utf8'))
+    zip.addFile(
+      `vaults/${vaultId}/domains/auth/session.md`,
+      Buffer.from(
+        serializeNote({
+          frontmatter: { type: 'domains', title: 'User Session', status: 'active' },
+          body: 'Hierarchical note body.',
+        }),
+        'utf8',
+      ),
+    )
+    zip.addFile(
+      `vaults/${vaultId}/a/b/c/d/e/f/g/h.md`,
+      Buffer.from(
+        serializeNote({
+          frontmatter: { type: 'a' },
+          body: 'Max depth note body.',
+        }),
+        'utf8',
+      ),
+    )
+
+    const result = await restoreBackup(zip.toBuffer())
+    expect(result.notesImported).toBe(2)
+    expect(result.notesSkipped).toHaveLength(0)
+
+    const note1 = await readNote(vaultId, 'domains/auth/session')
+    expect(note1?.body).toBe('Hierarchical note body.')
+    expect(note1?.frontmatter.title).toBe('User Session')
+
+    const note2 = await readNote(vaultId, 'a/b/c/d/e/f/g/h')
+    expect(note2?.body).toBe('Max depth note body.')
   })
 
   it('throws for a zip that is not a full-instance backup', async () => {

@@ -15,6 +15,13 @@ import {
   isSlug,
   type Frontmatter,
 } from './okf.js'
+import {
+  resolveNotePath,
+  type ResolvedNotePath,
+  splitPath,
+} from './okf/paths.js'
+
+export { splitPath, resolveNotePath, type ResolvedNotePath }
 
 export type NoteRow = typeof notes.$inferSelect
 export type RevisionRow = typeof noteRevisions.$inferSelect
@@ -79,14 +86,6 @@ function isUniqueViolation(err: unknown): boolean {
   return false
 }
 
-export function splitPath(path: string): { type: string; name: string } {
-  const parts = path.split('/')
-  if (parts.length !== 2 || !isSlug(parts[0]!) || !isSlug(parts[1]!)) {
-    throw new OkfValidationError(`invalid note path: ${path}`)
-  }
-  return { type: parts[0]!, name: parts[1]! }
-}
-
 async function atomicWrite(file: string, content: string): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
   const tmp = `${file}.tmp`
@@ -95,53 +94,153 @@ async function atomicWrite(file: string, content: string): Promise<void> {
 }
 
 /**
- * OKF convention: every type folder carries an auto-generated index.md
- * listing its notes. Derived output — regenerated on any change, never
- * indexed as a note itself.
+ * OKF v0.2 Progressive Disclosure: regenerates index.md for each directory in ancestorDirs.
+ * Contains subsystems (child directories) and concepts & artifacts (direct child notes).
+ * If a directory has 0 notes and 0 subdirectories, index.md is unlinked.
  */
-async function regenIndex(vaultId: string, type: string): Promise<void> {
+export async function regenProgressiveIndices(
+  vaultId: string,
+  ancestorDirs: string[],
+): Promise<void> {
+  const uniqueDirs = [...new Set(ancestorDirs.filter(Boolean))]
+  if (uniqueDirs.length === 0) return
+
   const rows = await db
-    .select({ path: notes.path, name: notes.name })
+    .select({
+      path: notes.path,
+      type: notes.type,
+      name: notes.name,
+      frontmatter: notes.frontmatter,
+    })
     .from(notes)
-    .where(and(eq(notes.vaultId, vaultId), eq(notes.type, type), isNull(notes.deletedAt)))
-    .orderBy(asc(notes.name))
-  const file = join(vaultDir(vaultId), type, 'index.md')
-  if (rows.length === 0) {
-    await unlink(file).catch(() => {})
-    return
+    .where(and(eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
+
+  for (const dir of uniqueDirs) {
+    const prefix = `${dir}/`
+    const subdirCounts = new Map<string, number>()
+    const childNotes: Array<{
+      path: string
+      baseName: string
+      type: string
+      frontmatter: Record<string, unknown>
+    }> = []
+
+    for (const note of rows) {
+      if (note.path === 'index' || note.path.endsWith('/index')) continue
+      if (!note.path.startsWith(prefix)) continue
+
+      const remainder = note.path.slice(prefix.length)
+      if (!remainder) continue
+
+      const slashIndex = remainder.indexOf('/')
+      if (slashIndex === -1) {
+        childNotes.push({
+          path: note.path,
+          baseName: remainder,
+          type: note.type,
+          frontmatter: (note.frontmatter ?? {}) as Record<string, unknown>,
+        })
+      } else {
+        const subdir = remainder.slice(0, slashIndex)
+        subdirCounts.set(subdir, (subdirCounts.get(subdir) ?? 0) + 1)
+      }
+    }
+
+    const file = join(vaultDir(vaultId), dir, 'index.md')
+
+    if (subdirCounts.size === 0 && childNotes.length === 0) {
+      await unlink(file).catch(() => {})
+      continue
+    }
+
+    const sections: string[] = []
+
+    if (subdirCounts.size > 0) {
+      const sortedSubdirs = [...subdirCounts.entries()].sort(([a], [b]) => a.localeCompare(b))
+      const lines = [
+        '## Subsystems & Architectural Domains',
+        '',
+        '| Subsystem / Domain | Active Concepts | Index |',
+        '| :--- | :--- | :--- |',
+      ]
+      for (const [subdir, count] of sortedSubdirs) {
+        lines.push(`| **${subdir}** | ${count} notes | [[${dir}/${subdir}/index|View Domain]] |`)
+      }
+      sections.push(lines.join('\n'))
+    }
+
+    if (childNotes.length > 0) {
+      childNotes.sort((a, b) => a.path.localeCompare(b.path))
+      const lines = [
+        '## Concepts & Artifacts',
+        '',
+        '| Concept | Type | Status | Description |',
+        '| :--- | :--- | :--- | :--- |',
+      ]
+      for (const child of childNotes) {
+        const fm = child.frontmatter
+        const type = typeof fm.type === 'string' && fm.type ? String(fm.type) : child.type
+        const status = fm.status !== undefined && fm.status !== null ? String(fm.status) : ''
+        const description = typeof fm.description === 'string' ? fm.description : ''
+        const link =
+          typeof fm.title === 'string' && fm.title.trim() && fm.title.trim() !== child.baseName
+            ? `[[${child.path}|${fm.title.trim()}]]`
+            : `[[${child.path}]]`
+        lines.push(`| ${link} | \`${type}\` | ${status} | ${description} |`)
+      }
+      sections.push(lines.join('\n'))
+    }
+
+    await atomicWrite(file, `${sections.join('\n\n')}\n`)
   }
-  const lines = rows.map((r) => `- [[${r.path}]]`)
-  await atomicWrite(file, `# ${type}\n\n${lines.join('\n')}\n`)
 }
 
 export async function createNote(
   vaultId: string,
-  input: { type: string; name: string; frontmatter?: Record<string, unknown>; body?: string },
+  input: {
+    path?: string
+    type?: string
+    name?: string
+    frontmatter?: Record<string, unknown>
+    body?: string
+  },
   actor: Actor = SYSTEM_ACTOR,
 ): Promise<NoteRow> {
+  const rawPath =
+    input.path ??
+    (input.type && input.name
+      ? `${input.type}/${input.name}`
+      : `${input.type ?? ''}/${input.name ?? ''}`)
+  const resolved = resolveNotePath(rawPath)
   const frontmatter: Frontmatter = {
     timestamp: new Date().toISOString(),
     ...input.frontmatter,
-    type: input.type,
+    type: input.frontmatter?.type ? String(input.frontmatter.type) : resolved.type,
   }
   const body = input.body ?? ''
-  validateNote(input.type, input.name, frontmatter, body)
-  const path = `${input.type}/${input.name}`
+  validateNote(resolved.type, resolved.name, frontmatter, body)
   let row: NoteRow
   try {
     const inserted = await db
       .insert(notes)
-      .values({ vaultId, type: input.type, name: input.name, path, frontmatter, body })
+      .values({
+        vaultId,
+        type: resolved.type,
+        name: resolved.name,
+        path: resolved.fullPath,
+        frontmatter,
+        body,
+      })
       .returning()
     row = inserted[0]!
   } catch (err) {
     if (isUniqueViolation(err)) {
-      throw new OkfValidationError(`a note already exists at ${path}`)
+      throw new OkfValidationError(`a note already exists at ${resolved.fullPath}`)
     }
     throw err
   }
-  await atomicWrite(noteFile(vaultId, path), serializeNote({ frontmatter, body }))
-  await regenIndex(vaultId, input.type)
+  await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
+  await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
   await syncLinks(row.id, body)
   scheduleEmbedding(row.id)
   await recordRevision(row.id, 'create', frontmatter, body, actor)
@@ -165,10 +264,11 @@ async function syncLinks(noteId: string, body: string): Promise<void> {
 }
 
 export async function getLiveNote(vaultId: string, path: string): Promise<NoteRow | null> {
+  const resolved = resolveNotePath(path)
   const rows = await db
     .select()
     .from(notes)
-    .where(and(eq(notes.vaultId, vaultId), eq(notes.path, path), isNull(notes.deletedAt)))
+    .where(and(eq(notes.vaultId, vaultId), eq(notes.path, resolved.fullPath), isNull(notes.deletedAt)))
   return rows[0] ?? null
 }
 
@@ -186,11 +286,12 @@ export async function readNote(
   vaultId: string,
   path: string,
 ): Promise<{ row: NoteRow; frontmatter: Frontmatter; body: string } | null> {
-  const row = await getLiveNote(vaultId, path)
+  const resolved = resolveNotePath(path)
+  const row = await getLiveNote(vaultId, resolved.fullPath)
   if (!row) return null
   let raw: string
   try {
-    raw = await readFile(noteFile(vaultId, path), 'utf8')
+    raw = await readFile(noteFile(vaultId, resolved.fullPath), 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     return { row, frontmatter: row.frontmatter as Frontmatter, body: row.body }
@@ -205,7 +306,8 @@ export async function updateNote(
   input: { frontmatter?: Record<string, unknown>; body?: string },
   actor: Actor = SYSTEM_ACTOR,
 ): Promise<NoteRow | null> {
-  const row = await getLiveNote(vaultId, path)
+  const resolved = resolveNotePath(path)
+  const row = await getLiveNote(vaultId, resolved.fullPath)
   if (!row) return null
   const frontmatter: Frontmatter = {
     ...(input.frontmatter ?? (row.frontmatter as Frontmatter)),
@@ -218,7 +320,8 @@ export async function updateNote(
     .set({ frontmatter, body, updatedAt: new Date() })
     .where(eq(notes.id, row.id))
     .returning()
-  await atomicWrite(noteFile(vaultId, path), serializeNote({ frontmatter, body }))
+  await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
+  await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
   await syncLinks(row.id, body)
   scheduleEmbedding(row.id)
   await recordRevision(row.id, 'update', frontmatter, body, actor)
@@ -230,20 +333,35 @@ export async function renameNote(
   from: string,
   toName: string,
 ): Promise<NoteRow | null> {
-  const row = await getLiveNote(vaultId, from)
+  const fromResolved = resolveNotePath(from)
+  const row = await getLiveNote(vaultId, fromResolved.fullPath)
   if (!row) return null
-  if (!isSlug(toName)) throw new OkfValidationError(`invalid name slug: ${toName}`)
-  const toPath = `${row.type}/${toName}`
-  if (await getLiveNote(vaultId, toPath)) {
-    throw new OkfValidationError(`a note already exists at ${toPath}`)
+  let toPath: string
+  if (isSlug(toName)) {
+    toPath = fromResolved.directory ? `${fromResolved.directory}/${toName}` : toName
+  } else {
+    toPath = toName
+  }
+  const toResolved = resolveNotePath(toPath)
+  if (await getLiveNote(vaultId, toResolved.fullPath)) {
+    throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
   }
   const [updated] = await db
     .update(notes)
-    .set({ name: toName, path: toPath, updatedAt: new Date() })
+    .set({
+      name: toResolved.name,
+      type: toResolved.type,
+      path: toResolved.fullPath,
+      updatedAt: new Date(),
+    })
     .where(eq(notes.id, row.id))
     .returning()
-  await rename(noteFile(vaultId, from), noteFile(vaultId, toPath))
-  await regenIndex(vaultId, row.type)
+  await mkdir(dirname(noteFile(vaultId, toResolved.fullPath)), { recursive: true })
+  await rename(noteFile(vaultId, fromResolved.fullPath), noteFile(vaultId, toResolved.fullPath))
+  const affectedDirs = [
+    ...new Set([...fromResolved.ancestorDirectories, ...toResolved.ancestorDirectories]),
+  ]
+  await regenProgressiveIndices(vaultId, affectedDirs)
   return updated!
 }
 
@@ -253,7 +371,8 @@ export async function softDeleteNote(
   path: string,
   actor: Actor = SYSTEM_ACTOR,
 ): Promise<NoteRow | null> {
-  const row = await getLiveNote(vaultId, path)
+  const resolved = resolveNotePath(path)
+  const row = await getLiveNote(vaultId, resolved.fullPath)
   if (!row) return null
   const [updated] = await db
     .update(notes)
@@ -261,8 +380,8 @@ export async function softDeleteNote(
     .where(eq(notes.id, row.id))
     .returning()
   await mkdir(join(vaultDir(vaultId), '.trash'), { recursive: true })
-  await rename(noteFile(vaultId, path), trashFile(vaultId, row.id))
-  await regenIndex(vaultId, row.type)
+  await rename(noteFile(vaultId, resolved.fullPath), trashFile(vaultId, row.id))
+  await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
   await recordRevision(row.id, 'delete', row.frontmatter, row.body, actor)
   return updated!
 }
@@ -274,17 +393,18 @@ export async function restoreNote(vaultId: string, noteId: string): Promise<Note
     .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId), isNotNull(notes.deletedAt)))
   const row = rows[0]
   if (!row) return null
-  if (await getLiveNote(vaultId, row.path)) {
-    throw new OkfValidationError(`a live note already exists at ${row.path}`)
+  const resolved = resolveNotePath(row.path)
+  if (await getLiveNote(vaultId, resolved.fullPath)) {
+    throw new OkfValidationError(`a live note already exists at ${resolved.fullPath}`)
   }
   const [updated] = await db
     .update(notes)
     .set({ deletedAt: null, updatedAt: new Date() })
     .where(eq(notes.id, row.id))
     .returning()
-  await mkdir(dirname(noteFile(vaultId, row.path)), { recursive: true })
-  await rename(trashFile(vaultId, row.id), noteFile(vaultId, row.path))
-  await regenIndex(vaultId, row.type)
+  await mkdir(dirname(noteFile(vaultId, resolved.fullPath)), { recursive: true })
+  await rename(trashFile(vaultId, row.id), noteFile(vaultId, resolved.fullPath))
+  await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
   scheduleEmbedding(row.id)
   return updated!
 }
