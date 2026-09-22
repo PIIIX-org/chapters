@@ -15,14 +15,14 @@ When this skill is active, **you do not need to ask the user what Chapters is or
 
 Chapters is a team knowledge base and codebase mapping platform built on four foundational pillars:
 
-1. **Notes as Plain Files (OKF)**: Every note is a markdown file with YAML frontmatter following Google's Open Knowledge Format (OKF). Notes support typed relationships and bidirectional wikilinks (`[[note-name]]`, `[[note-name|display text]]`, and `[[repo:repo-id/path/to/file]]`).
+1. **Notes as Plain Files (OKF)**: Every note is a markdown file with YAML frontmatter following Google's [Open Knowledge Format (OKF v0.2)](https://github.com/GoogleCloudPlatform/open-knowledge-format). Notes support typed relationships and bidirectional wikilinks (`[[note-name]]`, `[[note-name|display text]]`, and `[[repo:repo-id/path/to/file]]`).
 2. **AI-Navigable Knowledge Graph**: The graph links notes and code via three edge types:
    - `EXTRACTED`: Explicit wikilinks and code imports/calls derived via Tree-sitter.
    - `STRUCTURAL`: Notes sharing metadata properties, tags, or hierarchies.
    - `INFERRED` / `SEMANTIC`: Top-k nearest neighbors computed from local ONNX embeddings in a shared vector space.
    - Nodes are clustered using Louvain community detection and ranked via PageRank.
 3. **Synced Code Repositories**: Read-only ingestion of git repositories (via git clone/poll/webhook, local filesystem watch, or CLI push) indexed with Tree-sitter AST symbol extraction and semantic embeddings.
-4. **First-Class MCP Server**: A stateless, permission-scoped MCP server (`POST /mcp` via Streamable HTTP transport or stdio) providing 49 tools with full system parity.
+4. **First-Class MCP Server**: A stateless, permission-scoped MCP server (`POST /mcp` via Streamable HTTP transport or stdio) providing 50 tools with full system parity.
 
 ---
 
@@ -92,6 +92,7 @@ Performs operations on notes:
 - `/chapters-note delete <vault-id> <path>`: Move note to trash.
 - `/chapters-note history <vault-id> <path>`: View revision history and attribution.
 - `/chapters-note revert <vault-id> <path> <revision-id>`: Revert to a previous revision.
+- `/chapters-note audit [vault-id]`: Audit vault notes for OKF v0.2 conformance.
 
 ### `/chapters-repo <action> [arguments...]`
 Performs operations on connected codebase repositories:
@@ -109,22 +110,29 @@ Manages vaults and sharing:
 - `/chapters-vault preference <vault-id> [include true|false]`: View or set merged-graph preference.
 
 ### `/chapters-map <repo-id-or-path> [--vault <vault-id>] [--name <vault-name>]`
-Maps an entire project or codebase repository into structured OKF notes within a Chapters vault following the **4-Pass Flawless Mapping Protocol** ([`references/codebase-mapping-protocol.md`](references/codebase-mapping-protocol.md)), generating an interconnected, AI-navigable knowledge graph.
-- **Workflow for Agents (The 4-Pass Protocol)**:
-  1. **Pass 1 — Discovery & Manifest Analysis**:
-     - Inspect project manifests (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `Dockerfile`).
-     - Detect frameworks, runtimes, database layers, and top-level entrypoints (HTTP server, CLI, MCP server, background workers).
-  2. **Pass 2 — Architectural Domain Partitioning**:
-     - Partition the codebase into 4 to 8 cohesive architectural domains (e.g. Auth/Security, Data/Storage, API/Routes, Core Domain Logic, UI/Client).
-     - Identify key exported interfaces, lead implementation files, and invariants for each domain.
-  3. **Pass 3 — Structured OKF Note Generation in Vault**:
-     - Select or create the target vault (`list_vaults` / `create_vault`).
-     - **Root Index (`index.md`)**: System overview, architecture diagram, domain inventory, tech stack table, and entrypoint list with `[[repo:...]]` links.
-     - **Domain Concept Notes (`concepts/<domain>.md`)**: Deep architectural documentation, responsibilities, invariants, key files linked with `[[repo:<repo-id>/path/to/file]]`, and cross-domain `[[wikilinks]]`.
-     - **Critical Flow Specs (`specs/<flow>.md`)**: Sequence steps, state transitions, and trust boundaries for critical paths (e.g. data ingestion, live collaboration, auth lifecycle).
-  4. **Pass 4 — Graph Validation & Edge Audit**:
-     - Verify zero broken links: all `[[wikilinks]]` must point to existing notes, and all `[[repo:...]]` links must match real files.
-     - Call `graph` with `aggregate: "community"` to confirm that the generated notes and code nodes form cohesive, interconnected Louvain community clusters with zero orphan notes.
+Maps an entire project or codebase repository into an interconnected, Open Knowledge Format (OKF v0.2) Knowledge Bundle within Chapters following the **5-Phase Flawless OKF Mapping Protocol** ([`references/codebase-mapping-protocol.md`](references/codebase-mapping-protocol.md)), engineered from Google's Open Knowledge Format standards ([`GoogleCloudPlatform/open-knowledge-format`](https://github.com/GoogleCloudPlatform/open-knowledge-format), [`references/okf-format.md`](references/okf-format.md)).
+
+- **Workflow for Agents (The 5-Phase OKF Protocol)**:
+  1. **Phase 0 — Target Binding**: Check repository connection (`list_repositories` / `connect_repository`) and locate or initialize the target vault (`list_vaults` / `create_vault`).
+  2. **Phase 1 — Discovery & Manifest Analysis**:
+     - Parse build manifests (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `Dockerfile`).
+     - Detect runtime engines, primary web/API frameworks, database/ORM layers, and all ingress boundaries (HTTP, WebSockets, CLI binaries, MCP servers, background worker queues).
+  3. **Phase 2 — Architectural Domain Partitioning**:
+     - Decompose the codebase into 4 to 8 cohesive bounded domains (e.g. Auth/Security, Data/Storage, API/Ingress, Core Domain Engine, Client/UI).
+     - Identify lead implementation files, exported symbol interfaces, and hard architectural invariants.
+  4. **Phase 3 — Structured OKF Note Synthesis**:
+     - Create notes via Chapters MCP `create_note` conforming to OKF v0.2 schemas:
+       - **Root System Index (`index.md`)**: High-level overview, architecture blueprint, domain roster, entrypoints, and technology stack table with `[[repo:...]]` links.
+       - **Domain Concept Notes (`domains/<domain>/index.md`)**: Architectural responsibilities, invariants, and implementation files.
+       - **End-to-End Workflow Specs (`specs/<flow>.md`)**: Sequence steps, trust boundaries, and error recovery contracts.
+       - **Data Model Notes (`models/<entity>.md`)**: Entity schemas, relationships, and code definitions.
+       - **Architecture Decisions (`decisions/ADR-<nnn>-<title>.md`)**: Context, decisions, trade-offs, and alternatives considered.
+  5. **Phase 4 — Progressive Disclosure Synthesis**:
+     - Ensure every directory level contains an `index.md` summarizing child concepts, allowing AI agents to navigate progressively without overflowing context windows.
+  6. **Phase 5 — Knowledge Graph Audit & Validation**:
+     - Audit link integrity: zero broken `[[wikilinks]]` and valid `[[repo:...]]` code targets.
+     - Call Chapters MCP `graph` with `aggregate: "community"` to verify cohesive Louvain community clusters and confirm zero orphan notes.
+     - Call Chapters MCP `search` to verify top-k hybrid search retrieval across all mapped domains.
 
 ### `/chapters-export <vault-id|note-path>`
 Exports a vault or note archive.
@@ -134,14 +142,14 @@ Exports a vault or note archive.
 
 ## Chapters MCP Tool Reference
 
-Chapters exposes 49 tools across 6 functional domains:
+Chapters exposes 50 tools across 6 functional domains:
 
 ### 1. Vault Management
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `list_vaults` | Account | List all vaults accessible to the current user. |
 | `create_vault` | Account | Create a new vault with name, description, and settings. |
-| `browse_vault` | Vault/Account | Browse directory and note structure within a vault. |
+| `browse_vault` | Vault/Account | Browse directory and note structure within a vault, with progressive disclosure (`path` and `recursive`). |
 | `update_vault` | Vault/Account | Update vault name, description, or mergeable settings. |
 | `get_vault_graph_preference` | Vault/Account | Get user's personal merged-graph inclusion preference. |
 | `set_vault_graph_preference` | Vault/Account | Set user's personal merged-graph inclusion preference. |
@@ -156,7 +164,8 @@ Chapters exposes 49 tools across 6 functional domains:
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `read_note` | Vault/Account | Read note markdown content, frontmatter, and metadata. |
-| `create_note` | Vault/Account | Create a new OKF note at path with frontmatter. |
+| `create_note` | Vault/Account | Create a new OKF note with unified `path` (or `type` and `name`) and frontmatter. |
+| `audit_okf_conformance` | Vault/Account | Audit an OKF Knowledge Bundle vault for OKF v0.2 conformance (strict ISO 8601 UTC offsets, wikilinks, repo links, progressive disclosure indices, orphan notes). |
 | `edit_note` | Vault/Account | Update note content through CRDT live collaboration. |
 | `rename_note` | Vault/Account | Rename or move a note within the vault. |
 | `delete_note` | Vault/Account | Soft-delete a note to the vault trash. |
@@ -188,7 +197,7 @@ Chapters exposes 49 tools across 6 functional domains:
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `search` | Any | Hybrid search (lexical + semantic) across notes and code. |
-| `graph` | Any | Query graph nodes, edges (extracted/structural/semantic), Louvain communities. |
+| `graph` | Any | Query graph nodes, edges (extracted/structural/semantic), Louvain communities (`aggregate: "community"`). |
 
 ### 5. Teams & Users
 | Tool | Scope | Description |

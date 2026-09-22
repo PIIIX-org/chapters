@@ -16,8 +16,7 @@ for best AI navigability, see
 - **Auth & sharing** — setup-token bootstrap, signup→verify→approve,
   sessions, teams, vault shares with live permission resolution, MFA
   (TOTP + backup codes, admin-mandatable)
-- **Notes** — plain OKF markdown files on disk, one shared server-side
-  validation for every write path, soft-delete trash, per-type index.md
+- **Notes** — plain OKF v0.2 markdown files on disk, strict ISO 8601 UTC standard (mandatory explicit timezone offsets across all timestamp fields), 8-level arbitrary directory trees with progressive disclosure index tables, automated upstream sync with Google Cloud's [`GoogleCloudPlatform/open-knowledge-format`](https://github.com/GoogleCloudPlatform/open-knowledge-format) (commit [`3dc3029`](https://github.com/GoogleCloudPlatform/open-knowledge-format/commit/3dc3029)), one shared server-side validation for every write path, soft-delete trash, and per-directory `index.md` summaries
 - **Vaults** — owner-only soft delete (`DELETE /api/vaults/:id`), trash
   listing and restore (`GET /api/vaults/trash`, `POST /api/vaults/:id/restore`,
   409 if not trashed), and hard purge (`POST /api/vaults/:id/purge`, only
@@ -312,11 +311,12 @@ tokens re-deriving structure that should already be explicit.
 ## Design principles
 
 - **Notes are plain files, always.** Every note is markdown + YAML
-  frontmatter, following Google's [Open Knowledge Format
-  (OKF)](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf)
-  spec — a vendor-neutral, version-controllable way to represent knowledge
-  as `type/name` files with typed frontmatter and linked relationships. No
-  proprietary database holding your notes hostage.
+  frontmatter, following Google Cloud's [Open Knowledge Format (OKF v0.2)](https://github.com/GoogleCloudPlatform/open-knowledge-format)
+  specification (pinned to commit [`3dc3029`](https://github.com/GoogleCloudPlatform/open-knowledge-format/commit/3dc3029)
+  with automated weekly upstream sync via GitHub Actions). OKF v0.2 defines a vendor-neutral,
+  version-controllable standard for knowledge representation with strict ISO 8601 UTC
+  offsets, progressive disclosure index trees up to 8 directory levels, and structured
+  provenance metadata. No proprietary database holding your notes hostage.
 - **The graph is a first-class citizen, not an afterthought.** Relationship
   modeling is inspired by [Graphify](https://github.com/Graphify-Labs/graphify):
   explicit (`EXTRACTED`) edges from real links, and derived (`INFERRED`)

@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/GoogleCloudPlatform/open-knowledge-format/main/schemas/concept.schema.json",
+  "title": "OKF v0.2 Concept Document Schema",
+  "description": "JSON Schema specification for Open Knowledge Format (OKF v0.2) concept documents frontmatter.",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "description": "Short string identifying the kind of concept for routing, search, and clustering."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable display title for the concept."
+    },
+    "description": {
+      "type": "string",
+      "description": "Single high-density sentence summarizing what the concept is and does."
+    },
+    "resource": {
+      "type": "string",
+      "description": "URI or canonical reference identifying the underlying asset described by the concept."
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Categorization tags."
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$",
+      "description": "ISO 8601 datetime with explicit UTC offset indicating when the note was created/recorded."
+    },
+    "stale_after": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$",
+      "description": "ISO 8601 datetime with explicit UTC offset after which the concept should be treated as stale."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "active", "deprecated", "superseded", "archived", "stable"],
+      "description": "Lifecycle state of the concept."
+    },
+    "generated": {
+      "type": "object",
+      "required": ["by", "at"],
+      "properties": {
+        "by": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["resource"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "last_modified": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+          },
+          "author": {
+            "type": "string"
+          },
+          "usage_count": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "verified": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["tier"],
+          "properties": {
+            "tier": {
+              "type": "string",
+              "enum": ["unverified", "machine-confirmed", "human-reviewed"]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["tier"],
+            "properties": {
+              "tier": {
+                "type": "string",
+                "enum": ["unverified", "machine-confirmed", "human-reviewed"]
+              },
+              "by": {
+                "type": "string"
+              },
+              "at": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      ]
+    },
+    "usage_window": {
+      "type": "object",
+      "required": ["from"],
+      "properties": {
+        "from": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "properties": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

@@ -163,7 +163,7 @@ describe('search', () => {
       'notes',
       'zeppelin-log',
       'Zeppelin airship engineering log for launch scheduling.',
-      { timestamp: '2026-03-01' },
+      { timestamp: '2026-03-01T00:00:00Z' },
     )
     await flushEmbeddings()
   })
