@@ -60,3 +60,4 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 - **Open issues**: #123 (semantic-edges flake: HNSW recall, not a regression),
   #9. #66 (unit 6's CRDT) and #101 (#129) are closed. **Test-that-cannot-fail:
   SEVEN times**, always a fixture too uniform to tell working from broken.
+- **Editor Cursor & Bidirectional Support (2026-09-22)**: Terminal block cursor (8px) with multi-color cycling blink (Emerald, Cyan, Amber, Purple, Rose), visible in dark/light modes, with full RTL/LTR bidirectional support (auto-detection, toolbar controls, persistence).
