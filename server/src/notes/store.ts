@@ -64,7 +64,7 @@ async function recordRevision(
   })
 }
 
-function vaultDir(vaultId: string): string {
+export function vaultDir(vaultId: string): string {
   return join(config.dataDir, 'vaults', vaultId)
 }
 

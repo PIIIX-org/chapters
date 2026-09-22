@@ -1,0 +1,61 @@
+name: OKF Upstream Sync
+
+on:
+  schedule:
+    # Run weekly on Monday at 04:00 UTC
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: okf-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync OKF Upstream & Verify Conformance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Sync upstream OKF artifacts
+        run: |
+          echo "Syncing canonical OKF upstream artifacts..."
+          git clone --depth 1 https://github.com/GoogleCloudPlatform/open-knowledge-format.git /tmp/okf-upstream
+          mkdir -p vendor/okf
+          if [ -f /tmp/okf-upstream/SPEC.md ]; then
+            cp /tmp/okf-upstream/SPEC.md vendor/okf/SPEC.md
+          fi
+          rm -rf /tmp/okf-upstream
+
+      - name: Detect diff
+        id: diff-check
+        run: |
+          git status --porcelain
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "has_diff=true" >> $GITHUB_OUTPUT
+            echo "Changes detected from upstream OKF repository."
+          else
+            echo "has_diff=false" >> $GITHUB_OUTPUT
+            echo "No upstream changes detected."
+          fi
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run OKF Conformance Tests
+        env:
+          SKIP_DB_SETUP: '1'
+        run: pnpm --filter @chapters/server exec vitest run test/okf-conformance.test.ts test/okf.test.ts test/paths.test.ts
