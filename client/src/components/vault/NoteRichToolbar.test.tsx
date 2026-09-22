@@ -47,6 +47,28 @@ describe('NoteRichToolbar', () => {
     expect(onWidthChange).toHaveBeenCalledWith('wide')
   })
 
+  it('renders LTR and RTL direction buttons and handles direction change', () => {
+    const onDirectionChange = vi.fn()
+    render(
+      <NoteRichToolbar
+        view={null}
+        readOnly={false}
+        width="standard"
+        onWidthChange={vi.fn()}
+        direction="ltr"
+        onDirectionChange={onDirectionChange}
+      />,
+    )
+
+    const ltrBtn = screen.getByRole('button', { name: /left-to-right/i })
+    const rtlBtn = screen.getByRole('button', { name: /right-to-left/i })
+    expect(ltrBtn).toBeInTheDocument()
+    expect(rtlBtn).toBeInTheDocument()
+
+    fireEvent.click(rtlBtn)
+    expect(onDirectionChange).toHaveBeenCalledWith('rtl')
+  })
+
   it('disables formatting buttons when readOnly is true', () => {
     render(
       <NoteRichToolbar

@@ -26,7 +26,9 @@ import {
 import {
   useNoteWidth,
   NOTE_WIDTH_CLASSES,
+  useNoteDirection,
 } from '../../components/vault/note-toolbar-utils.js'
+import type { NoteDirection } from '../../components/vault/note-toolbar-utils.js'
 import { Inspector } from '../../components/shell/ShellPanels.js'
 import { useShellStatus } from '../../components/shell/shell-context.js'
 import type { ShellStatus } from '../../components/shell/shell-context.js'
@@ -131,9 +133,20 @@ interface NoteFrameProps {
   inspector: ReactNode
   view?: EditorView | null
   readOnly?: boolean
+  direction?: NoteDirection
+  onDirectionChange?: (direction: NoteDirection) => void
 }
 
-function NoteFrame({ bar, notice, editorRef, inspector, view = null, readOnly = false }: NoteFrameProps) {
+function NoteFrame({
+  bar,
+  notice,
+  editorRef,
+  inspector,
+  view = null,
+  readOnly = false,
+  direction = 'ltr',
+  onDirectionChange,
+}: NoteFrameProps) {
   const [width, setWidth] = useNoteWidth()
 
   return (
@@ -150,14 +163,18 @@ function NoteFrame({ bar, notice, editorRef, inspector, view = null, readOnly = 
           readOnly={readOnly}
           width={width}
           onWidthChange={setWidth}
+          direction={direction}
+          onDirectionChange={onDirectionChange}
         />
         <NoteFloatingSelectionToolbar view={view} readOnly={readOnly} />
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4">
           <div
             ref={editorRef}
+            dir={direction}
             className={cn(
               'mx-auto h-full min-h-0 w-full transition-all duration-150',
               NOTE_WIDTH_CLASSES[width],
+              direction === 'rtl' ? 'direction-rtl' : 'direction-ltr',
             )}
           />
         </div>
@@ -291,6 +308,7 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
   // while offline, so nothing can be typed into this and lost on the swap.
   const strandedOffline = collab.status === 'offline' && !collab.synced
 
+  const [direction, setDirection] = useNoteDirection(vaultId, path, initialBody)
   const [editorView, setEditorView] = useState<EditorView | null>(null)
 
   const editorRef = useCodeMirrorEditor({
@@ -302,6 +320,7 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
     wikilinkTargets: wikilinks.targets,
     onWikilinkClick: wikilinks.onClick,
     collab: strandedOffline ? undefined : { ytext, awareness: collab.awareness },
+    direction,
     onView: setEditorView,
   })
 
@@ -323,6 +342,8 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
       editorRef={editorRef}
       view={editorView}
       readOnly={locked}
+      direction={direction}
+      onDirectionChange={setDirection}
       bar={
         <>
           <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />
@@ -385,6 +406,7 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
   const state = live.state ?? { frontmatter: initialFrontmatter, body: initialBody }
   const wikilinks = useWikilinks(vaultId, false)
 
+  const [direction, setDirection] = useNoteDirection(vaultId, path, state.body)
   const [editorView, setEditorView] = useState<EditorView | null>(null)
 
   const editorRef = useCodeMirrorEditor({
@@ -393,6 +415,7 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
     readOnly: true,
     wikilinkTargets: wikilinks.targets,
     onWikilinkClick: wikilinks.onClick,
+    direction,
     onView: setEditorView,
   })
 
@@ -411,6 +434,8 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
       editorRef={editorRef}
       view={editorView}
       readOnly={true}
+      direction={direction}
+      onDirectionChange={setDirection}
       bar={
         <>
           <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />

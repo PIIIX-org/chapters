@@ -35,6 +35,60 @@ export function useNoteWidth() {
   return [width, updateWidth] as const
 }
 
+export type NoteDirection = 'ltr' | 'rtl'
+
+const RTL_REGEX = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF]/
+
+export function detectTextDirection(text?: string | null): NoteDirection {
+  if (!text) return 'ltr'
+  const sample = text.slice(0, 1000)
+  return RTL_REGEX.test(sample) ? 'rtl' : 'ltr'
+}
+
+export function getNoteDirectionKey(vaultId?: string, path?: string): string {
+  if (vaultId && path) {
+    return `chapters:note-direction:${vaultId}:${path}`
+  }
+  return 'chapters:note-direction-default'
+}
+
+function readStoredDirection(vaultId?: string, path?: string, initialBody?: string): NoteDirection {
+  if (typeof localStorage === 'undefined') return detectTextDirection(initialBody)
+  const specificKey = getNoteDirectionKey(vaultId, path)
+  const stored = localStorage.getItem(specificKey)
+  if (stored === 'ltr' || stored === 'rtl') return stored
+  const defaultStored = localStorage.getItem('chapters:note-direction-default')
+  if (defaultStored === 'ltr' || defaultStored === 'rtl') return defaultStored
+  return detectTextDirection(initialBody)
+}
+
+export function useNoteDirection(vaultId?: string, path?: string, initialBody?: string) {
+  const noteKey = `${vaultId ?? ''}:${path ?? ''}`
+  const [prevKey, setPrevKey] = useState(noteKey)
+  const [direction, setDirection] = useState<NoteDirection>(() => readStoredDirection(vaultId, path, initialBody))
+
+  if (prevKey !== noteKey) {
+    setPrevKey(noteKey)
+    setDirection(readStoredDirection(vaultId, path, initialBody))
+  }
+
+  const updateDirection = useCallback(
+    (newDirection: NoteDirection) => {
+      setDirection(newDirection)
+      try {
+        const specificKey = getNoteDirectionKey(vaultId, path)
+        localStorage.setItem(specificKey, newDirection)
+        localStorage.setItem('chapters:note-direction-default', newDirection)
+      } catch {
+        // Ignore quota error
+      }
+    },
+    [vaultId, path],
+  )
+
+  return [direction, updateDirection] as const
+}
+
 export type FormatType =
   | 'bold'
   | 'italic'

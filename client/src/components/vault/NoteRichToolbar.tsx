@@ -23,10 +23,13 @@ import {
   Columns2,
   Smartphone,
   Monitor,
+  AlignLeft,
+  AlignRight,
 } from 'lucide-react'
 import { cn } from '../../lib/utils.js'
 import {
   type NoteWidth,
+  type NoteDirection,
   applyFormat,
 } from './note-toolbar-utils.js'
 
@@ -65,9 +68,18 @@ interface NoteRichToolbarProps {
   readOnly?: boolean
   width: NoteWidth
   onWidthChange: (width: NoteWidth) => void
+  direction?: NoteDirection
+  onDirectionChange?: (direction: NoteDirection) => void
 }
 
-export function NoteRichToolbar({ view, readOnly, width, onWidthChange }: NoteRichToolbarProps) {
+export function NoteRichToolbar({
+  view,
+  readOnly,
+  width,
+  onWidthChange,
+  direction = 'ltr',
+  onDirectionChange,
+}: NoteRichToolbarProps) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-1 border-b border-border bg-card/60 px-3 py-1 text-xs backdrop-blur-xs select-none">
       {/* Formatting Tools */}
@@ -209,68 +221,118 @@ export function NoteRichToolbar({ view, readOnly, width, onWidthChange }: NoteRi
         />
       </div>
 
-      {/* Note Area Adjustable Width Controls */}
-      <div className="flex items-center gap-1 shrink-0 ml-auto pl-2">
-        <span className="text-[10px] text-muted-foreground uppercase tracking-wider mr-1 hidden sm:inline">
-          Width:
-        </span>
-        <div className="flex items-center rounded-[var(--radius-md,4px)] border border-border bg-background p-0.5" role="group" aria-label="Note width">
-          <button
-            type="button"
-            onClick={() => onWidthChange('compact')}
-            aria-label="Compact note width (680px)"
-            title="Compact width (680px)"
-            className={cn(
-              'flex size-6 items-center justify-center rounded-[var(--radius-sm,2px)] text-xs transition-colors',
-              width === 'compact'
-                ? 'bg-primary text-primary-foreground font-medium'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <Smartphone className="size-3" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onWidthChange('standard')}
-            aria-label="Standard note width (896px)"
-            title="Standard width (896px)"
-            className={cn(
-              'flex size-6 items-center justify-center rounded-[var(--radius-sm,2px)] text-xs transition-colors',
-              width === 'standard'
-                ? 'bg-primary text-primary-foreground font-medium'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <Columns2 className="size-3" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onWidthChange('wide')}
-            aria-label="Wide note width (1152px)"
-            title="Wide width (1152px)"
-            className={cn(
-              'flex size-6 items-center justify-center rounded-[var(--radius-sm,2px)] text-xs transition-colors',
-              width === 'wide'
-                ? 'bg-primary text-primary-foreground font-medium'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <Monitor className="size-3" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onWidthChange('full')}
-            aria-label="Full width (100%)"
-            title="Full width (100%)"
-            className={cn(
-              'flex size-6 items-center justify-center rounded-[var(--radius-sm,2px)] text-xs transition-colors',
-              width === 'full'
-                ? 'bg-primary text-primary-foreground font-medium'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <Maximize2 className="size-3" aria-hidden="true" />
-          </button>
+      {/* Action & Layout Controls */}
+      <div className="flex items-center gap-2.5 shrink-0 ml-auto pl-2">
+        {/* Text Direction Controls (LTR / RTL) */}
+        {onDirectionChange && (
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider hidden sm:inline">
+              Dir:
+            </span>
+            <div
+              className="flex items-center rounded-[var(--radius-md,4px)] border border-border bg-background p-0.5"
+              role="group"
+              aria-label="Text direction"
+            >
+              <button
+                type="button"
+                onClick={() => onDirectionChange('ltr')}
+                aria-label="Left-to-Right (LTR)"
+                aria-pressed={direction === 'ltr'}
+                title="Left-to-Right (LTR)"
+                className={cn(
+                  'flex h-6 items-center px-1.5 gap-1 rounded-[var(--radius-sm,2px)] text-[11px] font-mono transition-colors',
+                  direction === 'ltr'
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <AlignLeft className="size-3" aria-hidden="true" />
+                <span>LTR</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onDirectionChange('rtl')}
+                aria-label="Right-to-Left (RTL)"
+                aria-pressed={direction === 'rtl'}
+                title="Right-to-Left (RTL)"
+                className={cn(
+                  'flex h-6 items-center px-1.5 gap-1 rounded-[var(--radius-sm,2px)] text-[11px] font-mono transition-colors',
+                  direction === 'rtl'
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <span>RTL</span>
+                <AlignRight className="size-3" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Note Area Adjustable Width Controls */}
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-wider mr-1 hidden sm:inline">
+            Width:
+          </span>
+          <div className="flex items-center rounded-[var(--radius-md,4px)] border border-border bg-background p-0.5" role="group" aria-label="Note width">
+            <button
+              type="button"
+              onClick={() => onWidthChange('compact')}
+              aria-label="Compact note width (680px)"
+              title="Compact width (680px)"
+              className={cn(
+                'flex size-6 items-center justify-center rounded-[var(--radius-sm,2px)] text-xs transition-colors',
+                width === 'compact'
+                  ? 'bg-primary text-primary-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Smartphone className="size-3" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onWidthChange('standard')}
+              aria-label="Standard note width (896px)"
+              title="Standard width (896px)"
+              className={cn(
+                'flex size-6 items-center justify-center rounded-[var(--radius-sm,2px)] text-xs transition-colors',
+                width === 'standard'
+                  ? 'bg-primary text-primary-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Columns2 className="size-3" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onWidthChange('wide')}
+              aria-label="Wide note width (1152px)"
+              title="Wide width (1152px)"
+              className={cn(
+                'flex size-6 items-center justify-center rounded-[var(--radius-sm,2px)] text-xs transition-colors',
+                width === 'wide'
+                  ? 'bg-primary text-primary-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Monitor className="size-3" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onWidthChange('full')}
+              aria-label="Full width (100%)"
+              title="Full width (100%)"
+              className={cn(
+                'flex size-6 items-center justify-center rounded-[var(--radius-sm,2px)] text-xs transition-colors',
+                width === 'full'
+                  ? 'bg-primary text-primary-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Maximize2 className="size-3" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
