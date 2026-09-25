@@ -141,6 +141,47 @@ describe('HomePage', () => {
     expect(await screen.findByText('foo')).toBeInTheDocument()
   })
 
+  it('resolves the vault notes directory route through router.tsx without context sidebar', async () => {
+    const { router } = await import('../router.js')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, [VAULT]))
+        if (url === '/api/repositories') return Promise.resolve(mockJsonResponse(200, []))
+        if (url.startsWith('/api/notifications')) return Promise.resolve(mockJsonResponse(200, []))
+        if (url.endsWith('/tree')) {
+          return Promise.resolve(
+            mockJsonResponse(200, {
+              meetings: [
+                {
+                  id: 'n1',
+                  path: 'meetings/sprint-plan.md',
+                  type: 'meetings',
+                  name: 'Sprint Plan',
+                  frontmatter: {},
+                },
+              ],
+            }),
+          )
+        }
+        return Promise.resolve(mockJsonResponse(200, SESSION))
+      }),
+    )
+    const memoryRouter = createMemoryRouter(router.routes, { initialEntries: ['/vaults/v1'] })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={memoryRouter} />
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByRole('link', { name: 'Sprint Plan' })).toBeInTheDocument()
+    // Context panel sidebar is hidden on the vault notes index page
+    const aside = document.querySelector('aside[data-shell-panel="context"]')
+    expect(aside).toHaveAttribute('hidden')
+  })
+
   it('has no accessibility violations in the empty-state branch', async () => {
     stubFetch([])
     const { container } = renderHome()

@@ -1,7 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import { CircleUser, LogOut, Settings2 } from 'lucide-react'
-import { Button } from '../ui/button.js'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,8 +15,9 @@ import { SESSION_QUERY_KEY, useSession } from '../../hooks/useSession.js'
 import { useTheme } from '../../hooks/useTheme.js'
 import { logout } from '../../api/auth.js'
 import { isThemePreference } from '../../lib/theme.js'
+import { cn } from '../../lib/utils.js'
 
-export function AccountMenu() {
+export function AccountMenu({ showLabel = false }: { showLabel?: boolean } = {}) {
   const session = useSession()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -32,16 +32,21 @@ export function AccountMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
+        <button
           type="button"
-          variant="ghost"
-          size="icon"
           aria-label="Account menu"
+          className={cn(
+            'relative flex items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150 hover:bg-muted hover:text-foreground active:scale-95 active:bg-muted/80 focus-visible:ring-2 focus-visible:ring-ring/40 shrink-0',
+            showLabel
+              ? 'h-9 w-full justify-start gap-2.5 px-2.5 text-[13px] font-medium'
+              : 'size-9 justify-center p-0 hover:scale-105',
+          )}
         >
-          <CircleUser aria-hidden="true" />
-        </Button>
+          <CircleUser className="size-[18px] shrink-0" aria-hidden="true" />
+          {showLabel && <span className="truncate">Profile</span>}
+        </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[14rem]">
+      <DropdownMenuContent side="right" align="end" sideOffset={12} className="min-w-[14rem] shadow-floating">
         <DropdownMenuLabel className="truncate font-sans text-xs normal-case tracking-normal text-foreground">
           {session.data?.email ?? 'Signed in'}
         </DropdownMenuLabel>

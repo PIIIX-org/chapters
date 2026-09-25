@@ -1,4 +1,4 @@
-import { Link, NavLink } from 'react-router'
+import { NavLink, useLocation } from 'react-router'
 import {
   GitBranch,
   Library,
@@ -13,10 +13,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.js'
 import { useSession } from '../../hooks/useSession.js'
 import { cn } from '../../lib/utils.js'
 import { isAdminRole } from '../../api/admin.js'
+import { useShell } from './shell-context.js'
+import { NotificationBell } from './NotificationBell.js'
+import { AccountMenu } from './AccountMenu.js'
 
 interface RailItem {
   to: string
   label: string
+  display: string
   icon: LucideIcon
   chord: string
   end?: boolean
@@ -24,82 +28,144 @@ interface RailItem {
 }
 
 const PRIMARY: RailItem[] = [
-  { to: '/', label: 'Graph', icon: Waypoints, chord: 'g', end: true },
-  { to: '/vaults', label: 'Vaults', icon: Library, chord: 'v' },
-  { to: '/repos', label: 'Repositories', icon: GitBranch, chord: 'r' },
-  { to: '/team', label: 'Team', icon: Users, chord: 't' },
-  { to: '/admin', label: 'Admin', icon: ShieldCheck, chord: 'a', admin: true },
+  { to: '/', label: 'Graph', display: 'Graphs', icon: Waypoints, chord: 'g', end: true },
+  { to: '/vaults', label: 'Vaults', display: 'Vaults', icon: Library, chord: 'v' },
+  { to: '/repos', label: 'Repositories', display: 'Repos', icon: GitBranch, chord: 'r' },
 ]
 
 const SECONDARY: RailItem[] = [
-  { to: '/settings', label: 'Settings', icon: Settings2, chord: 's' },
+  { to: '/team', label: 'Team', display: 'Team', icon: Users, chord: 't' },
+  { to: '/admin', label: 'Admin', display: 'Admin', icon: ShieldCheck, chord: 'a', admin: true },
+  { to: '/settings', label: 'Settings', display: 'Settings', icon: Settings2, chord: 's' },
 ]
 
-function RailLink({ item }: { item: RailItem }) {
+function RailLink({ item, expanded }: { item: RailItem; expanded: boolean }) {
   const Icon = item.icon
+  const location = useLocation()
+  const isActive = item.end
+    ? location.pathname === item.to
+    : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)
+
+  const link = (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      aria-label={item.label}
+      aria-current={isActive ? 'page' : undefined}
+      className={cn(
+        'relative flex items-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
+        'hover:bg-muted hover:text-foreground',
+        'active:scale-[0.98] active:bg-muted/80',
+        'focus-visible:ring-2 focus-visible:ring-ring/40',
+        expanded
+          ? 'h-9 w-full justify-between px-2.5 text-[13px] font-medium shrink-0'
+          : 'size-9 justify-center p-0 hover:scale-105 shrink-0',
+        isActive &&
+          cn(
+            'bg-muted text-foreground shadow-xs',
+            expanded
+              ? 'before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-[var(--radius-sm)] before:bg-primary font-semibold'
+              : 'before:absolute before:left-0.5 before:top-2 before:bottom-2 before:w-0.5 before:rounded-full before:bg-primary',
+          ),
+      )}
+    >
+      <span className={cn('flex items-center min-w-0', expanded ? 'flex-1 gap-2.5 truncate' : 'justify-center size-full')}>
+        <Icon className="size-[18px] shrink-0" strokeWidth={1.75} aria-hidden="true" />
+        {expanded && <span className="truncate">{item.display}</span>}
+      </span>
+      {expanded && (
+        <span className="shrink-0 ml-2 opacity-70">
+          <Kbd aria-hidden="true">g {item.chord}</Kbd>
+        </span>
+      )}
+    </NavLink>
+  )
+
+  if (expanded) {
+    return link
+  }
+
   return (
     <Tooltip>
-      <NavLink
-        to={item.to}
-        end={item.end}
-        aria-label={item.label}
-        className={({ isActive }) =>
-          cn(
-            'relative flex size-9 items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
-            'hover:bg-muted hover:text-foreground hover:scale-105',
-            'active:scale-95 active:bg-muted/80',
-            'focus-visible:ring-2 focus-visible:ring-ring/40',
-            isActive &&
-              'bg-muted text-foreground before:absolute before:top-2 before:bottom-2 before:-left-2 before:w-0.5 before:rounded-[var(--radius-sm)] before:bg-primary shadow-xs',
-          )
-        }
-      >
-        <TooltipTrigger asChild>
-          <span className="flex size-full items-center justify-center">
-            <Icon className="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
-          </span>
-        </TooltipTrigger>
-      </NavLink>
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
       <TooltipContent side="right">
-        {item.label}
+        <span>{item.label}</span>
         <Kbd aria-hidden="true">g {item.chord}</Kbd>
       </TooltipContent>
     </Tooltip>
   )
 }
 
-/** The always-present left rail. Icons only; names live in tooltips and aria. */
+/** The primary navigation rail with standalone CH logo button and centered dual-card navigation. */
 export function Rail() {
+  const shell = useShell()
   const session = useSession()
   const isAdmin = isAdminRole(session.data?.role)
-  const primary = PRIMARY.filter((item) => !item.admin || isAdmin)
+  const primary = PRIMARY
+  const secondary = SECONDARY.filter((item) => !item.admin || isAdmin)
+  const expanded = shell.sidebarExpanded
 
   return (
     <nav
       aria-label="Primary"
-      className="row-span-2 flex w-[52px] flex-col items-center border-r border-border bg-secondary px-2 py-2"
+      className={cn(
+        'flex h-full flex-col items-center gap-2 bg-transparent border-none pointer-events-none transition-[width] duration-200 ease-in-out select-none',
+        expanded ? 'w-[var(--shell-context,240px)]' : 'w-11',
+      )}
     >
-      <Link
-        to="/"
-        aria-label="Chapters"
-        className="mb-3 flex size-8 items-center justify-center rounded-[var(--radius-md)] bg-foreground font-mono text-[12px] font-semibold text-background outline-none transition-all duration-150 hover:scale-105 hover:opacity-90 active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40"
+      <div className={cn('flex w-full items-center pointer-events-auto', expanded ? 'justify-start' : 'justify-center')}>
+        <button
+          type="button"
+          onClick={shell.toggleSidebar}
+          aria-label="Chapters logo, toggle sidebar"
+          aria-expanded={expanded}
+          className={cn(
+            'flex items-center justify-center rounded-[var(--radius-md)] border border-border bg-card font-mono text-[13px] font-bold text-foreground outline-none transition-all duration-150 hover:bg-muted hover:border-input active:scale-95 shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40',
+            expanded ? 'h-11 w-full justify-between px-3' : 'size-11',
+          )}
+        >
+          <span>CH</span>
+          {expanded && <span className="font-sans text-xs font-normal text-muted-foreground">Chapters</span>}
+        </button>
+      </div>
+
+      {/* Upper Navigation Card (Graphs, Vaults, Repos) */}
+      <div
+        className={cn(
+          'flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating shrink-0',
+          expanded ? 'w-full' : 'w-11 items-center',
+        )}
       >
-        Ch
-      </Link>
-      <ul className="flex flex-col items-center gap-1">
-        {primary.map((item) => (
-          <li key={item.to}>
-            <RailLink item={item} />
+        <ul className="flex flex-col gap-1 w-full items-center">
+          {primary.map((item) => (
+            <li key={item.to} className="w-full flex justify-center shrink-0">
+              <RailLink item={item} expanded={expanded} />
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Lower Navigation Card (Team, Admin, Settings, Notifications, Profile) */}
+      <div
+        className={cn(
+          'mt-auto flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating shrink-0',
+          expanded ? 'w-full' : 'w-11 items-center',
+        )}
+      >
+        <ul className="flex flex-col gap-1 w-full items-center">
+          {secondary.map((item) => (
+            <li key={item.to} className="w-full flex justify-center shrink-0">
+              <RailLink item={item} expanded={expanded} />
+            </li>
+          ))}
+          <li data-slot="notifications" className="w-full flex justify-center shrink-0">
+            <NotificationBell showLabel={expanded} />
           </li>
-        ))}
-      </ul>
-      <ul className="mt-auto flex flex-col items-center gap-1">
-        {SECONDARY.map((item) => (
-          <li key={item.to}>
-            <RailLink item={item} />
+          <li className="w-full flex justify-center shrink-0">
+            <AccountMenu showLabel={expanded} />
           </li>
-        ))}
-      </ul>
+        </ul>
+      </div>
     </nav>
   )
 }

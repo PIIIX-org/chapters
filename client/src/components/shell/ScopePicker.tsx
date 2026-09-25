@@ -79,12 +79,12 @@ export function ScopePicker() {
         aria-controls="scope-list"
         disabled={vaults.isPending}
         onClick={toggle}
-        className="rounded-md px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-100"
+        className="flex h-9 items-center gap-1.5 rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs px-3 text-sm font-medium hover:bg-muted shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-100"
       >
-        {label}
+        <span>{label}</span>
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-10 mt-1 min-w-[12rem] rounded-md border border-border bg-popover py-1 shadow-md">
+        <div className="absolute left-0 top-full z-40 mt-1 min-w-[14rem] rounded-[var(--radius-md,4px)] border border-border bg-popover py-1 shadow-floating">
           <ul id="scope-list" role="listbox" aria-label="Scope">
             <li role="presentation">
               <button

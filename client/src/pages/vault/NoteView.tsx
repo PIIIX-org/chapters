@@ -29,8 +29,9 @@ import {
   useNoteDirection,
 } from '../../components/vault/note-toolbar-utils.js'
 import type { NoteDirection } from '../../components/vault/note-toolbar-utils.js'
-import { Inspector } from '../../components/shell/ShellPanels.js'
-import { useShellStatus } from '../../components/shell/shell-context.js'
+import { History, Share2, SlidersHorizontal } from 'lucide-react'
+import { Inspector, PanelRailButton, PanelRailNav } from '../../components/shell/ShellPanels.js'
+import { useOptionalShell, usePanel, useShellStatus } from '../../components/shell/shell-context.js'
 import type { ShellStatus } from '../../components/shell/shell-context.js'
 import { Pill } from '../../components/ui/pill.js'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js'
@@ -148,26 +149,39 @@ function NoteFrame({
   onDirectionChange,
 }: NoteFrameProps) {
   const [width, setWidth] = useNoteWidth()
+  const shell = useOptionalShell()
+  const leftPad = shell?.sidebarExpanded ? 'pl-[264px]' : 'pl-16'
 
   return (
     <>
       <div className="flex h-full min-h-0 flex-col">
-        {/* min-h-10, not h-10: an inline rename form wraps to a second row
-            instead of clipping inside the bar. */}
-        <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-1">
+        {/* Note bar: padded left to clear the CH logo and right to clear TopBar search */}
+        <div
+          className={cn(
+            'flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pr-16 py-1 transition-[padding] duration-200',
+            leftPad,
+          )}
+        >
           {bar}
         </div>
         {notice}
-        <NoteRichToolbar
-          view={view}
-          readOnly={readOnly}
-          width={width}
-          onWidthChange={setWidth}
-          direction={direction}
-          onDirectionChange={onDirectionChange}
-        />
+        <div className={cn('transition-[padding] duration-200', leftPad)}>
+          <NoteRichToolbar
+            view={view}
+            readOnly={readOnly}
+            width={width}
+            onWidthChange={setWidth}
+            direction={direction}
+            onDirectionChange={onDirectionChange}
+          />
+        </div>
         <NoteFloatingSelectionToolbar view={view} readOnly={readOnly} />
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4">
+        <div
+          className={cn(
+            'min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4 pb-16 transition-[padding] duration-200',
+            leftPad,
+          )}
+        >
           <div
             ref={editorRef}
             dir={direction}
@@ -205,8 +219,38 @@ interface NoteInspectorProps {
 /** The note's detail, as inspector tabs — the property panel, the revision
  *  history and (for the owner) sharing all fold in here. */
 function NoteInspector({ properties, history, sharing }: NoteInspectorProps) {
+  const [tab, setTab] = useState<'properties' | 'history' | 'sharing'>('properties')
+  const panel = usePanel()
+
+  if (panel && !panel.open) {
+    return (
+      <PanelRailNav label="Note inspector tabs">
+        <PanelRailButton
+          icon={SlidersHorizontal}
+          label="Properties"
+          active={tab === 'properties'}
+          onClick={() => setTab('properties')}
+        />
+        <PanelRailButton
+          icon={History}
+          label="History"
+          active={tab === 'history'}
+          onClick={() => setTab('history')}
+        />
+        {sharing != null && (
+          <PanelRailButton
+            icon={Share2}
+            label="Sharing"
+            active={tab === 'sharing'}
+            onClick={() => setTab('sharing')}
+          />
+        )}
+      </PanelRailNav>
+    )
+  }
+
   return (
-    <Tabs defaultValue="properties" className="flex min-h-0 flex-1 flex-col">
+    <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="flex min-h-0 flex-1 flex-col">
       <TabsList>
         <TabsTrigger value="properties">Properties</TabsTrigger>
         <TabsTrigger value="history">History</TabsTrigger>

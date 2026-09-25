@@ -8,11 +8,12 @@
 // keeps d3-force out of the entry chunk (client/src/bundle.test.ts).
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router'
-import { Maximize, ZoomIn, ZoomOut } from 'lucide-react'
+import { Filter, Info, ListTree, Maximize, Sliders, ZoomIn, ZoomOut } from 'lucide-react'
 import { useGraph } from '../../hooks/useGraph.js'
 import { useVaults } from '../../hooks/useVaults.js'
 import type { CommunityEdge, CommunityGraph, CommunityNode, GraphEdge, GraphNode, VaultGraph } from '../../api/graph.js'
-import { ContextPanel, Inspector } from '../shell/ShellPanels.js'
+import { ContextPanel, Inspector, PanelRailButton, PanelRailNav } from '../shell/ShellPanels.js'
+import { useOptionalShell } from '../shell/shell-context.js'
 import { Button } from '../ui/button.js'
 import { Eyebrow } from '../ui/eyebrow.js'
 import { GraphSkeleton } from './GraphSkeleton.js'
@@ -26,6 +27,7 @@ import { createPanZoom, fitTransform, screenToWorld, type Transform } from './pa
 import { drawGraph, type ColorMode, type DrawAggregatedEdge, type DrawMemberEdge } from './draw.js'
 import { createSimulation, DEFAULT_SIMULATION_PARAMS, type SimEdge, type SimNode, type SimulationParams } from './simulation.js'
 import { hitTest } from './hitTest.js'
+import { cn } from '../../lib/utils.js'
 
 // Task 9's filter options come from the currently loaded graph, not a
 // hardcoded list. An aggregated CommunityGraph has no per-node type/tags
@@ -140,6 +142,9 @@ export default function GraphCanvas() {
   // vault/color here for the same reason: GraphFilters writes them, this
   // reads them, and both go through the same router.
   const [searchParams] = useSearchParams()
+  const shell = useOptionalShell()
+  const isInspectorOpen = !!(shell?.panels.inspector.open && (shell?.panels.inspector.mounted ?? 0) > 0)
+  const isSidebarExpanded = !!shell?.sidebarExpanded
   const colorMode: ColorMode = searchParams.get('color') === 'community' ? 'community' : 'attribute'
   const filters = graphFiltersFromSearchParams(searchParams)
   const graph = useGraph(null, filters)
@@ -503,11 +508,13 @@ export default function GraphCanvas() {
   }
 
   return (
-    <div data-testid="graph-canvas" className="flex h-full w-full flex-col bg-background">
-      {/* Stats strip under the top bar — mono numerals, always computed
+    <div data-testid="graph-canvas" className="relative flex h-full w-full flex-col bg-background">
+      {/* Stats strip floating at the top center — mono numerals, always computed
           from the aggregated graph even while drilled into a community. */}
       {graph.data && isCommunityGraph(graph.data) && (
-        <StatsStrip vaultCount={vaults.data?.length ?? null} graph={graph.data} />
+        <div className="pointer-events-none absolute top-2.5 left-1/2 -translate-x-1/2 z-10 flex items-center">
+          <StatsStrip vaultCount={vaults.data?.length ?? null} graph={graph.data} />
+        </div>
       )}
 
       <div
@@ -515,21 +522,31 @@ export default function GraphCanvas() {
         className="relative min-h-0 w-full flex-1 overflow-hidden bg-background bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] bg-[size:48px_48px] [background-position:center]"
       >
         <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 h-full w-full" />
-        {/* The only DOM allowed over the canvas, all inside this cell:
-            colour-mode pills top-left, zoom controls bottom-right, capped/
-            truncation notices bottom-left. Everything else lives in the
-            shell's context panel and inspector tracks. */}
-        <div className="absolute left-3 top-3">
+
+        {/* Colour-mode pills: positioned safely to the right of the Rail */}
+        <div
+          className={cn(
+            'absolute top-[54px] z-10 transition-[left] duration-200',
+            isSidebarExpanded ? 'left-[264px]' : 'left-16',
+          )}
+        >
           <ColorModeToggle />
         </div>
-        <div className="absolute bottom-3 right-3 flex flex-col gap-1">
+
+        {/* Zoom controls: shifted left of Inspector when open, positioned above BottomBar toggles */}
+        <div
+          className={cn(
+            'absolute bottom-14 z-10 flex flex-col gap-1 transition-[right] duration-200',
+            isInspectorOpen ? 'right-[340px]' : 'right-3',
+          )}
+        >
           <Button
             type="button"
             variant="outline"
             size="icon-sm"
             aria-label="Zoom in"
             onClick={() => zoomApiRef.current?.zoomBy(1.4)}
-            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-xs text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
+            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-floating text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
           >
             <ZoomIn aria-hidden="true" />
           </Button>
@@ -539,7 +556,7 @@ export default function GraphCanvas() {
             size="icon-sm"
             aria-label="Zoom out"
             onClick={() => zoomApiRef.current?.zoomBy(1 / 1.4)}
-            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-xs text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
+            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-floating text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
           >
             <ZoomOut aria-hidden="true" />
           </Button>
@@ -549,14 +566,19 @@ export default function GraphCanvas() {
             size="icon-sm"
             aria-label="Fit graph to view"
             onClick={() => zoomApiRef.current?.fit()}
-            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-xs text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
+            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-floating text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
           >
             <Maximize aria-hidden="true" />
           </Button>
         </div>
-        {/* Non-blocking: the graph loaded fine, these just name what the
-            server capped rather than letting it look silently thinner. */}
-        <div className="absolute bottom-3 left-3 right-14 flex flex-col items-start gap-2">
+
+        {/* Non-blocking: capped/truncation notices clear of lower rail and above BottomBar */}
+        <div
+          className={cn(
+            'absolute bottom-14 z-10 flex max-w-[calc(100vw-360px)] flex-col items-start gap-2 transition-[left] duration-200',
+            isSidebarExpanded ? 'left-[264px]' : 'left-16',
+          )}
+        >
           <CappedGroupsNotice groups={graph.data?.cappedGroups ?? []} />
           {expandedCommunity !== null && activeGraph.data && !isCommunityGraph(activeGraph.data) && (
             <TruncationNotice
@@ -565,6 +587,7 @@ export default function GraphCanvas() {
             />
           )}
         </div>
+
         {/* The canvas is presentation-only (aria-hidden). It has zero
             accessible content of its own — GraphOutline, in the context
             panel, is the real keyboard-operable interface; this skeleton is
@@ -576,7 +599,17 @@ export default function GraphCanvas() {
         )}
       </div>
 
-      <ContextPanel label="Outline">
+      <ContextPanel
+        label="Outline"
+        collapsed={
+          <PanelRailNav label="Graph outline">
+            <PanelRailButton
+              icon={ListTree}
+              label="Outline"
+            />
+          </PanelRailNav>
+        }
+      >
         <GraphOutline
           communities={communities}
           expandedCommunity={expandedCommunity}
@@ -585,7 +618,26 @@ export default function GraphCanvas() {
         />
       </ContextPanel>
 
-      <Inspector label="Graph detail" className="gap-3 p-3">
+      <Inspector
+        label="Graph detail"
+        className="gap-3 p-3"
+        collapsed={
+          <PanelRailNav label="Graph detail sections">
+            <PanelRailButton
+              icon={Info}
+              label="Community detail"
+            />
+            <PanelRailButton
+              icon={Filter}
+              label="Filters"
+            />
+            <PanelRailButton
+              icon={Sliders}
+              label="Physics"
+            />
+          </PanelRailNav>
+        }
+      >
         <CommunityDetail
           communities={communities}
           hoveredCommunity={hoveredCommunity}
@@ -643,7 +695,7 @@ function StatsStrip({ vaultCount, graph }: { vaultCount: number | null; graph: C
   return (
     <dl
       aria-label="Graph statistics"
-      className="flex h-9 shrink-0 items-center gap-5 overflow-x-auto border-b border-border bg-secondary px-3"
+      className="pointer-events-auto flex h-9 shrink-0 items-center gap-4 overflow-x-auto rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs px-3 shadow-floating"
     >
       {stats.map(([label, value]) =>
         value === null ? null : (

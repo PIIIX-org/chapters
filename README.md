@@ -100,14 +100,14 @@ panel, note create/rename/delete, and full live-preview) and Slice 2c
 settings modal stack and the Team page), Unit 3 (Admin & the onboarding path)
 Unit 4 (Settings & MFA), Unit 5 (Trash, history & import), Unit 6
 (Collaboration) and Unit 7 (Repositories) are done — the UI phase is complete.
-On top of that, the **command redesign**
-([spec](docs/superpowers/specs/2026-08-30-ui-command-redesign.md)) rebuilt the
-client as a dark-first command console: a grid shell (rail · top bar · context
-panel · content · inspector) on every authed route, a grouped command palette
-with recents, and every page's controls living in the shell's panels instead
-of floating over the content. All eight slices are merged, QA'd against the
-fixture API (`client/mock/`) with headless screenshots and a shell-overlap
-check at two sizes in both themes.
+On top of that, the **Observatory Bridge interface**
+([spec](docs/superpowers/specs/2026-09-21-ui-ux-observatory-bridge-redesign.md)) provides
+a floating full-screen workspace architecture: an edge-to-edge canvas underneath an overlay
+layer featuring an expandable navigation rail with standalone CH logo button, dual-card floating
+navigation, a top-right expandable search bar, and a bottom navigation bar with history navigation
+and breadcrumbs. Sidebars (Context panel and Inspector) float between navigation chrome and
+collapse to a 44px (`w-11`) icon rail displaying child section icons with tooltips. Safe-area
+insets across all routes keep text and interactive controls clear from underneath floating components.
 Tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a

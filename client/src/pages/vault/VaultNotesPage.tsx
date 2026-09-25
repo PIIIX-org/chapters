@@ -30,6 +30,7 @@ import {
 import { useVaults } from '../../hooks/useVaults.js'
 import { useVaultTree } from '../../hooks/useVaultTree.js'
 import { canEdit } from '../../api/vaults.js'
+import { useShellBreadcrumb } from '../../components/shell/shell-context.js'
 import { getColorDef, type VaultColor } from '../../components/vault/useVaultFolders.js'
 import { useNoteFolders } from '../../components/vault/useNoteFolders.js'
 import { NoteCard } from '../../components/vault/NoteCard.js'
@@ -48,6 +49,10 @@ export function VaultNotesPage() {
   const tree = useVaultTree(vaultId!)
   const vault = vaults.data?.find((v) => v.id === vaultId)
   const editable = canEdit(vault?.access)
+  useShellBreadcrumb([
+    { label: 'Vaults', to: '/vaults' },
+    { label: vault?.name ?? 'Vault' },
+  ])
 
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     return (localStorage.getItem('chapters_notes_view_mode') as ViewMode) || 'card'
@@ -235,7 +240,7 @@ export function VaultNotesPage() {
 
   return (
     <div className="h-full min-h-0 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 px-4 py-5">
+      <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 px-4 pt-5 pb-16">
         <Panel>
           <PanelHeader
             title={

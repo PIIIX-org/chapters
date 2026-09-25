@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Bell, Bot, Database, Palette, Shield, User } from 'lucide-react'
 import { AccountExport } from '../components/settings/AccountExport.js'
 import { VaultImport } from '../components/settings/VaultImport.js'
 import { AccountSection } from '../components/settings/AccountSection.js'
@@ -6,26 +7,28 @@ import { AppearanceSection } from '../components/settings/AppearanceSection.js'
 import { MfaSection } from '../components/settings/MfaSection.js'
 import { NotificationPreferences } from '../components/settings/NotificationPreferences.js'
 import { McpPanel } from '../components/vault/VaultMcpPanel.js'
-import { ContextPanel } from '../components/shell/ShellPanels.js'
+import { ContextPanel, PanelRailButton, PanelRailNav } from '../components/shell/ShellPanels.js'
 import { useShellBreadcrumb } from '../components/shell/shell-context.js'
 import { Eyebrow } from '../components/ui/eyebrow.js'
 import { useSession } from '../hooks/useSession.js'
 import { cn } from '../lib/utils.js'
 
 const SECTIONS = [
-  { id: 'account', label: 'Account', render: () => <AccountSection /> },
-  { id: 'security', label: 'Security', render: () => <MfaSection /> },
+  { id: 'account', label: 'Account', icon: User, render: () => <AccountSection /> },
+  { id: 'security', label: 'Security', icon: Shield, render: () => <MfaSection /> },
   {
     id: 'notifications',
     label: 'Notifications',
+    icon: Bell,
     render: () => <NotificationPreferences />,
   },
   // The same component the vault settings modal uses, in account scope — the
   // spec asks for the component to be reused, not reimplemented.
-  { id: 'mcp', label: 'MCP', render: () => <McpPanel scope="account" /> },
+  { id: 'mcp', label: 'MCP', icon: Bot, render: () => <McpPanel scope="account" /> },
   {
     id: 'data',
     label: 'Data',
+    icon: Database,
     render: () => (
       <>
         <AccountExport />
@@ -34,7 +37,7 @@ const SECTIONS = [
       </>
     ),
   },
-  { id: 'appearance', label: 'Appearance', render: () => <AppearanceSection /> },
+  { id: 'appearance', label: 'Appearance', icon: Palette, render: () => <AppearanceSection /> },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
@@ -66,7 +69,7 @@ export function SettingsPage() {
   if (mustEnrol) {
     return (
       <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto flex max-w-2xl flex-col gap-6 px-6 py-5">
+        <div className="mx-auto flex max-w-2xl flex-col gap-6 px-6 pt-5 pb-16">
           {/* Says only what the section below does not: why the rest of the
               page is missing. MfaSection already states the requirement
               itself, and saying it twice on one short screen reads as a
@@ -86,7 +89,22 @@ export function SettingsPage() {
 
   return (
     <>
-      <ContextPanel label="Settings sections">
+      <ContextPanel
+        label="Settings sections"
+        collapsed={
+          <PanelRailNav label="Settings sections">
+            {SECTIONS.map((s) => (
+              <PanelRailButton
+                key={s.id}
+                icon={s.icon}
+                label={s.label}
+                active={s.id === active}
+                onClick={() => setActive(s.id)}
+              />
+            ))}
+          </PanelRailNav>
+        }
+      >
         <div className="flex h-9 shrink-0 items-center border-b border-border px-3">
           <Eyebrow as="h2">Settings</Eyebrow>
         </div>
@@ -94,26 +112,30 @@ export function SettingsPage() {
           aria-label="Settings sections"
           className="flex flex-col gap-0.5 p-2"
         >
-          {SECTIONS.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              aria-current={s.id === active ? 'page' : undefined}
-              onClick={() => setActive(s.id)}
-              className={cn(
-                'rounded-md px-2 py-1.5 text-left text-sm outline-none transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-ring/40',
-                s.id === active
-                  ? 'bg-muted text-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-              )}
-            >
-              {s.label}
-            </button>
-          ))}
+          {SECTIONS.map((s) => {
+            const Icon = s.icon
+            return (
+              <button
+                key={s.id}
+                type="button"
+                aria-current={s.id === active ? 'page' : undefined}
+                onClick={() => setActive(s.id)}
+                className={cn(
+                  'flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-ring/40',
+                  s.id === active
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                <Icon className="size-4 shrink-0" aria-hidden="true" />
+                <span>{s.label}</span>
+              </button>
+            )
+          })}
         </nav>
       </ContextPanel>
       <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto flex max-w-2xl flex-col gap-6 px-6 py-5">
+        <div className="mx-auto flex max-w-2xl flex-col gap-6 px-6 pt-5 pb-16">
           {section.render()}
         </div>
       </div>

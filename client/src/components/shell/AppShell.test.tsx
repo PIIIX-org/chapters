@@ -39,10 +39,10 @@ function PanelPage() {
   useShellStatus({ tone: 'live', label: 'Live' })
   return (
     <>
-      <ContextPanel label="Notes">
+      <ContextPanel label="Notes" collapsed={<p>Collapsed context</p>}>
         <p>Context content</p>
       </ContextPanel>
-      <Inspector label="Details">
+      <Inspector label="Details" collapsed={<p>Collapsed inspector</p>}>
         <p>Inspector content</p>
       </Inspector>
       <input aria-label="Note title" />
@@ -172,20 +172,36 @@ describe('AppShell', () => {
     await waitFor(() => expect(within(context).getByText('Context content')).toBeInTheDocument())
     expect(within(inspector).getByText('Inspector content')).toBeInTheDocument()
     expect(context).toBeVisible()
+    expect(context).toHaveClass('absolute', 'top-[194px]', 'bottom-[222px]', 'left-2.5', 'z-20')
+    expect(inspector).toHaveClass('absolute', 'top-[54px]', 'bottom-[54px]', 'z-20', 'right-2.5')
 
     const toggle = screen.getByRole('button', { name: 'Toggle context panel' })
     expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(context).toHaveAttribute('data-panel-open', 'true')
+    expect(context).toHaveClass('w-[var(--shell-context,240px)]')
 
     // fireEvent, not user.keyboard: '[' is a user-event descriptor character.
     fireEvent.keyDown(document.body, { key: '[' })
-    expect(context).not.toBeVisible()
+    expect(context).toHaveAttribute('data-panel-open', 'false')
+    expect(context).toHaveClass('w-11')
+    expect(within(context).getByText('Collapsed context')).toBeInTheDocument()
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
     expect(localStorage.getItem('chapters.shell.context')).toBe('closed')
 
-    await user.click(screen.getByRole('button', { name: 'Toggle inspector' }))
-    expect(inspector).not.toBeVisible()
+    const inspectorToggle = screen.getByRole('button', { name: 'Toggle inspector' })
+    expect(inspectorToggle).toHaveAttribute('aria-pressed', 'true')
+    expect(inspector).toHaveAttribute('data-panel-open', 'true')
+
+    await user.click(inspectorToggle)
+    expect(inspector).toHaveAttribute('data-panel-open', 'false')
+    expect(inspector).toHaveClass('w-11')
+    expect(within(inspector).getByText('Collapsed inspector')).toBeInTheDocument()
+    expect(inspectorToggle).toHaveAttribute('aria-pressed', 'false')
+
     fireEvent.keyDown(document.body, { key: ']' })
-    expect(inspector).toBeVisible()
+    expect(inspector).toHaveAttribute('data-panel-open', 'true')
+    expect(inspector).toHaveClass('w-[var(--shell-inspector,320px)]')
+    expect(within(inspector).getByText('Inspector content')).toBeInTheDocument()
   })
 
   it('shows the page breadcrumb and status pill in the top bar', async () => {
@@ -222,5 +238,83 @@ describe('AppShell', () => {
       Array.from(el.classList).some((c) => c === 'bg-accent' || c.startsWith('hover:bg-accent')),
     )
     expect(offenders).toHaveLength(0)
+  })
+
+  it('toggles the sidebar between collapsed and expanded when clicking the CH logo button', async () => {
+    stubFetch()
+    renderShell()
+    const user = userEvent.setup()
+    const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+    const rail = screen.getByRole('navigation', { name: 'Primary' })
+    const graphLink = within(rail).getByRole('link', { name: 'Graph' })
+    const vaultsLink = within(rail).getByRole('link', { name: 'Vaults' })
+    expect(chButton).toHaveAttribute('aria-expanded', 'false')
+    expect(rail).toHaveClass('w-11')
+    expect(graphLink).toHaveClass('size-9', 'shrink-0')
+    expect(vaultsLink).toHaveClass('size-9', 'shrink-0')
+    expect(graphLink.className).not.toContain('({ isActive })')
+
+    // Click CH logo to expand
+    await user.click(chButton)
+    expect(chButton).toHaveAttribute('aria-expanded', 'true')
+    expect(rail).toHaveClass('w-[var(--shell-context,240px)]')
+    expect(within(rail).getByText('Graphs')).toBeInTheDocument()
+    expect(within(rail).getByText('Vaults')).toBeInTheDocument()
+    expect(within(rail).getByText('Repos')).toBeInTheDocument()
+    expect(within(rail).getByText('Team')).toBeInTheDocument()
+    expect(within(rail).getByText('Settings')).toBeInTheDocument()
+    expect(within(rail).getByText('Profile')).toBeInTheDocument()
+    expect(within(rail).getByText('g g')).toBeInTheDocument()
+    expect(within(rail).getByRole('link', { name: 'Graph' })).toHaveClass('h-9', 'w-full')
+
+    // Click again to collapse
+    await user.click(chButton)
+    expect(chButton).toHaveAttribute('aria-expanded', 'false')
+    expect(rail).toHaveClass('w-11')
+    const collapsedGraphLink = within(rail).getByRole('link', { name: 'Graph' })
+    const collapsedVaultsLink = within(rail).getByRole('link', { name: 'Vaults' })
+    expect(collapsedGraphLink).toHaveClass('size-9', 'shrink-0')
+    expect(collapsedVaultsLink).toHaveClass('size-9', 'shrink-0')
+    expect(collapsedGraphLink.className).not.toContain('({ isActive })')
+  })
+
+  it('expands the search bar on click and collapses on Escape', async () => {
+    stubFetch()
+    renderShell()
+    const user = userEvent.setup()
+
+    const searchBtn = screen.getByRole('button', { name: 'Open the command palette' })
+    expect(screen.queryByPlaceholderText(/search notes, code/i)).toBeNull()
+
+    // Click to expand
+    await user.click(searchBtn)
+    const input = screen.getByPlaceholderText(/search notes, code/i)
+    expect(input).toBeInTheDocument()
+
+    // Type query
+    await user.type(input, 'architecture')
+    expect(input).toHaveValue('architecture')
+
+    // Press Escape to collapse
+    await user.keyboard('{Escape}')
+    expect(screen.queryByPlaceholderText(/search notes, code/i)).toBeNull()
+  })
+
+  it('navigates history back and forward from the bottom bar', async () => {
+    stubFetch()
+    const backSpy = vi.spyOn(window.history, 'back').mockImplementation(() => {})
+    const forwardSpy = vi.spyOn(window.history, 'forward').mockImplementation(() => {})
+
+    renderShell()
+    const user = userEvent.setup()
+
+    const backButton = screen.getByRole('button', { name: 'Go back' })
+    const forwardButton = screen.getByRole('button', { name: 'Go forward' })
+
+    await user.click(backButton)
+    expect(backSpy).toHaveBeenCalledTimes(1)
+
+    await user.click(forwardButton)
+    expect(forwardSpy).toHaveBeenCalledTimes(1)
   })
 })

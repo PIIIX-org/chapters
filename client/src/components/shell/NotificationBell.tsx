@@ -3,8 +3,9 @@ import type { KeyboardEvent } from 'react'
 import { Bell } from 'lucide-react'
 import { Button } from '../ui/button.js'
 import { useMarkNotificationRead, useNotifications } from '../../hooks/useNotifications.js'
+import { cn } from '../../lib/utils.js'
 
-export function NotificationBell() {
+export function NotificationBell({ showLabel = false }: { showLabel?: boolean } = {}) {
   const [open, setOpen] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -47,7 +48,11 @@ export function NotificationBell() {
   }
 
   return (
-    <div ref={wrapperRef} className="relative inline-block" onKeyDown={onKeyDown}>
+    <div
+      ref={wrapperRef}
+      className={showLabel ? 'relative w-full shrink-0' : 'relative size-9 flex items-center justify-center shrink-0'}
+      onKeyDown={onKeyDown}
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -55,14 +60,27 @@ export function NotificationBell() {
         aria-expanded={open}
         aria-label={label}
         onClick={() => setOpen((o) => !o)}
-        className="relative flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors duration-100 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+        className={cn(
+          'relative flex items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-colors duration-100 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 shrink-0',
+          showLabel
+            ? 'h-9 w-full justify-start gap-2.5 px-2.5 text-[13px] font-medium'
+            : 'size-9 justify-center p-0 hover:scale-105',
+        )}
       >
-        <Bell className="size-4" aria-hidden="true" />
+        <Bell className="size-[18px] shrink-0" aria-hidden="true" />
+        {showLabel && <span className="truncate">Notifications</span>}
         {unreadCount > 0 && (
           <span
             aria-hidden="true"
-            className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary"
-          />
+            className={cn(
+              'rounded-full bg-primary',
+              showLabel
+                ? 'ml-auto px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground leading-none'
+                : 'absolute right-1 top-1 size-1.5',
+            )}
+          >
+            {showLabel ? unreadCount : null}
+          </span>
         )}
       </button>
       {open && (
@@ -71,7 +89,7 @@ export function NotificationBell() {
           role="dialog"
           aria-label="Notifications"
           tabIndex={-1}
-          className="absolute right-0 top-full z-40 mt-1.5 w-80 rounded-md border border-border bg-popover py-1 shadow-floating focus:outline-none"
+          className="absolute left-full bottom-0 z-50 ml-3 w-80 rounded-[var(--radius-lg)] border border-border bg-popover py-1 shadow-floating focus:outline-none"
         >
           {notifications.isError ? (
             // Ordered before any read of `.data`, same reasoning as

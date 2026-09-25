@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
-import { X } from 'lucide-react'
+import { Users, X } from 'lucide-react'
 import { TeamManagement } from '../components/team/TeamManagement.js'
 import { UserConstellation } from '../components/team/UserConstellation.js'
 import { VaultReachExpansion } from '../components/team/VaultReachExpansion.js'
-import { Inspector } from '../components/shell/ShellPanels.js'
+import { Inspector, PanelRailButton, PanelRailNav } from '../components/shell/ShellPanels.js'
 import { useShellBreadcrumb } from '../components/shell/shell-context.js'
 import { PanelState } from '../components/ui/empty-state.js'
 import { Eyebrow } from '../components/ui/eyebrow.js'
@@ -76,7 +76,18 @@ function SearchIcon({ className }: { className?: string }) {
 
 function ManagementPanel() {
   return (
-    <Inspector label="Team management" className="gap-4 p-3">
+    <Inspector
+      label="Team management"
+      className="gap-4 p-3"
+      collapsed={
+        <PanelRailNav label="Team management">
+          <PanelRailButton
+            icon={Users}
+            label="Team management"
+          />
+        </PanelRailNav>
+      }
+    >
       <div className="flex h-9 shrink-0 items-center border-b border-border">
         <Eyebrow as="h2">Manage</Eyebrow>
       </div>
@@ -172,7 +183,7 @@ export function TeamPage() {
   return (
     <>
       <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 px-4 py-5">
+        <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 px-4 pt-3 pb-16">
           {/* Teams Navigation Shelf */}
           {teams.data.length > 1 && (
             <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">

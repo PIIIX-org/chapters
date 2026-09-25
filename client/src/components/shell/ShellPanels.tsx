@@ -1,10 +1,88 @@
 import { useEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useOptionalShell, type PanelKind } from './shell-context.js'
+import type { LucideIcon } from 'lucide-react'
+import {
+  PanelContext,
+  useOptionalShell,
+  usePanel,
+  type PanelKind,
+} from './shell-context.js'
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.js'
 import { cn } from '../../lib/utils.js'
+
+
+export function PanelRailNav({
+  children,
+  label,
+  className,
+}: {
+  children: ReactNode
+  label: string
+  className?: string
+}) {
+  return (
+    <nav
+      aria-label={label}
+      className={cn('flex flex-col items-center gap-1 w-full', className)}
+    >
+      {children}
+    </nav>
+  )
+}
+
+export interface PanelRailButtonProps {
+  icon: LucideIcon
+  label: string
+  active?: boolean
+  onClick?: () => void
+  side?: 'left' | 'right'
+  className?: string
+}
+
+export function PanelRailButton({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+  side,
+  className,
+}: PanelRailButtonProps) {
+  const panel = usePanel()
+  const shell = useOptionalShell()
+  const tooltipSide = side ?? (panel?.kind === 'inspector' ? 'left' : 'right')
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          aria-current={active ? 'page' : undefined}
+          onClick={() => {
+            onClick?.()
+            if (panel?.kind) {
+              shell?.setPanelOpen(panel.kind, true)
+            }
+          }}
+          className={cn(
+            'flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
+            'hover:bg-muted hover:text-foreground active:scale-95',
+            active && 'bg-muted text-foreground font-semibold shadow-xs',
+            className,
+          )}
+        >
+          <Icon className="size-[18px] shrink-0" strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side={tooltipSide}>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
 
 interface PanelProps {
   children: ReactNode
+  /** Collapsed icon-only view rendered when the panel is collapsed to rail width */
+  collapsed?: ReactNode
   /** Accessible name; also used when the panel renders inline outside a shell. */
   label: string
   className?: string
@@ -19,6 +97,7 @@ interface PanelProps {
 function ShellPanel({
   kind,
   children,
+  collapsed,
   label,
   className,
 }: PanelProps & { kind: PanelKind }) {
@@ -26,15 +105,19 @@ function ShellPanel({
   const registerPanel = shell?.registerPanel
   useEffect(() => registerPanel?.(kind), [registerPanel, kind])
 
+  const open = shell ? shell.panels[kind].open : true
   const node = shell?.panels[kind].node
   if (shell && node) {
     return createPortal(
-      <div
-        data-shell-panel={kind}
-        className={cn('flex min-h-full flex-col', className)}
-      >
-        {children}
-      </div>,
+      <PanelContext.Provider value={{ kind, open, label }}>
+        <div
+          data-shell-panel={kind}
+          data-panel-open={open}
+          className={cn('flex min-h-full flex-col w-full', open && className)}
+        >
+          {open ? children : (collapsed ?? children)}
+        </div>
+      </PanelContext.Provider>,
       node,
     )
   }

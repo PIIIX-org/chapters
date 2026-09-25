@@ -41,7 +41,10 @@ describe('NotificationBell', () => {
     const bell = await screen.findByRole('button', { name: /notifications, 2 unread/i })
 
     await user.click(bell)
-    expect(screen.getByRole('dialog', { name: 'Notifications' })).toBeInTheDocument()
+    const dialog = screen.getByRole('dialog', { name: 'Notifications' })
+    expect(dialog).toBeInTheDocument()
+    expect(dialog).toHaveClass('left-full')
+    expect(dialog).not.toHaveClass('right-0')
     expect(screen.getByText('First message')).toBeInTheDocument()
     expect(screen.getByText('Second message')).toBeInTheDocument()
     expect(screen.getByText('Third message')).toBeInTheDocument()
