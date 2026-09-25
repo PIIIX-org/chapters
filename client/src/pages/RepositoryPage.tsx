@@ -340,7 +340,7 @@ interface ShellProps {
 function Shell({ children, connectDialog, onConnect, title, subtitle, onSettings }: ShellProps) {
   useShellBreadcrumb([{ label: 'Repositories', to: '/repos' }, { label: title ?? 'Repository' }])
   const shell = useOptionalShell()
-  const leftPad = shell?.sidebarExpanded ? 'pl-[228px]' : 'pl-16'
+  const leftPad = shell?.sidebarExpanded ? 'pl-[264px]' : 'pl-16'
 
   return (
     <div className="flex h-full min-h-0 flex-col">

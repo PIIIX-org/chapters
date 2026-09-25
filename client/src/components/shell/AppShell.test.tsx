@@ -253,13 +253,14 @@ describe('AppShell', () => {
     // Click CH logo to expand
     await user.click(chButton)
     expect(chButton).toHaveAttribute('aria-expanded', 'true')
-    expect(rail).toHaveClass('w-[200px]')
+    expect(rail).toHaveClass('w-[var(--shell-context,240px)]')
     expect(within(rail).getByText('Graphs')).toBeInTheDocument()
     expect(within(rail).getByText('Vaults')).toBeInTheDocument()
     expect(within(rail).getByText('Repos')).toBeInTheDocument()
     expect(within(rail).getByText('Team')).toBeInTheDocument()
     expect(within(rail).getByText('Settings')).toBeInTheDocument()
     expect(within(rail).getByText('Profile')).toBeInTheDocument()
+    expect(within(rail).getByText('g g')).toBeInTheDocument()
 
     // Click again to collapse
     await user.click(chButton)

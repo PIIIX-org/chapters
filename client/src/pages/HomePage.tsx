@@ -42,7 +42,7 @@ export function HomePage() {
           <div
             className={cn(
               'pointer-events-none absolute top-2.5 z-10 transition-[left] duration-200',
-              shell?.sidebarExpanded ? 'left-[228px]' : 'left-16',
+              shell?.sidebarExpanded ? 'left-[264px]' : 'left-16',
             )}
           >
             <div className="pointer-events-auto">
