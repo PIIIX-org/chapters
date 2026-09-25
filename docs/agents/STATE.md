@@ -18,7 +18,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
     **revoked ≠ offline** — revoked KEEPS the doc (unsent text must survive).
   - **7** viewer read-only forever; local folders watched;
     **`gitUrl`/`localPath` are owner-only** (they leaked to viewers + MCP).
-- **`prod` == `dev` as of 2026-09-22 (#206, #213)** — Observatory Bridge UI/UX MVP redesign (#206), Google Open Knowledge Format (OKF v0.2) spec alignment and upstream sync (#213; PRs #208, #209, #210, #211, #212).
+- **`prod` == `dev` as of 2026-09-25 (#217, #241)** — Observatory Bridge UI/UX MVP redesign (#206), OKF v0.2 alignment (#213), terminal cursor & RTL/LTR (#217), and Floating Fullscreen Shell with Collapsible Rails (#241; PRs #218–#239).
 - **Phase: OKF v0.2 ALIGNMENT & UPSTREAM SYNC (2026-09-22)**: Master plan implementing Google Cloud OKF v0.2 spec (`GoogleCloudPlatform/open-knowledge-format`, Commit `3dc3029`).
   - **Phase 1 (#209)**: Strict ISO 8601 UTC offsets (`Z`/`[+-]HH:MM`), v0.2 frontmatter families (`generated`, `sources`, `verified`, `usage_window`, `properties`), rejection of date-only strings.
   - **Phase 2 (#210)**: Arbitrary directory hierarchy (1-8 segments), progressive disclosure table generation in `index.md`, zero-loss zip backup restore.
@@ -61,4 +61,9 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   #9. #66 (unit 6's CRDT) and #101 (#129) are closed. **Test-that-cannot-fail:
   SEVEN times**, always a fixture too uniform to tell working from broken.
 - **Editor Cursor & Bidirectional Support (2026-09-22)**: Terminal block cursor (8px) with multi-color cycling blink (Emerald, Cyan, Amber, Purple, Rose), visible in dark/light modes, with full RTL/LTR bidirectional support (auto-detection, toolbar controls, persistence).
-- **Shell Layout Redesign (2026-09-25)**: Expandable sidebar toggled via top CH logo button, dual-card navigation grouping, top-right expandable search bar with smooth transition, and bottom navigation bar with back/forward history, breadcrumb trailing separator, and panel toggles.
+- **Shell Layout Redesign & Floating Fullscreen Shell (2026-09-25; PRs #218–#239)**:
+  - Floating chrome architecture with edge-to-edge full-screen workspace canvas (`<main>` underneath overlay layer).
+  - Expandable navigation rail with standalone CH logo button, dual-card floating navigation (primary apps & secondary settings/profile).
+  - Collapsible sidebars: context panel nested inside the rail column between top/bottom navigation cards, inspector panel on the right. When collapsed, sidebars shrink to an icon rail (`w-11`, 44px) matching parent nav width, displaying child section icons with tooltips (`PanelRailNav`, `PanelRailButton`).
+  - Safe-area margins across all workspace views (Graph, Note, Vaults, Repos, Team, Admin, Settings) preventing text and interactive controls from being obscured under floating chrome.
+  - Radix UI slot stringification fix on `<TooltipTrigger asChild>` wrapping `<NavLink>`: static string `className` computed via `useLocation` guarantees full `size-9` (36px x 36px) button sizing, flex centering, and uniform 4px gaps across all rail links.
