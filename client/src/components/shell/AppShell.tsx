@@ -52,7 +52,7 @@ function ShellFrame({ children }: { children?: ReactNode }) {
     <div className="grid h-dvh w-full grid-cols-[auto_minmax(0,1fr)] grid-rows-[var(--shell-topbar,44px)_minmax(0,1fr)_var(--shell-bottombar,44px)] overflow-hidden bg-background text-foreground">
       <Rail />
       <TopBar />
-      <div className="relative grid min-h-0 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto]">
+      <div className="col-start-2 row-start-2 relative grid min-h-0 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto]">
         <aside
           ref={contextRef}
           data-shell-panel="context"
