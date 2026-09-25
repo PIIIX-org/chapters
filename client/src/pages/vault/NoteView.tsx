@@ -29,8 +29,9 @@ import {
   useNoteDirection,
 } from '../../components/vault/note-toolbar-utils.js'
 import type { NoteDirection } from '../../components/vault/note-toolbar-utils.js'
-import { Inspector } from '../../components/shell/ShellPanels.js'
-import { useOptionalShell, useShellStatus } from '../../components/shell/shell-context.js'
+import { History, Share2, SlidersHorizontal } from 'lucide-react'
+import { Inspector, PanelRailButton, PanelRailNav } from '../../components/shell/ShellPanels.js'
+import { useOptionalShell, usePanel, useShellStatus } from '../../components/shell/shell-context.js'
 import type { ShellStatus } from '../../components/shell/shell-context.js'
 import { Pill } from '../../components/ui/pill.js'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js'
@@ -218,8 +219,38 @@ interface NoteInspectorProps {
 /** The note's detail, as inspector tabs — the property panel, the revision
  *  history and (for the owner) sharing all fold in here. */
 function NoteInspector({ properties, history, sharing }: NoteInspectorProps) {
+  const [tab, setTab] = useState<'properties' | 'history' | 'sharing'>('properties')
+  const panel = usePanel()
+
+  if (panel && !panel.open) {
+    return (
+      <PanelRailNav label="Note inspector tabs">
+        <PanelRailButton
+          icon={SlidersHorizontal}
+          label="Properties"
+          active={tab === 'properties'}
+          onClick={() => setTab('properties')}
+        />
+        <PanelRailButton
+          icon={History}
+          label="History"
+          active={tab === 'history'}
+          onClick={() => setTab('history')}
+        />
+        {sharing != null && (
+          <PanelRailButton
+            icon={Share2}
+            label="Sharing"
+            active={tab === 'sharing'}
+            onClick={() => setTab('sharing')}
+          />
+        )}
+      </PanelRailNav>
+    )
+  }
+
   return (
-    <Tabs defaultValue="properties" className="flex min-h-0 flex-1 flex-col">
+    <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="flex min-h-0 flex-1 flex-col">
       <TabsList>
         <TabsTrigger value="properties">Properties</TabsTrigger>
         <TabsTrigger value="history">History</TabsTrigger>

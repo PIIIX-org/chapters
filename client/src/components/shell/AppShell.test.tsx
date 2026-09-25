@@ -39,10 +39,10 @@ function PanelPage() {
   useShellStatus({ tone: 'live', label: 'Live' })
   return (
     <>
-      <ContextPanel label="Notes">
+      <ContextPanel label="Notes" collapsed={<p>Collapsed context</p>}>
         <p>Context content</p>
       </ContextPanel>
-      <Inspector label="Details">
+      <Inspector label="Details" collapsed={<p>Collapsed inspector</p>}>
         <p>Inspector content</p>
       </Inspector>
       <input aria-label="Note title" />
@@ -177,17 +177,31 @@ describe('AppShell', () => {
 
     const toggle = screen.getByRole('button', { name: 'Toggle context panel' })
     expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(context).toHaveAttribute('data-panel-open', 'true')
+    expect(context).toHaveClass('w-[var(--shell-context,240px)]')
 
     // fireEvent, not user.keyboard: '[' is a user-event descriptor character.
     fireEvent.keyDown(document.body, { key: '[' })
-    expect(context).not.toBeVisible()
+    expect(context).toHaveAttribute('data-panel-open', 'false')
+    expect(context).toHaveClass('w-11')
+    expect(within(context).getByText('Collapsed context')).toBeInTheDocument()
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
     expect(localStorage.getItem('chapters.shell.context')).toBe('closed')
 
-    await user.click(screen.getByRole('button', { name: 'Toggle inspector' }))
-    expect(inspector).not.toBeVisible()
+    const inspectorToggle = screen.getByRole('button', { name: 'Toggle inspector' })
+    expect(inspectorToggle).toHaveAttribute('aria-pressed', 'true')
+    expect(inspector).toHaveAttribute('data-panel-open', 'true')
+
+    await user.click(inspectorToggle)
+    expect(inspector).toHaveAttribute('data-panel-open', 'false')
+    expect(inspector).toHaveClass('w-11')
+    expect(within(inspector).getByText('Collapsed inspector')).toBeInTheDocument()
+    expect(inspectorToggle).toHaveAttribute('aria-pressed', 'false')
+
     fireEvent.keyDown(document.body, { key: ']' })
-    expect(inspector).toBeVisible()
+    expect(inspector).toHaveAttribute('data-panel-open', 'true')
+    expect(inspector).toHaveClass('w-[var(--shell-inspector,320px)]')
+    expect(within(inspector).getByText('Inspector content')).toBeInTheDocument()
   })
 
   it('shows the page breadcrumb and status pill in the top bar', async () => {

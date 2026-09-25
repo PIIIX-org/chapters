@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { Outlet, useNavigate, useParams } from 'react-router'
-import { Plus, Trash2 } from 'lucide-react'
+import { FileText, Plus, Trash2 } from 'lucide-react'
 import { useVaults } from '../../hooks/useVaults.js'
 import { useVaultTree } from '../../hooks/useVaultTree.js'
 import { FileTree } from '../../components/vault/FileTree.js'
 import { NoteTrashPanel } from '../../components/vault/NoteTrashPanel.js'
 import { canEdit } from '../../api/vaults.js'
 import { NewNoteForm } from '../../components/vault/NewNoteForm.js'
-import { ContextPanel } from '../../components/shell/ShellPanels.js'
+import { ContextPanel, PanelRailButton, PanelRailNav } from '../../components/shell/ShellPanels.js'
 import { useShellBreadcrumb } from '../../components/shell/shell-context.js'
 import { Button } from '../../components/ui/button.js'
 import { Eyebrow } from '../../components/ui/eyebrow.js'
@@ -29,7 +29,37 @@ export function VaultLayout() {
 
   return (
     <>
-      <ContextPanel label={vault?.name ?? 'Vault'}>
+      <ContextPanel
+        label={vault?.name ?? 'Vault'}
+        collapsed={
+          <PanelRailNav label="Vault navigation">
+            {editable && (
+              <PanelRailButton
+                icon={Plus}
+                label="New note"
+                onClick={() => setCreating(true)}
+              />
+            )}
+            <PanelRailButton
+              icon={FileText}
+              label={vault?.name ?? 'Notes'}
+              active={!trashOpen && !creating}
+              onClick={() => {
+                setCreating(false)
+                setTrashOpen(false)
+              }}
+            />
+            {editable && (
+              <PanelRailButton
+                icon={Trash2}
+                label="Trash"
+                active={trashOpen}
+                onClick={() => setTrashOpen(true)}
+              />
+            )}
+          </PanelRailNav>
+        }
+      >
         <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
           <Eyebrow as="h2" className="min-w-0 flex-1 truncate">
             {vault?.name ?? 'Vault'}
