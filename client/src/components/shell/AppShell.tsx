@@ -28,9 +28,6 @@ export function AppShell({ children }: { children?: ReactNode }) {
   )
 }
 
-const TRACK =
-  'min-h-0 overflow-y-auto max-lg:fixed max-lg:inset-y-2.5 max-lg:z-40'
-
 function ShellFrame({ children }: { children?: ReactNode }) {
   const shell = useShell()
   useShellChords()
@@ -50,34 +47,32 @@ function ShellFrame({ children }: { children?: ReactNode }) {
 
   return (
     <div className="relative h-dvh w-full overflow-hidden bg-background text-foreground">
-      {/* Full-screen workspace canvas & floating side panels */}
-      <div className="relative flex h-full w-full min-h-0 min-w-0 overflow-hidden">
-        <aside
-          ref={contextRef}
-          data-shell-panel="context"
-          aria-label="Context panel"
-          hidden={!contextVisible}
-          className={cn(
-            TRACK,
-            'relative my-2.5 ml-[60px] flex w-[var(--shell-context,240px)] shrink-0 flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 z-10',
-            'max-lg:left-[60px]',
-          )}
-        />
-        <main className="relative flex-1 min-h-0 min-w-0 h-full overflow-hidden">
-          {children ?? <Outlet />}
-        </main>
-        <aside
-          ref={inspectorRef}
-          data-shell-panel="inspector"
-          aria-label="Inspector"
-          hidden={!inspectorVisible}
-          className={cn(
-            TRACK,
-            'relative my-2.5 mr-2.5 flex w-[var(--shell-inspector,320px)] shrink-0 flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 z-10',
-            'max-lg:right-2.5',
-          )}
-        />
-      </div>
+      {/* Full-screen workspace canvas */}
+      <main className="relative h-full w-full min-h-0 min-w-0 overflow-hidden">
+        {children ?? <Outlet />}
+      </main>
+
+      {/* Floating Side Panels */}
+      <aside
+        ref={contextRef}
+        data-shell-panel="context"
+        aria-label="Context panel"
+        hidden={!contextVisible}
+        className={cn(
+          'pointer-events-auto absolute top-[54px] bottom-[54px] z-20 flex w-[var(--shell-context,240px)] flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0 overflow-y-auto',
+          shell.sidebarExpanded ? 'left-[218px]' : 'left-[70px]',
+        )}
+      />
+
+      <aside
+        ref={inspectorRef}
+        data-shell-panel="inspector"
+        aria-label="Inspector"
+        hidden={!inspectorVisible}
+        className={cn(
+          'pointer-events-auto absolute top-[54px] bottom-[54px] right-2.5 z-20 flex w-[var(--shell-inspector,320px)] flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0 overflow-y-auto',
+        )}
+      />
 
       {/* Floating navigation overlay layer */}
       <div className="pointer-events-none fixed inset-0 z-30 select-none overflow-hidden">
@@ -87,12 +82,12 @@ function ShellFrame({ children }: { children?: ReactNode }) {
         </div>
 
         {/* Floating TopBar on the Top Right */}
-        <div className="pointer-events-none absolute top-2.5 right-3 flex items-center justify-end">
+        <div className="pointer-events-none absolute top-2.5 right-2.5 flex items-center justify-end">
           <TopBar />
         </div>
 
         {/* Floating BottomBar along the Bottom */}
-        <div className="pointer-events-none absolute bottom-2.5 inset-x-0 flex items-center justify-between px-3">
+        <div className="pointer-events-none absolute bottom-2.5 inset-x-0 flex items-center justify-between px-2.5">
           <BottomBar />
         </div>
       </div>
