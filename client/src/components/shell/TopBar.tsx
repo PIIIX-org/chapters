@@ -9,7 +9,7 @@ export function TopBar() {
   const shell = useShell()
 
   return (
-    <header className="flex h-[var(--shell-topbar,44px)] items-center justify-between gap-3 border-b border-border bg-secondary px-3 overflow-hidden select-none">
+    <header className="col-start-2 row-start-1 flex h-11 items-center justify-between gap-3 bg-transparent px-3 select-none">
       <div className="flex items-center min-w-0">
         {shell.status && (
           <Pill tone={shell.status.tone} dot role="status" className="inline-flex">

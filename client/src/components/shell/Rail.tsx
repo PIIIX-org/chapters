@@ -49,25 +49,25 @@ function RailLink({ item, expanded }: { item: RailItem; expanded: boolean }) {
         aria-label={item.label}
         className={({ isActive }) =>
           cn(
-            'relative flex items-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
+            'relative flex items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
             'hover:bg-muted hover:text-foreground',
             'active:scale-[0.98] active:bg-muted/80',
             'focus-visible:ring-2 focus-visible:ring-ring/40',
             expanded
-              ? 'h-9 w-full gap-2.5 px-2 text-[13px] font-medium'
-              : 'size-9 justify-center hover:scale-105',
+              ? 'h-9 w-full justify-start gap-2.5 px-2.5 text-[13px] font-medium'
+              : 'h-9 w-full justify-center p-0 hover:scale-105',
             isActive &&
               cn(
                 'bg-muted text-foreground shadow-xs',
                 expanded
                   ? 'before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-[var(--radius-sm)] before:bg-primary font-semibold'
-                  : 'before:absolute before:-left-1 before:top-2 before:bottom-2 before:w-0.5 before:rounded-[var(--radius-sm)] before:bg-primary',
+                  : 'before:absolute before:left-0.5 before:top-2 before:bottom-2 before:w-0.5 before:rounded-full before:bg-primary',
               ),
           )
         }
       >
         <TooltipTrigger asChild>
-          <span className={cn('flex items-center', expanded ? 'w-full gap-2.5' : 'size-full justify-center')}>
+          <span className={cn('flex items-center justify-center', expanded ? 'w-full justify-start gap-2.5' : 'size-full')}>
             <Icon className="size-[18px] shrink-0" strokeWidth={1.75} aria-hidden="true" />
             {expanded && <span className="truncate">{item.display}</span>}
           </span>
@@ -88,7 +88,7 @@ function RailLink({ item, expanded }: { item: RailItem; expanded: boolean }) {
   )
 }
 
-/** The primary navigation rail with top CH logo toggle and split primary/utility cards. */
+/** The primary navigation rail with standalone CH logo button and centered dual-card navigation. */
 export function Rail() {
   const shell = useShell()
   const session = useSession()
@@ -101,27 +101,36 @@ export function Rail() {
     <nav
       aria-label="Primary"
       className={cn(
-        'row-span-2 flex flex-col items-center border-r border-border bg-secondary p-1.5 transition-[width] duration-200 ease-in-out select-none',
+        'col-start-1 row-start-1 row-end-4 flex flex-col items-center gap-2 bg-transparent border-none px-1 py-2 transition-[width] duration-200 ease-in-out select-none',
         expanded ? 'w-[200px]' : 'w-[52px]',
       )}
     >
-      <div className={cn('mb-2 flex w-full items-center', expanded ? 'justify-start px-0.5' : 'justify-center')}>
+      <div className={cn('flex w-full items-center', expanded ? 'justify-start' : 'justify-center')}>
         <button
           type="button"
           onClick={shell.toggleSidebar}
           aria-label="Chapters logo, toggle sidebar"
           aria-expanded={expanded}
-          className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-border bg-card font-mono text-[13px] font-bold text-foreground outline-none transition-all duration-150 hover:bg-muted hover:border-input active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40"
+          className={cn(
+            'flex items-center justify-center rounded-[var(--radius-md)] border border-border bg-card font-mono text-[13px] font-bold text-foreground outline-none transition-all duration-150 hover:bg-muted hover:border-input active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40',
+            expanded ? 'h-11 w-full justify-between px-3' : 'size-11',
+          )}
         >
-          CH
+          <span>CH</span>
+          {expanded && <span className="font-sans text-xs font-normal text-muted-foreground">Chapters</span>}
         </button>
       </div>
 
       {/* Upper Navigation Card (Graphs, Vaults, Repos) */}
-      <div className="flex w-full flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1">
-        <ul className="flex flex-col gap-1">
+      <div
+        className={cn(
+          'flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1',
+          expanded ? 'w-full' : 'w-11 items-center',
+        )}
+      >
+        <ul className="flex flex-col gap-1 w-full items-center">
           {primary.map((item) => (
-            <li key={item.to}>
+            <li key={item.to} className="w-full flex justify-center">
               <RailLink item={item} expanded={expanded} />
             </li>
           ))}
@@ -129,17 +138,22 @@ export function Rail() {
       </div>
 
       {/* Lower Navigation Card (Team, Admin, Settings, Notifications, Profile) */}
-      <div className="mt-auto flex w-full flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1">
-        <ul className="flex flex-col gap-1">
+      <div
+        className={cn(
+          'mt-auto flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1',
+          expanded ? 'w-full' : 'w-11 items-center',
+        )}
+      >
+        <ul className="flex flex-col gap-1 w-full items-center">
           {secondary.map((item) => (
-            <li key={item.to}>
+            <li key={item.to} className="w-full flex justify-center">
               <RailLink item={item} expanded={expanded} />
             </li>
           ))}
-          <li data-slot="notifications" className="w-full">
+          <li data-slot="notifications" className="w-full flex justify-center">
             <NotificationBell showLabel={expanded} />
           </li>
-          <li className="w-full">
+          <li className="w-full flex justify-center">
             <AccountMenu showLabel={expanded} />
           </li>
         </ul>

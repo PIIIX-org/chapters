@@ -40,7 +40,7 @@ export function BottomBar() {
   const shell = useShell()
 
   return (
-    <footer className="flex h-11 items-center justify-between gap-3 border-t border-border bg-secondary px-3 select-none">
+    <footer className="col-start-2 row-start-3 flex h-11 items-center justify-between gap-3 bg-transparent px-3 select-none">
       {/* Left: History navigation & Breadcrumbs */}
       <div className="flex items-center gap-1.5 min-w-0">
         <Tooltip>
