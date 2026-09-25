@@ -223,4 +223,71 @@ describe('AppShell', () => {
     )
     expect(offenders).toHaveLength(0)
   })
+
+  it('toggles the sidebar between collapsed and expanded when clicking the CH logo button', async () => {
+    stubFetch()
+    renderShell()
+    const user = userEvent.setup()
+
+    const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+    const rail = screen.getByRole('navigation', { name: 'Primary' })
+    expect(chButton).toHaveAttribute('aria-expanded', 'false')
+    expect(rail).toHaveClass('w-[52px]')
+
+    // Click CH logo to expand
+    await user.click(chButton)
+    expect(chButton).toHaveAttribute('aria-expanded', 'true')
+    expect(rail).toHaveClass('w-[200px]')
+    expect(within(rail).getByText('Graphs')).toBeInTheDocument()
+    expect(within(rail).getByText('Vaults')).toBeInTheDocument()
+    expect(within(rail).getByText('Repos')).toBeInTheDocument()
+    expect(within(rail).getByText('Team')).toBeInTheDocument()
+    expect(within(rail).getByText('Settings')).toBeInTheDocument()
+    expect(within(rail).getByText('Profile')).toBeInTheDocument()
+
+    // Click again to collapse
+    await user.click(chButton)
+    expect(chButton).toHaveAttribute('aria-expanded', 'false')
+    expect(rail).toHaveClass('w-[52px]')
+  })
+
+  it('expands the search bar on click and collapses on Escape', async () => {
+    stubFetch()
+    renderShell()
+    const user = userEvent.setup()
+
+    const searchBtn = screen.getByRole('button', { name: 'Open the command palette' })
+    expect(screen.queryByPlaceholderText(/search notes, code/i)).toBeNull()
+
+    // Click to expand
+    await user.click(searchBtn)
+    const input = screen.getByPlaceholderText(/search notes, code/i)
+    expect(input).toBeInTheDocument()
+
+    // Type query
+    await user.type(input, 'architecture')
+    expect(input).toHaveValue('architecture')
+
+    // Press Escape to collapse
+    await user.keyboard('{Escape}')
+    expect(screen.queryByPlaceholderText(/search notes, code/i)).toBeNull()
+  })
+
+  it('navigates history back and forward from the bottom bar', async () => {
+    stubFetch()
+    const backSpy = vi.spyOn(window.history, 'back').mockImplementation(() => {})
+    const forwardSpy = vi.spyOn(window.history, 'forward').mockImplementation(() => {})
+
+    renderShell()
+    const user = userEvent.setup()
+
+    const backButton = screen.getByRole('button', { name: 'Go back' })
+    const forwardButton = screen.getByRole('button', { name: 'Go forward' })
+
+    await user.click(backButton)
+    expect(backSpy).toHaveBeenCalledTimes(1)
+
+    await user.click(forwardButton)
+    expect(forwardSpy).toHaveBeenCalledTimes(1)
+  })
 })

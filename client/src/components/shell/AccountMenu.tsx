@@ -16,8 +16,9 @@ import { SESSION_QUERY_KEY, useSession } from '../../hooks/useSession.js'
 import { useTheme } from '../../hooks/useTheme.js'
 import { logout } from '../../api/auth.js'
 import { isThemePreference } from '../../lib/theme.js'
+import { cn } from '../../lib/utils.js'
 
-export function AccountMenu() {
+export function AccountMenu({ showLabel = false }: { showLabel?: boolean } = {}) {
   const session = useSession()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -35,10 +36,16 @@ export function AccountMenu() {
         <Button
           type="button"
           variant="ghost"
-          size="icon"
           aria-label="Account menu"
+          className={cn(
+            'relative flex items-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150 hover:bg-muted hover:text-foreground active:bg-muted/80 focus-visible:ring-2 focus-visible:ring-ring/40',
+            showLabel
+              ? 'h-9 w-full justify-start gap-2.5 px-2 py-1.5 text-[13px] font-medium'
+              : 'size-9 justify-center',
+          )}
         >
-          <CircleUser aria-hidden="true" />
+          <CircleUser className="size-[18px] shrink-0" aria-hidden="true" />
+          {showLabel && <span className="truncate">Profile</span>}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[14rem]">
