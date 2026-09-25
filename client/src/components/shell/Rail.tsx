@@ -41,49 +41,53 @@ const SECONDARY: RailItem[] = [
 
 function RailLink({ item, expanded }: { item: RailItem; expanded: boolean }) {
   const Icon = item.icon
+  const link = (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      aria-label={item.label}
+      className={({ isActive }) =>
+        cn(
+          'relative flex items-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
+          'hover:bg-muted hover:text-foreground',
+          'active:scale-[0.98] active:bg-muted/80',
+          'focus-visible:ring-2 focus-visible:ring-ring/40',
+          expanded
+            ? 'h-9 w-full justify-between px-2.5 text-[13px] font-medium'
+            : 'h-9 w-full justify-center p-0 hover:scale-105',
+          isActive &&
+            cn(
+              'bg-muted text-foreground shadow-xs',
+              expanded
+                ? 'before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-[var(--radius-sm)] before:bg-primary font-semibold'
+                : 'before:absolute before:left-0.5 before:top-2 before:bottom-2 before:w-0.5 before:rounded-full before:bg-primary',
+            ),
+        )
+      }
+    >
+      <span className={cn('flex items-center min-w-0', expanded ? 'flex-1 gap-2.5 truncate' : 'justify-center size-full')}>
+        <Icon className="size-[18px] shrink-0" strokeWidth={1.75} aria-hidden="true" />
+        {expanded && <span className="truncate">{item.display}</span>}
+      </span>
+      {expanded && (
+        <span className="shrink-0 ml-2 opacity-70">
+          <Kbd aria-hidden="true">g {item.chord}</Kbd>
+        </span>
+      )}
+    </NavLink>
+  )
+
+  if (expanded) {
+    return link
+  }
+
   return (
     <Tooltip>
-      <NavLink
-        to={item.to}
-        end={item.end}
-        aria-label={item.label}
-        className={({ isActive }) =>
-          cn(
-            'relative flex items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
-            'hover:bg-muted hover:text-foreground',
-            'active:scale-[0.98] active:bg-muted/80',
-            'focus-visible:ring-2 focus-visible:ring-ring/40',
-            expanded
-              ? 'h-9 w-full justify-start gap-2.5 px-2.5 text-[13px] font-medium'
-              : 'h-9 w-full justify-center p-0 hover:scale-105',
-            isActive &&
-              cn(
-                'bg-muted text-foreground shadow-xs',
-                expanded
-                  ? 'before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-[var(--radius-sm)] before:bg-primary font-semibold'
-                  : 'before:absolute before:left-0.5 before:top-2 before:bottom-2 before:w-0.5 before:rounded-full before:bg-primary',
-              ),
-          )
-        }
-      >
-        <TooltipTrigger asChild>
-          <span className={cn('flex items-center justify-center', expanded ? 'w-full justify-start gap-2.5' : 'size-full')}>
-            <Icon className="size-[18px] shrink-0" strokeWidth={1.75} aria-hidden="true" />
-            {expanded && <span className="truncate">{item.display}</span>}
-          </span>
-        </TooltipTrigger>
-        {expanded && (
-          <span className="ml-auto opacity-70">
-            <Kbd aria-hidden="true">g {item.chord}</Kbd>
-          </span>
-        )}
-      </NavLink>
-      {!expanded && (
-        <TooltipContent side="right">
-          {item.label}
-          <Kbd aria-hidden="true">g {item.chord}</Kbd>
-        </TooltipContent>
-      )}
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      <TooltipContent side="right">
+        <span>{item.label}</span>
+        <Kbd aria-hidden="true">g {item.chord}</Kbd>
+      </TooltipContent>
     </Tooltip>
   )
 }
@@ -102,7 +106,7 @@ export function Rail() {
       aria-label="Primary"
       className={cn(
         'flex h-full flex-col items-center gap-2 bg-transparent border-none pointer-events-none transition-[width] duration-200 ease-in-out select-none',
-        expanded ? 'w-[200px]' : 'w-[52px]',
+        expanded ? 'w-[var(--shell-context,240px)]' : 'w-[52px]',
       )}
     >
       <div className={cn('flex w-full items-center pointer-events-auto', expanded ? 'justify-start' : 'justify-center')}>

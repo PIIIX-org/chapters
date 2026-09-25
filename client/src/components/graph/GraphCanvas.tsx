@@ -527,7 +527,7 @@ export default function GraphCanvas() {
         <div
           className={cn(
             'absolute top-[54px] z-10 transition-[left] duration-200',
-            isSidebarExpanded ? 'left-[228px]' : 'left-16',
+            isSidebarExpanded ? 'left-[264px]' : 'left-16',
           )}
         >
           <ColorModeToggle />
@@ -576,7 +576,7 @@ export default function GraphCanvas() {
         <div
           className={cn(
             'absolute bottom-14 z-10 flex max-w-[calc(100vw-360px)] flex-col items-start gap-2 transition-[left] duration-200',
-            isSidebarExpanded ? 'left-[228px]' : 'left-16',
+            isSidebarExpanded ? 'left-[264px]' : 'left-16',
           )}
         >
           <CappedGroupsNotice groups={graph.data?.cappedGroups ?? []} />
