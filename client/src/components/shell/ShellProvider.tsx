@@ -42,6 +42,13 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const [breadcrumb, setBreadcrumb] = useState<BreadcrumbItem[]>([])
   const [status, setStatus] = useState<ShellStatus | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [sidebarExpanded, setSidebarExpandedState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('chapters.shell.sidebar') === 'expanded'
+    } catch {
+      return false
+    }
+  })
   const [panels, setPanels] = useState<Record<PanelKind, PanelState>>(() => ({
     context: { open: readOpen('context'), mounted: 0, node: null },
     inspector: { open: readOpen('inspector'), mounted: 0, node: null },
@@ -91,6 +98,27 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const openPalette = useCallback(() => setPaletteOpen(true), [])
   const closePalette = useCallback(() => setPaletteOpen(false), [])
 
+  const toggleSidebar = useCallback(() => {
+    setSidebarExpandedState((prev) => {
+      const next = !prev
+      try {
+        localStorage.setItem('chapters.shell.sidebar', next ? 'expanded' : 'collapsed')
+      } catch {
+        // ignore storage errors
+      }
+      return next
+    })
+  }, [])
+
+  const setSidebarExpanded = useCallback((expanded: boolean) => {
+    setSidebarExpandedState(expanded)
+    try {
+      localStorage.setItem('chapters.shell.sidebar', expanded ? 'expanded' : 'collapsed')
+    } catch {
+      // ignore storage errors
+    }
+  }, [])
+
   const value = useMemo<ShellValue>(
     () => ({
       breadcrumb,
@@ -105,6 +133,9 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       paletteOpen,
       openPalette,
       closePalette,
+      sidebarExpanded,
+      toggleSidebar,
+      setSidebarExpanded,
     }),
     [
       breadcrumb,
@@ -117,6 +148,9 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       paletteOpen,
       openPalette,
       closePalette,
+      sidebarExpanded,
+      toggleSidebar,
+      setSidebarExpanded,
     ],
   )
 

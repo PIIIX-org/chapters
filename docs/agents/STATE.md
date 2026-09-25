@@ -61,3 +61,4 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   #9. #66 (unit 6's CRDT) and #101 (#129) are closed. **Test-that-cannot-fail:
   SEVEN times**, always a fixture too uniform to tell working from broken.
 - **Editor Cursor & Bidirectional Support (2026-09-22)**: Terminal block cursor (8px) with multi-color cycling blink (Emerald, Cyan, Amber, Purple, Rose), visible in dark/light modes, with full RTL/LTR bidirectional support (auto-detection, toolbar controls, persistence).
+- **Shell Layout Redesign (2026-09-25)**: Expandable sidebar toggled via top CH logo button, dual-card navigation grouping, top-right expandable search bar with smooth transition, and bottom navigation bar with back/forward history, breadcrumb trailing separator, and panel toggles.

@@ -4,19 +4,19 @@ import { TooltipProvider } from '../ui/tooltip.js'
 import { GlobalSearch } from '../search/GlobalSearch.js'
 import { Rail } from './Rail.js'
 import { TopBar } from './TopBar.js'
+import { BottomBar } from './BottomBar.js'
 import { ShellProvider } from './ShellProvider.js'
 import { useShell } from './shell-context.js'
 import { useShellChords } from './useShellChords.js'
 import { cn } from '../../lib/utils.js'
 
 /**
- * The one authenticated shell. Everything is a grid track — rail, top bar,
- * context panel, content, inspector — so nothing can paint over anything
- * else; a page only ever renders inside its own cell. Pages fill the side
- * tracks through <ContextPanel> and <Inspector> (ShellPanels.tsx).
- *
- * Renders `children` when given (tests, storybook-style mounts) and the
- * route <Outlet> otherwise.
+ * The authenticated shell conforming to the Observatory Bridge design system.
+ * Layout grid:
+ * - Column 1 (full height): Rail with top CH logo toggle and navigation cards.
+ * - Column 2 Row 1: TopBar with live status telemetry and expandable search.
+ * - Column 2 Row 2: Central workspace with Context panel, main view, and Inspector panel.
+ * - Column 2 Row 3: BottomBar with history navigation, breadcrumb, and panel toggles.
  */
 export function AppShell({ children }: { children?: ReactNode }) {
   return (
@@ -49,7 +49,7 @@ function ShellFrame({ children }: { children?: ReactNode }) {
     shell.panels.inspector.mounted > 0 && shell.panels.inspector.open
 
   return (
-    <div className="grid h-dvh w-full grid-cols-[var(--shell-rail)_minmax(0,1fr)] grid-rows-[var(--shell-topbar)_minmax(0,1fr)] overflow-hidden bg-background text-foreground">
+    <div className="grid h-dvh w-full grid-cols-[auto_minmax(0,1fr)] grid-rows-[var(--shell-topbar,44px)_minmax(0,1fr)_var(--shell-bottombar,44px)] overflow-hidden bg-background text-foreground">
       <Rail />
       <TopBar />
       <div className="relative grid min-h-0 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto]">
@@ -77,6 +77,7 @@ function ShellFrame({ children }: { children?: ReactNode }) {
           )}
         />
       </div>
+      <BottomBar />
       <GlobalSearch />
     </div>
   )
