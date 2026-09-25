@@ -172,7 +172,7 @@ describe('AppShell', () => {
     await waitFor(() => expect(within(context).getByText('Context content')).toBeInTheDocument())
     expect(within(inspector).getByText('Inspector content')).toBeInTheDocument()
     expect(context).toBeVisible()
-    expect(context).toHaveClass('absolute', 'top-[54px]', 'bottom-[54px]', 'z-20')
+    expect(context).toHaveClass('absolute', 'top-[194px]', 'bottom-[222px]', 'left-2.5', 'z-20')
     expect(inspector).toHaveClass('absolute', 'top-[54px]', 'bottom-[54px]', 'z-20', 'right-2.5')
 
     const toggle = screen.getByRole('button', { name: 'Toggle context panel' })
