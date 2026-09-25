@@ -100,7 +100,7 @@ export function ExpandableSearch() {
               onClick={openSearch}
               aria-label="Open the command palette"
               aria-keyshortcuts="Meta+K Control+K"
-              className="flex size-9 items-center justify-center rounded-[var(--radius-md)] border border-border bg-card text-muted-foreground outline-none transition-all duration-150 hover:bg-muted hover:text-foreground active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40"
+              className="flex size-9 items-center justify-center rounded-[var(--radius-md)] border border-border bg-card text-muted-foreground outline-none transition-all duration-150 hover:bg-muted hover:text-foreground active:scale-95 shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40"
             >
               <Search className="size-4" aria-hidden="true" />
             </button>

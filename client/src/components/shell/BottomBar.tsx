@@ -21,7 +21,7 @@ function PanelToggle({ kind }: { kind: PanelKind }) {
           onClick={() => shell.togglePanel(kind)}
           className={cn(
             'flex size-9 items-center justify-center rounded-[var(--radius-md)] border border-border bg-card text-muted-foreground outline-none transition-all duration-150',
-            'hover:bg-muted hover:text-foreground active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40',
+            'hover:bg-muted hover:text-foreground active:scale-95 shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40',
             panel.open && 'text-foreground bg-muted/60',
           )}
         >
@@ -40,16 +40,21 @@ export function BottomBar() {
   const shell = useShell()
 
   return (
-    <footer className="col-start-2 row-start-3 flex h-11 items-center justify-between gap-3 bg-transparent px-3 select-none">
+    <footer className="flex w-full items-center justify-between pointer-events-none select-none">
       {/* Left: History navigation & Breadcrumbs */}
-      <div className="flex items-center gap-1.5 min-w-0">
+      <div
+        className={cn(
+          'flex items-center gap-1.5 min-w-0 pointer-events-auto transition-[margin] duration-200',
+          shell.sidebarExpanded ? 'ml-[204px]' : 'ml-[52px]',
+        )}
+      >
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               type="button"
               onClick={() => window.history.back()}
               aria-label="Go back"
-              className="flex size-9 items-center justify-center rounded-[var(--radius-md)] border border-border bg-card text-muted-foreground outline-none transition-all duration-150 hover:bg-muted hover:text-foreground active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40"
+              className="flex size-9 items-center justify-center rounded-[var(--radius-md)] border border-border bg-card text-muted-foreground outline-none transition-all duration-150 hover:bg-muted hover:text-foreground active:scale-95 shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40"
             >
               <ArrowLeft className="size-[18px]" aria-hidden="true" />
             </button>
@@ -63,7 +68,7 @@ export function BottomBar() {
               type="button"
               onClick={() => window.history.forward()}
               aria-label="Go forward"
-              className="flex size-9 items-center justify-center rounded-[var(--radius-md)] border border-border bg-card text-muted-foreground outline-none transition-all duration-150 hover:bg-muted hover:text-foreground active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40"
+              className="flex size-9 items-center justify-center rounded-[var(--radius-md)] border border-border bg-card text-muted-foreground outline-none transition-all duration-150 hover:bg-muted hover:text-foreground active:scale-95 shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40"
             >
               <ArrowRight className="size-[18px]" aria-hidden="true" />
             </button>
@@ -71,7 +76,7 @@ export function BottomBar() {
           <TooltipContent side="top">Go forward</TooltipContent>
         </Tooltip>
 
-        <div className="flex h-9 items-center gap-1 rounded-[var(--radius-md)] border border-border bg-card px-2.5 min-w-0 max-w-[420px]">
+        <div className="flex h-9 items-center gap-1 rounded-[var(--radius-md)] border border-border bg-card px-2.5 min-w-0 max-w-[420px] shadow-floating">
           <Breadcrumb items={shell.breadcrumb} />
           <span aria-hidden="true" className="text-faint font-mono text-[12px] select-none shrink-0">
             /
@@ -80,7 +85,7 @@ export function BottomBar() {
       </div>
 
       {/* Right: Layout panel toggles */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="flex items-center gap-1.5 shrink-0 pointer-events-auto">
         <PanelToggle kind="context" />
         <PanelToggle kind="inspector" />
       </div>
