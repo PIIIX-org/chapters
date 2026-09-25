@@ -9,16 +9,16 @@ export function TopBar() {
   const shell = useShell()
 
   return (
-    <header className="col-start-2 row-start-1 flex h-11 items-center justify-between gap-3 bg-transparent px-3 select-none">
-      <div className="flex items-center min-w-0">
-        {shell.status && (
+    <header className="flex items-center justify-end gap-3 pointer-events-none select-none">
+      {shell.status && (
+        <div className="pointer-events-auto rounded-full shadow-floating">
           <Pill tone={shell.status.tone} dot role="status" className="inline-flex">
             {shell.status.label}
           </Pill>
-        )}
-      </div>
+        </div>
+      )}
 
-      <div className="flex items-center justify-end flex-1 min-w-0">
+      <div className="pointer-events-auto">
         <ExpandableSearch />
       </div>
     </header>

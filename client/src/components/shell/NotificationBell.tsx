@@ -85,7 +85,7 @@ export function NotificationBell({ showLabel = false }: { showLabel?: boolean } 
           role="dialog"
           aria-label="Notifications"
           tabIndex={-1}
-          className="absolute right-0 top-full z-40 mt-1.5 w-80 rounded-md border border-border bg-popover py-1 shadow-floating focus:outline-none"
+          className="absolute left-full bottom-0 z-50 ml-3 w-80 rounded-[var(--radius-lg)] border border-border bg-popover py-1 shadow-floating focus:outline-none"
         >
           {notifications.isError ? (
             // Ordered before any read of `.data`, same reasoning as

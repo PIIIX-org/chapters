@@ -29,7 +29,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
 }
 
 const TRACK =
-  'min-h-0 overflow-y-auto max-lg:absolute max-lg:inset-y-0 max-lg:z-30 max-lg:shadow-floating'
+  'min-h-0 overflow-y-auto max-lg:fixed max-lg:inset-y-2.5 max-lg:z-40'
 
 function ShellFrame({ children }: { children?: ReactNode }) {
   const shell = useShell()
@@ -49,10 +49,9 @@ function ShellFrame({ children }: { children?: ReactNode }) {
     shell.panels.inspector.mounted > 0 && shell.panels.inspector.open
 
   return (
-    <div className="grid h-dvh w-full grid-cols-[auto_minmax(0,1fr)] grid-rows-[var(--shell-topbar,44px)_minmax(0,1fr)_var(--shell-bottombar,44px)] overflow-hidden bg-background text-foreground">
-      <Rail />
-      <TopBar />
-      <div className="col-start-2 row-start-2 relative grid min-h-0 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto]">
+    <div className="relative h-dvh w-full overflow-hidden bg-background text-foreground">
+      {/* Full-screen workspace canvas & floating side panels */}
+      <div className="relative flex h-full w-full min-h-0 min-w-0 overflow-hidden">
         <aside
           ref={contextRef}
           data-shell-panel="context"
@@ -60,10 +59,11 @@ function ShellFrame({ children }: { children?: ReactNode }) {
           hidden={!contextVisible}
           className={cn(
             TRACK,
-            'col-start-1 w-[var(--shell-context)] border-r border-border bg-secondary max-lg:left-0',
+            'relative my-2.5 ml-[60px] flex w-[var(--shell-context,240px)] shrink-0 flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 z-10',
+            'max-lg:left-[60px]',
           )}
         />
-        <main className="col-start-2 min-h-0 min-w-0 overflow-hidden">
+        <main className="relative flex-1 min-h-0 min-w-0 h-full overflow-hidden">
           {children ?? <Outlet />}
         </main>
         <aside
@@ -73,11 +73,30 @@ function ShellFrame({ children }: { children?: ReactNode }) {
           hidden={!inspectorVisible}
           className={cn(
             TRACK,
-            'col-start-3 w-[var(--shell-inspector)] border-l border-border bg-card max-lg:right-0',
+            'relative my-2.5 mr-2.5 flex w-[var(--shell-inspector,320px)] shrink-0 flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 z-10',
+            'max-lg:right-2.5',
           )}
         />
       </div>
-      <BottomBar />
+
+      {/* Floating navigation overlay layer */}
+      <div className="pointer-events-none fixed inset-0 z-30 select-none overflow-hidden">
+        {/* Floating Rail on the Left */}
+        <div className="pointer-events-none absolute inset-y-2.5 left-2.5 flex flex-col">
+          <Rail />
+        </div>
+
+        {/* Floating TopBar on the Top Right */}
+        <div className="pointer-events-none absolute top-2.5 right-3 flex items-center justify-end">
+          <TopBar />
+        </div>
+
+        {/* Floating BottomBar along the Bottom */}
+        <div className="pointer-events-none absolute bottom-2.5 inset-x-0 flex items-center justify-between px-3">
+          <BottomBar />
+        </div>
+      </div>
+
       <GlobalSearch />
     </div>
   )

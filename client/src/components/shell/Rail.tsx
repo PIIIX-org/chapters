@@ -101,18 +101,18 @@ export function Rail() {
     <nav
       aria-label="Primary"
       className={cn(
-        'col-start-1 row-start-1 row-end-4 flex flex-col items-center gap-2 bg-transparent border-none px-1 py-2 transition-[width] duration-200 ease-in-out select-none',
+        'flex h-full flex-col items-center gap-2 bg-transparent border-none pointer-events-none transition-[width] duration-200 ease-in-out select-none',
         expanded ? 'w-[200px]' : 'w-[52px]',
       )}
     >
-      <div className={cn('flex w-full items-center', expanded ? 'justify-start' : 'justify-center')}>
+      <div className={cn('flex w-full items-center pointer-events-auto', expanded ? 'justify-start' : 'justify-center')}>
         <button
           type="button"
           onClick={shell.toggleSidebar}
           aria-label="Chapters logo, toggle sidebar"
           aria-expanded={expanded}
           className={cn(
-            'flex items-center justify-center rounded-[var(--radius-md)] border border-border bg-card font-mono text-[13px] font-bold text-foreground outline-none transition-all duration-150 hover:bg-muted hover:border-input active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40',
+            'flex items-center justify-center rounded-[var(--radius-md)] border border-border bg-card font-mono text-[13px] font-bold text-foreground outline-none transition-all duration-150 hover:bg-muted hover:border-input active:scale-95 shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40',
             expanded ? 'h-11 w-full justify-between px-3' : 'size-11',
           )}
         >
@@ -124,7 +124,7 @@ export function Rail() {
       {/* Upper Navigation Card (Graphs, Vaults, Repos) */}
       <div
         className={cn(
-          'flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1',
+          'flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating',
           expanded ? 'w-full' : 'w-11 items-center',
         )}
       >
@@ -140,7 +140,7 @@ export function Rail() {
       {/* Lower Navigation Card (Team, Admin, Settings, Notifications, Profile) */}
       <div
         className={cn(
-          'mt-auto flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1',
+          'mt-auto flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating',
           expanded ? 'w-full' : 'w-11 items-center',
         )}
       >

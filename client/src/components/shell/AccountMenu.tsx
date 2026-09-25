@@ -46,7 +46,7 @@ export function AccountMenu({ showLabel = false }: { showLabel?: boolean } = {})
           {showLabel && <span className="truncate">Profile</span>}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[14rem]">
+      <DropdownMenuContent side="right" align="end" sideOffset={12} className="min-w-[14rem] shadow-floating">
         <DropdownMenuLabel className="truncate font-sans text-xs normal-case tracking-normal text-foreground">
           {session.data?.email ?? 'Signed in'}
         </DropdownMenuLabel>
