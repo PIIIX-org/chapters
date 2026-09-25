@@ -1,10 +1,11 @@
 import { lazy, Suspense } from 'react'
 import { GraphSkeleton } from '../components/graph/GraphSkeleton.js'
 import { ScopePicker } from '../components/shell/ScopePicker.js'
-import { useShellBreadcrumb } from '../components/shell/shell-context.js'
+import { useOptionalShell, useShellBreadcrumb } from '../components/shell/shell-context.js'
 import { VaultEmptyState } from '../components/vault/VaultEmptyState.js'
 import { PanelState } from '../components/ui/empty-state.js'
 import { useVaults } from '../hooks/useVaults.js'
+import { cn } from '../lib/utils.js'
 
 // Loaded as a separate chunk, requested after first paint (spec decision 9) —
 // this import must stay dynamic, never hoisted to a static import above.
@@ -12,10 +13,11 @@ const GraphCanvas = lazy(() => import('../components/graph/GraphCanvas.js'))
 
 export function HomePage() {
   const vaults = useVaults()
+  const shell = useOptionalShell()
   useShellBreadcrumb([{ label: 'Graph' }])
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative h-full w-full min-h-0 min-w-0">
       {vaults.isPending ? (
         <GraphSkeleton />
       ) : vaults.isError ? (
@@ -35,20 +37,24 @@ export function HomePage() {
       ) : vaults.data.length === 0 ? (
         <VaultEmptyState />
       ) : (
-        <>
-          {/* A row of its own, not an overlay: the scope picker used to be
-              painted over the canvas by the old shell, and the canvas padded
-              itself to dodge it. */}
-          <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-            <ScopePicker />
+        <div className="relative h-full w-full min-h-0 min-w-0">
+          {/* Floating ScopePicker positioned safely to the right of the CH logo */}
+          <div
+            className={cn(
+              'pointer-events-none absolute top-2.5 z-10 transition-[left] duration-200',
+              shell?.sidebarExpanded ? 'left-[228px]' : 'left-16',
+            )}
+          >
+            <div className="pointer-events-auto">
+              <ScopePicker />
+            </div>
           </div>
-          <div className="min-h-0 flex-1">
-            <Suspense fallback={<GraphSkeleton />}>
-              <GraphCanvas />
-            </Suspense>
-          </div>
-        </>
+          <Suspense fallback={<GraphSkeleton />}>
+            <GraphCanvas />
+          </Suspense>
+        </div>
       )}
     </div>
   )
 }
+

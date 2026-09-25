@@ -235,7 +235,7 @@ export function VaultNotesPage() {
 
   return (
     <div className="h-full min-h-0 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 px-4 py-5">
+      <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 px-4 pt-5 pb-16">
         <Panel>
           <PanelHeader
             title={

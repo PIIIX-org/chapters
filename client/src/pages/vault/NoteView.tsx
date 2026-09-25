@@ -30,7 +30,7 @@ import {
 } from '../../components/vault/note-toolbar-utils.js'
 import type { NoteDirection } from '../../components/vault/note-toolbar-utils.js'
 import { Inspector } from '../../components/shell/ShellPanels.js'
-import { useShellStatus } from '../../components/shell/shell-context.js'
+import { useOptionalShell, useShellStatus } from '../../components/shell/shell-context.js'
 import type { ShellStatus } from '../../components/shell/shell-context.js'
 import { Pill } from '../../components/ui/pill.js'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js'
@@ -148,26 +148,39 @@ function NoteFrame({
   onDirectionChange,
 }: NoteFrameProps) {
   const [width, setWidth] = useNoteWidth()
+  const shell = useOptionalShell()
+  const leftPad = shell?.sidebarExpanded ? 'pl-[228px]' : 'pl-16'
 
   return (
     <>
       <div className="flex h-full min-h-0 flex-col">
-        {/* min-h-10, not h-10: an inline rename form wraps to a second row
-            instead of clipping inside the bar. */}
-        <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-1">
+        {/* Note bar: padded left to clear the CH logo and right to clear TopBar search */}
+        <div
+          className={cn(
+            'flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pr-16 py-1 transition-[padding] duration-200',
+            leftPad,
+          )}
+        >
           {bar}
         </div>
         {notice}
-        <NoteRichToolbar
-          view={view}
-          readOnly={readOnly}
-          width={width}
-          onWidthChange={setWidth}
-          direction={direction}
-          onDirectionChange={onDirectionChange}
-        />
+        <div className={cn('transition-[padding] duration-200', leftPad)}>
+          <NoteRichToolbar
+            view={view}
+            readOnly={readOnly}
+            width={width}
+            onWidthChange={setWidth}
+            direction={direction}
+            onDirectionChange={onDirectionChange}
+          />
+        </div>
         <NoteFloatingSelectionToolbar view={view} readOnly={readOnly} />
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4">
+        <div
+          className={cn(
+            'min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4 pb-16 transition-[padding] duration-200',
+            leftPad,
+          )}
+        >
           <div
             ref={editorRef}
             dir={direction}

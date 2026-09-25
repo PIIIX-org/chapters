@@ -15,6 +15,7 @@ import { SyncTokenList } from '../components/repositories/SyncTokenList.js'
 import { WebhookSetupCard } from '../components/repositories/WebhookSetupCard.js'
 import { ContextPanel, Inspector } from '../components/shell/ShellPanels.js'
 import {
+  useOptionalShell,
   useShellBreadcrumb,
   useShellStatus,
   type ShellStatus,
@@ -24,6 +25,7 @@ import { PanelState } from '../components/ui/empty-state.js'
 import { Eyebrow } from '../components/ui/eyebrow.js'
 import { Pill } from '../components/ui/pill.js'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.js'
+import { cn } from '../lib/utils.js'
 import { syncHealth, type SyncHealth } from '../api/repositories.js'
 import { useRepository, useRepositoryFile, useRepositoryFiles } from '../hooks/useRepositories.js'
 
@@ -294,9 +296,17 @@ interface ShellProps {
 
 function Shell({ children, connectDialog, onConnect, title, subtitle, onSettings }: ShellProps) {
   useShellBreadcrumb([{ label: 'Repositories', to: '/repos' }, { label: title ?? 'Repository' }])
+  const shell = useOptionalShell()
+  const leftPad = shell?.sidebarExpanded ? 'pl-[228px]' : 'pl-16'
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex h-10 shrink-0 items-center gap-3 border-b border-border px-4">
+      <header
+        className={cn(
+          'flex h-10 shrink-0 items-center gap-3 border-b border-border pr-16 transition-[padding] duration-200',
+          leftPad,
+        )}
+      >
         <h1 className="truncate text-sm font-medium text-foreground">{title ?? 'Repository'}</h1>
         {subtitle && <Pill>{subtitle}</Pill>}
         <div className="ml-auto flex items-center gap-2">
@@ -310,7 +320,9 @@ function Shell({ children, connectDialog, onConnect, title, subtitle, onSettings
           </Button>
         </div>
       </header>
-      {children}
+      <div className={cn('flex min-h-0 flex-1 pb-16 transition-[padding] duration-200', leftPad)}>
+        {children}
+      </div>
       {connectDialog}
     </div>
   )
