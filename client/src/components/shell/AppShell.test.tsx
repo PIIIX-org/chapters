@@ -248,7 +248,7 @@ describe('AppShell', () => {
     const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
     const rail = screen.getByRole('navigation', { name: 'Primary' })
     expect(chButton).toHaveAttribute('aria-expanded', 'false')
-    expect(rail).toHaveClass('w-[52px]')
+    expect(rail).toHaveClass('w-11')
 
     // Click CH logo to expand
     await user.click(chButton)
@@ -265,7 +265,7 @@ describe('AppShell', () => {
     // Click again to collapse
     await user.click(chButton)
     expect(chButton).toHaveAttribute('aria-expanded', 'false')
-    expect(rail).toHaveClass('w-[52px]')
+    expect(rail).toHaveClass('w-11')
   })
 
   it('expands the search bar on click and collapses on Escape', async () => {

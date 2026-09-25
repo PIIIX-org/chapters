@@ -23,7 +23,7 @@ export function PanelRailNav({
   return (
     <nav
       aria-label={label}
-      className={cn('flex flex-col items-center gap-1 w-full py-1', className)}
+      className={cn('flex flex-col items-center gap-1 w-full', className)}
     >
       {children}
     </nav>
@@ -65,13 +65,13 @@ export function PanelRailButton({
             }
           }}
           className={cn(
-            'flex size-9 items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
+            'flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
             'hover:bg-muted hover:text-foreground active:scale-95',
             active && 'bg-muted text-foreground font-semibold shadow-xs',
             className,
           )}
         >
-          <Icon className="size-4 shrink-0" aria-hidden="true" />
+          <Icon className="size-[18px] shrink-0" strokeWidth={1.75} aria-hidden="true" />
         </button>
       </TooltipTrigger>
       <TooltipContent side={tooltipSide}>{label}</TooltipContent>
@@ -113,7 +113,7 @@ function ShellPanel({
         <div
           data-shell-panel={kind}
           data-panel-open={open}
-          className={cn('flex min-h-full flex-col w-full', className)}
+          className={cn('flex min-h-full flex-col w-full', open && className)}
         >
           {open ? children : (collapsed ?? children)}
         </div>

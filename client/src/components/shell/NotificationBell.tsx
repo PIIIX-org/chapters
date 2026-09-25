@@ -48,7 +48,11 @@ export function NotificationBell({ showLabel = false }: { showLabel?: boolean } 
   }
 
   return (
-    <div ref={wrapperRef} className={showLabel ? 'relative w-full' : 'relative inline-block'} onKeyDown={onKeyDown}>
+    <div
+      ref={wrapperRef}
+      className={showLabel ? 'relative w-full shrink-0' : 'relative size-9 flex items-center justify-center shrink-0'}
+      onKeyDown={onKeyDown}
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -57,10 +61,10 @@ export function NotificationBell({ showLabel = false }: { showLabel?: boolean } 
         aria-label={label}
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          'relative flex items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-colors duration-100 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40',
+          'relative flex items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-colors duration-100 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 shrink-0',
           showLabel
             ? 'h-9 w-full justify-start gap-2.5 px-2.5 text-[13px] font-medium'
-            : 'h-9 w-full justify-center p-0 hover:scale-105',
+            : 'size-9 justify-center p-0 hover:scale-105',
         )}
       >
         <Bell className="size-[18px] shrink-0" aria-hidden="true" />
