@@ -244,11 +244,15 @@ describe('AppShell', () => {
     stubFetch()
     renderShell()
     const user = userEvent.setup()
-
     const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
     const rail = screen.getByRole('navigation', { name: 'Primary' })
+    const graphLink = within(rail).getByRole('link', { name: 'Graph' })
+    const vaultsLink = within(rail).getByRole('link', { name: 'Vaults' })
     expect(chButton).toHaveAttribute('aria-expanded', 'false')
     expect(rail).toHaveClass('w-11')
+    expect(graphLink).toHaveClass('size-9', 'shrink-0')
+    expect(vaultsLink).toHaveClass('size-9', 'shrink-0')
+    expect(graphLink.className).not.toContain('({ isActive })')
 
     // Click CH logo to expand
     await user.click(chButton)
@@ -261,11 +265,17 @@ describe('AppShell', () => {
     expect(within(rail).getByText('Settings')).toBeInTheDocument()
     expect(within(rail).getByText('Profile')).toBeInTheDocument()
     expect(within(rail).getByText('g g')).toBeInTheDocument()
+    expect(within(rail).getByRole('link', { name: 'Graph' })).toHaveClass('h-9', 'w-full')
 
     // Click again to collapse
     await user.click(chButton)
     expect(chButton).toHaveAttribute('aria-expanded', 'false')
     expect(rail).toHaveClass('w-11')
+    const collapsedGraphLink = within(rail).getByRole('link', { name: 'Graph' })
+    const collapsedVaultsLink = within(rail).getByRole('link', { name: 'Vaults' })
+    expect(collapsedGraphLink).toHaveClass('size-9', 'shrink-0')
+    expect(collapsedVaultsLink).toHaveClass('size-9', 'shrink-0')
+    expect(collapsedGraphLink.className).not.toContain('({ isActive })')
   })
 
   it('expands the search bar on click and collapses on Escape', async () => {

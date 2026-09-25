@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router'
+import { NavLink, useLocation } from 'react-router'
 import {
   GitBranch,
   Library,
@@ -41,29 +41,33 @@ const SECONDARY: RailItem[] = [
 
 function RailLink({ item, expanded }: { item: RailItem; expanded: boolean }) {
   const Icon = item.icon
+  const location = useLocation()
+  const isActive = item.end
+    ? location.pathname === item.to
+    : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)
+
   const link = (
     <NavLink
       to={item.to}
       end={item.end}
       aria-label={item.label}
-      className={({ isActive }) =>
-        cn(
-          'relative flex items-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
-          'hover:bg-muted hover:text-foreground',
-          'active:scale-[0.98] active:bg-muted/80',
-          'focus-visible:ring-2 focus-visible:ring-ring/40',
-          expanded
-            ? 'h-9 w-full justify-between px-2.5 text-[13px] font-medium shrink-0'
-            : 'size-9 justify-center p-0 hover:scale-105 shrink-0',
-          isActive &&
-            cn(
-              'bg-muted text-foreground shadow-xs',
-              expanded
-                ? 'before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-[var(--radius-sm)] before:bg-primary font-semibold'
-                : 'before:absolute before:left-0.5 before:top-2 before:bottom-2 before:w-0.5 before:rounded-full before:bg-primary',
-            ),
-        )
-      }
+      aria-current={isActive ? 'page' : undefined}
+      className={cn(
+        'relative flex items-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150',
+        'hover:bg-muted hover:text-foreground',
+        'active:scale-[0.98] active:bg-muted/80',
+        'focus-visible:ring-2 focus-visible:ring-ring/40',
+        expanded
+          ? 'h-9 w-full justify-between px-2.5 text-[13px] font-medium shrink-0'
+          : 'size-9 justify-center p-0 hover:scale-105 shrink-0',
+        isActive &&
+          cn(
+            'bg-muted text-foreground shadow-xs',
+            expanded
+              ? 'before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-[var(--radius-sm)] before:bg-primary font-semibold'
+              : 'before:absolute before:left-0.5 before:top-2 before:bottom-2 before:w-0.5 before:rounded-full before:bg-primary',
+          ),
+      )}
     >
       <span className={cn('flex items-center min-w-0', expanded ? 'flex-1 gap-2.5 truncate' : 'justify-center size-full')}>
         <Icon className="size-[18px] shrink-0" strokeWidth={1.75} aria-hidden="true" />
