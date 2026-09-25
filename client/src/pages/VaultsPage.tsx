@@ -264,7 +264,7 @@ export function VaultsPage() {
 
   return (
     <div className="h-full min-h-0 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-full sm:max-w-[94%] md:max-w-[88%] lg:max-w-[80%] flex-col gap-3 sm:gap-4 px-2.5 sm:px-4 py-3 sm:py-5">
+      <div className="mx-auto flex w-full max-w-full sm:max-w-[94%] md:max-w-[88%] lg:max-w-[80%] flex-col gap-3 sm:gap-4 px-2.5 sm:px-4 pt-3 pb-16 sm:pt-5 sm:pb-16">
         <Panel>
           <PanelHeader
             className="min-h-9 h-auto py-2 sm:h-9 sm:py-0 flex-wrap sm:flex-nowrap gap-y-2"

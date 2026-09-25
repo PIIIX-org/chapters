@@ -87,7 +87,7 @@ export function AdminPage() {
         </nav>
       </ContextPanel>
       <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto max-w-4xl px-6 py-5">{section.render()}</div>
+        <div className="mx-auto max-w-4xl px-6 pt-5 pb-16">{section.render()}</div>
       </div>
     </>
   )

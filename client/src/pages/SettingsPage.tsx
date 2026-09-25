@@ -66,7 +66,7 @@ export function SettingsPage() {
   if (mustEnrol) {
     return (
       <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto flex max-w-2xl flex-col gap-6 px-6 py-5">
+        <div className="mx-auto flex max-w-2xl flex-col gap-6 px-6 pt-5 pb-16">
           {/* Says only what the section below does not: why the rest of the
               page is missing. MfaSection already states the requirement
               itself, and saying it twice on one short screen reads as a
@@ -113,7 +113,7 @@ export function SettingsPage() {
         </nav>
       </ContextPanel>
       <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto flex max-w-2xl flex-col gap-6 px-6 py-5">
+        <div className="mx-auto flex max-w-2xl flex-col gap-6 px-6 pt-5 pb-16">
           {section.render()}
         </div>
       </div>
