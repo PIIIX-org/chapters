@@ -53,8 +53,8 @@ function RailLink({ item, expanded }: { item: RailItem; expanded: boolean }) {
           'active:scale-[0.98] active:bg-muted/80',
           'focus-visible:ring-2 focus-visible:ring-ring/40',
           expanded
-            ? 'h-9 w-full justify-between px-2.5 text-[13px] font-medium'
-            : 'h-9 w-full justify-center p-0 hover:scale-105',
+            ? 'h-9 w-full justify-between px-2.5 text-[13px] font-medium shrink-0'
+            : 'size-9 justify-center p-0 hover:scale-105 shrink-0',
           isActive &&
             cn(
               'bg-muted text-foreground shadow-xs',
@@ -106,7 +106,7 @@ export function Rail() {
       aria-label="Primary"
       className={cn(
         'flex h-full flex-col items-center gap-2 bg-transparent border-none pointer-events-none transition-[width] duration-200 ease-in-out select-none',
-        expanded ? 'w-[var(--shell-context,240px)]' : 'w-[52px]',
+        expanded ? 'w-[var(--shell-context,240px)]' : 'w-11',
       )}
     >
       <div className={cn('flex w-full items-center pointer-events-auto', expanded ? 'justify-start' : 'justify-center')}>
@@ -128,13 +128,13 @@ export function Rail() {
       {/* Upper Navigation Card (Graphs, Vaults, Repos) */}
       <div
         className={cn(
-          'flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating',
+          'flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating shrink-0',
           expanded ? 'w-full' : 'w-11 items-center',
         )}
       >
         <ul className="flex flex-col gap-1 w-full items-center">
           {primary.map((item) => (
-            <li key={item.to} className="w-full flex justify-center">
+            <li key={item.to} className="w-full flex justify-center shrink-0">
               <RailLink item={item} expanded={expanded} />
             </li>
           ))}
@@ -144,20 +144,20 @@ export function Rail() {
       {/* Lower Navigation Card (Team, Admin, Settings, Notifications, Profile) */}
       <div
         className={cn(
-          'mt-auto flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating',
+          'mt-auto flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating shrink-0',
           expanded ? 'w-full' : 'w-11 items-center',
         )}
       >
         <ul className="flex flex-col gap-1 w-full items-center">
           {secondary.map((item) => (
-            <li key={item.to} className="w-full flex justify-center">
+            <li key={item.to} className="w-full flex justify-center shrink-0">
               <RailLink item={item} expanded={expanded} />
             </li>
           ))}
-          <li data-slot="notifications" className="w-full flex justify-center">
+          <li data-slot="notifications" className="w-full flex justify-center shrink-0">
             <NotificationBell showLabel={expanded} />
           </li>
-          <li className="w-full flex justify-center">
+          <li className="w-full flex justify-center shrink-0">
             <AccountMenu showLabel={expanded} />
           </li>
         </ul>
