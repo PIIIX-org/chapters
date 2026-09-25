@@ -59,8 +59,7 @@ function ShellFrame({ children }: { children?: ReactNode }) {
         aria-label="Context panel"
         hidden={!contextVisible}
         className={cn(
-          'pointer-events-auto absolute top-[54px] bottom-[54px] z-20 flex w-[var(--shell-context,240px)] flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0 overflow-y-auto',
-          shell.sidebarExpanded ? 'left-[218px]' : 'left-[70px]',
+          'pointer-events-auto absolute top-[194px] bottom-[222px] left-2.5 z-20 flex w-[var(--shell-context,240px)] flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0 overflow-y-auto',
         )}
       />
 
