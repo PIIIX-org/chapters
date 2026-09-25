@@ -92,10 +92,13 @@ export const routes: RouteObject[] = [
           },
           {
             path: '/vaults/:vaultId',
-            element: lazyPage(<VaultLayout />),
             children: [
               { index: true, element: lazyPage(<VaultNotesPage />) },
-              { path: 'notes/*', element: lazyPage(<NoteView />) },
+              {
+                path: 'notes',
+                element: lazyPage(<VaultLayout />),
+                children: [{ path: '*', element: lazyPage(<NoteView />) }],
+              },
             ],
           },
         ],

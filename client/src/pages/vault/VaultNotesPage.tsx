@@ -30,6 +30,7 @@ import {
 import { useVaults } from '../../hooks/useVaults.js'
 import { useVaultTree } from '../../hooks/useVaultTree.js'
 import { canEdit } from '../../api/vaults.js'
+import { useShellBreadcrumb } from '../../components/shell/shell-context.js'
 import { getColorDef, type VaultColor } from '../../components/vault/useVaultFolders.js'
 import { useNoteFolders } from '../../components/vault/useNoteFolders.js'
 import { NoteCard } from '../../components/vault/NoteCard.js'
@@ -48,6 +49,10 @@ export function VaultNotesPage() {
   const tree = useVaultTree(vaultId!)
   const vault = vaults.data?.find((v) => v.id === vaultId)
   const editable = canEdit(vault?.access)
+  useShellBreadcrumb([
+    { label: 'Vaults', to: '/vaults' },
+    { label: vault?.name ?? 'Vault' },
+  ])
 
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     return (localStorage.getItem('chapters_notes_view_mode') as ViewMode) || 'card'
