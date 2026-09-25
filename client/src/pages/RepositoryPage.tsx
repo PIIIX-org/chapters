@@ -13,7 +13,8 @@ import { RepositorySyncCard } from '../components/repositories/RepositorySyncCar
 import { SymbolOutline } from '../components/repositories/SymbolOutline.js'
 import { SyncTokenList } from '../components/repositories/SyncTokenList.js'
 import { WebhookSetupCard } from '../components/repositories/WebhookSetupCard.js'
-import { ContextPanel, Inspector } from '../components/shell/ShellPanels.js'
+import { Code2, FolderGit2, RefreshCw, Shield, Webhook } from 'lucide-react'
+import { ContextPanel, Inspector, PanelRailButton, PanelRailNav } from '../components/shell/ShellPanels.js'
 import {
   useOptionalShell,
   useShellBreadcrumb,
@@ -144,7 +145,17 @@ export function RepositoryPage() {
         />
       )}
 
-      <ContextPanel label="Files">
+      <ContextPanel
+        label="Files"
+        collapsed={
+          <PanelRailNav label="Files">
+            <PanelRailButton
+              icon={FolderGit2}
+              label={`Files${fileCount !== undefined ? ` (${fileCount})` : ''}`}
+            />
+          </PanelRailNav>
+        }
+      >
         <div className="sticky top-0 z-10 flex h-9 shrink-0 items-center gap-2 border-b border-border bg-card px-3">
           <Eyebrow as="h2">Files</Eyebrow>
           {fileCount !== undefined && (
@@ -183,7 +194,39 @@ export function RepositoryPage() {
         )}
       </div>
 
-      <Inspector label="Repository">
+      <Inspector
+        label="Repository"
+        collapsed={
+          <PanelRailNav label="Repository tabs">
+            <PanelRailButton
+              icon={RefreshCw}
+              label="Sync"
+              active={activeTab === 'sync'}
+              onClick={() => setTab('sync')}
+            />
+            {webhookTab && (
+              <PanelRailButton
+                icon={Webhook}
+                label="Webhook"
+                active={activeTab === 'webhook'}
+                onClick={() => setTab('webhook')}
+              />
+            )}
+            <PanelRailButton
+              icon={Shield}
+              label="Access"
+              active={activeTab === 'access'}
+              onClick={() => setTab('access')}
+            />
+            <PanelRailButton
+              icon={Code2}
+              label="Symbols"
+              active={activeTab === 'symbols'}
+              onClick={() => setTab('symbols')}
+            />
+          </PanelRailNav>
+        }
+      >
         <Tabs value={activeTab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
           <TabsList className="sticky top-0 z-10 bg-card">
             <TabsTrigger value="sync">Sync</TabsTrigger>

@@ -8,11 +8,11 @@
 // keeps d3-force out of the entry chunk (client/src/bundle.test.ts).
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router'
-import { Maximize, ZoomIn, ZoomOut } from 'lucide-react'
+import { Filter, Info, ListTree, Maximize, Sliders, ZoomIn, ZoomOut } from 'lucide-react'
 import { useGraph } from '../../hooks/useGraph.js'
 import { useVaults } from '../../hooks/useVaults.js'
 import type { CommunityEdge, CommunityGraph, CommunityNode, GraphEdge, GraphNode, VaultGraph } from '../../api/graph.js'
-import { ContextPanel, Inspector } from '../shell/ShellPanels.js'
+import { ContextPanel, Inspector, PanelRailButton, PanelRailNav } from '../shell/ShellPanels.js'
 import { useOptionalShell } from '../shell/shell-context.js'
 import { Button } from '../ui/button.js'
 import { Eyebrow } from '../ui/eyebrow.js'
@@ -599,7 +599,17 @@ export default function GraphCanvas() {
         )}
       </div>
 
-      <ContextPanel label="Outline">
+      <ContextPanel
+        label="Outline"
+        collapsed={
+          <PanelRailNav label="Graph outline">
+            <PanelRailButton
+              icon={ListTree}
+              label="Outline"
+            />
+          </PanelRailNav>
+        }
+      >
         <GraphOutline
           communities={communities}
           expandedCommunity={expandedCommunity}
@@ -608,7 +618,26 @@ export default function GraphCanvas() {
         />
       </ContextPanel>
 
-      <Inspector label="Graph detail" className="gap-3 p-3">
+      <Inspector
+        label="Graph detail"
+        className="gap-3 p-3"
+        collapsed={
+          <PanelRailNav label="Graph detail sections">
+            <PanelRailButton
+              icon={Info}
+              label="Community detail"
+            />
+            <PanelRailButton
+              icon={Filter}
+              label="Filters"
+            />
+            <PanelRailButton
+              icon={Sliders}
+              label="Physics"
+            />
+          </PanelRailNav>
+        }
+      >
         <CommunityDetail
           communities={communities}
           hoveredCommunity={hoveredCommunity}

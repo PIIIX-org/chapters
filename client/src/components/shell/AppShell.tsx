@@ -40,10 +40,10 @@ function ShellFrame({ children }: { children?: ReactNode }) {
     (node: HTMLElement | null) => setPanelNode('inspector', node),
     [setPanelNode],
   )
-  const contextVisible =
-    shell.panels.context.mounted > 0 && shell.panels.context.open
-  const inspectorVisible =
-    shell.panels.inspector.mounted > 0 && shell.panels.inspector.open
+  const contextMounted = shell.panels.context.mounted > 0
+  const inspectorMounted = shell.panels.inspector.mounted > 0
+  const contextOpen = shell.panels.context.open
+  const inspectorOpen = shell.panels.inspector.open
 
   return (
     <div className="relative h-dvh w-full overflow-hidden bg-background text-foreground">
@@ -56,20 +56,28 @@ function ShellFrame({ children }: { children?: ReactNode }) {
       <aside
         ref={contextRef}
         data-shell-panel="context"
+        data-panel-open={contextOpen}
         aria-label="Context panel"
-        hidden={!contextVisible}
+        hidden={!contextMounted}
         className={cn(
-          'pointer-events-auto absolute top-[194px] bottom-[222px] left-2.5 z-20 flex w-[var(--shell-context,240px)] flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0 overflow-y-auto',
+          'pointer-events-auto absolute top-[194px] bottom-[222px] left-2.5 z-20 flex flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0',
+          contextOpen
+            ? 'w-[var(--shell-context,240px)] overflow-y-auto'
+            : 'w-11 items-center p-1 overflow-hidden',
         )}
       />
 
       <aside
         ref={inspectorRef}
         data-shell-panel="inspector"
+        data-panel-open={inspectorOpen}
         aria-label="Inspector"
-        hidden={!inspectorVisible}
+        hidden={!inspectorMounted}
         className={cn(
-          'pointer-events-auto absolute top-[54px] bottom-[54px] right-2.5 z-20 flex w-[var(--shell-inspector,320px)] flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0 overflow-y-auto',
+          'pointer-events-auto absolute top-[54px] bottom-[54px] right-2.5 z-20 flex flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0',
+          inspectorOpen
+            ? 'w-[var(--shell-inspector,320px)] overflow-y-auto'
+            : 'w-11 items-center p-1 overflow-hidden',
         )}
       />
 
