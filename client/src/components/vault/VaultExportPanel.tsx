@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Button } from '../ui/button.js'
 import { SecretReveal } from '../ui/SecretReveal.js'
+import { toast } from '../../lib/toast.js'
 import { FormError } from '../FormError.js'
 import { createExportLink, exportDownloadUrl, revokeExportLink } from '../../api/exports.js'
 import type { ExportLink } from '../../api/exports.js'
@@ -34,6 +35,7 @@ export function VaultExportPanel({ vaultId }: VaultExportPanelProps) {
       setRevealed(true)
       setConfirmingRevoke(false)
       setRevokeError(null)
+      toast.success('Export link created', 'Temporary download link is ready to share.')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create a link for this vault.')
     } finally {
@@ -50,6 +52,7 @@ export function VaultExportPanel({ vaultId }: VaultExportPanelProps) {
       setCreated(null)
       setRevealed(false)
       setConfirmingRevoke(false)
+      toast.info('Export link revoked', 'The link can no longer be accessed.')
     } catch (err) {
       setRevokeError(err instanceof Error ? err.message : 'Could not revoke this link.')
     } finally {
