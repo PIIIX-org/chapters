@@ -2,74 +2,22 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **UI phase DONE** (all 7 units + the redesign). PRs target `dev` directly,
-  never stacked; `dev → prod` needs Taha's explicit OK. Detail in README +
-  git log; only the traps live below.
-  - **1** Louvain is **seeded** — drill-down addresses communities by number.
-    ≈500ms at 10k notes, **not the bottleneck**; semantic edges **directed**.
-  - **3** `/admin` is gated *before* any query fires, **metadata only**;
-    **login stays generic on purpose** (account enumeration).
-  - **4** **per-type notification prefs stay OUT of scope.**
-  - **5** `actorType` is `user|mcp|collab`, no 'system'; **collab is a PERSON**,
-    the commonest. `/history/*` metadata-only — **MCP `note_history` untouched**.
-  - **6** **no autosave PUT** — the CRDT is the note. `/collab/ticket` returns
-    a **path**: behind any proxy the server's `host` is the proxy's. The relay
-    rides the app's own HTTP server on `/collab` — ONE port, no proxy anywhere.
-    **revoked ≠ offline** — revoked KEEPS the doc (unsent text must survive).
-  - **7** viewer read-only forever; local folders watched;
-    **`gitUrl`/`localPath` are owner-only** (they leaked to viewers + MCP).
-- **`prod` == `dev` as of 2026-09-25 (#217, #241)** — Observatory Bridge UI/UX MVP redesign (#206), OKF v0.2 alignment (#213), terminal cursor & RTL/LTR (#217), and Floating Fullscreen Shell with Collapsible Rails (#241; PRs #218–#239).
-- **Phase: PRODUCTION HARDENING & PRE-FLIGHT MVP (2026-09-26; PRs #269–#276)**:
-  - Security: `adm-zip` upgrade (#244/#269), production vulnerabilities zeroed via pnpm overrides, and `shadcn` moved to devDeps (#249/#250/#273).
-  - UI Resilience & Feedback: React Error Boundaries, 404 route, and zero-dependency accessible Toast notification system (#245/#271).
-  - Server Operations & Logging: Fastify pino logger enabled, centralized `setErrorHandler`, process unhandledRejection/uncaughtException handlers, DB health check with 503 fallback, and safe `sendMail` failure logging (#246-#248/#252/#272).
-  - Worker Queues & Diagnostics: pg pool error listener, exponential backoff retries with bounded queue processing on boot, and repository read diagnostics (#253-#255/#274).
-  - DX & Tooling: Zero ESLint warnings via `allowExportNames`, Node 24 pinned in `.nvmrc`, `no-explicit-any` enforced, multi-provider remote repo links (GitHub, GitLab, Bitbucket, Codeberg), and complete self-hosting backup/checklist docs (#256-#259/#264/#275).
-  - Deterministic Graph Recall: Exact seq scan for offline semantic edge recompute and dense test fixtures, fixing the intermittent zero-neighbour flake (#123/#276).
-- **Phase: OKF v0.2 ALIGNMENT & UPSTREAM SYNC (2026-09-22)**: Master plan implementing Google Cloud OKF v0.2 spec (`GoogleCloudPlatform/open-knowledge-format`, Commit `3dc3029`).
-  - **Phase 1 (#209)**: Strict ISO 8601 UTC offsets (`Z`/`[+-]HH:MM`), v0.2 frontmatter families (`generated`, `sources`, `verified`, `usage_window`, `properties`), rejection of date-only strings.
-  - **Phase 2 (#210)**: Arbitrary directory hierarchy (1-8 segments), progressive disclosure table generation in `index.md`, zero-loss zip backup restore.
-  - **Phase 3 (#211)**: MCP tool parity (`create_note` unified path, progressive `browse_vault`, community `graph`, `audit_okf_conformance`), code drift detection worker, upstream schema vendoring (`vendor/okf/`), weekly sync workflow (`.github/workflows/okf-sync.yml`).
-  - **Phase 4 (#212)**: UI PropertyPanel trust badges (`human-reviewed`, `machine-confirmed`, `unverified`), status pills, real-time ISO UTC validation and "NOW" button, and agent skill synchronization.
-- **Phase: UI COMMAND REDESIGN** (owner-directed 2026-08-30): spec + plan of
-  the same date under `superpowers/`. Dark-first grid shell (rail · top bar ·
-  context · content · inspector) on every authed route; `/vaults`, `/repos`.
-  **All 8 slices DONE** (2026-08-31). Slice 8 QA: headless Edge over 12 routes
-  × 2 sizes × 2 themes, zero overlaps/scroll-x. Caught one real bug — the graph
-  loaded cropped into the canvas corner (identity camera vs `forceCenter(0,0)`;
-  first mount now centres world origin, a test pins it). `client/mock/` =
-  fixture API for QA (`MOCK_PORT=3000` to sit behind vite).
-- **Previous phase: DEPLOYABLE**. The API serves the client and the relay
-  shares its port — one published port, verified in a browser with two tabs
-  co-editing. The cold walkthrough as a stranger is done (2026-08-28).
-- **Hosted = one container + one Postgres PER CUSTOMER**, and the app is **not
-  forked** for it: one repo, one branch line; the control plane is a separate
-  private repo the app must NEVER import or call. No edition flag — it would
-  branch on nothing. See `implementation.md` "Product shape". Control plane =
-  `PIIIX-org/chapters-cloud` (private, design approved 2026-08-28): OIDC
-  provider + Docker provisioner, and **it claims `/api/setup` per customer —
-  the setup token is the provisioning handshake, NOT a barrier to hosted
-  signup**. #127 (in-app multi-tenancy) was closed for contradicting this;
-  don't re-propose tenancy here. That debt **LANDED in #132** — generic OIDC
-  login (`OIDC_ISSUER`/`_CLIENT_ID`/`_CLIENT_SECRET`/`OIDC_ONLY`), first
-  sign-in LINKS to the setup-created admin by verified email.
-  `chapters.piiix.org` is deployed but **unclaimed** — `/setup` never run.
-- **#126**: approval mails the welcome; `notify()`'s `emailSubject`/`emailText`
-  override the MAIL only, feed row stays short. **No SMTP = mail neither sent
-  NOR logged** (in-memory array), so nobody can pass verification.
-- **Mutation-verify every new test** AND click it in a real browser. Two whole
-  features shipped green and broken: `apiFetch` sent JSON with no body (#110),
-  and unit 6's ticket built its ws URL from fastify's `host`, the proxy's —
-  537 tests passed while every editor 404'd the handshake.
-- **Deferred**: cloud backups (#260), cli-visualizer (#9), symbol embeddings (#262), partial
-  restore (#261), per-type notification prefs (#263). Single-process is a PROPERTY, not a gap. **Decided against
-  2026-08-22, do NOT re-open**: Leiden (#265), a graph DB, GraphRAG (#267), cross-file calls (#266), dedicated graph export (#268).
-- **Open issues**: #9. All audit bugs and #123 are resolved and closed. Suite: 1,125 tests (805 client, 320 server across 171 test files), 100% passing. Zero open bugs.
-- **Test-that-cannot-fail: SEVEN times**, always a fixture too uniform to tell working from broken. Fixed #123 with exact seq scan for offline semantic edge recompute and dense pseudo-random test vectors.
-- **Editor Cursor & Bidirectional Support (2026-09-22)**: Terminal block cursor (8px) with multi-color cycling blink (Emerald, Cyan, Amber, Purple, Rose), visible in dark/light modes, with full RTL/LTR bidirectional support (auto-detection, toolbar controls, persistence).
-- **Shell Layout Redesign & Floating Fullscreen Shell (2026-09-25; PRs #218–#239)**:
-  - Floating chrome architecture with edge-to-edge full-screen workspace canvas (`<main>` underneath overlay layer).
-  - Expandable navigation rail with standalone CH logo button, dual-card floating navigation (primary apps & secondary settings/profile).
-  - Collapsible sidebars: context panel nested inside the rail column between top/bottom navigation cards, inspector panel on the right. When collapsed, sidebars shrink to an icon rail (`w-11`, 44px) matching parent nav width, displaying child section icons with tooltips (`PanelRailNav`, `PanelRailButton`).
-  - Safe-area margins across all workspace views (Graph, Note, Vaults, Repos, Team, Admin, Settings) preventing text and interactive controls from being obscured under floating chrome.
-  - Radix UI slot stringification fix on `<TooltipTrigger asChild>` wrapping `<NavLink>`: static string `className` computed via `useLocation` guarantees full `size-9` (36px x 36px) button sizing, flex centering, and uniform 4px gaps across all rail links.
+- **Status**: Post-audit MVP stabilization COMPLETE (PRs #286–#293 merged into `dev`).
+  - #286 (Fixes #278): Note rename frontmatter type sync and disk rollback.
+  - #287 (Fixes #279): REST note updates and revision reverts write through live Yjs CRDT docs.
+  - #288 (Fixes #280): Admin user reactivation endpoint `POST /api/admin/users/:id/reactivate`, security event, client API, and UI roster action.
+  - #289 (Fixes #281): Vault-wide wikilink refactoring on note rename via `writeThroughCollab`.
+  - #290 (Fixes #284): Bulk `POST /api/notifications/read-all` endpoint, client API, and UI action.
+  - #291 (Fixes #282): Visual revision diff preview modal with LCS line diffing before revert.
+  - #292 (Fixes #283): Incoming backlinks panel in note inspector with candidate target matching.
+  - #293 (Fixes #285): Responsive mobile drawer layout, auto-collapse, and mutual exclusivity.
+- **Previous Phases**: UI Redesign (#206), OKF v0.2 alignment (#209–#213), Fullscreen Floating Shell (#218–#239), and Production Hardening (#244–#276: zero vulnerabilities, pino logger, error boundaries, health check, backoff retries, exact seq scan for deterministic semantic edge recompute).
+- **Architecture Traps**:
+  - `prod` == `dev` needs Taha's explicit OK. PRs target `dev` directly, never stacked.
+  - 1 container + 1 Postgres per customer. Control plane in separate private repo.
+  - Collab is a person, no autosave PUT (CRDT is the note). Viewer read-only forever.
+  - Exact seq scan for semantic edge recompute (#123). Mutation-verify every test.
+- **Suite**: 1,140 automated tests (820 client, 320 server across 171 test files), 100% passing. Zero open bugs.
+- **Deferred**: cloud backups (#260), cli-visualizer (#9, assigned), symbol embeddings (#262), partial restore (#261), per-type notification prefs (#263).
+- **Decided against (do NOT re-open)**: Leiden (#265), graph DB (#268), GraphRAG (#267), cross-file calls (#266).
+- **Open issues**: #9 (assigned).
