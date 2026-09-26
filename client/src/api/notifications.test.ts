@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mockJsonResponse, ApiError } from '../lib/api'
-import { listNotifications, markNotificationRead } from './notifications'
+import { listNotifications, markAllNotificationsRead, markNotificationRead } from './notifications'
 
 describe('notifications api', () => {
   afterEach(() => {
@@ -58,5 +58,18 @@ describe('notifications api', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockJsonResponse(500, { error: 'boom' })))
 
     await expect(markNotificationRead('n1')).rejects.toBeInstanceOf(ApiError)
+  })
+
+  it('markAllNotificationsRead POSTs /api/notifications/read-all', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, { status: 'read', count: 5 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await markAllNotificationsRead()
+
+    expect(result).toEqual({ status: 'read', count: 5 })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/notifications/read-all',
+      expect.objectContaining({ method: 'POST' }),
+    )
   })
 })

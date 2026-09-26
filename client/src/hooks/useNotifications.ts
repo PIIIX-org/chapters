@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { listNotifications, markNotificationRead } from '../api/notifications.js'
+import { listNotifications, markAllNotificationsRead, markNotificationRead } from '../api/notifications.js'
 import type { Notification } from '../api/notifications.js'
 import type { ApiError } from '../lib/api.js'
 
@@ -19,6 +19,16 @@ export function useMarkNotificationRead() {
   const queryClient = useQueryClient()
   return useMutation<{ status: 'read' }, ApiError, string>({
     mutationFn: (id) => markNotificationRead(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_QUERY_KEY, exact: true })
+    },
+  })
+}
+
+export function useMarkAllNotificationsRead() {
+  const queryClient = useQueryClient()
+  return useMutation<{ status: 'read'; count: number }, ApiError, void>({
+    mutationFn: () => markAllNotificationsRead(),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_QUERY_KEY, exact: true })
     },
