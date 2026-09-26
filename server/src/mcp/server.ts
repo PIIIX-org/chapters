@@ -717,7 +717,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
     wrap(async ({ vaultId, from, toName }: { vaultId?: string; from: string; toName: string }) => {
       const target = vaultFor(vaultId)
       await requireAccess(target, 'edit')
-      const renamed = await renameNote(target, from, toName)
+      const renamed = await renameNote(target, from, toName, writeThroughCollab)
       if (!renamed) throw new McpToolError('note not found')
       return renamed
     }),
