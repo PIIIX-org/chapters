@@ -14,6 +14,7 @@ import {
   listAuditTrail,
   listSecurityEvents,
   promoteUser,
+  reactivateUser,
   transferVaultOwner,
   updateUserRole,
 } from '../api/admin.js'
@@ -148,6 +149,17 @@ export function useDeactivateUser() {
       void queryClient.invalidateQueries({ queryKey: ADMIN_STATS_KEY })
       void queryClient.invalidateQueries({ queryKey: ADMIN_SHARES_KEY })
       void queryClient.invalidateQueries({ queryKey: ADMIN_TEAMS_KEY })
+    },
+  })
+}
+
+export function useReactivateUser() {
+  const queryClient = useQueryClient()
+  return useMutation<{ status: 'active' }, ApiError, string>({
+    mutationFn: reactivateUser,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ADMIN_USERS_KEY })
+      void queryClient.invalidateQueries({ queryKey: ADMIN_STATS_KEY })
     },
   })
 }
