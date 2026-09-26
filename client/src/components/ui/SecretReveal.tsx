@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Button } from './button.js'
+import { toast } from '../../lib/toast.js'
 
 interface SecretRevealProps {
   label: string
@@ -23,6 +24,7 @@ export function SecretReveal({ label, secret, note, onDismiss }: SecretRevealPro
     if (!navigator.clipboard?.writeText) return
     await navigator.clipboard.writeText(secret)
     setCopied(true)
+    toast.success('Copied to clipboard', 'Secret has been copied.')
   }
 
   function handleDone() {
