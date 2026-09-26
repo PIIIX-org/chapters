@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { and, asc, desc, eq, isNotNull, isNull, ne, or } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { noteLinks, noteRevisions, notes } from '../db/schema.js'
 import { config } from '../config.js'
@@ -611,6 +611,72 @@ export async function getRevision(
   const row = rows[0]
   if (!row) return null
   return row as RevisionRow & { path: string }
+}
+
+export interface BacklinkItem {
+  id: string
+  path: string
+  type: string
+  name: string
+  title: string | null
+  updatedAt: Date
+}
+
+/**
+ * Returns incoming links to the given note path within the vault.
+ * Resolves candidate wikilink targets (fullPath, fullPath.md, name, name.md).
+ */
+export async function getIncomingLinks(vaultId: string, path: string): Promise<BacklinkItem[] | null> {
+  const target = await getLiveNote(vaultId, path)
+  if (!target) return null
+
+  const resolved = resolveNotePath(path)
+  const candidateTargets = [resolved.fullPath, `${resolved.fullPath}.md`]
+  if (resolved.name !== resolved.fullPath) {
+    candidateTargets.push(resolved.name, `${resolved.name}.md`)
+  }
+
+  const rows = await db
+    .select({
+      id: notes.id,
+      path: notes.path,
+      type: notes.type,
+      name: notes.name,
+      frontmatter: notes.frontmatter,
+      updatedAt: notes.updatedAt,
+    })
+    .from(noteLinks)
+    .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
+    .where(
+      and(
+        eq(notes.vaultId, vaultId),
+        ne(notes.id, target.id),
+        isNull(notes.deletedAt),
+        inArray(noteLinks.targetPath, candidateTargets),
+      ),
+    )
+    .orderBy(asc(notes.path))
+
+  const seen = new Set<string>()
+  const result: BacklinkItem[] = []
+  for (const row of rows) {
+    if (seen.has(row.id)) continue
+    seen.add(row.id)
+    const title =
+      typeof (row.frontmatter as Record<string, unknown> | null)?.title === 'string'
+        ? ((row.frontmatter as Record<string, unknown>).title as string)
+        : null
+    result.push({
+      id: row.id,
+      path: row.path,
+      type: row.type,
+      name: row.name,
+      title,
+      updatedAt: row.updatedAt,
+    })
+  }
+
+  return result
 }
 
 /** Restores a note to a recorded revision (a new attributed write). */

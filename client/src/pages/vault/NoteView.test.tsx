@@ -578,11 +578,12 @@ describe('NoteView — the inspector tabs', () => {
     doc.load('body', { resource: 'https://kintsugi.test/ada' })
 
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Properties' })).toBeInTheDocument())
+    expect(screen.getByRole('tab', { name: 'Backlinks' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'History' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Sharing' })).toBeInTheDocument()
     // Properties is the resting tab, bound to the live document.
     expect(screen.getByDisplayValue('https://kintsugi.test/ada')).toBeInTheDocument()
-    // All three live in the inspector track, not over the editor.
+    // All four live in the inspector track, not over the editor.
     expect(inspector()).toContainElement(screen.getByRole('tab', { name: 'Sharing' }))
 
     await expectNoA11yViolations(inspector())
@@ -594,6 +595,7 @@ describe('NoteView — the inspector tabs', () => {
 
     await relay()
     await waitFor(() => expect(screen.getByRole('tab', { name: 'History' })).toBeInTheDocument())
+    expect(screen.getByRole('tab', { name: 'Backlinks' })).toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Sharing' })).toBeNull()
   })
 
