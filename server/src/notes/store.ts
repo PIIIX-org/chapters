@@ -531,6 +531,12 @@ export async function revertNote(
   path: string,
   revisionId: string,
   actor: Actor,
+  updateFn: (
+    vaultId: string,
+    path: string,
+    input: { frontmatter?: Record<string, unknown>; body?: string },
+    actor: Actor,
+  ) => Promise<NoteRow | null> = updateNote,
 ): Promise<NoteRow | null> {
   const row = await getLiveNote(vaultId, path)
   if (!row) return null
@@ -541,7 +547,7 @@ export async function revertNote(
       .where(and(eq(noteRevisions.id, revisionId), eq(noteRevisions.noteId, row.id)))
   )[0]
   if (!revision) return null
-  const updated = await updateNote(
+  const updated = await updateFn(
     vaultId,
     path,
     { frontmatter: revision.frontmatter as Record<string, unknown>, body: revision.body },

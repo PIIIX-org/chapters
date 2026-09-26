@@ -3,6 +3,7 @@ import { atLeast, listUsersWithAccess, resolveAccess, type Access } from '../vau
 import { OkfValidationError } from './okf.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
+import { writeThroughCollab } from '../sync/crdt-write.js'
 import {
   createNote,
   listRevisionMeta,
@@ -15,7 +16,6 @@ import {
   restoreNote,
   softDeleteNote,
   splitPath,
-  updateNote,
 } from './store.js'
 
 type VaultReq = FastifyRequest<{ Params: { id: string; '*': string } }>
@@ -97,7 +97,7 @@ export function noteRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!(await guard(req, reply, 'edit'))) return
       splitPath(req.params['*'])
-      const updated = await updateNote(req.params.id, req.params['*'], req.body, {
+      const updated = await writeThroughCollab(req.params.id, req.params['*'], req.body, {
         type: 'user',
         id: req.user!.id,
       })
@@ -215,10 +215,16 @@ export function noteRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!(await guard(req, reply, 'edit'))) return
       splitPath(req.params['*'])
-      const reverted = await revertNote(req.params.id, req.params['*'], req.body.revisionId, {
-        type: 'user',
-        id: req.user!.id,
-      })
+      const reverted = await revertNote(
+        req.params.id,
+        req.params['*'],
+        req.body.revisionId,
+        {
+          type: 'user',
+          id: req.user!.id,
+        },
+        writeThroughCollab,
+      )
       if (!reverted) return reply.code(404).send({ error: 'note or revision not found' })
       await notifyRevert(req.params.id, req.params['*'], req.user!.id)
       return reverted
