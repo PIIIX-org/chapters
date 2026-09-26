@@ -13,3 +13,10 @@ allowBuilds:
   tree-sitter-typescript: false
 overrides:
   adm-zip: '>=0.6.1'
+  find-my-way: '>=9.6.1'
+  sharp: '>=0.35.4'
+  hono: '>=4.13.5'
+  '@hono/node-server': '>=1.19.15'
+  qs: '>=6.16.0'
+  fast-uri: '>=4.1.3'
+  ip-address: '>=10.2.2'
