@@ -343,27 +343,61 @@ export async function renameNote(
     toPath = toName
   }
   const toResolved = resolveNotePath(toPath)
-  if (await getLiveNote(vaultId, toResolved.fullPath)) {
+  if (toResolved.fullPath !== fromResolved.fullPath && (await getLiveNote(vaultId, toResolved.fullPath))) {
     throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
   }
-  const [updated] = await db
-    .update(notes)
-    .set({
-      name: toResolved.name,
-      type: toResolved.type,
-      path: toResolved.fullPath,
-      updatedAt: new Date(),
-    })
-    .where(eq(notes.id, row.id))
-    .returning()
-  await mkdir(dirname(noteFile(vaultId, toResolved.fullPath)), { recursive: true })
-  await rename(noteFile(vaultId, fromResolved.fullPath), noteFile(vaultId, toResolved.fullPath))
+
+  // Disk is canonical source (readNote), row is fallback.
+  const existing = await readNote(vaultId, fromResolved.fullPath)
+  const currentFrontmatter = (existing?.frontmatter ?? (row.frontmatter as Frontmatter)) as Frontmatter
+  const currentBody = existing?.body ?? row.body
+
+  const newFrontmatter: Frontmatter = {
+    ...currentFrontmatter,
+    type: toResolved.type,
+  }
+  validateNote(toResolved.type, toResolved.name, newFrontmatter, currentBody)
+
+  const fromFile = noteFile(vaultId, fromResolved.fullPath)
+  const toFile = noteFile(vaultId, toResolved.fullPath)
+  const isMoving = fromResolved.fullPath !== toResolved.fullPath
+
+  if (isMoving) {
+    await atomicWrite(toFile, serializeNote({ frontmatter: newFrontmatter, body: currentBody }))
+    await unlink(fromFile).catch(() => {})
+  } else {
+    await atomicWrite(toFile, serializeNote({ frontmatter: newFrontmatter, body: currentBody }))
+  }
+
+  let updated: NoteRow
+  try {
+    const [u] = await db
+      .update(notes)
+      .set({
+        name: toResolved.name,
+        type: toResolved.type,
+        path: toResolved.fullPath,
+        frontmatter: newFrontmatter,
+        updatedAt: new Date(),
+      })
+      .where(eq(notes.id, row.id))
+      .returning()
+    updated = u!
+  } catch (err) {
+    if (isMoving) {
+      await atomicWrite(fromFile, serializeNote({ frontmatter: currentFrontmatter, body: currentBody })).catch(() => {})
+      await unlink(toFile).catch(() => {})
+    }
+    throw err
+  }
+
   const affectedDirs = [
     ...new Set([...fromResolved.ancestorDirectories, ...toResolved.ancestorDirectories]),
   ]
   await regenProgressiveIndices(vaultId, affectedDirs)
-  return updated!
+  return updated
 }
+
 
 /** Soft delete (spec 6: one consistent delete behavior): file → .trash, row keeps everything. */
 export async function softDeleteNote(
