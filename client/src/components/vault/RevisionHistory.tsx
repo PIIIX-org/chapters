@@ -3,6 +3,7 @@ import { Button } from '../ui/button.js'
 import { Eyebrow } from '../ui/eyebrow.js'
 import { FormError } from '../FormError.js'
 import { ConfirmAction } from '../admin/ConfirmAction.js'
+import { RevisionDiffModal } from './RevisionDiffModal.js'
 import { usePurgeRevision, useRevertNote, useRevisions } from '../../hooks/useRevisions.js'
 import type { Revision } from '../../api/revisions.js'
 
@@ -50,6 +51,7 @@ interface RevisionHistoryProps {
 
 export function RevisionHistory({ vaultId, path, access }: RevisionHistoryProps) {
   const [offset, setOffset] = useState(0)
+  const [previewRevision, setPreviewRevision] = useState<Revision | null>(null)
   // The server requires edit for history (audit rule), so a read-only viewer
   // gets the reason instead of a 403 rendered as an error. Empty path keeps
   // the query disabled rather than firing a request that cannot succeed.
@@ -130,6 +132,15 @@ export function RevisionHistory({ vaultId, path, access }: RevisionHistoryProps)
                 {AUTHOR[revision.actorType]?.label ?? `by ${revision.actorType}`}
               </span>
               <span className="ml-auto flex items-center gap-1">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  aria-label={`Preview changes from ${formatStamp(revision.createdAt)}`}
+                  onClick={() => setPreviewRevision(revision)}
+                >
+                  Preview
+                </Button>
                 <ConfirmAction
                   label="Revert"
                   ariaLabel={`Revert to the version from ${formatStamp(revision.createdAt)}`}
@@ -155,6 +166,18 @@ export function RevisionHistory({ vaultId, path, access }: RevisionHistoryProps)
           ))}
         </ul>
       )}
+
+      <RevisionDiffModal
+        vaultId={vaultId}
+        path={path}
+        revision={previewRevision}
+        open={previewRevision !== null}
+        onOpenChange={(open) => {
+          if (!open) setPreviewRevision(null)
+        }}
+        onRevert={(revId) => revert.mutate(revId)}
+        revertPending={revert.isPending}
+      />
     </section>
   )
 }

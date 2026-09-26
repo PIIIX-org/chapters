@@ -586,6 +586,33 @@ export async function listRevisionMeta(
     .offset(offset)
 }
 
+/** Full content of a single recorded revision for preview / diff inspection. */
+export async function getRevision(
+  vaultId: string,
+  revisionId: string,
+): Promise<(RevisionRow & { path: string }) | null> {
+  const rows = await db
+    .select({
+      id: noteRevisions.id,
+      noteId: noteRevisions.noteId,
+      path: notes.path,
+      actorType: noteRevisions.actorType,
+      actorId: noteRevisions.actorId,
+      action: noteRevisions.action,
+      frontmatter: noteRevisions.frontmatter,
+      body: noteRevisions.body,
+      createdAt: noteRevisions.createdAt,
+    })
+    .from(noteRevisions)
+    .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
+    .where(and(eq(noteRevisions.id, revisionId), eq(notes.vaultId, vaultId)))
+    .limit(1)
+
+  const row = rows[0]
+  if (!row) return null
+  return row as RevisionRow & { path: string }
+}
+
 /** Restores a note to a recorded revision (a new attributed write). */
 export async function revertNote(
   vaultId: string,

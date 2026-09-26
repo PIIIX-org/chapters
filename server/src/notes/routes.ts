@@ -6,6 +6,7 @@ import { notify } from '../notifications/notify.js'
 import { writeThroughCollab } from '../sync/crdt-write.js'
 import {
   createNote,
+  getRevision,
   listRevisionMeta,
   purgeRevision,
   revertNote,
@@ -228,6 +229,30 @@ export function noteRoutes(app: FastifyInstance) {
       if (!reverted) return reply.code(404).send({ error: 'note or revision not found' })
       await notifyRevert(req.params.id, req.params['*'], req.user!.id)
       return reverted
+    },
+  )
+
+  app.get<{ Params: { id: string; revisionId: string } }>(
+    '/vaults/:id/revisions/:revisionId',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id', 'revisionId'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            revisionId: { type: 'string', format: 'uuid' },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      // Audit rule: inspecting history and revisions requires edit access.
+      const access = await resolveAccess(req.user!.id, req.params.id)
+      if (!atLeast(access, 'edit')) return reply.code(404).send({ error: 'not found' })
+      const revision = await getRevision(req.params.id, req.params.revisionId)
+      if (!revision) return reply.code(404).send({ error: 'revision not found' })
+      return revision
     },
   )
 
