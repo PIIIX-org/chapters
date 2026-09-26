@@ -370,6 +370,16 @@ describe('local folder ingestion', () => {
     return listed.find((r) => r.id === id)!
   }
 
+  async function waitForSync(cookie: string, id: string, ms = 4000): Promise<Record<string, unknown>> {
+    const start = Date.now()
+    for (;;) {
+      const served = await view(cookie, id)
+      if (served?.lastSyncedAt != null && served?.syncStatus === 'idle') return served
+      if (Date.now() - start > ms) return served
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }
+
   afterAll(async () => {
     // Every watcher this file opened, including any `startLocalWatchers`
     // attached to another test's repository, or the process never exits.
@@ -394,7 +404,7 @@ describe('local folder ingestion', () => {
     const repo = await connectFolder(cookie, folder.relative)
     expect(await waitForFiles(repo.id, 1)).toEqual(['a.ts'])
 
-    const served = await view(cookie, repo.id)
+    const served = await waitForSync(cookie, repo.id)
     // The two states `syncHealth` keeps apart: this is "synced, 1 file", and
     // a null `lastSyncedAt` here would render as "never synced" forever.
     expect(served.lastSyncedAt).not.toBeNull()
