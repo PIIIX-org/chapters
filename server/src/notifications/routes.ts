@@ -30,6 +30,20 @@ export function notificationRoutes(app: FastifyInstance) {
     },
   )
 
+  app.post('/notifications/read-all', async (req) => {
+    const updated = await db
+      .update(notifications)
+      .set({ readAt: new Date() })
+      .where(
+        and(
+          eq(notifications.recipientId, req.user!.id),
+          isNull(notifications.readAt),
+        ),
+      )
+      .returning({ id: notifications.id })
+    return { status: 'read', count: updated.length }
+  })
+
   app.post<{ Params: { id: string } }>('/notifications/:id/read', async (req, reply) => {
     const [row] = await db
       .update(notifications)

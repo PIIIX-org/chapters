@@ -25,3 +25,7 @@ export async function markNotificationRead(id: string): Promise<{ status: 'read'
     throw err
   }
 }
+
+export async function markAllNotificationsRead(): Promise<{ status: 'read'; count: number }> {
+  return await apiFetch('/notifications/read-all', { method: 'POST' })
+}
