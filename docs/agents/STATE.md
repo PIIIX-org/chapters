@@ -19,6 +19,13 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   - **7** viewer read-only forever; local folders watched;
     **`gitUrl`/`localPath` are owner-only** (they leaked to viewers + MCP).
 - **`prod` == `dev` as of 2026-09-25 (#217, #241)** — Observatory Bridge UI/UX MVP redesign (#206), OKF v0.2 alignment (#213), terminal cursor & RTL/LTR (#217), and Floating Fullscreen Shell with Collapsible Rails (#241; PRs #218–#239).
+- **Phase: PRODUCTION HARDENING & PRE-FLIGHT MVP (2026-09-26; PRs #269–#276)**:
+  - Security: `adm-zip` upgrade (#244/#269), production vulnerabilities zeroed via pnpm overrides, and `shadcn` moved to devDeps (#249/#250/#273).
+  - UI Resilience & Feedback: React Error Boundaries, 404 route, and zero-dependency accessible Toast notification system (#245/#271).
+  - Server Operations & Logging: Fastify pino logger enabled, centralized `setErrorHandler`, process unhandledRejection/uncaughtException handlers, DB health check with 503 fallback, and safe `sendMail` failure logging (#246-#248/#252/#272).
+  - Worker Queues & Diagnostics: pg pool error listener, exponential backoff retries with bounded queue processing on boot, and repository read diagnostics (#253-#255/#274).
+  - DX & Tooling: Zero ESLint warnings via `allowExportNames`, Node 24 pinned in `.nvmrc`, `no-explicit-any` enforced, multi-provider remote repo links (GitHub, GitLab, Bitbucket, Codeberg), and complete self-hosting backup/checklist docs (#256-#259/#264/#275).
+  - Deterministic Graph Recall: Exact seq scan for offline semantic edge recompute and dense test fixtures, fixing the intermittent zero-neighbour flake (#123/#276).
 - **Phase: OKF v0.2 ALIGNMENT & UPSTREAM SYNC (2026-09-22)**: Master plan implementing Google Cloud OKF v0.2 spec (`GoogleCloudPlatform/open-knowledge-format`, Commit `3dc3029`).
   - **Phase 1 (#209)**: Strict ISO 8601 UTC offsets (`Z`/`[+-]HH:MM`), v0.2 frontmatter families (`generated`, `sources`, `verified`, `usage_window`, `properties`), rejection of date-only strings.
   - **Phase 2 (#210)**: Arbitrary directory hierarchy (1-8 segments), progressive disclosure table generation in `index.md`, zero-loss zip backup restore.
@@ -54,12 +61,11 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   features shipped green and broken: `apiFetch` sent JSON with no body (#110),
   and unit 6's ticket built its ws URL from fastify's `host`, the proxy's —
   537 tests passed while every editor 404'd the handshake.
-- **Deferred**: cloud backups, cli-visualizer (#9), symbol embeddings, partial
-  restore. Single-process is a PROPERTY, not a gap. **Decided against
-  2026-08-22, do NOT re-open**: Leiden, a graph DB, GraphRAG, cross-file calls.
-- **Open issues**: #123 (semantic-edges flake: HNSW recall, not a regression),
-  #9. #66 (unit 6's CRDT) and #101 (#129) are closed. **Test-that-cannot-fail:
-  SEVEN times**, always a fixture too uniform to tell working from broken.
+- **Deferred**: cloud backups (#260), cli-visualizer (#9), symbol embeddings (#262), partial
+  restore (#261), per-type notification prefs (#263). Single-process is a PROPERTY, not a gap. **Decided against
+  2026-08-22, do NOT re-open**: Leiden (#265), a graph DB, GraphRAG (#267), cross-file calls (#266), dedicated graph export (#268).
+- **Open issues**: #9. All audit bugs and #123 are resolved and closed. Suite: 1,125 tests (805 client, 320 server across 171 test files), 100% passing. Zero open bugs.
+- **Test-that-cannot-fail: SEVEN times**, always a fixture too uniform to tell working from broken. Fixed #123 with exact seq scan for offline semantic edge recompute and dense pseudo-random test vectors.
 - **Editor Cursor & Bidirectional Support (2026-09-22)**: Terminal block cursor (8px) with multi-color cycling blink (Emerald, Cyan, Amber, Purple, Rose), visible in dark/light modes, with full RTL/LTR bidirectional support (auto-detection, toolbar controls, persistence).
 - **Shell Layout Redesign & Floating Fullscreen Shell (2026-09-25; PRs #218–#239)**:
   - Floating chrome architecture with edge-to-edge full-screen workspace canvas (`<main>` underneath overlay layer).

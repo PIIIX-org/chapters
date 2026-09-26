@@ -125,6 +125,7 @@ queues, the live-collaboration permission-kick bus, MCP rate limiting,
 and repository polling are all in-process state) — see
 [`docs/agents/implementation.md`](docs/agents/implementation.md)'s
 "Deployment topology" section before running more than one instance.
+For production operations, review the [Pre-Flight Deployment Checklist](docs/self-hosting/checklist.md) and the [Backup & Restore Guide](docs/self-hosting/backup.md).
 
 The frontend (`client/`) is a Vite + React app. In development, run the
 API (`pnpm -C server dev`) and the frontend (`pnpm -C client dev`)
