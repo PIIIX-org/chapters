@@ -6,9 +6,11 @@ import { notes, semanticEdges, vaults } from '../src/db/schema.js'
 import { recomputeSemanticEdges } from '../src/search/semantic-edges.js'
 import { createActiveUser } from './helpers.js'
 
-/** One-hot 384-d vector — matches `notes.embedding`'s declared dimensions. */
-function unitVector(axis: number): number[] {
-  return Array.from({ length: 384 }, (_, i) => (i === axis ? 1 : 0))
+/** Dense 384-d normalized unit vector — avoids HNSW tie-breaking artifacts (#123). */
+function denseVector(seed: number): number[] {
+  const raw = Array.from({ length: 384 }, (_, i) => Math.sin(seed + i * 0.1))
+  const norm = Math.sqrt(raw.reduce((sum, v) => sum + v * v, 0))
+  return raw.map((v) => v / norm)
 }
 
 async function createNote(vaultId: string, name: string, embedding: number[]): Promise<string> {
@@ -36,7 +38,7 @@ function edgesOwnedBy(nodeId: string) {
 
 let noteA: string
 let noteB: string
-const embeddingA = unitVector(0)
+const embeddingA = denseVector(1)
 
 beforeAll(async () => {
   const owner = await createActiveUser()
@@ -44,9 +46,9 @@ beforeAll(async () => {
     .insert(vaults)
     .values({ name: 'Semantic edges vault', ownerId: owner.id })
     .returning({ id: vaults.id })
-  // Same axis => cosine similarity 1, so each is comfortably in the other's top-k.
+  // Same dense vector => cosine similarity 1, so each is comfortably in the other's top-k.
   noteA = await createNote(vault!.id, `sem-a-${randomUUID()}`, embeddingA)
-  noteB = await createNote(vault!.id, `sem-b-${randomUUID()}`, unitVector(0))
+  noteB = await createNote(vault!.id, `sem-b-${randomUUID()}`, denseVector(1))
 })
 
 describe('recomputeSemanticEdges', () => {
