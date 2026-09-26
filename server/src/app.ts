@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from 'fastify'
+import Fastify, { type FastifyInstance, type FastifyServerOptions, type FastifyError } from 'fastify'
 import cookie from '@fastify/cookie'
 import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
@@ -6,6 +6,7 @@ import multipart from '@fastify/multipart'
 import rateLimit from '@fastify/rate-limit'
 import { config } from './config.js'
 import { registerStatic } from './static.js'
+import { sql } from './db/client.js'
 import { authPlugin } from './auth/plugin.js'
 import { authRoutes } from './auth/routes.js'
 import { oidcRoutes } from './auth/oidc-routes.js'
@@ -29,9 +30,34 @@ import { repositoryWebhookRoutes } from './repositories/git-webhook-routes.js'
 import { repositoryFileContentRoutes } from './repositories/file-content-routes.js'
 
 export async function buildApp(
-  opts: { clientDist?: string } = {},
+  opts: { clientDist?: string; logger?: FastifyServerOptions['logger'] } = {},
 ): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false })
+  const app = Fastify({
+    logger:
+      opts.logger !== undefined
+        ? opts.logger
+        : config.isTest
+          ? false
+          : { level: config.isProd ? 'info' : 'debug' },
+  })
+
+  app.setErrorHandler((error: FastifyError, req, reply) => {
+    const statusCode = error.statusCode ?? 500
+    if (statusCode >= 500) {
+      req.log.error(error)
+    } else {
+      req.log.info({ err: error }, error.message)
+    }
+    const message =
+      statusCode >= 500 && config.isProd
+        ? 'Internal server error'
+        : error.message || 'Internal server error'
+    return reply.code(statusCode).send({
+      statusCode,
+      error: message,
+      message,
+    })
+  })
 
   // The CSP is spelled out rather than left to helmet's defaults because this
   // app now serves an HTML document, not just JSON. Two defaults are wrong for
@@ -76,7 +102,15 @@ export async function buildApp(
   })
   await app.register(authPlugin)
 
-  app.get('/health', () => ({ status: 'ok' }))
+  app.get('/health', async (_req, reply) => {
+    try {
+      await sql`SELECT 1`
+      return { status: 'ok' }
+    } catch (err) {
+      app.log.error(err, 'Health check database failure')
+      return reply.code(503).send({ status: 'error', error: 'Database unreachable' })
+    }
+  })
 
   mcpRoutes(app)
   repositoryPushRoutes(app)
