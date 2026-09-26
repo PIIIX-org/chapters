@@ -6,6 +6,11 @@ export default tseslint.config(
   { ignores: ['**/dist/', '**/coverage/', '**/node_modules/', 'runs/**'] },
   ...tseslint.configs.recommended,
   {
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
+    },
+  },
+  {
     files: ['client/**/*.{ts,tsx}'],
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
     rules: {
