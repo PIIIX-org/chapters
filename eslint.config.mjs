@@ -15,7 +15,25 @@ export default tseslint.config(
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
     rules: {
       ...reactHooks.configs.flat.recommended.rules,
-      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      'react-refresh/only-export-components': [
+        'warn',
+        {
+          allowConstantExport: true,
+          allowExportNames: [
+            'graphFiltersFromSearchParams',
+            'formatLastActive',
+            'countWithNoun',
+            'canShowInline',
+            'collabShellStatus',
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['client/src/router.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
     },
   },
 )
