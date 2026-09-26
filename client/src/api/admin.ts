@@ -150,6 +150,10 @@ export function deactivateUser(id: string): Promise<{ status: 'deactivated' }> {
   return apiFetch(`/admin/users/${id}/deactivate`, { method: 'POST' })
 }
 
+export function reactivateUser(id: string): Promise<{ status: 'active' }> {
+  return apiFetch(`/admin/users/${id}/reactivate`, { method: 'POST' })
+}
+
 export function transferVaultOwner(vaultId: string, newOwnerId: string): Promise<{ ownerId: string }> {
   return apiFetch(`/admin/vaults/${vaultId}/transfer-owner`, {
     method: 'POST',

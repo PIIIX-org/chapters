@@ -142,6 +142,27 @@ export function adminRoutes(app: FastifyInstance) {
     return { status: 'deactivated' }
   })
 
+  app.post<{ Params: { id: string } }>('/users/:id/reactivate', async (req, reply) => {
+    const [user] = await db
+      .update(users)
+      .set({ status: 'active' })
+      .where(and(eq(users.id, req.params.id), eq(users.status, 'deactivated')))
+      .returning()
+    if (!user) return reply.code(404).send({ error: 'deactivated user not found' })
+    await logSecurityEvent({
+      type: 'user_reactivated',
+      actorUserId: req.user!.id,
+      subjectUserId: user.id,
+    })
+    emitPermissionChange({ userIds: [user.id] })
+    await notify({
+      recipientId: user.id,
+      type: 'account_status_changed',
+      message: 'Your Chapters account has been reactivated by an admin. You can now log in.',
+    })
+    return { status: 'active' }
+  })
+
   app.post<{ Params: { id: string }; Body: { newOwnerId: string } }>(
     '/vaults/:id/transfer-owner',
     {
