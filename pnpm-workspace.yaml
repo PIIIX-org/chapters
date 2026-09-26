@@ -11,3 +11,5 @@ allowBuilds:
   tree-sitter-javascript: false
   tree-sitter-python: false
   tree-sitter-typescript: false
+overrides:
+  adm-zip: '>=0.6.1'
