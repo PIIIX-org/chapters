@@ -123,8 +123,9 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
     for (const path of currentPaths) {
       try {
         files.push({ path, content: await readFile(join(root, path), 'utf8') })
-      } catch {
-        // Vanished between listing and reading — the next pass's manifest wins.
+      } catch (err) {
+        // Vanished between listing and reading, or permission/read failure — log for diagnostics.
+        console.warn(`[scheduler] failed reading repository file ${path} at ${root}:`, err)
       }
     }
     await syncRepositoryFiles(repositoryId, files, currentPaths)
