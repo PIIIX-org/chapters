@@ -22,7 +22,7 @@ describe('notifications routes', () => {
     const cookie2 = await loginCookie(app, user2.email)
 
     // Insert notifications for user1 and user2
-    const [n1] = await db
+    const inserted = await db
       .insert(notifications)
       .values([
         { recipientId: user1.id, type: 'test', message: 'Notification 1' },
@@ -30,6 +30,7 @@ describe('notifications routes', () => {
         { recipientId: user1.id, type: 'test', message: 'Notification 3' },
       ])
       .returning()
+    const n1 = inserted[0]!
 
     await db.insert(notifications).values({
       recipientId: user2.id,
@@ -100,6 +101,6 @@ describe('notifications routes', () => {
     expect(u2List.statusCode).toBe(200)
     const u2Items = u2List.json() as Array<{ id: string; readAt: string | null }>
     expect(u2Items.length).toBe(1)
-    expect(u2Items[0].readAt).toBeNull()
+    expect(u2Items[0]!.readAt).toBeNull()
   })
 })
