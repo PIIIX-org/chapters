@@ -140,6 +140,39 @@ describe('notes CRUD + OKF on disk', () => {
     expect(index).not.toContain('john-doe')
   })
 
+  it('rename across types updates frontmatter type and disk file cleanly', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes`,
+      headers: { cookie: ownerCookie },
+      body: { type: 'projects', name: 'alpha', body: 'Alpha body', frontmatter: { type: 'projects', tags: ['active'] } },
+    })
+    expect(created.statusCode).toBe(200)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes-rename`,
+      headers: { cookie: ownerCookie },
+      body: { from: 'projects/alpha', to: 'archive/alpha-retired' },
+    })
+    expect(res.statusCode).toBe(200)
+
+    await expect(stat(vaultFile('projects', 'alpha.md'))).rejects.toThrow()
+    await expect(stat(vaultFile('archive', 'alpha-retired.md'))).resolves.toBeTruthy()
+
+    const raw = await readFile(vaultFile('archive', 'alpha-retired.md'), 'utf8')
+    expect(raw).toContain('type: archive')
+    expect(raw).toContain('Alpha body')
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/notes/archive/alpha-retired`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(getRes.statusCode).toBe(200)
+    expect((getRes.json() as { frontmatter: { type: string } }).frontmatter.type).toBe('archive')
+  })
+
   it('soft delete moves to trash; restore brings it back', async () => {
     const del = await app.inject({
       method: 'DELETE',
