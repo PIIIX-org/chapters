@@ -275,3 +275,52 @@ describe('notes CRUD + OKF on disk', () => {
     expect(diskContent).not.toContain('original-doc')
   })
 })
+
+describe('GET /vaults/:id/backlinks/* — incoming backlinks', () => {
+  it('returns incoming links referencing the target note, excluding self-references', async () => {
+    // guides/overview references docs/renamed-doc, and docs/renamed-doc also references itself
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/backlinks/docs/renamed-doc`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const backlinks = res.json() as Array<{ id: string; path: string; type: string; name: string }>
+    expect(backlinks).toHaveLength(1)
+    expect(backlinks[0]!.path).toBe('guides/overview')
+    expect(backlinks[0]!.type).toBe('guides')
+    expect(backlinks[0]!.name).toBe('overview')
+  })
+
+  it('allows read-only grantees to read backlinks', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/backlinks/docs/renamed-doc`,
+      headers: { cookie: readerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const backlinks = res.json() as Array<{ id: string; path: string }>
+    expect(backlinks).toHaveLength(1)
+    expect(backlinks[0]!.path).toBe('guides/overview')
+  })
+
+  it('hides backlinks from strangers without access', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/backlinks/docs/renamed-doc`,
+      headers: { cookie: strangerCookie },
+    })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('404s for a non-existent note', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/backlinks/docs/non-existent`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: 'note not found' })
+  })
+})
+

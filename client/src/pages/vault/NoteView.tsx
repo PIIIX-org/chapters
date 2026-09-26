@@ -17,6 +17,7 @@ import { CollabStatusLine, collabShellStatus } from '../../components/vault/Coll
 import { CollaboratorAvatars } from '../../components/vault/CollaboratorAvatars.js'
 import { NoteActions } from '../../components/vault/NoteActions.js'
 import { RevokedNotice } from '../../components/vault/RevokedNotice.js'
+import { BacklinksPanel } from '../../components/vault/BacklinksPanel.js'
 import { RevisionHistory } from '../../components/vault/RevisionHistory.js'
 import { SharingPanel } from '../../components/vault/SharingPanel.js'
 import {
@@ -29,7 +30,7 @@ import {
   useNoteDirection,
 } from '../../components/vault/note-toolbar-utils.js'
 import type { NoteDirection } from '../../components/vault/note-toolbar-utils.js'
-import { History, Share2, SlidersHorizontal } from 'lucide-react'
+import { History, Link2, Share2, SlidersHorizontal } from 'lucide-react'
 import { Inspector, PanelRailButton, PanelRailNav } from '../../components/shell/ShellPanels.js'
 import { useOptionalShell, usePanel, useShellStatus } from '../../components/shell/shell-context.js'
 import type { ShellStatus } from '../../components/shell/shell-context.js'
@@ -211,15 +212,16 @@ function NotePath({ vaultName, vaultId, path }: { vaultName: string | undefined;
 
 interface NoteInspectorProps {
   properties: ReactNode
+  backlinks?: ReactNode
   history: ReactNode
   /** Owner-only: shares are the owner's to grant, so nobody else gets the tab. */
   sharing?: ReactNode
 }
 
-/** The note's detail, as inspector tabs — the property panel, the revision
+/** The note's detail, as inspector tabs — the property panel, backlinks, the revision
  *  history and (for the owner) sharing all fold in here. */
-function NoteInspector({ properties, history, sharing }: NoteInspectorProps) {
-  const [tab, setTab] = useState<'properties' | 'history' | 'sharing'>('properties')
+function NoteInspector({ properties, backlinks, history, sharing }: NoteInspectorProps) {
+  const [tab, setTab] = useState<'properties' | 'backlinks' | 'history' | 'sharing'>('properties')
   const panel = usePanel()
 
   if (panel && !panel.open) {
@@ -231,6 +233,14 @@ function NoteInspector({ properties, history, sharing }: NoteInspectorProps) {
           active={tab === 'properties'}
           onClick={() => setTab('properties')}
         />
+        {backlinks != null && (
+          <PanelRailButton
+            icon={Link2}
+            label="Backlinks"
+            active={tab === 'backlinks'}
+            onClick={() => setTab('backlinks')}
+          />
+        )}
         <PanelRailButton
           icon={History}
           label="History"
@@ -253,12 +263,18 @@ function NoteInspector({ properties, history, sharing }: NoteInspectorProps) {
     <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="flex min-h-0 flex-1 flex-col">
       <TabsList>
         <TabsTrigger value="properties">Properties</TabsTrigger>
+        {backlinks != null && <TabsTrigger value="backlinks">Backlinks</TabsTrigger>}
         <TabsTrigger value="history">History</TabsTrigger>
         {sharing != null && <TabsTrigger value="sharing">Sharing</TabsTrigger>}
       </TabsList>
       <TabsContent value="properties" className="flex-1 overflow-y-auto p-3">
         {properties}
       </TabsContent>
+      {backlinks != null && (
+        <TabsContent value="backlinks" className="flex-1 overflow-y-auto p-3">
+          {backlinks}
+        </TabsContent>
+      )}
       <TabsContent value="history" className="flex-1 overflow-y-auto p-3">
         {history}
       </TabsContent>
@@ -408,6 +424,7 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
       inspector={
         <NoteInspector
           properties={<CollabPropertyPanel frontmatter={collab.ydoc.getMap('frontmatter')} readOnly={locked} />}
+          backlinks={<BacklinksPanel vaultId={vaultId} path={path} />}
           // RevisionHistory explains itself to a downgraded (now read) viewer
           // instead of firing a request that can only 403.
           history={<RevisionHistory vaultId={vaultId} path={path} access={access} />}
@@ -492,6 +509,7 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
       inspector={
         <NoteInspector
           properties={<LivePropertyPanel frontmatter={state.frontmatter} />}
+          backlinks={<BacklinksPanel vaultId={vaultId} path={path} />}
           // Same layout as an editor's, locked: RevisionHistory says why a
           // read-only viewer gets no list instead of rendering a 403.
           history={<RevisionHistory vaultId={vaultId} path={path} access="read" />}

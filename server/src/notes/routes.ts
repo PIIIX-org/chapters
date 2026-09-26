@@ -6,6 +6,7 @@ import { notify } from '../notifications/notify.js'
 import { writeThroughCollab } from '../sync/crdt-write.js'
 import {
   createNote,
+  getIncomingLinks,
   getRevision,
   listRevisionMeta,
   purgeRevision,
@@ -199,6 +200,17 @@ export function noteRoutes(app: FastifyInstance) {
       )
       if (!revisions) return reply.code(404).send({ error: 'note not found' })
       return revisions
+    },
+  )
+
+  app.get<{ Params: { id: string; '*': string } }>(
+    '/vaults/:id/backlinks/*',
+    async (req, reply) => {
+      if (!(await guard(req as VaultReq, reply, 'read'))) return
+      splitPath(req.params['*'])
+      const backlinks = await getIncomingLinks(req.params.id, req.params['*'])
+      if (!backlinks) return reply.code(404).send({ error: 'note not found' })
+      return backlinks
     },
   )
 
