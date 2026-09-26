@@ -6,11 +6,34 @@ export default tseslint.config(
   { ignores: ['**/dist/', '**/coverage/', '**/node_modules/', 'runs/**'] },
   ...tseslint.configs.recommended,
   {
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
+    },
+  },
+  {
     files: ['client/**/*.{ts,tsx}'],
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
     rules: {
       ...reactHooks.configs.flat.recommended.rules,
-      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      'react-refresh/only-export-components': [
+        'warn',
+        {
+          allowConstantExport: true,
+          allowExportNames: [
+            'graphFiltersFromSearchParams',
+            'formatLastActive',
+            'countWithNoun',
+            'canShowInline',
+            'collabShellStatus',
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['client/src/router.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
     },
   },
 )

@@ -11,6 +11,8 @@ import { SetupPage } from './pages/auth/SetupPage.js'
 import { SignupPage } from './pages/auth/SignupPage.js'
 import { VerifyEmailPage } from './pages/auth/VerifyEmailPage.js'
 import { PendingApprovalPage } from './pages/auth/PendingApprovalPage.js'
+import { RouteErrorBoundary } from './components/ErrorBoundary.js'
+import { NotFoundPage } from './pages/NotFoundPage.js'
 
 // Lazy at the route level, not just the graph: VaultLayout pulls in the file
 // tree + note-create UI, and NoteView pulls in the whole CodeMirror/@lezer
@@ -73,9 +75,11 @@ function lazyPage(element: React.ReactNode) {
 export const routes: RouteObject[] = [
   {
     element: <RequireAuth />,
+    errorElement: <RouteErrorBoundary />,
     children: [
       {
         element: <AppShell />,
+        errorElement: <RouteErrorBoundary />,
         children: [
           { path: '/', element: <HomePage /> },
           { path: '/vaults', element: lazyPage(<VaultsPage />) },
@@ -101,17 +105,19 @@ export const routes: RouteObject[] = [
               },
             ],
           },
+          { path: '*', element: <NotFoundPage /> },
         ],
       },
     ],
   },
-  { path: '/setup', element: <SetupPage /> },
-  { path: '/signup', element: <SignupPage /> },
-  { path: '/verify-email', element: <VerifyEmailPage /> },
-  { path: '/pending-approval', element: <PendingApprovalPage /> },
-  { path: '/login', element: <LoginPage /> },
-  { path: '/forgot-password', element: <RequestPasswordResetPage /> },
-  { path: '/reset-password', element: <ResetPasswordPage /> },
+  { path: '/setup', element: <SetupPage />, errorElement: <RouteErrorBoundary /> },
+  { path: '/signup', element: <SignupPage />, errorElement: <RouteErrorBoundary /> },
+  { path: '/verify-email', element: <VerifyEmailPage />, errorElement: <RouteErrorBoundary /> },
+  { path: '/pending-approval', element: <PendingApprovalPage />, errorElement: <RouteErrorBoundary /> },
+  { path: '/login', element: <LoginPage />, errorElement: <RouteErrorBoundary /> },
+  { path: '/forgot-password', element: <RequestPasswordResetPage />, errorElement: <RouteErrorBoundary /> },
+  { path: '/reset-password', element: <ResetPasswordPage />, errorElement: <RouteErrorBoundary /> },
+  { path: '*', element: <NotFoundPage /> },
 ]
 
 export const router = createBrowserRouter(routes)

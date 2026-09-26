@@ -1,5 +1,6 @@
 import { Button } from '../ui/button.js'
 import { Eyebrow } from '../ui/eyebrow.js'
+import { toast } from '../../lib/toast.js'
 import { FormError } from '../FormError.js'
 import { useRestoreNote, useTrashedNotes } from '../../hooks/useTrash.js'
 
@@ -63,7 +64,13 @@ export function NoteTrashPanel({ vaultId, heading = true }: NoteTrashPanelProps)
                   variant="outline"
                   aria-label={`Restore ${note.path}`}
                   disabled={restore.isPending}
-                  onClick={() => restore.mutate(note.id)}
+                  onClick={() =>
+                    restore.mutate(note.id, {
+                      onSuccess: () => {
+                        toast.success('Note restored', `${note.path} has been restored.`)
+                      },
+                    })
+                  }
                 >
                   Restore
                 </Button>

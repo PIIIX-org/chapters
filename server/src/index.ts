@@ -33,6 +33,20 @@ try {
         .finally(() => process.exit(0))
     })
   }
+  process.on('uncaughtException', (err) => {
+    app.log.error(err, 'uncaught exception, initiating shutdown')
+    void collab
+      .destroy()
+      .then(() => app.close())
+      .finally(() => process.exit(1))
+  })
+  process.on('unhandledRejection', (reason) => {
+    app.log.error({ err: reason }, 'unhandled rejection, initiating shutdown')
+    void collab
+      .destroy()
+      .then(() => app.close())
+      .finally(() => process.exit(1))
+  })
   startPollingScheduler(config.pollIntervalMs, config.webhookStaleThresholdMs)
   // Watchers live in process memory: without this pass every local_path
   // repository connected before the last restart silently stops ingesting.

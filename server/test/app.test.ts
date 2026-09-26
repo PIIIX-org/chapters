@@ -28,4 +28,18 @@ describe('app', () => {
     expect(res.headers['access-control-allow-origin']).toBeUndefined()
     await app.close()
   })
+
+  it('formats unhandled exceptions as structured JSON responses via global error handler', async () => {
+    const app = await buildApp()
+    app.get('/test-crash', async () => {
+      throw new Error('Simulation of unexpected failure')
+    })
+    const res = await app.inject({ method: 'GET', url: '/test-crash' })
+    expect(res.statusCode).toBe(500)
+    const json = res.json()
+    expect(json.statusCode).toBe(500)
+    expect(json.error).toBeDefined()
+    expect(json.message).toBeDefined()
+    await app.close()
+  })
 })

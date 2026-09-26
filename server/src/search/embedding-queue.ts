@@ -4,13 +4,19 @@ import { notes } from '../db/schema.js'
 import { embedder } from './embeddings.js'
 import { recomputeSemanticEdges } from './semantic-edges.js'
 
+interface QueueEntry {
+  noteId: string
+  attempts: number
+}
+
 // ponytail: in-process serial queue; move to a job table if multi-process
-const queue: string[] = []
+const queue: QueueEntry[] = []
 let running: Promise<void> | null = null
+const MAX_ATTEMPTS = 3
 
 /** Enqueue a note for (re-)embedding. Never blocks the caller (perf rule 2). */
-export function scheduleEmbedding(noteId: string): void {
-  queue.push(noteId)
+export function scheduleEmbedding(noteId: string, attempts = 0): void {
+  queue.push({ noteId, attempts })
   running ??= drain().finally(() => {
     running = null
   })
@@ -22,22 +28,35 @@ export async function flushEmbeddings(): Promise<void> {
 }
 
 /** Boot catch-up: enqueue live notes that never got an embedding. */
-export async function scheduleMissingEmbeddings(): Promise<number> {
-  const missing = await db
+export async function scheduleMissingEmbeddings(limit?: number): Promise<number> {
+  const query = db
     .select({ id: notes.id })
     .from(notes)
     .where(and(isNull(notes.deletedAt), sql`${notes.embedding} is null`))
+  const missing = limit ? await query.limit(limit) : await query
   for (const row of missing) scheduleEmbedding(row.id)
   return missing.length
 }
 
 async function drain(): Promise<void> {
   while (queue.length > 0) {
-    const noteId = queue.shift()!
+    const item = queue.shift()!
     try {
-      await processNote(noteId)
+      await processNote(item.noteId)
     } catch (err) {
-      console.error(`embedding failed for note ${noteId}:`, err)
+      const nextAttempt = item.attempts + 1
+      if (nextAttempt < MAX_ATTEMPTS) {
+        console.warn(
+          `[embedding-queue] embedding failed for note ${item.noteId} (attempt ${nextAttempt}/${MAX_ATTEMPTS}), retrying:`,
+          err,
+        )
+        queue.push({ noteId: item.noteId, attempts: nextAttempt })
+      } else {
+        console.error(
+          `[embedding-queue] embedding permanently failed for note ${item.noteId} after ${MAX_ATTEMPTS} attempts:`,
+          err,
+        )
+      }
     }
   }
 }

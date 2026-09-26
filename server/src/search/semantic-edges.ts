@@ -11,12 +11,15 @@ interface Neighbor {
   similarity: number
 }
 
+type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]
+
 async function knn(
   vec: string,
   excludeType: SemanticNodeType,
   excludeId: string,
+  client: DbOrTx = db,
 ): Promise<Neighbor[]> {
-  const noteRows = await db
+  const noteRows = await client
     .select({ id: notes.id, similarity: sql<number>`1 - (${notes.embedding} <=> ${vec}::vector)` })
     .from(notes)
     .where(
@@ -29,7 +32,7 @@ async function knn(
     .orderBy(sql`${notes.embedding} <=> ${vec}::vector`)
     .limit(config.semanticK)
 
-  const codeRows = await db
+  const codeRows = await client
     .select({
       id: repositoryFiles.id,
       similarity: sql<number>`1 - (${repositoryFiles.embedding} <=> ${vec}::vector)`,
@@ -63,38 +66,45 @@ export async function recomputeSemanticEdges(
   nodeId: string,
   embedding: number[],
 ): Promise<void> {
-  // Only this node's OWN edges. kNN is asymmetric — B can hold A in its top-k
-  // while A does not hold B — so deleting by either side would wipe an edge B
-  // owns and nothing would restore it until B is re-embedded (#91).
-  await db
-    .delete(semanticEdges)
-    .where(and(eq(semanticEdges.sourceType, nodeType), eq(semanticEdges.sourceId, nodeId)))
+  await db.transaction(async (tx) => {
+    // ponytail: exact scan for offline recompute ensures 100% recall even when HNSW
+    // loses ties or elements are isolated by dead index entries (#123). Request-path
+    // search in search.ts remains index-backed.
+    await tx.execute(sql`set local enable_indexscan = off`)
 
-  const vec = JSON.stringify(embedding)
-  const neighbors = (await knn(vec, nodeType, nodeId)).filter(
-    (n) => n.similarity >= config.semanticThreshold,
-  )
-  if (neighbors.length === 0) return
+    // Only this node's OWN edges. kNN is asymmetric — B can hold A in its top-k
+    // while A does not hold B — so deleting by either side would wipe an edge B
+    // owns and nothing would restore it until B is re-embedded (#91).
+    await tx
+      .delete(semanticEdges)
+      .where(and(eq(semanticEdges.sourceType, nodeType), eq(semanticEdges.sourceId, nodeId)))
 
-  const rows = neighbors.map((n) => ({
-    sourceType: nodeType,
-    sourceId: nodeId,
-    targetType: n.type,
-    targetId: n.id,
-    similarity: n.similarity,
-  }))
-  await db
-    .insert(semanticEdges)
-    .values(rows)
-    .onConflictDoUpdate({
-      target: [
-        semanticEdges.sourceType,
-        semanticEdges.sourceId,
-        semanticEdges.targetType,
-        semanticEdges.targetId,
-      ],
-      set: { similarity: sql`excluded.similarity` },
-    })
+    const vec = JSON.stringify(embedding)
+    const neighbors = (await knn(vec, nodeType, nodeId, tx)).filter(
+      (n) => n.similarity >= config.semanticThreshold,
+    )
+    if (neighbors.length === 0) return
+
+    const rows = neighbors.map((n) => ({
+      sourceType: nodeType,
+      sourceId: nodeId,
+      targetType: n.type,
+      targetId: n.id,
+      similarity: n.similarity,
+    }))
+    await tx
+      .insert(semanticEdges)
+      .values(rows)
+      .onConflictDoUpdate({
+        target: [
+          semanticEdges.sourceType,
+          semanticEdges.sourceId,
+          semanticEdges.targetType,
+          semanticEdges.targetId,
+        ],
+        set: { similarity: sql`excluded.similarity` },
+      })
+  })
 }
 
 /** Removes every semantic edge touching a node, in both directions. */
