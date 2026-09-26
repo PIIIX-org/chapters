@@ -123,7 +123,7 @@ export function noteRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!(await guard(req as VaultReq, reply, 'edit'))) return
       splitPath(req.body.from)
-      const renamed = await renameNote(req.params.id, req.body.from, req.body.to)
+      const renamed = await renameNote(req.params.id, req.body.from, req.body.to, writeThroughCollab)
       if (!renamed) return reply.code(404).send({ error: 'note not found' })
       return renamed
     },

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { and, asc, desc, eq, isNotNull, isNull } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, isNull, ne, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { noteLinks, noteRevisions, notes } from '../db/schema.js'
 import { config } from '../config.js'
@@ -328,10 +328,29 @@ export async function updateNote(
   return updated!
 }
 
+/**
+ * Rewrites wikilinks in a markdown document from one target path to another,
+ * preserving any inner anchor `#heading`, custom label `|text`, or `.md` extension.
+ */
+export function refactorWikilinks(body: string, fromPath: string, toPath: string): string {
+  const escaped = fromPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const regex = new RegExp(`\\[\\[([ \\t]*)${escaped}(\\.md)?([ \\t]*)(#[^\\]|]*)?(\\|[^\\]]*)?\\]\\]`, 'g')
+  return body.replace(regex, (_match, p1, p2, p3, anchor = '', label = '') => {
+    const ext = p2 ? '.md' : ''
+    return `[[${p1}${toPath}${ext}${p3}${anchor}${label}]]`
+  })
+}
+
 export async function renameNote(
   vaultId: string,
   from: string,
   toName: string,
+  updateFn: (
+    vaultId: string,
+    path: string,
+    input: { frontmatter?: Record<string, unknown>; body?: string },
+    actor: Actor,
+  ) => Promise<NoteRow | null> = updateNote,
 ): Promise<NoteRow | null> {
   const fromResolved = resolveNotePath(from)
   const row = await getLiveNote(vaultId, fromResolved.fullPath)
@@ -350,7 +369,13 @@ export async function renameNote(
   // Disk is canonical source (readNote), row is fallback.
   const existing = await readNote(vaultId, fromResolved.fullPath)
   const currentFrontmatter = (existing?.frontmatter ?? (row.frontmatter as Frontmatter)) as Frontmatter
-  const currentBody = existing?.body ?? row.body
+  const rawBody = existing?.body ?? row.body
+  const isMoving = fromResolved.fullPath !== toResolved.fullPath
+
+  // Refactor any self-referential wikilinks in the note's own body
+  const currentBody = isMoving
+    ? refactorWikilinks(rawBody, fromResolved.fullPath, toResolved.fullPath)
+    : rawBody
 
   const newFrontmatter: Frontmatter = {
     ...currentFrontmatter,
@@ -360,7 +385,6 @@ export async function renameNote(
 
   const fromFile = noteFile(vaultId, fromResolved.fullPath)
   const toFile = noteFile(vaultId, toResolved.fullPath)
-  const isMoving = fromResolved.fullPath !== toResolved.fullPath
 
   if (isMoving) {
     await atomicWrite(toFile, serializeNote({ frontmatter: newFrontmatter, body: currentBody }))
@@ -377,6 +401,7 @@ export async function renameNote(
         name: toResolved.name,
         type: toResolved.type,
         path: toResolved.fullPath,
+        body: currentBody,
         frontmatter: newFrontmatter,
         updatedAt: new Date(),
       })
@@ -385,7 +410,7 @@ export async function renameNote(
     updated = u!
   } catch (err) {
     if (isMoving) {
-      await atomicWrite(fromFile, serializeNote({ frontmatter: currentFrontmatter, body: currentBody })).catch(() => {})
+      await atomicWrite(fromFile, serializeNote({ frontmatter: currentFrontmatter, body: rawBody })).catch(() => {})
       await unlink(toFile).catch(() => {})
     }
     throw err
@@ -395,6 +420,42 @@ export async function renameNote(
     ...new Set([...fromResolved.ancestorDirectories, ...toResolved.ancestorDirectories]),
   ]
   await regenProgressiveIndices(vaultId, affectedDirs)
+  await syncLinks(updated.id, currentBody)
+
+  // Refactor incoming wikilinks across other notes in the vault
+  if (isMoving) {
+    const referringRows = await db
+      .select({
+        sourceNoteId: noteLinks.sourceNoteId,
+        sourceNotePath: notes.path,
+      })
+      .from(noteLinks)
+      .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
+      .where(
+        and(
+          eq(notes.vaultId, vaultId),
+          ne(notes.id, row.id),
+          isNull(notes.deletedAt),
+          or(
+            eq(noteLinks.targetPath, fromResolved.fullPath),
+            eq(noteLinks.targetPath, `${fromResolved.fullPath}.md`),
+          ),
+        ),
+      )
+
+    const seenNotes = new Set<string>()
+    for (const ref of referringRows) {
+      if (seenNotes.has(ref.sourceNoteId)) continue
+      seenNotes.add(ref.sourceNoteId)
+      const targetNote = await readNote(vaultId, ref.sourceNotePath)
+      if (!targetNote) continue
+      const refactored = refactorWikilinks(targetNote.body, fromResolved.fullPath, toResolved.fullPath)
+      if (refactored !== targetNote.body) {
+        await updateFn(vaultId, ref.sourceNotePath, { body: refactored }, SYSTEM_ACTOR)
+      }
+    }
+  }
+
   return updated
 }
 
