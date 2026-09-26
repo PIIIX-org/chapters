@@ -194,25 +194,79 @@ export function setRepositoryGraphPreference(id: string, include: boolean): Prom
   })
 }
 
-/**
- * A GitHub deep link for one file, or null when there is nothing to link to.
- * Null for `local_path` and `agent_push` (no URL exists) and for non-GitHub
- * hosts (their blob paths differ) — callers render the button only when this
- * returns a string, per the spec's "git-sourced only" rule.
- *
- * ponytail: GitHub only. GitLab/Bitbucket are a `-/blob` variant each; add
- * them when someone actually connects one.
- */
-export function gitHubFileUrl(repo: Pick<Repository, 'ingestionMethod' | 'gitUrl' | 'defaultBranch'>, path: string): string | null {
-  if (repo.ingestionMethod !== 'git' || !repo.gitUrl) return null
-  // Both remote forms: https://github.com/o/r(.git) and git@github.com:o/r.git
-  const match = /^(?:https?:\/\/(?:[^@/]*@)?github\.com\/|git@github\.com:)(.+?)(?:\.git)?\/?$/.exec(repo.gitUrl)
-  if (!match) return null
-  // `HEAD` resolves to the default branch on GitHub, so a repository that has
-  // not synced yet (defaultBranch still null) still gets a working link.
-  const ref = repo.defaultBranch ?? 'HEAD'
-  return `https://github.com/${match[1]}/blob/${ref}/${path.split('/').map(encodeURIComponent).join('/')}`
+export interface RemoteFileInfo {
+  url: string
+  label: string
+  provider: 'GitHub' | 'GitLab' | 'Bitbucket' | 'Codeberg'
 }
+
+/**
+ * A remote git deep link for one file, or null when there is nothing to link to.
+ * Null for `local_path` and `agent_push` (no remote URL exists) and for unrecognized
+ * hosts — callers render the button only when this returns a non-null info,
+ * per the spec's "git-sourced only" rule.
+ *
+ * Supports GitHub, GitLab, Bitbucket, and Codeberg/Gitea.
+ */
+export function remoteFileInfo(
+  repo: Pick<Repository, 'ingestionMethod' | 'gitUrl' | 'defaultBranch'>,
+  path: string,
+): RemoteFileInfo | null {
+  if (repo.ingestionMethod !== 'git' || !repo.gitUrl) return null
+  const ref = repo.defaultBranch ?? 'HEAD'
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/')
+
+  // GitHub: https://github.com/o/r(.git) or git@github.com:o/r.git
+  const gh = /^(?:https?:\/\/(?:[^@/]*@)?github\.com\/|git@github\.com:)(.+?)(?:\.git)?\/?$/.exec(repo.gitUrl)
+  if (gh) {
+    return {
+      url: `https://github.com/${gh[1]}/blob/${ref}/${encodedPath}`,
+      label: 'Open on GitHub',
+      provider: 'GitHub',
+    }
+  }
+
+  // GitLab: https://gitlab.com/o/r(.git) or git@gitlab.com:o/r.git
+  const gl = /^(?:https?:\/\/(?:[^@/]*@)?gitlab\.com\/|git@gitlab\.com:)(.+?)(?:\.git)?\/?$/.exec(repo.gitUrl)
+  if (gl) {
+    return {
+      url: `https://gitlab.com/${gl[1]}/-/blob/${ref}/${encodedPath}`,
+      label: 'Open on GitLab',
+      provider: 'GitLab',
+    }
+  }
+
+  // Bitbucket: https://bitbucket.org/o/r(.git) or git@bitbucket.org:o/r.git
+  const bb = /^(?:https?:\/\/(?:[^@/]*@)?bitbucket\.org\/|git@bitbucket\.org:)(.+?)(?:\.git)?\/?$/.exec(repo.gitUrl)
+  if (bb) {
+    return {
+      url: `https://bitbucket.org/${bb[1]}/src/${ref}/${encodedPath}`,
+      label: 'Open on Bitbucket',
+      provider: 'Bitbucket',
+    }
+  }
+
+  // Codeberg: https://codeberg.org/o/r(.git) or git@codeberg.org:o/r.git
+  const cb = /^(?:https?:\/\/(?:[^@/]*@)?codeberg\.org\/|git@codeberg\.org:)(.+?)(?:\.git)?\/?$/.exec(repo.gitUrl)
+  if (cb) {
+    return {
+      url: `https://codeberg.org/${cb[1]}/src/branch/${ref}/${encodedPath}`,
+      label: 'Open on Codeberg',
+      provider: 'Codeberg',
+    }
+  }
+
+  return null
+}
+
+export function remoteFileUrl(
+  repo: Pick<Repository, 'ingestionMethod' | 'gitUrl' | 'defaultBranch'>,
+  path: string,
+): string | null {
+  return remoteFileInfo(repo, path)?.url ?? null
+}
+
+export const gitHubFileUrl = remoteFileUrl
 
 export type SyncHealth = 'syncing' | 'error' | 'never-synced' | 'synced-empty' | 'synced'
 

@@ -1,7 +1,7 @@
 import { useImperativeHandle, type Ref } from 'react'
 import { ExternalLink } from 'lucide-react'
 import { EditorView } from '@codemirror/view'
-import { gitHubFileUrl, type Repository, type RepositoryFile } from '../../api/repositories.js'
+import { remoteFileInfo, type Repository, type RepositoryFile } from '../../api/repositories.js'
 import { useRepositoryFile } from '../../hooks/useRepositories.js'
 import { useCodeViewer } from '../../hooks/useCodeViewer.js'
 import { Button } from '../ui/button.js'
@@ -56,7 +56,7 @@ export function CodeViewer({ repository, path, meta, ref }: CodeViewerProps) {
   const file = useRepositoryFile(repository.id, knownOversize ? null : path)
   // Git-sourced only: a deep link serves neither `local_path` nor
   // `agent_push`, so the link is absent rather than present-and-disabled.
-  const gitHubUrl = gitHubFileUrl(repository, path)
+  const remote = remoteFileInfo(repository, path)
 
   // isError first, always: a failed read must never reach `.data` and render
   // as an empty file.
@@ -95,7 +95,7 @@ export function CodeViewer({ repository, path, meta, ref }: CodeViewerProps) {
         status="empty"
         title="Not shown inline"
         message={`This file is ${formatBytes(oversizeBytes)} — too large to show here. ${
-          gitHubUrl ? 'Open it on GitHub instead.' : 'Open it in your own editor instead.'
+          remote ? `Open it on ${remote.provider} instead.` : 'Open it in your own editor instead.'
         }`}
       />
     )
@@ -135,7 +135,7 @@ export function CodeViewer({ repository, path, meta, ref }: CodeViewerProps) {
           >
             Read-only
           </Pill>
-          {gitHubUrl && (
+          {remote && (
             <Button
               asChild
               variant="ghost"
@@ -143,12 +143,12 @@ export function CodeViewer({ repository, path, meta, ref }: CodeViewerProps) {
               className="h-6 rounded-[var(--radius-sm,2px)] font-mono text-xs"
             >
               <a
-                href={gitHubUrl}
+                href={remote.url}
                 target="_blank"
                 rel="noreferrer"
-                aria-label={`Open ${path} on GitHub`}
+                aria-label={`Open ${path} on ${remote.provider}`}
               >
-                Open on GitHub
+                {remote.label}
                 <ExternalLink aria-hidden="true" />
               </a>
             </Button>
