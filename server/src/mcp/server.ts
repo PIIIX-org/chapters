@@ -821,7 +821,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
       async ({ vaultId, path, revisionId }: { vaultId?: string; path: string; revisionId: string }) => {
         const target = vaultFor(vaultId)
         await requireAccess(target, 'edit')
-        const reverted = await revertNote(target, path, revisionId, actor)
+        const reverted = await revertNote(target, path, revisionId, actor, writeThroughCollab)
         if (!reverted) throw new McpToolError('note or revision not found')
         return reverted
       },
