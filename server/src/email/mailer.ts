@@ -25,5 +25,9 @@ export async function sendMail(mail: Mail): Promise<void> {
     sentMails.push(mail)
     return
   }
-  await transport.sendMail({ from: config.smtp?.from, ...mail })
+  try {
+    await transport.sendMail({ from: config.smtp?.from, ...mail })
+  } catch (err) {
+    console.error('[mailer] failed to send email:', err)
+  }
 }

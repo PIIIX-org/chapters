@@ -5,6 +5,7 @@ const env = process.env
 export const config = {
   nodeEnv: env.NODE_ENV ?? 'development',
   isProd: env.NODE_ENV === 'production',
+  isTest: env.NODE_ENV === 'test',
   port: Number(env.PORT ?? 3000),
   /**
    * Built client to serve from this process (`/collab` and `/api/*` excluded).
