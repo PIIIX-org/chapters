@@ -113,3 +113,106 @@ export function fetchLocalGraph(
   const qs = params.toString() ? `?${params.toString()}` : ''
   return apiFetch(`/vaults/${vaultId}/local-graph/${path}${qs}`)
 }
+
+export interface PathFindingResult {
+  found: boolean
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  distance: number
+}
+
+/**
+ * Finds the shortest path connecting two nodes in a graph via BFS.
+ * Instant client-side computation over already-loaded graph nodes and edges.
+ */
+export function findShortestPath(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  sourceId: string,
+  targetId: string,
+): PathFindingResult {
+  if (sourceId === targetId) {
+    const node = nodes.find((n) => n.id === sourceId)
+    return node
+      ? { found: true, nodes: [node], edges: [], distance: 0 }
+      : { found: false, nodes: [], edges: [], distance: -1 }
+  }
+
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]))
+  if (!nodeMap.has(sourceId) || !nodeMap.has(targetId)) {
+    return { found: false, nodes: [], edges: [], distance: -1 }
+  }
+
+  const adj = new Map<string, Array<{ neighborId: string; edge: GraphEdge }>>()
+  for (const edge of edges) {
+    let sList = adj.get(edge.source)
+    if (!sList) {
+      sList = []
+      adj.set(edge.source, sList)
+    }
+    sList.push({ neighborId: edge.target, edge })
+
+    let tList = adj.get(edge.target)
+    if (!tList) {
+      tList = []
+      adj.set(edge.target, tList)
+    }
+    tList.push({ neighborId: edge.source, edge })
+  }
+
+  const queue: string[] = [sourceId]
+  const visited = new Set<string>([sourceId])
+  const prev = new Map<string, { prevId: string; edge: GraphEdge }>()
+
+  let found = false
+  while (queue.length > 0) {
+    const curr = queue.shift()!
+    if (curr === targetId) {
+      found = true
+      break
+    }
+    const neighbors = adj.get(curr) ?? []
+    for (const { neighborId, edge } of neighbors) {
+      if (!visited.has(neighborId)) {
+        visited.add(neighborId)
+        prev.set(neighborId, { prevId: curr, edge })
+        queue.push(neighborId)
+      }
+    }
+  }
+
+  if (!found) {
+    return { found: false, nodes: [], edges: [], distance: -1 }
+  }
+
+  const pathNodes: GraphNode[] = []
+  const pathEdges: GraphEdge[] = []
+  let curr = targetId
+  while (curr !== sourceId) {
+    const node = nodeMap.get(curr)
+    if (node) pathNodes.unshift(node)
+    const step = prev.get(curr)!
+    pathEdges.unshift(step.edge)
+    curr = step.prevId
+  }
+  const sourceNode = nodeMap.get(sourceId)
+  if (sourceNode) pathNodes.unshift(sourceNode)
+
+  return {
+    found: true,
+    nodes: pathNodes,
+    edges: pathEdges,
+    distance: pathEdges.length,
+  }
+}
+
+export function fetchGraphPath(
+  vaultId: string | null,
+  source: string,
+  target: string,
+): Promise<PathFindingResult> {
+  const basePath = vaultId ? `/vaults/${vaultId}/graph/path` : '/graph/merged/path'
+  const params = new URLSearchParams({ source, target })
+  return apiFetch(`${basePath}?${params.toString()}`)
+}
+
