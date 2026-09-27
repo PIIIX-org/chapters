@@ -11,7 +11,7 @@ import {
   vaults,
   vaultShares,
 } from '../db/schema.js'
-import { listNotes, readNote } from '../notes/store.js'
+import { listAssets, listNotes, readAsset, readNote } from '../notes/store.js'
 import { serializeNote, type Frontmatter } from '../notes/okf.js'
 
 export interface ShareManifestEntry {
@@ -69,6 +69,13 @@ export async function addVaultToZip(zip: AdmZip, vaultId: string, prefix = ''): 
         'utf8',
       ),
     )
+  }
+  const assets = await listAssets(vaultId)
+  for (const asset of assets) {
+    const data = await readAsset(vaultId, asset.fileName)
+    if (data) {
+      zip.addFile(`${prefix}assets/${asset.fileName}`, data.buffer)
+    }
   }
   zip.addFile(`${prefix}manifest.json`, Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'))
 }

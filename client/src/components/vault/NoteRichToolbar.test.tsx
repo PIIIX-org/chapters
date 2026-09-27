@@ -4,6 +4,7 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { NoteRichToolbar } from './NoteRichToolbar.js'
 import { applyFormat } from './note-toolbar-utils.js'
+import { expectNoA11yViolations } from '../../test/axe.js'
 
 describe('NoteRichToolbar', () => {
   it('renders all formatting buttons and width adjustment controls', () => {
@@ -35,6 +36,7 @@ describe('NoteRichToolbar', () => {
     expect(screen.getByRole('button', { name: 'Task Checklist' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Table' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Quote' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Insert Image' })).toBeInTheDocument()
 
     // Width adjustment buttons
     expect(screen.getByRole('button', { name: /compact note width/i })).toBeInTheDocument()
@@ -114,5 +116,35 @@ describe('NoteRichToolbar', () => {
     expect(view.state.doc.toString()).toBe('# First title')
     view.destroy()
     parent.remove()
+  })
+
+  it('applies image formatting to editor selection', () => {
+    const parent = document.createElement('div')
+    document.body.appendChild(parent)
+    const state = EditorState.create({
+      doc: 'Diagram',
+      selection: { anchor: 0, head: 7 },
+    })
+    const view = new EditorView({ state, parent })
+
+    applyFormat(view, 'image')
+
+    expect(view.state.doc.toString()).toBe('![Diagram](https://)')
+    view.destroy()
+    parent.remove()
+  })
+
+  it('passes accessibility audit', async () => {
+    const { container } = render(
+      <NoteRichToolbar
+        view={null}
+        readOnly={false}
+        width="standard"
+        onWidthChange={vi.fn()}
+        direction="ltr"
+        onDirectionChange={vi.fn()}
+      />,
+    )
+    await expectNoA11yViolations(container)
   })
 })

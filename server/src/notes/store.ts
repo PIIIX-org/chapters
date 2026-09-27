@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { basename, dirname, extname, join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
@@ -1019,4 +1020,103 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
   await deleteSemanticEdgesFor('note', [row.id])
   await rm(trashFile(vaultId, row.id), { force: true })
   return true
+}
+
+export const ASSET_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+}
+
+export function sanitizeAssetFilename(originalFilename: string): string {
+  const ext = extname(originalFilename).toLowerCase().slice(0, 10)
+  const base =
+    basename(originalFilename, ext)
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]/g, '-')
+      .slice(0, 40)
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '') || 'attachment'
+  return `${base}-${Date.now()}-${randomUUID().slice(0, 6)}${ext}`
+}
+
+export function assetFile(vaultId: string, filename: string): string {
+  return join(vaultDir(vaultId), 'assets', filename)
+}
+
+export async function saveAsset(
+  vaultId: string,
+  originalFilename: string,
+  buffer: Buffer,
+): Promise<{ fileName: string; size: number; mimeType: string }> {
+  const fileName = sanitizeAssetFilename(originalFilename)
+  const targetDir = join(vaultDir(vaultId), 'assets')
+  await mkdir(targetDir, { recursive: true })
+  const targetPath = join(targetDir, fileName)
+  await writeFile(targetPath, buffer)
+  const ext = extname(fileName).toLowerCase()
+  const mimeType = ASSET_MIME_TYPES[ext] ?? 'application/octet-stream'
+  return { fileName, size: buffer.length, mimeType }
+}
+
+export async function readAsset(
+  vaultId: string,
+  filename: string,
+): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  if (
+    !filename ||
+    filename.includes('..') ||
+    filename.includes('/') ||
+    filename.includes('\\') ||
+    filename.includes('\0') ||
+    !/^[a-zA-Z0-9._-]+$/.test(filename)
+  ) {
+    return null
+  }
+  const filePath = assetFile(vaultId, filename)
+  try {
+    const buffer = await readFile(filePath)
+    const ext = extname(filename).toLowerCase()
+    const mimeType = ASSET_MIME_TYPES[ext] ?? 'application/octet-stream'
+    return { buffer, mimeType }
+  } catch {
+    return null
+  }
+}
+
+export async function listAssets(
+  vaultId: string,
+): Promise<{ fileName: string; size: number; modifiedAt: string }[]> {
+  const targetDir = join(vaultDir(vaultId), 'assets')
+  try {
+    const entries = await readdir(targetDir, { withFileTypes: true })
+    const results: { fileName: string; size: number; modifiedAt: string }[] = []
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.name.startsWith('.')) continue
+      const stats = await stat(join(targetDir, entry.name)).catch(() => null)
+      if (stats) {
+        results.push({
+          fileName: entry.name,
+          size: stats.size,
+          modifiedAt: stats.mtime.toISOString(),
+        })
+      }
+    }
+    return results.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
+  } catch {
+    return []
+  }
 }
