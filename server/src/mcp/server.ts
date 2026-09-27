@@ -2,9 +2,10 @@ import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import {
+  graphPerspectives,
   notifications,
   repositories,
   repositoryGraphPreferences,
@@ -56,6 +57,7 @@ import { notify } from '../notifications/notify.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 import { writeThroughCollab } from './crdt-write.js'
+import { registerMcpPrompts } from './prompts.js'
 
 class McpToolError extends Error {}
 
@@ -1632,6 +1634,136 @@ export function buildMcpServer(auth: McpAuth): McpServer {
   )
 
   server.registerTool(
+    'list_graph_perspectives',
+    {
+      description:
+        'List saved graph perspectives and filter presets for a vault or merged graph.',
+      inputSchema: {
+        vaultId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe('Optional vault ID constraint. If omitted, lists merged/global perspectives.'),
+      },
+    },
+    wrap(async (args: { vaultId?: string }) => {
+      if (args.vaultId) {
+        await requireAccess(args.vaultId, 'read')
+        return db
+          .select()
+          .from(graphPerspectives)
+          .where(
+            and(
+              eq(graphPerspectives.vaultId, args.vaultId),
+              or(
+                eq(graphPerspectives.userId, auth.user.id),
+                eq(graphPerspectives.isShared, true),
+              ),
+            ),
+          )
+          .orderBy(asc(graphPerspectives.createdAt))
+      }
+
+      return db
+        .select()
+        .from(graphPerspectives)
+        .where(
+          and(
+            isNull(graphPerspectives.vaultId),
+            or(
+              eq(graphPerspectives.userId, auth.user.id),
+              eq(graphPerspectives.isShared, true),
+            ),
+          ),
+        )
+        .orderBy(asc(graphPerspectives.createdAt))
+    }),
+  )
+
+  server.registerTool(
+    'save_graph_perspective',
+    {
+      description:
+        'Save a scoped graph perspective with filter presets (types, tags, date range, color mode) for a vault or merged graph.',
+      inputSchema: {
+        name: z.string().min(1).describe('Perspective name'),
+        vaultId: z.string().uuid().optional().describe('Optional vault ID constraint'),
+        filters: z
+          .object({
+            types: z.array(z.string()).optional(),
+            tags: z.array(z.string()).optional(),
+            since: z.string().optional(),
+            until: z.string().optional(),
+            colorMode: z.string().optional(),
+          })
+          .optional()
+          .describe('Filter preset values'),
+        isShared: z
+          .boolean()
+          .optional()
+          .describe('Whether this perspective is shared with other vault members (default true)'),
+      },
+    },
+    wrap(
+      async (args: {
+        name: string
+        vaultId?: string
+        filters?: {
+          types?: string[]
+          tags?: string[]
+          since?: string
+          until?: string
+          colorMode?: string
+        }
+        isShared?: boolean
+      }) => {
+        if (args.vaultId) {
+          await requireAccess(args.vaultId, 'read')
+        }
+        const [created] = await db
+          .insert(graphPerspectives)
+          .values({
+            name: args.name.trim(),
+            vaultId: args.vaultId || null,
+            userId: auth.user.id,
+            filters: args.filters ?? {},
+            isShared: args.isShared ?? true,
+          })
+          .returning()
+        return created
+      },
+    ),
+  )
+
+  server.registerTool(
+    'delete_graph_perspective',
+    {
+      description: 'Delete a saved graph perspective by its ID.',
+      inputSchema: {
+        id: z.string().uuid().describe('Perspective ID to delete'),
+      },
+    },
+    wrap(async (args: { id: string }) => {
+      const [perspective] = await db
+        .select()
+        .from(graphPerspectives)
+        .where(eq(graphPerspectives.id, args.id))
+      if (!perspective) throw new McpToolError('not found')
+
+      if (perspective.userId !== auth.user.id) {
+        if (perspective.vaultId) {
+          await requireVaultOwner(perspective.vaultId)
+        } else {
+          throw new McpToolError('forbidden')
+        }
+      }
+
+      await db.delete(graphPerspectives).where(eq(graphPerspectives.id, args.id))
+      return { ok: true }
+    }),
+  )
+
+  server.registerTool(
     'audit_okf_conformance',
     {
       description:
@@ -1646,6 +1778,13 @@ export function buildMcpServer(auth: McpAuth): McpServer {
       return auditVaultConformance(target, auth.user.id)
     }),
   )
+
+  registerMcpPrompts(server, auth, {
+    vaultFor,
+    repositoryFor,
+    requireAccess,
+    requireRepositoryAccess,
+  })
 
   return server
 }

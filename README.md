@@ -64,7 +64,11 @@ for best AI navigability, see
   view for read-only users
 - **MCP** — permission-scoped AI access with full tool parity, writes
   flowing through the live collaboration engine, attributed audit trail
-  with revert and hard purge, per-connection rate limits
+  with revert and hard purge, per-connection rate limits, and a comprehensive
+  suite of 20 first-class engineering prompts (`prompts/list` and `prompts/get`)
+  covering continuous session capture, ADR drafting, architecture drift auditing,
+  and shortest-path navigation. See
+  [`2026-09-27-mcp-prompts-suite-design.md`](docs/superpowers/specs/2026-09-27-mcp-prompts-suite-design.md).
 - **Export & portability** — zip exports with manifest, expiring share
   links, validated import, full-instance admin backup and a matching
   `pnpm restore-backup` CLI (deliberately not an HTTP endpoint) for

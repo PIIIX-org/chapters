@@ -216,3 +216,39 @@ export function fetchGraphPath(
   return apiFetch(`${basePath}?${params.toString()}`)
 }
 
+export interface GraphPerspective {
+  id: string
+  vaultId: string | null
+  userId: string
+  name: string
+  filters: GraphFilters & { colorMode?: string }
+  isShared: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export function fetchGraphPerspectives(vaultId?: string | null): Promise<GraphPerspective[]> {
+  const params = new URLSearchParams()
+  if (vaultId) params.set('vaultId', vaultId)
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  return apiFetch(`/graph/perspectives${qs}`)
+}
+
+export function saveGraphPerspective(data: {
+  name: string
+  vaultId?: string | null
+  filters?: GraphFilters & { colorMode?: string }
+  isShared?: boolean
+}): Promise<GraphPerspective> {
+  return apiFetch('/graph/perspectives', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteGraphPerspective(id: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/graph/perspectives/${id}`, {
+    method: 'DELETE',
+  })
+}
+

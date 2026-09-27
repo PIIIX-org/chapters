@@ -95,6 +95,10 @@ export const routes: RouteObject[] = [
             element: lazyPage(<RepositoryPage />),
           },
           {
+            path: '/repos/:id/tree/*',
+            element: lazyPage(<RepositoryPage />),
+          },
+          {
             path: '/vaults/:vaultId',
             children: [
               { index: true, element: lazyPage(<VaultNotesPage />) },

@@ -42,4 +42,17 @@ describe('app', () => {
     expect(json.message).toBeDefined()
     await app.close()
   })
+
+  it('converts Postgres 22P02 invalid input syntax errors into 404 not found', async () => {
+    const app = await buildApp()
+    app.get('/test-22p02', async () => {
+      const err = new Error('invalid input syntax for type uuid')
+      ;(err as unknown as { code: string }).code = '22P02'
+      throw err
+    })
+    const res = await app.inject({ method: 'GET', url: '/test-22p02' })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: 'not found' })
+    await app.close()
+  })
 })

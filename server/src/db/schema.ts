@@ -183,6 +183,39 @@ export const userVaultPreferences = pgTable('user_vault_preferences', {
     .defaultNow(),
 })
 
+export const graphPerspectives = pgTable(
+  'graph_perspectives',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    vaultId: uuid('vault_id').references(() => vaults.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    filters: jsonb('filters')
+      .$type<{
+        types?: string[]
+        tags?: string[]
+        since?: string
+        until?: string
+        colorMode?: string
+      }>()
+      .notNull()
+      .default({}),
+    isShared: boolean('is_shared').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('graph_perspectives_vault_idx').on(t.vaultId),
+    index('graph_perspectives_user_idx').on(t.userId),
+  ],
+)
+
 export const mcpConnections = pgTable(
   'mcp_connections',
   {

@@ -245,6 +245,11 @@ describe('MCP integration', () => {
     expect(names).toContain('list_notifications')
     expect(names).toContain('mark_notification_read')
 
+    // Graph Perspective tools
+    expect(names).toContain('list_graph_perspectives')
+    expect(names).toContain('save_graph_perspective')
+    expect(names).toContain('delete_graph_perspective')
+
     // Security invariant: MCP cannot create new MCP connections
     expect(names).not.toContain('create_mcp_connection')
   })
@@ -355,5 +360,34 @@ describe('MCP integration', () => {
       arguments: { teamId: team.id },
     })
     expect(deleteTeamRes.isError).toBeFalsy()
+  })
+
+  it('saves, lists, and deletes graph perspectives via MCP', async () => {
+    const client = await mcpClient(accountToken)
+    const saved = await client.callTool({
+      name: 'save_graph_perspective',
+      arguments: {
+        name: 'MCP Pipeline Perspective',
+        vaultId,
+        filters: { tags: ['data-pipeline'] },
+      },
+    })
+    expect(saved.isError).toBeFalsy()
+    const savedData = JSON.parse(textOf(saved)) as { id: string; name: string }
+    expect(savedData.name).toBe('MCP Pipeline Perspective')
+
+    const listRes = await client.callTool({
+      name: 'list_graph_perspectives',
+      arguments: { vaultId },
+    })
+    expect(listRes.isError).toBeFalsy()
+    const list = JSON.parse(textOf(listRes)) as Array<{ id: string; name: string }>
+    expect(list.some((p) => p.id === savedData.id)).toBe(true)
+
+    const delRes = await client.callTool({
+      name: 'delete_graph_perspective',
+      arguments: { id: savedData.id },
+    })
+    expect(delRes.isError).toBeFalsy()
   })
 })

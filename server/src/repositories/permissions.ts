@@ -9,10 +9,13 @@ export type RepoAccess = 'owner' | 'viewer'
  * direct share, or team share — no edit tier, nothing here is ever
  * written to. Live-resolved on every call, active users only.
  */
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function resolveRepositoryAccess(
   userId: string,
   repositoryId: string,
 ): Promise<RepoAccess | null> {
+  if (!UUID_REGEX.test(userId) || !UUID_REGEX.test(repositoryId)) return null
   const user = (
     await db.select({ status: users.status }).from(users).where(eq(users.id, userId))
   )[0]
