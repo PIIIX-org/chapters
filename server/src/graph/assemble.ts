@@ -322,10 +322,32 @@ export async function buildGraph(
     for (const link of links) {
       const source = byId.get(link.sourceNoteId)
       if (!source) continue
-      if (link.targetPath.startsWith('repo:')) {
-        const [repoName, ...pathParts] = link.targetPath.slice('repo:'.length).split('/')
-        const repositoryId = repoName ? repoNameToId.get(repoName) : undefined
-        const targetId = repositoryId ? codeByRepoPath.get(`${repositoryId}:${pathParts.join('/')}`) : undefined
+      if (link.targetPath.startsWith('repo:') || link.targetPath.startsWith('code:')) {
+        const withoutPrefix = link.targetPath.startsWith('repo:')
+          ? link.targetPath.slice('repo:'.length)
+          : link.targetPath.slice('code:'.length)
+        const cleanPath = withoutPrefix.split('#')[0] ?? ''
+        if (!cleanPath) continue
+        let repoKey = ''
+        let filePath = ''
+        const colonIdx = cleanPath.indexOf(':')
+        if (colonIdx !== -1) {
+          repoKey = cleanPath.slice(0, colonIdx)
+          filePath = cleanPath.slice(colonIdx + 1)
+        } else {
+          const slashIdx = cleanPath.indexOf('/')
+          if (slashIdx !== -1) {
+            repoKey = cleanPath.slice(0, slashIdx)
+            filePath = cleanPath.slice(slashIdx + 1)
+          } else {
+            repoKey = cleanPath
+            filePath = ''
+          }
+        }
+        const repositoryId =
+          (repoKey ? repoNameToId.get(repoKey) : undefined) ??
+          (repositoryIds.includes(repoKey) ? repoKey : undefined)
+        const targetId = repositoryId ? codeByRepoPath.get(`${repositoryId}:${filePath}`) : undefined
         if (targetId) addEdge(link.sourceNoteId, targetId, 'extracted')
         continue
       }

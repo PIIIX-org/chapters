@@ -3,12 +3,18 @@ import type { DecorationSet, ViewUpdate } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
 
 const matcher = new MatchDecorator({
-  regexp: /\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g,
-  decoration: (match) =>
-    Decoration.mark({
+  regexp: /\[\[([^\]|#]+)(?:#([^\]|]*))?(?:\|[^\]]*)?\]\]/g,
+  decoration: (match) => {
+    const target = match[1]!.trim()
+    const anchor = match[2]?.trim()
+    return Decoration.mark({
       class: 'cm-wikilink',
-      attributes: { 'data-wikilink-target': match[1]!.trim() },
-    }),
+      attributes: {
+        'data-wikilink-target': target,
+        ...(anchor ? { 'data-wikilink-anchor': anchor } : {}),
+      },
+    })
+  },
 })
 
 const wikilinkView = ViewPlugin.fromClass(
@@ -32,6 +38,7 @@ function clickHandler(onClick: (target: string) => void): Extension {
       if (!el) return false
       const target = el.getAttribute('data-wikilink-target')
       if (!target) return false
+      const anchor = el.getAttribute('data-wikilink-anchor')
       // On the line the cursor already occupies → let the click place the
       // cursor (edit the source). Otherwise the link is "rendered" → navigate.
       const line = view.state.doc.lineAt(view.posAtDOM(el))
@@ -42,7 +49,7 @@ function clickHandler(onClick: (target: string) => void): Extension {
       })
       if (editing) return false
       event.preventDefault()
-      onClick(target)
+      onClick(anchor ? `${target}#${anchor}` : target)
       return true
     },
   })
