@@ -2,7 +2,8 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Status**: MCP Prompts Suite (20 prompts); Symbol embeddings (#262); Concept pathfinding; Scheduled backups; Git drift; AST links.
+- **Status**: Saved Graph Perspectives & Presets (§4.2); MCP Prompts Suite (20 prompts); Symbol embeddings (#262); Concept pathfinding; Scheduled backups.
+  - Graph Perspectives (§4.2): Scoped saved graph views & filter presets (Architecture, Security, Recent) with team sharing, REST API, UI & MCP tools.
   - MCP Prompts Suite: 20 engineering prompts (`prompts/list` & `prompts/get`) for continuous session capture, ADRs, drift audits, blast radius.
   - #286–#293: Rename sync, CRDT write-through, admin reactivation, wikilink refactoring, mark-all-read notifications, revision diff, incoming backlinks, responsive mobile shell.
   - Symbol Embeddings (#262): Fine-grained AST symbol vector embeddings (384d), snippets & line ranges in MCP `find_symbols`, `search`, and UI.
@@ -19,7 +20,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   - 1 container + 1 Postgres per customer. Control plane in separate private repo.
   - Collab is a person, no autosave PUT (CRDT is the note). Viewer read-only forever.
   - Exact seq scan for semantic edge recompute (#123). Mutation-verify every test.
-- **Suite**: 1,243 automated tests (867 client, 376 server across 185 test files), 100% passing. Zero open bugs.
+- **Suite**: 1,253 automated tests (871 client, 382 server across 186 test files), 100% passing. Zero open bugs.
 - **Deferred**: cli-visualizer (#9, assigned), partial restore (#261), per-type notification prefs (#263).
 - **Decided against (do NOT re-open)**: Leiden (#265), graph DB (#268), GraphRAG (#267), cross-file calls (#266).
 - **Open issues**: #9 (assigned).

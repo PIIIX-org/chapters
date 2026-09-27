@@ -1,7 +1,13 @@
 import type { FastifyInstance } from 'fastify'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { repositories, repositoryGraphPreferences, vaultGraphPreferences, vaults } from '../db/schema.js'
+import {
+  graphPerspectives,
+  repositories,
+  repositoryGraphPreferences,
+  vaultGraphPreferences,
+  vaults,
+} from '../db/schema.js'
 import { atLeast, listAccessibleVaults, resolveAccess } from '../vaults/permissions.js'
 import { listAccessibleRepositories } from '../repositories/permissions.js'
 import { buildGraph, findShortestPath } from './assemble.js'
@@ -131,6 +137,111 @@ export function graphRoutes(app: FastifyInstance) {
       const tNode = graph.nodes.find((n) => n.id === target || n.path === target)
       if (!sNode || !tNode) return reply.code(404).send({ error: 'Source or target node not found in graph' })
       return findShortestPath(graph, sNode.id, tNode.id)
+    },
+  )
+
+  app.get<{
+    Querystring: { vaultId?: string }
+  }>(
+    '/graph/perspectives',
+    async (req, reply) => {
+      const { vaultId } = req.query
+      if (vaultId) {
+        const access = await resolveAccess(req.user!.id, vaultId)
+        if (!atLeast(access, 'read')) return reply.code(404).send({ error: 'not found' })
+        return db
+          .select()
+          .from(graphPerspectives)
+          .where(
+            and(
+              eq(graphPerspectives.vaultId, vaultId),
+              or(
+                eq(graphPerspectives.userId, req.user!.id),
+                eq(graphPerspectives.isShared, true),
+              ),
+            ),
+          )
+          .orderBy(asc(graphPerspectives.createdAt))
+      }
+
+      return db
+        .select()
+        .from(graphPerspectives)
+        .where(
+          and(
+            isNull(graphPerspectives.vaultId),
+            or(
+              eq(graphPerspectives.userId, req.user!.id),
+              eq(graphPerspectives.isShared, true),
+            ),
+          ),
+        )
+        .orderBy(asc(graphPerspectives.createdAt))
+    },
+  )
+
+  app.post<{
+    Body: {
+      name: string
+      vaultId?: string | null
+      filters?: {
+        types?: string[]
+        tags?: string[]
+        since?: string
+        until?: string
+        colorMode?: string
+      }
+      isShared?: boolean
+    }
+  }>(
+    '/graph/perspectives',
+    async (req, reply) => {
+      const { name, vaultId, filters, isShared } = req.body ?? {}
+      if (!name || !name.trim()) {
+        return reply.code(400).send({ error: 'name is required' })
+      }
+      if (vaultId) {
+        const access = await resolveAccess(req.user!.id, vaultId)
+        if (!atLeast(access, 'read')) return reply.code(404).send({ error: 'not found' })
+      }
+
+      const [created] = await db
+        .insert(graphPerspectives)
+        .values({
+          name: name.trim(),
+          vaultId: vaultId || null,
+          userId: req.user!.id,
+          filters: filters ?? {},
+          isShared: isShared ?? true,
+        })
+        .returning()
+
+      return reply.code(201).send(created)
+    },
+  )
+
+  app.delete<{
+    Params: { id: string }
+  }>(
+    '/graph/perspectives/:id',
+    async (req, reply) => {
+      const [perspective] = await db
+        .select()
+        .from(graphPerspectives)
+        .where(eq(graphPerspectives.id, req.params.id))
+      if (!perspective) return reply.code(404).send({ error: 'not found' })
+
+      if (perspective.userId !== req.user!.id) {
+        if (perspective.vaultId) {
+          const access = await resolveAccess(req.user!.id, perspective.vaultId)
+          if (access !== 'owner') return reply.code(403).send({ error: 'forbidden' })
+        } else {
+          return reply.code(403).send({ error: 'forbidden' })
+        }
+      }
+
+      await db.delete(graphPerspectives).where(eq(graphPerspectives.id, req.params.id))
+      return reply.code(200).send({ ok: true })
     },
   )
 }

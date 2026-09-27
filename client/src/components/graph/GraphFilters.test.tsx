@@ -18,8 +18,30 @@ const NODES: FilterableNode[] = [
 const AGGREGATED_GRAPH = { aggregated: true, nodes: [], edges: [], cappedGroups: [] }
 const MEMBER_GRAPH = { nodes: [], edges: [], cappedGroups: [], memberTotal: 0 }
 
-function stubFetch() {
-  const fetchMock = vi.fn().mockImplementation((url: string) => {
+function stubFetch(
+  perspectives: Array<{ id: string; name: string; vaultId: string | null; filters: Record<string, unknown>; isShared: boolean }> = [],
+) {
+  const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    if (url.includes('/graph/perspectives')) {
+      if (init?.method === 'POST') {
+        const body = JSON.parse(init.body as string)
+        return Promise.resolve(
+          mockJsonResponse(201, {
+            id: 'p-new',
+            name: body.name,
+            vaultId: body.vaultId ?? null,
+            filters: body.filters ?? {},
+            isShared: body.isShared ?? true,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          }),
+        )
+      }
+      if (init?.method === 'DELETE') {
+        return Promise.resolve(mockJsonResponse(200, { ok: true }))
+      }
+      return Promise.resolve(mockJsonResponse(200, perspectives))
+    }
     if (url.includes('community=')) return Promise.resolve(mockJsonResponse(200, MEMBER_GRAPH))
     return Promise.resolve(mockJsonResponse(200, AGGREGATED_GRAPH))
   })
@@ -229,6 +251,109 @@ describe('GraphFilters', () => {
     await user.click(screen.getByLabelText('Since'))
     await user.paste('2026-01-01')
     await screen.findByRole('button', { name: 'Clear filters' })
+
+    await expectNoA11yViolations(container)
+  })
+
+  it('applies built-in presets (Architecture & Specs, Security & Auth) to search params', async () => {
+    stubFetch()
+    const user = userEvent.setup()
+    renderFilters()
+
+    const select = screen.getByRole('combobox', { name: 'Graph perspective' })
+
+    // Select Architecture & Specs
+    await user.selectOptions(select, 'preset:arch')
+    await waitFor(() => {
+      const params = screen.getByTestId('params').textContent
+      expect(params).toContain('types=adr%2Cspec%2Crfc')
+      expect(params).toContain('tags=architecture')
+    })
+
+    // Select Security & Auth
+    await user.selectOptions(select, 'preset:security')
+    await waitFor(() => {
+      const params = screen.getByTestId('params').textContent
+      expect(params).not.toContain('types=')
+      expect(params).toContain('tags=security%2Cauth')
+    })
+
+    // Reset with All Nodes
+    await user.selectOptions(select, 'all')
+    await waitFor(() => {
+      const params = screen.getByTestId('params').textContent
+      expect(params).toBe('vault=v1')
+    })
+  })
+
+  it('saves a new custom perspective and applies it', async () => {
+    const fetchMock = stubFetch()
+    const user = userEvent.setup()
+    renderFilters()
+
+    // Click + Save view
+    await user.click(screen.getByRole('button', { name: '+ Save view' }))
+
+    // Fill perspective name
+    const input = screen.getByPlaceholderText('Perspective name...')
+    await user.type(input, 'Core Backend View')
+
+    // Click Save
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/graph/perspectives',
+        expect.objectContaining({
+          method: 'POST',
+        }),
+      )
+    })
+  })
+
+  it('deletes a custom perspective and resets selection', async () => {
+    const customPerspective = {
+      id: 'custom-1',
+      name: 'Custom Team View',
+      vaultId: 'v1',
+      filters: { types: ['okf/person'] },
+      isShared: true,
+    }
+    const fetchMock = stubFetch([customPerspective])
+    const user = userEvent.setup()
+    renderFilters()
+
+    // Wait for perspective to load in select
+    const select = await screen.findByRole('combobox', { name: 'Graph perspective' })
+    await waitFor(() => expect(screen.getByText('Custom Team View')).toBeInTheDocument())
+
+    // Select custom perspective
+    await user.selectOptions(select, 'custom-1')
+    await waitFor(() => {
+      expect(screen.getByTestId('params').textContent).toContain('types=okf%2Fperson')
+    })
+
+    // Delete button should now be visible
+    const deleteBtn = screen.getByRole('button', { name: 'Delete' })
+    await user.click(deleteBtn)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/graph/perspectives/custom-1',
+        expect.objectContaining({
+          method: 'DELETE',
+        }),
+      )
+    })
+  })
+
+  it('has no accessibility violations with perspective form open', async () => {
+    stubFetch()
+    const user = userEvent.setup()
+    const { container } = renderFilters()
+
+    await user.click(screen.getByRole('button', { name: '+ Save view' }))
+    expect(screen.getByPlaceholderText('Perspective name...')).toBeInTheDocument()
 
     await expectNoA11yViolations(container)
   })

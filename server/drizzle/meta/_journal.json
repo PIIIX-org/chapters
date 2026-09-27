@@ -120,6 +120,13 @@
       "when": 1790496546461,
       "tag": "0016_easy_talkback",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790520253564,
+      "tag": "0017_nervous_jack_flag",
+      "breakpoints": true
     }
   ]
 }
