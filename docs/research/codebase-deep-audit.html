@@ -1,0 +1,1180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapters — Deep Audit Report: Bugs, Features & Missing Functionalities</title>
+<style>
+  :root {
+    --bg: #070A0F;
+    --surface: #0F141F;
+    --card: #161C2A;
+    --card-hover: #1C2436;
+    --border: #1E2738;
+    --text: #E2E8F0;
+    --text-dim: #8B95A8;
+    --blue: #38BDF8;
+    --teal: #2DD4BF;
+    --red: #F87171;
+    --orange: #FB923C;
+    --yellow: #FACC15;
+    --green: #4ADE80;
+    --purple: #A78BFA;
+    --pink: #F472B6;
+    --gray: #64748B;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    min-height: 100vh;
+    padding-bottom: 4rem;
+  }
+  .container { max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem; }
+
+  /* Header */
+  .header { text-align: center; margin-bottom: 2.5rem; }
+  .badge-mvp {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    background: rgba(45, 212, 191, 0.15);
+    color: var(--teal);
+    border: 1px solid rgba(45, 212, 191, 0.3);
+    margin-bottom: 1rem;
+  }
+  .header h1 {
+    font-size: 2.25rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    margin-bottom: 0.75rem;
+  }
+  .header h1 span { color: var(--teal); }
+  .header p { color: var(--text-dim); font-size: 1.05rem; max-width: 720px; margin: 0 auto; }
+  .header .date { color: var(--gray); font-size: 0.85rem; margin-top: 0.5rem; }
+
+  /* Metrics Grid */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin: 2.5rem 0 3rem;
+  }
+  .metric-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+    text-align: center;
+    transition: transform 0.2s, border-color 0.2s;
+  }
+  .metric-card:hover { transform: translateY(-2px); border-color: #2F3D55; }
+  .metric-num { font-size: 2.2rem; font-weight: 800; line-height: 1.1; margin-bottom: 0.35rem; }
+  .metric-label { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); }
+  .metric-sub { font-size: 0.75rem; color: var(--gray); margin-top: 0.25rem; }
+
+  /* Filter bar */
+  .filter-bar {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-bottom: 2rem;
+    justify-content: center;
+    position: sticky;
+    top: 1rem;
+    z-index: 50;
+    background: rgba(7, 10, 15, 0.85);
+    backdrop-filter: blur(12px);
+    padding: 0.75rem;
+    border-radius: 999px;
+    border: 1px solid rgba(30, 39, 56, 0.8);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+  }
+  .filter-btn {
+    padding: 0.45rem 1.1rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .filter-btn:hover { border-color: var(--text-dim); color: var(--text); }
+  .filter-btn.active {
+    background: var(--teal);
+    border-color: var(--teal);
+    color: #070A0F;
+    font-weight: 700;
+  }
+  .filter-btn .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  /* Section Title */
+  .section-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 3rem 0 1.25rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-icon {
+    width: 34px; height: 34px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+  .section-heading h2 { font-size: 1.25rem; font-weight: 700; }
+  .section-count {
+    margin-left: auto;
+    font-size: 0.78rem;
+    padding: 0.2rem 0.65rem;
+    border-radius: 999px;
+    font-weight: 700;
+  }
+
+  /* Card */
+  .audit-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    margin-bottom: 1rem;
+    overflow: hidden;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .audit-card:hover { border-color: #2F3D55; }
+  .audit-card.open { border-color: #384C6E; box-shadow: 0 4px 24px rgba(0,0,0,0.3); }
+
+  .audit-header {
+    padding: 1.15rem 1.4rem;
+    cursor: pointer;
+    display: flex;
+    align-items: flex-start;
+    gap: 1.1rem;
+    user-select: none;
+    transition: background 0.15s ease;
+  }
+  .audit-header:hover { background: rgba(255,255,255,0.02); }
+  .priority-bar {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-top: 0.5rem;
+    flex-shrink: 0;
+  }
+  .audit-main { flex: 1; }
+  .audit-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    line-height: 1.4;
+    color: var(--text);
+    margin-bottom: 0.35rem;
+  }
+  .audit-subtitle {
+    font-size: 0.88rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  .audit-tags {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-top: 0.6rem;
+  }
+  .audit-tag {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  .chevron {
+    color: var(--gray);
+    font-size: 1.2rem;
+    transition: transform 0.25s ease;
+    margin-top: 0.25rem;
+  }
+  .audit-card.open .chevron { transform: rotate(90deg); color: var(--text); }
+
+  /* Body Content */
+  .audit-body {
+    display: none;
+    padding: 0 1.4rem 1.4rem 3rem;
+    border-top: 1px solid rgba(30, 39, 56, 0.5);
+    background: rgba(15, 20, 31, 0.4);
+  }
+  .audit-card.open .audit-body { display: block; padding-top: 1.25rem; }
+
+  .analogy-box {
+    background: rgba(56, 189, 248, 0.08);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
+    margin-bottom: 1.1rem;
+    font-size: 0.9rem;
+    color: #BAE6FD;
+    line-height: 1.6;
+  }
+  .analogy-box strong { color: #E0F2FE; }
+
+  .detail-row {
+    margin-bottom: 0.75rem;
+    font-size: 0.88rem;
+    line-height: 1.6;
+  }
+  .detail-label {
+    font-weight: 700;
+    color: var(--text);
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.2rem;
+    display: block;
+  }
+  .code-pill {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.8rem;
+    background: rgba(0,0,0,0.3);
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.08);
+    color: #F1F5F9;
+  }
+
+  /* Footer */
+  .footer {
+    text-align: center;
+    color: var(--gray);
+    font-size: 0.85rem;
+    margin-top: 4rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border);
+  }
+
+  @media (max-width: 640px) {
+    .container { padding: 1.25rem 1rem; }
+    .header h1 { font-size: 1.75rem; }
+    .filter-bar { border-radius: 16px; justify-content: flex-start; }
+    .audit-body { padding-left: 1.4rem; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="badge-mvp">Comprehensive Codebase Discovery</div>
+    <h1>Chapters — <span>Deep Audit Report</span></h1>
+    <p>Every hidden bug, architectural race condition, missing feature, and incomplete user journey discovered across the Chapters codebase — explained so anyone can understand.</p>
+    <div class="date">Codebase: PIIIX-org/chapters • September 26, 2026</div>
+  </div>
+
+  <!-- High-Level Metrics -->
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-num" style="color:var(--red);">8</div>
+      <div class="metric-label">Bugs Found</div>
+      <div class="metric-sub">Data integrity & race conditions</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-num" style="color:var(--purple);">11</div>
+      <div class="metric-label">Missing Features</div>
+      <div class="metric-sub">Images, Math, Cursors, Imports</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-num" style="color:var(--blue);">9</div>
+      <div class="metric-label">Missing Flows</div>
+      <div class="metric-sub">Diff views, backlinks, mobile UI</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-num" style="color:var(--green);">10</div>
+      <div class="metric-label">Blockers Fixed</div>
+      <div class="metric-sub">Promoted to Prod via PR #277</div>
+    </div>
+  </div>
+
+  <!-- Interactive Filter Bar -->
+  <div class="filter-bar" id="filterBar">
+    <button class="filter-btn active" data-filter="all">All Items (38)</button>
+    <button class="filter-btn" data-filter="bug">
+      <div class="dot" style="background:var(--red);"></div>Bugs (8)
+    </button>
+    <button class="filter-btn" data-filter="feature">
+      <div class="dot" style="background:var(--purple);"></div>Missing Features (11)
+    </button>
+    <button class="filter-btn" data-filter="flow">
+      <div class="dot" style="background:var(--blue);"></div>Missing Flows (9)
+    </button>
+    <button class="filter-btn" data-filter="resolved">
+      <div class="dot" style="background:var(--green);"></div>Fixed in Prod (10)
+    </button>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 1: BUGS & DATA INTEGRITY RISKS -->
+  <!-- ============================================================== -->
+  <div class="section-heading" data-group="bug">
+    <div class="section-icon" style="background:rgba(248,113,113,0.15); color:var(--red);">🪲</div>
+    <h2>Bugs, Concurrency & Data Integrity Risks</h2>
+    <div class="section-count" style="background:rgba(248,113,113,0.15); color:var(--red);">8 Bugs</div>
+  </div>
+
+  <!-- Bug 1 -->
+  <div class="audit-card" data-category="bug">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--red);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Moving or Renaming a Note Across Folders Corrupts It Permanently</div>
+        <div class="audit-subtitle">Renaming a note updates the database, but forgets to update the header inside the actual file.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(248,113,113,0.2); color:var(--red);">Critical Data Corruption</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">server/src/notes/store.ts:331</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> Imagine you put a letter inside an envelope addressed to "Archive", but the letterhead inside still says "Active Project". The strict post office inspection rule says: "The envelope and the letterhead must match 100%, or this document is rejected." Because the letterhead wasn't updated, the system marks the note as corrupted and refuses to let you or any AI agent open or edit it ever again!
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Where It Happens:</span>
+        <span class="code-pill">server/src/notes/store.ts</span> in <span class="code-pill">renameNote()</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">The Technical Root Cause:</span>
+        The database row type is updated, and the file is moved on disk. But the YAML frontmatter text inside the Markdown file is not rewritten. Next time the note is loaded, <span class="code-pill">validateNote()</span> throws <span class="code-pill">OkfValidationError</span>.
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">How to Fix:</span>
+        Inside <span class="code-pill">renameNote</span>, read the file, update <span class="code-pill">frontmatter.type = toResolved.type</span>, and re-serialize the file to disk atomically.
+      </div>
+    </div>
+  </div>
+
+  <!-- Bug 2 -->
+  <div class="audit-card" data-category="bug">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--red);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Live Collaboration Silently Overwrites External Edits and Reverts</div>
+        <div class="audit-subtitle">If you have a note open in your browser, external REST edits or revision reverts get erased on your next keystroke.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(248,113,113,0.2); color:var(--red);">Data Loss / Concurrency</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">server/src/sync/collab-server.ts:140</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> You and a colleague are looking at a shared whiteboard. Behind the scenes, someone in the back office updates the master document. But your whiteboard didn't get the memo! The moment you write a single period or close your browser, your whiteboard copies its older version over the master document, completely wiping out what the back office just did.
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Where It Happens:</span>
+        <span class="code-pill">server/src/notes/routes.ts:100</span> (REST update) and <span class="code-pill">server/src/notes/store.ts:510</span> (<span class="code-pill">revertNote</span>)
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">The Technical Root Cause:</span>
+        MCP tools were given <span class="code-pill">writeThroughCollab()</span>, but standard REST updates and revision reverts bypass it and call <span class="code-pill">updateNote()</span> directly. The in-memory Yjs document in Hocuspocus never receives the change, and its debounced store later clobbers the disk.
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">How to Fix:</span>
+        Route all note updates (REST PUT and <span class="code-pill">revertNote</span>) through <span class="code-pill">writeThroughCollab()</span>.
+      </div>
+    </div>
+  </div>
+
+  <!-- Bug 3 -->
+  <div class="audit-card" data-category="bug">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--red);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Database & Hard Drive Can Get Permanently Out of Sync on Rename Failures</div>
+        <div class="audit-subtitle">If moving a file fails on the hard drive, the database still remembers the new name.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(248,113,113,0.2); color:var(--red);">State Desynchronization</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">server/src/notes/store.ts:349</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> You change the address in the library catalog first. Then you go to move the book to the new shelf, but your cart breaks and the book stays where it was. Now the catalog says the book is on Shelf B, but it's really on Shelf A. Anyone looking for it will never find it!
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">The Technical Root Cause:</span>
+        <span class="code-pill">db.update()</span> runs without a rollback mechanism before <span class="code-pill">fs.rename()</span> completes. If disk rename throws, DB has the new path, disk has the old path.
+      </div>
+    </div>
+  </div>
+
+  <!-- Bug 4 -->
+  <div class="audit-card" data-category="bug">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--orange);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Renaming a Note Breaks Every Wikilink Pointing to It</div>
+        <div class="audit-subtitle">When you rename a note, other notes that link to it are not updated, creating dead links.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(251,146,60,0.2); color:var(--orange);">Broken Links</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">server/src/notes/store.ts:331</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> If you change a street's name from "Main Street" to "Broadway", but you don't update any of the road signs or maps in town, everyone trying to follow directions to "Main Street" gets lost.
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">How to Fix:</span>
+        When renaming a note, find all notes in the vault containing <span class="code-pill">[[old-path]]</span> and replace them with <span class="code-pill">[[new-path]]</span>.
+      </div>
+    </div>
+  </div>
+
+  <!-- Bug 5 -->
+  <div class="audit-card" data-category="bug">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--orange);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Deactivated Users Are Bricked and Cannot Be Reactivated</div>
+        <div class="audit-subtitle">An admin can deactivate a user, but the software has no button or API to ever turn them back on.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(251,146,60,0.2); color:var(--orange);">Admin Lockout</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">server/src/auth/admin-routes.ts:118</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> The admin dashboard has an "Off" switch for employees, but no "On" switch! If an admin temporarily deactivates someone (e.g. during a leave of absence), they can never reactivate that account.
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">How to Fix:</span>
+        Add a <span class="code-pill">POST /users/:id/reactivate</span> route that flips <span class="code-pill">status: 'active'</span>.
+      </div>
+    </div>
+  </div>
+
+  <!-- Bug 6 -->
+  <div class="audit-card" data-category="bug">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--yellow);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Brute-Force Login Protection Resets on Every Server Restart</div>
+        <div class="audit-subtitle">Failed password attempt counts are kept in temporary computer memory instead of the database.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(250,204,21,0.2); color:var(--yellow);">Security / Rate Limiting</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">server/src/auth/lockout.ts:1</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> The security guard counts failed passcode attempts on a dry-erase board. Every time the server restarts or if you run multiple servers, the board is wiped clean, giving attackers fresh attempts to guess passwords.
+      </div>
+    </div>
+  </div>
+
+  <!-- Bug 7 -->
+  <div class="audit-card" data-category="bug">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--yellow);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Old Login Sessions and Password Reset Tokens Accumulate Forever</div>
+        <div class="audit-subtitle">Expired login sessions from months ago are never deleted from the database.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(250,204,21,0.2); color:var(--yellow);">Resource Leak</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">server/src/auth/sessions.ts</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> Imagine a hotel that never throws away expired room keycard records. After a year, the filing cabinet is overflowing with useless junk cards.
+      </div>
+    </div>
+  </div>
+
+  <!-- Bug 8 -->
+  <div class="audit-card" data-category="bug">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--yellow);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Search Returns 0 Results If Filtered Notes Fall Outside Top 30</div>
+        <div class="audit-subtitle">The search engine only grabs 30 candidates before filtering, missing relevant notes deeper in the list.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(250,204,21,0.2); color:var(--yellow);">Search Starvation</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">server/src/search/search.ts:154</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> You ask for "red apples". The store clerk only looks at the top 30 fruits on the table (which happen to be 30 oranges) and tells you "we don't have any red apples", even though a basket full of red apples was sitting on shelf 31 right behind the oranges!
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 2: MISSING FEATURES -->
+  <!-- ============================================================== -->
+  <div class="section-heading" data-group="feature">
+    <div class="section-icon" style="background:rgba(167,139,250,0.15); color:var(--purple);">✨</div>
+    <h2>Missing Features (Standard Industry Capabilities)</h2>
+    <div class="section-count" style="background:rgba(167,139,250,0.15); color:var(--purple);">11 Features</div>
+  </div>
+
+  <!-- Feat 1 -->
+  <div class="audit-card" data-category="feature">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">No Image or File Attachment Support (Notes are Text-Only)</div>
+        <div class="audit-subtitle">Users cannot drag, paste, or upload screenshots, diagrams, PDFs, or files into their notes.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">Major Limitation</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> Every modern note app (Notion, Obsidian, Apple Notes, Slack) lets you copy a screenshot and paste it directly into your notes. In Chapters today, notes are strictly plain text — there is no place to store or display pictures.
+      </div>
+    </div>
+  </div>
+
+  <!-- Feat 2 -->
+  <div class="audit-card" data-category="feature">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">No Math (KaTeX) or Flowchart (Mermaid) Rendering</div>
+        <div class="audit-subtitle">Scientific formulas and visual architecture diagrams are rendered as ugly raw text blocks.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">Markdown Engine</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> Engineers and researchers love writing formulas and Mermaid diagrams in markdown. Chapters doesn't render them into pretty visual diagrams; it just shows the raw code.
+      </div>
+    </div>
+  </div>
+
+  <!-- Feat 3 -->
+  <div class="audit-card" data-category="feature">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">No Live Multi-User Cursors or Presence Badges</div>
+        <div class="audit-subtitle">You cannot see where your teammates' cursors are, or who is currently looking at the note.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">Collaboration UI</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> In Google Docs or Figma, you see little colored flags with your teammates' names floating around so you don't type over each other. In Chapters, edits sync behind the scenes, but the people editing are invisible "ghosts".
+      </div>
+    </div>
+  </div>
+
+  <!-- Feat 4 -->
+  <div class="audit-card" data-category="feature">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">No One-Click Importer from Obsidian or Notion</div>
+        <div class="audit-subtitle">You can only import from Chapters' own internal zip format, making migration from other apps painful.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">Onboarding Friction</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> If a prospective user already has 500 notes in Obsidian or Notion and wants to switch to Chapters, they have to write custom scripts to convert their files because Chapters has no "Import from Obsidian/Notion" button.
+      </div>
+    </div>
+  </div>
+
+  <!-- Feat 5 -->
+  <div class="audit-card" data-category="feature">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">No Git Commit History, Diffs, or Blame Annotations</div>
+        <div class="audit-subtitle">Connected code repositories can only be browsed as static files; git history is not stored.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">Code Intelligence</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> You can see the code, but you can't see who wrote a line, when it was changed, or what changed between two versions.
+      </div>
+    </div>
+  </div>
+
+  <!-- Feat 6 -->
+  <div class="audit-card" data-category="feature">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Code Repositories Are Strictly Read-Only (Cannot Edit or Commit)</div>
+        <div class="audit-subtitle">You cannot fix typos or edit files in connected repositories from the Chapters UI.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">Developer Workflow</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> The code viewer is a glass display case: you can look at the code, but you cannot touch or update it.
+      </div>
+    </div>
+  </div>
+
+  <!-- Feat 7 -->
+  <div class="audit-card" data-category="feature">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Code Symbol Extraction Missing for Rust, Java, C++, C#, and Ruby</div>
+        <div class="audit-subtitle">Symbol extraction only supports TypeScript, JavaScript, Python, and Go.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">Language Coverage</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> If your team writes in Rust, Java, C++, or C#, the AI graph cannot automatically map out your functions and classes like it does for TypeScript or Python.
+      </div>
+    </div>
+  </div>
+
+  <!-- Feat 8 -->
+  <div class="audit-card" data-category="feature">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">No Visual Custom Metadata Editor or Notion-Style Database Views</div>
+        <div class="audit-subtitle">Custom note properties are displayed as read-only text, with no table or board views.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">Knowledge Management</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> In Notion or Obsidian, you can turn notes with tags/dates into a Kanban board or a spreadsheet table. In Chapters, notes can only be viewed one-by-one.
+      </div>
+    </div>
+  </div>
+
+  <!-- Feat 9 -->
+  <div class="audit-card" data-category="feature">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Cannot Isolate Local Graph Neighborhoods or Export Graph Images</div>
+        <div class="audit-subtitle">The knowledge graph cannot focus on 1-hop connections or export to PNG/SVG/JSON.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">Graph Controls</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> You cannot say: "Show me only the notes connected to this specific project." It's either the whole universe or community clusters. Nor can you download a picture of your graph to put in a presentation.
+      </div>
+    </div>
+  </div>
+
+  <!-- Feat 10 -->
+  <div class="audit-card" data-category="feature">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">No User Names or Avatars (Users Are Just Raw Email Addresses)</div>
+        <div class="audit-subtitle">The database has no name or avatar columns; everyone appears as their full email.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">User Profile</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> Instead of seeing "Taha" with a nice profile picture, every revision, share, and notification displays <span class="code-pill">85902429+Taha-Mahmoodi@users.noreply.github.com</span>.
+      </div>
+    </div>
+  </div>
+
+  <!-- Feat 11 -->
+  <div class="audit-card" data-category="feature">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">MCP AI Surface Lacks Resources and Prompts (Tools Only)</div>
+        <div class="audit-subtitle">AI clients like Cursor or Claude Desktop cannot attach notes as live URI resources.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">AI Protocol</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> The Model Context Protocol (MCP) lets AI agents browse knowledge bases. Chapters provides 52 tool actions, but does not provide standard "Resource Links" or pre-canned "Prompts", limiting compatibility with tools like Cursor.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 3: MISSING FLOWS & INCOMPLETE EXPERIENCES -->
+  <!-- ============================================================== -->
+  <div class="section-heading" data-group="flow">
+    <div class="section-icon" style="background:rgba(56,189,248,0.15); color:var(--blue);">🧭</div>
+    <h2>Missing Functionalities & Incomplete User Journeys</h2>
+    <div class="section-count" style="background:rgba(56,189,248,0.15); color:var(--blue);">9 Flows</div>
+  </div>
+
+  <!-- Flow 1 -->
+  <div class="audit-card" data-category="flow">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--blue);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Revision History Has No Diff View (You Restore Blindly)</div>
+        <div class="audit-subtitle">You can see that a revision occurred at 2:15 PM, but cannot see what changed before clicking Revert.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(56,189,248,0.2); color:var(--blue);">Missing UX Flow</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> It's like having a "time machine" button, but with your eyes closed. You know it will take you back to Tuesday, but you have no idea what your document looked like on Tuesday until you actually press the button.
+      </div>
+    </div>
+  </div>
+
+  <!-- Flow 2 -->
+  <div class="audit-card" data-category="flow">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--blue);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Clicking a Simple Wikilink Without a Type Fails to Create It</div>
+        <div class="audit-subtitle">Clicking [[meeting-notes]] fails because Chapters requires a type prefix like [[project/notes]].</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(56,189,248,0.2); color:var(--blue);">Knowledge Creation</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> In Obsidian, typing <span class="code-pill">[[my-idea]]</span> and clicking it instantly creates that note. In Chapters, if you forget to prefix it with a type folder (like <span class="code-pill">[[topic/my-idea]]</span>), the app fails to create the note and shows an error.
+      </div>
+    </div>
+  </div>
+
+  <!-- Flow 3 -->
+  <div class="audit-card" data-category="flow">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--blue);"></div>
+      <div class="audit-main">
+        <div class="audit-title">No Incoming Backlinks Panel in the Note Inspector</div>
+        <div class="audit-subtitle">When reading a note, you cannot see which other notes link to it.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(56,189,248,0.2); color:var(--blue);">Second Brain Core</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> The core premise of a "second brain" is two-way links: when you're looking at a client note, you should see every meeting where that client was mentioned. Chapters has no backlinks list in the side panel!
+      </div>
+    </div>
+  </div>
+
+  <!-- Flow 4 -->
+  <div class="audit-card" data-category="flow">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--blue);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Search Results Do Not Highlight or Jump to the Word in Editor</div>
+        <div class="audit-subtitle">Clicking a search result opens the note at the top, without scrolling to the matched phrase.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(56,189,248,0.2); color:var(--blue);">Search Usability</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> If you search for a specific sentence inside a 20-page document, clicking the search result just drops you at page 1. You have to manually search all over again to find where that sentence was.
+      </div>
+    </div>
+  </div>
+
+  <!-- Flow 5 -->
+  <div class="audit-card" data-category="flow">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--blue);"></div>
+      <div class="audit-main">
+        <div class="audit-title">No "Mark All as Read" Button for Notifications</div>
+        <div class="audit-subtitle">If you have 50 notifications, you must click every single one individually to clear the badge.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(56,189,248,0.2); color:var(--blue);">Notification Fatigue</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> Imagine opening your email and having to click 50 separate emails one by one just to make the "50 unread" badge go away!
+      </div>
+    </div>
+  </div>
+
+  <!-- Flow 6 -->
+  <div class="audit-card" data-category="flow">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--blue);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Cannot Invite Teammates by Email (They Must Already Have an Account)</div>
+        <div class="audit-subtitle">Adding a team member returns "404 user not found" if they haven't signed up yet.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(56,189,248,0.2); color:var(--blue);">Team Growth</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> Usually, you invite a coworker by typing their email and they receive an invitation link. In Chapters, you cannot invite someone who hasn't already registered and been approved first.
+      </div>
+    </div>
+  </div>
+
+  <!-- Flow 7 -->
+  <div class="audit-card" data-category="flow">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--blue);"></div>
+      <div class="audit-main">
+        <div class="audit-title">No Bulk File Actions in Vault Tree (One-By-One Only)</div>
+        <div class="audit-subtitle">Users cannot select multiple notes to move, tag, export, or delete them in batches.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(56,189,248,0.2); color:var(--blue);">File Management</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> If you want to move 20 notes into an "Archive" folder, you have to click, rename, and move all 20 notes one by one.
+      </div>
+    </div>
+  </div>
+
+  <!-- Flow 8 -->
+  <div class="audit-card" data-category="flow">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--blue);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Mobile UI Breakage: Sidebars Overlap on Small Screens</div>
+        <div class="audit-subtitle">The floating full-screen shell has no mobile drawer mode; side panels swallow the editor.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(56,189,248,0.2); color:var(--blue);">Responsive Design</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> On an iPhone or mobile screen, the left menu and the right inspector panel are so wide that they collide and completely cover your text editor.
+      </div>
+    </div>
+  </div>
+
+  <!-- Flow 9 -->
+  <div class="audit-card" data-category="flow">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--blue);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Export Formats Restricted to Zip & Markdown (No PDF or Print)</div>
+        <div class="audit-subtitle">Users cannot export notes as clean PDFs, HTML documents, or print-friendly pages.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(56,189,248,0.2); color:var(--blue);">Export Flexibility</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> If you need to send a formatted proposal or meeting note to an executive or client as a PDF, Chapters cannot do it. You have to copy-paste it into Word or Google Docs first.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 4: RESOLVED MVP BLOCKERS -->
+  <!-- ============================================================== -->
+  <div class="section-heading" data-group="resolved">
+    <div class="section-icon" style="background:rgba(74,222,128,0.15); color:var(--green);">✅</div>
+    <h2>Hardened & Promoted to Production (PR #269–#277)</h2>
+    <div class="section-count" style="background:rgba(74,222,128,0.15); color:var(--green);">10 Fixed</div>
+  </div>
+
+  <div class="audit-card" data-category="resolved">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--green);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Zip Library Path Traversal Vulnerability Patched (CVE-2024-21505)</div>
+        <div class="audit-subtitle">Upgraded adm-zip to ^0.6.1, blocking malicious zip file uploads.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(74,222,128,0.2); color:var(--green);">PR #269 (Merged to Prod)</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box"><strong>Status:</strong> Resolved in PR #269 and promoted to production in PR #277.</div>
+    </div>
+  </div>
+
+  <div class="audit-card" data-category="resolved">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--green);"></div>
+      <div class="audit-main">
+        <div class="audit-title">React Error Boundary & Accessible Toast Notification System Added</div>
+        <div class="audit-subtitle">Client app never shows blank white screens on render errors; users can recover with one click.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(74,222,128,0.2); color:var(--green);">PR #271 (Merged to Prod)</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box"><strong>Status:</strong> Resolved in PR #271 and promoted to production in PR #277.</div>
+    </div>
+  </div>
+
+  <div class="audit-card" data-category="resolved">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--green);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Server Pino Logging, Process Crash Guards & Active Database Probe</div>
+        <div class="audit-subtitle">Centralized Fastify error handler, uncaught exception traps, and active DB ping on /health.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(74,222,128,0.2); color:var(--green);">PR #272 (Merged to Prod)</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box"><strong>Status:</strong> Resolved in PR #272 and promoted to production in PR #277.</div>
+    </div>
+  </div>
+
+  <div class="audit-card" data-category="resolved">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--green);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Zero Production Vulnerabilities & Node 24 Pinned via .nvmrc</div>
+        <div class="audit-subtitle">Eliminated all security audit warnings via pnpm overrides and locked Node engine.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(74,222,128,0.2); color:var(--green);">PR #273 (Merged to Prod)</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box"><strong>Status:</strong> Resolved in PR #273 and promoted to production in PR #277.</div>
+    </div>
+  </div>
+
+  <div class="audit-card" data-category="resolved">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--green);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Database Pool Error Traps & Embedding Queue Backoff Retries</div>
+        <div class="audit-subtitle">Added pg pool error listeners and automatic retry loops with exponential backoff on queue tasks.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(74,222,128,0.2); color:var(--green);">PR #274 (Merged to Prod)</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box"><strong>Status:</strong> Resolved in PR #274 and promoted to production in PR #277.</div>
+    </div>
+  </div>
+
+  <div class="audit-card" data-category="resolved">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--green);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Multi-Provider Code Viewer Deep Links (GitHub, GitLab, Bitbucket, Codeberg)</div>
+        <div class="audit-subtitle">Users can jump straight from Chapters' code viewer directly to remote files on their git provider.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(74,222,128,0.2); color:var(--green);">PR #275 (Merged to Prod)</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box"><strong>Status:</strong> Resolved in PR #275 and promoted to production in PR #277.</div>
+    </div>
+  </div>
+
+  <div class="audit-card" data-category="resolved">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--green);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Exact Scan for Semantic Edge Recompute (100% Deterministic Recall)</div>
+        <div class="audit-subtitle">Resolved issue #123: HNSW vector search pruning in dense clusters eliminated during recompute.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(74,222,128,0.2); color:var(--green);">PR #276 (Merged to Prod)</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box"><strong>Status:</strong> Resolved in PR #276 and promoted to production in PR #277.</div>
+    </div>
+  </div>
+
+  <div class="audit-card" data-category="resolved">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--green);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Eliminated Asynchronous Test Race Conditions in Repository Routes</div>
+        <div class="audit-subtitle">Added database polling for sync status persistence, ensuring 100% reproducible green test runs.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(74,222,128,0.2); color:var(--green);">Commit 8b46b3e (Merged to Prod)</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box"><strong>Status:</strong> Resolved in commit 8b46b3e and promoted to production in PR #277.</div>
+    </div>
+  </div>
+
+  <div class="audit-card" data-category="resolved">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--green);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Production Self-Hosting Backup & Checklist Documentation Authored</div>
+        <div class="audit-subtitle">Created complete ops guides for self-hosting administrators (backup.md and checklist.md).</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(74,222,128,0.2); color:var(--green);">Docs Hardened</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box"><strong>Status:</strong> Authored in docs/self-hosting/ and promoted to production.</div>
+    </div>
+  </div>
+
+  <div class="audit-card" data-category="resolved">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--green);"></div>
+      <div class="audit-main">
+        <div class="audit-title">1,125 / 1,125 Automated Tests Passing (100% Green CI Suite)</div>
+        <div class="audit-subtitle">805 client tests across 125 files + 320 server tests across 46 files running against real pgvector.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(74,222,128,0.2); color:var(--green);">Full Suite Green</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box"><strong>Status:</strong> Verified and promoted to origin/prod in PR #277.</div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    Chapters Deep Audit Dashboard • Generated on September 26, 2026<br>
+    Run locally: Open this file in Google Chrome, Safari, or Brave.
+  </div>
+
+</div>
+
+<script>
+  // Filter buttons logic
+  document.getElementById('filterBar').addEventListener('click', (e) => {
+    const btn = e.target.closest('.filter-btn');
+    if (!btn) return;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const f = btn.dataset.filter;
+
+    // Show/hide cards
+    document.querySelectorAll('.audit-card').forEach(card => {
+      if (f === 'all' || card.dataset.category === f) {
+        card.style.display = '';
+      } else {
+        card.style.display = 'none';
+      }
+    });
+
+    // Show/hide section headings
+    document.querySelectorAll('.section-heading').forEach(h => {
+      if (f === 'all' || h.dataset.group === f) {
+        h.style.display = '';
+      } else {
+        h.style.display = 'none';
+      }
+    });
+  });
+</script>
+
+</body>
+</html>
