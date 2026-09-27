@@ -4,6 +4,7 @@ import { runMigrations } from './db/migrate.js'
 import { ensureInstanceState } from './auth/bootstrap.js'
 import { scheduleMissingEmbeddings } from './search/embedding-queue.js'
 import { startLocalWatchers, startPollingScheduler, reconcileOrphanedSyncs } from './repositories/scheduler.js'
+import { startBackupScheduler } from './export/backup-service.js'
 import { config } from './config.js'
 import { COLLAB_PATH } from './sync/routes.js'
 
@@ -48,6 +49,7 @@ try {
       .finally(() => process.exit(1))
   })
   startPollingScheduler(config.pollIntervalMs, config.webhookStaleThresholdMs)
+  startBackupScheduler()
   // Watchers live in process memory: without this pass every local_path
   // repository connected before the last restart silently stops ingesting.
   const watching = await startLocalWatchers()

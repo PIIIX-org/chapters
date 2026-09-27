@@ -15,6 +15,7 @@ import {
   buildVaultZip,
   type VaultManifest,
 } from './archive.js'
+import { executeBackup, getBackupStatus } from './backup-service.js'
 
 const LINK_TTL_MS = Number(process.env.EXPORT_LINK_TTL_HOURS ?? 24) * 60 * 60 * 1000
 
@@ -233,5 +234,23 @@ export function exportRoutes(app: FastifyInstance) {
         .header('content-disposition', 'attachment; filename="chapters-backup.zip"')
         .send(zip)
     })
+
+    authed.get('/admin/backup/status', async (req, reply) => {
+      if (req.user!.role !== 'admin') return reply.code(403).send({ error: 'admin required' })
+      return reply.send(getBackupStatus())
+    })
+
+    authed.post('/admin/backup/run', async (req, reply) => {
+      if (req.user!.role !== 'admin') return reply.code(403).send({ error: 'admin required' })
+      try {
+        const result = await executeBackup({ actorUserId: req.user!.id })
+        return reply.send({ success: true, result })
+      } catch (err) {
+        return reply.code(500).send({
+          error: err instanceof Error ? err.message : 'Backup execution failed',
+        })
+      }
+    })
   })
 }
+

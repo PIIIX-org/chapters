@@ -6,6 +6,7 @@ import {
   forceRevokeMcpConnection,
   forceRevokeShare,
   getAdminStats,
+  getBackupStatus,
   listAdminMcpConnections,
   listAdminShares,
   listAdminTeams,
@@ -15,6 +16,7 @@ import {
   listSecurityEvents,
   promoteUser,
   reactivateUser,
+  runBackup,
   transferVaultOwner,
   updateUserRole,
 } from '../api/admin.js'
@@ -26,6 +28,8 @@ import type {
   AdminUser,
   AdminVault,
   AuditEntry,
+  BackupRunResult,
+  BackupStatus,
   SecurityEvent,
   UserRole,
 } from '../api/admin.js'
@@ -195,3 +199,24 @@ export function useForceRevokeMcpConnection() {
     },
   })
 }
+
+export const ADMIN_BACKUP_STATUS_KEY = ['admin', 'backup-status'] as const
+
+export function useBackupStatus() {
+  return useQuery<BackupStatus, ApiError>({
+    queryKey: ADMIN_BACKUP_STATUS_KEY,
+    queryFn: getBackupStatus,
+  })
+}
+
+export function useRunBackup() {
+  const queryClient = useQueryClient()
+  return useMutation<{ success: boolean; result: BackupRunResult }, ApiError, void>({
+    mutationFn: runBackup,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ADMIN_BACKUP_STATUS_KEY })
+      void queryClient.invalidateQueries({ queryKey: ADMIN_STATS_KEY })
+    },
+  })
+}
+
