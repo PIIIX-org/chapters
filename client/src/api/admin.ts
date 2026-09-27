@@ -204,3 +204,34 @@ export function listAuditTrail(limit = 50, offset = 0): Promise<AuditEntry[]> {
  * file straight to disk — no blob held in memory, no fetch wrapper needed.
  */
 export const INSTANCE_BACKUP_URL = '/api/admin/backup'
+
+export interface BackupStatus {
+  configured: boolean
+  destinations: ('local' | 's3')[]
+  localPath?: string
+  s3Bucket?: string
+  s3Prefix?: string
+  retentionCount: number
+  intervalHours: number
+  lastRunAt: string | null
+  lastStatus: 'idle' | 'success' | 'error'
+  lastError: string | null
+  lastFilename: string | null
+  lastSizeBytes: number | null
+}
+
+export interface BackupRunResult {
+  filename: string
+  sizeBytes: number
+  destinations: ('local' | 's3')[]
+  prunedCount: number
+  completedAt: string
+}
+
+export function getBackupStatus(): Promise<BackupStatus> {
+  return apiFetch('/admin/backup/status')
+}
+
+export function runBackup(): Promise<{ success: boolean; result: BackupRunResult }> {
+  return apiFetch('/admin/backup/run', { method: 'POST' })
+}
