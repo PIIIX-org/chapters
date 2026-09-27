@@ -14,6 +14,8 @@ import { penNibCursor } from '../components/vault/penNibCursor.js'
 import { terminalCursor } from '../components/vault/terminalCursor.js'
 import type { NoteDirection } from '../components/vault/note-toolbar-utils.js'
 import { markdownMarkerHiding } from './markdownMarkerHiding.js'
+import { mathLivePreview } from './mathDecorations.js'
+import { mermaidLivePreview } from './mermaidDecorations.js'
 import { wikilinkCompletions } from './wikilinkCompletions.js'
 import { wikilinkExtension } from './wikilinkDecorations.js'
 
@@ -152,6 +154,8 @@ export function useCodeMirrorEditor({
         EditorView.contentAttributes.of({ 'aria-label': 'Note body' }),
         syntaxHighlighting(markdownHighlight),
         markdownMarkerHiding,
+        mathLivePreview,
+        mermaidLivePreview,
         autocompletion({ override: [wikilinkCompletions(wikilinkTargets)] }),
         wikilinkExtension((target) => onWikilinkClickRef.current?.(target)),
         EditorView.updateListener.of((update) => {
