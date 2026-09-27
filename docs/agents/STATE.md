@@ -14,7 +14,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   - Image & Asset Uploads: Clipboard paste & drag-drop asset upload to vault storage with live image preview & export/import packaging.
   - Mermaid & KaTeX: Live block/inline KaTeX preview, live rendered Mermaid diagrams with click-to-edit cursor focus.
   - Local Ego Graph: 1–2 hops local network in Note Inspector with SVG layout, depth toggle, relation pills, accessible roster.
-- **Previous Phases**: UI Redesign (#206), OKF v0.2 (#209–#213), Shell (#218–#239), Hardening (#244–#277), Prod Promotion (#303).
+- **Previous Phases**: UI Redesign (#206), OKF v0.2 (#209–#213), Shell (#218–#239), Hardening (#244–#277), Prod Promotions (#303, #307).
 - **Architecture Traps**:
   - `prod` == `dev` needs Taha's explicit OK. PRs target `dev` directly, never stacked.
   - 1 container + 1 Postgres per customer. Control plane in separate private repo.
