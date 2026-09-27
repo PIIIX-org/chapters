@@ -30,6 +30,7 @@ import { listRepositoryFiles } from './store.js'
 import { buildGraph } from '../graph/assemble.js'
 import { graphQuerySchema, parseGraphFilters, type GraphQuery } from '../graph/filters.js'
 import { searchNotes } from '../search/search.js'
+import { checkCodeStaleness } from '../notes/staleness.js'
 
 async function requireOwner(userId: string, repositoryId: string): Promise<boolean> {
   return (await resolveRepositoryAccess(userId, repositoryId)) === 'owner'
@@ -482,4 +483,12 @@ export function repositoryRoutes(app: FastifyInstance) {
       return { include: req.body.include }
     },
   )
+
+  app.get<{ Params: { id: string } }>('/repositories/:id/drift', async (req, reply) => {
+    const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
+    if (!access) return reply.code(404).send({ error: 'not found' })
+    const drifts = await checkCodeStaleness(req.params.id)
+    return { repositoryId: req.params.id, drifts }
+  })
 }
+
