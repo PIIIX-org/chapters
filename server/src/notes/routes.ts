@@ -7,6 +7,7 @@ import { writeThroughCollab } from '../sync/crdt-write.js'
 import {
   createNote,
   getIncomingLinks,
+  getLocalGraph,
   getRevision,
   listRevisionMeta,
   purgeRevision,
@@ -211,6 +212,19 @@ export function noteRoutes(app: FastifyInstance) {
       const backlinks = await getIncomingLinks(req.params.id, req.params['*'])
       if (!backlinks) return reply.code(404).send({ error: 'note not found' })
       return backlinks
+    },
+  )
+
+  app.get<{ Params: { id: string; '*': string }; Querystring: { depth?: string } }>(
+    '/vaults/:id/local-graph/*',
+    async (req, reply) => {
+      if (!(await guard(req as VaultReq, reply, 'read'))) return
+      splitPath(req.params['*'])
+      const rawDepth = Number(req.query?.depth ?? 1)
+      const depth = Number.isInteger(rawDepth) && rawDepth >= 1 && rawDepth <= 2 ? rawDepth : 1
+      const graph = await getLocalGraph(req.params.id, req.params['*'], depth)
+      if (!graph) return reply.code(404).send({ error: 'note not found' })
+      return graph
     },
   )
 

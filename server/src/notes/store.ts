@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises
 import { dirname, join } from 'node:path'
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { noteLinks, noteRevisions, notes } from '../db/schema.js'
+import { noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
 import { scheduleEmbedding } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
@@ -677,6 +677,269 @@ export async function getIncomingLinks(vaultId: string, path: string): Promise<B
   }
 
   return result
+}
+
+export interface LocalGraphNode {
+  id: string
+  path: string
+  name: string
+  title: string | null
+  type: string | null
+  resourceType: 'note' | 'code'
+  resourceId: string
+  isCenter: boolean
+  depth: number
+}
+
+export interface LocalGraphEdge {
+  source: string
+  target: string
+  kind: 'extracted' | 'semantic'
+  similarity?: number
+}
+
+export interface LocalGraphData {
+  center: LocalGraphNode
+  nodes: LocalGraphNode[]
+  edges: LocalGraphEdge[]
+}
+
+/**
+ * Returns a local ego graph (1 or 2 hops) around the given note.
+ * Includes incoming backlinks, outgoing wikilinks, and semantic edges within the vault.
+ */
+export async function getLocalGraph(
+  vaultId: string,
+  path: string,
+  depth = 1,
+): Promise<LocalGraphData | null> {
+  const target = await getLiveNote(vaultId, path)
+  if (!target) return null
+
+  const allNotes = await listNotes(vaultId)
+  const byId = new Map(allNotes.map((n) => [n.id, n]))
+  const byPath = new Map(allNotes.map((n) => [n.path, n]))
+  const byName = new Map(allNotes.map((n) => [n.name, n]))
+
+  function resolveLink(targetPath: string): (typeof allNotes)[number] | undefined {
+    const clean = targetPath.endsWith('.md') ? targetPath.slice(0, -3) : targetPath
+    return byPath.get(clean) ?? byName.get(clean) ?? byPath.get(targetPath) ?? byName.get(targetPath)
+  }
+
+  function candidateTargetsFor(p: string): string[] {
+    const resolved = resolveNotePath(p)
+    const candidates = [resolved.fullPath, `${resolved.fullPath}.md`]
+    if (resolved.name !== resolved.fullPath) {
+      candidates.push(resolved.name, `${resolved.name}.md`)
+    }
+    return candidates
+  }
+
+  const MAX_NODES = 50
+  const oneHopIds = new Set<string>()
+  const twoHopIds = new Set<string>()
+
+  // 1-hop: Outgoing wikilinks from target
+  const outgoingLinks = await db
+    .select({ targetPath: noteLinks.targetPath })
+    .from(noteLinks)
+    .where(eq(noteLinks.sourceNoteId, target.id))
+
+  for (const link of outgoingLinks) {
+    const resolved = resolveLink(link.targetPath)
+    if (resolved && resolved.id !== target.id) {
+      oneHopIds.add(resolved.id)
+    }
+  }
+
+  // 1-hop: Incoming backlinks to target
+  const targetCandidates = candidateTargetsFor(path)
+  const incomingLinks = await db
+    .select({ sourceNoteId: noteLinks.sourceNoteId })
+    .from(noteLinks)
+    .where(inArray(noteLinks.targetPath, targetCandidates))
+
+  for (const link of incomingLinks) {
+    if (byId.has(link.sourceNoteId) && link.sourceNoteId !== target.id) {
+      oneHopIds.add(link.sourceNoteId)
+    }
+  }
+
+  // 1-hop: Semantic edges for target
+  const semEdges = await db
+    .select()
+    .from(semanticEdges)
+    .where(
+      or(
+        and(eq(semanticEdges.sourceType, 'note'), eq(semanticEdges.sourceId, target.id)),
+        and(eq(semanticEdges.targetType, 'note'), eq(semanticEdges.targetId, target.id)),
+      ),
+    )
+
+  for (const edge of semEdges) {
+    const otherId = edge.sourceId === target.id ? edge.targetId : edge.sourceId
+    if (byId.has(otherId) && otherId !== target.id) {
+      oneHopIds.add(otherId)
+    }
+  }
+
+  // 2-hop (if depth === 2)
+  if (depth >= 2 && oneHopIds.size > 0 && oneHopIds.size < MAX_NODES) {
+    const oneHopArr = [...oneHopIds]
+
+    // Outgoing from 1-hop
+    const twoHopOutgoing = await db
+      .select({ sourceNoteId: noteLinks.sourceNoteId, targetPath: noteLinks.targetPath })
+      .from(noteLinks)
+      .where(inArray(noteLinks.sourceNoteId, oneHopArr))
+
+    for (const link of twoHopOutgoing) {
+      if (1 + oneHopIds.size + twoHopIds.size >= MAX_NODES) break
+      const resolved = resolveLink(link.targetPath)
+      if (resolved && resolved.id !== target.id && !oneHopIds.has(resolved.id)) {
+        twoHopIds.add(resolved.id)
+      }
+    }
+
+    // Incoming to 1-hop
+    const oneHopCandidates: string[] = []
+    for (const id of oneHopArr) {
+      const n = byId.get(id)
+      if (n) oneHopCandidates.push(...candidateTargetsFor(n.path))
+    }
+
+    if (oneHopCandidates.length > 0 && 1 + oneHopIds.size + twoHopIds.size < MAX_NODES) {
+      const twoHopIncoming = await db
+        .select({ sourceNoteId: noteLinks.sourceNoteId })
+        .from(noteLinks)
+        .where(inArray(noteLinks.targetPath, oneHopCandidates))
+
+      for (const link of twoHopIncoming) {
+        if (1 + oneHopIds.size + twoHopIds.size >= MAX_NODES) break
+        if (byId.has(link.sourceNoteId) && link.sourceNoteId !== target.id && !oneHopIds.has(link.sourceNoteId)) {
+          twoHopIds.add(link.sourceNoteId)
+        }
+      }
+    }
+
+    // Semantic to 1-hop
+    if (1 + oneHopIds.size + twoHopIds.size < MAX_NODES) {
+      const twoHopSem = await db
+        .select()
+        .from(semanticEdges)
+        .where(
+          or(
+            and(eq(semanticEdges.sourceType, 'note'), inArray(semanticEdges.sourceId, oneHopArr)),
+            and(eq(semanticEdges.targetType, 'note'), inArray(semanticEdges.targetId, oneHopArr)),
+          ),
+        )
+
+      for (const edge of twoHopSem) {
+        if (1 + oneHopIds.size + twoHopIds.size >= MAX_NODES) break
+        const otherId = oneHopIds.has(edge.sourceId) ? edge.targetId : edge.sourceId
+        if (byId.has(otherId) && otherId !== target.id && !oneHopIds.has(otherId)) {
+          twoHopIds.add(otherId)
+        }
+      }
+    }
+  }
+
+  // Construct node list
+  const nodeMap = new Map<string, LocalGraphNode>()
+
+  function makeNode(
+    n: (typeof allNotes)[number] | NoteRow,
+    d: number,
+    isCenter: boolean,
+  ): LocalGraphNode {
+    const title =
+      typeof (n.frontmatter as Record<string, unknown> | null)?.title === 'string'
+        ? ((n.frontmatter as Record<string, unknown>).title as string)
+        : null
+    return {
+      id: n.id,
+      path: n.path,
+      name: n.name,
+      title,
+      type: n.type,
+      resourceType: 'note',
+      resourceId: vaultId,
+      isCenter,
+      depth: d,
+    }
+  }
+
+  const centerNode = makeNode(target, 0, true)
+  nodeMap.set(centerNode.id, centerNode)
+
+  for (const id of oneHopIds) {
+    const n = byId.get(id)
+    if (n) nodeMap.set(n.id, makeNode(n, 1, false))
+  }
+
+  for (const id of twoHopIds) {
+    const n = byId.get(id)
+    if (n) nodeMap.set(n.id, makeNode(n, 2, false))
+  }
+
+  const allNodeIds = [...nodeMap.keys()]
+
+  // Collect all edges between nodes in the graph
+  const edges: LocalGraphEdge[] = []
+  const edgeKeys = new Set<string>()
+
+  const allLinks = await db
+    .select({ sourceNoteId: noteLinks.sourceNoteId, targetPath: noteLinks.targetPath })
+    .from(noteLinks)
+    .where(inArray(noteLinks.sourceNoteId, allNodeIds))
+
+  for (const link of allLinks) {
+    const resolved = resolveLink(link.targetPath)
+    if (resolved && nodeMap.has(resolved.id) && link.sourceNoteId !== resolved.id) {
+      const key = `${link.sourceNoteId}->${resolved.id}:extracted`
+      if (!edgeKeys.has(key)) {
+        edgeKeys.add(key)
+        edges.push({
+          source: link.sourceNoteId,
+          target: resolved.id,
+          kind: 'extracted',
+        })
+      }
+    }
+  }
+
+  // Collect semantic edges between nodes in graph
+  const allSem = await db
+    .select()
+    .from(semanticEdges)
+    .where(
+      and(
+        inArray(semanticEdges.sourceId, allNodeIds),
+        inArray(semanticEdges.targetId, allNodeIds),
+      ),
+    )
+
+  for (const sem of allSem) {
+    const key =
+      sem.sourceId < sem.targetId
+        ? `${sem.sourceId}<->${sem.targetId}:semantic`
+        : `${sem.targetId}<->${sem.sourceId}:semantic`
+    if (!edgeKeys.has(key)) {
+      edgeKeys.add(key)
+      edges.push({
+        source: sem.sourceId,
+        target: sem.targetId,
+        kind: 'semantic',
+        similarity: sem.similarity,
+      })
+    }
+  }
+
+  return {
+    center: centerNode,
+    nodes: [...nodeMap.values()],
+    edges,
+  }
 }
 
 /** Restores a note to a recorded revision (a new attributed write). */
