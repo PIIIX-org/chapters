@@ -248,6 +248,12 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     visit({ kind: 'note', label: path, path: `/vaults/${containerId}/notes/${path}` })
   }
 
+  function goSymbol(containerId: string, path: string, startLine?: number) {
+    onClose()
+    const targetPath = `/repos/${containerId}/tree/${path}${startLine ? `#L${startLine}` : ''}`
+    visit({ kind: 'repo', label: path, path: targetPath })
+  }
+
   function toggleCode(key: string) {
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -389,7 +395,15 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
       ? []
       : items.map((r) => ({
           id: resultOptionId(r),
-          activate: () => (r.resourceType === 'code' ? toggleCode(resultKey(r)) : go(r.containerId, r.path)),
+          activate: () => {
+            if (r.resourceType === 'symbol') {
+              goSymbol(r.containerId, r.path, r.startLine)
+            } else if (r.resourceType === 'code') {
+              toggleCode(resultKey(r))
+            } else {
+              go(r.containerId, r.path)
+            }
+          },
         }))),
   ]
 
@@ -557,6 +571,38 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                     const key = resultKey(r)
                     const optionId = resultOptionId(r)
                     const isActive = activeEntryId === optionId
+                    if (r.resourceType === 'symbol') {
+                      return (
+                        <button
+                          key={key}
+                          id={optionId}
+                          type="button"
+                          role="option"
+                          aria-selected={isActive}
+                          onClick={() => goSymbol(r.containerId, r.path, r.startLine)}
+                          className={cn(
+                            'block w-full min-h-9 px-3 py-1.5 text-left hover:bg-muted',
+                            isActive && 'bg-muted',
+                          )}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <Code aria-hidden="true" strokeWidth={1.75} className="size-4 shrink-0 text-primary" />
+                            <span className="min-w-0 font-mono text-[13px] font-semibold text-foreground">
+                              {r.symbolName}
+                            </span>
+                            {r.symbolKind && <Pill>{r.symbolKind}</Pill>}
+                            <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                              {r.path}:{r.startLine}
+                            </span>
+                            <Hint className="tabular-nums">{r.score.toFixed(2)}</Hint>
+                          </div>
+                          {r.snippet && (
+                            <div className="truncate pl-[26px] font-mono text-xs text-muted-foreground">{r.snippet}</div>
+                          )}
+                        </button>
+                      )
+                    }
+
                     if (r.resourceType === 'code') {
                       const isExpanded = expanded.has(key)
                       return (

@@ -61,17 +61,55 @@ async function processFile(fileId: string): Promise<void> {
     }
 
     await db.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, fileId))
+    let symbolPayloads: Array<{
+      fileId: string
+      name: string
+      kind: string
+      startLine: number
+      endLine: number
+      snippet: string
+      embedText: string
+    }> = []
+
     if (symbols.length > 0) {
-      await db.insert(repositoryFileSymbols).values(
-        symbols.map((s) => ({
+      const fileLines = row.content.split('\n')
+      symbolPayloads = symbols.map((s) => {
+        const snippetLines = fileLines.slice(s.startLine - 1, s.endLine)
+        const snippet = snippetLines.slice(0, 30).join('\n').slice(0, 1500)
+        return {
           fileId,
           name: s.name,
           kind: s.kind,
           startLine: s.startLine,
           endLine: s.endLine,
+          snippet,
+          embedText: `${s.kind} ${s.name} in ${row.path}:${s.startLine}\n${snippet}`,
+        }
+      })
+    }
+
+    const allTexts = [`${row.path}\n${row.content}`, ...symbolPayloads.map((s) => s.embedText)]
+    const allEmbeddings = await embedder.embed(allTexts)
+    const fileEmbedding = allEmbeddings[0]!
+    const symbolEmbeddings = allEmbeddings.slice(1)
+
+    if (symbolPayloads.length > 0) {
+      await db.insert(repositoryFileSymbols).values(
+        symbolPayloads.map((s, i) => ({
+          fileId: s.fileId,
+          name: s.name,
+          kind: s.kind,
+          startLine: s.startLine,
+          endLine: s.endLine,
+          snippet: s.snippet,
+          embedding: symbolEmbeddings[i],
         })),
       )
     }
+
+    await db.update(repositoryFiles).set({ embedding: fileEmbedding }).where(eq(repositoryFiles.id, fileId))
+    await recomputeSemanticEdges('code', fileId, fileEmbedding)
+    return
   }
 
   const [embedding] = await embedder.embed([`${row.path}\n${row.content}`])

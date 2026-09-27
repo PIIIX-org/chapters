@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { atLeast, listAccessibleVaults, resolveAccess } from '../vaults/permissions.js'
-import { listAccessibleRepositories } from '../repositories/permissions.js'
-import { searchNotes } from './search.js'
+import { listAccessibleRepositories, resolveRepositoryAccess } from '../repositories/permissions.js'
+import { findSymbols, searchNotes } from './search.js'
 import type { GraphFilters } from '../graph/assemble.js'
 
 const searchQuerySchema = {
@@ -14,6 +14,7 @@ const searchQuerySchema = {
     tags: { type: 'string' },
     since: { type: 'string' },
     until: { type: 'string' },
+    symbols: { type: 'boolean' },
   },
 } as const
 
@@ -24,6 +25,7 @@ interface SearchQuery {
   tags?: string
   since?: string
   until?: string
+  symbols?: boolean
 }
 
 // Same wire format as parseFilters in graph/routes.ts — comma-separated lists.
@@ -50,6 +52,7 @@ export function searchRoutes(app: FastifyInstance) {
         req.query.q,
         req.query.limit,
         parseFilters(req.query),
+        { includeSymbols: req.query.symbols },
       )
     },
   )
@@ -75,7 +78,43 @@ export function searchRoutes(app: FastifyInstance) {
         req.query.q,
         req.query.limit,
         parseFilters(req.query),
+        { includeSymbols: req.query.symbols },
       )
+    },
+  )
+
+  /**
+   * Fine-grained AST symbol retrieval across all accessible repositories.
+   */
+  app.get<{
+    Querystring: { q: string; kind?: string; limit?: number }
+  }>(
+    '/symbols/search',
+    async (req) => {
+      const accessibleRepos = await listAccessibleRepositories(req.user!.id)
+      return findSymbols(
+        accessibleRepos.map((r) => r.id),
+        req.query.q,
+        { kind: req.query.kind, limit: req.query.limit },
+      )
+    },
+  )
+
+  /**
+   * Fine-grained AST symbol retrieval for a single repository.
+   */
+  app.get<{
+    Params: { id: string }
+    Querystring: { q: string; kind?: string; limit?: number }
+  }>(
+    '/repositories/:id/symbols/search',
+    async (req, reply) => {
+      const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
+      if (!access) return reply.code(404).send({ error: 'not found' })
+      return findSymbols([req.params.id], req.query.q, {
+        kind: req.query.kind,
+        limit: req.query.limit,
+      })
     },
   )
 }
