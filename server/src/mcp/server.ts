@@ -49,7 +49,7 @@ import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord } from '../vaults/routes.js'
 import { isTeamOwner, notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
-import { searchNotes } from '../search/search.js'
+import { findSymbols, searchNotes } from '../search/search.js'
 import { buildGraph, findShortestPath } from '../graph/assemble.js'
 import { buildVaultZip } from '../export/archive.js'
 import { notify } from '../notifications/notify.js'
@@ -1485,6 +1485,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         vaultId: z.string().uuid().optional(),
         repositoryId: z.string().uuid().optional(),
         everywhere: z.boolean().optional(),
+        symbols: z.boolean().optional().describe('Include individual AST code symbols (functions, classes, interfaces, types)'),
         limit: z.number().int().min(1).max(100).optional(),
       },
     },
@@ -1494,6 +1495,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         vaultId?: string
         repositoryId?: string
         everywhere?: boolean
+        symbols?: boolean
         limit?: number
       }) => {
         if (args.everywhere) {
@@ -1506,10 +1508,53 @@ export function buildMcpServer(auth: McpAuth): McpServer {
             { vaultIds: vaultsList.map((v) => v.id), repositoryIds: repos.map((r) => r.id) },
             args.query,
             args.limit,
+            {},
+            { includeSymbols: args.symbols ?? true },
           )
         }
         const resources = await resolveResourceSet(args)
-        return searchNotes(resources, args.query, args.limit)
+        return searchNotes(resources, args.query, args.limit, {}, { includeSymbols: args.symbols ?? true })
+      },
+    ),
+  )
+
+  server.registerTool(
+    'find_symbols',
+    {
+      description:
+        'Fine-grained semantic and keyword search for AST code symbols (functions, classes, interfaces, types) across repositories. Returns exact declarations, line ranges, code snippets, and container file paths without burning tokens reading full files.',
+      inputSchema: {
+        query: z.string().describe('Search query for symbol semantics, signature, or name'),
+        kind: z.enum(['function', 'class', 'interface', 'type']).optional().describe('Filter by symbol kind'),
+        repositoryId: z.string().uuid().optional().describe('Optional repository ID filter'),
+        everywhere: z.boolean().optional().describe('Search across all accessible repositories'),
+        limit: z.number().int().min(1).max(50).optional(),
+      },
+    },
+    wrap(
+      async (args: {
+        query: string
+        kind?: 'function' | 'class' | 'interface' | 'type'
+        repositoryId?: string
+        everywhere?: boolean
+        limit?: number
+      }) => {
+        let repoIds: string[] = []
+        if (args.everywhere) {
+          requireAccountScope('search everywhere')
+          const repos = await listAccessibleRepositories(auth.user.id)
+          repoIds = repos.map((r) => r.id)
+        } else if (args.repositoryId) {
+          const target = repositoryFor(args.repositoryId)
+          await requireRepositoryAccess(target)
+          repoIds = [target]
+        } else if (auth.connection.scope === 'repository') {
+          repoIds = [auth.connection.repositoryId!]
+        } else {
+          const repos = await listAccessibleRepositories(auth.user.id)
+          repoIds = repos.map((r) => r.id)
+        }
+        return findSymbols(repoIds, args.query, { kind: args.kind, limit: args.limit })
       },
     ),
   )
