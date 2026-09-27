@@ -8,10 +8,10 @@
 // keeps d3-force out of the entry chunk (client/src/bundle.test.ts).
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router'
-import { Filter, Info, ListTree, Maximize, Sliders, ZoomIn, ZoomOut } from 'lucide-react'
+import { Filter, Info, ListTree, Maximize, Route, Sliders, ZoomIn, ZoomOut } from 'lucide-react'
 import { useGraph } from '../../hooks/useGraph.js'
 import { useVaults } from '../../hooks/useVaults.js'
-import type { CommunityEdge, CommunityGraph, CommunityNode, GraphEdge, GraphNode, VaultGraph } from '../../api/graph.js'
+import type { CommunityEdge, CommunityGraph, CommunityNode, GraphEdge, GraphNode, PathFindingResult, VaultGraph } from '../../api/graph.js'
 import { ContextPanel, Inspector, PanelRailButton, PanelRailNav } from '../shell/ShellPanels.js'
 import { useOptionalShell } from '../shell/shell-context.js'
 import { Button } from '../ui/button.js'
@@ -21,6 +21,7 @@ import { GraphOutline } from './GraphOutline.js'
 import { CommunityDetail } from './CommunityDetail.js'
 import { ColorModeToggle } from './ColorModeToggle.js'
 import { PhysicsControls } from './PhysicsControls.js'
+import { GraphPathfinder } from './GraphPathfinder.js'
 import { GraphFilters, graphFiltersFromSearchParams, type FilterableNode } from './GraphFilters.js'
 import { CappedGroupsNotice, GraphEmptyState, GraphErrorState, TruncationNotice } from './GraphStates.js'
 import { createPanZoom, fitTransform, screenToWorld, type Transform } from './panzoom.js'
@@ -229,6 +230,14 @@ export default function GraphCanvas() {
     requestRedrawRef.current?.()
   }
 
+  const activePathRef = useRef<PathFindingResult | null>(null)
+
+  function handlePathChange(path: PathFindingResult | null) {
+    activePathRef.current = path
+    requestRedrawRef.current?.()
+  }
+
+
   useEffect(() => {
     // No `setSettled(false)` reset here on purpose: react-hooks bans a
     // synchronous setState call at the top of an effect body (cascading
@@ -286,6 +295,20 @@ export default function GraphCanvas() {
     let mode: 'running' | 'settling' | 'redraw' | 'idle' = reducedMotion ? 'settling' : 'running'
 
     function draw() {
+      const pathNodeIds = activePathRef.current?.found
+        ? new Set(activePathRef.current.nodes.map((n) => n.id))
+        : null
+      const pathEdges =
+        activePathRef.current?.found && pathNodeIds
+          ? drawEdges
+              .filter((e) => 'kind' in e)
+              .filter((e) => {
+                const s = e.source as unknown as { id?: string }
+                const t = e.target as unknown as { id?: string }
+                return Boolean(s?.id && t?.id && pathNodeIds.has(s.id) && pathNodeIds.has(t.id))
+              })
+          : null
+
       drawGraph(ctx!, {
         nodes,
         edges: drawEdges,
@@ -299,8 +322,11 @@ export default function GraphCanvas() {
         now: Date.now(),
         nodeSizeScale: nodeSizeScaleRef.current,
         edgeWidthScale: edgeWidthScaleRef.current,
+        highlightPathNodeIds: pathNodeIds,
+        highlightPathEdges: pathEdges,
       })
     }
+
 
     function requestFrame() {
       if (rafId === null) rafId = requestAnimationFrame(frame)
@@ -507,6 +533,13 @@ export default function GraphCanvas() {
     )
   }
 
+  const memberGraph: VaultGraph | null =
+    memberData && !isCommunityGraph(memberData)
+      ? memberData
+      : graph.data && !isCommunityGraph(graph.data)
+        ? graph.data
+        : null
+
   return (
     <div data-testid="graph-canvas" className="relative flex h-full w-full flex-col bg-background">
       {/* Stats strip floating at the top center — mono numerals, always computed
@@ -631,6 +664,12 @@ export default function GraphCanvas() {
               icon={Filter}
               label="Filters"
             />
+            {memberGraph && (
+              <PanelRailButton
+                icon={Route}
+                label="Pathfinder"
+              />
+            )}
             <PanelRailButton
               icon={Sliders}
               label="Physics"
@@ -648,6 +687,15 @@ export default function GraphCanvas() {
         <CollapsibleSection title="Filters">
           <GraphFilters nodes={filterableNodesOf(memberData ?? graph.data)} />
         </CollapsibleSection>
+        {memberGraph && (
+          <CollapsibleSection title="Pathfinder">
+            <GraphPathfinder
+              nodes={memberGraph.nodes}
+              edges={memberGraph.edges}
+              onPathChange={handlePathChange}
+            />
+          </CollapsibleSection>
+        )}
         {/* No initial* props: this stays mounted for the component's whole
             life (a closed <details> keeps its children), so its own state
             already tracks the sliders — while simParamsRef carries the same
@@ -659,6 +707,7 @@ export default function GraphCanvas() {
             onEdgeWidthChange={handleEdgeWidthChange}
           />
         </CollapsibleSection>
+
       </Inspector>
     </div>
   )

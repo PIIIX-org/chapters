@@ -50,7 +50,7 @@ import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord } from '../vaults/routes.js'
 import { isTeamOwner, notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { searchNotes } from '../search/search.js'
-import { buildGraph } from '../graph/assemble.js'
+import { buildGraph, findShortestPath } from '../graph/assemble.js'
 import { buildVaultZip } from '../export/archive.js'
 import { notify } from '../notifications/notify.js'
 import { logSecurityEvent } from '../auth/security-events.js'
@@ -1544,6 +1544,44 @@ export function buildMcpServer(auth: McpAuth): McpServer {
           aggregate: args.aggregate,
           community: args.community,
         })
+      },
+    ),
+  )
+
+  server.registerTool(
+    'find_graph_path',
+    {
+      description:
+        'Find the shortest path connecting two concepts, notes, or code files in the knowledge graph. Returns the ordered path of nodes and connecting edges.',
+      inputSchema: {
+        source: z.string().describe('Source note path or ID, or code file path'),
+        target: z.string().describe('Target note path or ID, or code file path'),
+        vaultId: z.string().uuid().optional().describe('Optional vault ID constraint'),
+        repositoryId: z.string().uuid().optional().describe('Optional repository ID constraint'),
+      },
+    },
+    wrap(
+      async (args: {
+        source: string
+        target: string
+        vaultId?: string
+        repositoryId?: string
+      }) => {
+        const resources = await resolveResourceSet(args)
+        const graph = await buildGraph(resources)
+        const sourceNode = graph.nodes.find(
+          (n) => n.id === args.source || n.path === args.source,
+        )
+        const targetNode = graph.nodes.find(
+          (n) => n.id === args.target || n.path === args.target,
+        )
+        if (!sourceNode) {
+          throw new McpToolError(`Source "${args.source}" not found in graph.`)
+        }
+        if (!targetNode) {
+          throw new McpToolError(`Target "${args.target}" not found in graph.`)
+        }
+        return findShortestPath(graph, sourceNode.id, targetNode.id)
       },
     ),
   )
