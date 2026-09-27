@@ -6,7 +6,7 @@ import { exportLinks, users, vaults, vaultShares } from '../db/schema.js'
 import { generateToken, hashToken } from '../auth/tokens.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { resolveAccess, atLeast } from '../vaults/permissions.js'
-import { createNote, readNote } from '../notes/store.js'
+import { createNote, readNote, saveAsset } from '../notes/store.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { parseNote, serializeNote, OkfValidationError } from '../notes/okf.js'
 import {
@@ -147,7 +147,15 @@ export function exportRoutes(app: FastifyInstance) {
       const skipped: string[] = []
       let imported = 0
       for (const entry of zip.getEntries()) {
-        if (entry.isDirectory || !entry.entryName.endsWith('.md')) continue
+        if (entry.isDirectory) continue
+        if (entry.entryName.startsWith('assets/')) {
+          const assetName = entry.entryName.slice(7)
+          if (assetName && /^[a-zA-Z0-9._-]+$/.test(assetName)) {
+            await saveAsset(vault!.id, assetName, entry.getData())
+          }
+          continue
+        }
+        if (!entry.entryName.endsWith('.md')) continue
         const path = entry.entryName.replace(/\.md$/, '')
         if (path === 'index' || path.endsWith('/index')) continue
         try {

@@ -9,14 +9,17 @@ import {
   getIncomingLinks,
   getLocalGraph,
   getRevision,
+  listAssets,
   listRevisionMeta,
   purgeRevision,
+  readAsset,
   revertNote,
   listNotes,
   listTrash,
   readNote,
   renameNote,
   restoreNote,
+  saveAsset,
   softDeleteNote,
   splitPath,
 } from './store.js'
@@ -297,6 +300,46 @@ export function noteRoutes(app: FastifyInstance) {
         detail: { vaultId: req.params.id, revisionId: req.params.revisionId },
       })
       return { status: 'purged' }
+    },
+  )
+
+  app.post<{ Params: { id: string } }>(
+    '/vaults/:id/assets',
+    async (req, reply) => {
+      if (!(await guard(req as unknown as VaultReq, reply, 'edit'))) return
+      const file = await req.file()
+      if (!file) return reply.code(400).send({ error: 'file required' })
+      const buffer = await file.toBuffer()
+      const asset = await saveAsset(req.params.id, file.filename, buffer)
+      return {
+        fileName: asset.fileName,
+        url: `/api/vaults/${req.params.id}/assets/${asset.fileName}`,
+        path: `assets/${asset.fileName}`,
+        size: asset.size,
+        mimeType: asset.mimeType,
+      }
+    },
+  )
+
+  app.get<{ Params: { id: string; fileName: string } }>(
+    '/vaults/:id/assets/:fileName',
+    async (req, reply) => {
+      if (!(await guard(req as unknown as VaultReq, reply, 'read'))) return
+      const asset = await readAsset(req.params.id, req.params.fileName)
+      if (!asset) return reply.code(404).send({ error: 'asset not found' })
+      return reply
+        .header('content-type', asset.mimeType)
+        .header('cache-control', 'public, max-age=86400, immutable')
+        .send(asset.buffer)
+    },
+  )
+
+  app.get<{ Params: { id: string } }>(
+    '/vaults/:id/assets',
+    async (req, reply) => {
+      if (!(await guard(req as unknown as VaultReq, reply, 'read'))) return
+      const assets = await listAssets(req.params.id)
+      return { assets }
     },
   )
 }

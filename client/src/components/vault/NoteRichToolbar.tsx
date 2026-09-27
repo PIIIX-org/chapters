@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react'
+import { useState, useEffect, useRef, type ReactNode } from 'react'
 import type { EditorView } from '@codemirror/view'
 import {
   Bold,
@@ -17,6 +17,7 @@ import {
   Minus,
   Link2,
   FileText,
+  Image as ImageIcon,
   Undo2,
   Redo2,
   Maximize2,
@@ -27,6 +28,7 @@ import {
   AlignRight,
 } from 'lucide-react'
 import { cn } from '../../lib/utils.js'
+import { uploadAndInsertImage } from '../../hooks/imageDecorations.js'
 import {
   type NoteWidth,
   type NoteDirection,
@@ -70,6 +72,7 @@ interface NoteRichToolbarProps {
   onWidthChange: (width: NoteWidth) => void
   direction?: NoteDirection
   onDirectionChange?: (direction: NoteDirection) => void
+  vaultId?: string
 }
 
 export function NoteRichToolbar({
@@ -79,7 +82,10 @@ export function NoteRichToolbar({
   onWidthChange,
   direction = 'ltr',
   onDirectionChange,
+  vaultId,
 }: NoteRichToolbarProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
   return (
     <div className="flex flex-wrap items-center justify-between gap-1 border-b border-border bg-card/60 px-3 py-1 text-xs backdrop-blur-xs select-none">
       {/* Formatting Tools */}
@@ -219,6 +225,35 @@ export function NoteRichToolbar({
           onClick={() => applyFormat(view, 'link')}
           disabled={readOnly}
         />
+        <ToolbarButton
+          label="Insert Image"
+          icon={<ImageIcon className="size-3.5" aria-hidden="true" />}
+          onClick={() => {
+            if (vaultId && fileInputRef.current) {
+              fileInputRef.current.click()
+            } else {
+              applyFormat(view, 'image')
+            }
+          }}
+          disabled={readOnly}
+        />
+        {vaultId && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file && view) {
+                void uploadAndInsertImage(view, vaultId, file)
+              }
+              e.target.value = ''
+            }}
+          />
+        )}
       </div>
 
       {/* Action & Layout Controls */}

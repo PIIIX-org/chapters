@@ -138,6 +138,7 @@ interface NoteFrameProps {
   readOnly?: boolean
   direction?: NoteDirection
   onDirectionChange?: (direction: NoteDirection) => void
+  vaultId?: string
 }
 
 function NoteFrame({
@@ -149,6 +150,7 @@ function NoteFrame({
   readOnly = false,
   direction = 'ltr',
   onDirectionChange,
+  vaultId,
 }: NoteFrameProps) {
   const [width, setWidth] = useNoteWidth()
   const shell = useOptionalShell()
@@ -175,6 +177,7 @@ function NoteFrame({
             onWidthChange={setWidth}
             direction={direction}
             onDirectionChange={onDirectionChange}
+            vaultId={vaultId}
           />
         </div>
         <NoteFloatingSelectionToolbar view={view} readOnly={readOnly} />
@@ -398,6 +401,7 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
     collab: strandedOffline ? undefined : { ytext, awareness: collab.awareness },
     direction,
     onView: setEditorView,
+    vaultId,
   })
 
   // "Synced 10:04" needs the moment `synced` last became true. Tracked with
@@ -420,6 +424,7 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
       readOnly={locked}
       direction={direction}
       onDirectionChange={setDirection}
+      vaultId={vaultId}
       bar={
         <>
           <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />
@@ -495,6 +500,7 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
     onWikilinkClick: wikilinks.onClick,
     direction,
     onView: setEditorView,
+    vaultId,
   })
 
   // The editor is built once, around the first body it is given. Later frames
@@ -514,6 +520,7 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
       readOnly={true}
       direction={direction}
       onDirectionChange={setDirection}
+      vaultId={vaultId}
       bar={
         <>
           <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />
