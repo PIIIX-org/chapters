@@ -262,4 +262,23 @@ describe('vault + share endpoints', () => {
     })
     expect(strangerRes.statusCode).toBe(404)
   })
+
+  it('returns 404 for malformed non-UUID vault id across endpoints', async () => {
+    const user = await createActiveUser()
+    const cookie = await loginCookie(app, user.email)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/vaults/malformed-not-a-uuid',
+      headers: { cookie },
+    })
+    expect(res.statusCode).toBe(404)
+
+    const notesRes = await app.inject({
+      method: 'GET',
+      url: '/api/vaults/malformed-not-a-uuid/notes',
+      headers: { cookie },
+    })
+    expect(notesRes.statusCode).toBe(404)
+  })
 })

@@ -221,7 +221,7 @@ describe('SearchOverlay', () => {
     await expectNoA11yViolations(container)
 
     await user.click(screen.getByText('generateAuthToken'))
-    expect(router.state.location.pathname).toBe('/repos/r1/tree/src/token.ts')
+    expect(router.state.location.pathname).toBe('/repos/r1/files/src/token.ts')
     expect(router.state.location.hash).toBe('#L42')
     expect(onClose).toHaveBeenCalled()
   })

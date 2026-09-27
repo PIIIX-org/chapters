@@ -151,4 +151,21 @@ describe('Graph Perspectives API', () => {
     const list = listRes.json() as Array<{ id: string }>
     expect(list.some((p) => p.id === created.id)).toBe(false)
   })
+
+  it('safely rejects malformed non-UUID parameters with 404 instead of throwing 500', async () => {
+    const listRes = await app.inject({
+      method: 'GET',
+      url: '/api/graph/perspectives?vaultId=invalid-not-uuid',
+      headers: { cookie: ownerCookie },
+    })
+    expect(listRes.statusCode).toBe(404)
+
+    const deleteRes = await app.inject({
+      method: 'DELETE',
+      url: '/api/graph/perspectives/not-a-uuid-string',
+      headers: { cookie: ownerCookie },
+    })
+    expect(deleteRes.statusCode).toBe(404)
+    expect(deleteRes.json()).toEqual({ error: 'not found' })
+  })
 })

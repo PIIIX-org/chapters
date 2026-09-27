@@ -150,7 +150,7 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
                   const linkTarget =
                     node.resourceType === 'note'
                       ? `/vaults/${node.resourceId}/notes/${node.path}`
-                      : `/repos/${node.resourceId}/tree/${node.path}`
+                      : `/repos/${node.resourceId}/files/${node.path}`
 
                   return (
                     <li key={node.id} className="flex flex-col">
