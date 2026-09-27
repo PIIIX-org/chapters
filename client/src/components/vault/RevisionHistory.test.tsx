@@ -38,6 +38,7 @@ const REVISIONS: Revision[] = [
 
 const REVERT = { name: /^Revert to the version from / }
 const PURGE = { name: /^Purge the version from / }
+const PREVIEW = { name: /^Preview changes from / }
 
 function renderWithClient(ui: React.ReactNode) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -181,5 +182,101 @@ describe('RevisionHistory', () => {
     // human (design system, authorship rule).
     expect(collabRow.querySelector('.text-primary')).not.toBeNull()
     expect(collabRow.querySelector('.text-accent')).toBeNull()
+  })
+
+  it('opens diff preview modal showing visual additions and deletions comparing revision against current note', async () => {
+    stubFetch((url) => {
+      if (url.includes('/api/vaults/v1/revisions/rev-user')) {
+        return mockJsonResponse(200, {
+          id: 'rev-user',
+          noteId: 'n1',
+          path: 'notes/one.md',
+          actorType: 'user',
+          actorId: 'u1',
+          action: 'create',
+          frontmatter: { title: 'Old Title' },
+          body: 'Old line 1\nCommon line',
+          createdAt: '2026-08-19T09:15:00.000Z',
+        })
+      }
+      if (url.includes('/api/vaults/v1/notes/notes/one.md')) {
+        return mockJsonResponse(200, {
+          path: 'notes/one.md',
+          frontmatter: { title: 'New Title' },
+          body: 'Current line 1\nCommon line',
+          updatedAt: '2026-08-20T14:30:00.000Z',
+        })
+      }
+      return undefined
+    })
+
+    renderWithClient(<RevisionHistory vaultId="v1" path="notes/one.md" access="edit" />)
+    const userRow = await row('by a person')
+    await userEvent.click(within(userRow).getByRole('button', PREVIEW))
+
+    // Modal opens
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toBeTruthy()
+    expect(screen.getByText('Revision diff preview')).toBeTruthy()
+
+    // Additions and deletions highlights
+    expect(screen.getByText('Current line 1')).toBeTruthy()
+    expect(screen.getByText('Old line 1')).toBeTruthy()
+    expect(screen.getByText('Common line')).toBeTruthy()
+
+    // Frontmatter changes
+    expect(screen.getByText('Frontmatter Changes')).toBeTruthy()
+
+    await expectNoA11yViolations(dialog)
+  })
+
+  it('allows reverting to the revision directly from the preview modal', async () => {
+    const fetchMock = stubFetch((url, init) => {
+      if (url.includes('/api/vaults/v1/revisions/rev-user')) {
+        return mockJsonResponse(200, {
+          id: 'rev-user',
+          noteId: 'n1',
+          path: 'notes/one.md',
+          actorType: 'user',
+          actorId: 'u1',
+          action: 'create',
+          frontmatter: {},
+          body: 'Old content',
+          createdAt: '2026-08-19T09:15:00.000Z',
+        })
+      }
+      if (url.includes('/api/vaults/v1/notes/notes/one.md')) {
+        return mockJsonResponse(200, {
+          path: 'notes/one.md',
+          frontmatter: {},
+          body: 'Current content',
+          updatedAt: '2026-08-20T14:30:00.000Z',
+        })
+      }
+      if (init?.method === 'POST') {
+        return mockJsonResponse(200, { id: 'n1', path: 'notes/one.md' })
+      }
+      return undefined
+    })
+
+    renderWithClient(<RevisionHistory vaultId="v1" path="notes/one.md" access="edit" />)
+    const userRow = await row('by a person')
+    await userEvent.click(within(userRow).getByRole('button', PREVIEW))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toBeTruthy()
+
+    const modalRevertBtn = within(dialog).getByRole('button', { name: /^Confirm revert to revision from/ })
+    await userEvent.click(modalRevertBtn)
+
+    const confirmBtn = within(dialog).getByRole('button', { name: 'Revert to this version' })
+    await userEvent.click(confirmBtn)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/vaults/v1/revert/notes/one.md',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ revisionId: 'rev-user' }) }),
+      )
+    })
   })
 })

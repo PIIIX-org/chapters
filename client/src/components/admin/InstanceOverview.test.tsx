@@ -85,4 +85,96 @@ describe('InstanceOverview', () => {
     expect(screen.getByText('pnpm restore-backup')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /restore/i })).toBeNull()
   })
+
+  it('renders configured automated backup details and triggers manual backup', async () => {
+    let backupRunCalled = false
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/me') return Promise.resolve(mockJsonResponse(200, ADMIN_SESSION))
+      if (url.startsWith('/api/admin/stats')) return Promise.resolve(mockJsonResponse(200, STATS))
+      if (url === '/api/admin/backup/status') {
+        return Promise.resolve(
+          mockJsonResponse(200, {
+            configured: true,
+            destinations: ['local', 's3'],
+            localPath: '/var/backups/chapters',
+            s3Bucket: 'my-chapters-bucket',
+            s3Prefix: 'chapters-backups/',
+            retentionCount: 5,
+            intervalHours: 12,
+            lastRunAt: '2026-09-27T10:00:00.000Z',
+            lastStatus: 'success',
+            lastError: null,
+            lastFilename: 'chapters-backup-2026-09-27.zip',
+            lastSizeBytes: 5242880,
+          }),
+        )
+      }
+      if (url === '/api/admin/backup/run' && init?.method === 'POST') {
+        backupRunCalled = true
+        return Promise.resolve(
+          mockJsonResponse(200, {
+            success: true,
+            result: {
+              filename: 'chapters-backup-2026-09-27T12-00-00.zip',
+              sizeBytes: 5242880,
+              destinations: ['local', 's3'],
+              prunedCount: 1,
+              completedAt: '2026-09-27T12:00:00.000Z',
+            },
+          }),
+        )
+      }
+      return Promise.resolve(mockJsonResponse(404, { error: 'not found' }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { container } = renderWithClient(<InstanceOverview />)
+
+    expect(await screen.findByText('Configured')).toBeInTheDocument()
+    expect(screen.getByText('/var/backups/chapters')).toBeInTheDocument()
+    expect(screen.getByText(/my-chapters-bucket/)).toBeInTheDocument()
+    expect(screen.getByText(/every 12h/)).toBeInTheDocument()
+
+    const runButton = screen.getByRole('button', { name: 'Run backup now' })
+    expect(runButton).toBeInTheDocument()
+    runButton.click()
+
+    expect(await screen.findByText(/Backup snapshot created successfully/)).toBeInTheDocument()
+    expect(backupRunCalled).toBe(true)
+
+    await expectNoA11yViolations(container)
+  })
+
+  it('renders sync error state when backup execution has failed', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/me') return Promise.resolve(mockJsonResponse(200, ADMIN_SESSION))
+      if (url.startsWith('/api/admin/stats')) return Promise.resolve(mockJsonResponse(200, STATS))
+      if (url === '/api/admin/backup/status') {
+        return Promise.resolve(
+          mockJsonResponse(200, {
+            configured: true,
+            destinations: ['s3'],
+            s3Bucket: 'my-chapters-bucket',
+            retentionCount: 7,
+            intervalHours: 24,
+            lastRunAt: '2026-09-27T10:00:00.000Z',
+            lastStatus: 'error',
+            lastError: 'S3 upload failed (403 Forbidden): InvalidAccessKeyId',
+            lastFilename: null,
+            lastSizeBytes: null,
+          }),
+        )
+      }
+      return Promise.resolve(mockJsonResponse(404, { error: 'not found' }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { container } = renderWithClient(<InstanceOverview />)
+
+    expect(await screen.findByText('Sync Error')).toBeInTheDocument()
+    expect(screen.getByText(/InvalidAccessKeyId/)).toBeInTheDocument()
+
+    await expectNoA11yViolations(container)
+  })
 })
+

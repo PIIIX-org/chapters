@@ -160,4 +160,53 @@ describe('buildGraph over repositories', () => {
     expect(withoutRepo.edges.some((e) => e.kind === 'extracted')).toBe(false)
     await app.close()
   })
+
+  it('resolves repo wikilinks with symbol anchors, colons, and direct repo UUIDs into extracted edges', async () => {
+    const app = await buildApp()
+    await app.ready()
+    const owner = await createActiveUser()
+    const cookie = await loginCookie(app, owner.email)
+    const repo = await makeRepo()
+    await db.update(repositories).set({ name: 'code-repo' }).where(eq(repositories.id, repo.id))
+    await syncRepositoryFiles(repo.id, [{ path: 'src/main.ts', content: 'export function run() {}' }], ['src/main.ts'])
+    await flushExtraction()
+
+    const vault = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/vaults',
+        headers: { cookie },
+        body: { name: 'anchors-vault' },
+      })
+    ).json() as { id: string }
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vault.id}/notes`,
+      headers: { cookie },
+      body: {
+        type: 'docs',
+        name: 'notes-with-anchors',
+        body: `Links:
+- Symbol anchor: [[repo:code-repo/src/main.ts#run]]
+- Colon separator and line anchor: [[repo:code-repo:src/main.ts#L10]]
+- Repo UUID: [[repo:${repo.id}/src/main.ts]]`,
+      },
+    })
+
+    const graph = await buildGraph({ vaultIds: [vault.id], repositoryIds: [repo.id] })
+    const noteNode = graph.nodes.find((n) => n.path === 'docs/notes-with-anchors')!
+    const codeNode = graph.nodes.find((n) => n.path === 'src/main.ts')!
+    expect(
+      graph.edges.some(
+        (e) =>
+          e.kind === 'extracted' &&
+          ((e.source === noteNode.id && e.target === codeNode.id) ||
+            (e.source === codeNode.id && e.target === noteNode.id)),
+      ),
+    ).toBe(true)
+
+    await app.close()
+  })
 })
+

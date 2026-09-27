@@ -193,6 +193,39 @@ describe('SearchOverlay', () => {
     expect(storedRecents()).toHaveLength(0)
   })
 
+  it('renders symbol results and clicking navigates to file and line', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const symbolFixture = [
+      {
+        resourceType: 'symbol',
+        id: 's1',
+        containerId: 'r1',
+        path: 'src/token.ts',
+        symbolName: 'generateAuthToken',
+        symbolKind: 'function',
+        startLine: 42,
+        endLine: 45,
+        snippet: 'export function generateAuthToken()',
+        score: 0.88,
+      },
+    ]
+    stubFetch(() => mockJsonResponse(200, symbolFixture))
+    const { onClose, router, container } = renderOverlay(true)
+
+    await search(user, 'generateAuthToken')
+    await waitFor(() => expect(screen.getByText('generateAuthToken')).toBeInTheDocument())
+    expect(screen.getByText('function')).toBeInTheDocument()
+    expect(screen.getByText('src/token.ts:42')).toBeInTheDocument()
+
+    await expectNoA11yViolations(container)
+
+    await user.click(screen.getByText('generateAuthToken'))
+    expect(router.state.location.pathname).toBe('/repos/r1/tree/src/token.ts')
+    expect(router.state.location.hash).toBe('#L42')
+    expect(onClose).toHaveBeenCalled()
+  })
+
   it('renders an alert with a retry button on search failure, never the empty state', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })

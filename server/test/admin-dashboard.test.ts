@@ -307,4 +307,46 @@ describe('admin oversight dashboard', () => {
     })
     expect(selfDemote.statusCode).toBe(400)
   })
+
+  it('allows deactivating and reactivating users', async () => {
+    const user = await createActiveUser({ role: 'member' })
+    const userCookie = await loginCookie(app, user.email)
+
+    // Deactivate user
+    const deactRes = await app.inject({
+      method: 'POST',
+      url: `/api/admin/users/${user.id}/deactivate`,
+      headers: { cookie: adminCookie },
+    })
+    expect(deactRes.statusCode).toBe(200)
+    expect(deactRes.json()).toEqual({ status: 'deactivated' })
+
+    // User is kicked / cannot access auth routes
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/me', headers: { cookie: userCookie } })).statusCode,
+    ).toBe(401)
+
+    // Reactivate user
+    const reactRes = await app.inject({
+      method: 'POST',
+      url: `/api/admin/users/${user.id}/reactivate`,
+      headers: { cookie: adminCookie },
+    })
+    expect(reactRes.statusCode).toBe(200)
+    expect(reactRes.json()).toEqual({ status: 'active' })
+
+    // Non-deactivated user returns 404 when trying to reactivate again
+    const dupRes = await app.inject({
+      method: 'POST',
+      url: `/api/admin/users/${user.id}/reactivate`,
+      headers: { cookie: adminCookie },
+    })
+    expect(dupRes.statusCode).toBe(404)
+
+    // Reactivated user can log in again
+    const newCookie = await loginCookie(app, user.email)
+    const meRes = await app.inject({ method: 'GET', url: '/api/me', headers: { cookie: newCookie } })
+    expect(meRes.statusCode).toBe(200)
+    expect((meRes.json() as { id: string }).id).toBe(user.id)
+  })
 })

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { useLocation, useNavigate, useParams } from 'react-router'
 import {
   canShowInline,
   CodeViewer,
@@ -56,6 +56,7 @@ export function RepositoryPage() {
   // The splat is the file path, with its slashes intact. Empty at
   // `/repos/:id/files` — a real state (no file chosen yet), not a missing one.
   const path = useParams()['*'] ?? ''
+  const location = useLocation()
   const navigate = useNavigate()
   const [connecting, setConnecting] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -184,7 +185,14 @@ export function RepositoryPage() {
         {path ? (
           // Keyed on the file: the viewer mounts one document per file and
           // has no cursor or history worth carrying across a switch.
-          <CodeViewer key={path} ref={viewerRef} repository={repo} path={path} meta={openFile} />
+          <CodeViewer
+            key={path}
+            ref={viewerRef}
+            repository={repo}
+            path={path}
+            meta={openFile}
+            initialAnchor={location.hash}
+          />
         ) : (
           <PanelState
             status="empty"

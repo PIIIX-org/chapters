@@ -3,19 +3,25 @@ import { atLeast, listUsersWithAccess, resolveAccess, type Access } from '../vau
 import { OkfValidationError } from './okf.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
+import { writeThroughCollab } from '../sync/crdt-write.js'
 import {
   createNote,
+  getIncomingLinks,
+  getLocalGraph,
+  getRevision,
+  listAssets,
   listRevisionMeta,
   purgeRevision,
+  readAsset,
   revertNote,
   listNotes,
   listTrash,
   readNote,
   renameNote,
   restoreNote,
+  saveAsset,
   softDeleteNote,
   splitPath,
-  updateNote,
 } from './store.js'
 
 type VaultReq = FastifyRequest<{ Params: { id: string; '*': string } }>
@@ -97,7 +103,7 @@ export function noteRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!(await guard(req, reply, 'edit'))) return
       splitPath(req.params['*'])
-      const updated = await updateNote(req.params.id, req.params['*'], req.body, {
+      const updated = await writeThroughCollab(req.params.id, req.params['*'], req.body, {
         type: 'user',
         id: req.user!.id,
       })
@@ -123,7 +129,7 @@ export function noteRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!(await guard(req as VaultReq, reply, 'edit'))) return
       splitPath(req.body.from)
-      const renamed = await renameNote(req.params.id, req.body.from, req.body.to)
+      const renamed = await renameNote(req.params.id, req.body.from, req.body.to, writeThroughCollab)
       if (!renamed) return reply.code(404).send({ error: 'note not found' })
       return renamed
     },
@@ -201,6 +207,30 @@ export function noteRoutes(app: FastifyInstance) {
     },
   )
 
+  app.get<{ Params: { id: string; '*': string } }>(
+    '/vaults/:id/backlinks/*',
+    async (req, reply) => {
+      if (!(await guard(req as VaultReq, reply, 'read'))) return
+      splitPath(req.params['*'])
+      const backlinks = await getIncomingLinks(req.params.id, req.params['*'])
+      if (!backlinks) return reply.code(404).send({ error: 'note not found' })
+      return backlinks
+    },
+  )
+
+  app.get<{ Params: { id: string; '*': string }; Querystring: { depth?: string } }>(
+    '/vaults/:id/local-graph/*',
+    async (req, reply) => {
+      if (!(await guard(req as VaultReq, reply, 'read'))) return
+      splitPath(req.params['*'])
+      const rawDepth = Number(req.query?.depth ?? 1)
+      const depth = Number.isInteger(rawDepth) && rawDepth >= 1 && rawDepth <= 2 ? rawDepth : 1
+      const graph = await getLocalGraph(req.params.id, req.params['*'], depth)
+      if (!graph) return reply.code(404).send({ error: 'note not found' })
+      return graph
+    },
+  )
+
   app.post<{ Params: { id: string; '*': string }; Body: { revisionId: string } }>(
     '/vaults/:id/revert/*',
     {
@@ -215,13 +245,43 @@ export function noteRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!(await guard(req, reply, 'edit'))) return
       splitPath(req.params['*'])
-      const reverted = await revertNote(req.params.id, req.params['*'], req.body.revisionId, {
-        type: 'user',
-        id: req.user!.id,
-      })
+      const reverted = await revertNote(
+        req.params.id,
+        req.params['*'],
+        req.body.revisionId,
+        {
+          type: 'user',
+          id: req.user!.id,
+        },
+        writeThroughCollab,
+      )
       if (!reverted) return reply.code(404).send({ error: 'note or revision not found' })
       await notifyRevert(req.params.id, req.params['*'], req.user!.id)
       return reverted
+    },
+  )
+
+  app.get<{ Params: { id: string; revisionId: string } }>(
+    '/vaults/:id/revisions/:revisionId',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id', 'revisionId'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            revisionId: { type: 'string', format: 'uuid' },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      // Audit rule: inspecting history and revisions requires edit access.
+      const access = await resolveAccess(req.user!.id, req.params.id)
+      if (!atLeast(access, 'edit')) return reply.code(404).send({ error: 'not found' })
+      const revision = await getRevision(req.params.id, req.params.revisionId)
+      if (!revision) return reply.code(404).send({ error: 'revision not found' })
+      return revision
     },
   )
 
@@ -240,6 +300,46 @@ export function noteRoutes(app: FastifyInstance) {
         detail: { vaultId: req.params.id, revisionId: req.params.revisionId },
       })
       return { status: 'purged' }
+    },
+  )
+
+  app.post<{ Params: { id: string } }>(
+    '/vaults/:id/assets',
+    async (req, reply) => {
+      if (!(await guard(req as unknown as VaultReq, reply, 'edit'))) return
+      const file = await req.file()
+      if (!file) return reply.code(400).send({ error: 'file required' })
+      const buffer = await file.toBuffer()
+      const asset = await saveAsset(req.params.id, file.filename, buffer)
+      return {
+        fileName: asset.fileName,
+        url: `/api/vaults/${req.params.id}/assets/${asset.fileName}`,
+        path: `assets/${asset.fileName}`,
+        size: asset.size,
+        mimeType: asset.mimeType,
+      }
+    },
+  )
+
+  app.get<{ Params: { id: string; fileName: string } }>(
+    '/vaults/:id/assets/:fileName',
+    async (req, reply) => {
+      if (!(await guard(req as unknown as VaultReq, reply, 'read'))) return
+      const asset = await readAsset(req.params.id, req.params.fileName)
+      if (!asset) return reply.code(404).send({ error: 'asset not found' })
+      return reply
+        .header('content-type', asset.mimeType)
+        .header('cache-control', 'public, max-age=86400, immutable')
+        .send(asset.buffer)
+    },
+  )
+
+  app.get<{ Params: { id: string } }>(
+    '/vaults/:id/assets',
+    async (req, reply) => {
+      if (!(await guard(req as unknown as VaultReq, reply, 'read'))) return
+      const assets = await listAssets(req.params.id)
+      return { assets }
     },
   )
 }

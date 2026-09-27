@@ -5,6 +5,7 @@ import { EditorView } from '@codemirror/view'
 import { useNote } from '../../hooks/useNote.js'
 import { useCreateNote } from '../../hooks/useCreateNote.js'
 import { useVaultTree } from '../../hooks/useVaultTree.js'
+import { useRepositories } from '../../hooks/useRepositories.js'
 import { useCodeMirrorEditor } from '../../hooks/useCodeMirrorEditor.js'
 import { useCollabDoc } from '../../hooks/useCollabDoc.js'
 import { useLiveNote } from '../../hooks/useLiveNote.js'
@@ -17,6 +18,8 @@ import { CollabStatusLine, collabShellStatus } from '../../components/vault/Coll
 import { CollaboratorAvatars } from '../../components/vault/CollaboratorAvatars.js'
 import { NoteActions } from '../../components/vault/NoteActions.js'
 import { RevokedNotice } from '../../components/vault/RevokedNotice.js'
+import { BacklinksPanel } from '../../components/vault/BacklinksPanel.js'
+import { LocalGraphPanel } from '../../components/vault/LocalGraphPanel.js'
 import { RevisionHistory } from '../../components/vault/RevisionHistory.js'
 import { SharingPanel } from '../../components/vault/SharingPanel.js'
 import {
@@ -29,7 +32,7 @@ import {
   useNoteDirection,
 } from '../../components/vault/note-toolbar-utils.js'
 import type { NoteDirection } from '../../components/vault/note-toolbar-utils.js'
-import { History, Share2, SlidersHorizontal } from 'lucide-react'
+import { History, Link2, Network, Share2, SlidersHorizontal } from 'lucide-react'
 import { Inspector, PanelRailButton, PanelRailNav } from '../../components/shell/ShellPanels.js'
 import { useOptionalShell, usePanel, useShellStatus } from '../../components/shell/shell-context.js'
 import type { ShellStatus } from '../../components/shell/shell-context.js'
@@ -136,6 +139,7 @@ interface NoteFrameProps {
   readOnly?: boolean
   direction?: NoteDirection
   onDirectionChange?: (direction: NoteDirection) => void
+  vaultId?: string
 }
 
 function NoteFrame({
@@ -147,6 +151,7 @@ function NoteFrame({
   readOnly = false,
   direction = 'ltr',
   onDirectionChange,
+  vaultId,
 }: NoteFrameProps) {
   const [width, setWidth] = useNoteWidth()
   const shell = useOptionalShell()
@@ -173,6 +178,7 @@ function NoteFrame({
             onWidthChange={setWidth}
             direction={direction}
             onDirectionChange={onDirectionChange}
+            vaultId={vaultId}
           />
         </div>
         <NoteFloatingSelectionToolbar view={view} readOnly={readOnly} />
@@ -211,15 +217,17 @@ function NotePath({ vaultName, vaultId, path }: { vaultName: string | undefined;
 
 interface NoteInspectorProps {
   properties: ReactNode
+  backlinks?: ReactNode
+  graph?: ReactNode
   history: ReactNode
   /** Owner-only: shares are the owner's to grant, so nobody else gets the tab. */
   sharing?: ReactNode
 }
 
-/** The note's detail, as inspector tabs — the property panel, the revision
- *  history and (for the owner) sharing all fold in here. */
-function NoteInspector({ properties, history, sharing }: NoteInspectorProps) {
-  const [tab, setTab] = useState<'properties' | 'history' | 'sharing'>('properties')
+/** The note's detail, as inspector tabs — the property panel, backlinks, local graph,
+ *  the revision history and (for the owner) sharing all fold in here. */
+function NoteInspector({ properties, backlinks, graph, history, sharing }: NoteInspectorProps) {
+  const [tab, setTab] = useState<'properties' | 'backlinks' | 'graph' | 'history' | 'sharing'>('properties')
   const panel = usePanel()
 
   if (panel && !panel.open) {
@@ -231,6 +239,22 @@ function NoteInspector({ properties, history, sharing }: NoteInspectorProps) {
           active={tab === 'properties'}
           onClick={() => setTab('properties')}
         />
+        {backlinks != null && (
+          <PanelRailButton
+            icon={Link2}
+            label="Backlinks"
+            active={tab === 'backlinks'}
+            onClick={() => setTab('backlinks')}
+          />
+        )}
+        {graph != null && (
+          <PanelRailButton
+            icon={Network}
+            label="Graph"
+            active={tab === 'graph'}
+            onClick={() => setTab('graph')}
+          />
+        )}
         <PanelRailButton
           icon={History}
           label="History"
@@ -253,12 +277,24 @@ function NoteInspector({ properties, history, sharing }: NoteInspectorProps) {
     <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="flex min-h-0 flex-1 flex-col">
       <TabsList>
         <TabsTrigger value="properties">Properties</TabsTrigger>
+        {backlinks != null && <TabsTrigger value="backlinks">Backlinks</TabsTrigger>}
+        {graph != null && <TabsTrigger value="graph">Graph</TabsTrigger>}
         <TabsTrigger value="history">History</TabsTrigger>
         {sharing != null && <TabsTrigger value="sharing">Sharing</TabsTrigger>}
       </TabsList>
       <TabsContent value="properties" className="flex-1 overflow-y-auto p-3">
         {properties}
       </TabsContent>
+      {backlinks != null && (
+        <TabsContent value="backlinks" className="flex-1 overflow-y-auto p-3">
+          {backlinks}
+        </TabsContent>
+      )}
+      {graph != null && (
+        <TabsContent value="graph" className="flex-1 overflow-y-auto p-3">
+          {graph}
+        </TabsContent>
+      )}
       <TabsContent value="history" className="flex-1 overflow-y-auto p-3">
         {history}
       </TabsContent>
@@ -276,6 +312,7 @@ function useWikilinks(vaultId: string, canCreate: boolean) {
   const navigate = useNavigate()
   const createNote = useCreateNote(vaultId)
   const tree = useVaultTree(vaultId)
+  const repos = useRepositories()
   const targets = tree.data ? Object.values(tree.data).flat().map((n) => n.path) : []
 
   return {
@@ -288,6 +325,7 @@ function useWikilinks(vaultId: string, canCreate: boolean) {
         canCreate,
         (to) => navigate(to),
         (input, onSettled) => createNote.mutate(input, { onSettled }),
+        repos.data,
       ),
   }
 }
@@ -366,6 +404,7 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
     collab: strandedOffline ? undefined : { ytext, awareness: collab.awareness },
     direction,
     onView: setEditorView,
+    vaultId,
   })
 
   // "Synced 10:04" needs the moment `synced` last became true. Tracked with
@@ -388,6 +427,7 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
       readOnly={locked}
       direction={direction}
       onDirectionChange={setDirection}
+      vaultId={vaultId}
       bar={
         <>
           <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />
@@ -408,6 +448,8 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
       inspector={
         <NoteInspector
           properties={<CollabPropertyPanel frontmatter={collab.ydoc.getMap('frontmatter')} readOnly={locked} />}
+          backlinks={<BacklinksPanel vaultId={vaultId} path={path} />}
+          graph={<LocalGraphPanel vaultId={vaultId} path={path} />}
           // RevisionHistory explains itself to a downgraded (now read) viewer
           // instead of firing a request that can only 403.
           history={<RevisionHistory vaultId={vaultId} path={path} access={access} />}
@@ -461,6 +503,7 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
     onWikilinkClick: wikilinks.onClick,
     direction,
     onView: setEditorView,
+    vaultId,
   })
 
   // The editor is built once, around the first body it is given. Later frames
@@ -480,6 +523,7 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
       readOnly={true}
       direction={direction}
       onDirectionChange={setDirection}
+      vaultId={vaultId}
       bar={
         <>
           <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />
@@ -492,6 +536,8 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
       inspector={
         <NoteInspector
           properties={<LivePropertyPanel frontmatter={state.frontmatter} />}
+          backlinks={<BacklinksPanel vaultId={vaultId} path={path} />}
+          graph={<LocalGraphPanel vaultId={vaultId} path={path} />}
           // Same layout as an editor's, locked: RevisionHistory says why a
           // read-only viewer gets no list instead of rendering a 403.
           history={<RevisionHistory vaultId={vaultId} path={path} access="read" />}

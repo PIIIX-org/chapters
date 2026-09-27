@@ -286,3 +286,26 @@ export function syncHealth(
   if (repo.lastSyncedAt === null) return 'never-synced'
   return fileCount === 0 ? 'synced-empty' : 'synced'
 }
+
+export interface DriftItem {
+  noteId: string
+  notePath: string
+  vaultId: string
+  resource: string
+  expectedHash?: string
+  currentHash?: string | null
+  kind: 'hash_mismatch' | 'deleted_file' | 'missing_symbol'
+  detail: string
+}
+
+export interface RepositoryDriftResponse {
+  repositoryId: string
+  drifts: DriftItem[]
+}
+
+export async function getRepositoryDrift(
+  repositoryId: string,
+): Promise<RepositoryDriftResponse> {
+  return apiFetch(`/repositories/${repositoryId}/drift`)
+}
+

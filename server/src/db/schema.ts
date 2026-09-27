@@ -554,8 +554,13 @@ export const repositoryFileSymbols = pgTable(
     kind: text('kind').notNull(),
     startLine: integer('start_line').notNull(),
     endLine: integer('end_line').notNull(),
+    snippet: text('snippet'),
+    embedding: vector('embedding', { dimensions: 384 }),
   },
-  (t) => [index('repository_file_symbols_file_idx').on(t.fileId)],
+  (t) => [
+    index('repository_file_symbols_file_idx').on(t.fileId),
+    index('repository_file_symbols_name_idx').on(t.name),
+  ],
 )
 
 /** Auth for the agent/CLI push ingestion method — same lifecycle as an MCP token. */

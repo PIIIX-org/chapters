@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapters — Market Intelligence, User Cravings & Roadmap Strategy</title>
+<style>
+  :root {
+    --bg: #070A0F;
+    --surface: #0F141F;
+    --card: #161C2A;
+    --card-hover: #1C2436;
+    --border: #1E2738;
+    --text: #E2E8F0;
+    --text-dim: #8B95A8;
+    --blue: #38BDF8;
+    --teal: #2DD4BF;
+    --red: #F87171;
+    --orange: #FB923C;
+    --yellow: #FACC15;
+    --green: #4ADE80;
+    --purple: #A78BFA;
+    --pink: #F472B6;
+    --gray: #64748B;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    min-height: 100vh;
+    padding-bottom: 5rem;
+  }
+  .container { max-width: 1080px; margin: 0 auto; padding: 2.5rem 1.5rem; }
+
+  /* Header */
+  .header { text-align: center; margin-bottom: 2.5rem; }
+  .badge-mvp {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    background: rgba(45, 212, 191, 0.15);
+    color: var(--teal);
+    border: 1px solid rgba(45, 212, 191, 0.3);
+    margin-bottom: 1rem;
+  }
+  .header h1 {
+    font-size: 2.35rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    margin-bottom: 0.75rem;
+    line-height: 1.2;
+  }
+  .header h1 span { color: var(--teal); }
+  .header p { color: var(--text-dim); font-size: 1.08rem; max-width: 780px; margin: 0 auto; }
+
+  /* Metrics Grid */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1.1rem;
+    margin: 2.5rem 0 3rem;
+  }
+  .metric-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.35rem;
+    text-align: center;
+    transition: transform 0.2s, border-color 0.2s;
+  }
+  .metric-card:hover { transform: translateY(-2px); border-color: #2F3D55; }
+  .metric-num { font-size: 2.3rem; font-weight: 800; line-height: 1.1; margin-bottom: 0.35rem; }
+  .metric-label { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
+  .metric-sub { font-size: 0.75rem; color: var(--gray); margin-top: 0.25rem; }
+
+  /* Filter bar */
+  .filter-bar {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-bottom: 2.5rem;
+    justify-content: center;
+    position: sticky;
+    top: 1rem;
+    z-index: 50;
+    background: rgba(7, 10, 15, 0.9);
+    backdrop-filter: blur(14px);
+    padding: 0.75rem;
+    border-radius: 999px;
+    border: 1px solid rgba(30, 39, 56, 0.9);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  }
+  .filter-btn {
+    padding: 0.45rem 1.15rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+  .filter-btn:hover { border-color: var(--text-dim); color: var(--text); }
+  .filter-btn.active {
+    background: var(--teal);
+    border-color: var(--teal);
+    color: #070A0F;
+    font-weight: 700;
+  }
+  .filter-btn .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  /* Section Title */
+  .section-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 3.5rem 0 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-icon {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.15rem;
+    flex-shrink: 0;
+  }
+  .section-heading h2 { font-size: 1.35rem; font-weight: 700; }
+  .section-count {
+    margin-left: auto;
+    font-size: 0.78rem;
+    padding: 0.2rem 0.65rem;
+    border-radius: 999px;
+    font-weight: 700;
+  }
+
+  /* Card */
+  .audit-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    margin-bottom: 1.1rem;
+    overflow: hidden;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .audit-card:hover { border-color: #2F3D55; }
+  .audit-card.open { border-color: #384C6E; box-shadow: 0 4px 28px rgba(0,0,0,0.35); }
+
+  .audit-header {
+    padding: 1.25rem 1.5rem;
+    cursor: pointer;
+    display: flex;
+    align-items: flex-start;
+    gap: 1.2rem;
+    user-select: none;
+    transition: background 0.15s ease;
+  }
+  .audit-header:hover { background: rgba(255,255,255,0.02); }
+  .priority-bar {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-top: 0.55rem;
+    flex-shrink: 0;
+  }
+  .audit-main { flex: 1; }
+  .audit-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    line-height: 1.4;
+    color: var(--text);
+    margin-bottom: 0.35rem;
+  }
+  .audit-subtitle {
+    font-size: 0.9rem;
+    color: var(--text-dim);
+    line-height: 1.55;
+  }
+  .audit-tags {
+    display: flex;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    margin-top: 0.65rem;
+  }
+  .audit-tag {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.2rem 0.6rem;
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  .chevron {
+    color: var(--gray);
+    font-size: 1.2rem;
+    transition: transform 0.2s ease;
+    margin-top: 0.4rem;
+  }
+  .audit-card.open .chevron { transform: rotate(90deg); color: var(--teal); }
+
+  .audit-body {
+    display: none;
+    padding: 0 1.5rem 1.5rem 1.5rem;
+    border-top: 1px solid rgba(30, 39, 56, 0.6);
+    background: rgba(10, 14, 22, 0.5);
+  }
+  .audit-card.open .audit-body { display: block; }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.2rem;
+    margin-top: 1.25rem;
+  }
+  @media (max-width: 768px) {
+    .detail-grid { grid-template-columns: 1fr; }
+  }
+  .detail-block h4 {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .detail-block p, .detail-block ul {
+    font-size: 0.88rem;
+    color: #CBD5E1;
+    line-height: 1.6;
+  }
+  .detail-block ul { padding-left: 1.2rem; }
+  .detail-block li { margin-bottom: 0.35rem; }
+
+  .quote-box {
+    margin-top: 1.2rem;
+    padding: 0.9rem 1.2rem;
+    border-left: 3px solid var(--purple);
+    background: rgba(167, 139, 250, 0.06);
+    border-radius: 0 8px 8px 0;
+    font-size: 0.88rem;
+    color: #D8B4FE;
+    font-style: italic;
+  }
+  .quote-box strong { font-style: normal; color: var(--purple); }
+
+  .analogy-box {
+    margin-top: 1.2rem;
+    padding: 0.9rem 1.2rem;
+    border-left: 3px solid var(--teal);
+    background: rgba(45, 212, 191, 0.06);
+    border-radius: 0 8px 8px 0;
+    font-size: 0.88rem;
+    color: #99F6E4;
+  }
+
+  /* Table */
+  .table-container {
+    overflow-x: auto;
+    margin: 2rem 0;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    text-align: left;
+  }
+  th {
+    background: #141A28;
+    color: var(--text-dim);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255, 255, 255, 0.02); }
+  .badge-yes { color: var(--green); font-weight: 700; }
+  .badge-no { color: var(--red); opacity: 0.8; }
+  .badge-part { color: var(--yellow); }
+  .col-highlight { background: rgba(45, 212, 191, 0.05); font-weight: 600; color: var(--teal); }
+
+  .code-pill {
+    background: rgba(255,255,255,0.08);
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.82em;
+    color: var(--teal);
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="badge-mvp">Market Intelligence & Strategy • September 2026</div>
+    <h1>What the Industry Lacks & What Users <span>Desperately Crave</span></h1>
+    <p>A comprehensive deep-dive into developer knowledge bases, living documentation, AI agent workflows (MCP), and interactive graph UX.</p>
+  </div>
+
+  <!-- Metrics Grid -->
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-num" style="color:var(--red);">4</div>
+      <div class="metric-label">Industry Voids</div>
+      <div class="metric-sub">Systemic market blindspots</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-num" style="color:var(--orange);">6</div>
+      <div class="metric-label">Table Stakes (P0)</div>
+      <div class="metric-sub">Non-negotiable must-haves</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-num" style="color:var(--teal);">5</div>
+      <div class="metric-label">Differentiators (P1)</div>
+      <div class="metric-sub">Category-defining delighters</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-num" style="color:var(--purple);">6</div>
+      <div class="metric-label">Competitors Mapped</div>
+      <div class="metric-sub">Notion, Obsidian, Outline, Confluence, etc.</div>
+    </div>
+  </div>
+
+  <!-- Filter Bar -->
+  <div class="filter-bar">
+    <button class="filter-btn active" onclick="filterCategory('all', this)">
+      <span class="dot" style="background:var(--teal);"></span> All Findings (15)
+    </button>
+    <button class="filter-btn" onclick="filterCategory('must', this)">
+      <span class="dot" style="background:var(--red);"></span> 🚨 Must Add (P0)
+    </button>
+    <button class="filter-btn" onclick="filterCategory('good', this)">
+      <span class="dot" style="background:var(--teal);"></span> ✨ Good to Have (P1)
+    </button>
+    <button class="filter-btn" onclick="filterCategory('lacks', this)">
+      <span class="dot" style="background:var(--orange);"></span> 🛑 Industry Lacks
+    </button>
+    <button class="filter-btn" onclick="filterCategory('craves', this)">
+      <span class="dot" style="background:var(--purple);"></span> 💡 What Users Crave
+    </button>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 1: WHAT THE INDUSTRY LACKS -->
+  <!-- ============================================================== -->
+  <div class="section-heading" data-group="lacks">
+    <div class="section-icon" style="background:rgba(251,146,60,0.15); color:var(--orange);">🛑</div>
+    <h2>What the Industry Lacks (Market Blindspots)</h2>
+    <div class="section-count" style="background:rgba(251,146,60,0.15); color:var(--orange);">4 Gaps</div>
+  </div>
+
+  <!-- Item L1 -->
+  <div class="audit-card" data-category="lacks">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--red);"></div>
+      <div class="audit-main">
+        <div class="audit-title">The Code-Doc Schism ("The Truth Gap")</div>
+        <div class="audit-subtitle">Documentation tools live in a separate universe from Git repositories, causing ADRs and system specs to rot within weeks.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(248,113,113,0.2); color:var(--red);">Documentation Drift</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">Market Void</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> Imagine an architectural blueprint that never updates when the builders knock down a wall. New engineers consult the blueprint, walk directly into a brick wall, and learn to never trust documentation again.
+      </div>
+      <div class="detail-grid">
+        <div class="detail-block">
+          <h4>Why Existing Tools Fail</h4>
+          <p>Confluence, Notion, and Slite are decoupled from Git. When an engineer refactors code in a PR, updating external wiki pages is treated as an optional "Friday afternoon chore" that gets abandoned under deadline pressure.</p>
+        </div>
+        <div class="detail-block">
+          <h4>The Chapters Solution</h4>
+          <p>Host Markdown notes and synced Git repositories in the <strong>same application</strong>. Notes link to live code symbols (ASTs) rather than fragile line numbers, and webhook sync triggers drift alerts automatically.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Item L2 -->
+  <div class="audit-card" data-category="lacks">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--orange);"></div>
+      <div class="audit-main">
+        <div class="audit-title">The "Team Obsidian" Paradox</div>
+        <div class="audit-subtitle">Developers adore Obsidian's local-first speed and Markdown on disk, but deploying it across a team results in painful sync collisions and zero permissions.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(251,146,60,0.2); color:var(--orange);">Multiplayer PKM</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="quote-box">
+        <strong>💬 Hacker News Consensus:</strong> "We tried sharing an Obsidian vault with Git. Within two days, non-technical team members couldn't commit, and two devs editing the same note created merge conflicts that clobbered notes. We gave up and went back to Notion."
+      </div>
+      <div class="detail-grid">
+        <div class="detail-block">
+          <h4>The Missing Middle</h4>
+          <p>Obsidian is an uncompromising single-player PKM. Teams want its plain text files, instant keyboard navigation, and wikilink graph, but need conflict-free CRDT collaborative editing (Yjs) and server-side RBAC.</p>
+        </div>
+        <div class="detail-block">
+          <h4>How Chapters Solves It</h4>
+          <p>Notes live as plain Markdown files on disk, but live editing is coordinated through an in-memory <strong>Yjs collaborative CRDT relay</strong> with real-time permissions and revision snapshots.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Item L3 -->
+  <div class="audit-card" data-category="lacks">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--yellow);"></div>
+      <div class="audit-main">
+        <div class="audit-title">The Global Graph "Hairball" Fallacy</div>
+        <div class="audit-subtitle">Massive 3,000-node global graphs in PKM tools are dismissed as "aesthetic vanity" that provide zero daily navigation utility.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(250,204,21,0.2); color:var(--yellow);">Graph UX</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="analogy-box">
+        <strong>💡 In Plain English:</strong> Looking at a map of every single road in the entire world simultaneously is useless for driving home from the grocery store. You need a turn-by-turn local view of your immediate neighborhood.
+      </div>
+      <div class="detail-grid">
+        <div class="detail-block">
+          <h4>The Problem in Obsidian & Roam</h4>
+          <p>Users stare at an overwhelming bouncing ball of yarn. Finding a specific concept is 100x slower than pressing <span class="code-pill">Cmd+K</span>.</p>
+        </div>
+        <div class="detail-block">
+          <h4>The High-Utility Graph Pattern</h4>
+          <p>Engineers need <strong>Local Ego Graphs</strong> (showing only 1-2 degrees of separation from the current note/file), <strong>Concept Pathfinding</strong> (shortest path between two nodes), and <strong>Supernode Bottleneck Spotting</strong>.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Item L4 -->
+  <div class="audit-card" data-category="lacks">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">The AI Agent "Token Burn" Trap</div>
+        <div class="audit-subtitle">Current tools either dump massive raw files into AI agent contexts or use naive vector search that destroys architectural hierarchy.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">MCP Architecture</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="detail-grid">
+        <div class="detail-block">
+          <h4>The Pain for AI Coding Agents</h4>
+          <p>When Claude Desktop, Cursor, or Devin queries a repository, reading 10 full files burns 50k tokens and causes "lost-in-the-middle" reasoning errors. Naive RAG chunks miss function call hierarchies.</p>
+        </div>
+        <div class="detail-block">
+          <h4>The Progressive Disclosure Fix</h4>
+          <p>The knowledge base must serve summary catalogs and AST function headers first (Layer 1). The agent uses specific MCP tools to traverse relationships (Layer 2) and only reads exact line blocks on demand (Layer 3).</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 2: WHAT USERS CRAVE -->
+  <!-- ============================================================== -->
+  <div class="section-heading" data-group="craves">
+    <div class="section-icon" style="background:rgba(167,139,250,0.15); color:var(--purple);">💡</div>
+    <h2>What Users Crave (Unmet Desires & Emotional Drivers)</h2>
+    <div class="section-count" style="background:rgba(167,139,250,0.15); color:var(--purple);">3 Core Desires</div>
+  </div>
+
+  <!-- Item C1 -->
+  <div class="audit-card" data-category="craves">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--purple);"></div>
+      <div class="audit-main">
+        <div class="audit-title">"Why Does This Code Exist?" — The Living Lineage</div>
+        <div class="audit-subtitle">Developers desperately want to click a function in code and instantly see the ADR, whiteboard spec, or incident post-mortem that conceived it.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(167,139,250,0.2); color:var(--purple);">Developer Experience</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="quote-box">
+        <strong>💬 Reddit r/programming:</strong> "I spent 3 days debugging why an odd retry delay was set to 42 seconds, only to find an unlinked Slack discussion from 2 years ago explaining a third-party gateway bug. If our code linked to the design decision, I would have known in 5 seconds."
+      </div>
+    </div>
+  </div>
+
+  <!-- Item C2 -->
+  <div class="audit-card" data-category="craves">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--teal);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Sub-Millisecond Keystroke Latency</div>
+        <div class="audit-subtitle">Engineers crave tools that feel as fast as Vim/Sublime, rejecting the input lag and heavy DOM repaints of Notion and Confluence.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(45,212,191,0.2); color:var(--teal);">Performance</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <p style="font-size:0.9rem; color:#CBD5E1;">A local CodeMirror 6 editor with zero server roundtrip on typing, paired with asynchronous WebSocket sync, delivers the visceral satisfaction that keeps developers inside the wiki rather than writing notes in private text files.</p>
+    </div>
+  </div>
+
+  <!-- Item C3 -->
+  <div class="audit-card" data-category="craves">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--blue);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Zero-Maintenance Living Documentation</div>
+        <div class="audit-subtitle">Documentation that validates itself in CI, flags its own staleness, and updates AST references automatically when code moves.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(56,189,248,0.2); color:var(--blue);">Automation</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <p style="font-size:0.9rem; color:#CBD5E1;">When documentation maintenance feels like filing paperwork, it dies. When documentation automatically flags: <em>"Commit abc1234 changed the Session schema; 2 notes need review"</em>, keeping documentation fresh becomes an effortless automated guardrail.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 3: WHAT WE MUST ADD (TABLE STAKES / P0) -->
+  <!-- ============================================================== -->
+  <div class="section-heading" data-group="must">
+    <div class="section-icon" style="background:rgba(248,113,113,0.15); color:var(--red);">🚨</div>
+    <h2>What We MUST Add (Table Stakes / P0)</h2>
+    <div class="section-count" style="background:rgba(248,113,113,0.15); color:var(--red);">6 Priorities</div>
+  </div>
+
+  <!-- Item M1 -->
+  <div class="audit-card" data-category="must">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--red);"></div>
+      <div class="audit-main">
+        <div class="audit-title">1. Local Ego Graph (1–2 Hops) in Inspector</div>
+        <div class="audit-subtitle">Add an interactive neighborhood graph panel directly in the note and repository inspector, showing immediate 1-2 hop relationships.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(248,113,113,0.2); color:var(--red);">P0 Table Stakes</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">client/src/components/vault/NoteInspector.tsx</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="detail-grid">
+        <div class="detail-block">
+          <h4>Why It Is P0</h4>
+          <p>Global graphs are overwhelming; local graphs are indispensable. Placing an ego graph right beside the active note transforms the graph from an occasional dashboard into a continuous thinking partner.</p>
+        </div>
+        <div class="detail-block">
+          <h4>Implementation Plan</h4>
+          <p>Query existing <span class="code-pill">/api/vaults/:id/graph</span> filtered to <span class="code-pill">depth=1..2</span> around the active note. Render using the existing canvas force simulation in a compact 300px sidebar tab.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Item M2 -->
+  <div class="audit-card" data-category="must">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--red);"></div>
+      <div class="audit-main">
+        <div class="audit-title">2. Flowcharts (Mermaid) & Math (KaTeX) Rendering</div>
+        <div class="audit-subtitle">Support live rendering of architecture diagrams, sequence flows, and formulas inside Markdown notes.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(248,113,113,0.2); color:var(--red);">P0 Table Stakes</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">client/src/components/editor/</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="detail-grid">
+        <div class="detail-block">
+          <h4>Why It Is P0</h4>
+          <p>Technical architecture notes are incomplete without sequence diagrams and flowcharts. Engineers will not write system specs or RFCs in a tool that cannot render Mermaid diagrams.</p>
+        </div>
+        <div class="detail-block">
+          <h4>Implementation Plan</h4>
+          <p>Add lazy-loaded Mermaid.js and KaTeX extensions to the CodeMirror 6 markdown stack. Only load the heavy parser bundles when a code block contains <span class="code-pill">```mermaid</span> or math delimiters.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Item M3 -->
+  <div class="audit-card" data-category="must">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--red);"></div>
+      <div class="audit-main">
+        <div class="audit-title">3. AST-Anchored Note-to-Code Links</div>
+        <div class="audit-subtitle">Enable wikilinks to reference parsed AST symbols (functions, classes, interfaces) that persist across line edits and refactors.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(248,113,113,0.2); color:var(--red);">P0 Table Stakes</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">server/src/repos/ast/</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="detail-grid">
+        <div class="detail-block">
+          <h4>Why It Is P0</h4>
+          <p>Linking to line numbers is fragile and breaks on the very next commit. Anchoring links to symbol names (e.g. <span class="code-pill">[[repo:backend/auth.ts#TokenService]]</span>) ensures links survive normal code evolution.</p>
+        </div>
+        <div class="detail-block">
+          <h4>Implementation Plan</h4>
+          <p>Leverage the existing tree-sitter AST extraction in <span class="code-pill">repository_symbols</span> table to resolve symbol target offsets dynamically when clicking a code link.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Item M4 -->
+  <div class="audit-card" data-category="must">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--red);"></div>
+      <div class="audit-main">
+        <div class="audit-title">4. Automated Scheduled Backups to Object Storage (#260)</div>
+        <div class="audit-subtitle">Provide automated, scheduled snapshots of database and vault disk files to S3, GCS, or local backup directory with retention policy.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(248,113,113,0.2); color:var(--red);">P0 Table Stakes</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">server/src/backup/</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="detail-grid">
+        <div class="detail-block">
+          <h4>Why It Is P0</h4>
+          <p>Teams self-hosting on Docker/VPS refuse to store mission-critical knowledge without automated disaster recovery. A single accidental <span class="code-pill">docker compose down -v</span> currently destroys all data if manual export wasn't run.</p>
+        </div>
+        <div class="detail-block">
+          <h4>Implementation Plan</h4>
+          <p>Implement a lightweight cron worker that runs <span class="code-pill">pg_dump</span> + zips the vault data directory to a configured path or S3 bucket, pruning backups older than N days.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Item M5 -->
+  <div class="audit-card" data-category="must">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--red);"></div>
+      <div class="audit-main">
+        <div class="audit-title">5. Git Webhook Documentation Drift Detection</div>
+        <div class="audit-subtitle">When a push webhook is received from GitHub/GitLab, inspect changed files and flag linked notes with an "Unverified / Needs Review" trust badge.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(248,113,113,0.2); color:var(--red);">P0 Table Stakes</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">server/src/repos/webhooks.ts</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <div class="detail-grid">
+        <div class="detail-block">
+          <h4>Why It Is P0</h4>
+          <p>This is the core differentiator of Chapters: closing the gap between code and documentation. It prevents the "truth gap" before it ever starts.</p>
+        </div>
+        <div class="detail-block">
+          <h4>Implementation Plan</h4>
+          <p>When <span class="code-pill">sync_repository</span> finishes, match modified file paths against <span class="code-pill">note_links</span>. For matched notes, set OKF trust status to <span class="code-pill">unverified</span> and notify authors in the in-app notification feed.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Item M6 -->
+  <div class="audit-card" data-category="must">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--red);"></div>
+      <div class="audit-main">
+        <div class="audit-title">6. Image & Asset Attachment Uploads</div>
+        <div class="audit-subtitle">Allow pasting images from the clipboard directly into notes, saving them to vault assets with instant preview rendering.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(248,113,113,0.2); color:var(--red);">P0 Table Stakes</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">client/src/components/vault/NoteEditor.tsx</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <p style="font-size:0.9rem; color:#CBD5E1;">Notes cannot remain text-only. Engineering documentation requires pasting architecture whiteboard photos, UI mockups, and terminal outputs. Stored locally under <span class="code-pill">.attachments/</span> in the vault disk directory.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 4: GOOD TO HAVE (DIFFERENTIATORS / P1) -->
+  <!-- ============================================================== -->
+  <div class="section-heading" data-group="good">
+    <div class="section-icon" style="background:rgba(45,212,191,0.15); color:var(--teal);">✨</div>
+    <h2>Good to Have (Differentiators / P1)</h2>
+    <div class="section-count" style="background:rgba(45,212,191,0.15); color:var(--teal);">5 Delighters</div>
+  </div>
+
+  <!-- Item G1 -->
+  <div class="audit-card" data-category="good">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--teal);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Concept Pathfinding (Shortest Path Explorer)</div>
+        <div class="audit-subtitle">Select any two notes or code modules and discover the hidden chain of decisions, dependencies, and wikilinks connecting them.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(45,212,191,0.2); color:var(--teal);">P1 Delighter</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">Graph Intelligence</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <p style="font-size:0.9rem; color:#CBD5E1;">Solves: <em>"How does our Billing Service relate to Note Revisions?"</em> Runs BFS/Dijkstra across relational links and semantic edges, illuminating the latent architecture path in glowing highlights on the graph canvas.</p>
+    </div>
+  </div>
+
+  <!-- Item G2 -->
+  <div class="audit-card" data-category="good">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--teal);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Symbol-Level Embeddings for Fine-Grained MCP Retrieval (#262)</div>
+        <div class="audit-subtitle">Vector index individual AST functions and classes instead of entire files, saving 85% on AI agent token burn.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(45,212,191,0.2); color:var(--teal);">P1 Delighter</span>
+          <span class="audit-tag" style="background:rgba(255,255,255,0.06); color:var(--text-dim);">AI / MCP</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <p style="font-size:0.9rem; color:#CBD5E1;">Enables Claude or Cursor to ask: <em>"How does the token refresh work?"</em> and receive only the exact 15-line function embedding rather than paying for a 600-line monolithic file.</p>
+    </div>
+  </div>
+
+  <!-- Item G3 -->
+  <div class="audit-card" data-category="good">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--teal);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Saved Graph Perspectives & Topical Filter Presets</div>
+        <div class="audit-subtitle">Allow engineers to bookmark and switch between curated graph views (e.g. "Security Surface", "ADRs", "Data Pipelines").</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(45,212,191,0.2); color:var(--teal);">P1 Delighter</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <p style="font-size:0.9rem; color:#CBD5E1;">Pre-configured filters save team members from manually selecting tags and repositories every time they want to explore a specific subsystem.</p>
+    </div>
+  </div>
+
+  <!-- Item G4 -->
+  <div class="audit-card" data-category="good">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--teal);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Live Multi-User Cursors & Presence Badges</div>
+        <div class="audit-subtitle">Display colorful collaborator cursors and active viewer badges during simultaneous note editing.</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(45,212,191,0.2); color:var(--teal);">P1 Delighter</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <p style="font-size:0.9rem; color:#CBD5E1;">Brings the Google Docs / Figma multiplayer joy to a local-first Markdown environment via existing Yjs awareness protocols.</p>
+    </div>
+  </div>
+
+  <!-- Item G5 -->
+  <div class="audit-card" data-category="good">
+    <div class="audit-header" onclick="this.parentElement.classList.toggle('open')">
+      <div class="priority-bar" style="background:var(--teal);"></div>
+      <div class="audit-main">
+        <div class="audit-title">Pre-Packaged MCP Prompts & Architecture Checkers</div>
+        <div class="audit-subtitle">Ship native MCP prompts like `draft_adr` and `check_code_drift` directly to connected IDEs (Cursor, Claude).</div>
+        <div class="audit-tags">
+          <span class="audit-tag" style="background:rgba(45,212,191,0.2); color:var(--teal);">P1 Delighter</span>
+        </div>
+      </div>
+      <div class="chevron">›</div>
+    </div>
+    <div class="audit-body">
+      <p style="font-size:0.9rem; color:#CBD5E1;">Developers in Cursor can type <span class="code-pill">/draft_adr</span>, and Chapters provides the template, recent decision history, and relevant symbol links directly into the AI's prompt context.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 5: COMPETITIVE MATRIX -->
+  <!-- ============================================================== -->
+  <div class="section-heading">
+    <div class="section-icon" style="background:rgba(56,189,248,0.15); color:var(--blue);">📊</div>
+    <h2>Competitive Benchmark Matrix</h2>
+  </div>
+
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr>
+          <th>Capability</th>
+          <th>Confluence</th>
+          <th>Notion</th>
+          <th>Obsidian</th>
+          <th>Outline</th>
+          <th>Swimm</th>
+          <th class="col-highlight">Chapters</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Storage Format</strong></td>
+          <td>Proprietary HTML</td>
+          <td>Proprietary JSON</td>
+          <td>Markdown</td>
+          <td>Markdown</td>
+          <td>Markdown</td>
+          <td class="col-highlight"><strong>OKF v0.2 + Markdown</strong></td>
+        </tr>
+        <tr>
+          <td><strong>Self-Hostable</strong></td>
+          <td><span class="badge-no">❌ Enterprise only</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-yes">✓ Local disk</span></td>
+          <td><span class="badge-yes">✓ Docker</span></td>
+          <td><span class="badge-no">❌ Cloud app</span></td>
+          <td class="col-highlight"><span class="badge-yes">✓ 1-Container + PG</span></td>
+        </tr>
+        <tr>
+          <td><strong>Real-Time Multiplayer</strong></td>
+          <td><span class="badge-yes">✓ Yes</span></td>
+          <td><span class="badge-yes">✓ Yes</span></td>
+          <td><span class="badge-no">❌ Merge conflicts</span></td>
+          <td><span class="badge-yes">✓ Yes</span></td>
+          <td><span class="badge-no">❌ PR reviews</span></td>
+          <td class="col-highlight"><span class="badge-yes">✓ Yjs CRDTs</span></td>
+        </tr>
+        <tr>
+          <td><strong>Synced Code Repos</strong></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-part">Part (IDE plugin)</span></td>
+          <td class="col-highlight"><span class="badge-yes">✓ Full Git Tree + AST</span></td>
+        </tr>
+        <tr>
+          <td><strong>Knowledge Graph View</strong></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-yes">✓ Global only</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td class="col-highlight"><span class="badge-yes">✓ 2D/3D + Louvain</span></td>
+        </tr>
+        <tr>
+          <td><strong>Code-to-Doc Backlinks</strong></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-part">Part (Snippets)</span></td>
+          <td class="col-highlight"><span class="badge-yes">✓ AST Cross-Linking</span></td>
+        </tr>
+        <tr>
+          <td><strong>Native AI MCP Server</strong></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-part">Part (Community)</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td><span class="badge-no">❌ No</span></td>
+          <td class="col-highlight"><span class="badge-yes">✓ 40+ Native Tools</span></td>
+        </tr>
+        <tr>
+          <td><strong>Zero External AI Leak</strong></td>
+          <td><span class="badge-no">❌ Cloud AI</span></td>
+          <td><span class="badge-no">❌ OpenAI</span></td>
+          <td><span class="badge-yes">✓ Local</span></td>
+          <td><span class="badge-no">❌ OpenAI</span></td>
+          <td><span class="badge-no">❌ Cloud</span></td>
+          <td class="col-highlight"><span class="badge-yes">✓ Local ONNX + pgvector</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+function filterCategory(cat, btn) {
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  const cards = document.querySelectorAll('.audit-card');
+  const headings = document.querySelectorAll('.section-heading');
+
+  if (cat === 'all') {
+    cards.forEach(c => c.style.display = 'block');
+    headings.forEach(h => h.style.display = 'flex');
+  } else {
+    cards.forEach(c => {
+      c.style.display = c.getAttribute('data-category') === cat ? 'block' : 'none';
+    });
+    headings.forEach(h => {
+      h.style.display = h.getAttribute('data-group') === cat ? 'flex' : 'none';
+    });
+  }
+}
+</script>
+
+</body>
+</html>

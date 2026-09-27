@@ -107,6 +107,7 @@ export type FormatType =
   | 'hr'
   | 'wikilink'
   | 'link'
+  | 'image'
   | 'undo'
   | 'redo'
 
@@ -178,6 +179,15 @@ export function applyFormat(view: EditorView | null, format: FormatType) {
     case 'link': {
       const text = hasSelection ? selected : 'link text'
       const insert = `[${text}](https://)`
+      view.dispatch({
+        changes: { from, to, insert },
+        selection: { anchor: from + insert.length - 9, head: from + insert.length - 1 },
+      })
+      break
+    }
+    case 'image': {
+      const text = hasSelection ? selected : 'image'
+      const insert = `![${text}](https://)`
       view.dispatch({
         changes: { from, to, insert },
         selection: { anchor: from + insert.length - 9, head: from + insert.length - 1 },

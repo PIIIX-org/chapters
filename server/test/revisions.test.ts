@@ -149,3 +149,55 @@ describe('GET /vaults/:id/history/* — access', () => {
     expect(res.json()).toEqual({ error: 'note not found' })
   })
 })
+
+describe('GET /vaults/:id/revisions/:revisionId — preview content', () => {
+  it('serves full content and frontmatter for preview to an editor', async () => {
+    const rows = (await history(ownerCookie, 'people/attributed')).json() as Row[]
+    expect(rows.length).toBeGreaterThan(0)
+    const targetRev = rows[0]!
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/revisions/${targetRev.id}`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const data = res.json() as {
+      id: string
+      body: string
+      frontmatter: Record<string, unknown>
+      action: string
+      actorType: string
+      path: string
+    }
+    expect(data.id).toBe(targetRev.id)
+    expect(data.body).toContain(MARKER)
+    expect(data.body).toContain('edited once')
+    expect(data.action).toBe('update')
+    expect(data.actorType).toBe('user')
+    expect(data.path).toBe('people/attributed')
+  })
+
+  it('hides revision preview from a read-only grantee', async () => {
+    const rows = (await history(ownerCookie, 'people/attributed')).json() as Row[]
+    const targetRev = rows[0]!
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/revisions/${targetRev.id}`,
+      headers: { cookie: readerCookie },
+    })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('404s for a non-existent revision ID', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/revisions/00000000-0000-0000-0000-000000000000`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: 'revision not found' })
+  })
+})
+

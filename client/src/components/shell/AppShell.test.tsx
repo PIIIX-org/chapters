@@ -317,4 +317,116 @@ describe('AppShell', () => {
     await user.click(forwardButton)
     expect(forwardSpy).toHaveBeenCalledTimes(1)
   })
+
+  describe('responsive mobile shell', () => {
+    const originalInnerWidth = window.innerWidth
+
+    afterEach(() => {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: originalInnerWidth })
+    })
+
+    it('auto-collapses side panels on mobile viewports (< 768px)', async () => {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 })
+      stubFetch()
+      renderShell('/vaults/v1')
+
+      const context = screen.getByRole('complementary', { name: 'Context panel' })
+      const inspector = screen.getByRole('complementary', { name: 'Inspector' })
+
+      expect(context).toHaveAttribute('data-panel-open', 'false')
+      expect(inspector).toHaveAttribute('data-panel-open', 'false')
+      expect(context).toHaveClass('max-md:hidden')
+      expect(inspector).toHaveClass('max-md:hidden')
+      expect(screen.queryByTestId('shell-backdrop')).toBeNull()
+    })
+
+    it('renders drawer overlay and backdrop when a panel is opened on mobile', async () => {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 })
+      stubFetch()
+      renderShell('/vaults/v1')
+      const user = userEvent.setup()
+
+      const contextToggle = screen.getByRole('button', { name: 'Toggle context panel' })
+      await user.click(contextToggle)
+
+      const context = screen.getByRole('complementary', { name: 'Context panel' })
+      expect(context).toHaveAttribute('data-panel-open', 'true')
+      expect(context).toHaveClass('max-md:fixed', 'max-md:inset-y-0', 'max-md:top-0', 'max-md:left-0', 'max-md:z-40')
+
+      const backdrop = screen.getByTestId('shell-backdrop')
+      expect(backdrop).toBeInTheDocument()
+
+      // Clicking backdrop dismisses drawer
+      await user.click(backdrop)
+      expect(context).toHaveAttribute('data-panel-open', 'false')
+      expect(screen.queryByTestId('shell-backdrop')).toBeNull()
+    })
+
+    it('enforces mutual exclusivity between panels on mobile', async () => {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 })
+      stubFetch()
+      renderShell('/vaults/v1')
+      const user = userEvent.setup()
+
+      const contextToggle = screen.getByRole('button', { name: 'Toggle context panel' })
+      const inspectorToggle = screen.getByRole('button', { name: 'Toggle inspector' })
+
+      // Open context panel
+      await user.click(contextToggle)
+      const context = screen.getByRole('complementary', { name: 'Context panel' })
+      const inspector = screen.getByRole('complementary', { name: 'Inspector' })
+      expect(context).toHaveAttribute('data-panel-open', 'true')
+      expect(inspector).toHaveAttribute('data-panel-open', 'false')
+
+      // Open inspector panel -> context should auto-collapse
+      await user.click(inspectorToggle)
+      expect(context).toHaveAttribute('data-panel-open', 'false')
+      expect(inspector).toHaveAttribute('data-panel-open', 'true')
+      expect(inspector).toHaveClass('max-md:fixed', 'max-md:inset-y-0', 'max-md:top-0', 'max-md:right-0', 'max-md:z-40')
+    })
+
+    it('dismisses open drawer on Escape key in mobile viewport', async () => {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 })
+      stubFetch()
+      renderShell('/vaults/v1')
+      const user = userEvent.setup()
+
+      const contextToggle = screen.getByRole('button', { name: 'Toggle context panel' })
+      await user.click(contextToggle)
+      const context = screen.getByRole('complementary', { name: 'Context panel' })
+      expect(context).toHaveAttribute('data-panel-open', 'true')
+
+      // Press Escape
+      await user.keyboard('{Escape}')
+      expect(context).toHaveAttribute('data-panel-open', 'false')
+      expect(screen.queryByTestId('shell-backdrop')).toBeNull()
+    })
+
+    it('auto-collapses panels when window resizes from desktop to mobile', async () => {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1200 })
+      stubFetch()
+      renderShell('/vaults/v1')
+
+      const context = screen.getByRole('complementary', { name: 'Context panel' })
+      expect(context).toHaveAttribute('data-panel-open', 'true')
+
+      // Resize window to mobile
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 })
+      fireEvent(window, new Event('resize'))
+
+      expect(context).toHaveAttribute('data-panel-open', 'false')
+    })
+
+    it('has no accessibility violations in mobile drawer view', async () => {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 })
+      stubFetch()
+      const { container } = renderShell('/vaults/v1')
+      const user = userEvent.setup()
+
+      await user.click(screen.getByRole('button', { name: 'Toggle context panel' }))
+      expect(screen.getByTestId('shell-backdrop')).toBeInTheDocument()
+
+      await expectNoA11yViolations(container)
+    })
+  })
 })

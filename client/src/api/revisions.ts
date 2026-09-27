@@ -46,3 +46,15 @@ export function revertNote(
 export function purgeRevision(vaultId: string, revisionId: string): Promise<{ status: 'purged' }> {
   return apiFetch(`/vaults/${vaultId}/revisions/${revisionId}`, { method: 'DELETE' })
 }
+
+export interface RevisionDetail extends Revision {
+  noteId: string
+  path: string
+  frontmatter: Record<string, unknown>
+  body: string
+}
+
+/** Fetches full content and frontmatter of a single revision for diff preview. */
+export function getRevision(vaultId: string, revisionId: string): Promise<RevisionDetail> {
+  return apiFetch(`/vaults/${vaultId}/revisions/${revisionId}`)
+}

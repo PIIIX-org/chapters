@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { Bell } from 'lucide-react'
 import { Button } from '../ui/button.js'
-import { useMarkNotificationRead, useNotifications } from '../../hooks/useNotifications.js'
+import {
+  useMarkAllNotificationsRead,
+  useMarkNotificationRead,
+  useNotifications,
+} from '../../hooks/useNotifications.js'
 import { cn } from '../../lib/utils.js'
 
 export function NotificationBell({ showLabel = false }: { showLabel?: boolean } = {}) {
@@ -12,6 +16,7 @@ export function NotificationBell({ showLabel = false }: { showLabel?: boolean } 
   const panelRef = useRef<HTMLDivElement>(null)
   const notifications = useNotifications()
   const markRead = useMarkNotificationRead()
+  const markAllRead = useMarkAllNotificationsRead()
 
   useEffect(() => {
     if (!open) return
@@ -91,6 +96,23 @@ export function NotificationBell({ showLabel = false }: { showLabel?: boolean } 
           tabIndex={-1}
           className="absolute left-full bottom-0 z-50 ml-3 w-80 rounded-[var(--radius-lg)] border border-border bg-popover py-1 shadow-floating focus:outline-none"
         >
+          <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground font-mono">
+              Notifications
+            </span>
+            {unreadCount > 0 && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                disabled={markAllRead.isPending}
+                onClick={() => markAllRead.mutate()}
+              >
+                Mark all as read
+              </Button>
+            )}
+          </div>
           {notifications.isError ? (
             // Ordered before any read of `.data`, same reasoning as
             // HomePage's vaults fetch: isError must gate before an empty

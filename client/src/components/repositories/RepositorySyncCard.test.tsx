@@ -1,9 +1,14 @@
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
 import { mockJsonResponse } from '../../lib/api.js'
 import { expectNoA11yViolations } from '../../test/axe.js'
-import type { AccessibleRepository, RepositoryFile } from '../../api/repositories.js'
+import type {
+  AccessibleRepository,
+  RepositoryDriftResponse,
+  RepositoryFile,
+} from '../../api/repositories.js'
 import { RepositorySyncCard } from './RepositorySyncCard.js'
 
 // A git repository and an agent-push one, differing on every axis this
@@ -66,6 +71,7 @@ function renderCard(
   files: RepositoryFile[] | { status: number; body: unknown },
   repositoryId = 'r1',
   listStatus?: { status: number; body: unknown },
+  driftData: RepositoryDriftResponse = { repositoryId, drifts: [] },
 ) {
   const fetchMock = vi.fn().mockImplementation((url: string) => {
     if (url === '/api/repositories') {
@@ -78,14 +84,19 @@ function renderCard(
         Array.isArray(files) ? mockJsonResponse(200, files) : mockJsonResponse(files.status, files.body),
       )
     }
+    if (url.endsWith('/drift')) {
+      return Promise.resolve(mockJsonResponse(200, driftData))
+    }
     throw new Error(`unstubbed request: ${url}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <QueryClientProvider client={queryClient}>
-      <RepositorySyncCard repositoryId={repositoryId} />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <RepositorySyncCard repositoryId={repositoryId} />
+      </QueryClientProvider>
+    </MemoryRouter>,
   )
 }
 
@@ -203,4 +214,38 @@ describe('RepositorySyncCard', () => {
     expect(screen.queryByText('Synced, but nothing was indexed')).toBeNull()
     expect(await screen.findByText('Could not count the indexed files.')).toBeInTheDocument()
   })
+
+  it('renders documentation drift detected banner with links to affected notes when drift exists', async () => {
+    const driftData = {
+      repositoryId: 'r1',
+      drifts: [
+        {
+          noteId: 'n1',
+          notePath: 'docs/api-guide',
+          vaultId: 'v1',
+          resource: 'repo:chapters/src/app.ts#runServer',
+          kind: 'missing_symbol' as const,
+          detail: 'Referenced symbol "#runServer" not found in "src/app.ts".',
+        },
+      ],
+    }
+    const { container } = renderCard(
+      [{ ...GIT, lastSyncedAt: '2026-08-24T11:00:00.000Z' }, AGENT],
+      FILES,
+      'r1',
+      undefined,
+      driftData,
+    )
+
+    expect(await screen.findByText(/Documentation Drift Detected \(1\)/)).toBeInTheDocument()
+    expect(screen.getByText('docs/api-guide')).toBeInTheDocument()
+    expect(screen.getByText('docs/api-guide').closest('a')).toHaveAttribute(
+      'href',
+      '/vaults/v1/notes/docs/api-guide',
+    )
+    expect(screen.getByText(/Referenced symbol "#runServer" not found/)).toBeInTheDocument()
+
+    await expectNoA11yViolations(container)
+  })
 })
+

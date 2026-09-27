@@ -90,6 +90,7 @@ describe('MCP integration', () => {
     const names = tools.tools.map((t) => t.name)
     expect(names).toContain('read_note')
     expect(names).toContain('search')
+    expect(names).toContain('find_symbols')
 
     const result = await client.callTool({
       name: 'read_note',

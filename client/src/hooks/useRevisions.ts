@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { listRevisions, purgeRevision, revertNote } from '../api/revisions.js'
-import type { Revision } from '../api/revisions.js'
+import { listRevisions, purgeRevision, revertNote, getRevision } from '../api/revisions.js'
+import type { Revision, RevisionDetail } from '../api/revisions.js'
 import type { ApiError } from '../lib/api.js'
 
 export const revisionsQueryKey = (vaultId: string, path: string, offset: number) =>
@@ -11,6 +11,14 @@ export function useRevisions(vaultId: string, path: string, limit: number, offse
     queryKey: revisionsQueryKey(vaultId, path, offset),
     queryFn: () => listRevisions(vaultId, path, limit, offset),
     enabled: vaultId !== '' && path !== '',
+  })
+}
+
+export function useRevision(vaultId: string, revisionId: string | null) {
+  return useQuery<RevisionDetail, ApiError>({
+    queryKey: ['vaults', vaultId, 'revisions', revisionId],
+    queryFn: () => getRevision(vaultId, revisionId!),
+    enabled: Boolean(vaultId && revisionId),
   })
 }
 

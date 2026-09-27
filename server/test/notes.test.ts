@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
+import { refactorWikilinks } from '../src/notes/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -140,6 +141,39 @@ describe('notes CRUD + OKF on disk', () => {
     expect(index).not.toContain('john-doe')
   })
 
+  it('rename across types updates frontmatter type and disk file cleanly', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes`,
+      headers: { cookie: ownerCookie },
+      body: { type: 'projects', name: 'alpha', body: 'Alpha body', frontmatter: { type: 'projects', tags: ['active'] } },
+    })
+    expect(created.statusCode).toBe(200)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes-rename`,
+      headers: { cookie: ownerCookie },
+      body: { from: 'projects/alpha', to: 'archive/alpha-retired' },
+    })
+    expect(res.statusCode).toBe(200)
+
+    await expect(stat(vaultFile('projects', 'alpha.md'))).rejects.toThrow()
+    await expect(stat(vaultFile('archive', 'alpha-retired.md'))).resolves.toBeTruthy()
+
+    const raw = await readFile(vaultFile('archive', 'alpha-retired.md'), 'utf8')
+    expect(raw).toContain('type: archive')
+    expect(raw).toContain('Alpha body')
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/notes/archive/alpha-retired`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(getRes.statusCode).toBe(200)
+    expect((getRes.json() as { frontmatter: { type: string } }).frontmatter.type).toBe('archive')
+  })
+
   it('soft delete moves to trash; restore brings it back', async () => {
     const del = await app.inject({
       method: 'DELETE',
@@ -166,4 +200,210 @@ describe('notes CRUD + OKF on disk', () => {
     expect(restore.statusCode).toBe(200)
     await expect(stat(vaultFile('people', 'john.md'))).resolves.toBeTruthy()
   })
+
+  it('refactorWikilinks rewrites targets preserving labels, anchors, and extensions', () => {
+    const original =
+      'Intro [[docs/target]], labeled [[docs/target|My Label]], anchored [[docs/target#setup]], complex [[docs/target#setup|Setup Guide]], extension [[docs/target.md]], whitespace [[ docs/target | Trim ]], unrelated [[docs/target-other]] and [[other/docs/target]].'
+    const refactored = refactorWikilinks(original, 'docs/target', 'docs/destination')
+    expect(refactored).toBe(
+      'Intro [[docs/destination]], labeled [[docs/destination|My Label]], anchored [[docs/destination#setup]], complex [[docs/destination#setup|Setup Guide]], extension [[docs/destination.md]], whitespace [[ docs/destination | Trim ]], unrelated [[docs/target-other]] and [[other/docs/target]].',
+    )
+  })
+
+  it('rename refactors incoming wikilinks across other notes and self-references in the vault', async () => {
+    // 1. Create target note
+    const targetRes = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes`,
+      headers: { cookie: ownerCookie },
+      body: {
+        type: 'docs',
+        name: 'original-doc',
+        body: 'Target content with self-reference: [[docs/original-doc]]',
+        frontmatter: { type: 'docs', tags: ['reference'] },
+      },
+    })
+    expect(targetRes.statusCode).toBe(200)
+
+    // 2. Create referencing note
+    const refRes = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes`,
+      headers: { cookie: ownerCookie },
+      body: {
+        type: 'guides',
+        name: 'overview',
+        body: 'Check out [[docs/original-doc]] and [[docs/original-doc#part1|Part 1]] and unrelated [[guides/other]].',
+        frontmatter: { type: 'guides' },
+      },
+    })
+    expect(refRes.statusCode).toBe(200)
+
+    // 3. Rename target note
+    const renameRes = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes-rename`,
+      headers: { cookie: ownerCookie },
+      body: { from: 'docs/original-doc', to: 'docs/renamed-doc' },
+    })
+    expect(renameRes.statusCode).toBe(200)
+
+    // 4. Verify target note itself has self-reference updated
+    const targetUpdated = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/notes/docs/renamed-doc`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(targetUpdated.statusCode).toBe(200)
+    expect((targetUpdated.json() as { body: string }).body).toContain('[[docs/renamed-doc]]')
+
+    // 5. Verify referencing note has been refactored in DB and on disk
+    const refUpdated = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/notes/guides/overview`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(refUpdated.statusCode).toBe(200)
+    const refBody = (refUpdated.json() as { body: string }).body
+    expect(refBody).toContain('[[docs/renamed-doc]]')
+    expect(refBody).toContain('[[docs/renamed-doc#part1|Part 1]]')
+    expect(refBody).toContain('[[guides/other]]')
+    expect(refBody).not.toContain('original-doc')
+
+    const diskContent = await readFile(vaultFile('guides', 'overview.md'), 'utf8')
+    expect(diskContent).toContain('[[docs/renamed-doc]]')
+    expect(diskContent).not.toContain('original-doc')
+  })
 })
+
+describe('GET /vaults/:id/backlinks/* — incoming backlinks', () => {
+  it('returns incoming links referencing the target note, excluding self-references', async () => {
+    // guides/overview references docs/renamed-doc, and docs/renamed-doc also references itself
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/backlinks/docs/renamed-doc`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const backlinks = res.json() as Array<{ id: string; path: string; type: string; name: string }>
+    expect(backlinks).toHaveLength(1)
+    expect(backlinks[0]!.path).toBe('guides/overview')
+    expect(backlinks[0]!.type).toBe('guides')
+    expect(backlinks[0]!.name).toBe('overview')
+  })
+
+  it('allows read-only grantees to read backlinks', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/backlinks/docs/renamed-doc`,
+      headers: { cookie: readerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const backlinks = res.json() as Array<{ id: string; path: string }>
+    expect(backlinks).toHaveLength(1)
+    expect(backlinks[0]!.path).toBe('guides/overview')
+  })
+
+  it('hides backlinks from strangers without access', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/backlinks/docs/renamed-doc`,
+      headers: { cookie: strangerCookie },
+    })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('404s for a non-existent note', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/backlinks/docs/non-existent`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: 'note not found' })
+  })
+})
+
+describe('GET /vaults/:id/local-graph/* — local ego graph', () => {
+  it('returns center node and 1-hop connected neighbors with extracted edges', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/local-graph/docs/renamed-doc`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const graph = res.json() as {
+      center: { id: string; path: string; isCenter: boolean; depth: number }
+      nodes: Array<{ id: string; path: string; isCenter: boolean; depth: number }>
+      edges: Array<{ source: string; target: string; kind: string }>
+    }
+
+    expect(graph.center.path).toBe('docs/renamed-doc')
+    expect(graph.center.isCenter).toBe(true)
+    expect(graph.center.depth).toBe(0)
+
+    // Center plus guides/overview which links to it
+    const centerInNodes = graph.nodes.find((n) => n.path === 'docs/renamed-doc')
+    expect(centerInNodes).toBeDefined()
+    expect(centerInNodes!.isCenter).toBe(true)
+
+    const neighbor = graph.nodes.find((n) => n.path === 'guides/overview')
+    expect(neighbor).toBeDefined()
+    expect(neighbor!.depth).toBe(1)
+    expect(neighbor!.isCenter).toBe(false)
+
+    // Edge from guides/overview to docs/renamed-doc
+    const edge = graph.edges.find(
+      (e) => e.source === neighbor!.id && e.target === centerInNodes!.id && e.kind === 'extracted',
+    )
+    expect(edge).toBeDefined()
+  })
+
+  it('supports depth=2 traversal', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/local-graph/docs/renamed-doc?depth=2`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const graph = res.json() as {
+      center: { path: string }
+      nodes: Array<{ path: string; depth: number }>
+      edges: Array<{ source: string; target: string }>
+    }
+    expect(graph.center.path).toBe('docs/renamed-doc')
+    expect(graph.nodes.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('allows read-only grantees to read the local graph', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/local-graph/docs/renamed-doc`,
+      headers: { cookie: readerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const graph = res.json() as { center: { path: string } }
+    expect(graph.center.path).toBe('docs/renamed-doc')
+  })
+
+  it('hides local graph from strangers without access', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/local-graph/docs/renamed-doc`,
+      headers: { cookie: strangerCookie },
+    })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('404s for a non-existent note', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/local-graph/docs/non-existent`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: 'note not found' })
+  })
+})
+
+

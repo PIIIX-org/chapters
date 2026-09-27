@@ -1,4 +1,4 @@
-import { useCallback, type ReactNode } from 'react'
+import { useCallback, useEffect, type ReactNode } from 'react'
 import { Outlet } from 'react-router'
 import { TooltipProvider } from '../ui/tooltip.js'
 import { GlobalSearch } from '../search/GlobalSearch.js'
@@ -45,6 +45,19 @@ function ShellFrame({ children }: { children?: ReactNode }) {
   const contextOpen = shell.panels.context.open
   const inspectorOpen = shell.panels.inspector.open
 
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape' && !shell.paletteOpen && (contextOpen || inspectorOpen)) {
+        if (typeof window !== 'undefined' && window.innerWidth < 768) {
+          if (contextOpen) shell.setPanelOpen('context', false)
+          if (inspectorOpen) shell.setPanelOpen('inspector', false)
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [contextOpen, inspectorOpen, shell])
+
   return (
     <div className="relative h-dvh w-full overflow-hidden bg-background text-foreground">
       {/* Full-screen workspace canvas */}
@@ -62,8 +75,8 @@ function ShellFrame({ children }: { children?: ReactNode }) {
         className={cn(
           'pointer-events-auto absolute top-[194px] bottom-[222px] left-2.5 z-20 flex flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0',
           contextOpen
-            ? 'w-[var(--shell-context,240px)] overflow-y-auto'
-            : 'w-11 items-center p-1 overflow-hidden',
+            ? 'w-[var(--shell-context,240px)] overflow-y-auto max-md:fixed max-md:inset-y-0 max-md:top-0 max-md:bottom-0 max-md:left-0 max-md:z-40 max-md:w-[min(320px,85vw)] max-md:rounded-none max-md:shadow-2xl'
+            : 'w-11 items-center p-1 overflow-hidden max-md:hidden',
         )}
       />
 
@@ -76,10 +89,23 @@ function ShellFrame({ children }: { children?: ReactNode }) {
         className={cn(
           'pointer-events-auto absolute top-[54px] bottom-[54px] right-2.5 z-20 flex flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0',
           inspectorOpen
-            ? 'w-[var(--shell-inspector,320px)] overflow-y-auto'
-            : 'w-11 items-center p-1 overflow-hidden',
+            ? 'w-[var(--shell-inspector,320px)] overflow-y-auto max-md:fixed max-md:inset-y-0 max-md:top-0 max-md:bottom-0 max-md:right-0 max-md:z-40 max-md:w-[min(320px,85vw)] max-md:rounded-none max-md:shadow-2xl'
+            : 'w-11 items-center p-1 overflow-hidden max-md:hidden',
         )}
       />
+
+      {/* Mobile drawer backdrop */}
+      {((contextMounted && contextOpen) || (inspectorMounted && inspectorOpen)) && (
+        <div
+          data-testid="shell-backdrop"
+          aria-hidden="true"
+          className="fixed inset-0 z-30 bg-black/50 backdrop-blur-xs md:hidden pointer-events-auto"
+          onClick={() => {
+            if (contextOpen) shell.setPanelOpen('context', false)
+            if (inspectorOpen) shell.setPanelOpen('inspector', false)
+          }}
+        />
+      )}
 
       {/* Floating navigation overlay layer */}
       <div className="pointer-events-none fixed inset-0 z-30 select-none overflow-hidden">

@@ -113,6 +113,13 @@
       "when": 1789915200000,
       "tag": "0015_user_vault_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790496546461,
+      "tag": "0016_easy_talkback",
+      "breakpoints": true
     }
   ]
 }

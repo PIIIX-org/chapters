@@ -15,6 +15,7 @@ import {
   useDeactivateUser,
   useDemoteUser,
   usePromoteUser,
+  useReactivateUser,
   useUpdateUserRole,
 } from '../../hooks/useAdmin.js'
 import { useSession } from '../../hooks/useSession.js'
@@ -57,6 +58,7 @@ export function UserRoster() {
   const demote = useDemoteUser()
   const updateRole = useUpdateUserRole()
   const deactivate = useDeactivateUser()
+  const reactivate = useReactivateUser()
 
   return (
     <Panel className="rounded-[var(--radius-sm,2px)]">
@@ -156,6 +158,16 @@ export function UserRoster() {
                           pending={deactivate.isPending}
                           error={deactivate.error?.message ?? null}
                           onConfirm={() => deactivate.mutate(user.id)}
+                        />
+                      )}
+                      {user.status === 'deactivated' && !isSelf && (
+                        <ConfirmAction
+                          label="Reactivate"
+                          ariaLabel={`Reactivate ${user.email}`}
+                          consequence={`${user.email} will have their account restored to active status and will be able to log in again.`}
+                          pending={reactivate.isPending}
+                          error={reactivate.error?.message ?? null}
+                          onConfirm={() => reactivate.mutate(user.id)}
                         />
                       )}
                       {isSelf && (

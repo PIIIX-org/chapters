@@ -70,9 +70,10 @@ describe('UserRoster', () => {
     expect(within(rowFor('me@example.com')).queryByRole('button', { name: /^Demote/ })).toBeNull()
     expect(within(rowFor('me@example.com')).getByText('This is you')).toBeInTheDocument()
 
-    // Already deactivated: nothing left to take.
+    // Already deactivated: reactivation is available, but not deactivate or demote.
     expect(within(rowFor('gone@example.com')).queryByRole('button', { name: /^Deactivate/ })).toBeNull()
     expect(within(rowFor('gone@example.com')).queryByRole('button', { name: /^Demote/ })).toBeNull()
+    expect(within(rowFor('gone@example.com')).getByRole('button', { name: /^Reactivate/ })).toBeInTheDocument()
 
     // Role selector is present for active accounts other than self.
     expect(
@@ -166,5 +167,27 @@ describe('UserRoster', () => {
 
     expect(screen.queryByText(/dropped from every team/)).not.toBeInTheDocument()
     expect(fetch).not.toHaveBeenCalledWith('/api/admin/users/m1/deactivate', expect.anything())
+  })
+
+  it('states the consequence before reactivating, and only acts on confirm', async () => {
+    const fetch = fetchMock()
+    vi.stubGlobal('fetch', fetch)
+    renderWithClient(<UserRoster />)
+
+    await screen.findByText('gone@example.com')
+    await userEvent.click(
+      within(rowFor('gone@example.com')).getByRole('button', { name: 'Reactivate gone@example.com' }),
+    )
+
+    expect(screen.getByText(/restored to active status/)).toBeInTheDocument()
+    expect(fetch).not.toHaveBeenCalledWith('/api/admin/users/d1/reactivate', expect.anything())
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reactivate' }))
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/admin/users/d1/reactivate',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    )
   })
 })

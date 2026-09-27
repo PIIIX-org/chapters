@@ -2,25 +2,30 @@ import { apiFetch } from '../lib/api.js'
 import type { GraphFilters } from '../api/graph.js'
 
 export interface SearchResult {
-  resourceType: 'note' | 'code'
+  resourceType: 'note' | 'code' | 'symbol'
   id: string
   containerId: string
   path: string
   type?: string | null
   frontmatter?: Record<string, unknown>
   language?: string | null
+  symbolName?: string
+  symbolKind?: string
+  startLine?: number
+  endLine?: number
   snippet: string
   score: number
 }
 
 export function search(
   query: string,
-  opts?: { limit?: number; vaultId?: string | null; filters?: GraphFilters },
+  opts?: { limit?: number; vaultId?: string | null; filters?: GraphFilters; symbols?: boolean },
 ): Promise<SearchResult[]> {
   const path = opts?.vaultId ? `/vaults/${opts.vaultId}/search` : '/search'
   const filters = opts?.filters
 
   const parts = [`q=${encodeURIComponent(query)}`, `limit=${opts?.limit ?? 20}`]
+  if (opts?.symbols) parts.push('symbols=true')
   if (filters?.types?.length) parts.push(`types=${filters.types.join(',')}`)
   if (filters?.tags?.length) parts.push(`tags=${filters.tags.join(',')}`)
   if (filters?.since) parts.push(`since=${filters.since}`)

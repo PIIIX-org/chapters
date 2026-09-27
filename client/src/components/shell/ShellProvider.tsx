@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   ShellContext,
   type BreadcrumbItem,
@@ -16,8 +16,14 @@ interface PanelState {
 const STORAGE_PREFIX = 'chapters.shell.'
 /** Below this the tracks would leave the content cell too narrow to use. */
 const WIDE_VIEWPORT = 1024
+const MOBILE_BREAKPOINT = 768
+
+function isMobile(): boolean {
+  return typeof window !== 'undefined' && window.innerWidth < MOBILE_BREAKPOINT
+}
 
 function readOpen(kind: PanelKind): boolean {
+  if (isMobile()) return false
   try {
     const raw = localStorage.getItem(STORAGE_PREFIX + kind)
     if (raw === 'open') return true
@@ -54,19 +60,55 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     inspector: { open: readOpen('inspector'), mounted: 0, node: null },
   }))
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    let lastMobile = window.innerWidth < MOBILE_BREAKPOINT
+    const handleResize = () => {
+      const currentMobile = window.innerWidth < MOBILE_BREAKPOINT
+      if (currentMobile && !lastMobile) {
+        setPanels((prev) => {
+          if (!prev.context.open && !prev.inspector.open) return prev
+          return {
+            ...prev,
+            context: { ...prev.context, open: false },
+            inspector: { ...prev.inspector, open: false },
+          }
+        })
+      }
+      lastMobile = currentMobile
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
   const setPanelOpen = useCallback((kind: PanelKind, open: boolean) => {
     writeOpen(kind, open)
-    setPanels((prev) =>
-      prev[kind].open === open
-        ? prev
-        : { ...prev, [kind]: { ...prev[kind], open } },
-    )
+    setPanels((prev) => {
+      if (prev[kind].open === open) return prev
+      if (isMobile() && open) {
+        const otherKind: PanelKind = kind === 'context' ? 'inspector' : 'context'
+        return {
+          ...prev,
+          [kind]: { ...prev[kind], open: true },
+          [otherKind]: { ...prev[otherKind], open: false },
+        }
+      }
+      return { ...prev, [kind]: { ...prev[kind], open } }
+    })
   }, [])
 
   const togglePanel = useCallback((kind: PanelKind) => {
     setPanels((prev) => {
       const open = !prev[kind].open
       writeOpen(kind, open)
+      if (isMobile() && open) {
+        const otherKind: PanelKind = kind === 'context' ? 'inspector' : 'context'
+        return {
+          ...prev,
+          [kind]: { ...prev[kind], open: true },
+          [otherKind]: { ...prev[otherKind], open: false },
+        }
+      }
       return { ...prev, [kind]: { ...prev[kind], open } }
     })
   }, [])

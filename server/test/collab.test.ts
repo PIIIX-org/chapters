@@ -263,4 +263,21 @@ describe('real-time collaboration', () => {
     expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200)
     await waitFor(() => collab.hocuspocus.getConnectionsCount() <= before)
   })
+
+  it('REST PUT note update syncs live to active CRDT client without being clobbered', async () => {
+    const client = connect(ownerToken)
+    await waitFor(() => client.document.getText('body').toString().length > 0)
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/vaults/${vaultId}/notes/docs/shared`,
+      headers: { cookie: ownerCookie },
+      body: { body: 'Content from REST update', frontmatter: { type: 'docs', tags: ['live'] } },
+    })
+    expect(res.statusCode).toBe(200)
+
+    await waitFor(() => client.document.getText('body').toString() === 'Content from REST update')
+    expect(client.document.getText('body').toString()).toBe('Content from REST update')
+    expect(client.document.getMap('frontmatter').get('type')).toBe('docs')
+  })
 })

@@ -62,4 +62,41 @@ export const config = {
       only: env.OIDC_ONLY === 'true',
     }
   },
+  /** Automated scheduled offsite backup configuration (Issue #260). */
+  backup: {
+    get localPath() {
+      return env.BACKUP_LOCAL_PATH
+    },
+    get s3Endpoint() {
+      return env.BACKUP_S3_ENDPOINT
+    },
+    get s3Region() {
+      return env.BACKUP_S3_REGION ?? 'us-east-1'
+    },
+    get s3Bucket() {
+      return env.BACKUP_S3_BUCKET
+    },
+    get s3Prefix() {
+      return env.BACKUP_S3_PREFIX ?? 'chapters-backups/'
+    },
+    get s3AccessKeyId() {
+      return env.BACKUP_S3_ACCESS_KEY_ID
+    },
+    get s3SecretAccessKey() {
+      return env.BACKUP_S3_SECRET_ACCESS_KEY
+    },
+    get s3ForcePathStyle() {
+      return (
+        env.BACKUP_S3_FORCE_PATH_STYLE === 'true' ||
+        Boolean(env.BACKUP_S3_ENDPOINT)
+      )
+    },
+    get retentionCount() {
+      return Math.max(1, Number(env.BACKUP_RETENTION_COUNT ?? 7))
+    },
+    get intervalHours() {
+      return Number(env.BACKUP_INTERVAL_HOURS ?? 24)
+    },
+  },
 }
+

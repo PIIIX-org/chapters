@@ -143,4 +143,28 @@ describe('NotificationBell', () => {
     )
     expect(offenders).toHaveLength(0)
   })
+
+  it('marks all notifications as read via Mark all as read button', async () => {
+    let notificationsState = [...NOTIFICATIONS]
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/notifications/read-all' && init?.method === 'POST') {
+        notificationsState = notificationsState.map((n) => ({ ...n, readAt: '2026-08-01T00:00:00Z' }))
+        return Promise.resolve(mockJsonResponse(200, { status: 'read', count: 2 }))
+      }
+      return Promise.resolve(mockJsonResponse(200, notificationsState))
+    })
+
+    renderBell(fetchMock)
+    const user = userEvent.setup()
+    const bell = await screen.findByRole('button', { name: /notifications, 2 unread/i })
+    await user.click(bell)
+
+    const markAllBtn = screen.getByRole('button', { name: 'Mark all as read' })
+    await user.click(markAllBtn)
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith('/api/notifications/read-all', expect.objectContaining({ method: 'POST' })),
+    )
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument())
+  })
 })

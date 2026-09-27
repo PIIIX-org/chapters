@@ -101,3 +101,18 @@ export function listTrashedNotes(vaultId: string): Promise<TrashedNote[]> {
 export function restoreNote(vaultId: string, noteId: string): Promise<{ id: string; path: string }> {
   return apiFetch(`/vaults/${vaultId}/trash/${noteId}/restore`, { method: 'POST' })
 }
+
+export interface Backlink {
+  id: string
+  path: string
+  type: string
+  name: string
+  title: string | null
+  updatedAt: string
+}
+
+/** Lists all notes that link to the given note path in the vault. */
+export function getBacklinks(vaultId: string, path: string): Promise<Backlink[]> {
+  return apiFetch(`/vaults/${vaultId}/backlinks/${path}`)
+}
+

@@ -6,7 +6,7 @@ import { exportLinks, users, vaults, vaultShares } from '../db/schema.js'
 import { generateToken, hashToken } from '../auth/tokens.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { resolveAccess, atLeast } from '../vaults/permissions.js'
-import { createNote, readNote } from '../notes/store.js'
+import { createNote, readNote, saveAsset } from '../notes/store.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { parseNote, serializeNote, OkfValidationError } from '../notes/okf.js'
 import {
@@ -15,6 +15,7 @@ import {
   buildVaultZip,
   type VaultManifest,
 } from './archive.js'
+import { executeBackup, getBackupStatus } from './backup-service.js'
 
 const LINK_TTL_MS = Number(process.env.EXPORT_LINK_TTL_HOURS ?? 24) * 60 * 60 * 1000
 
@@ -147,7 +148,15 @@ export function exportRoutes(app: FastifyInstance) {
       const skipped: string[] = []
       let imported = 0
       for (const entry of zip.getEntries()) {
-        if (entry.isDirectory || !entry.entryName.endsWith('.md')) continue
+        if (entry.isDirectory) continue
+        if (entry.entryName.startsWith('assets/')) {
+          const assetName = entry.entryName.slice(7)
+          if (assetName && /^[a-zA-Z0-9._-]+$/.test(assetName)) {
+            await saveAsset(vault!.id, assetName, entry.getData())
+          }
+          continue
+        }
+        if (!entry.entryName.endsWith('.md')) continue
         const path = entry.entryName.replace(/\.md$/, '')
         if (path === 'index' || path.endsWith('/index')) continue
         try {
@@ -225,5 +234,23 @@ export function exportRoutes(app: FastifyInstance) {
         .header('content-disposition', 'attachment; filename="chapters-backup.zip"')
         .send(zip)
     })
+
+    authed.get('/admin/backup/status', async (req, reply) => {
+      if (req.user!.role !== 'admin') return reply.code(403).send({ error: 'admin required' })
+      return reply.send(getBackupStatus())
+    })
+
+    authed.post('/admin/backup/run', async (req, reply) => {
+      if (req.user!.role !== 'admin') return reply.code(403).send({ error: 'admin required' })
+      try {
+        const result = await executeBackup({ actorUserId: req.user!.id })
+        return reply.send({ success: true, result })
+      } catch (err) {
+        return reply.code(500).send({
+          error: err instanceof Error ? err.message : 'Backup execution failed',
+        })
+      }
+    })
   })
 }
+

@@ -1,4 +1,4 @@
-import { useImperativeHandle, type Ref } from 'react'
+import { useCallback, useEffect, useImperativeHandle, type Ref } from 'react'
 import { ExternalLink } from 'lucide-react'
 import { EditorView } from '@codemirror/view'
 import { remoteFileInfo, type Repository, type RepositoryFile } from '../../api/repositories.js'
@@ -41,6 +41,8 @@ interface CodeViewerProps {
    */
   meta?: Pick<RepositoryFile, 'language' | 'size'>
   ref?: Ref<CodeViewerHandle>
+  /** Optional anchor (#L42 or #symbolName) to jump to on mount or hash change. */
+  initialAnchor?: string
 }
 
 function formatBytes(bytes: number): string {
@@ -49,7 +51,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function CodeViewer({ repository, path, meta, ref }: CodeViewerProps) {
+export function CodeViewer({ repository, path, meta, ref, initialAnchor }: CodeViewerProps) {
   // Known oversize from the list's metadata: don't download what will be
   // refused anyway. The query stays disabled (path null) in that case.
   const knownOversize = meta !== undefined && !canShowInline(meta.size)
@@ -64,21 +66,49 @@ export function CodeViewer({ repository, path, meta, ref }: CodeViewerProps) {
   const showable = readable && canShowInline(readable.size) ? readable : undefined
   const containerRef = useCodeViewer(showable?.content, path, showable?.language ?? null)
 
+  const reveal = useCallback(
+    (line: number) => {
+      const view = containerRef.current && EditorView.findFromDOM(containerRef.current)
+      if (!view || line < 1 || line > view.state.doc.lines) return
+      const pos = view.state.doc.line(line).from
+      view.dispatch({
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: 'start' }),
+      })
+    },
+    [containerRef],
+  )
+
   useImperativeHandle(
     ref,
     () => ({
-      revealLine(line: number) {
-        const view = containerRef.current && EditorView.findFromDOM(containerRef.current)
-        if (!view || line < 1 || line > view.state.doc.lines) return
-        const pos = view.state.doc.line(line).from
-        view.dispatch({
-          selection: { anchor: pos },
-          effects: EditorView.scrollIntoView(pos, { y: 'start' }),
-        })
-      },
+      revealLine: reveal,
     }),
-    [containerRef],
+    [reveal],
   )
+
+  useEffect(() => {
+    if (!showable || !initialAnchor) return
+    const raw = initialAnchor.startsWith('#') ? initialAnchor.slice(1).trim() : initialAnchor.trim()
+    if (!raw) return
+
+    let targetLine: number | null = null
+    const lineMatch = raw.match(/^L?(\d+)$/i)
+    if (lineMatch && lineMatch[1]) {
+      targetLine = parseInt(lineMatch[1], 10)
+    } else if (showable.symbols && showable.symbols.length > 0) {
+      const sym = showable.symbols.find(
+        (s) => s.name === raw || s.name.toLowerCase() === raw.toLowerCase(),
+      )
+      if (sym) {
+        targetLine = sym.startLine
+      }
+    }
+
+    if (targetLine !== null) {
+      reveal(targetLine)
+    }
+  }, [showable, initialAnchor, reveal])
 
   const language = showable?.language ?? meta?.language ?? null
   const size = readable?.size ?? meta?.size

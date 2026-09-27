@@ -77,7 +77,12 @@ export interface DrawGraphOptions {
    * passes null there.
    */
   highlightCommunity?: number | null
+  /** Optional set of node IDs along a found concept path to illuminate. */
+  highlightPathNodeIds?: Set<string> | null
+  /** Optional list of edge endpoints along a found concept path to illuminate. */
+  highlightPathEdges?: Array<{ source: DrawPoint; target: DrawPoint }> | null
 }
+
 
 const DAY_MS = 86_400_000
 const FRESH_DAYS = 7
@@ -169,7 +174,12 @@ function mixToward(hex: string, towardHex: string, fraction: number): string {
   return `rgb(${r},${g},${bl})`
 }
 
-function strokeBatch(ctx: CanvasRenderingContext2D, edges: DrawEdge[], color: string, lineWidth: number): void {
+function strokeBatch(
+  ctx: CanvasRenderingContext2D,
+  edges: readonly { source: DrawPoint; target: DrawPoint }[],
+  color: string,
+  lineWidth: number,
+): void {
   if (edges.length === 0) return
   ctx.beginPath()
   for (const edge of edges) {
@@ -224,31 +234,44 @@ export function drawGraph(ctx: CanvasRenderingContext2D, opts: DrawGraphOptions)
   ctx.setTransform(transform.k, 0, 0, transform.k, transform.x, transform.y)
   ctx.globalAlpha = 1
 
+  const isPathActive = Boolean(opts.highlightPathNodeIds && opts.highlightPathNodeIds.size > 0)
+
   const machine = edges.filter((e): e is DrawMemberEdge => 'kind' in e && e.kind !== 'extracted')
   const human = edges.filter((e): e is DrawMemberEdge => 'kind' in e && e.kind === 'extracted')
   const aggregated = edges.filter((e): e is DrawAggregatedEdge => !('kind' in e))
 
+  if (isPathActive) ctx.globalAlpha = 0.15
   strokeBatch(ctx, machine, teal, (edgeScale * 1) / transform.k)
   strokeBatch(ctx, human, ink, (edgeScale * 1) / transform.k)
   if (aggregated.length > 0) {
     const avgWeight = aggregated.reduce((sum, e) => sum + e.weight, 0) / aggregated.length
-    // ponytail: a single stroke() call can only carry one lineWidth, so a
-    // per-batch average stands in for "scaled from weight" rather than a
-    // true per-edge width — splitting into weight buckets would trade the
-    // one-call guarantee for a handful of calls if this ever needs to be
-    // truer to individual weights.
     strokeBatch(ctx, aggregated, aggregatedInk, (edgeScale * Math.min(6, 0.5 + avgWeight * 0.5)) / transform.k)
   }
-
   ctx.globalAlpha = 1
+
+  if (isPathActive && opts.highlightPathEdges && opts.highlightPathEdges.length > 0) {
+    strokeBatch(ctx, opts.highlightPathEdges, highlight, (edgeScale * 3) / transform.k)
+  }
+
   for (const node of nodes) {
     const timestamp = isCommunityNode(node) ? node.lastActivity : node.updatedAt
-    const alpha = decayAlpha(timestamp, now)
+    const rawAlpha = decayAlpha(timestamp, now)
+    const inPath = opts.highlightPathNodeIds?.has(node.id)
+    const alpha = isPathActive ? (inPath ? 1 : 0.2) : rawAlpha
     ctx.globalAlpha = alpha
-    ctx.fillStyle = mixToward(categoryColor(node, colorMode, isDark, muted), muted, 1 - alpha)
+    ctx.fillStyle = mixToward(categoryColor(node, colorMode, isDark, muted), muted, 1 - rawAlpha)
     ctx.beginPath()
     ctx.arc(node.x, node.y, node.radius * nodeScale, 0, Math.PI * 2)
     ctx.fill()
+
+    if (inPath) {
+      const ringOffset = 2 / transform.k
+      ctx.strokeStyle = highlight
+      ctx.lineWidth = 2.5 / transform.k
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, node.radius * nodeScale + ringOffset, 0, Math.PI * 2)
+      ctx.stroke()
+    }
   }
   ctx.globalAlpha = 1
 
@@ -268,3 +291,4 @@ export function drawGraph(ctx: CanvasRenderingContext2D, opts: DrawGraphOptions)
     ctx.stroke()
   }
 }
+

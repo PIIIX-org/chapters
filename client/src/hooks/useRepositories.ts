@@ -7,6 +7,7 @@ import {
   deleteRepository,
   getRepositoryFileContent,
   getRepositoryGraphPreference,
+  getRepositoryDrift,
   listRepositories,
   listRepositoryFiles,
   listRepositoryShares,
@@ -20,6 +21,7 @@ import type {
   AccessibleRepository,
   CreateRepositoryInput,
   Repository,
+  RepositoryDriftResponse,
   RepositoryFile,
   RepositoryFileContent,
   RepositoryShare,
@@ -197,3 +199,14 @@ export function useSetRepositoryGraphPreference(id: string) {
     },
   })
 }
+
+export const repositoryDriftKey = (id: string) => ['repositories', id, 'drift'] as const
+
+export function useRepositoryDrift(id: string) {
+  return useQuery<RepositoryDriftResponse, ApiError>({
+    queryKey: repositoryDriftKey(id),
+    queryFn: () => getRepositoryDrift(id),
+    enabled: !!id,
+  })
+}
+

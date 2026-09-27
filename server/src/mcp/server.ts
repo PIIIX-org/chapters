@@ -49,8 +49,8 @@ import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord } from '../vaults/routes.js'
 import { isTeamOwner, notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
-import { searchNotes } from '../search/search.js'
-import { buildGraph } from '../graph/assemble.js'
+import { findSymbols, searchNotes } from '../search/search.js'
+import { buildGraph, findShortestPath } from '../graph/assemble.js'
 import { buildVaultZip } from '../export/archive.js'
 import { notify } from '../notifications/notify.js'
 import { logSecurityEvent } from '../auth/security-events.js'
@@ -717,7 +717,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
     wrap(async ({ vaultId, from, toName }: { vaultId?: string; from: string; toName: string }) => {
       const target = vaultFor(vaultId)
       await requireAccess(target, 'edit')
-      const renamed = await renameNote(target, from, toName)
+      const renamed = await renameNote(target, from, toName, writeThroughCollab)
       if (!renamed) throw new McpToolError('note not found')
       return renamed
     }),
@@ -821,7 +821,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
       async ({ vaultId, path, revisionId }: { vaultId?: string; path: string; revisionId: string }) => {
         const target = vaultFor(vaultId)
         await requireAccess(target, 'edit')
-        const reverted = await revertNote(target, path, revisionId, actor)
+        const reverted = await revertNote(target, path, revisionId, actor, writeThroughCollab)
         if (!reverted) throw new McpToolError('note or revision not found')
         return reverted
       },
@@ -1485,6 +1485,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         vaultId: z.string().uuid().optional(),
         repositoryId: z.string().uuid().optional(),
         everywhere: z.boolean().optional(),
+        symbols: z.boolean().optional().describe('Include individual AST code symbols (functions, classes, interfaces, types)'),
         limit: z.number().int().min(1).max(100).optional(),
       },
     },
@@ -1494,6 +1495,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         vaultId?: string
         repositoryId?: string
         everywhere?: boolean
+        symbols?: boolean
         limit?: number
       }) => {
         if (args.everywhere) {
@@ -1506,10 +1508,53 @@ export function buildMcpServer(auth: McpAuth): McpServer {
             { vaultIds: vaultsList.map((v) => v.id), repositoryIds: repos.map((r) => r.id) },
             args.query,
             args.limit,
+            {},
+            { includeSymbols: args.symbols ?? true },
           )
         }
         const resources = await resolveResourceSet(args)
-        return searchNotes(resources, args.query, args.limit)
+        return searchNotes(resources, args.query, args.limit, {}, { includeSymbols: args.symbols ?? true })
+      },
+    ),
+  )
+
+  server.registerTool(
+    'find_symbols',
+    {
+      description:
+        'Fine-grained semantic and keyword search for AST code symbols (functions, classes, interfaces, types) across repositories. Returns exact declarations, line ranges, code snippets, and container file paths without burning tokens reading full files.',
+      inputSchema: {
+        query: z.string().describe('Search query for symbol semantics, signature, or name'),
+        kind: z.enum(['function', 'class', 'interface', 'type']).optional().describe('Filter by symbol kind'),
+        repositoryId: z.string().uuid().optional().describe('Optional repository ID filter'),
+        everywhere: z.boolean().optional().describe('Search across all accessible repositories'),
+        limit: z.number().int().min(1).max(50).optional(),
+      },
+    },
+    wrap(
+      async (args: {
+        query: string
+        kind?: 'function' | 'class' | 'interface' | 'type'
+        repositoryId?: string
+        everywhere?: boolean
+        limit?: number
+      }) => {
+        let repoIds: string[] = []
+        if (args.everywhere) {
+          requireAccountScope('search everywhere')
+          const repos = await listAccessibleRepositories(auth.user.id)
+          repoIds = repos.map((r) => r.id)
+        } else if (args.repositoryId) {
+          const target = repositoryFor(args.repositoryId)
+          await requireRepositoryAccess(target)
+          repoIds = [target]
+        } else if (auth.connection.scope === 'repository') {
+          repoIds = [auth.connection.repositoryId!]
+        } else {
+          const repos = await listAccessibleRepositories(auth.user.id)
+          repoIds = repos.map((r) => r.id)
+        }
+        return findSymbols(repoIds, args.query, { kind: args.kind, limit: args.limit })
       },
     ),
   )
@@ -1544,6 +1589,44 @@ export function buildMcpServer(auth: McpAuth): McpServer {
           aggregate: args.aggregate,
           community: args.community,
         })
+      },
+    ),
+  )
+
+  server.registerTool(
+    'find_graph_path',
+    {
+      description:
+        'Find the shortest path connecting two concepts, notes, or code files in the knowledge graph. Returns the ordered path of nodes and connecting edges.',
+      inputSchema: {
+        source: z.string().describe('Source note path or ID, or code file path'),
+        target: z.string().describe('Target note path or ID, or code file path'),
+        vaultId: z.string().uuid().optional().describe('Optional vault ID constraint'),
+        repositoryId: z.string().uuid().optional().describe('Optional repository ID constraint'),
+      },
+    },
+    wrap(
+      async (args: {
+        source: string
+        target: string
+        vaultId?: string
+        repositoryId?: string
+      }) => {
+        const resources = await resolveResourceSet(args)
+        const graph = await buildGraph(resources)
+        const sourceNode = graph.nodes.find(
+          (n) => n.id === args.source || n.path === args.source,
+        )
+        const targetNode = graph.nodes.find(
+          (n) => n.id === args.target || n.path === args.target,
+        )
+        if (!sourceNode) {
+          throw new McpToolError(`Source "${args.source}" not found in graph.`)
+        }
+        if (!targetNode) {
+          throw new McpToolError(`Target "${args.target}" not found in graph.`)
+        }
+        return findShortestPath(graph, sourceNode.id, targetNode.id)
       },
     ),
   )

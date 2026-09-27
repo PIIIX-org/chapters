@@ -1,8 +1,9 @@
-import { mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import { and, asc, desc, eq, isNotNull, isNull } from 'drizzle-orm'
+import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { basename, dirname, extname, join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { noteLinks, noteRevisions, notes } from '../db/schema.js'
+import { noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
 import { scheduleEmbedding } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
@@ -328,10 +329,29 @@ export async function updateNote(
   return updated!
 }
 
+/**
+ * Rewrites wikilinks in a markdown document from one target path to another,
+ * preserving any inner anchor `#heading`, custom label `|text`, or `.md` extension.
+ */
+export function refactorWikilinks(body: string, fromPath: string, toPath: string): string {
+  const escaped = fromPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const regex = new RegExp(`\\[\\[([ \\t]*)${escaped}(\\.md)?([ \\t]*)(#[^\\]|]*)?(\\|[^\\]]*)?\\]\\]`, 'g')
+  return body.replace(regex, (_match, p1, p2, p3, anchor = '', label = '') => {
+    const ext = p2 ? '.md' : ''
+    return `[[${p1}${toPath}${ext}${p3}${anchor}${label}]]`
+  })
+}
+
 export async function renameNote(
   vaultId: string,
   from: string,
   toName: string,
+  updateFn: (
+    vaultId: string,
+    path: string,
+    input: { frontmatter?: Record<string, unknown>; body?: string },
+    actor: Actor,
+  ) => Promise<NoteRow | null> = updateNote,
 ): Promise<NoteRow | null> {
   const fromResolved = resolveNotePath(from)
   const row = await getLiveNote(vaultId, fromResolved.fullPath)
@@ -343,27 +363,103 @@ export async function renameNote(
     toPath = toName
   }
   const toResolved = resolveNotePath(toPath)
-  if (await getLiveNote(vaultId, toResolved.fullPath)) {
+  if (toResolved.fullPath !== fromResolved.fullPath && (await getLiveNote(vaultId, toResolved.fullPath))) {
     throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
   }
-  const [updated] = await db
-    .update(notes)
-    .set({
-      name: toResolved.name,
-      type: toResolved.type,
-      path: toResolved.fullPath,
-      updatedAt: new Date(),
-    })
-    .where(eq(notes.id, row.id))
-    .returning()
-  await mkdir(dirname(noteFile(vaultId, toResolved.fullPath)), { recursive: true })
-  await rename(noteFile(vaultId, fromResolved.fullPath), noteFile(vaultId, toResolved.fullPath))
+
+  // Disk is canonical source (readNote), row is fallback.
+  const existing = await readNote(vaultId, fromResolved.fullPath)
+  const currentFrontmatter = (existing?.frontmatter ?? (row.frontmatter as Frontmatter)) as Frontmatter
+  const rawBody = existing?.body ?? row.body
+  const isMoving = fromResolved.fullPath !== toResolved.fullPath
+
+  // Refactor any self-referential wikilinks in the note's own body
+  const currentBody = isMoving
+    ? refactorWikilinks(rawBody, fromResolved.fullPath, toResolved.fullPath)
+    : rawBody
+
+  const newFrontmatter: Frontmatter = {
+    ...currentFrontmatter,
+    type: toResolved.type,
+  }
+  validateNote(toResolved.type, toResolved.name, newFrontmatter, currentBody)
+
+  const fromFile = noteFile(vaultId, fromResolved.fullPath)
+  const toFile = noteFile(vaultId, toResolved.fullPath)
+
+  if (isMoving) {
+    await atomicWrite(toFile, serializeNote({ frontmatter: newFrontmatter, body: currentBody }))
+    await unlink(fromFile).catch(() => {})
+  } else {
+    await atomicWrite(toFile, serializeNote({ frontmatter: newFrontmatter, body: currentBody }))
+  }
+
+  let updated: NoteRow
+  try {
+    const [u] = await db
+      .update(notes)
+      .set({
+        name: toResolved.name,
+        type: toResolved.type,
+        path: toResolved.fullPath,
+        body: currentBody,
+        frontmatter: newFrontmatter,
+        updatedAt: new Date(),
+      })
+      .where(eq(notes.id, row.id))
+      .returning()
+    updated = u!
+  } catch (err) {
+    if (isMoving) {
+      await atomicWrite(fromFile, serializeNote({ frontmatter: currentFrontmatter, body: rawBody })).catch(() => {})
+      await unlink(toFile).catch(() => {})
+    }
+    throw err
+  }
+
   const affectedDirs = [
     ...new Set([...fromResolved.ancestorDirectories, ...toResolved.ancestorDirectories]),
   ]
   await regenProgressiveIndices(vaultId, affectedDirs)
-  return updated!
+  await syncLinks(updated.id, currentBody)
+
+  // Refactor incoming wikilinks across other notes in the vault
+  if (isMoving) {
+    const referringRows = await db
+      .select({
+        sourceNoteId: noteLinks.sourceNoteId,
+        sourceNotePath: notes.path,
+      })
+      .from(noteLinks)
+      .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
+      .where(
+        and(
+          eq(notes.vaultId, vaultId),
+          ne(notes.id, row.id),
+          isNull(notes.deletedAt),
+          or(
+            eq(noteLinks.targetPath, fromResolved.fullPath),
+            eq(noteLinks.targetPath, `${fromResolved.fullPath}.md`),
+          ),
+        ),
+      )
+
+    const seenNotes = new Set<string>()
+    for (const ref of referringRows) {
+      if (seenNotes.has(ref.sourceNoteId)) continue
+      seenNotes.add(ref.sourceNoteId)
+      const targetNote = await readNote(vaultId, ref.sourceNotePath)
+      if (!targetNote) continue
+      const refactored = refactorWikilinks(targetNote.body, fromResolved.fullPath, toResolved.fullPath)
+      if (refactored !== targetNote.body) {
+        await updateFn(vaultId, ref.sourceNotePath, { body: refactored }, SYSTEM_ACTOR)
+      }
+    }
+  }
+
+  return updated
 }
+
 
 /** Soft delete (spec 6: one consistent delete behavior): file → .trash, row keeps everything. */
 export async function softDeleteNote(
@@ -491,12 +587,374 @@ export async function listRevisionMeta(
     .offset(offset)
 }
 
+/** Full content of a single recorded revision for preview / diff inspection. */
+export async function getRevision(
+  vaultId: string,
+  revisionId: string,
+): Promise<(RevisionRow & { path: string }) | null> {
+  const rows = await db
+    .select({
+      id: noteRevisions.id,
+      noteId: noteRevisions.noteId,
+      path: notes.path,
+      actorType: noteRevisions.actorType,
+      actorId: noteRevisions.actorId,
+      action: noteRevisions.action,
+      frontmatter: noteRevisions.frontmatter,
+      body: noteRevisions.body,
+      createdAt: noteRevisions.createdAt,
+    })
+    .from(noteRevisions)
+    .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
+    .where(and(eq(noteRevisions.id, revisionId), eq(notes.vaultId, vaultId)))
+    .limit(1)
+
+  const row = rows[0]
+  if (!row) return null
+  return row as RevisionRow & { path: string }
+}
+
+export interface BacklinkItem {
+  id: string
+  path: string
+  type: string
+  name: string
+  title: string | null
+  updatedAt: Date
+}
+
+/**
+ * Returns incoming links to the given note path within the vault.
+ * Resolves candidate wikilink targets (fullPath, fullPath.md, name, name.md).
+ */
+export async function getIncomingLinks(vaultId: string, path: string): Promise<BacklinkItem[] | null> {
+  const target = await getLiveNote(vaultId, path)
+  if (!target) return null
+
+  const resolved = resolveNotePath(path)
+  const candidateTargets = [resolved.fullPath, `${resolved.fullPath}.md`]
+  if (resolved.name !== resolved.fullPath) {
+    candidateTargets.push(resolved.name, `${resolved.name}.md`)
+  }
+
+  const rows = await db
+    .select({
+      id: notes.id,
+      path: notes.path,
+      type: notes.type,
+      name: notes.name,
+      frontmatter: notes.frontmatter,
+      updatedAt: notes.updatedAt,
+    })
+    .from(noteLinks)
+    .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
+    .where(
+      and(
+        eq(notes.vaultId, vaultId),
+        ne(notes.id, target.id),
+        isNull(notes.deletedAt),
+        inArray(noteLinks.targetPath, candidateTargets),
+      ),
+    )
+    .orderBy(asc(notes.path))
+
+  const seen = new Set<string>()
+  const result: BacklinkItem[] = []
+  for (const row of rows) {
+    if (seen.has(row.id)) continue
+    seen.add(row.id)
+    const title =
+      typeof (row.frontmatter as Record<string, unknown> | null)?.title === 'string'
+        ? ((row.frontmatter as Record<string, unknown>).title as string)
+        : null
+    result.push({
+      id: row.id,
+      path: row.path,
+      type: row.type,
+      name: row.name,
+      title,
+      updatedAt: row.updatedAt,
+    })
+  }
+
+  return result
+}
+
+export interface LocalGraphNode {
+  id: string
+  path: string
+  name: string
+  title: string | null
+  type: string | null
+  resourceType: 'note' | 'code'
+  resourceId: string
+  isCenter: boolean
+  depth: number
+}
+
+export interface LocalGraphEdge {
+  source: string
+  target: string
+  kind: 'extracted' | 'semantic'
+  similarity?: number
+}
+
+export interface LocalGraphData {
+  center: LocalGraphNode
+  nodes: LocalGraphNode[]
+  edges: LocalGraphEdge[]
+}
+
+/**
+ * Returns a local ego graph (1 or 2 hops) around the given note.
+ * Includes incoming backlinks, outgoing wikilinks, and semantic edges within the vault.
+ */
+export async function getLocalGraph(
+  vaultId: string,
+  path: string,
+  depth = 1,
+): Promise<LocalGraphData | null> {
+  const target = await getLiveNote(vaultId, path)
+  if (!target) return null
+
+  const allNotes = await listNotes(vaultId)
+  const byId = new Map(allNotes.map((n) => [n.id, n]))
+  const byPath = new Map(allNotes.map((n) => [n.path, n]))
+  const byName = new Map(allNotes.map((n) => [n.name, n]))
+
+  function resolveLink(targetPath: string): (typeof allNotes)[number] | undefined {
+    const clean = targetPath.endsWith('.md') ? targetPath.slice(0, -3) : targetPath
+    return byPath.get(clean) ?? byName.get(clean) ?? byPath.get(targetPath) ?? byName.get(targetPath)
+  }
+
+  function candidateTargetsFor(p: string): string[] {
+    const resolved = resolveNotePath(p)
+    const candidates = [resolved.fullPath, `${resolved.fullPath}.md`]
+    if (resolved.name !== resolved.fullPath) {
+      candidates.push(resolved.name, `${resolved.name}.md`)
+    }
+    return candidates
+  }
+
+  const MAX_NODES = 50
+  const oneHopIds = new Set<string>()
+  const twoHopIds = new Set<string>()
+
+  // 1-hop: Outgoing wikilinks from target
+  const outgoingLinks = await db
+    .select({ targetPath: noteLinks.targetPath })
+    .from(noteLinks)
+    .where(eq(noteLinks.sourceNoteId, target.id))
+
+  for (const link of outgoingLinks) {
+    const resolved = resolveLink(link.targetPath)
+    if (resolved && resolved.id !== target.id) {
+      oneHopIds.add(resolved.id)
+    }
+  }
+
+  // 1-hop: Incoming backlinks to target
+  const targetCandidates = candidateTargetsFor(path)
+  const incomingLinks = await db
+    .select({ sourceNoteId: noteLinks.sourceNoteId })
+    .from(noteLinks)
+    .where(inArray(noteLinks.targetPath, targetCandidates))
+
+  for (const link of incomingLinks) {
+    if (byId.has(link.sourceNoteId) && link.sourceNoteId !== target.id) {
+      oneHopIds.add(link.sourceNoteId)
+    }
+  }
+
+  // 1-hop: Semantic edges for target
+  const semEdges = await db
+    .select()
+    .from(semanticEdges)
+    .where(
+      or(
+        and(eq(semanticEdges.sourceType, 'note'), eq(semanticEdges.sourceId, target.id)),
+        and(eq(semanticEdges.targetType, 'note'), eq(semanticEdges.targetId, target.id)),
+      ),
+    )
+
+  for (const edge of semEdges) {
+    const otherId = edge.sourceId === target.id ? edge.targetId : edge.sourceId
+    if (byId.has(otherId) && otherId !== target.id) {
+      oneHopIds.add(otherId)
+    }
+  }
+
+  // 2-hop (if depth === 2)
+  if (depth >= 2 && oneHopIds.size > 0 && oneHopIds.size < MAX_NODES) {
+    const oneHopArr = [...oneHopIds]
+
+    // Outgoing from 1-hop
+    const twoHopOutgoing = await db
+      .select({ sourceNoteId: noteLinks.sourceNoteId, targetPath: noteLinks.targetPath })
+      .from(noteLinks)
+      .where(inArray(noteLinks.sourceNoteId, oneHopArr))
+
+    for (const link of twoHopOutgoing) {
+      if (1 + oneHopIds.size + twoHopIds.size >= MAX_NODES) break
+      const resolved = resolveLink(link.targetPath)
+      if (resolved && resolved.id !== target.id && !oneHopIds.has(resolved.id)) {
+        twoHopIds.add(resolved.id)
+      }
+    }
+
+    // Incoming to 1-hop
+    const oneHopCandidates: string[] = []
+    for (const id of oneHopArr) {
+      const n = byId.get(id)
+      if (n) oneHopCandidates.push(...candidateTargetsFor(n.path))
+    }
+
+    if (oneHopCandidates.length > 0 && 1 + oneHopIds.size + twoHopIds.size < MAX_NODES) {
+      const twoHopIncoming = await db
+        .select({ sourceNoteId: noteLinks.sourceNoteId })
+        .from(noteLinks)
+        .where(inArray(noteLinks.targetPath, oneHopCandidates))
+
+      for (const link of twoHopIncoming) {
+        if (1 + oneHopIds.size + twoHopIds.size >= MAX_NODES) break
+        if (byId.has(link.sourceNoteId) && link.sourceNoteId !== target.id && !oneHopIds.has(link.sourceNoteId)) {
+          twoHopIds.add(link.sourceNoteId)
+        }
+      }
+    }
+
+    // Semantic to 1-hop
+    if (1 + oneHopIds.size + twoHopIds.size < MAX_NODES) {
+      const twoHopSem = await db
+        .select()
+        .from(semanticEdges)
+        .where(
+          or(
+            and(eq(semanticEdges.sourceType, 'note'), inArray(semanticEdges.sourceId, oneHopArr)),
+            and(eq(semanticEdges.targetType, 'note'), inArray(semanticEdges.targetId, oneHopArr)),
+          ),
+        )
+
+      for (const edge of twoHopSem) {
+        if (1 + oneHopIds.size + twoHopIds.size >= MAX_NODES) break
+        const otherId = oneHopIds.has(edge.sourceId) ? edge.targetId : edge.sourceId
+        if (byId.has(otherId) && otherId !== target.id && !oneHopIds.has(otherId)) {
+          twoHopIds.add(otherId)
+        }
+      }
+    }
+  }
+
+  // Construct node list
+  const nodeMap = new Map<string, LocalGraphNode>()
+
+  function makeNode(
+    n: (typeof allNotes)[number] | NoteRow,
+    d: number,
+    isCenter: boolean,
+  ): LocalGraphNode {
+    const title =
+      typeof (n.frontmatter as Record<string, unknown> | null)?.title === 'string'
+        ? ((n.frontmatter as Record<string, unknown>).title as string)
+        : null
+    return {
+      id: n.id,
+      path: n.path,
+      name: n.name,
+      title,
+      type: n.type,
+      resourceType: 'note',
+      resourceId: vaultId,
+      isCenter,
+      depth: d,
+    }
+  }
+
+  const centerNode = makeNode(target, 0, true)
+  nodeMap.set(centerNode.id, centerNode)
+
+  for (const id of oneHopIds) {
+    const n = byId.get(id)
+    if (n) nodeMap.set(n.id, makeNode(n, 1, false))
+  }
+
+  for (const id of twoHopIds) {
+    const n = byId.get(id)
+    if (n) nodeMap.set(n.id, makeNode(n, 2, false))
+  }
+
+  const allNodeIds = [...nodeMap.keys()]
+
+  // Collect all edges between nodes in the graph
+  const edges: LocalGraphEdge[] = []
+  const edgeKeys = new Set<string>()
+
+  const allLinks = await db
+    .select({ sourceNoteId: noteLinks.sourceNoteId, targetPath: noteLinks.targetPath })
+    .from(noteLinks)
+    .where(inArray(noteLinks.sourceNoteId, allNodeIds))
+
+  for (const link of allLinks) {
+    const resolved = resolveLink(link.targetPath)
+    if (resolved && nodeMap.has(resolved.id) && link.sourceNoteId !== resolved.id) {
+      const key = `${link.sourceNoteId}->${resolved.id}:extracted`
+      if (!edgeKeys.has(key)) {
+        edgeKeys.add(key)
+        edges.push({
+          source: link.sourceNoteId,
+          target: resolved.id,
+          kind: 'extracted',
+        })
+      }
+    }
+  }
+
+  // Collect semantic edges between nodes in graph
+  const allSem = await db
+    .select()
+    .from(semanticEdges)
+    .where(
+      and(
+        inArray(semanticEdges.sourceId, allNodeIds),
+        inArray(semanticEdges.targetId, allNodeIds),
+      ),
+    )
+
+  for (const sem of allSem) {
+    const key =
+      sem.sourceId < sem.targetId
+        ? `${sem.sourceId}<->${sem.targetId}:semantic`
+        : `${sem.targetId}<->${sem.sourceId}:semantic`
+    if (!edgeKeys.has(key)) {
+      edgeKeys.add(key)
+      edges.push({
+        source: sem.sourceId,
+        target: sem.targetId,
+        kind: 'semantic',
+        similarity: sem.similarity,
+      })
+    }
+  }
+
+  return {
+    center: centerNode,
+    nodes: [...nodeMap.values()],
+    edges,
+  }
+}
+
 /** Restores a note to a recorded revision (a new attributed write). */
 export async function revertNote(
   vaultId: string,
   path: string,
   revisionId: string,
   actor: Actor,
+  updateFn: (
+    vaultId: string,
+    path: string,
+    input: { frontmatter?: Record<string, unknown>; body?: string },
+    actor: Actor,
+  ) => Promise<NoteRow | null> = updateNote,
 ): Promise<NoteRow | null> {
   const row = await getLiveNote(vaultId, path)
   if (!row) return null
@@ -507,7 +965,7 @@ export async function revertNote(
       .where(and(eq(noteRevisions.id, revisionId), eq(noteRevisions.noteId, row.id)))
   )[0]
   if (!revision) return null
-  const updated = await updateNote(
+  const updated = await updateFn(
     vaultId,
     path,
     { frontmatter: revision.frontmatter as Record<string, unknown>, body: revision.body },
@@ -562,4 +1020,103 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
   await deleteSemanticEdgesFor('note', [row.id])
   await rm(trashFile(vaultId, row.id), { force: true })
   return true
+}
+
+export const ASSET_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+}
+
+export function sanitizeAssetFilename(originalFilename: string): string {
+  const ext = extname(originalFilename).toLowerCase().slice(0, 10)
+  const base =
+    basename(originalFilename, ext)
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]/g, '-')
+      .slice(0, 40)
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '') || 'attachment'
+  return `${base}-${Date.now()}-${randomUUID().slice(0, 6)}${ext}`
+}
+
+export function assetFile(vaultId: string, filename: string): string {
+  return join(vaultDir(vaultId), 'assets', filename)
+}
+
+export async function saveAsset(
+  vaultId: string,
+  originalFilename: string,
+  buffer: Buffer,
+): Promise<{ fileName: string; size: number; mimeType: string }> {
+  const fileName = sanitizeAssetFilename(originalFilename)
+  const targetDir = join(vaultDir(vaultId), 'assets')
+  await mkdir(targetDir, { recursive: true })
+  const targetPath = join(targetDir, fileName)
+  await writeFile(targetPath, buffer)
+  const ext = extname(fileName).toLowerCase()
+  const mimeType = ASSET_MIME_TYPES[ext] ?? 'application/octet-stream'
+  return { fileName, size: buffer.length, mimeType }
+}
+
+export async function readAsset(
+  vaultId: string,
+  filename: string,
+): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  if (
+    !filename ||
+    filename.includes('..') ||
+    filename.includes('/') ||
+    filename.includes('\\') ||
+    filename.includes('\0') ||
+    !/^[a-zA-Z0-9._-]+$/.test(filename)
+  ) {
+    return null
+  }
+  const filePath = assetFile(vaultId, filename)
+  try {
+    const buffer = await readFile(filePath)
+    const ext = extname(filename).toLowerCase()
+    const mimeType = ASSET_MIME_TYPES[ext] ?? 'application/octet-stream'
+    return { buffer, mimeType }
+  } catch {
+    return null
+  }
+}
+
+export async function listAssets(
+  vaultId: string,
+): Promise<{ fileName: string; size: number; modifiedAt: string }[]> {
+  const targetDir = join(vaultDir(vaultId), 'assets')
+  try {
+    const entries = await readdir(targetDir, { withFileTypes: true })
+    const results: { fileName: string; size: number; modifiedAt: string }[] = []
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.name.startsWith('.')) continue
+      const stats = await stat(join(targetDir, entry.name)).catch(() => null)
+      if (stats) {
+        results.push({
+          fileName: entry.name,
+          size: stats.size,
+          modifiedAt: stats.mtime.toISOString(),
+        })
+      }
+    }
+    return results.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
+  } catch {
+    return []
+  }
 }
