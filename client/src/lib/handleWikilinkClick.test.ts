@@ -33,4 +33,42 @@ describe('handleWikilinkClick', () => {
     expect(create).not.toHaveBeenCalled()
     expect(navigate).toHaveBeenCalledWith('/vaults/v1/notes/justaname')
   })
+
+  it('navigates to code repository file and resolves symbol anchor', () => {
+    const navigate = vi.fn()
+    const create = vi.fn()
+    const repos = [{ id: 'repo-uuid-1', name: 'piiix' }]
+    handleWikilinkClick(
+      'repo:piiix/src/auth.ts#verifyToken',
+      'v1',
+      [],
+      true,
+      navigate,
+      create,
+      repos,
+    )
+    expect(create).not.toHaveBeenCalled()
+    expect(navigate).toHaveBeenCalledWith('/repos/repo-uuid-1/files/src/auth.ts#verifyToken')
+  })
+
+  it('navigates to code repository with direct repo ID and line anchor', () => {
+    const navigate = vi.fn()
+    const create = vi.fn()
+    handleWikilinkClick(
+      'repo:repo-uuid-2/src/main.ts#L42',
+      'v1',
+      [],
+      true,
+      navigate,
+      create,
+    )
+    expect(navigate).toHaveBeenCalledWith('/repos/repo-uuid-2/files/src/main.ts#L42')
+  })
+
+  it('navigates to a note with heading anchor', () => {
+    const navigate = vi.fn()
+    const create = vi.fn()
+    handleWikilinkClick('people/jane#bio', 'v1', ['people/jane'], true, navigate, create)
+    expect(navigate).toHaveBeenCalledWith('/vaults/v1/notes/people/jane#bio')
+  })
 })

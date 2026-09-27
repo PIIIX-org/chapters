@@ -5,6 +5,7 @@ import { EditorView } from '@codemirror/view'
 import { useNote } from '../../hooks/useNote.js'
 import { useCreateNote } from '../../hooks/useCreateNote.js'
 import { useVaultTree } from '../../hooks/useVaultTree.js'
+import { useRepositories } from '../../hooks/useRepositories.js'
 import { useCodeMirrorEditor } from '../../hooks/useCodeMirrorEditor.js'
 import { useCollabDoc } from '../../hooks/useCollabDoc.js'
 import { useLiveNote } from '../../hooks/useLiveNote.js'
@@ -311,6 +312,7 @@ function useWikilinks(vaultId: string, canCreate: boolean) {
   const navigate = useNavigate()
   const createNote = useCreateNote(vaultId)
   const tree = useVaultTree(vaultId)
+  const repos = useRepositories()
   const targets = tree.data ? Object.values(tree.data).flat().map((n) => n.path) : []
 
   return {
@@ -323,6 +325,7 @@ function useWikilinks(vaultId: string, canCreate: boolean) {
         canCreate,
         (to) => navigate(to),
         (input, onSettled) => createNote.mutate(input, { onSettled }),
+        repos.data,
       ),
   }
 }

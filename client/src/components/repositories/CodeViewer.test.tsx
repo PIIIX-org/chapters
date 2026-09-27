@@ -218,4 +218,23 @@ describe('CodeViewer', () => {
 
     await expectNoA11yViolations(container)
   })
+
+  it('moves the viewer to symbol declaration when initialAnchor matches symbol name', async () => {
+    stubFile(TS_FILE)
+    renderWithClient(<CodeViewer repository={GIT_REPO} path={TS_FILE.path} initialAnchor="#Beta" />)
+    await screen.findByRole('textbox', { name: `${TS_FILE.path} (read-only)` })
+
+    const view = editorView()
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(5).from)
+  })
+
+  it('moves the viewer to line number when initialAnchor matches line pattern', async () => {
+    stubFile(TS_FILE)
+    renderWithClient(<CodeViewer repository={GIT_REPO} path={TS_FILE.path} initialAnchor="#L2" />)
+    await screen.findByRole('textbox', { name: `${TS_FILE.path} (read-only)` })
+
+    const view = editorView()
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(2).from)
+  })
 })
+
