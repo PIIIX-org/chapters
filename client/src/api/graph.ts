@@ -77,3 +77,39 @@ export function fetchGraph(opts: FetchGraphOptions): Promise<VaultGraph | Commun
 
   return apiFetch(`${path}?${params.toString()}`)
 }
+
+export interface LocalGraphNode {
+  id: string
+  path: string
+  name: string
+  title: string | null
+  type: string | null
+  resourceType: 'note' | 'code'
+  resourceId: string
+  isCenter: boolean
+  depth: number
+}
+
+export interface LocalGraphEdge {
+  source: string
+  target: string
+  kind: 'extracted' | 'semantic'
+  similarity?: number
+}
+
+export interface LocalGraphData {
+  center: LocalGraphNode
+  nodes: LocalGraphNode[]
+  edges: LocalGraphEdge[]
+}
+
+export function fetchLocalGraph(
+  vaultId: string,
+  path: string,
+  depth = 1,
+): Promise<LocalGraphData> {
+  const params = new URLSearchParams()
+  if (depth > 1) params.set('depth', String(depth))
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  return apiFetch(`/vaults/${vaultId}/local-graph/${path}${qs}`)
+}

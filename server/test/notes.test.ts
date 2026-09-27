@@ -324,3 +324,86 @@ describe('GET /vaults/:id/backlinks/* — incoming backlinks', () => {
   })
 })
 
+describe('GET /vaults/:id/local-graph/* — local ego graph', () => {
+  it('returns center node and 1-hop connected neighbors with extracted edges', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/local-graph/docs/renamed-doc`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const graph = res.json() as {
+      center: { id: string; path: string; isCenter: boolean; depth: number }
+      nodes: Array<{ id: string; path: string; isCenter: boolean; depth: number }>
+      edges: Array<{ source: string; target: string; kind: string }>
+    }
+
+    expect(graph.center.path).toBe('docs/renamed-doc')
+    expect(graph.center.isCenter).toBe(true)
+    expect(graph.center.depth).toBe(0)
+
+    // Center plus guides/overview which links to it
+    const centerInNodes = graph.nodes.find((n) => n.path === 'docs/renamed-doc')
+    expect(centerInNodes).toBeDefined()
+    expect(centerInNodes!.isCenter).toBe(true)
+
+    const neighbor = graph.nodes.find((n) => n.path === 'guides/overview')
+    expect(neighbor).toBeDefined()
+    expect(neighbor!.depth).toBe(1)
+    expect(neighbor!.isCenter).toBe(false)
+
+    // Edge from guides/overview to docs/renamed-doc
+    const edge = graph.edges.find(
+      (e) => e.source === neighbor!.id && e.target === centerInNodes!.id && e.kind === 'extracted',
+    )
+    expect(edge).toBeDefined()
+  })
+
+  it('supports depth=2 traversal', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/local-graph/docs/renamed-doc?depth=2`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const graph = res.json() as {
+      center: { path: string }
+      nodes: Array<{ path: string; depth: number }>
+      edges: Array<{ source: string; target: string }>
+    }
+    expect(graph.center.path).toBe('docs/renamed-doc')
+    expect(graph.nodes.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('allows read-only grantees to read the local graph', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/local-graph/docs/renamed-doc`,
+      headers: { cookie: readerCookie },
+    })
+    expect(res.statusCode).toBe(200)
+    const graph = res.json() as { center: { path: string } }
+    expect(graph.center.path).toBe('docs/renamed-doc')
+  })
+
+  it('hides local graph from strangers without access', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/local-graph/docs/renamed-doc`,
+      headers: { cookie: strangerCookie },
+    })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('404s for a non-existent note', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/local-graph/docs/non-existent`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: 'note not found' })
+  })
+})
+
+
