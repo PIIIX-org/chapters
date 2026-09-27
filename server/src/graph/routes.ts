@@ -8,7 +8,7 @@ import {
   vaultGraphPreferences,
   vaults,
 } from '../db/schema.js'
-import { atLeast, listAccessibleVaults, resolveAccess } from '../vaults/permissions.js'
+import { atLeast, listAccessibleVaults, resolveAccess, UUID_REGEX } from '../vaults/permissions.js'
 import { listAccessibleRepositories } from '../repositories/permissions.js'
 import { buildGraph, findShortestPath } from './assemble.js'
 import { graphQuerySchema, parseGraphFilters, type GraphQuery } from './filters.js'
@@ -225,6 +225,7 @@ export function graphRoutes(app: FastifyInstance) {
   }>(
     '/graph/perspectives/:id',
     async (req, reply) => {
+      if (!UUID_REGEX.test(req.params.id)) return reply.code(404).send({ error: 'not found' })
       const [perspective] = await db
         .select()
         .from(graphPerspectives)

@@ -16,10 +16,13 @@ export function atLeast(access: Access | null, needed: Access): boolean {
  * must never cache the result across requests. Only active users have
  * any access at all.
  */
+export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function resolveAccess(
   userId: string,
   vaultId: string,
 ): Promise<Access | null> {
+  if (!UUID_REGEX.test(userId) || !UUID_REGEX.test(vaultId)) return null
   const user = (
     await db.select({ status: users.status }).from(users).where(eq(users.id, userId))
   )[0]

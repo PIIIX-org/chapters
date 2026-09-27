@@ -76,6 +76,11 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
 
   const [perspectives, setPerspectives] = useState<GraphPerspective[]>([])
   const [selectedPerspectiveId, setSelectedPerspectiveId] = useState<string>('all')
+  const [prevVaultId, setPrevVaultId] = useState(effectiveVaultId)
+  if (prevVaultId !== effectiveVaultId) {
+    setPrevVaultId(effectiveVaultId)
+    setSelectedPerspectiveId('all')
+  }
   const [isSaving, setIsSaving] = useState(false)
   const [newPerspectiveName, setNewPerspectiveName] = useState('')
   const [newPerspectiveShared, setNewPerspectiveShared] = useState(true)
@@ -153,6 +158,7 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
         else next.delete(`${paramPrefix}until`)
 
         if (custom.filters.colorMode) next.set('color', custom.filters.colorMode)
+        else next.delete('color')
         return next
       })
     }

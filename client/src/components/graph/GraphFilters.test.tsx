@@ -357,4 +357,27 @@ describe('GraphFilters', () => {
 
     await expectNoA11yViolations(container)
   })
+
+  it('cleans up stale color param when applying a perspective without colorMode', async () => {
+    const customPerspective = {
+      id: 'custom-no-color',
+      name: 'No Color View',
+      vaultId: 'v1',
+      filters: { types: ['okf/person'] },
+      isShared: true,
+    }
+    stubFetch([customPerspective])
+    const user = userEvent.setup()
+    renderFilters({ initialEntry: '/?vault=v1&color=community' })
+
+    const select = await screen.findByRole('combobox', { name: 'Graph perspective' })
+    await waitFor(() => expect(screen.getByText('No Color View')).toBeInTheDocument())
+
+    await user.selectOptions(select, 'custom-no-color')
+    await waitFor(() => {
+      const params = screen.getByTestId('params').textContent ?? ''
+      expect(params).toContain('types=okf%2Fperson')
+      expect(params).not.toContain('color=')
+    })
+  })
 })

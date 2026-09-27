@@ -42,6 +42,9 @@ export async function buildApp(
   })
 
   app.setErrorHandler((error: FastifyError, req, reply) => {
+    if ((error as { code?: string }).code === '22P02') {
+      return reply.code(404).send({ error: 'not found' })
+    }
     const statusCode = error.statusCode ?? 500
     if (statusCode >= 500) {
       req.log.error(error)

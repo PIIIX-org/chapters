@@ -250,7 +250,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
 
   function goSymbol(containerId: string, path: string, startLine?: number) {
     onClose()
-    const targetPath = `/repos/${containerId}/tree/${path}${startLine ? `#L${startLine}` : ''}`
+    const targetPath = `/repos/${containerId}/files/${path}${startLine ? `#L${startLine}` : ''}`
     visit({ kind: 'repo', label: path, path: targetPath })
   }
 

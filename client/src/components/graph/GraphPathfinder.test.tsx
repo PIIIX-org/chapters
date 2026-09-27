@@ -96,6 +96,8 @@ describe('GraphPathfinder', () => {
     expect(screen.getByText('concepts/auth.md')).toBeInTheDocument()
     expect(screen.getByText('concepts/session.md')).toBeInTheDocument()
     expect(screen.getByText('src/auth/session.ts')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'concepts/auth.md' })).toHaveAttribute('href', '/vaults/v1/notes/concepts/auth.md')
+    expect(screen.getByRole('link', { name: 'src/auth/session.ts' })).toHaveAttribute('href', '/repos/r1/files/src/auth/session.ts')
 
     expect(onPathChange).toHaveBeenCalledWith(
       expect.objectContaining({
