@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react'
+import { Link } from 'react-router'
+import { AlertTriangle } from 'lucide-react'
 import { syncHealth } from '../../api/repositories.js'
 import type { AccessibleRepository, SyncHealth } from '../../api/repositories.js'
-import { useRepository, useRepositoryFiles } from '../../hooks/useRepositories.js'
+import { useRepository, useRepositoryFiles, useRepositoryDrift } from '../../hooks/useRepositories.js'
 import { Panel, PanelBody, PanelHeader } from '../ui/panel.js'
 import { StatusDot, type PillTone } from '../ui/pill.js'
 import { cn } from '../../lib/utils.js'
@@ -79,6 +81,8 @@ function Frame({ titleAs, children }: { titleAs: 'h2' | 'h3'; children: ReactNod
 export function RepositorySyncCard({ repositoryId, titleAs = 'h3' }: RepositorySyncCardProps) {
   const repository = useRepository(repositoryId)
   const files = useRepositoryFiles(repositoryId)
+  const drift = useRepositoryDrift(repositoryId)
+  const drifts = drift.data?.drifts ?? []
 
   // isError first, always: a repository whose fetch failed must never render
   // as "synced, 0 files".
@@ -184,6 +188,39 @@ export function RepositorySyncCard({ repositoryId, titleAs = 'h3' }: RepositoryS
             take minutes to appear.
           </p>
         ))}
+
+      {drifts.length > 0 && (
+        <div className="mt-2 rounded-[var(--radius-sm,2px)] border border-amber-500/30 bg-amber-500/10 p-2.5">
+          <div className="flex items-center gap-2 text-xs font-medium text-amber-500">
+            <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+            <span>Documentation Drift Detected ({drifts.length})</span>
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            The following note references have drifted from repository code:
+          </p>
+          <ul className="mt-2 space-y-1.5 text-xs">
+            {drifts.map((d) => (
+              <li
+                key={`${d.noteId}-${d.resource}-${d.kind}`}
+                className="flex flex-col border-b border-border/50 pb-1.5 last:border-b-0 last:pb-0"
+              >
+                <div className="flex items-center gap-1.5">
+                  <Link
+                    to={`/vaults/${d.vaultId}/notes/${d.notePath}`}
+                    className="font-medium text-foreground underline decoration-muted-foreground underline-offset-2 hover:text-accent-foreground"
+                  >
+                    {d.notePath}
+                  </Link>
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    ({d.kind.replace('_', ' ')})
+                  </span>
+                </div>
+                <span className="text-[11px] text-muted-foreground">{d.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </Frame>
   )
 }
