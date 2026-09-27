@@ -56,6 +56,7 @@ import { notify } from '../notifications/notify.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 import { writeThroughCollab } from './crdt-write.js'
+import { registerMcpPrompts } from './prompts.js'
 
 class McpToolError extends Error {}
 
@@ -1646,6 +1647,13 @@ export function buildMcpServer(auth: McpAuth): McpServer {
       return auditVaultConformance(target, auth.user.id)
     }),
   )
+
+  registerMcpPrompts(server, auth, {
+    vaultFor,
+    repositoryFor,
+    requireAccess,
+    requireRepositoryAccess,
+  })
 
   return server
 }
