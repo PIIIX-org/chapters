@@ -247,18 +247,22 @@ export function ReposPage() {
     return groups
   }, [groupByFolder, filteredRepos, getRepoFolder])
 
+  const hasActiveFilters =
+    search.trim() !== '' || selectedFolder !== 'all' || sourceFilter !== 'all'
+
   return (
     <div className="h-full min-h-0 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 px-4 pt-5 pb-16">
+      <div className="mx-auto flex w-full max-w-full sm:max-w-[94%] md:max-w-[88%] lg:max-w-[80%] flex-col gap-3 sm:gap-4 px-2.5 sm:px-4 pt-3 pb-16 sm:pt-5 sm:pb-16">
         <Panel>
           <PanelHeader
+            className="min-h-9 h-auto py-2 sm:h-9 sm:py-0 flex-wrap sm:flex-nowrap gap-y-2"
             title={
-              repositories.data && repositories.data.length > 0
+              repositories.data && repositories.data.length > 0 && filteredRepos.length !== repositories.data.length
                 ? `Repositories (${filteredRepos.length} of ${repositories.data.length})`
                 : 'Repositories'
             }
             actions={
-              <div className="flex items-center gap-2">
+              <div className="flex items-center flex-wrap gap-1.5 sm:gap-2">
                 {/* Group by Folder Toggle */}
                 {repositories.data && repositories.data.length > 0 && (
                   <Button
@@ -268,7 +272,7 @@ export function ReposPage() {
                     onClick={handleToggleGroupByFolder}
                     title="Group by folder"
                     aria-label="Group by folder"
-                    className="gap-1 text-xs"
+                    className="h-7 px-2 gap-1 text-xs"
                   >
                     <FolderTree className="size-3.5" aria-hidden="true" />
                     <span className="hidden sm:inline">Group</span>
@@ -310,9 +314,10 @@ export function ReposPage() {
                   size="sm"
                   variant="outline"
                   onClick={() => setConnecting(true)}
+                  className="h-7 sm:h-8 px-2 sm:px-3 text-xs gap-1"
                 >
-                  <Plus aria-hidden="true" />
-                  Connect a repository
+                  <Plus aria-hidden="true" className="size-3.5" />
+                  <span>Connect a repository</span>
                 </Button>
               </div>
             }
@@ -320,10 +325,10 @@ export function ReposPage() {
 
           {/* Search, Filter, and Sort Toolbar */}
           {repositories.data && repositories.data.length > 0 && (
-            <div className="border-b border-border p-3 flex flex-col gap-3 bg-muted/10">
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="border-b border-border p-2.5 sm:p-3 flex flex-col gap-2.5 sm:gap-3 bg-muted/10">
+              <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2">
                 {/* Search */}
-                <div className="relative flex-1 min-w-[200px]">
+                <div className="relative w-full sm:flex-1 sm:min-w-[200px]">
                   <Search
                     className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none"
                     aria-hidden="true"
@@ -333,52 +338,55 @@ export function ReposPage() {
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search repositories by name, folder, or source..."
                     aria-label="Search repositories"
-                    className="pl-8 h-8 text-xs"
+                    className="pl-8 pr-8 h-8 text-xs w-full"
                   />
                   {search && (
                     <button
                       type="button"
                       onClick={() => setSearch('')}
                       aria-label="Clear search"
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
                     >
                       <X className="size-3.5" aria-hidden="true" />
                     </button>
                   )}
                 </div>
 
-                {/* Source filter */}
-                <select
-                  value={sourceFilter}
-                  onChange={(e) => setSourceFilter(e.target.value)}
-                  aria-label="Filter by source"
-                  className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  <option value="all">All sources</option>
-                  <option value="git">Git</option>
-                  <option value="local_path">Local folder</option>
-                  <option value="agent_push">Agent push</option>
-                </select>
-
-                {/* Sort */}
-                <div className="flex items-center gap-1">
-                  <ArrowUpDown className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                {/* Filters row on mobile, inline on desktop */}
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  {/* Source filter */}
                   <select
-                    value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as SortOption)}
-                    aria-label="Sort repositories"
-                    className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={sourceFilter}
+                    onChange={(e) => setSourceFilter(e.target.value)}
+                    aria-label="Filter by source"
+                    className="h-8 flex-1 sm:flex-none rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   >
-                    <option value="synced">Last synced</option>
-                    <option value="name-asc">Name (A–Z)</option>
-                    <option value="name-desc">Name (Z–A)</option>
-                    <option value="source">Source</option>
+                    <option value="all">All sources</option>
+                    <option value="git">Git</option>
+                    <option value="local_path">Local folder</option>
+                    <option value="agent_push">Agent push</option>
                   </select>
+
+                  {/* Sort */}
+                  <div className="flex items-center gap-1 flex-1 sm:flex-none">
+                    <ArrowUpDown className="size-3.5 text-muted-foreground shrink-0 hidden sm:inline-block" aria-hidden="true" />
+                    <select
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value as SortOption)}
+                      aria-label="Sort repositories"
+                      className="h-8 w-full sm:w-auto rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <option value="synced">Last synced</option>
+                      <option value="name-asc">Name (A–Z)</option>
+                      <option value="name-desc">Name (Z–A)</option>
+                      <option value="source">Source</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
               {/* Visual Folder Tabs / Shelf */}
-              <div className="flex items-end gap-2 overflow-x-auto pt-2 pb-1 text-xs">
+              <div className="flex items-end gap-2 overflow-x-auto pt-2 pb-1.5 text-xs -mx-2.5 px-2.5 sm:mx-0 sm:px-0 scroll-smooth">
                 <span className="text-muted-foreground font-medium text-[11px] uppercase tracking-wider shrink-0 mb-1.5 mr-1">
                   Folders:
                 </span>
@@ -441,36 +449,40 @@ export function ReposPage() {
                     <div key={folder} className="relative inline-flex flex-col items-start shrink-0">
                       {/* Top folder tab ear */}
                       <div
-                        className={`h-1.5 w-6 rounded-t-sm border-t border-x transition-colors ${
+                        className={`h-1.5 w-7 rounded-t-sm border-t border-x transition-colors ${
                           isSelected
-                            ? 'bg-primary border-primary'
+                            ? colorDef
+                              ? colorDef.cardTopBar
+                              : 'bg-primary border-primary'
                             : colorDef
-                              ? colorDef.folderTab
+                              ? colorDef.accent + ' opacity-40'
                               : 'bg-muted/60 border-border'
                         }`}
-                        style={!isSelected ? colorDef?.style?.folderTab : undefined}
+                        style={
+                          isSelected
+                            ? colorDef?.style?.cardTopBar
+                            : colorDef?.style?.accent
+                              ? { ...colorDef.style.accent, opacity: 0.4 }
+                              : undefined
+                        }
                       />
                       <button
                         type="button"
                         onClick={() => setSelectedFolder(folder)}
                         className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-b-md rounded-tr-md border transition-colors ${
                           isSelected
-                            ? 'border-primary bg-primary text-primary-foreground font-medium'
+                            ? colorDef
+                              ? `${colorDef.badge} border-current font-medium shadow-sm`
+                              : 'border-primary bg-primary text-primary-foreground font-medium'
                             : colorDef
-                              ? colorDef.folderTab
+                              ? `${colorDef.badge} border-border hover:border-current`
                               : 'border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted'
                         }`}
-                        style={!isSelected ? colorDef?.style?.folderTab : undefined}
+                        style={colorDef?.style?.badge}
                       >
                         <Folder
-                          className={`size-3 ${
-                            isSelected
-                              ? 'text-primary-foreground'
-                              : colorDef
-                                ? colorDef.folderIcon
-                                : 'text-muted-foreground'
-                          }`}
-                          style={!isSelected ? colorDef?.style?.folderIcon : undefined}
+                          className={`size-3 ${colorDef ? colorDef.folderIcon : 'text-muted-foreground'}`}
+                          style={colorDef?.style?.folderIcon}
                           aria-hidden="true"
                         />
                         <span>{folder}</span>
@@ -499,14 +511,26 @@ export function ReposPage() {
               message="Connect one and its files join the graph beside your notes. Chapters never writes code back — git stays the record of truth."
             />
           ) : filteredRepos.length === 0 ? (
-            <PanelState
-              status="empty"
-              title="No matching repositories"
-              message="Try adjusting your search query or folder filter."
-            />
+            <div className="p-8 text-center flex flex-col items-center gap-2">
+              <p className="text-sm text-muted-foreground">No matching repositories found.</p>
+              {hasActiveFilters && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSearch('')
+                    setSelectedFolder('all')
+                    setSourceFilter('all')
+                  }}
+                >
+                  Clear filters
+                </Button>
+              )}
+            </div>
           ) : groupByFolder ? (
             /* Grouped View with Folder Ears and Styling */
-            <div className="flex flex-col gap-6 p-4">
+            <div className="flex flex-col gap-4 sm:gap-6 p-2.5 sm:p-4">
               {groupedRepos.map((group) => {
                 const colorDef = getColorDef(getFolderColor(group.folder))
                 const isCollapsed = Boolean(collapsedFolders[group.folder])
@@ -555,13 +579,13 @@ export function ReposPage() {
 
                     {/* Folder Body */}
                     <div
-                      className={`rounded-b-lg rounded-tr-lg border border-border p-4 transition-colors ${
+                      className={`rounded-b-lg rounded-tr-lg border border-border p-3 sm:p-4 transition-colors ${
                         colorDef ? colorDef.folderBg : 'bg-muted/10'
                       } ${isCollapsed ? 'hidden' : ''}`}
                       style={colorDef?.style?.folderBg}
                     >
                       {viewMode === 'card' ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
                           {group.repos.map((repo) => (
                             <RepoCard
                               key={repo.id}
@@ -690,7 +714,7 @@ export function ReposPage() {
             </div>
           ) : viewMode === 'card' ? (
             /* Flat Card View */
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4 p-2.5 sm:p-4">
               {filteredRepos.map((repo) => (
                 <RepoCard
                   key={repo.id}

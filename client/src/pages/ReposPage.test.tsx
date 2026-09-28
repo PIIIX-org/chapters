@@ -168,6 +168,40 @@ describe('ReposPage', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 
+  it('displays branch info, sync error, and open repository link in repo card', async () => {
+    const errorRepos = [
+      {
+        ...REPOS[0],
+        syncStatus: 'error',
+        lastSyncError: 'Authentication failed for origin',
+      },
+    ]
+    stubFetch(errorRepos)
+    renderPage()
+
+    expect(await screen.findByRole('link', { name: 'Atlas ERP' })).toBeInTheDocument()
+    expect(screen.getByText('branch: main')).toBeInTheDocument()
+    expect(screen.getByText('Authentication failed for origin')).toBeInTheDocument()
+    const openLink = screen.getByRole('link', { name: /open repository/i })
+    expect(openLink).toHaveAttribute('href', '/repos/r1/files')
+  })
+
+  it('shows clear filters button when search yields no matches and resets on click', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Atlas ERP' })
+    const searchInput = screen.getByRole('textbox', { name: 'Search repositories' })
+    await userEvent.type(searchInput, 'NonexistentRepo')
+
+    expect(await screen.findByText('No matching repositories found.')).toBeInTheDocument()
+    const clearBtn = screen.getByRole('button', { name: 'Clear filters' })
+    await userEvent.click(clearBtn)
+
+    expect(await screen.findByRole('link', { name: 'Atlas ERP' })).toBeInTheDocument()
+    expect(searchInput).toHaveValue('')
+  })
+
   it('has no accessibility violations', async () => {
     stubFetch()
     const { container } = renderPage()
