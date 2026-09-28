@@ -108,6 +108,8 @@ export type FormatType =
   | 'wikilink'
   | 'link'
   | 'image'
+  | 'math'
+  | 'mermaid'
   | 'undo'
   | 'redo'
 
@@ -269,6 +271,26 @@ export function applyFormat(view: EditorView | null, format: FormatType) {
       view.dispatch({
         changes: { from, to, insert },
         selection: { anchor: from + insert.length },
+      })
+      break
+    }
+    case 'math': {
+      const text = hasSelection ? selected : 'x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}'
+      const isBlock = !hasSelection || selected.includes('\n')
+      const insert = isBlock ? `\n$$\n${text}\n$$\n` : `$${text}$`
+      view.dispatch({
+        changes: { from, to, insert },
+        selection: { anchor: from + (isBlock ? 4 : 1), head: from + (isBlock ? 4 : 1) + text.length },
+      })
+      break
+    }
+    case 'mermaid': {
+      const template = 'graph TD\n    A[Start] --> B[Process]\n    B --> C[End]'
+      const text = hasSelection ? selected : template
+      const insert = `\n\`\`\`mermaid\n${text}\n\`\`\`\n`
+      view.dispatch({
+        changes: { from, to, insert },
+        selection: { anchor: from + 12, head: from + 12 + text.length },
       })
       break
     }
