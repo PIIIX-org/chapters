@@ -18,7 +18,15 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
   const [result, setResult] = useState<PathFindingResult | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
 
+  const [filterText, setFilterText] = useState('')
+
   const sortedNodes = [...nodes].sort((a, b) => a.path.localeCompare(b.path))
+  const sourceOptions = sortedNodes.filter(
+    (n) => n.id === sourceId || !filterText.trim() || n.path.toLowerCase().includes(filterText.toLowerCase()),
+  )
+  const targetOptions = sortedNodes.filter(
+    (n) => n.id === targetId || !filterText.trim() || n.path.toLowerCase().includes(filterText.toLowerCase()),
+  )
 
   const handleFindPath = () => {
     if (!sourceId || !targetId) return
@@ -62,6 +70,17 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
     <div className="flex flex-col gap-3 text-sm">
       <div className="flex flex-col gap-2">
         <div>
+          <input
+            type="search"
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+            placeholder="Search concepts by path…"
+            aria-label="Filter concepts"
+            className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+
+        <div>
           <label htmlFor={sourceSelectId} className="block text-xs font-medium text-muted-foreground pb-1">
             Start concept
           </label>
@@ -72,7 +91,7 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
             className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           >
             <option value="">Select source note or file…</option>
-            {sortedNodes.map((n) => (
+            {sourceOptions.map((n) => (
               <option key={n.id} value={n.id}>
                 [{n.resourceType}] {n.path}
               </option>
@@ -106,7 +125,7 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
             className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           >
             <option value="">Select target note or file…</option>
-            {sortedNodes.map((n) => (
+            {targetOptions.map((n) => (
               <option key={n.id} value={n.id}>
                 [{n.resourceType}] {n.path}
               </option>
