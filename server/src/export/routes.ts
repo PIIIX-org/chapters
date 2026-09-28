@@ -225,8 +225,10 @@ export function exportRoutes(app: FastifyInstance) {
         .send(zip.toBuffer())
     })
 
+    const isAdminRole = (role: string) => ['admin', 'owner', 'superadmin'].includes(role)
+
     authed.get('/admin/backup', async (req, reply) => {
-      if (req.user!.role !== 'admin') return reply.code(403).send({ error: 'admin required' })
+      if (!isAdminRole(req.user!.role)) return reply.code(403).send({ error: 'admin required' })
       const zip = await buildInstanceBackup()
       await logSecurityEvent({ type: 'instance_backup_created', actorUserId: req.user!.id })
       return reply
@@ -236,12 +238,12 @@ export function exportRoutes(app: FastifyInstance) {
     })
 
     authed.get('/admin/backup/status', async (req, reply) => {
-      if (req.user!.role !== 'admin') return reply.code(403).send({ error: 'admin required' })
+      if (!isAdminRole(req.user!.role)) return reply.code(403).send({ error: 'admin required' })
       return reply.send(getBackupStatus())
     })
 
     authed.post('/admin/backup/run', async (req, reply) => {
-      if (req.user!.role !== 'admin') return reply.code(403).send({ error: 'admin required' })
+      if (!isAdminRole(req.user!.role)) return reply.code(403).send({ error: 'admin required' })
       try {
         const result = await executeBackup({ actorUserId: req.user!.id })
         return reply.send({ success: true, result })

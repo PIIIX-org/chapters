@@ -76,6 +76,7 @@ for best AI navigability, see
   from disk is recovered from its database row rather than failing the run
 - **Admin oversight** — metadata-only dashboards and instance-wide
   force-revoke; never note content
+- **Security hardening & penetration testing** — complete full-stack hardening (12/12 vulnerabilities remediated): SVG attachment sandboxing (`Content-Security-Policy: default-src 'none'; sandbox`), Mermaid strict DOMPurify rendering, Git URL SSRF and command-injection filter (`isSafeGitUrl`), atomic MFA enrollment verification, Fastify schema protections against mass assignment, TOTP secret redaction from backups, OIDC Host-header sanitization, strict admin hierarchy enforcement, 6-digit verification code brute-force lockout, bounded git repository ingestion limits, and zero npm audit advisories. See [`docs/security-audit-report.html`](docs/security-audit-report.html).
 
 **Codebase mapping** is also implemented, extending the platform beyond
 notes to also index and query code — read-only, sharing the same graph/

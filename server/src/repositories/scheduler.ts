@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { and, eq, ne } from 'drizzle-orm'
 import { db } from '../db/client.js'
@@ -118,11 +118,17 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
 
   await db.update(repositories).set({ syncStatus: 'syncing' }).where(eq(repositories.id, repositoryId))
   try {
-    const currentPaths = await listFilesRecursive(root, IGNORED)
+    const allPaths = await listFilesRecursive(root, IGNORED)
+    const currentPaths = allPaths.slice(0, 10_000)
     const files: FileUpdate[] = []
     for (const path of currentPaths) {
       try {
-        files.push({ path, content: await readFile(join(root, path), 'utf8') })
+        const fullPath = join(root, path)
+        const fileStat = await stat(fullPath)
+        if (fileStat.size > 1_048_576) {
+          continue
+        }
+        files.push({ path, content: await readFile(fullPath, 'utf8') })
       } catch (err) {
         // Vanished between listing and reading, or permission/read failure — log for diagnostics.
         console.warn(`[scheduler] failed reading repository file ${path} at ${root}:`, err)

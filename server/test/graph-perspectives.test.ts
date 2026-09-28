@@ -11,7 +11,7 @@ let vaultId: string
 beforeAll(async () => {
   app = await buildApp()
   await app.ready()
-  const owner = await createActiveUser()
+  const owner = await createActiveUser({ role: 'admin' })
   ownerCookie = await loginCookie(app, owner.email)
   const stranger = await createActiveUser()
   strangerCookie = await loginCookie(app, stranger.email)
@@ -110,6 +110,21 @@ describe('Graph Perspectives API', () => {
     expect(listRes.statusCode).toBe(200)
     const list = listRes.json() as Array<{ id: string; name: string }>
     expect(list.some((p) => p.id === created.id)).toBe(true)
+  })
+
+  it('rejects global perspective creation by non-admin member', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/graph/perspectives',
+      headers: { cookie: strangerCookie },
+      body: {
+        name: 'Malicious Global View',
+        filters: { tags: ['hack'] },
+        isShared: true,
+      },
+    })
+    expect(res.statusCode).toBe(403)
+    expect(res.json()).toHaveProperty('error')
   })
 
   it('allows owner to delete perspective and denies non-owner', async () => {

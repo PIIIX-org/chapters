@@ -4,14 +4,24 @@ const MAX_FAILURES = 10
 
 const failures = new Map<string, { count: number; windowStart: number }>()
 
-export function isLocked(key: string): boolean {
+export function isLocked(key: string, max: number = MAX_FAILURES): boolean {
   const entry = failures.get(key)
   if (!entry) return false
   if (Date.now() - entry.windowStart > WINDOW_MS) {
     failures.delete(key)
     return false
   }
-  return entry.count >= MAX_FAILURES
+  return entry.count >= max
+}
+
+export function getFailureCount(key: string): number {
+  const entry = failures.get(key)
+  if (!entry) return 0
+  if (Date.now() - entry.windowStart > WINDOW_MS) {
+    failures.delete(key)
+    return 0
+  }
+  return entry.count
 }
 
 export function recordFailure(key: string): void {

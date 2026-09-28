@@ -1,4 +1,5 @@
 import { and, eq } from 'drizzle-orm'
+import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositories, repositoryShares, teamMemberships, users } from '../db/schema.js'
 
@@ -82,6 +83,54 @@ export function publicGitUrl(gitUrl: string | null): string | null {
     return url.toString()
   } catch {
     return null
+  }
+}
+
+const BLOCKED_HOSTNAMES = new Set([
+  '169.254.169.254',
+  'metadata.google.internal',
+  'instance-data',
+])
+
+function isPrivateIp(ip: string): boolean {
+  if (ip.startsWith('127.') || ip === '::1' || ip === '0.0.0.0') return true
+  if (ip.startsWith('10.') || ip.startsWith('192.168.')) return true
+  if (ip.startsWith('169.254.')) return true
+  const m = /^172\.(\d+)\./.exec(ip)
+  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true
+  return false
+}
+
+export function isSafeGitUrl(gitUrl: string): boolean {
+  if (!gitUrl || typeof gitUrl !== 'string') return false
+  if (/[\r\n\0]/.test(gitUrl)) return false
+  const trimmed = gitUrl.trim()
+  if (trimmed.startsWith('-') || /\s/.test(trimmed)) return false
+
+  if (config.isTest && trimmed.startsWith('file://')) {
+    return true
+  }
+
+  // scp-style (`user@host:owner/repo.git`)
+  const scp = /^[^@/\s]+@([a-zA-Z0-9.-]+):([a-zA-Z0-9._\/-]+)$/.exec(trimmed)
+  if (scp) {
+    const host = scp[1]?.toLowerCase()
+    if (!host || BLOCKED_HOSTNAMES.has(host)) return false
+    if (config.isProd && (host === 'localhost' || isPrivateIp(host))) return false
+    return true
+  }
+
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:' && parsed.protocol !== 'ssh:') {
+      return false
+    }
+    const host = parsed.hostname.toLowerCase()
+    if (!host || BLOCKED_HOSTNAMES.has(host)) return false
+    if (config.isProd && (host === 'localhost' || isPrivateIp(host))) return false
+    return true
+  } catch {
+    return false
   }
 }
 

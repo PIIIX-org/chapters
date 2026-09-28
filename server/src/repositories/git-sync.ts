@@ -1,4 +1,4 @@
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -8,16 +8,23 @@ import { db } from '../db/client.js'
 import { repositories } from '../db/schema.js'
 import { decryptCredential } from './credentials.js'
 import { listFilesRecursive } from './fs-scan.js'
+import { isSafeGitUrl } from './permissions.js'
 import { syncRepositoryFiles, type FileUpdate } from './store.js'
 
-const IGNORED = /(^|\/)\.git(\/|$)/
+const IGNORED = /(^|\/)(\.git|node_modules|\.next|dist|build|\.turbo)(\/|$)/
+const MAX_FILE_BYTES = 1_048_576 // 1MB per file limit to prevent heap exhaustion
+const MAX_INDEXED_FILES = 10_000
 
 /** Injects a decrypted credential as basic-auth username — the common convention for PATs. */
 function authenticatedUrl(gitUrl: string, credential: string | null): string {
   if (!credential) return gitUrl
-  const url = new URL(gitUrl)
-  url.username = credential
-  return url.toString()
+  try {
+    const url = new URL(gitUrl)
+    url.username = credential
+    return url.toString()
+  } catch {
+    return gitUrl
+  }
 }
 
 /**
@@ -30,6 +37,14 @@ function authenticatedUrl(gitUrl: string, credential: string | null): string {
 export async function syncGitRepository(repositoryId: string): Promise<void> {
   const repo = (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]
   if (!repo || repo.ingestionMethod !== 'git' || !repo.gitUrl) return
+
+  if (!isSafeGitUrl(repo.gitUrl)) {
+    await db
+      .update(repositories)
+      .set({ syncStatus: 'error', lastSyncError: 'Invalid or forbidden git clone URL' })
+      .where(eq(repositories.id, repositoryId))
+    return
+  }
 
   await db
     .update(repositories)
@@ -44,10 +59,20 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     const cloneUrl = authenticatedUrl(repo.gitUrl, credential)
     await simpleGit({ timeout: { block: 300_000 } }).clone(cloneUrl, workDir, ['--depth', '1'])
 
-    const currentPaths = await listFilesRecursive(workDir, IGNORED)
+    const allPaths = await listFilesRecursive(workDir, IGNORED)
+    const currentPaths = allPaths.slice(0, MAX_INDEXED_FILES)
     const files: FileUpdate[] = []
     for (const path of currentPaths) {
-      files.push({ path, content: await readFile(join(workDir, path), 'utf8') })
+      try {
+        const fullPath = join(workDir, path)
+        const fileStat = await stat(fullPath)
+        if (fileStat.size > MAX_FILE_BYTES) {
+          continue
+        }
+        files.push({ path, content: await readFile(fullPath, 'utf8') })
+      } catch (err) {
+        console.warn(`[git-sync] failed reading ${path}:`, err)
+      }
     }
     await syncRepositoryFiles(repositoryId, files, currentPaths)
 

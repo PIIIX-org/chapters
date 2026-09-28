@@ -22,11 +22,15 @@ export function mfaRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAuth)
 
   /** Step 1: provision a pending secret (not active until verified). */
-  app.post('/mfa/setup', async (req) => {
+  app.post('/mfa/setup', async (req, reply) => {
+    const user = (await db.select().from(users).where(eq(users.id, req.user!.id)))[0]!
+    if (user.mfaEnabledAt) {
+      return reply.code(400).send({ error: 'MFA is already enabled' })
+    }
     const secret = generateTotpSecret()
     await db
       .update(users)
-      .set({ totpSecret: secret, mfaEnabledAt: null })
+      .set({ totpSecret: secret })
       .where(eq(users.id, req.user!.id))
     return { secret, uri: provisioningUri(secret, req.user!.email) }
   })

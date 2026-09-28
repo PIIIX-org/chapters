@@ -4,13 +4,16 @@ import { RangeSetBuilder, StateField } from '@codemirror/state'
 import type { EditorState } from '@codemirror/state'
 import mermaid from 'mermaid'
 
+import DOMPurify from 'dompurify'
+
 // Initialize mermaid once with sensible defaults
 let mermaidInitialized = false
 function ensureMermaidInitialized() {
   if (!mermaidInitialized) {
     mermaid.initialize({
       startOnLoad: false,
-      securityLevel: 'loose',
+      securityLevel: 'strict',
+      htmlLabels: false,
       fontFamily: 'inherit',
       theme: 'default',
     })
@@ -59,7 +62,9 @@ class MermaidWidget extends WidgetType {
     mermaid
       .render(renderId, this.code.trim())
       .then(({ svg }) => {
-        viewport.innerHTML = svg
+        viewport.innerHTML = DOMPurify.sanitize(svg, {
+          USE_PROFILES: { svg: true, svgFilters: true },
+        })
         const svgEl = viewport.querySelector('svg')
         if (svgEl) {
           svgEl.style.maxWidth = '100%'

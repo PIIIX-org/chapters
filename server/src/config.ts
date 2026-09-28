@@ -7,6 +7,8 @@ export const config = {
   isProd: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
   port: Number(env.PORT ?? 3000),
+  /** Base public application URL for external callbacks (OIDC, emails, etc.). */
+  appUrl: env.APP_URL ?? env.BASE_URL ?? null,
   /**
    * Built client to serve from this process (`/collab` and `/api/*` excluded).
    * Absolute by default so it resolves the same however the process is

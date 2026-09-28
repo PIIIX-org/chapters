@@ -71,7 +71,13 @@ export async function instanceRequiresMfa(): Promise<boolean> {
 }
 
 export async function setInstanceMfaRequirement(required: boolean): Promise<void> {
-  await db.update(instanceState).set({ requireMfa: required })
+  await db
+    .insert(instanceState)
+    .values({ id: 'singleton', requireMfa: required })
+    .onConflictDoUpdate({
+      target: instanceState.id,
+      set: { requireMfa: required },
+    })
 }
 
 export type MfaUser = typeof users.$inferSelect
