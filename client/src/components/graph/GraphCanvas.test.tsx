@@ -646,4 +646,27 @@ describe('GraphCanvas', () => {
     // Zooming is paint-only: the settled simulation never re-heated.
     expect(tickSpy.mock.calls.length).toBe(ticksAtIdle)
   })
+
+  it('hovering over a node displays floating telemetry tooltip and sets pointer cursor', async () => {
+    stubFetch()
+    stubMatchMedia(false)
+    stubCanvasContext()
+    stubManualRaf()
+    const { container } = renderGraphCanvas()
+
+    await screen.findByRole('button', { name: /Community 0/ })
+    const canvas = container.querySelector('canvas')!
+    canvas.getBoundingClientRect = () =>
+      ({ left: 316, top: 80, width: 600, height: 400, right: 916, bottom: 480, x: 316, y: 80, toJSON: () => ({}) }) as DOMRect
+
+    // Hover outside any node
+    fireEvent.pointerMove(canvas, { clientX: 0, clientY: 0 })
+    expect(canvas.style.cursor).toBe('grab')
+    expect(screen.queryByText(/Click to explore members/i)).toBeNull()
+
+    // Hover over Community 0 at world (0, 0) => client (316, 80)
+    fireEvent.pointerMove(canvas, { clientX: 316, clientY: 80 })
+    expect(canvas.style.cursor).toBe('pointer')
+    expect(await screen.findByText(/Click to explore members/i)).toBeInTheDocument()
+  })
 })
