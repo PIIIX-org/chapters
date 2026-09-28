@@ -278,6 +278,32 @@ describe('AppShell', () => {
     expect(collapsedGraphLink.className).not.toContain('({ isActive })')
   })
 
+  it('toggles the sidebar with \\ chord, but never while typing', async () => {
+    stubFetch()
+    renderShell('/vaults/v1')
+    const user = userEvent.setup()
+    await screen.findByText('Context content')
+
+    const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+    const rail = screen.getByRole('navigation', { name: 'Primary' })
+    expect(chButton).toHaveAttribute('aria-expanded', 'false')
+    expect(rail).toHaveClass('w-11')
+
+    // Typing in a text input: \ belongs to the field
+    await user.click(screen.getByRole('textbox', { name: 'Note title' }))
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Note title' }), { key: '\\' })
+    expect(chButton).toHaveAttribute('aria-expanded', 'false')
+
+    // Non-editable target: toggles sidebar
+    fireEvent.keyDown(document.body, { key: '\\' })
+    expect(chButton).toHaveAttribute('aria-expanded', 'true')
+    expect(rail).toHaveClass('w-[var(--shell-context,240px)]')
+
+    fireEvent.keyDown(document.body, { key: '\\' })
+    expect(chButton).toHaveAttribute('aria-expanded', 'false')
+    expect(rail).toHaveClass('w-11')
+  })
+
   it('expands the search bar on click and collapses on Escape', async () => {
     stubFetch()
     renderShell()
@@ -427,6 +453,86 @@ describe('AppShell', () => {
       expect(screen.getByTestId('shell-backdrop')).toBeInTheDocument()
 
       await expectNoA11yViolations(container)
+    })
+
+    it('shows backdrop when sidebar is expanded on mobile and dismisses on backdrop click', async () => {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 })
+      stubFetch()
+      renderShell('/vaults/v1')
+      const user = userEvent.setup()
+
+      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+      expect(chButton).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByTestId('shell-backdrop')).toBeNull()
+
+      await user.click(chButton)
+      expect(chButton).toHaveAttribute('aria-expanded', 'true')
+      const backdrop = screen.getByTestId('shell-backdrop')
+      expect(backdrop).toBeInTheDocument()
+
+      await user.click(backdrop)
+      expect(chButton).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByTestId('shell-backdrop')).toBeNull()
+    })
+
+    it('auto-collapses expanded sidebar on mobile when navigating via a rail link', async () => {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 })
+      stubFetch()
+      renderShell('/vaults/v1')
+      const user = userEvent.setup()
+
+      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+      await user.click(chButton)
+      expect(chButton).toHaveAttribute('aria-expanded', 'true')
+
+      const rail = screen.getByRole('navigation', { name: 'Primary' })
+      const vaultsLink = within(rail).getByRole('link', { name: 'Vaults' })
+      await user.click(vaultsLink)
+
+      expect(chButton).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByTestId('shell-backdrop')).toBeNull()
+    })
+
+    it('dismisses expanded sidebar on Escape key in mobile viewport', async () => {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 })
+      stubFetch()
+      renderShell('/vaults/v1')
+      const user = userEvent.setup()
+
+      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+      await user.click(chButton)
+      expect(chButton).toHaveAttribute('aria-expanded', 'true')
+      expect(screen.getByTestId('shell-backdrop')).toBeInTheDocument()
+
+      await user.keyboard('{Escape}')
+      expect(chButton).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByTestId('shell-backdrop')).toBeNull()
+    })
+
+    it('enforces mutual exclusivity between sidebar and side panels on mobile', async () => {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 })
+      stubFetch()
+      renderShell('/vaults/v1')
+      const user = userEvent.setup()
+
+      const contextToggle = screen.getByRole('button', { name: 'Toggle context panel' })
+      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+
+      // Open context panel
+      await user.click(contextToggle)
+      const context = screen.getByRole('complementary', { name: 'Context panel' })
+      expect(context).toHaveAttribute('data-panel-open', 'true')
+      expect(chButton).toHaveAttribute('aria-expanded', 'false')
+
+      // Open sidebar -> context panel should auto-collapse
+      await user.click(chButton)
+      expect(chButton).toHaveAttribute('aria-expanded', 'true')
+      expect(context).toHaveAttribute('data-panel-open', 'false')
+
+      // Re-open context panel -> sidebar should auto-collapse
+      await user.click(contextToggle)
+      expect(context).toHaveAttribute('data-panel-open', 'true')
+      expect(chButton).toHaveAttribute('aria-expanded', 'false')
     })
   })
 })

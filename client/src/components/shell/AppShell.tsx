@@ -45,18 +45,23 @@ function ShellFrame({ children }: { children?: ReactNode }) {
   const contextOpen = shell.panels.context.open
   const inspectorOpen = shell.panels.inspector.open
 
+  const sidebarExpanded = shell.sidebarExpanded
+  const showMobileBackdrop =
+    (contextMounted && contextOpen) || (inspectorMounted && inspectorOpen) || sidebarExpanded
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !shell.paletteOpen && (contextOpen || inspectorOpen)) {
+      if (e.key === 'Escape' && !shell.paletteOpen && (contextOpen || inspectorOpen || sidebarExpanded)) {
         if (typeof window !== 'undefined' && window.innerWidth < 768) {
           if (contextOpen) shell.setPanelOpen('context', false)
           if (inspectorOpen) shell.setPanelOpen('inspector', false)
+          if (sidebarExpanded) shell.setSidebarExpanded(false)
         }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [contextOpen, inspectorOpen, shell])
+  }, [contextOpen, inspectorOpen, sidebarExpanded, shell])
 
   return (
     <div className="relative h-dvh w-full overflow-hidden bg-background text-foreground">
@@ -95,7 +100,7 @@ function ShellFrame({ children }: { children?: ReactNode }) {
       />
 
       {/* Mobile drawer backdrop */}
-      {((contextMounted && contextOpen) || (inspectorMounted && inspectorOpen)) && (
+      {showMobileBackdrop && (
         <div
           data-testid="shell-backdrop"
           aria-hidden="true"
@@ -103,24 +108,40 @@ function ShellFrame({ children }: { children?: ReactNode }) {
           onClick={() => {
             if (contextOpen) shell.setPanelOpen('context', false)
             if (inspectorOpen) shell.setPanelOpen('inspector', false)
+            if (sidebarExpanded) shell.setSidebarExpanded(false)
           }}
         />
       )}
 
       {/* Floating navigation overlay layer */}
-      <div className="pointer-events-none fixed inset-0 z-30 select-none overflow-hidden">
+      <div
+        className={cn(
+          'pointer-events-none fixed inset-0 z-30 select-none overflow-hidden',
+          sidebarExpanded && 'max-md:z-40',
+        )}
+      >
         {/* Floating Rail on the Left */}
         <div className="pointer-events-none absolute inset-y-2.5 left-2.5 flex flex-col">
           <Rail />
         </div>
 
         {/* Floating TopBar on the Top Right */}
-        <div className="pointer-events-none absolute top-2.5 right-2.5 flex items-center justify-end">
+        <div
+          className={cn(
+            'pointer-events-none absolute top-2.5 right-2.5 flex items-center justify-end transition-opacity duration-150',
+            sidebarExpanded && 'max-md:opacity-0 max-md:pointer-events-none',
+          )}
+        >
           <TopBar />
         </div>
 
         {/* Floating BottomBar along the Bottom */}
-        <div className="pointer-events-none absolute bottom-2.5 inset-x-0 flex items-center justify-between px-2.5">
+        <div
+          className={cn(
+            'pointer-events-none absolute bottom-2.5 inset-x-0 flex items-center justify-between px-2.5 transition-opacity duration-150',
+            sidebarExpanded && 'max-md:opacity-0 max-md:pointer-events-none',
+          )}
+        >
           <BottomBar />
         </div>
       </div>

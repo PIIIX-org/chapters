@@ -29,7 +29,7 @@ export function useShellChords(): void {
   const navigate = useNavigate()
   const session = useSession()
   const isAdmin = isAdminRole(session.data?.role)
-  const { togglePanel } = shell
+  const { togglePanel, toggleSidebar } = shell
 
   useEffect(() => {
     let pendingSince: number | null = null
@@ -48,6 +48,11 @@ export function useShellChords(): void {
         togglePanel('inspector')
         return
       }
+      if (e.key === '\\') {
+        e.preventDefault()
+        toggleSidebar()
+        return
+      }
 
       const now = Date.now()
       if (pendingSince !== null && now - pendingSince <= CHORD_WINDOW_MS) {
@@ -64,5 +69,5 @@ export function useShellChords(): void {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [togglePanel, navigate, isAdmin])
+  }, [togglePanel, toggleSidebar, navigate, isAdmin])
 }
