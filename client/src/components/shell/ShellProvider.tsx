@@ -49,6 +49,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<ShellStatus | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [sidebarExpanded, setSidebarExpandedState] = useState<boolean>(() => {
+    if (isMobile()) return false
     try {
       return localStorage.getItem('chapters.shell.sidebar') === 'expanded'
     } catch {
@@ -66,6 +67,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     const handleResize = () => {
       const currentMobile = window.innerWidth < MOBILE_BREAKPOINT
       if (currentMobile && !lastMobile) {
+        setSidebarExpandedState(false)
         setPanels((prev) => {
           if (!prev.context.open && !prev.inspector.open) return prev
           return {
@@ -86,6 +88,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     setPanels((prev) => {
       if (prev[kind].open === open) return prev
       if (isMobile() && open) {
+        setSidebarExpandedState(false)
         const otherKind: PanelKind = kind === 'context' ? 'inspector' : 'context'
         return {
           ...prev,
@@ -102,6 +105,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       const open = !prev[kind].open
       writeOpen(kind, open)
       if (isMobile() && open) {
+        setSidebarExpandedState(false)
         const otherKind: PanelKind = kind === 'context' ? 'inspector' : 'context'
         return {
           ...prev,
@@ -148,6 +152,16 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       } catch {
         // ignore storage errors
       }
+      if (next && isMobile()) {
+        setPanels((p) => {
+          if (!p.context.open && !p.inspector.open) return p
+          return {
+            ...p,
+            context: { ...p.context, open: false },
+            inspector: { ...p.inspector, open: false },
+          }
+        })
+      }
       return next
     })
   }, [])
@@ -158,6 +172,16 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       localStorage.setItem('chapters.shell.sidebar', expanded ? 'expanded' : 'collapsed')
     } catch {
       // ignore storage errors
+    }
+    if (expanded && isMobile()) {
+      setPanels((p) => {
+        if (!p.context.open && !p.inspector.open) return p
+        return {
+          ...p,
+          context: { ...p.context, open: false },
+          inspector: { ...p.inspector, open: false },
+        }
+      })
     }
   }, [])
 
