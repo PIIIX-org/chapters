@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
-import { useNavigate, useOutletContext, useParams } from 'react-router'
+import { Link, useNavigate, useOutletContext, useParams } from 'react-router'
 import { EditorView } from '@codemirror/view'
 import { useNote } from '../../hooks/useNote.js'
 import { useCreateNote } from '../../hooks/useCreateNote.js'
@@ -210,7 +210,11 @@ function NoteFrame({
 function NotePath({ vaultName, vaultId, path }: { vaultName: string | undefined; vaultId: string; path: string }) {
   return (
     <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-      {vaultName ?? vaultId} / <span className="text-foreground">{path}</span>
+      <Link to={`/vaults/${vaultId}`} className="hover:text-foreground transition-colors hover:underline">
+        {vaultName ?? vaultId}
+      </Link>
+      {' / '}
+      <span className="text-foreground">{path}</span>
     </span>
   )
 }

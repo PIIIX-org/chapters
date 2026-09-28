@@ -36,6 +36,8 @@ describe('NoteRichToolbar', () => {
     expect(screen.getByRole('button', { name: 'Task Checklist' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Table' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Quote' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Math Formula' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Mermaid Diagram' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Insert Image' })).toBeInTheDocument()
 
     // Width adjustment buttons
@@ -130,6 +132,38 @@ describe('NoteRichToolbar', () => {
     applyFormat(view, 'image')
 
     expect(view.state.doc.toString()).toBe('![Diagram](https://)')
+    view.destroy()
+    parent.remove()
+  })
+
+  it('applies math formatting to editor selection', () => {
+    const parent = document.createElement('div')
+    document.body.appendChild(parent)
+    const state = EditorState.create({
+      doc: 'E = mc^2',
+      selection: { anchor: 0, head: 8 },
+    })
+    const view = new EditorView({ state, parent })
+
+    applyFormat(view, 'math')
+
+    expect(view.state.doc.toString()).toBe('$E = mc^2$')
+    view.destroy()
+    parent.remove()
+  })
+
+  it('applies mermaid formatting to editor selection', () => {
+    const parent = document.createElement('div')
+    document.body.appendChild(parent)
+    const state = EditorState.create({
+      doc: 'graph LR; A-->B',
+      selection: { anchor: 0, head: 15 },
+    })
+    const view = new EditorView({ state, parent })
+
+    applyFormat(view, 'mermaid')
+
+    expect(view.state.doc.toString()).toBe('\n```mermaid\ngraph LR; A-->B\n```\n')
     view.destroy()
     parent.remove()
   })
