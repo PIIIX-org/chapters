@@ -203,6 +203,11 @@ export function graphRoutes(app: FastifyInstance) {
       if (vaultId) {
         const access = await resolveAccess(req.user!.id, vaultId)
         if (!atLeast(access, 'read')) return reply.code(404).send({ error: 'not found' })
+      } else {
+        const isAdmin = ['admin', 'superadmin', 'owner'].includes(req.user!.role)
+        if (!isAdmin) {
+          return reply.code(403).send({ error: 'only admins can create global perspectives' })
+        }
       }
 
       const [created] = await db
@@ -237,7 +242,8 @@ export function graphRoutes(app: FastifyInstance) {
           const access = await resolveAccess(req.user!.id, perspective.vaultId)
           if (access !== 'owner') return reply.code(403).send({ error: 'forbidden' })
         } else {
-          return reply.code(403).send({ error: 'forbidden' })
+          const isAdmin = ['admin', 'superadmin', 'owner'].includes(req.user!.role)
+          if (!isAdmin) return reply.code(403).send({ error: 'forbidden' })
         }
       }
 

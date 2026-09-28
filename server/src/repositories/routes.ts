@@ -15,6 +15,7 @@ import { logSecurityEvent } from '../auth/security-events.js'
 import { EncryptionKeyMissingError, encryptCredential } from './credentials.js'
 import { generateToken } from '../auth/tokens.js'
 import {
+  isSafeGitUrl,
   listAccessibleRepositories,
   repositoryFields as repositoryView,
   resolveRepositoryAccess,
@@ -102,8 +103,13 @@ export function repositoryRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { name, ingestionMethod, gitUrl, gitCredential, localPath } = req.body
 
-      if (ingestionMethod === 'git' && !gitUrl) {
-        return reply.code(400).send({ error: 'gitUrl is required for the git ingestion method' })
+      if (ingestionMethod === 'git') {
+        if (!gitUrl) {
+          return reply.code(400).send({ error: 'gitUrl is required for the git ingestion method' })
+        }
+        if (!isSafeGitUrl(gitUrl)) {
+          return reply.code(400).send({ error: 'Invalid or forbidden git clone URL' })
+        }
       }
       if (ingestionMethod === 'local_path') {
         if (!localPath) {
@@ -161,6 +167,7 @@ export function repositoryRoutes(app: FastifyInstance) {
       schema: {
         body: {
           type: 'object',
+          additionalProperties: false,
           properties: {
             name: { type: 'string', minLength: 1, maxLength: 200 },
             mergeable: { type: 'boolean' },
@@ -172,12 +179,17 @@ export function repositoryRoutes(app: FastifyInstance) {
       if (!(await requireOwner(req.user!.id, req.params.id))) {
         return reply.code(404).send({ error: 'not found' })
       }
+      const { name, mergeable } = req.body
+      const updates: { name?: string; mergeable?: boolean } = {}
+      if (typeof name === 'string') updates.name = name
+      if (typeof mergeable === 'boolean') updates.mergeable = mergeable
+
       const [repo] = await db
         .update(repositories)
-        .set(req.body)
+        .set(updates)
         .where(eq(repositories.id, req.params.id))
         .returning()
-      if (req.body.mergeable === true) {
+      if (mergeable === true) {
         await db
           .insert(repositoryGraphPreferences)
           .values({ userId: req.user!.id, repositoryId: req.params.id, include: true })

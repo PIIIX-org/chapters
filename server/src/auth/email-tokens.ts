@@ -67,3 +67,19 @@ export async function consumeEmailToken(
     .returning({ userId: emailTokens.userId })
   return updated[0]?.userId ?? null
 }
+
+/**
+ * Invalidates all active tokens for a user and purpose (e.g. on lockout or code exhaustion).
+ */
+export async function invalidateEmailTokens(userId: string, purpose: Purpose): Promise<void> {
+  await db
+    .update(emailTokens)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(emailTokens.userId, userId),
+        eq(emailTokens.purpose, purpose),
+        isNull(emailTokens.usedAt),
+      ),
+    )
+}

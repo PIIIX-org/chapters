@@ -56,66 +56,138 @@ export function adminRoutes(app: FastifyInstance) {
     return { status: 'active' }
   })
 
+  const ROLE_RANK: Record<string, number> = {
+    owner: 100,
+    superadmin: 90,
+    admin: 80,
+    moderator: 70,
+    manager: 60,
+    editor: 50,
+    contributor: 40,
+    member: 30,
+    viewer: 20,
+    guest: 10,
+  }
+
+  async function getTargetUser(id: string) {
+    const [user] = await db.select().from(users).where(eq(users.id, id))
+    return user ?? null
+  }
+
   app.post<{ Params: { id: string }; Body: { role?: UserRole } }>('/users/:id/promote', async (req, reply) => {
+    if (req.params.id === req.user!.id) {
+      return reply.code(400).send({ error: 'cannot promote yourself' })
+    }
+    const target = await getTargetUser(req.params.id)
+    if (!target) return reply.code(404).send({ error: 'user not found' })
+
     const targetRole = req.body?.role || 'admin'
+    const callerRank = ROLE_RANK[req.user!.role] ?? 0
+    const targetRoleRank = ROLE_RANK[targetRole] ?? 0
+
+    if (target.role === 'owner') {
+      return reply.code(403).send({ error: 'cannot modify the instance owner' })
+    }
+    if (target.role === 'superadmin' && req.user!.role !== 'owner') {
+      return reply.code(403).send({ error: 'cannot modify a superadmin' })
+    }
+    if (targetRoleRank > callerRank) {
+      return reply.code(403).send({ error: 'cannot grant a role higher than your own' })
+    }
+
     const [user] = await db
       .update(users)
       .set({ role: targetRole })
       .where(eq(users.id, req.params.id))
       .returning()
-    if (!user) return reply.code(404).send({ error: 'user not found' })
     await logSecurityEvent({
       type: 'admin_promoted',
       actorUserId: req.user!.id,
-      subjectUserId: user.id,
+      subjectUserId: user!.id,
       detail: { role: targetRole },
     })
-    return { role: user.role }
+    return { role: user!.role }
   })
 
   app.post<{ Params: { id: string }; Body: { role?: UserRole } }>('/users/:id/demote', async (req, reply) => {
     if (req.params.id === req.user!.id) {
       return reply.code(400).send({ error: 'cannot demote yourself' })
     }
+    const target = await getTargetUser(req.params.id)
+    if (!target) return reply.code(404).send({ error: 'user not found' })
+
+    if (target.role === 'owner') {
+      return reply.code(403).send({ error: 'cannot demote the instance owner' })
+    }
+    if (target.role === 'superadmin' && req.user!.role !== 'owner') {
+      return reply.code(403).send({ error: 'cannot demote a superadmin' })
+    }
+
     const targetRole = req.body?.role || 'member'
     const [user] = await db
       .update(users)
       .set({ role: targetRole })
       .where(eq(users.id, req.params.id))
       .returning()
-    if (!user) return reply.code(404).send({ error: 'user not found' })
     await logSecurityEvent({
       type: 'admin_demoted',
       actorUserId: req.user!.id,
-      subjectUserId: user.id,
+      subjectUserId: user!.id,
       detail: { role: targetRole },
     })
-    return { role: user.role }
+    return { role: user!.role }
   })
 
   app.post<{ Params: { id: string }; Body: { role: UserRole } }>('/users/:id/role', async (req, reply) => {
-    if (req.params.id === req.user!.id && req.body?.role && req.body.role !== req.user!.role) {
+    if (req.params.id === req.user!.id) {
       return reply.code(400).send({ error: 'cannot change your own role' })
     }
     if (!req.body?.role) {
       return reply.code(400).send({ error: 'role is required' })
     }
+    const target = await getTargetUser(req.params.id)
+    if (!target) return reply.code(404).send({ error: 'user not found' })
+
+    if (target.role === 'owner') {
+      return reply.code(403).send({ error: 'cannot modify the instance owner' })
+    }
+    if (target.role === 'superadmin' && req.user!.role !== 'owner') {
+      return reply.code(403).send({ error: 'cannot modify a superadmin' })
+    }
+    const callerRank = ROLE_RANK[req.user!.role] ?? 0
+    const desiredRank = ROLE_RANK[req.body.role] ?? 0
+    if (desiredRank > callerRank) {
+      return reply.code(403).send({ error: 'cannot grant a role higher than your own' })
+    }
+
     const [user] = await db
       .update(users)
       .set({ role: req.body.role })
       .where(eq(users.id, req.params.id))
       .returning()
-    if (!user) return reply.code(404).send({ error: 'user not found' })
     await logSecurityEvent({
       type: 'user_role_changed',
       actorUserId: req.user!.id,
-      subjectUserId: user.id,
+      subjectUserId: user!.id,
       detail: { role: req.body.role },
     })
-    return { role: user.role }
+    return { role: user!.role }
   })
 
   app.post<{ Params: { id: string } }>('/users/:id/deactivate', async (req, reply) => {
+    if (req.params.id === req.user!.id) {
+      return reply.code(400).send({ error: 'cannot deactivate yourself' })
+    }
+    const target = await getTargetUser(req.params.id)
+    if (!target) return reply.code(404).send({ error: 'user not found' })
+
+    if (target.role === 'owner') {
+      return reply.code(403).send({ error: 'cannot deactivate the instance owner' })
+    }
+    if (target.role === 'superadmin' && req.user!.role !== 'owner') {
+      return reply.code(403).send({ error: 'cannot deactivate a superadmin' })
+    }
+
     const [user] = await db
       .update(users)
       .set({ status: 'deactivated' })

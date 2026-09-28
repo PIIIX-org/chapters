@@ -218,10 +218,11 @@ describe('export', () => {
     expect(names).toContain('account-dump.json')
     expect(names.some((n) => n.startsWith(`vaults/${vaultId}/`))).toBe(true)
     const dump = JSON.parse(zip.getEntry('account-dump.json')!.getData().toString('utf8')) as {
-      users: Array<{ email: string }>
+      users: Array<{ email: string; totpSecret?: string | null }>
       vaultShares: unknown[]
     }
     expect(dump.users.length).toBeGreaterThan(0)
+    expect(dump.users.every((u) => u.totpSecret === null)).toBe(true)
   }, BACKUP_TIMEOUT_MS)
 
   // createNote writes the row before the file, so a crash in between leaves a

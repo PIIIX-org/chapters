@@ -306,6 +306,33 @@ describe('admin oversight dashboard', () => {
       headers: { cookie: adminCookie },
     })
     expect(selfDemote.statusCode).toBe(400)
+
+    // SEC-08: Cannot promote self
+    const selfPromote = await app.inject({
+      method: 'POST',
+      url: `/api/admin/users/${adminUser.id}/promote`,
+      headers: { cookie: adminCookie },
+      body: { role: 'owner' },
+    })
+    expect(selfPromote.statusCode).toBe(400)
+
+    // SEC-08: Admin cannot grant a role higher than own (e.g. promoting someone to owner)
+    const promoteToOwner = await app.inject({
+      method: 'POST',
+      url: `/api/admin/users/${user.id}/promote`,
+      headers: { cookie: adminCookie },
+      body: { role: 'owner' },
+    })
+    expect(promoteToOwner.statusCode).toBe(403)
+
+    // SEC-08: Admin cannot demote owner
+    const ownerUser = await createActiveUser({ role: 'owner' })
+    const demoteOwner = await app.inject({
+      method: 'POST',
+      url: `/api/admin/users/${ownerUser.id}/demote`,
+      headers: { cookie: adminCookie },
+    })
+    expect(demoteOwner.statusCode).toBe(403)
   })
 
   it('allows deactivating and reactivating users', async () => {

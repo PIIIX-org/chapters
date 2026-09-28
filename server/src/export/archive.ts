@@ -94,7 +94,10 @@ export async function buildInstanceBackup(): Promise<Buffer> {
     await addVaultToZip(zip, vault.id, `vaults/${vault.id}/`)
   }
   const dump = {
-    users: await db.select().from(users),
+    users: (await db.select().from(users)).map((u) => ({
+      ...u,
+      totpSecret: null,
+    })),
     teams: await db.select().from(teams),
     teamMemberships: await db.select().from(teamMemberships),
     vaults: await db.select().from(vaults),

@@ -81,4 +81,14 @@ describe('mermaidLivePreview CodeMirror extension', () => {
     view.destroy()
     container.remove()
   })
+
+  it('DOMPurify strips malicious scripts and event handlers from svg output', async () => {
+    const DOMPurify = (await import('dompurify')).default
+    const dirtySvg = '<svg><script>alert(1)</script><circle cx="10" cy="10" r="5" onload="alert(2)"/></svg>'
+    const cleanSvg = DOMPurify.sanitize(dirtySvg, { USE_PROFILES: { svg: true, svgFilters: true } })
+
+    expect(cleanSvg).not.toContain('<script>')
+    expect(cleanSvg).not.toContain('alert(1)')
+    expect(cleanSvg).not.toContain('onload')
+  })
 })

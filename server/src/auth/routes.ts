@@ -7,8 +7,8 @@ import { sendMail } from '../email/mailer.js'
 import { hashPassword, verifyPassword } from './passwords.js'
 import { createSession, destroySession, destroyUserSessions } from './sessions.js'
 import { generateCode, generateToken, hashToken } from './tokens.js'
-import { createEmailToken, consumeEmailToken } from './email-tokens.js'
-import { clearFailures, isLocked, recordFailure } from './lockout.js'
+import { createEmailToken, consumeEmailToken, invalidateEmailTokens } from './email-tokens.js'
+import { clearFailures, getFailureCount, isLocked, recordFailure } from './lockout.js'
 import { logSecurityEvent } from './security-events.js'
 import { isSetupComplete } from './bootstrap.js'
 import { instanceRequiresMfa, verifyMfaCode } from './mfa.js'
@@ -146,10 +146,28 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
     },
     async (req, reply) => {
       const email = req.body.email.toLowerCase()
+      const accountKey = `verify:${email}`
+      const ipKey = `ip:${req.ip}`
+      if (isLocked(accountKey, 5) || isLocked(ipKey)) {
+        await logSecurityEvent({ type: 'verify_email_locked_out', ip: req.ip, detail: { email } })
+        return reply.code(429).send({ error: 'too many failed attempts, try again later' })
+      }
       const user = (await db.select().from(users).where(eq(users.email, email)))[0]
-      if (!user) return reply.code(400).send({ error: 'invalid code' })
+      if (!user) {
+        recordFailure(accountKey)
+        recordFailure(ipKey)
+        return reply.code(400).send({ error: 'invalid code' })
+      }
       const consumed = await consumeEmailToken('verify_email', req.body.code, user.id)
-      if (!consumed) return reply.code(400).send({ error: 'invalid code' })
+      if (!consumed) {
+        recordFailure(accountKey)
+        recordFailure(ipKey)
+        if (getFailureCount(accountKey) >= 5) {
+          await invalidateEmailTokens(user.id, 'verify_email')
+        }
+        return reply.code(400).send({ error: 'invalid code' })
+      }
+      clearFailures(accountKey)
       await db.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, user.id))
       return reply.send({ status: 'verified' })
     },
