@@ -281,4 +281,32 @@ describe('vault + share endpoints', () => {
     })
     expect(notesRes.statusCode).toBe(404)
   })
+
+  it('rejects mass assignment when updating a vault (SEC-05)', async () => {
+    const owner = await createActiveUser()
+    const attacker = await createActiveUser()
+    const ownerCookie = await loginCookie(app, owner.email)
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/vaults',
+      headers: { cookie: ownerCookie },
+      body: { name: 'Mass Assignment Target' },
+    })
+    const vault = createRes.json() as { id: string; ownerId: string }
+    expect(vault.ownerId).toBe(owner.id)
+
+    // Attempting to overwrite ownerId must be ignored and not applied
+    const patchRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/vaults/${vault.id}`,
+      headers: { cookie: ownerCookie },
+      body: { name: 'Legitimate Name', ownerId: attacker.id },
+    })
+    expect(patchRes.statusCode).toBe(200)
+    const updated = patchRes.json() as { name: string; ownerId: string }
+    expect(updated.name).toBe('Legitimate Name')
+    expect(updated.ownerId).toBe(owner.id)
+    expect(updated.ownerId).not.toBe(attacker.id)
+  })
 })

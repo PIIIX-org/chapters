@@ -327,6 +327,11 @@ export function noteRoutes(app: FastifyInstance) {
       if (!(await guard(req as unknown as VaultReq, reply, 'read'))) return
       const asset = await readAsset(req.params.id, req.params.fileName)
       if (!asset) return reply.code(404).send({ error: 'asset not found' })
+      if (asset.mimeType === 'image/svg+xml') {
+        reply
+          .header('content-security-policy', "default-src 'none'; sandbox")
+          .header('content-disposition', `attachment; filename="${req.params.fileName}"`)
+      }
       return reply
         .header('content-type', asset.mimeType)
         .header('cache-control', 'public, max-age=86400, immutable')

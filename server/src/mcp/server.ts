@@ -21,6 +21,7 @@ import {
 import { config } from '../config.js'
 import { atLeast, listAccessibleVaults, resolveAccess } from '../vaults/permissions.js'
 import {
+  isSafeGitUrl,
   listAccessibleRepositories,
   repositoryFields as repositoryView,
   resolveRepositoryAccess,
@@ -888,8 +889,13 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         localPath?: string
       }) => {
         requireAccountScope('connect_repository')
-        if (args.ingestionMethod === 'git' && !args.gitUrl) {
-          throw new McpToolError('gitUrl is required for git ingestion method')
+        if (args.ingestionMethod === 'git') {
+          if (!args.gitUrl) {
+            throw new McpToolError('gitUrl is required for git ingestion method')
+          }
+          if (!isSafeGitUrl(args.gitUrl)) {
+            throw new McpToolError('Invalid or forbidden git clone URL')
+          }
         }
         if (args.ingestionMethod === 'local_path') {
           if (!args.localPath) {
@@ -1719,6 +1725,11 @@ export function buildMcpServer(auth: McpAuth): McpServer {
       }) => {
         if (args.vaultId) {
           await requireAccess(args.vaultId, 'read')
+        } else {
+          const isAdmin = ['admin', 'superadmin', 'owner'].includes(auth.user.role)
+          if (!isAdmin) {
+            throw new McpToolError('forbidden: only admins can create global perspectives')
+          }
         }
         const [created] = await db
           .insert(graphPerspectives)
@@ -1754,7 +1765,8 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         if (perspective.vaultId) {
           await requireVaultOwner(perspective.vaultId)
         } else {
-          throw new McpToolError('forbidden')
+          const isAdmin = ['admin', 'superadmin', 'owner'].includes(auth.user.role)
+          if (!isAdmin) throw new McpToolError('forbidden')
         }
       }
 

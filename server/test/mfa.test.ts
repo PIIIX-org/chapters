@@ -85,6 +85,15 @@ describe('MFA', () => {
       body: { email: user.email, password: TEST_PASSWORD, totp: backup },
     })
     expect(reuse.statusCode).toBe(401)
+
+    // SEC-04: /mfa/setup must NOT allow resetting mfaEnabledAt when already enrolled
+    const bypassAttempt = await app.inject({
+      method: 'POST',
+      url: '/api/mfa/setup',
+      headers: { cookie },
+    })
+    expect(bypassAttempt.statusCode).toBe(400)
+    expect((bypassAttempt.json() as { error?: string }).error).toBe('MFA is already enabled')
   })
 
   it('admin mandate gates the API until the user sets up MFA', async () => {

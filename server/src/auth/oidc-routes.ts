@@ -46,8 +46,13 @@ async function discover(issuer: string) {
  * (http) — trust x-forwarded-proto, as the collab ticket learned the hard way.
  */
 function callbackUrl(req: FastifyRequest): string {
+  if (config.appUrl) {
+    return `${config.appUrl.replace(/\/$/, '')}/auth/callback`
+  }
   const proto = (req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol
-  return `${proto}://${req.headers.host}/auth/callback`
+  const rawHost = req.headers.host ?? 'localhost'
+  const host = /^[a-zA-Z0-9.:-]+$/.test(rawHost) ? rawHost : 'localhost'
+  return `${proto}://${host}/auth/callback`
 }
 
 export function oidcRoutes(app: FastifyInstance, opts: { isProd: boolean }): void {

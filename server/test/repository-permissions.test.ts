@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { repositories, repositoryShares, teamMemberships, teams, users } from '../src/db/schema.js'
 import {
+  isSafeGitUrl,
   listAccessibleRepositories,
   resolveRepositoryAccess,
 } from '../src/repositories/permissions.js'
@@ -257,5 +258,31 @@ describe('listAccessibleRepositories field visibility', () => {
     // the owner into the redacted branch, nor list the repository twice.
     expect(listed.filter((r) => r.id === repo!.id)).toHaveLength(1)
     expect(listed.find((r) => r.id === repo!.id)!.gitUrl).toBe(CREDENTIALED_URL)
+  })
+})
+
+describe('isSafeGitUrl (SEC-03 SSRF & Git Argument Injection prevention)', () => {
+  it('rejects argument injection starting with leading dash', () => {
+    expect(isSafeGitUrl('--upload-pack=evil')).toBe(false)
+    expect(isSafeGitUrl('-u')).toBe(false)
+    expect(isSafeGitUrl('  --config=core.sshCommand=evil')).toBe(false)
+  })
+
+  it('rejects control characters and newlines', () => {
+    expect(isSafeGitUrl('https://github.com/org/repo.git\r\n')).toBe(false)
+    expect(isSafeGitUrl('https://github.com/org/repo.git\0evil')).toBe(false)
+  })
+
+  it('rejects cloud metadata endpoints', () => {
+    expect(isSafeGitUrl('http://169.254.169.254/latest/meta-data')).toBe(false)
+    expect(isSafeGitUrl('https://169.254.169.254/secret.git')).toBe(false)
+    expect(isSafeGitUrl('http://metadata.google.internal/computeMetadata/v1/')).toBe(false)
+  })
+
+  it('accepts legitimate https and ssh/scp git URLs', () => {
+    expect(isSafeGitUrl('https://github.com/piiix-org/chapters.git')).toBe(true)
+    expect(isSafeGitUrl('https://gitlab.com/group/project.git')).toBe(true)
+    expect(isSafeGitUrl('git@github.com:piiix-org/chapters.git')).toBe(true)
+    expect(isSafeGitUrl('ssh://git@github.com/piiix-org/chapters.git')).toBe(true)
   })
 })

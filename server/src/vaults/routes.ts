@@ -91,6 +91,7 @@ export function vaultRoutes(app: FastifyInstance) {
       schema: {
         body: {
           type: 'object',
+          additionalProperties: false,
           properties: {
             name: { type: 'string', minLength: 1, maxLength: 200 },
             mergeable: { type: 'boolean' },
@@ -102,12 +103,17 @@ export function vaultRoutes(app: FastifyInstance) {
       if (!(await requireOwner(req.user!.id, req.params.id))) {
         return reply.code(404).send({ error: 'not found' })
       }
+      const { name, mergeable } = req.body
+      const updates: { name?: string; mergeable?: boolean } = {}
+      if (typeof name === 'string') updates.name = name
+      if (typeof mergeable === 'boolean') updates.mergeable = mergeable
+
       const [vault] = await db
         .update(vaults)
-        .set(req.body)
+        .set(updates)
         .where(eq(vaults.id, req.params.id))
         .returning()
-      if (req.body.mergeable === true) {
+      if (mergeable === true) {
         await db
           .insert(vaultGraphPreferences)
           .values({ userId: req.user!.id, vaultId: req.params.id, include: true })

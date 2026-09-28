@@ -131,6 +131,8 @@ describe('asset API routes', () => {
     })
     expect(getRes.statusCode).toBe(200)
     expect(getRes.headers['content-type']).toBe('image/svg+xml')
+    expect(getRes.headers['content-security-policy']).toBe("default-src 'none'; sandbox")
+    expect(getRes.headers['content-disposition']).toBe(`attachment; filename="${json.fileName}"`)
     expect(getRes.body).toBe('<svg></svg>')
   })
 

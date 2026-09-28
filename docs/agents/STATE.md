@@ -2,7 +2,8 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Status**: Saved Graph Perspectives & Presets (§4.2); MCP Prompts Suite (20 prompts); Symbol embeddings (#262); Concept pathfinding; Scheduled backups.
+- **Status**: Full-Stack Security Audit & Remediation (12/12 resolved); Saved Graph Perspectives (§4.2); MCP Prompts Suite (20 prompts); Symbol embeddings (#262); Concept pathfinding; Scheduled backups.
+  - Security Audit & Remediation (2026-09-28): 12/12 vulnerabilities remediated at root cause (3 Critical, 3 High, 4 Medium, 2 Low). SVG CSP sandboxing, Mermaid DOMPurify strict, gitUrl SSRF filter, MFA verification guard, mass assignment schema guards, TOTP secret backup scrubbing, admin hierarchy, email code lockout, git size caps, global perspective role checks, 0 npm audit advisories.
   - Graph Perspectives (§4.2): Scoped saved graph views & filter presets (Architecture, Security, Recent) with team sharing, REST API, UI & MCP tools.
   - MCP Prompts Suite: 20 engineering prompts (`prompts/list` & `prompts/get`) for continuous session capture, ADRs, drift audits, blast radius.
   - #286–#293: Rename sync, CRDT write-through, admin reactivation, wikilink refactoring, mark-all-read notifications, revision diff, incoming backlinks, responsive mobile shell.
@@ -20,7 +21,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   - 1 container + 1 Postgres per customer. Control plane in separate private repo.
   - Collab is a person, no autosave PUT (CRDT is the note). Viewer read-only forever.
   - Exact seq scan for semantic edge recompute (#123). Mutation-verify every test.
-- **Suite**: 1,257 automated tests (872 client, 385 server across 186 test files), 100% passing. Zero open bugs.
+- **Suite**: 1,265 automated tests (873 client, 392 server across 186 test files), 100% passing. Zero open bugs. Zero vulnerabilities.
 - **Deferred**: cli-visualizer (#9, assigned), partial restore (#261), per-type notification prefs (#263).
 - **Decided against (do NOT re-open)**: Leiden (#265), graph DB (#268), GraphRAG (#267), cross-file calls (#266).
 - **Open issues**: #9 (assigned).

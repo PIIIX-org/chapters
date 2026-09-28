@@ -234,4 +234,43 @@ describe('brute-force lockout', () => {
     expect(locked.statusCode).toBe(429)
     resetLockouts()
   })
+
+  it('locks email verification and invalidates tokens after 5 failed attempts', async () => {
+    resetLockouts()
+    const email = uniqueEmail('verify-lock')
+    await app.inject({
+      method: 'POST',
+      url: '/api/signup',
+      body: { email, password: TEST_PASSWORD },
+    })
+    const mail = [...sentMails].reverse().find((m) => m.to === email)!
+    const validCode = mail.text.match(/(\d{6})/)![1]!
+
+    for (let i = 0; i < 5; i++) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/verify-email',
+        body: { email, code: '000000' },
+      })
+      expect(res.statusCode).toBe(400)
+    }
+
+    // 6th attempt locked out
+    const locked = await app.inject({
+      method: 'POST',
+      url: '/api/verify-email',
+      body: { email, code: validCode },
+    })
+    expect(locked.statusCode).toBe(429)
+
+    // Token was invalidated, so even after lockout reset the old code fails
+    resetLockouts()
+    const invalidated = await app.inject({
+      method: 'POST',
+      url: '/api/verify-email',
+      body: { email, code: validCode },
+    })
+    expect(invalidated.statusCode).toBe(400)
+    resetLockouts()
+  })
 })
