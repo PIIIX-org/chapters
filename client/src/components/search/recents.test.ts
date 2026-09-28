@@ -130,4 +130,13 @@ describe('recentsStore', () => {
     expect(recentsStore.get()).toEqual([])
     expect(localStorage.getItem(RECENTS_STORAGE_KEY)).toBeNull()
   })
+
+  it('records and reads symbol recents correctly', () => {
+    recentsStore.record({ kind: 'symbol', label: 'calcScore (src/math.ts:12)', path: '/repos/r1/files/src/math.ts#L12' })
+    expect(recentsStore.get()[0]).toMatchObject({
+      kind: 'symbol',
+      label: 'calcScore (src/math.ts:12)',
+      path: '/repos/r1/files/src/math.ts#L12',
+    })
+  })
 })

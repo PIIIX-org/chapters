@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   SunMoon,
+  Trash2,
   Users,
   Waypoints,
 } from 'lucide-react'
@@ -121,6 +122,7 @@ const RECENT_ICON: Record<RecentKind, LucideIcon> = {
   vault: Library,
   repo: GitBranch,
   note: FileText,
+  symbol: Code,
 }
 
 function repoHint(r: AccessibleRepository): string {
@@ -140,6 +142,7 @@ function Hint({ children, className }: { children: ReactNode; className?: string
 export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   const [query, setQuery] = useState('')
   const [debounced, setDebounced] = useState('')
+  const [resourceType, setResourceType] = useState<'all' | 'note' | 'code' | 'symbol'>('all')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [activeIndex, setActiveIndex] = useState(0)
   const [prevEntriesKey, setPrevEntriesKey] = useState('')
@@ -222,11 +225,35 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     }
   }
 
+  const trimmedQuery = query.trim()
+  const isSymbolMode = trimmedQuery.startsWith('@')
+  const isCommandMode = trimmedQuery.startsWith('>')
+  const effectiveResourceType = isSymbolMode ? 'symbol' : resourceType
+  const includeSymbols = effectiveResourceType === 'symbol' || effectiveResourceType === 'all'
+
+  const debouncedTrimmed = debounced.trim()
+  const debouncedIsSymbol = debouncedTrimmed.startsWith('@')
+  const debouncedIsCommand = debouncedTrimmed.startsWith('>')
+  const debouncedSearchQuery = debouncedIsSymbol || debouncedIsCommand
+    ? debouncedTrimmed.slice(1).trim()
+    : debouncedTrimmed
+
   // When closed, disable the query so a leftover search doesn't background-
   // refetch on window refocus (the overlay is always mounted). Reopening
   // re-enables with the last query.
-  const results = useSearch(open ? debounced : '', vaultId, filters)
-  const items = results.data ?? []
+  const results = useSearch(
+    open && !debouncedIsCommand ? debouncedSearchQuery : '',
+    vaultId,
+    filters,
+    { symbols: includeSymbols },
+  )
+  const rawItems = results.data ?? []
+  const items = rawItems.filter((r) => {
+    if (effectiveResourceType === 'note') return r.resourceType === 'note'
+    if (effectiveResourceType === 'code') return r.resourceType === 'code'
+    if (effectiveResourceType === 'symbol') return r.resourceType === 'symbol'
+    return true
+  })
 
   // Options for the filter panel come from the results actually loaded, not
   // a hardcoded list — narrows as the query and filters narrow, same
@@ -248,10 +275,14 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     visit({ kind: 'note', label: path, path: `/vaults/${containerId}/notes/${path}` })
   }
 
-  function goSymbol(containerId: string, path: string, startLine?: number) {
+  function goSymbol(containerId: string, path: string, startLine?: number, symbolName?: string) {
     onClose()
     const targetPath = `/repos/${containerId}/files/${path}${startLine ? `#L${startLine}` : ''}`
-    visit({ kind: 'repo', label: path, path: targetPath })
+    visit({
+      kind: 'symbol',
+      label: symbolName ? `${symbolName} (${path}${startLine ? `:${startLine}` : ''})` : path,
+      path: targetPath,
+    })
   }
 
   function toggleCode(key: string) {
@@ -263,9 +294,8 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     })
   }
 
-  const trimmedQuery = query.trim()
-  const lowerQuery = trimmedQuery.toLowerCase()
-  const matches = (cmd: Command) => lowerQuery === '' || cmd.name.toLowerCase().includes(lowerQuery)
+  const lowerQuery = (isCommandMode ? trimmedQuery.slice(1).trim() : isSymbolMode ? '' : trimmedQuery).toLowerCase()
+  const matches = (cmd: Command) => !isSymbolMode && (lowerQuery === '' || cmd.name.toLowerCase().includes(lowerQuery))
 
   // ---- Actions -----------------------------------------------------------
   const actions: Command[] = []
@@ -318,6 +348,16 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
       run: () => theme.setPreference(NEXT_THEME[theme.preference]),
     },
   )
+  if (recents.length > 0) {
+    actions.push({
+      id: 'clear-recents',
+      name: 'Clear recent history',
+      label: 'Clear recent history',
+      hint: `${recents.length} items`,
+      icon: Trash2,
+      run: () => recentsStore.clear(),
+    })
+  }
 
   // ---- Recent (before typing only) --------------------------------------
   const recentCommands: Command[] =
@@ -397,7 +437,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
           id: resultOptionId(r),
           activate: () => {
             if (r.resourceType === 'symbol') {
-              goSymbol(r.containerId, r.path, r.startLine)
+              goSymbol(r.containerId, r.path, r.startLine, r.symbolName)
             } else if (r.resourceType === 'code') {
               toggleCode(resultKey(r))
             } else {
@@ -488,7 +528,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={onKeyDown}
-                placeholder="Search notes, code, or jump anywhere…"
+                placeholder="Search notes, code, or jump anywhere… (@ for symbols)"
                 className="h-full min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
               />
               <Kbd aria-hidden="true">esc</Kbd>
@@ -505,6 +545,24 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                   </ScopeChip>
                 ))}
               </div>
+
+              <div className="mx-1 h-3.5 w-px bg-border shrink-0 hidden sm:block" />
+
+              <div role="radiogroup" aria-label="Result type" className="flex items-center gap-1">
+                <ScopeChip checked={effectiveResourceType === 'all'} onClick={() => setResourceType('all')}>
+                  All
+                </ScopeChip>
+                <ScopeChip checked={effectiveResourceType === 'note'} onClick={() => setResourceType('note')}>
+                  Notes
+                </ScopeChip>
+                <ScopeChip checked={effectiveResourceType === 'code'} onClick={() => setResourceType('code')}>
+                  Code
+                </ScopeChip>
+                <ScopeChip checked={effectiveResourceType === 'symbol'} onClick={() => setResourceType('symbol')}>
+                  @ Symbols
+                </ScopeChip>
+              </div>
+
               <button
                 type="button"
                 aria-expanded={filtersOpen}
@@ -562,7 +620,16 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                   })}
                 </div>
               ))}
-              {!results.isError && debounced.trim() && (
+              {trimmedQuery === '@' && (
+                <div className="flex flex-col items-center justify-center p-6 text-center">
+                  <Code className="size-6 text-primary mb-2" aria-hidden="true" />
+                  <p className="text-xs font-semibold text-foreground">Symbol Jump Mode</p>
+                  <p className="mt-1 max-w-xs text-xs text-muted-foreground">
+                    Type a symbol name (e.g. <span className="font-mono text-foreground">@login</span>) to jump directly to AST declarations across repositories.
+                  </p>
+                </div>
+              )}
+              {!results.isError && debouncedSearchQuery && (
                 <div role="group" aria-label="Results">
                   <Eyebrow as="div" className="px-3 pb-1 pt-2">
                     Results
@@ -579,7 +646,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                           type="button"
                           role="option"
                           aria-selected={isActive}
-                          onClick={() => goSymbol(r.containerId, r.path, r.startLine)}
+                          onClick={() => goSymbol(r.containerId, r.path, r.startLine, r.symbolName)}
                           className={cn(
                             'block w-full min-h-9 px-3 py-1.5 text-left hover:bg-muted',
                             isActive && 'bg-muted',
@@ -693,6 +760,12 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
               </span>
               <span className="flex items-center gap-1">
                 <Kbd>↵</Kbd> open
+              </span>
+              <span className="hidden sm:flex items-center gap-1">
+                <Kbd>@</Kbd> symbols
+              </span>
+              <span className="hidden sm:flex items-center gap-1">
+                <Kbd>&gt;</Kbd> commands
               </span>
               {noteHint && (
                 <span className="ml-auto truncate">
