@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
+import { Edit2, RotateCcw, Trash2 } from 'lucide-react'
 import { Input } from '../ui/input.js'
 import { Button } from '../ui/button.js'
 import { FormError } from '../FormError.js'
@@ -104,22 +105,24 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
   }
 
   return (
-    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
       <button
         type="button"
         onClick={() => setMode('renaming')}
         aria-label={`Rename ${vault.name}`}
-        className="text-xs text-muted-foreground hover:text-foreground px-1.5 py-1 rounded hover:bg-muted/50 transition-colors touch-manipulation"
+        className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/80 active:bg-muted active:scale-95 rounded-md border border-border/50 hover:border-border transition-all duration-100 touch-manipulation cursor-pointer shadow-xs"
       >
-        Rename
+        <Edit2 className="size-3 shrink-0" aria-hidden="true" />
+        <span>Rename</span>
       </button>
       <button
         type="button"
         onClick={() => setMode('confirmDelete')}
         aria-label={`Delete ${vault.name}`}
-        className="text-xs text-muted-foreground hover:text-foreground px-1.5 py-1 rounded hover:bg-muted/50 transition-colors touch-manipulation"
+        className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-destructive/80 hover:text-destructive hover:bg-destructive/15 active:bg-destructive/25 active:scale-95 rounded-md border border-destructive/20 hover:border-destructive/40 transition-all duration-100 touch-manipulation cursor-pointer shadow-xs"
       >
-        Delete
+        <Trash2 className="size-3 shrink-0" aria-hidden="true" />
+        <span>Delete</span>
       </button>
     </div>
   )
@@ -161,9 +164,10 @@ export function VaultTrashSection({ heading = true }: { heading?: boolean } = {}
           <Button
             type="button"
             size="xs"
-            variant="ghost"
+            variant="outline"
             aria-label={`Restore ${v.name}`}
             disabled={restoreVault.isPending}
+            className="gap-1 shadow-xs"
             onClick={() => {
               setError(null)
               restoreVault.mutate(v.id, {
@@ -171,7 +175,8 @@ export function VaultTrashSection({ heading = true }: { heading?: boolean } = {}
               })
             }}
           >
-            Restore
+            <RotateCcw className="size-3" aria-hidden="true" />
+            <span>Restore</span>
           </Button>
           {/* The delete confirmation above already promises "until you purge
               it". Until this existed, that sentence pointed at nothing. */}
@@ -179,14 +184,16 @@ export function VaultTrashSection({ heading = true }: { heading?: boolean } = {}
             <Button
               type="button"
               size="xs"
-              variant="ghost"
+              variant="destructive"
               aria-label={`Delete ${v.name} permanently`}
+              className="gap-1 shadow-xs"
               onClick={() => {
                 setError(null)
                 setPurging(v.id)
               }}
             >
-              Delete forever
+              <Trash2 className="size-3" aria-hidden="true" />
+              <span>Delete forever</span>
             </Button>
           )}
         </div>

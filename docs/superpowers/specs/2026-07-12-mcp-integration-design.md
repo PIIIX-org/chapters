@@ -181,3 +181,14 @@ Adopted from the security audit — see
   state; it does not need to support arbitrary point-in-time branching or
   merge-conflict resolution between two reverts — simple linear history is
   assumed sufficient for v1.
+
+## Evaluated & Rejected: Client-Side WebMCP (`navigator.modelContext`)
+
+- **Context**: The W3C Web Machine Learning Community Group's experimental **WebMCP** specification (`webmachinelearning/webmcp`) was evaluated for potential client-side integration in Chapters' web application (`client/`).
+- **Decision (ADR-001)**: **Rejected / Skipped**.
+- **Rationale**:
+  - **YAGNI & System Parity**: Chapters already provides a first-class, headless backend MCP server (`POST /mcp` via Streamable HTTP and stdio) with 50 tools covering notes, vaults, repositories, graph queries, and search. AI agents (Cursor, Claude, Antigravity, etc.) connect directly to the backend without needing a browser tab, DOM, or active user presence.
+  - **Spec Volatility**: WebMCP is an early Community Group draft with an unstable, frequently breaking API surface (registration, unregistration, security sandboxing).
+  - **Redundant Scope**: Exposing client-side browser tools duplicates backend capabilities with strictly narrower availability (only active while a browser tab is open).
+- **Revisit condition**: Only if WebMCP becomes a standardized W3C Recommendation natively supported across major browsers AND a specific requirement arises for in-browser agents to drive live viewport UI canvas interactions (e.g. 3D graph camera navigation).
+

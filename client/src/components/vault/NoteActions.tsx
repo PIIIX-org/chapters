@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { Edit2, Trash2 } from 'lucide-react'
 import { Input } from '../ui/input'
 import { Button } from '../ui/button'
 import { FormError } from '../FormError'
@@ -98,22 +99,24 @@ export function NoteActions({ vaultId, note }: NoteActionsProps) {
   }
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1.5">
       <button
         type="button"
         onClick={() => setMode('renaming')}
         aria-label={`Rename ${note.name}`}
-        className="rounded-sm px-1 text-xs text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+        className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/80 active:bg-muted active:scale-95 rounded-md border border-border/50 hover:border-border transition-all duration-100 touch-manipulation cursor-pointer shadow-xs focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
       >
-        Rename
+        <Edit2 className="size-3 shrink-0" aria-hidden="true" />
+        <span>Rename</span>
       </button>
       <button
         type="button"
         onClick={() => setMode('confirmDelete')}
         aria-label={`Delete ${note.name}`}
-        className="rounded-sm px-1 text-xs text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+        className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-destructive/80 hover:text-destructive hover:bg-destructive/15 active:bg-destructive/25 active:scale-95 rounded-md border border-destructive/20 hover:border-destructive/40 transition-all duration-100 touch-manipulation cursor-pointer shadow-xs focus-visible:ring-2 focus-visible:ring-destructive/50 focus-visible:outline-none"
       >
-        Delete
+        <Trash2 className="size-3 shrink-0" aria-hidden="true" />
+        <span>Delete</span>
       </button>
     </div>
   )

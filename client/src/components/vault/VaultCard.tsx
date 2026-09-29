@@ -1,10 +1,15 @@
+import { lazy, Suspense, useState } from 'react'
 import { Link } from 'react-router'
-import { BookOpen, Folder, Network, Star } from 'lucide-react'
+import { BookOpen, Folder, Network, Settings, Star } from 'lucide-react'
 import { Card, CardContent, CardFooter, CardHeader } from '../ui/card.js'
 import { Pill } from '../ui/pill.js'
 import { VaultRowActions } from '../shell/VaultActions.js'
 import { getColorDef, type VaultColor } from './useVaultFolders.js'
 import type { Vault, VaultAccess } from '../../api/vaults.js'
+
+const VaultSettingsModal = lazy(() =>
+  import('./VaultSettingsModal.js').then((m) => ({ default: m.VaultSettingsModal })),
+)
 
 const ACCESS_LABEL: Record<VaultAccess, string> = {
   owner: 'Owner',
@@ -31,11 +36,13 @@ export function VaultCard({
   onToggleFavorite,
   onOrganizeFolder,
 }: VaultCardProps) {
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const vColorDef = getColorDef(vaultColor)
   const fColorDef = getColorDef(folderColor)
 
   return (
-    <Card
+    <>
+      <Card
       className={`relative flex flex-col justify-between overflow-hidden transition-all hover:border-foreground/30 ${
         vColorDef ? vColorDef.cardBorder : ''
       }`}
@@ -124,17 +131,36 @@ export function VaultCard({
       </CardContent>
 
       <CardFooter className="flex items-center justify-between border-t border-border bg-muted/20 px-3.5 sm:px-4 py-2 sm:py-2.5 min-h-[42px]">
-        <Link
-          to={`/vaults/${vault.id}`}
-          className="text-xs text-primary hover:underline font-medium py-1"
-        >
-          Open vault &rarr;
-        </Link>
+        {vault.access === 'owner' ? (
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            aria-label={`Settings for ${vault.name}`}
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground font-medium px-2.5 py-1 rounded-md border border-border/70 bg-card hover:bg-muted/90 hover:border-border active:scale-95 transition-all duration-100 cursor-pointer shadow-xs"
+          >
+            <Settings className="size-3.5 text-muted-foreground shrink-0" aria-hidden="true" />
+            <span>Vault settings</span>
+          </button>
+        ) : (
+          <Link
+            to={`/vaults/${vault.id}`}
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground font-medium px-2.5 py-1 rounded-md border border-border/70 bg-card hover:bg-muted/90 hover:border-border active:scale-95 transition-all duration-100 cursor-pointer shadow-xs"
+          >
+            <span>Open vault &rarr;</span>
+          </Link>
+        )}
         <div className="flex items-center gap-2">
           {vault.access === 'owner' && <VaultRowActions vault={vault} />}
         </div>
       </CardFooter>
     </Card>
+
+    {settingsOpen && vault.access === 'owner' && (
+      <Suspense fallback={null}>
+        <VaultSettingsModal vault={vault} open={settingsOpen} onOpenChange={setSettingsOpen} />
+      </Suspense>
+    )}
+  </>
   )
 }
 

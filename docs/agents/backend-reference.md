@@ -402,6 +402,7 @@ re-resolved live.
   (`/chapters-status`, `/chapters-search`, `/chapters-graph`, `/chapters-map`,
   `/chapters-note`, `/chapters-repo`, `/chapters-vault`, `/chapters-export`),
   and an always-active mode (`skills/chapters/rules/chapters.md`).
+- **Architecture decision — rejected client-side WebMCP**: Evaluated the W3C Web Machine Learning Community Group's `navigator.modelContext` proposal (`webmachinelearning/webmcp`) and decided against implementing client-side WebMCP. Chapters is deliberately headless and backend-first (`POST /mcp` via Fastify); AI coding agents interact with full system parity without requiring active browser tabs, DOM rendering, or frontend runtime dependencies (ADR-001).
 
 ### 5.9 Export & backup (`server/src/export/`)
 

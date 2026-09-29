@@ -129,7 +129,11 @@ function toMemberSimEdges(edges: GraphEdge[]): MemberSimEdge[] {
 // units (clientX/clientY, unscaled by devicePixelRatio).
 const TAP_MAX_SCREEN_DRIFT = 6
 
-export default function GraphCanvas() {
+interface GraphCanvasProps {
+  leadControl?: ReactNode
+}
+
+export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Lazy initializer runs during render, not as a setState-in-effect, and
@@ -163,6 +167,8 @@ export default function GraphCanvas() {
   const navigate = useNavigate()
   const shell = useOptionalShell()
   const isInspectorOpen = !!(shell?.panels.inspector.open && (shell?.panels.inspector.mounted ?? 0) > 0)
+  const isContextMounted = (shell?.panels.context.mounted ?? 0) > 0
+  const isContextOpen = !!(shell?.panels.context.open && isContextMounted)
   const isSidebarExpanded = !!shell?.sidebarExpanded
   const colorMode: ColorMode = searchParams.get('color') === 'community' ? 'community' : 'attribute'
   const filters = graphFiltersFromSearchParams(searchParams)
@@ -591,22 +597,22 @@ export default function GraphCanvas() {
           <StatsStrip vaultCount={vaults.data?.length ?? null} graph={graph.data} />
         </div>
       )}
+      {/* Top controls: optional lead control (e.g. ScopePicker) + Colour-mode toggle */}
+      <div
+        className={cn(
+          'pointer-events-auto absolute top-2.5 z-30 flex items-center gap-2 transition-[left] duration-200',
+          isSidebarExpanded ? 'left-[264px]' : 'left-16',
+        )}
+      >
+        {leadControl}
+        <ColorModeToggle />
+      </div>
 
       <div
         ref={containerRef}
         className="relative min-h-0 w-full flex-1 overflow-hidden bg-background bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] bg-[size:48px_48px] [background-position:center]"
       >
         <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 h-full w-full" />
-
-        {/* Colour-mode pills: positioned safely to the right of the Rail */}
-        <div
-          className={cn(
-            'absolute top-[54px] z-10 transition-[left] duration-200',
-            isSidebarExpanded ? 'left-[264px]' : 'left-16',
-          )}
-        >
-          <ColorModeToggle />
-        </div>
 
         {/* Zoom controls: shifted left of Inspector when open, positioned above BottomBar toggles */}
         <div
@@ -651,7 +657,17 @@ export default function GraphCanvas() {
         <div
           className={cn(
             'absolute bottom-14 z-10 flex max-w-[calc(100vw-360px)] flex-col items-start gap-2 transition-[left] duration-200',
-            isSidebarExpanded ? 'left-[264px]' : 'left-16',
+            isSidebarExpanded
+              ? isContextOpen
+                ? 'left-[516px]'
+                : isContextMounted
+                  ? 'left-[318px]'
+                  : 'left-[264px]'
+              : isContextOpen
+                ? 'left-[316px]'
+                : isContextMounted
+                  ? 'left-[118px]'
+                  : 'left-16',
           )}
         >
           <CappedGroupsNotice groups={graph.data?.cappedGroups ?? []} />

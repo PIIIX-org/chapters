@@ -1,5 +1,6 @@
 import { Link } from 'react-router'
 import { Folder, GitBranch, Star } from 'lucide-react'
+import { Button } from '../ui/button.js'
 import { Card, CardContent, CardFooter, CardHeader } from '../ui/card.js'
 import { Pill, type PillTone } from '../ui/pill.js'
 import { getColorDef, type VaultColor } from '../vault/useVaultFolders.js'
@@ -82,7 +83,7 @@ export function RepoCard({
                 ? `Folder: ${folder} for ${repo.name}`
                 : `Assign folder for ${repo.name}`
             }
-            className={`flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 sm:py-0.5 min-h-[28px] sm:min-h-0 rounded border transition-colors touch-manipulation ${
+            className={`flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 sm:py-0.5 min-h-[28px] sm:min-h-0 rounded border transition-all cursor-pointer active:scale-95 touch-manipulation ${
               fColorDef
                 ? fColorDef.badge
                 : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
@@ -106,7 +107,7 @@ export function RepoCard({
                 onClick={() => onToggleFavorite(repo.id)}
                 title={isFavorite ? 'Unfavorite' : 'Favorite'}
                 aria-label={isFavorite ? `Unfavorite ${repo.name}` : `Favorite ${repo.name}`}
-                className={`p-1.5 sm:p-1 rounded transition-colors touch-manipulation ${
+                className={`p-1.5 sm:p-1 rounded transition-all cursor-pointer active:scale-90 touch-manipulation ${
                   isFavorite
                     ? 'text-amber-500 hover:text-amber-600'
                     : 'text-muted-foreground/40 hover:text-amber-500'
@@ -157,12 +158,16 @@ export function RepoCard({
       </CardContent>
 
       <CardFooter className="flex items-center justify-between border-t border-border bg-muted/20 px-3.5 sm:px-4 py-2 sm:py-2.5 min-h-[42px]">
-        <Link
-          to={`/repos/${repo.id}/files`}
-          className="text-xs text-primary hover:underline font-medium py-1"
+        <Button
+          asChild
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs gap-1.5 px-2.5 text-foreground hover:text-foreground active:scale-95"
         >
-          Open repository &rarr;
-        </Link>
+          <Link to={`/repos/${repo.id}/files`}>
+            <span>Open repository &rarr;</span>
+          </Link>
+        </Button>
         <span className="font-mono text-[11px] text-muted-foreground">
           {repo.lastSyncedAt
             ? `Synced ${syncedFormatter.format(new Date(repo.lastSyncedAt))}`
