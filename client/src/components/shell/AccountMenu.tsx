@@ -36,7 +36,7 @@ export function AccountMenu({ showLabel = false }: { showLabel?: boolean } = {})
           type="button"
           aria-label="Account menu"
           className={cn(
-            'relative flex items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150 hover:bg-muted hover:text-foreground active:scale-95 active:bg-muted/80 focus-visible:ring-2 focus-visible:ring-ring/40 shrink-0',
+            'relative flex items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150 hover:bg-muted hover:text-foreground active:scale-95 active:bg-muted/80 focus-visible:ring-2 focus-visible:ring-ring/40 shrink-0 cursor-pointer',
             showLabel
               ? 'h-9 w-full justify-start gap-2.5 px-2.5 text-[13px] font-medium'
               : 'size-9 justify-center p-0 hover:scale-105',

@@ -25,7 +25,7 @@ function DialogContent({ className, children, ...props }: React.ComponentProps<t
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border border-border bg-popover p-6 shadow-floating",
+          "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border border-border bg-popover p-6 shadow-floating max-h-[calc(100dvh-3rem)] overflow-y-auto overscroll-contain",
           className
         )}
         {...props}
@@ -33,7 +33,7 @@ function DialogContent({ className, children, ...props }: React.ComponentProps<t
         {children}
         <DialogPrimitive.Close
           data-slot="dialog-close"
-          className="absolute right-4 top-4 rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="absolute right-4 top-4 rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
         >
           <span className="sr-only">Close</span>
           <svg

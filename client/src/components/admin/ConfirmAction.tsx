@@ -72,6 +72,7 @@ interface ConfirmActionProps {
   pending?: boolean
   error?: string | null
   destructive?: boolean
+  variant?: 'ghost' | 'outline' | 'default' | 'secondary' | 'destructive'
 }
 
 /**
@@ -87,6 +88,7 @@ export function ConfirmAction({
   pending = false,
   error = null,
   destructive = false,
+  variant = 'ghost',
 }: ConfirmActionProps) {
   const [confirming, setConfirming] = useState(false)
 
@@ -95,7 +97,7 @@ export function ConfirmAction({
       <Button
         type="button"
         size="xs"
-        variant="ghost"
+        variant={variant}
         className="rounded-[var(--radius-sm,2px)]"
         aria-label={ariaLabel}
         onClick={() => setConfirming(true)}

@@ -2,7 +2,8 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Status**: UI/UX Tactile Micro-Interactions, Accidental Deletion Prevention, Observatory Shell Polish & WebMCP ADR (#316); Full-Stack Security Audit & Remediation (12/12 resolved); Saved Graph Perspectives (§4.2); MCP Prompts Suite (20 prompts).
+- **Status**: Deep UI/UX Audit & Polish (48 screenshots, 6 defect categories resolved); UI/UX Tactile Micro-Interactions, Accidental Deletion Prevention & Observatory Shell Polish (#316); Full-Stack Security Audit & Remediation (12/12 resolved); Saved Graph Perspectives (§4.2); MCP Prompts Suite (20 prompts).
+  - Deep UI/UX Audit (48 screenshots): Fixed dialog overflow/trapping in DialogContent (max-h + scroll), note title sidebar truncation in FileTree via NoteActions compact icon buttons, mobile 375px graph header collision in ColorModeToggle/GraphCanvas, mobile rail collision via pl-16 across all page wrappers, pointer cursors on Rail/NotificationBell/AccountMenu, and outline button affordances on Delete team and Change email.
   - UI/UX Polish (#316): Tactile button depress physics (active:scale-[0.96]), cursor-pointer restore, isolated destructive actions with safety borders in VaultActions/NoteActions, VaultCard settings modal trigger, ScopePicker opaque popover at z-30/z-50, unified top controls bar, dynamic context notice positioning.
   - WebMCP ADR: Documented architectural decision against WebMCP browser standard (in-tree native MCP tools + stdio/SSE are self-contained, auditable, and decoupled from client browser context).
   - Security Audit & Remediation (2026-09-28): 12/12 vulnerabilities remediated at root cause (3 Critical, 3 High, 4 Medium, 2 Low). SVG CSP sandboxing, Mermaid DOMPurify strict, gitUrl SSRF filter, MFA verification guard, mass assignment schema guards, TOTP secret backup scrubbing, admin hierarchy, email code lockout, git size caps, global perspective role checks, 0 npm audit advisories.

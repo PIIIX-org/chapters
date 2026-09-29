@@ -601,7 +601,7 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       <div
         className={cn(
           'pointer-events-auto absolute top-2.5 z-30 flex items-center gap-2 transition-[left] duration-200',
-          isSidebarExpanded ? 'left-[264px]' : 'left-16',
+          isSidebarExpanded ? 'left-[264px]' : 'left-14 sm:left-16',
         )}
       >
         {leadControl}

@@ -183,7 +183,7 @@ export function TeamPage() {
   return (
     <>
       <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 px-4 pt-3 pb-16">
+        <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 pl-16 pr-4 sm:px-4 pt-3 pb-16">
           {/* Teams Navigation Shelf */}
           {teams.data.length > 1 && (
             <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
