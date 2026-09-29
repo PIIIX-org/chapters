@@ -205,6 +205,7 @@ export function AccountSection() {
               label="Change email"
               ariaLabel="Change email address"
               destructive
+              variant="outline"
               pending={changeEmail.isPending}
               error={emailError}
               onConfirm={confirmEmail}

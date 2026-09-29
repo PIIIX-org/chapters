@@ -66,7 +66,7 @@ export function NotificationBell({ showLabel = false }: { showLabel?: boolean } 
         aria-label={label}
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          'relative flex items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-colors duration-100 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 shrink-0',
+          'relative flex items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-100 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 shrink-0 cursor-pointer active:scale-95',
           showLabel
             ? 'h-9 w-full justify-start gap-2.5 px-2.5 text-[13px] font-medium'
             : 'size-9 justify-center p-0 hover:scale-105',
