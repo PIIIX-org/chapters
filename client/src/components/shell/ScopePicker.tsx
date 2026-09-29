@@ -1,9 +1,11 @@
 import { lazy, Suspense, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
+import { BookOpen, Check, ChevronDown, Plus, Settings, Waypoints } from 'lucide-react'
 import { useVaults } from '../../hooks/useVaults.js'
 import { NewVaultForm } from '../vault/NewVaultForm.js'
 import { VaultRowActions, VaultTrashSection } from './VaultActions.js'
+import { cn } from '../../lib/utils.js'
 import type { Vault } from '../../api/vaults.js'
 
 // Lazy: keeps the radix dialog (and everything the settings modal pulls in)
@@ -50,17 +52,6 @@ export function ScopePicker() {
     navigate(`/vaults/${vault.id}`)
   }
 
-  // Bound to the wrapper, not the <ul>: after clicking the trigger, focus
-  // sits on the trigger button, a sibling of the popup — not a descendant of
-  // the listbox — so a real Escape keydown bubbles trigger -> this div and
-  // never reaches a handler on the <ul>.
-  //
-  // The vault settings modal is a Radix Dialog: it portals its DOM into
-  // document.body, but React synthetic events still propagate along the
-  // React tree, not the DOM tree — so the dialog's own Escape handler and
-  // this one both see the same keydown. Guard while the modal is open, or
-  // one Escape closes both layers and yanks focus toward a trigger button
-  // Radix's FocusScope is also about to restore focus to mid-unmount.
   function onKeyDown(e: KeyboardEvent) {
     if (settingsOpen) return
     if (e.key === 'Escape') {
@@ -79,22 +70,34 @@ export function ScopePicker() {
         aria-controls="scope-list"
         disabled={vaults.isPending}
         onClick={toggle}
-        className="flex h-9 items-center gap-1.5 rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs px-3 text-sm font-medium hover:bg-muted shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-100"
+        className="flex h-9 items-center gap-2 rounded-[var(--radius-md,4px)] border border-border bg-card/95 backdrop-blur-xs px-3 text-sm font-medium text-foreground hover:bg-muted hover:border-input shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40 active:scale-95 transition-all cursor-pointer disabled:opacity-100"
       >
-        <span>{label}</span>
+        <Waypoints className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+        <span className="max-w-[160px] truncate">{label}</span>
+        <ChevronDown
+          className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-150', open && 'rotate-180')}
+          aria-hidden="true"
+        />
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-40 mt-1 min-w-[14rem] rounded-[var(--radius-md,4px)] border border-border bg-popover py-1 shadow-floating">
-          <ul id="scope-list" role="listbox" aria-label="Scope">
+        <div className="absolute left-0 top-full z-50 mt-1.5 min-w-[16rem] max-w-sm rounded-[var(--radius-lg,8px)] border border-border bg-popover text-popover-foreground py-1 shadow-2xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-100">
+          <ul id="scope-list" role="listbox" aria-label="Scope" className="max-h-64 overflow-y-auto overscroll-contain py-0.5 divide-y divide-border/20">
             <li role="presentation">
               <button
                 type="button"
                 role="option"
                 aria-selected={!vaultId}
                 onClick={() => select(null)}
-                className="block w-full px-3 py-1.5 text-left text-sm hover:bg-muted"
+                className={cn(
+                  'flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors cursor-pointer',
+                  !vaultId ? 'bg-muted/90 text-foreground font-medium' : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground active:bg-muted',
+                )}
               >
-                All vaults
+                <span className="flex items-center gap-2">
+                  <Waypoints className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                  <span>All vaults</span>
+                </span>
+                {!vaultId && <Check className="size-3.5 shrink-0 text-primary" aria-hidden="true" />}
               </button>
             </li>
             {vaults.data?.map((v) => (
@@ -104,9 +107,16 @@ export function ScopePicker() {
                   role="option"
                   aria-selected={v.id === vaultId}
                   onClick={() => select(v.id)}
-                  className="block w-full px-3 py-1.5 text-left text-sm hover:bg-muted"
+                  className={cn(
+                    'flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors cursor-pointer',
+                    v.id === vaultId ? 'bg-muted/90 text-foreground font-medium' : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground active:bg-muted',
+                  )}
                 >
-                  {v.name}
+                  <span className="flex items-center gap-2 min-w-0">
+                    <BookOpen className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="truncate">{v.name}</span>
+                  </span>
+                  {v.id === vaultId && <Check className="size-3.5 shrink-0 text-primary" aria-hidden="true" />}
                 </button>
               </li>
             ))}
@@ -114,34 +124,33 @@ export function ScopePicker() {
           {/* Actions live outside the listbox's DOM subtree on purpose:
               role="listbox" requires every descendant of its options/groups to
               itself be an option, so rename/delete controls cannot be nested
-              inside it without an aria-required-children violation. Keyed to
-              the currently selected vault rather than listing every owned
-              vault again here, which used to repeat each name a second time
-              in the same open panel. */}
+              inside it without an aria-required-children violation. */}
           {activeVault?.access === 'owner' && (
-            <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-1">
-              <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{activeVault.name}</span>
+            <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-1.5 bg-muted/20">
+              <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground font-mono">{activeVault.name}</span>
               <button
                 type="button"
                 onClick={() => setSettingsOpen(true)}
-                className="text-xs text-muted-foreground hover:text-foreground"
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-0.5 rounded border border-border/50 bg-card hover:bg-muted active:scale-95 transition-all cursor-pointer shadow-xs"
               >
-                Vault settings
+                <Settings className="size-3" aria-hidden="true" />
+                <span>Vault settings</span>
               </button>
               <VaultRowActions vault={activeVault} />
             </div>
           )}
           <VaultTrashSection />
-          <div className="border-t border-border p-2">
+          <div className="border-t border-border p-2 bg-muted/10">
             {creating ? (
               <NewVaultForm onCreated={handleCreated} />
             ) : (
               <button
                 type="button"
                 onClick={() => setCreating(true)}
-                className="block w-full rounded-md px-1 py-1 text-left text-sm hover:bg-muted"
+                className="inline-flex items-center gap-2 w-full rounded-md px-2.5 py-1.5 text-left text-xs font-medium text-foreground hover:bg-muted/80 active:scale-95 transition-all cursor-pointer border border-dashed border-border/70 hover:border-border"
               >
-                + New vault
+                <Plus className="size-3.5 text-primary" aria-hidden="true" />
+                <span>+ New vault</span>
               </button>
             )}
           </div>

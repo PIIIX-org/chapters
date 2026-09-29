@@ -109,6 +109,23 @@ describe('GraphPathfinder', () => {
     await expectNoA11yViolations(container)
   })
 
+  it('filters concept options via search input', async () => {
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <GraphPathfinder nodes={MOCK_NODES} edges={MOCK_EDGES} />
+      </MemoryRouter>,
+    )
+
+    const searchInput = screen.getByRole('searchbox', { name: 'Filter concepts' })
+    await user.type(searchInput, 'session')
+
+    const startSelect = screen.getByRole('combobox', { name: 'Start concept' })
+    expect(startSelect).toHaveTextContent('concepts/session.md')
+    expect(startSelect).toHaveTextContent('src/auth/session.ts')
+    expect(startSelect).not.toHaveTextContent('isolated/island.md')
+  })
+
   it('swaps source and target concepts and recalculates path', async () => {
     const user = userEvent.setup()
     const onPathChange = vi.fn()

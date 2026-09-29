@@ -1091,3 +1091,90 @@ describe('SearchOverlay connect-repository command', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/repos/r7/files'))
   })
 })
+
+describe('SearchOverlay symbol jump and filters', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('typing @ enters symbol jump mode with symbols=true and strips @ from the query', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const symbolFixture = [
+      {
+        resourceType: 'symbol',
+        id: 's1',
+        containerId: 'r1',
+        path: 'src/token.ts',
+        symbolName: 'generateAuthToken',
+        symbolKind: 'function',
+        startLine: 42,
+        endLine: 45,
+        snippet: 'export function generateAuthToken()',
+        score: 0.88,
+      },
+    ]
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.startsWith('/api/search')) return Promise.resolve(mockJsonResponse(200, symbolFixture))
+      if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, []))
+      if (url === '/api/me') return Promise.resolve(mockJsonResponse(200, sessionUser('member')))
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderOverlay(true)
+
+    await search(user, '@generate')
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) => String(url).includes('/search?'))
+      expect(call?.[0]).toContain('q=generate')
+      expect(call?.[0]).toContain('symbols=true')
+    })
+    expect(screen.getByText('generateAuthToken')).toBeInTheDocument()
+  })
+
+  it('shows symbol jump guidance when typing @ alone', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    stubFetch(() => mockJsonResponse(200, []))
+    renderOverlay(true)
+
+    await search(user, '@')
+
+    await waitFor(() => expect(screen.getByText('Symbol Jump Mode')).toBeInTheDocument())
+  })
+
+  it('filtering by result type radio chip narrows displayed results', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    stubFetch(() => mockJsonResponse(200, FIXTURE))
+    renderOverlay(true)
+
+    await search(user, 'jane')
+    await waitFor(() => expect(screen.getByText('people/jane')).toBeInTheDocument())
+    expect(screen.getByText('src/x.ts')).toBeInTheDocument()
+
+    // Click "Notes" chip
+    await user.click(screen.getByRole('radio', { name: 'Notes' }))
+    expect(screen.getByText('people/jane')).toBeInTheDocument()
+    expect(screen.queryByText('src/x.ts')).toBeNull()
+
+    // Click "Code" chip
+    await user.click(screen.getByRole('radio', { name: 'Code' }))
+    expect(screen.queryByText('people/jane')).toBeNull()
+    expect(screen.getByText('src/x.ts')).toBeInTheDocument()
+  })
+
+  it('offers clear-recents command when recents exist and running it clears recents', async () => {
+    recentsStore.record({ kind: 'vault', label: 'Recipes', path: '/vaults/v2' })
+    stubCommandFetch()
+    renderOverlay(true)
+
+    const clearCmd = await screen.findByRole('option', { name: 'Command: Clear recent history' })
+    expect(clearCmd).toBeInTheDocument()
+
+    await userEvent.click(clearCmd)
+    expect(storedRecents()).toHaveLength(0)
+  })
+})

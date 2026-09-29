@@ -7,7 +7,7 @@
 // HomePage's lazy() import, never statically from the shell — that's what
 // keeps d3-force out of the entry chunk (client/src/bundle.test.ts).
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { Filter, Info, ListTree, Maximize, Route, Sliders, ZoomIn, ZoomOut } from 'lucide-react'
 import { useGraph } from '../../hooks/useGraph.js'
 import { useVaults } from '../../hooks/useVaults.js'
@@ -25,7 +25,7 @@ import { GraphPathfinder } from './GraphPathfinder.js'
 import { GraphFilters, graphFiltersFromSearchParams, type FilterableNode } from './GraphFilters.js'
 import { CappedGroupsNotice, GraphEmptyState, GraphErrorState, TruncationNotice } from './GraphStates.js'
 import { createPanZoom, fitTransform, screenToWorld, type Transform } from './panzoom.js'
-import { drawGraph, type ColorMode, type DrawAggregatedEdge, type DrawMemberEdge } from './draw.js'
+import { communityHue, drawGraph, type ColorMode, type DrawAggregatedEdge, type DrawMemberEdge } from './draw.js'
 import { createSimulation, DEFAULT_SIMULATION_PARAMS, type SimEdge, type SimNode, type SimulationParams } from './simulation.js'
 import { hitTest } from './hitTest.js'
 import { cn } from '../../lib/utils.js'
@@ -42,6 +42,9 @@ function filterableNodesOf(data: VaultGraph | CommunityGraph | undefined): Filte
 interface CommunitySimNode extends SimNode {
   community: number
   lastActivity: string | null
+  noteCount: number
+  codeCount: number
+  size: number
 }
 
 type CommunitySimEdge = SimEdge<CommunitySimNode>
@@ -61,6 +64,9 @@ function toSimNodes(nodes: CommunityNode[]): CommunitySimNode[] {
       id: n.id,
       community: n.community,
       lastActivity: n.lastActivity,
+      noteCount: n.noteCount,
+      codeCount: n.codeCount,
+      size: n.size,
       radius: Math.min(32, Math.max(4, Math.sqrt(n.size) * 2)),
       x: spread * Math.cos(angle),
       y: spread * Math.sin(angle),
@@ -83,6 +89,9 @@ function isCommunityGraph(data: VaultGraph | CommunityGraph): data is CommunityG
 const MEMBER_RADIUS = 6
 
 interface MemberSimNode extends SimNode {
+  path: string
+  resourceId: string
+  resourceType: 'note' | 'code'
   type: string | null
   tags: string[]
   updatedAt: string | null
@@ -97,6 +106,9 @@ function toMemberSimNodes(nodes: GraphNode[]): MemberSimNode[] {
     const angle = i * GOLDEN_ANGLE
     return {
       id: n.id,
+      path: n.path,
+      resourceId: n.resourceId,
+      resourceType: n.resourceType,
       type: n.type,
       tags: n.tags,
       updatedAt: n.updatedAt,
@@ -117,7 +129,11 @@ function toMemberSimEdges(edges: GraphEdge[]): MemberSimEdge[] {
 // units (clientX/clientY, unscaled by devicePixelRatio).
 const TAP_MAX_SCREEN_DRIFT = 6
 
-export default function GraphCanvas() {
+interface GraphCanvasProps {
+  leadControl?: ReactNode
+}
+
+export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Lazy initializer runs during render, not as a setState-in-effect, and
@@ -135,6 +151,11 @@ export default function GraphCanvas() {
   // pointermove resolves to the value already set, so this is cheap to
   // update per move event.
   const [hoveredCommunity, setHoveredCommunity] = useState<number | null>(null)
+  const [hoveredTooltip, setHoveredTooltip] = useState<{
+    node: CommunitySimNode | MemberSimNode
+    x: number
+    y: number
+  } | null>(null)
 
   // Same URL, same router as ColorModeToggle — reading it here rather than
   // taking colorMode/filters as props makes the URL the one shared source
@@ -143,8 +164,11 @@ export default function GraphCanvas() {
   // vault/color here for the same reason: GraphFilters writes them, this
   // reads them, and both go through the same router.
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const shell = useOptionalShell()
   const isInspectorOpen = !!(shell?.panels.inspector.open && (shell?.panels.inspector.mounted ?? 0) > 0)
+  const isContextMounted = (shell?.panels.context.mounted ?? 0) > 0
+  const isContextOpen = !!(shell?.panels.context.open && isContextMounted)
   const isSidebarExpanded = !!shell?.sidebarExpanded
   const colorMode: ColorMode = searchParams.get('color') === 'community' ? 'community' : 'attribute'
   const filters = graphFiltersFromSearchParams(searchParams)
@@ -442,7 +466,17 @@ export default function GraphCanvas() {
       const rect = canvas!.getBoundingClientRect()
       const world = screenToWorld(panzoom.transform, e.clientX - rect.left, e.clientY - rect.top)
       const hitNode = hitTest(nodes, world.x, world.y, (n) => n.radius)
-      if (hitNode) setExpandedCommunity(hitNode.community)
+      if (!hitNode) return
+
+      if ('path' in hitNode) {
+        const target =
+          hitNode.resourceType === 'note'
+            ? `/vaults/${hitNode.resourceId}/notes/${hitNode.path}`
+            : `/repos/${hitNode.resourceId}/files/${hitNode.path}`
+        navigate(target)
+      } else {
+        setExpandedCommunity(hitNode.community)
+      }
     }
 
     function onPointerCancelForTap() {
@@ -454,12 +488,26 @@ export default function GraphCanvas() {
     // before hit-testing, never raw screen coordinates).
     function onPointerMoveForHover(e: PointerEvent) {
       const rect = canvas!.getBoundingClientRect()
-      const world = screenToWorld(panzoom.transform, e.clientX - rect.left, e.clientY - rect.top)
+      const clientX = e.clientX - rect.left
+      const clientY = e.clientY - rect.top
+      const world = screenToWorld(panzoom.transform, clientX, clientY)
       const hitNode = hitTest(nodes, world.x, world.y, (n) => n.radius)
+      if (canvas) canvas.style.cursor = hitNode ? 'pointer' : 'grab'
       setHoveredCommunity(hitNode ? hitNode.community : null)
+      if (hitNode) {
+        setHoveredTooltip({
+          node: hitNode,
+          x: Math.min(clientX + 12, rect.width - 240),
+          y: Math.max(12, Math.min(clientY + 12, rect.height - 110)),
+        })
+      } else {
+        setHoveredTooltip(null)
+      }
     }
     function onPointerLeaveForHover() {
+      if (canvas) canvas.style.cursor = 'grab'
       setHoveredCommunity(null)
+      setHoveredTooltip(null)
     }
 
     canvas.addEventListener('pointerdown', onPointerDownForTap)
@@ -495,7 +543,7 @@ export default function GraphCanvas() {
       canvas.removeEventListener('pointerleave', onPointerLeaveForHover)
       ro?.disconnect()
     }
-  }, [graph.data, memberData, reducedMotion])
+  }, [graph.data, memberData, reducedMotion, navigate])
 
   // Non-reduced-motion has nothing to hide behind the skeleton for — the
   // canvas starts drawing live on its very first frame. Only the
@@ -549,22 +597,22 @@ export default function GraphCanvas() {
           <StatsStrip vaultCount={vaults.data?.length ?? null} graph={graph.data} />
         </div>
       )}
+      {/* Top controls: optional lead control (e.g. ScopePicker) + Colour-mode toggle */}
+      <div
+        className={cn(
+          'pointer-events-auto absolute top-2.5 z-30 flex items-center gap-2 transition-[left] duration-200',
+          isSidebarExpanded ? 'left-[264px]' : 'left-16',
+        )}
+      >
+        {leadControl}
+        <ColorModeToggle />
+      </div>
 
       <div
         ref={containerRef}
         className="relative min-h-0 w-full flex-1 overflow-hidden bg-background bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] bg-[size:48px_48px] [background-position:center]"
       >
         <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 h-full w-full" />
-
-        {/* Colour-mode pills: positioned safely to the right of the Rail */}
-        <div
-          className={cn(
-            'absolute top-[54px] z-10 transition-[left] duration-200',
-            isSidebarExpanded ? 'left-[264px]' : 'left-16',
-          )}
-        >
-          <ColorModeToggle />
-        </div>
 
         {/* Zoom controls: shifted left of Inspector when open, positioned above BottomBar toggles */}
         <div
@@ -609,7 +657,17 @@ export default function GraphCanvas() {
         <div
           className={cn(
             'absolute bottom-14 z-10 flex max-w-[calc(100vw-360px)] flex-col items-start gap-2 transition-[left] duration-200',
-            isSidebarExpanded ? 'left-[264px]' : 'left-16',
+            isSidebarExpanded
+              ? isContextOpen
+                ? 'left-[516px]'
+                : isContextMounted
+                  ? 'left-[318px]'
+                  : 'left-[264px]'
+              : isContextOpen
+                ? 'left-[316px]'
+                : isContextMounted
+                  ? 'left-[118px]'
+                  : 'left-16',
           )}
         >
           <CappedGroupsNotice groups={graph.data?.cappedGroups ?? []} />
@@ -628,6 +686,76 @@ export default function GraphCanvas() {
         {showSkeleton && (
           <div className="absolute inset-0">
             <GraphSkeleton />
+          </div>
+        )}
+
+        {/* Floating Node Telemetry HUD Tooltip */}
+        {hoveredTooltip && (
+          <div
+            className="pointer-events-none absolute z-20 transition-opacity duration-100"
+            style={{
+              left: hoveredTooltip.x,
+              top: hoveredTooltip.y,
+            }}
+          >
+            {'path' in hoveredTooltip.node ? (
+              <div className="flex max-w-xs flex-col gap-1 rounded-[var(--radius-sm,2px)] border border-border bg-card/95 px-2.5 py-1.5 shadow-floating backdrop-blur-xs text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      'rounded px-1 py-0.5 text-[9px] font-sans font-semibold uppercase tracking-wider',
+                      hoveredTooltip.node.resourceType === 'note'
+                        ? 'bg-primary/15 text-primary'
+                        : 'bg-[oklch(0.72_0.14_186)]/15 text-[oklch(0.72_0.14_186)]',
+                    )}
+                  >
+                    {hoveredTooltip.node.resourceType}
+                  </span>
+                  {hoveredTooltip.node.type && (
+                    <span className="rounded bg-muted px-1 py-0.5 font-mono text-[9px] text-muted-foreground">
+                      {hoveredTooltip.node.type}
+                    </span>
+                  )}
+                  {hoveredTooltip.node.updatedAt && (
+                    <span className="ml-auto font-mono text-[9px] text-muted-foreground">
+                      {new Date(hoveredTooltip.node.updatedAt).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+                <div className="truncate font-mono text-[11px] font-medium text-foreground" title={hoveredTooltip.node.path}>
+                  {hoveredTooltip.node.path}
+                </div>
+                {hoveredTooltip.node.tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1 pt-0.5">
+                    {hoveredTooltip.node.tags.slice(0, 3).map((tag) => (
+                      <span key={tag} className="text-[10px] text-muted-foreground">
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="pt-0.5 text-[10px] text-primary">Click node to open</div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1 rounded-[var(--radius-sm,2px)] border border-border bg-card/95 px-2.5 py-1.5 shadow-floating backdrop-blur-xs text-xs">
+                <div className="flex items-center gap-1.5 font-medium text-foreground">
+                  <span
+                    className="size-2 rounded-full"
+                    style={{
+                      backgroundColor: communityHue(
+                        hoveredTooltip.node.community,
+                        typeof document !== 'undefined' && document.documentElement.classList.contains('dark'),
+                      ),
+                    }}
+                  />
+                  <span>Community {hoveredTooltip.node.community}</span>
+                </div>
+                <div className="font-mono text-[11px] text-muted-foreground">
+                  {hoveredTooltip.node.size} members ({hoveredTooltip.node.noteCount} notes, {hoveredTooltip.node.codeCount} code)
+                </div>
+                <div className="pt-0.5 text-[10px] text-primary">Click to explore members</div>
+              </div>
+            )}
           </div>
         )}
       </div>

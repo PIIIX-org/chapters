@@ -5,12 +5,14 @@
 // GraphCanvas, exactly as before, so a canvas tap, a keyboard Enter in the
 // outline and the back button here all converge on the same state.
 import { useEffect, useRef } from 'react'
+import { Link } from 'react-router'
 import { useGraph } from '../../hooks/useGraph.js'
 import type { CommunityNode, GraphFilters, VaultGraph } from '../../api/graph.js'
 import { Button } from '../ui/button.js'
 import { Panel, PanelBody, PanelHeader } from '../ui/panel.js'
 import { Eyebrow } from '../ui/eyebrow.js'
 import { countWithNoun, formatLastActive } from './GraphOutline.js'
+import { cn } from '../../lib/utils.js'
 
 const NO_FILTERS: GraphFilters = {}
 
@@ -111,11 +113,33 @@ export function CommunityDetail({
                       {`Showing ${countWithNoun(memberData.nodes.length, 'member')} of ${(memberData.memberTotal ?? memberData.nodes.length).toLocaleString()}.`}
                     </p>
                     <ul className="flex flex-col gap-0.5 font-mono text-xs text-foreground">
-                      {memberData.nodes.map((n) => (
-                        <li key={n.id} className="truncate" title={n.path}>
-                          {n.path}
-                        </li>
-                      ))}
+                      {memberData.nodes.map((n) => {
+                        const target =
+                          n.resourceType === 'note'
+                            ? `/vaults/${n.resourceId}/notes/${n.path}`
+                            : `/repos/${n.resourceId}/files/${n.path}`
+                        return (
+                          <li key={n.id} className="truncate">
+                            <Link
+                              to={target}
+                              title={n.path}
+                              className="group flex items-center gap-1.5 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                            >
+                              <span
+                                className={cn(
+                                  'shrink-0 rounded px-1 py-0.2 text-[9px] font-sans font-medium uppercase',
+                                  n.resourceType === 'note'
+                                    ? 'bg-primary/10 text-primary group-hover:bg-primary/20'
+                                    : 'bg-[oklch(0.72_0.14_186)]/10 text-[oklch(0.72_0.14_186)] group-hover:bg-[oklch(0.72_0.14_186)]/20',
+                                )}
+                              >
+                                {n.resourceType}
+                              </span>
+                              <span className="truncate">{n.path}</span>
+                            </Link>
+                          </li>
+                        )
+                      })}
                     </ul>
                   </>
                 )}

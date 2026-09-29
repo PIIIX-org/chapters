@@ -6,8 +6,8 @@
 export const RECENTS_STORAGE_KEY = 'chapters.recents'
 export const MAX_RECENTS = 8
 
-export type RecentKind = 'area' | 'vault' | 'repo' | 'note'
-const KINDS: readonly RecentKind[] = ['area', 'vault', 'repo', 'note']
+export type RecentKind = 'area' | 'vault' | 'repo' | 'note' | 'symbol'
+const KINDS: readonly RecentKind[] = ['area', 'vault', 'repo', 'note', 'symbol']
 
 export interface Recent {
   kind: RecentKind

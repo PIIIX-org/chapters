@@ -26,6 +26,8 @@ import {
   Monitor,
   AlignLeft,
   AlignRight,
+  Sigma,
+  Workflow,
 } from 'lucide-react'
 import { cn } from '../../lib/utils.js'
 import { uploadAndInsertImage } from '../../hooks/imageDecorations.js'
@@ -223,6 +225,18 @@ export function NoteRichToolbar({
           label="External Link [URL]"
           icon={<Link2 className="size-3.5" aria-hidden="true" />}
           onClick={() => applyFormat(view, 'link')}
+          disabled={readOnly}
+        />
+        <ToolbarButton
+          label="Math Formula"
+          icon={<Sigma className="size-3.5" aria-hidden="true" />}
+          onClick={() => applyFormat(view, 'math')}
+          disabled={readOnly}
+        />
+        <ToolbarButton
+          label="Mermaid Diagram"
+          icon={<Workflow className="size-3.5" aria-hidden="true" />}
+          onClick={() => applyFormat(view, 'mermaid')}
           disabled={readOnly}
         />
         <ToolbarButton
@@ -536,6 +550,15 @@ export function NoteFloatingSelectionToolbar({
         className="inline-flex size-6 items-center justify-center rounded-[var(--radius-sm,2px)] text-xs hover:bg-muted active:bg-muted/80 transition-colors"
       >
         <FileText className="size-3" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        aria-label="Math formula"
+        title="Math formula"
+        onClick={() => applyFormat(view, 'math')}
+        className="inline-flex size-6 items-center justify-center rounded-[var(--radius-sm,2px)] text-xs hover:bg-muted active:bg-muted/80 transition-colors"
+      >
+        <Sigma className="size-3" aria-hidden="true" />
       </button>
     </div>
   )

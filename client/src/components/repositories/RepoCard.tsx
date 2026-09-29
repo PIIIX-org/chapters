@@ -1,5 +1,6 @@
 import { Link } from 'react-router'
 import { Folder, GitBranch, Star } from 'lucide-react'
+import { Button } from '../ui/button.js'
 import { Card, CardContent, CardFooter, CardHeader } from '../ui/card.js'
 import { Pill, type PillTone } from '../ui/pill.js'
 import { getColorDef, type VaultColor } from '../vault/useVaultFolders.js'
@@ -71,7 +72,7 @@ export function RepoCard({
         />
       )}
 
-      <CardHeader className="gap-2">
+      <CardHeader className="p-3.5 sm:p-4 gap-2">
         <div className="flex items-center justify-between gap-2">
           <button
             type="button"
@@ -82,7 +83,7 @@ export function RepoCard({
                 ? `Folder: ${folder} for ${repo.name}`
                 : `Assign folder for ${repo.name}`
             }
-            className={`flex items-center gap-1.5 text-xs font-mono px-2 py-0.5 rounded border transition-colors ${
+            className={`flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 sm:py-0.5 min-h-[28px] sm:min-h-0 rounded border transition-all cursor-pointer active:scale-95 touch-manipulation ${
               fColorDef
                 ? fColorDef.badge
                 : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
@@ -90,11 +91,11 @@ export function RepoCard({
             style={fColorDef?.style?.badge}
           >
             <Folder
-              className={`size-3 ${fColorDef ? fColorDef.folderIcon : 'text-muted-foreground'}`}
+              className={`size-3.5 sm:size-3 ${fColorDef ? fColorDef.folderIcon : 'text-muted-foreground'}`}
               style={fColorDef?.style?.folderIcon}
               aria-hidden="true"
             />
-            <span className="truncate max-w-[120px]">
+            <span className="truncate max-w-[140px] sm:max-w-[120px]">
               {folder || 'Add folder'}
             </span>
           </button>
@@ -106,14 +107,14 @@ export function RepoCard({
                 onClick={() => onToggleFavorite(repo.id)}
                 title={isFavorite ? 'Unfavorite' : 'Favorite'}
                 aria-label={isFavorite ? `Unfavorite ${repo.name}` : `Favorite ${repo.name}`}
-                className={`p-1 rounded transition-colors ${
+                className={`p-1.5 sm:p-1 rounded transition-all cursor-pointer active:scale-90 touch-manipulation ${
                   isFavorite
                     ? 'text-amber-500 hover:text-amber-600'
                     : 'text-muted-foreground/40 hover:text-amber-500'
                 }`}
               >
                 <Star
-                  className={`size-3.5 ${isFavorite ? 'fill-amber-500 text-amber-500' : ''}`}
+                  className={`size-4 sm:size-3.5 ${isFavorite ? 'fill-amber-500 text-amber-500' : ''}`}
                   aria-hidden="true"
                 />
               </button>
@@ -126,26 +127,48 @@ export function RepoCard({
 
         <div className="mt-1 flex items-start gap-2">
           <GitBranch className="size-4 text-muted-foreground mt-0.5 shrink-0" aria-hidden="true" />
-          <Link
-            to={`/repos/${repo.id}/files`}
-            className="font-medium text-foreground hover:underline truncate"
-          >
-            {repo.name}
-          </Link>
+          <div className="min-w-0 flex-1">
+            <Link
+              to={`/repos/${repo.id}/files`}
+              className="font-medium text-foreground hover:underline truncate block"
+            >
+              {repo.name}
+            </Link>
+            {repo.defaultBranch && (
+              <span className="text-[11px] font-mono text-muted-foreground flex items-center gap-1 mt-0.5">
+                branch: {repo.defaultBranch}
+              </span>
+            )}
+          </div>
         </div>
       </CardHeader>
 
-      <CardContent className="py-2">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
+      <CardContent className="py-2 px-3.5 sm:px-4">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <Pill tone="neutral">{METHOD_LABEL[repo.ingestionMethod]}</Pill>
           <Pill tone={health.tone} dot>
             {health.label}
           </Pill>
         </div>
+        {repo.lastSyncError && (
+          <p className="text-xs text-destructive truncate mt-1.5" title={repo.lastSyncError}>
+            {repo.lastSyncError}
+          </p>
+        )}
       </CardContent>
 
-      <CardFooter className="text-xs text-muted-foreground border-t border-border/60 pt-2.5 pb-2.5 flex items-center justify-between">
-        <span className="font-mono text-[11px]">
+      <CardFooter className="flex items-center justify-between border-t border-border bg-muted/20 px-3.5 sm:px-4 py-2 sm:py-2.5 min-h-[42px]">
+        <Button
+          asChild
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs gap-1.5 px-2.5 text-foreground hover:text-foreground active:scale-95"
+        >
+          <Link to={`/repos/${repo.id}/files`}>
+            <span>Open repository &rarr;</span>
+          </Link>
+        </Button>
+        <span className="font-mono text-[11px] text-muted-foreground">
           {repo.lastSyncedAt
             ? `Synced ${syncedFormatter.format(new Date(repo.lastSyncedAt))}`
             : 'Never synced'}
