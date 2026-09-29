@@ -14,9 +14,9 @@ import { useSearchParams } from 'react-router'
 import { categoryHuesFor, type ColorMode } from './draw.js'
 import { cn } from '../../lib/utils.js'
 
-const OPTIONS: { value: ColorMode; label: string }[] = [
-  { value: 'attribute', label: 'By type & tag' },
-  { value: 'community', label: 'By community' },
+const OPTIONS: { value: ColorMode; label: string; shortLabel: string }[] = [
+  { value: 'attribute', label: 'By type & tag', shortLabel: 'Type/tag' },
+  { value: 'community', label: 'By community', shortLabel: 'Community' },
 ]
 
 // Legend labels for the five fixed hue slots each mode cycles through
@@ -53,7 +53,7 @@ export function ColorModeToggle() {
           <label
             key={opt.value}
             className={cn(
-              'flex h-7 cursor-pointer select-none items-center rounded-[var(--radius-sm,2px)] px-2 font-mono text-[11px] font-medium uppercase tracking-[0.04em] transition-colors duration-100 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/50',
+              'flex h-7 cursor-pointer select-none items-center rounded-[var(--radius-sm,2px)] px-2 font-mono text-[11px] font-medium uppercase tracking-[0.04em] whitespace-nowrap transition-colors duration-100 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/50',
               colorMode === opt.value
                 ? 'bg-muted text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
@@ -66,14 +66,16 @@ export function ColorModeToggle() {
               checked={colorMode === opt.value}
               onChange={() => select(opt.value)}
               className="sr-only"
+              aria-label={opt.label}
             />
-            {opt.label}
+            <span className="hidden sm:inline">{opt.label}</span>
+            <span className="inline sm:hidden" aria-hidden="true">{opt.shortLabel}</span>
           </label>
         ))}
       </fieldset>
       {/* Legend for the active mode only — never both at once, matching the
           "never layered" rule for the modes themselves. */}
-      <ul className="flex h-9 items-center gap-1.5 rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-floating px-2.5">
+      <ul className="hidden sm:flex h-9 items-center gap-1.5 rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-floating px-2.5">
         {hues.map((hue, i) => (
           <li key={hue} className="flex items-center" title={`${LEGEND_NOUN[colorMode]} ${i + 1}`}>
             <span

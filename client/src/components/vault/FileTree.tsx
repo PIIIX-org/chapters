@@ -51,8 +51,8 @@ export function FileTree({ vaultId, tree, canEdit }: FileTreeProps) {
                   {note.name}
                 </NavLink>
                 {canEdit && (
-                  <span className="opacity-0 transition-opacity duration-100 group-focus-within:opacity-100 group-hover:opacity-100 motion-reduce:transition-none">
-                    <NoteActions vaultId={vaultId} note={note} />
+                  <span className="shrink-0 opacity-0 transition-opacity duration-100 group-focus-within:opacity-100 group-hover:opacity-100 motion-reduce:transition-none">
+                    <NoteActions vaultId={vaultId} note={note} compact />
                   </span>
                 )}
               </li>

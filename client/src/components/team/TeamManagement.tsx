@@ -176,10 +176,10 @@ function TeamManagementCard({ team }: TeamManagementCardProps) {
             <Button
               type="button"
               size="xs"
-              variant="ghost"
+              variant="outline"
               aria-label={`Delete ${team.name}`}
               onClick={() => setConfirmingDelete(true)}
-              className="self-start rounded-[var(--radius-sm,2px)]"
+              className="self-start rounded-[var(--radius-sm,2px)] text-destructive border-destructive/30 hover:bg-destructive/10 hover:border-destructive/60 transition-colors"
             >
               Delete team
             </Button>
