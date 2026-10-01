@@ -45,7 +45,7 @@ export function BottomBar() {
       <div
         className={cn(
           'flex items-center gap-1.5 min-w-0 pointer-events-auto transition-[margin] duration-200',
-          shell.sidebarExpanded ? 'md:ml-[256px] ml-[54px]' : 'ml-[54px] md:ml-[60px]',
+          shell.sidebarExpanded ? 'md:ml-[256px] ml-0' : 'ml-0 md:ml-[60px]',
         )}
       >
         <Tooltip>

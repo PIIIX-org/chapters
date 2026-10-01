@@ -120,7 +120,10 @@ export async function uploadAndInsertImage(
 ): Promise<void> {
   const insertPos = targetPos ?? view.state.selection.main.head
   const name = file instanceof File ? file.name : fileName
-  const placeholder = `![Uploading ${name}...]()`
+  const isImage = (file instanceof File && file.type.startsWith('image/')) ||
+    /\.(png|jpe?g|gif|webp|svg)$/i.test(name)
+  const prefix = isImage ? '!' : ''
+  const placeholder = `${prefix}[Uploading ${name}...]()`
 
   view.dispatch({
     changes: { from: insertPos, to: insertPos, insert: `\n${placeholder}\n` },
@@ -135,7 +138,7 @@ export async function uploadAndInsertImage(
         changes: {
           from: phIndex,
           to: phIndex + placeholder.length,
-          insert: `![${name}](/api/vaults/${encodeURIComponent(vaultId)}/assets/${encodeURIComponent(res.fileName)})`,
+          insert: `${prefix}[${name}](/api/vaults/${encodeURIComponent(vaultId)}/assets/${encodeURIComponent(res.fileName)})`,
         },
       })
     }

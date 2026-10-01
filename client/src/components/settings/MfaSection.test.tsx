@@ -74,6 +74,7 @@ describe('MfaSection', () => {
     expect(await screen.findByText(SETUP.secret)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: SETUP.uri })).toHaveAttribute('href', SETUP.uri)
     expect(screen.getByLabelText('6-digit code from your authenticator app')).toBeInTheDocument()
+    expect(await screen.findByTestId('mfa-qr-code')).toBeInTheDocument()
 
     await expectNoA11yViolations(container)
   })

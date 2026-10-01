@@ -1204,6 +1204,7 @@ let loggedIn = true
 // ---------------------------------------------------------------------------
 const userById = (id) => users.find((u) => u.id === id)
 const emailOf = (id) => userById(id)?.email ?? 'unknown@chapters.dev'
+const nameOf = (id) => userById(id)?.name ?? null
 const liveNotes = (vaultId) => (notesByVault.get(vaultId) ?? []).filter((n) => !n.deletedAt)
 const findVault = (id) => vaults.find((v) => v.id === id && !v.deletedAt)
 const findRepo = (id) => repositories.find((r) => r.id === id)
@@ -1231,7 +1232,12 @@ function expandShare(s) {
 }
 function expandRepoShare(s) {
   const out = { ...s }
-  if (s.granteeType === 'team') out.members = (teamMembers.get(s.granteeId) ?? []).map((m) => ({ teamId: s.granteeId, userId: m.userId, email: emailOf(m.userId) }))
+  if (s.granteeType === 'user') {
+    out.granteeEmail = emailOf(s.granteeId)
+    out.granteeName = typeof nameOf === 'function' ? nameOf(s.granteeId) : null
+  } else if (s.granteeType === 'team') {
+    out.members = (teamMembers.get(s.granteeId) ?? []).map((m) => ({ teamId: s.granteeId, userId: m.userId, email: emailOf(m.userId) }))
+  }
   return out
 }
 function teamRole(team) {
@@ -1799,6 +1805,12 @@ post('/vaults/:id/revert/*path', ({ params, body }) => {
   n.updatedAt = now()
   record(v, n, 'user', ME.id, 'revert')
   return { id: n.id, path: n.path }
+})
+get('/vaults/:id/revisions/:revisionId', ({ params }) => {
+  const v = vaultOr404(params.id)
+  const rev = revisions.find((r) => r.id === params.revisionId && r.vaultId === v.id)
+  if (!rev) throw notFound('revision not found')
+  return rev
 })
 del('/vaults/:id/revisions/:revisionId', ({ params }) => {
   const v = vaultOr404(params.id)

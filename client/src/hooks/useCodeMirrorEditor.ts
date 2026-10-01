@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Compartment, EditorState } from '@codemirror/state'
 import type { Extension } from '@codemirror/state'
-import { EditorView, keymap, drawSelection, dropCursor } from '@codemirror/view'
+import { EditorView, keymap, drawSelection, dropCursor, tooltips } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
@@ -161,6 +161,12 @@ export function useCodeMirrorEditor({
         mermaidLivePreview,
         imageLivePreview,
         imagePasteDropHandler(vaultId),
+        tooltips({
+          tooltipSpace: (view) => {
+            const rect = view.scrollDOM.getBoundingClientRect()
+            return { top: rect.top, left: rect.left, bottom: rect.bottom, right: rect.right }
+          },
+        }),
         autocompletion({ override: [wikilinkCompletions(wikilinkTargets)] }),
         wikilinkExtension((target) => onWikilinkClickRef.current?.(target)),
         EditorView.updateListener.of((update) => {
@@ -196,6 +202,9 @@ export function useCodeMirrorEditor({
           '.cm-md-link': { color: 'var(--primary)', textDecoration: 'underline' },
           '.cm-md-quote': { fontStyle: 'italic', color: 'var(--muted-foreground)' },
           '.cm-wikilink': { color: 'var(--primary)', textDecoration: 'underline', cursor: 'pointer' },
+          '.cm-tooltip-autocomplete': {
+            maxHeight: '260px',
+          },
         }),
         lockCompartment.of(lockExtensions(readOnly)),
         directionCompartment.of(getDirectionExtensions(direction)),
@@ -235,6 +244,17 @@ export function useCodeMirrorEditor({
       effects: directionCompartment.reconfigure(getDirectionExtensions(direction)),
     })
   }, [directionCompartment, direction])
+
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null
+    if (!vv) return
+    const onResize = () => {
+      const view = viewRef.current
+      if (view && view.hasFocus) view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head) })
+    }
+    vv.addEventListener('resize', onResize)
+    return () => vv.removeEventListener('resize', onResize)
+  }, [])
 
   return containerRef
 }

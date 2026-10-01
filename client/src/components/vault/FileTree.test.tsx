@@ -43,9 +43,13 @@ describe('FileTree', () => {
     )
 
     expect(screen.getByText('people')).toBeInTheDocument()
+    expect(screen.getByText('people')).toHaveAttribute('title', 'people')
     expect(screen.getByText('projects')).toBeInTheDocument()
+    expect(screen.getByText('projects')).toHaveAttribute('title', 'projects')
     const link = screen.getByRole('link', { name: 'jane' })
     expect(link).toHaveAttribute('href', '/vaults/v1/notes/people/jane')
+    expect(link).toHaveAttribute('title', 'jane (people/jane)')
+    expect(screen.getByRole('navigation', { name: 'Notes' })).toHaveClass('min-w-full', 'w-max')
   })
 
   it('renders nothing but the container when the tree is empty', () => {

@@ -168,4 +168,22 @@ describe('VaultNotesPage', () => {
     expect(screen.getAllByText('meetings').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('architecture').length).toBeGreaterThanOrEqual(1)
   })
+
+  it('shows empty PanelState with clear filters action when no notes match filters', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Sprint Planning' })
+    const searchInput = screen.getByRole('textbox', { name: 'Search notes' })
+    fireEvent.change(searchInput, { target: { value: 'Nonexistent note' } })
+
+    expect(screen.getByText('No matching notes')).toBeInTheDocument()
+    expect(screen.getByText('No notes match "Nonexistent note".')).toBeInTheDocument()
+
+    const clearBtn = screen.getByRole('button', { name: 'Clear filters' })
+    expect(clearBtn).toBeInTheDocument()
+    fireEvent.click(clearBtn)
+
+    expect(await screen.findByRole('link', { name: 'Sprint Planning' })).toBeInTheDocument()
+  })
 })

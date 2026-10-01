@@ -78,7 +78,7 @@ function ShellFrame({ children }: { children?: ReactNode }) {
         aria-label="Context panel"
         hidden={!contextMounted}
         className={cn(
-          'pointer-events-auto absolute top-[194px] bottom-[222px] left-2.5 z-20 flex flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0',
+          'pointer-events-auto absolute top-[194px] bottom-[222px] left-[68px] max-md:left-0 z-20 flex flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0',
           contextOpen
             ? 'w-[var(--shell-context,240px)] overflow-y-auto max-md:fixed max-md:inset-y-0 max-md:top-0 max-md:bottom-0 max-md:left-0 max-md:z-40 max-md:w-[min(320px,85vw)] max-md:rounded-none max-md:shadow-2xl'
             : 'w-11 items-center p-1 overflow-hidden max-md:hidden',

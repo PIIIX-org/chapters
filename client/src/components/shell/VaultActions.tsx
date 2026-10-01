@@ -24,6 +24,7 @@ interface VaultRowActionsProps {
 export function VaultRowActions({ vault }: VaultRowActionsProps) {
   const [mode, setMode] = useState<'idle' | 'renaming' | 'confirmDelete'>('idle')
   const [name, setName] = useState(vault.name)
+  const [typedName, setTypedName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const renameVault = useRenameVault()
   const deleteVault = useDeleteVault()
@@ -50,7 +51,10 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
   function confirmDelete() {
     setError(null)
     deleteVault.mutate(vault.id, {
-      onSuccess: () => setMode('idle'),
+      onSuccess: () => {
+        setMode('idle')
+        setTypedName('')
+      },
       onError: (err) => setError(err.message || 'Could not move the vault to trash.'),
     })
   }
@@ -91,11 +95,33 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
           Move &ldquo;{vault.name}&rdquo; to trash? Its notes go with it and anyone it is shared with loses access
           immediately. You can restore it from Trash below until you purge it.
         </p>
+        <Input
+          value={typedName}
+          onChange={(e) => setTypedName(e.target.value)}
+          placeholder={`Type "${vault.name}" to confirm`}
+          aria-label="Confirm vault name"
+          className="h-6"
+        />
         <div className="flex items-center gap-1">
-          <Button type="button" size="xs" variant="destructive" onClick={confirmDelete} disabled={deleteVault.isPending}>
+          <Button
+            type="button"
+            size="xs"
+            variant="destructive"
+            onClick={confirmDelete}
+            disabled={typedName !== vault.name || deleteVault.isPending}
+          >
             Move to trash
           </Button>
-          <Button type="button" size="xs" variant="ghost" onClick={() => { setMode('idle'); setError(null) }}>
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            onClick={() => {
+              setMode('idle')
+              setTypedName('')
+              setError(null)
+            }}
+          >
             Cancel
           </Button>
         </div>
@@ -117,7 +143,10 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
       </button>
       <button
         type="button"
-        onClick={() => setMode('confirmDelete')}
+        onClick={() => {
+          setMode('confirmDelete')
+          setTypedName('')
+        }}
         aria-label={`Delete ${vault.name}`}
         className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-destructive/80 hover:text-destructive hover:bg-destructive/15 active:bg-destructive/25 active:scale-95 rounded-md border border-destructive/20 hover:border-destructive/40 transition-all duration-100 touch-manipulation cursor-pointer shadow-xs"
       >

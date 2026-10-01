@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { BookOpen, Check, ChevronDown, Plus, Settings, Waypoints } from 'lucide-react'
@@ -21,7 +21,20 @@ export function ScopePicker() {
   const [searchParams, setSearchParams] = useSearchParams()
   const vaults = useVaults()
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null
+      if (!target) return
+      if (wrapperRef.current?.contains(target) || target.closest('[data-radix-popper-content-wrapper]') || target.closest('[role="dialog"]')) return
+      close()
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    return () => window.removeEventListener('pointerdown', onPointerDown)
+  }, [open])
 
   const vaultId = searchParams.get('vault')
   const activeVault = vaultId ? vaults.data?.find((v) => v.id === vaultId) : undefined
@@ -61,7 +74,7 @@ export function ScopePicker() {
   }
 
   return (
-    <div className="relative inline-block" onKeyDown={onKeyDown}>
+    <div ref={wrapperRef} className="relative inline-block" onKeyDown={onKeyDown}>
       <button
         ref={triggerRef}
         type="button"

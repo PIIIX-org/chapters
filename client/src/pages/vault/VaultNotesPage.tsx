@@ -511,23 +511,35 @@ export function VaultNotesPage() {
               message="Create a note to start writing and connecting ideas."
             />
           ) : filteredNotes.length === 0 ? (
-            <div className="p-8 text-center flex flex-col items-center gap-2">
-              <p className="text-sm text-muted-foreground">No notes match the current filter.</p>
-              {hasActiveFilters && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setSearch('')
-                    setSelectedFolder('all')
-                    setTypeFilter('all')
-                  }}
-                >
-                  Clear filters
-                </Button>
-              )}
-            </div>
+            <PanelState
+              status="empty"
+              title="No matching notes"
+              message={
+                search.trim()
+                  ? `No notes match "${search.trim()}".`
+                  : selectedFolder !== 'all'
+                    ? `No notes found in folder "${selectedFolder}".`
+                    : typeFilter !== 'all'
+                      ? `No notes match type "${typeFilter}".`
+                      : 'No notes match the current filter.'
+              }
+              action={
+                hasActiveFilters ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setSearch('')
+                      setSelectedFolder('all')
+                      setTypeFilter('all')
+                    }}
+                  >
+                    Clear filters
+                  </Button>
+                ) : undefined
+              }
+            />
           ) : groupByFolder && groupedNotes ? (
             /* Grouped by Folder View */
             <div className="flex flex-col gap-6 p-4">

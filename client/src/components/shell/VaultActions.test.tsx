@@ -65,13 +65,23 @@ describe('VaultRowActions', () => {
     expect(screen.getByRole('button', { name: /delete engineering/i })).toBeInTheDocument()
   })
 
-  it('Move to trash calls DELETE /api/vaults/v1', async () => {
+  it('Move to trash is disabled until exact vault name is typed, then calls DELETE /api/vaults/v1', async () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, { status: 'trashed', id: 'v1' }))
     vi.stubGlobal('fetch', fetchMock)
     renderWithClient(<VaultRowActions vault={OWNED} />)
 
     fireEvent.click(screen.getByRole('button', { name: /delete engineering/i }))
-    fireEvent.click(screen.getByRole('button', { name: /move to trash/i }))
+    const moveBtn = screen.getByRole('button', { name: /move to trash/i })
+    expect(moveBtn).toBeDisabled()
+
+    const input = screen.getByLabelText('Confirm vault name')
+    fireEvent.change(input, { target: { value: 'Engine' } })
+    expect(moveBtn).toBeDisabled()
+
+    fireEvent.change(input, { target: { value: 'Engineering' } })
+    expect(moveBtn).not.toBeDisabled()
+
+    fireEvent.click(moveBtn)
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith('/api/vaults/v1', expect.objectContaining({ method: 'DELETE' })),

@@ -155,7 +155,12 @@ function NoteFrame({
 }: NoteFrameProps) {
   const [width, setWidth] = useNoteWidth()
   const shell = useOptionalShell()
-  const leftPad = shell?.sidebarExpanded ? 'pl-[264px]' : 'pl-16'
+  const contextOpen = Boolean(shell?.panels?.context?.mounted && shell?.panels?.context?.open)
+  const leftPad = contextOpen
+    ? 'pl-[320px]'
+    : shell?.sidebarExpanded
+      ? 'pl-[264px]'
+      : 'pl-20'
 
   return (
     <>

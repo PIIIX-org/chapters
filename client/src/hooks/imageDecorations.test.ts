@@ -118,4 +118,30 @@ describe('uploadAndInsertImage', () => {
 
     view.destroy()
   })
+
+  it('inserts link without leading exclamation mark for non-image files like pdf', async () => {
+    vi.spyOn(assetsApi, 'uploadAsset').mockResolvedValue({
+      fileName: 'doc-456.pdf',
+      url: '/api/vaults/v1/assets/doc-456.pdf',
+      path: 'assets/doc-456.pdf',
+      size: 200,
+      mimeType: 'application/pdf',
+    })
+
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'Hello world',
+        selection: { anchor: 5 },
+      }),
+    })
+
+    const fakeFile = new File(['fake pdf content'], 'doc.pdf', { type: 'application/pdf' })
+    await uploadAndInsertImage(view, 'v1', fakeFile)
+
+    const finalDoc = view.state.doc.toString()
+    expect(finalDoc).toContain('[doc.pdf](/api/vaults/v1/assets/doc-456.pdf)')
+    expect(finalDoc).not.toContain('![doc.pdf]')
+
+    view.destroy()
+  })
 })

@@ -8,8 +8,10 @@ import {
   DialogTitle,
 } from '../ui/dialog.js'
 import { Label } from '../ui/label.js'
+import { Input } from '../ui/input.js'
+import { Button } from '../ui/button.js'
 import { FormError } from '../FormError.js'
-import { useUpdateVault } from '../../hooks/useVaultMutations.js'
+import { useDeleteVault, useUpdateVault } from '../../hooks/useVaultMutations.js'
 import { useSetVaultGraphPreference, useVaultGraphPreference } from '../../hooks/useVaults.js'
 import { SharingPanel } from './SharingPanel.js'
 import { VaultMcpPanel } from './VaultMcpPanel.js'
@@ -31,9 +33,24 @@ export function VaultSettingsModal({ vault, open, onOpenChange }: VaultSettingsM
   const [mergeable, setMergeable] = useState(vault.mergeable)
   const [error, setError] = useState<string | null>(null)
   const [graphError, setGraphError] = useState<string | null>(null)
+  const [deleteName, setDeleteName] = useState('')
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const updateVault = useUpdateVault()
+  const deleteVault = useDeleteVault()
   const graphPreference = useVaultGraphPreference(vault.id)
   const setGraphPreference = useSetVaultGraphPreference(vault.id)
+
+  function handleDeleteVault() {
+    setDeleteError(null)
+    deleteVault.mutate(vault.id, {
+      onSuccess: () => {
+        onOpenChange(false)
+      },
+      onError: (err) => {
+        setDeleteError(err.message || 'Could not delete the vault.')
+      },
+    })
+  }
 
   const graphInclude =
     !graphPreference.isError && graphPreference.data
@@ -126,6 +143,36 @@ export function VaultSettingsModal({ vault, open, onOpenChange }: VaultSettingsM
         <NoteTrashPanel vaultId={vault.id} />
 
         <VaultExportPanel vaultId={vault.id} />
+
+        {vault.access === 'owner' && (
+          <section className="flex flex-col gap-2 rounded-md border border-destructive/20 bg-destructive/5 p-3">
+            <h3 className="font-display text-base text-destructive">Danger zone</h3>
+            <p className="text-xs text-muted-foreground">
+              To delete &ldquo;{vault.name}&rdquo;, type its name below to confirm. Its notes go with it and anyone it is shared with loses access immediately.
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Input
+                value={deleteName}
+                onChange={(e) => {
+                  setDeleteName(e.target.value)
+                  setDeleteError(null)
+                }}
+                placeholder={vault.name}
+                aria-label={`Type ${vault.name} to confirm deletion`}
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={deleteName !== vault.name || deleteVault.isPending}
+                onClick={handleDeleteVault}
+              >
+                Delete vault
+              </Button>
+            </div>
+            <FormError message={deleteError} />
+          </section>
+        )}
       </DialogContent>
     </Dialog>
   )

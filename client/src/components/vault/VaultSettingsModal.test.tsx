@@ -25,6 +25,9 @@ function stubFetch(makePatchResponse: () => Response, graphPreferenceResponse?: 
       if (init?.method === 'PUT') return Promise.resolve(mockJsonResponse(200, JSON.parse(init.body as string)))
       return Promise.resolve(graphPreferenceResponse ? graphPreferenceResponse() : mockJsonResponse(200, { include: false }))
     }
+    if (init?.method === 'DELETE') {
+      return Promise.resolve(mockJsonResponse(200, { status: 'trashed', id: 'v1' }))
+    }
     return Promise.resolve(makePatchResponse())
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -177,6 +180,37 @@ describe('VaultSettingsModal', () => {
     await user.keyboard('{Escape}')
 
     expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('shows Danger zone for owner, disabled until exact name typed, and calls DELETE', async () => {
+    const fetchMock = stubFetch(() => mockJsonResponse(200, VAULT))
+    const user = userEvent.setup()
+    const { onOpenChange } = renderModal({ ...VAULT, access: 'owner' })
+
+    expect(screen.getByText('Danger zone')).toBeInTheDocument()
+    const deleteBtn = screen.getByRole('button', { name: 'Delete vault' })
+    expect(deleteBtn).toBeDisabled()
+
+    const input = screen.getByLabelText(/type engineering to confirm deletion/i)
+    await user.type(input, 'Eng')
+    expect(deleteBtn).toBeDisabled()
+
+    await user.type(input, 'ineering')
+    expect(deleteBtn).not.toBeDisabled()
+
+    await user.click(deleteBtn)
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith('/api/vaults/v1', expect.objectContaining({ method: 'DELETE' })),
+    )
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('hides Danger zone for non-owner', () => {
+    stubFetch(() => mockJsonResponse(200, VAULT))
+    renderModal({ ...VAULT, access: 'read' })
+
+    expect(screen.queryByText('Danger zone')).toBeNull()
   })
 
   // Focus RESTORE to the trigger on close is exercised in
