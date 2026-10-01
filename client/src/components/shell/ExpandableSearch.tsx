@@ -78,6 +78,8 @@ export function ExpandableSearch() {
             <button
               type="button"
               onClick={() => shell.openPalette()}
+              aria-label="Open command palette"
+              title="Open command palette"
               className="flex items-center gap-1 text-[11px] font-mono text-muted-foreground hover:text-foreground transition-colors"
             >
               <Kbd aria-hidden="true">{MOD_KEY_LABEL} K</Kbd>

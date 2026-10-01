@@ -22,12 +22,12 @@ interface FileTreeProps {
  */
 export function FileTree({ vaultId, tree, canEdit }: FileTreeProps) {
   return (
-    <nav aria-label="Notes">
+    <nav aria-label="Notes" className="min-w-full w-max">
       {Object.entries(tree).map(([type, notes]) => (
         <div key={type} className="mb-2.5">
           <div className="flex h-6 items-center gap-1.5 px-2 text-faint select-none">
             <ChevronDown className="size-3 shrink-0 text-faint/70" aria-hidden="true" />
-            <Eyebrow as="h3" className="truncate">
+            <Eyebrow as="h3" className="truncate" title={type}>
               {type}
             </Eyebrow>
           </div>
@@ -39,6 +39,7 @@ export function FileTree({ vaultId, tree, canEdit }: FileTreeProps) {
               >
                 <NavLink
                   to={`/vaults/${vaultId}/notes/${note.path}`}
+                  title={note.path ? `${note.name} (${note.path})` : note.name}
                   className={({ isActive }) =>
                     cn(
                       'relative min-w-0 flex-1 truncate rounded-[var(--radius-sm,2px)] px-2 py-1 text-sm outline-none transition-colors duration-100 focus-visible:ring-1 focus-visible:ring-ring/40',
