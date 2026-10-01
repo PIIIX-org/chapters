@@ -1,6 +1,6 @@
 import { UndirectedGraph } from 'graphology'
 import louvainModule from 'graphology-communities-louvain'
-import { and, inArray, isNull, or, sql } from 'drizzle-orm'
+import { and, inArray, isNull, sql } from 'drizzle-orm'
 
 /** louvain ships CJS-flavored typings that fight NodeNext default imports. */
 type LouvainFn = (
