@@ -260,7 +260,12 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
       if (retry) clearTimeout(retry)
       setAwareness(null)
       if (provider) {
-        const p = provider as any
+        const p = provider as unknown as {
+          flushPendingUpdates?: () => void
+          hasUnsyncedChanges?: boolean
+          destroy: () => void
+          on?: (event: string, cb: () => void) => void
+        }
         p.flushPendingUpdates?.()
         if (p.hasUnsyncedChanges) {
           const active = p

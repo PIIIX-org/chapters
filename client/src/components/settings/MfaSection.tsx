@@ -32,13 +32,11 @@ export function MfaSection() {
   const [qrSvg, setQrSvg] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!start.data?.uri) {
-      setQrSvg(null)
-      return
-    }
+    const uri = start.data?.uri
+    if (!uri) return
     let active = true
     void import('qrcode').then((QRCode) => {
-      QRCode.toString(start.data.uri, { type: 'svg', margin: 1, width: 192 }, (err, svg) => {
+      QRCode.toString(uri, { type: 'svg', margin: 1, width: 192 }, (err, svg) => {
         if (active && !err && svg) setQrSvg(svg)
       })
     })

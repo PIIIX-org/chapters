@@ -35,7 +35,7 @@ const stub = vi.hoisted(() => ({
     disconnected: boolean
     destroyed: boolean
     flushedPendingUpdates: boolean
-    listeners: Map<string, Function[]>
+    listeners: Map<string, ((...args: unknown[]) => void)[]>
     emit: (event: string, ...args: unknown[]) => void
   }[],
 }))
@@ -50,7 +50,7 @@ vi.mock('@hocuspocus/provider', () => {
     disconnected = false
     destroyed = false
     flushedPendingUpdates = false
-    listeners = new Map<string, Function[]>()
+    listeners = new Map<string, ((...args: unknown[]) => void)[]>()
 
     constructor(options: ProviderOptions) {
       this.options = options
@@ -73,7 +73,7 @@ vi.mock('@hocuspocus/provider', () => {
       this.flushedPendingUpdates = true
     }
 
-    on(event: string, fn: Function) {
+    on(event: string, fn: (...args: unknown[]) => void) {
       const list = this.listeners.get(event) ?? []
       list.push(fn)
       this.listeners.set(event, list)
