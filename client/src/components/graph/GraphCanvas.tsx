@@ -605,6 +605,19 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
         )}
       >
         {leadControl}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-label="Open Pathfinder"
+          onClick={() => {
+            shell?.setPanelOpen('inspector', true)
+          }}
+          className="h-8 gap-1.5 rounded-[var(--radius-md,4px)] border border-border bg-card/90 px-2.5 text-xs text-muted-foreground shadow-floating hover:bg-muted hover:text-foreground"
+        >
+          <Route className="size-3.5" aria-hidden="true" />
+          <span className="hidden sm:inline">Pathfinder</span>
+        </Button>
         <ColorModeToggle />
       </div>
 
@@ -792,12 +805,10 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
               icon={Filter}
               label="Filters"
             />
-            {memberGraph && (
-              <PanelRailButton
-                icon={Route}
-                label="Pathfinder"
-              />
-            )}
+            <PanelRailButton
+              icon={Route}
+              label="Pathfinder"
+            />
             <PanelRailButton
               icon={Sliders}
               label="Physics"
@@ -815,15 +826,19 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
         <CollapsibleSection title="Filters">
           <GraphFilters nodes={filterableNodesOf(memberData ?? graph.data)} />
         </CollapsibleSection>
-        {memberGraph && (
-          <CollapsibleSection title="Pathfinder">
+        <CollapsibleSection title="Pathfinder">
+          {memberGraph ? (
             <GraphPathfinder
               nodes={memberGraph.nodes}
               edges={memberGraph.edges}
               onPathChange={handlePathChange}
             />
-          </CollapsibleSection>
-        )}
+          ) : (
+            <p className="text-xs text-muted-foreground py-2">
+              Drill down into a community cluster or select a vault to find paths between individual concept nodes.
+            </p>
+          )}
+        </CollapsibleSection>
         {/* No initial* props: this stays mounted for the component's whole
             life (a closed <details> keeps its children), so its own state
             already tracks the sliders — while simParamsRef carries the same
