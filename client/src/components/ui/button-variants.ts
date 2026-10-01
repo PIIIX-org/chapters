@@ -5,7 +5,7 @@ import { cva } from 'class-variance-authority'
  * something. `bg-accent` (AI) is never a button colour.
  */
 export const buttonVariants = cva(
-  "group/button inline-flex shrink-0 items-center justify-center rounded-md border border-transparent text-sm font-medium whitespace-nowrap outline-none select-none transition-all duration-100 cursor-pointer focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 active:scale-[0.96] active:translate-y-[0.5px] disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/30 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/button relative inline-flex shrink-0 items-center justify-center rounded-md border border-transparent text-sm font-medium whitespace-nowrap outline-none select-none transition-all duration-100 cursor-pointer focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 active:scale-[0.96] active:translate-y-[0.5px] disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/30 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 after:absolute after:inset-y-1/2 after:inset-x-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:min-w-[44px] after:min-h-[44px] after:content-[''] md:after:hidden",
   {
     variants: {
       variant: {

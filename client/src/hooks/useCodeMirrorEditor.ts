@@ -236,5 +236,16 @@ export function useCodeMirrorEditor({
     })
   }, [directionCompartment, direction])
 
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null
+    if (!vv) return
+    const onResize = () => {
+      const view = viewRef.current
+      if (view && view.hasFocus) view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head) })
+    }
+    vv.addEventListener('resize', onResize)
+    return () => vv.removeEventListener('resize', onResize)
+  }, [])
+
   return containerRef
 }

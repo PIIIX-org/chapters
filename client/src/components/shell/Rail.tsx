@@ -147,7 +147,7 @@ export function Rail() {
       <div
         className={cn(
           'flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating shrink-0',
-          expanded ? 'w-full' : 'w-11 items-center',
+          expanded ? 'w-full' : 'w-11 items-center max-md:hidden',
         )}
       >
         <ul className="flex flex-col gap-1 w-full items-center">
@@ -163,7 +163,7 @@ export function Rail() {
       <div
         className={cn(
           'mt-auto flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating shrink-0',
-          expanded ? 'w-full' : 'w-11 items-center',
+          expanded ? 'w-full' : 'w-11 items-center max-md:hidden',
         )}
       >
         <ul className="flex flex-col gap-1 w-full items-center">

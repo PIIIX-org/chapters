@@ -354,7 +354,7 @@ function Shell({ children, connectDialog, onConnect, title, subtitle, onSettings
     <div className="flex h-full min-h-0 flex-col">
       <header
         className={cn(
-          'flex h-10 shrink-0 items-center gap-3 border-b border-border pr-16 transition-[padding] duration-200',
+          'flex h-10 shrink-0 items-center gap-3 border-b border-border pr-52 transition-[padding] duration-200',
           leftPad,
         )}
       >
