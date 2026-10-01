@@ -129,8 +129,8 @@ export async function registerStatic(app: FastifyInstance, dir: string): Promise
     const file = safeJoin(root, pathname)
     if (!file) return reply.code(404).send({ error: 'not found' })
     if (await isFile(file)) return sendFile(reply, file)
-    // Missing static assets or file paths must 404, never return the HTML shell.
-    if (pathname.startsWith('/assets/') || Boolean(extname(pathname))) {
+    // Missing static assets under /assets/ must 404, never return the HTML shell.
+    if (pathname.startsWith('/assets/')) {
       return reply.code(404).send({ error: 'not found' })
     }
     return sendFile(reply, index)
