@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState, useEffect, type FormEvent } from 'react'
 import { Button } from '../ui/button.js'
 import { Input } from '../ui/input.js'
 import { Label } from '../ui/label.js'
@@ -18,10 +18,6 @@ function formatDate(iso: string): string {
 /**
  * TOTP enrolment, backup codes, and — only when the instance does not mandate
  * it — turning it off again.
- *
- * No QR image: nothing in this client renders one, and every authenticator app
- * takes the key typed in or the otpauth:// URI opened on the device, so the
- * dependency would buy convenience on one screen and nothing else.
  */
 export function MfaSection() {
   const session = useSession()
@@ -33,6 +29,21 @@ export function MfaSection() {
   // Held in state and nowhere else: no storage, no query cache, no URL. Gone
   // from the tree the moment SecretReveal is dismissed.
   const [backupCodes, setBackupCodes] = useState<string[] | null>(null)
+  const [qrSvg, setQrSvg] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!start.data?.uri) {
+      setQrSvg(null)
+      return
+    }
+    let active = true
+    void import('qrcode').then((QRCode) => {
+      QRCode.toString(start.data.uri, { type: 'svg', margin: 1, width: 192 }, (err, svg) => {
+        if (active && !err && svg) setQrSvg(svg)
+      })
+    })
+    return () => { active = false }
+  }, [start.data?.uri])
 
   // isError before .data: a failed /me must not render as "two-factor is off",
   // which is an answer, and the wrong one.
@@ -178,6 +189,13 @@ export function MfaSection() {
               Add Chapters to your authenticator app, either by typing the key in or by opening the
               link below on the device the app is on. Then enter the 6-digit code it shows.
             </p>
+            {qrSvg && (
+              <div
+                data-testid="mfa-qr-code"
+                className="flex justify-center rounded-md border border-border bg-white p-2 w-fit shadow-xs"
+                dangerouslySetInnerHTML={{ __html: qrSvg }}
+              />
+            )}
             <div className="flex flex-col gap-1">
               <span className="font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                 Setup key

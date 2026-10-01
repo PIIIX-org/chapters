@@ -85,6 +85,8 @@ export interface RepositoryShare {
   granteeType: 'user' | 'team'
   granteeId: string
   createdAt: string
+  granteeEmail?: string | null
+  granteeName?: string | null
   members?: RepositoryShareMember[]
 }
 

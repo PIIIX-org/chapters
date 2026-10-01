@@ -258,8 +258,23 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     return () => {
       cancelled = true
       if (retry) clearTimeout(retry)
-      provider?.destroy()
       setAwareness(null)
+      if (provider) {
+        const p = provider as any
+        p.flushPendingUpdates?.()
+        if (p.hasUnsyncedChanges) {
+          const active = p
+          const timer = setTimeout(() => active.destroy(), 1500)
+          if (typeof active.on === 'function') {
+            active.on('synced', () => {
+              clearTimeout(timer)
+              active.destroy()
+            })
+          }
+        } else {
+          provider.destroy()
+        }
+      }
     }
     // `user` is deliberately absent: see userRef above.
   }, [ydoc, docName, enabled])

@@ -68,7 +68,7 @@ function McpConnectionRow({ connection, reach }: { connection: McpConnection; re
       <TableCell className="font-mono text-xs text-muted-foreground">
         {connection.lastUsedAt ? formatTimestamp(connection.lastUsedAt) : 'Never used'}
       </TableCell>
-      <TableCell className="text-right align-top">
+      <TableCell className="text-right align-top w-24 shrink-0">
         {confirming ? (
           // The consequence stays inside the row it is about — the design
           // system's inline confirmation, not a dialog.
@@ -87,7 +87,7 @@ function McpConnectionRow({ connection, reach }: { connection: McpConnection; re
             <FormError message={error} />
           </div>
         ) : (
-          <Button type="button" size="xs" variant="ghost" onClick={() => setConfirming(true)}>
+          <Button type="button" size="xs" variant="ghost" className="whitespace-nowrap" onClick={() => setConfirming(true)}>
             Revoke
           </Button>
         )}
@@ -184,7 +184,7 @@ export function McpPanel(target: McpTarget) {
                 <TableHead>Scope</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead>Last used</TableHead>
-                <TableHead className="text-right">
+                <TableHead className="text-right w-24 shrink-0">
                   <span className="sr-only">Revoke</span>
                 </TableHead>
               </TableRow>

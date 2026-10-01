@@ -34,6 +34,9 @@ const stub = vi.hoisted(() => ({
     awarenessFields: Record<string, unknown>
     disconnected: boolean
     destroyed: boolean
+    flushedPendingUpdates: boolean
+    listeners: Map<string, Function[]>
+    emit: (event: string, ...args: unknown[]) => void
   }[],
 }))
 
@@ -46,6 +49,8 @@ vi.mock('@hocuspocus/provider', () => {
     awarenessFields: Record<string, unknown> = {}
     disconnected = false
     destroyed = false
+    flushedPendingUpdates = false
+    listeners = new Map<string, Function[]>()
 
     constructor(options: ProviderOptions) {
       this.options = options
@@ -62,6 +67,22 @@ vi.mock('@hocuspocus/provider', () => {
 
     destroy() {
       this.destroyed = true
+    }
+
+    flushPendingUpdates() {
+      this.flushedPendingUpdates = true
+    }
+
+    on(event: string, fn: Function) {
+      const list = this.listeners.get(event) ?? []
+      list.push(fn)
+      this.listeners.set(event, list)
+    }
+
+    emit(event: string, ...args: unknown[]) {
+      for (const fn of this.listeners.get(event) ?? []) {
+        fn(...args)
+      }
     }
   }
 
@@ -383,6 +404,22 @@ describe('useCollabDoc', () => {
 
     expect(provider.destroyed).toBe(true)
     expect(view.result.current.ydoc.isDestroyed).toBe(true)
+  })
+
+  it('flushes pending updates and defers destroy until synced when unmounting with unsynced changes', async () => {
+    const { view, provider } = await connected()
+    provider.hasUnsyncedChanges = true
+
+    view.unmount()
+
+    expect(provider.flushedPendingUpdates).toBe(true)
+    expect(provider.destroyed).toBe(false)
+
+    act(() => {
+      provider.emit('synced')
+    })
+
+    expect(provider.destroyed).toBe(true)
   })
   it('recovers from offline on its own — a blip must not lock the editor for the whole mount', async () => {
     // 'offline' used to be terminal: no provider was ever constructed, so
