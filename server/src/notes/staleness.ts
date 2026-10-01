@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import {
   noteLinks,
@@ -103,7 +103,7 @@ export async function checkCodeStaleness(
       body: notes.body,
     })
     .from(notes)
-    .where(and(isNull(notes.deletedAt), sql`${notes.id} = ANY(${candidateIdArray}::uuid[])`))
+    .where(and(isNull(notes.deletedAt), inArray(notes.id, candidateIdArray)))
 
   const drifts: StalenessDrift[] = []
   const prefixId = `repo:${repositoryId}/`

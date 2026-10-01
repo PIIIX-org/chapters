@@ -4,14 +4,14 @@ import { embedder } from './embeddings.js'
 import { passesFilters, type GraphFilters } from '../graph/assemble.js'
 
 function uuidArray(ids: string[]): SQL {
-  // ponytail: single Postgres array parameter instead of N placeholders (DB-07).
-  return sql`${ids}::uuid[]`
+  // ponytail: single Postgres array parameter literal instead of N placeholders (DB-07).
+  return sql`${`{${ids.join(',')}}`}::uuid[]`
 }
 
 function noteFilterClauses(filters?: GraphFilters): SQL {
   const clauses: SQL[] = []
   if (filters?.types && filters.types.length > 0) {
-    clauses.push(sql`AND type = ANY(${filters.types})`)
+    clauses.push(sql`AND type = ANY(${`{${filters.types.join(',')}}`}::text[])`)
   }
   if (filters?.since) {
     clauses.push(sql`AND (frontmatter->>'timestamp') >= ${filters.since}`)

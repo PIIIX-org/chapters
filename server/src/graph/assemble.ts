@@ -373,14 +373,15 @@ export async function buildGraph(
     // Semantic: stored pairs (now spanning notes and code — spec 9)
     // filtered to the permitted, live node set.
     const allIds = [...byId.keys()]
-    // ponytail: bind allIds as Postgres array to prevent 65,535 parameter ceiling crash on large repositories (DB-08).
+    // ponytail: bind allIds as Postgres array literal to prevent 65,535 parameter ceiling crash on large repositories (DB-08).
+    const pgIds = `{${allIds.join(',')}}`
     const sem =
       allIds.length > 0
         ? await db
             .select()
             .from(semanticEdges)
             .where(
-              sql`${semanticEdges.sourceId} = ANY(${allIds}::uuid[]) OR ${semanticEdges.targetId} = ANY(${allIds}::uuid[])`,
+              sql`${semanticEdges.sourceId} = ANY(${pgIds}::uuid[]) OR ${semanticEdges.targetId} = ANY(${pgIds}::uuid[])`,
             )
         : []
     for (const edge of sem) {

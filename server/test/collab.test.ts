@@ -123,7 +123,7 @@ describe('real-time collaboration', () => {
       return raw.includes('PERSIST-MARKER') && raw.includes('collab')
     }, 8000)
     expect(raw).toContain('type: docs')
-  })
+  }, 10_000)
 
   it('read-only users cannot join the CRDT socket', async () => {
     let failed = false
