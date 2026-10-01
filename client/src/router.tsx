@@ -14,46 +14,66 @@ import { PendingApprovalPage } from './pages/auth/PendingApprovalPage.js'
 import { RouteErrorBoundary } from './components/ErrorBoundary.js'
 import { NotFoundPage } from './pages/NotFoundPage.js'
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function lazyRoute<T extends React.ComponentType<any>>(
+  factory: () => Promise<{ default: T }>,
+) {
+  return lazy(async () => {
+    try {
+      return await factory()
+    } catch (err: unknown) {
+      const key = 'chapters_chunk_reload'
+      const last = typeof sessionStorage !== 'undefined' ? Number(sessionStorage.getItem(key) ?? 0) : 0
+      if (typeof window !== 'undefined' && Date.now() - last > 10_000) {
+        sessionStorage.setItem(key, String(Date.now()))
+        window.location.reload()
+        return new Promise<{ default: T }>(() => {})
+      }
+      throw err
+    }
+  })
+}
+
 // Lazy at the route level, not just the graph: VaultLayout pulls in the file
 // tree + note-create UI, and NoteView pulls in the whole CodeMirror/@lezer
 // editor stack. Home never renders either, so neither belongs in the entry
 // chunk — same reasoning as GraphCanvas in HomePage.tsx, applied one level up.
-const VaultLayout = lazy(() =>
+const VaultLayout = lazyRoute(() =>
   import('./pages/vault/VaultLayout.js').then((m) => ({
     default: m.VaultLayout,
   })),
 )
-const NoteView = lazy(() =>
+const NoteView = lazyRoute(() =>
   import('./pages/vault/NoteView.js').then((m) => ({ default: m.NoteView })),
 )
-const VaultNotesPage = lazy(() =>
+const VaultNotesPage = lazyRoute(() =>
   import('./pages/vault/VaultNotesPage.js').then((m) => ({ default: m.VaultNotesPage })),
 )
-const VaultsPage = lazy(() =>
+const VaultsPage = lazyRoute(() =>
   import('./pages/VaultsPage.js').then((m) => ({ default: m.VaultsPage })),
 )
-const ReposPage = lazy(() =>
+const ReposPage = lazyRoute(() =>
   import('./pages/ReposPage.js').then((m) => ({ default: m.ReposPage })),
 )
 // Same reasoning as VaultLayout/NoteView above: Home never renders this, so
 // it doesn't belong in the entry chunk.
-const TeamPage = lazy(() =>
+const TeamPage = lazyRoute(() =>
   import('./pages/TeamPage.js').then((m) => ({ default: m.TeamPage })),
 )
 // Same again, and doubly so: most people on an instance are not admins and
 // will never load this chunk at all.
-const AdminPage = lazy(() =>
+const AdminPage = lazyRoute(() =>
   import('./pages/AdminPage.js').then((m) => ({ default: m.AdminPage })),
 )
 // Home never renders settings either, and an unenrolled user on an
 // MFA-mandating instance is sent straight here — one lazy chunk, not part of
 // the entry bundle.
-const SettingsPage = lazy(() =>
+const SettingsPage = lazyRoute(() =>
   import('./pages/SettingsPage.js').then((m) => ({ default: m.SettingsPage })),
 )
 // And again, hardest of all: this one pulls in a second CodeMirror stack (the
 // read-only code viewer) for people who have connected a repository at all.
-const RepositoryPage = lazy(() =>
+const RepositoryPage = lazyRoute(() =>
   import('./pages/RepositoryPage.js').then((m) => ({
     default: m.RepositoryPage,
   })),

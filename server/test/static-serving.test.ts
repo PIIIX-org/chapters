@@ -69,7 +69,16 @@ describe('serving the built client', () => {
 
   it('never caches the shell itself', async () => {
     const res = await app.inject({ method: 'GET', url: '/' })
-    expect(res.headers['cache-control']).toBe('no-cache')
+    expect(res.headers['cache-control']).toBe('no-cache, no-store, must-revalidate')
+  })
+
+  it('serves 404 for a missing asset or file path instead of the shell HTML', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/assets/stale-chunk-abc.js',
+    })
+    expect(res.statusCode).toBe(404)
+    expect(res.body).not.toContain('<!doctype html')
   })
 
   it('refuses a path that escapes the client directory', async () => {
