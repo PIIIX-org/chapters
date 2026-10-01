@@ -206,11 +206,6 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
   }, [shell, isInspectorOpen, isContextOpen, isSidebarExpanded])
   const hasUserInteractedRef = useRef(false)
 
-  useEffect(() => {
-    if (!hasUserInteractedRef.current && zoomApiRef.current) {
-      zoomApiRef.current.fit()
-    }
-  }, [isContextOpen, isInspectorOpen, isSidebarExpanded])
   const colorMode: ColorMode = searchParams.get('color') === 'community' ? 'community' : 'attribute'
   const filters = graphFiltersFromSearchParams(searchParams)
   const graph = useGraph(null, filters)
@@ -664,6 +659,12 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       ro?.disconnect()
     }
   }, [graph.data, memberData, reducedMotion, navigate])
+
+  useEffect(() => {
+    if (!hasUserInteractedRef.current && zoomApiRef.current) {
+      zoomApiRef.current.fit()
+    }
+  }, [isContextOpen, isInspectorOpen, isSidebarExpanded])
 
   // Non-reduced-motion has nothing to hide behind the skeleton for — the
   // canvas starts drawing live on its very first frame. Only the

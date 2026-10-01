@@ -1,4 +1,4 @@
-import { Component, useState, type ErrorInfo, type ReactNode } from 'react'
+import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react'
 import { isRouteErrorResponse, useRouteError, Link } from 'react-router'
 import { AlertTriangle, RotateCcw, Home, ChevronDown, ChevronRight, Compass } from 'lucide-react'
 import { Button } from './ui/button.js'
@@ -63,16 +63,17 @@ function isChunkLoadError(error: unknown): boolean {
  */
 export function RouteErrorBoundary() {
   const error = useRouteError()
+  const isChunk = isChunkLoadError(error)
 
-  if (isChunkLoadError(error)) {
+  useEffect(() => {
+    if (!isChunk) return
     const key = 'chapters_chunk_reload'
     const last = typeof sessionStorage !== 'undefined' ? Number(sessionStorage.getItem(key) ?? 0) : 0
     if (typeof window !== 'undefined' && Date.now() - last > 10_000) {
       sessionStorage.setItem(key, String(Date.now()))
       window.location.reload()
-      return null
     }
-  }
+  }, [isChunk])
 
   if (isRouteErrorResponse(error)) {
     if (error.status === 404) {

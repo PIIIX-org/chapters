@@ -14,6 +14,7 @@ import { PendingApprovalPage } from './pages/auth/PendingApprovalPage.js'
 import { RouteErrorBoundary } from './components/ErrorBoundary.js'
 import { NotFoundPage } from './pages/NotFoundPage.js'
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function lazyRoute<T extends React.ComponentType<any>>(
   factory: () => Promise<{ default: T }>,
 ) {
