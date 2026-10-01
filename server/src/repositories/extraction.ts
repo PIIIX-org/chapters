@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
-import { Parser, Language, Query } from 'web-tree-sitter'
+import { Parser, Language, Query, Tree } from 'web-tree-sitter'
 
 const require = createRequire(import.meta.url)
 
@@ -96,6 +96,17 @@ const SYMBOL_KIND_BY_CAPTURE: Record<string, SymbolKind> = {
 
 let initPromise: Promise<void> | null = null
 const languageCache = new Map<SupportedLanguage, Language>()
+const queryCache = new Map<string, Query>()
+
+function getCompiledQuery(lang: Language, language: SupportedLanguage, type: 'import' | 'symbol', queryString: string): Query {
+  const key = `${language}:${type}`
+  let query = queryCache.get(key)
+  if (!query) {
+    query = new Query(lang, queryString)
+    queryCache.set(key, query)
+  }
+  return query
+}
 
 async function loadLanguage(language: SupportedLanguage): Promise<Language> {
   initPromise ??= Parser.init()
@@ -118,26 +129,36 @@ export async function extractStructure(language: string, content: string): Promi
   const lang = await loadLanguage(language)
   const parser = new Parser()
   parser.setLanguage(lang)
-  const tree = parser.parse(content)
-  if (!tree) return { imports: [], symbols: [] }
 
-  const imports: string[] = []
-  for (const match of new Query(lang, config.importQuery).matches(tree.rootNode)) {
-    for (const capture of match.captures) imports.push(capture.node.text)
+  let tree: Tree | null = null
+  try {
+    tree = parser.parse(content)
+    if (!tree) return { imports: [], symbols: [] }
+
+    const importQuery = getCompiledQuery(lang, language, 'import', config.importQuery)
+    const imports: string[] = []
+    for (const match of importQuery.matches(tree.rootNode)) {
+      for (const capture of match.captures) imports.push(capture.node.text)
+    }
+
+    const symbolQuery = getCompiledQuery(lang, language, 'symbol', config.symbolQuery)
+    const symbols: ExtractedSymbol[] = []
+    for (const match of symbolQuery.matches(tree.rootNode)) {
+      const nameCapture = match.captures.find((c) => c.name === 'name')
+      const declCapture = match.captures.find((c) => c.name in SYMBOL_KIND_BY_CAPTURE)
+      if (!nameCapture || !declCapture) continue
+      symbols.push({
+        name: nameCapture.node.text,
+        kind: SYMBOL_KIND_BY_CAPTURE[declCapture.name]!,
+        startLine: declCapture.node.startPosition.row + 1,
+        endLine: declCapture.node.endPosition.row + 1,
+      })
+    }
+
+    return { imports, symbols }
+  } finally {
+    // ponytail: explicitly delete Tree and Parser to release WebAssembly linear memory (INGEST-01).
+    tree?.delete()
+    parser.delete()
   }
-
-  const symbols: ExtractedSymbol[] = []
-  for (const match of new Query(lang, config.symbolQuery).matches(tree.rootNode)) {
-    const nameCapture = match.captures.find((c) => c.name === 'name')
-    const declCapture = match.captures.find((c) => c.name in SYMBOL_KIND_BY_CAPTURE)
-    if (!nameCapture || !declCapture) continue
-    symbols.push({
-      name: nameCapture.node.text,
-      kind: SYMBOL_KIND_BY_CAPTURE[declCapture.name]!,
-      startLine: declCapture.node.startPosition.row + 1,
-      endLine: declCapture.node.endPosition.row + 1,
-    })
-  }
-
-  return { imports, symbols }
 }

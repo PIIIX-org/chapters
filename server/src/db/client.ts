@@ -4,7 +4,10 @@ import { config } from '../config.js'
 import * as schema from './schema.js'
 
 export const sql = postgres(config.databaseUrl, {
-  max: 10,
+  max: config.databasePoolSize,
+  idle_timeout: 30,
+  connect_timeout: 10,
+  max_lifetime: 60 * 30,
   onnotice: (notice) => {
     if (notice.severity === 'ERROR' || notice.severity === 'FATAL') {
       console.error('postgres pool notice error:', notice.message)

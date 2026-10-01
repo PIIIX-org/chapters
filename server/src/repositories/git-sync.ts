@@ -57,6 +57,26 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       ? decryptCredential(repo.gitCredentialEncrypted)
       : null
     const cloneUrl = authenticatedUrl(repo.gitUrl, credential)
+
+    // ponytail: check remote HEAD commit via ls-remote before expensive full shallow clone (INGEST-05).
+    try {
+      const lsRemote = await simpleGit({ timeout: { block: 30_000 } }).listRemote([cloneUrl, 'HEAD'])
+      const remoteCommit = lsRemote ? lsRemote.trim().split(/\s+/)[0] : null
+      if (remoteCommit && repo.lastSyncedCommit && remoteCommit === repo.lastSyncedCommit) {
+        await db
+          .update(repositories)
+          .set({
+            syncStatus: 'idle',
+            lastSyncedAt: new Date(),
+            lastSyncError: null,
+          })
+          .where(eq(repositories.id, repositoryId))
+        return
+      }
+    } catch (lsErr) {
+      console.warn(`[git-sync] listRemote check failed, falling back to clone:`, lsErr)
+    }
+
     await simpleGit({ timeout: { block: 300_000 } }).clone(cloneUrl, workDir, ['--depth', '1'])
 
     const allPaths = await listFilesRecursive(workDir, IGNORED)
@@ -79,6 +99,7 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     // A depth-1 clone checks out the remote's default branch, so the name of
     // the clone's HEAD *is* the default branch — no extra network call.
     const defaultBranch = (await simpleGit(workDir).revparse(['--abbrev-ref', 'HEAD'])).trim()
+    const headCommit = (await simpleGit(workDir).revparse(['HEAD'])).trim()
 
     await db
       .update(repositories)
@@ -87,6 +108,7 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
         lastSyncedAt: new Date(),
         lastSyncError: null,
         defaultBranch,
+        lastSyncedCommit: headCommit,
       })
       .where(eq(repositories.id, repositoryId))
   } catch (err) {

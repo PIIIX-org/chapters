@@ -1117,7 +1117,7 @@ const htmlContent = `<!DOCTYPE html>
     <header>
       <div class="badge-pill">
         <span class="pulse-dot"></span>
-        <span>Remediation Roadmap — 100% Approved</span>
+        <span>Remediation Complete — 100% Remediated & Promoted to Prod</span>
       </div>
       <div class="title-row">
         <div>
@@ -1125,9 +1125,9 @@ const htmlContent = `<!DOCTYPE html>
           <p class="subtitle">Architectural root-cause remediation plans for all 20 findings across Chapters platform visual, behavioral, concurrency, and accessibility audit suites.</p>
         </div>
         <div class="meta-bar">
-          <div class="meta-item">Branch: <strong>dev</strong></div>
-          <div class="meta-item">Status: <strong>Approved for Execution</strong></div>
-          <div class="meta-item">Tests: <strong>889 Passing Baseline</strong></div>
+          <div class="meta-item">Branch: <strong>prod & dev</strong></div>
+          <div class="meta-item">Status: <strong>100% Remediated & Promoted</strong></div>
+          <div class="meta-item">Tests: <strong>898 Passing (135 Suites)</strong></div>
           <div class="meta-item">Bundle: <strong>&lt; 300KB Budget Guarded</strong></div>
         </div>
       </div>
@@ -1147,8 +1147,8 @@ const htmlContent = `<!DOCTYPE html>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">Implementation Status</div>
-        <div class="kpi-val" id="kpi-progress">0 / 20</div>
-        <div class="kpi-desc" id="kpi-progress-desc">Track and mark checklist items live in your browser</div>
+        <div class="kpi-val" id="kpi-progress">20 / 20</div>
+        <div class="kpi-desc" id="kpi-progress-desc">100% Remediated, Tested, Merged to dev & Promoted to prod</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">Architecture Rule</div>

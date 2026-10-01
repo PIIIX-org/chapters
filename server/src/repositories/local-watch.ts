@@ -31,10 +31,28 @@ export function startWatching(
   // would take the whole server down on startup. The sync itself already
   // records the failure on the repository row; the watcher's job is to stay
   // alive so the next change gets another chance.
-  const runSync = () => {
-    void onChange().catch((err: unknown) => {
-      console.error(`[local-watch] sync failed for repository ${repositoryId}:`, err)
-    })
+  let isSyncing = false
+  let rerunRequested = false
+
+  const runSync = async () => {
+    // ponytail: re-entrancy mutex avoids parallel conflicting sync runs during rapid edits (INGEST-06).
+    if (isSyncing) {
+      rerunRequested = true
+      return
+    }
+    isSyncing = true
+    try {
+      do {
+        rerunRequested = false
+        try {
+          await onChange()
+        } catch (err: unknown) {
+          console.error(`[local-watch] sync failed for repository ${repositoryId}:`, err)
+        }
+      } while (rerunRequested)
+    } finally {
+      isSyncing = false
+    }
   }
 
   const watcher = chokidar.watch(localPath, {
@@ -43,7 +61,7 @@ export function startWatching(
   })
   watcher.on('all', () => {
     if (timer) clearTimeout(timer)
-    timer = setTimeout(runSync, DEBOUNCE_MS)
+    timer = setTimeout(() => void runSync(), DEBOUNCE_MS)
   })
 
   return () => {

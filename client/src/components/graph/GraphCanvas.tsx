@@ -156,6 +156,8 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
     x: number
     y: number
   } | null>(null)
+  const tooltipRef = useRef<HTMLDivElement>(null)
+  const hoveredNodeIdRef = useRef<string | null>(null)
 
   // Same URL, same router as ColorModeToggle — reading it here rather than
   // taking colorMode/filters as props makes the URL the one shared source
@@ -493,19 +495,32 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       const world = screenToWorld(panzoom.transform, clientX, clientY)
       const hitNode = hitTest(nodes, world.x, world.y, (n) => n.radius)
       if (canvas) canvas.style.cursor = hitNode ? 'pointer' : 'grab'
-      setHoveredCommunity(hitNode ? hitNode.community : null)
-      if (hitNode) {
-        setHoveredTooltip({
-          node: hitNode,
-          x: Math.min(clientX + 12, rect.width - 240),
-          y: Math.max(12, Math.min(clientY + 12, rect.height - 110)),
-        })
-      } else {
-        setHoveredTooltip(null)
+
+      const x = Math.min(clientX + 12, rect.width - 240)
+      const y = Math.max(12, Math.min(clientY + 12, rect.height - 110))
+
+      if (tooltipRef.current) {
+        tooltipRef.current.style.transform = `translate3d(${x}px, ${y}px, 0)`
+      }
+
+      const nextId = hitNode ? hitNode.id : null
+      if (nextId !== hoveredNodeIdRef.current) {
+        hoveredNodeIdRef.current = nextId
+        setHoveredCommunity(hitNode ? hitNode.community : null)
+        if (hitNode) {
+          setHoveredTooltip({
+            node: hitNode,
+            x,
+            y,
+          })
+        } else {
+          setHoveredTooltip(null)
+        }
       }
     }
     function onPointerLeaveForHover() {
       if (canvas) canvas.style.cursor = 'grab'
+      hoveredNodeIdRef.current = null
       setHoveredCommunity(null)
       setHoveredTooltip(null)
     }
@@ -541,6 +556,7 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       canvas.removeEventListener('pointercancel', onPointerCancelForTap)
       canvas.removeEventListener('pointermove', onPointerMoveForHover)
       canvas.removeEventListener('pointerleave', onPointerLeaveForHover)
+      hoveredNodeIdRef.current = null
       ro?.disconnect()
     }
   }, [graph.data, memberData, reducedMotion, navigate])
@@ -705,10 +721,12 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
         {/* Floating Node Telemetry HUD Tooltip */}
         {hoveredTooltip && (
           <div
-            className="pointer-events-none absolute z-20 transition-opacity duration-100"
+            ref={tooltipRef}
+            className="pointer-events-none absolute z-20 transition-opacity duration-100 will-change-transform"
             style={{
-              left: hoveredTooltip.x,
-              top: hoveredTooltip.y,
+              transform: `translate3d(${hoveredTooltip.x}px, ${hoveredTooltip.y}px, 0)`,
+              left: 0,
+              top: 0,
             }}
           >
             {'path' in hoveredTooltip.node ? (

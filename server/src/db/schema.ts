@@ -440,6 +440,8 @@ export const semanticEdges = pgTable(
   (t) => [
     primaryKey({ columns: [t.sourceType, t.sourceId, t.targetType, t.targetId] }),
     index('semantic_edges_b_idx').on(t.targetType, t.targetId),
+    index('semantic_edges_node_a_id_idx').on(t.sourceId),
+    index('semantic_edges_node_b_id_idx').on(t.targetId),
   ],
 )
 
@@ -484,6 +486,7 @@ export const repositories = pgTable(
      * (no branch exists) and for a git repo whose first sync has not landed.
      */
     defaultBranch: text('default_branch'),
+    lastSyncedCommit: text('last_synced_commit'),
     /** Staleness signal for the polling fallback scheduler. */
     lastWebhookAt: timestamp('last_webhook_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })

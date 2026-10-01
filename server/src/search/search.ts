@@ -4,10 +4,22 @@ import { embedder } from './embeddings.js'
 import { passesFilters, type GraphFilters } from '../graph/assemble.js'
 
 function uuidArray(ids: string[]): SQL {
-  return sql`ARRAY[${sql.join(
-    ids.map((id) => sql`${id}::uuid`),
-    sql`, `,
-  )}]`
+  // ponytail: single Postgres array parameter literal instead of N placeholders (DB-07).
+  return sql`${`{${ids.join(',')}}`}::uuid[]`
+}
+
+function noteFilterClauses(filters?: GraphFilters): SQL {
+  const clauses: SQL[] = []
+  if (filters?.types && filters.types.length > 0) {
+    clauses.push(sql`AND type = ANY(${`{${filters.types.join(',')}}`}::text[])`)
+  }
+  if (filters?.since) {
+    clauses.push(sql`AND (frontmatter->>'timestamp') >= ${filters.since}`)
+  }
+  if (filters?.until) {
+    clauses.push(sql`AND (frontmatter->>'timestamp') <= ${filters.until}`)
+  }
+  return clauses.length > 0 ? sql.join(clauses, sql` `) : sql``
 }
 
 export type ResourceType = 'note' | 'code' | 'symbol'
@@ -75,20 +87,33 @@ interface SymbolRow {
   snippet: string
 }
 
-async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'semantic', vec?: string): Promise<Row[]> {
+async function noteRows(
+  vaultIds: string[],
+  query: string,
+  mode: 'keyword' | 'semantic',
+  vec?: string,
+  filters?: GraphFilters,
+): Promise<Row[]> {
   if (vaultIds.length === 0) return []
+  const filterSql = noteFilterClauses(filters)
+  // ponytail: CTE wraps candidate search so ts_headline only runs on top 30 rows instead of whole table (DB-12, DB-14).
   const rows =
     mode === 'keyword'
       ? await db.execute(sql`
-          SELECT id, vault_id AS container_id, path, type, frontmatter,
+          WITH top_notes AS (
+            SELECT id, vault_id AS container_id, path, type, frontmatter, body
+            FROM notes
+            WHERE vault_id = ANY(${uuidArray(vaultIds)})
+              AND deleted_at IS NULL
+              AND fts @@ websearch_to_tsquery('english', ${query})
+              ${filterSql}
+            ORDER BY ts_rank(fts, websearch_to_tsquery('english', ${query})) DESC
+            LIMIT ${CANDIDATES}
+          )
+          SELECT id, container_id, path, type, frontmatter,
                  ts_headline('english', body, websearch_to_tsquery('english', ${query}),
                              'MaxWords=30, MinWords=10') AS snippet
-          FROM notes
-          WHERE vault_id = ANY(${uuidArray(vaultIds)})
-            AND deleted_at IS NULL
-            AND fts @@ websearch_to_tsquery('english', ${query})
-          ORDER BY ts_rank(fts, websearch_to_tsquery('english', ${query})) DESC
-          LIMIT ${CANDIDATES}
+          FROM top_notes
         `)
       : await db.execute(sql`
           SELECT id, vault_id AS container_id, path, type, frontmatter, left(body, 200) AS snippet
@@ -96,6 +121,7 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
           WHERE vault_id = ANY(${uuidArray(vaultIds)})
             AND deleted_at IS NULL
             AND embedding IS NOT NULL
+            ${filterSql}
           ORDER BY embedding <=> ${vec}::vector
           LIMIT ${CANDIDATES}
         `)
@@ -104,17 +130,22 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
 
 async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' | 'semantic', vec?: string): Promise<Row[]> {
   if (repositoryIds.length === 0) return []
+  // ponytail: CTE wraps candidate search so ts_headline only runs on top 30 files (DB-12).
   const rows =
     mode === 'keyword'
       ? await db.execute(sql`
-          SELECT id, repository_id AS container_id, path, language,
+          WITH top_code AS (
+            SELECT id, repository_id AS container_id, path, language, content
+            FROM repository_files
+            WHERE repository_id = ANY(${uuidArray(repositoryIds)})
+              AND fts @@ websearch_to_tsquery('english', ${query})
+            ORDER BY ts_rank(fts, websearch_to_tsquery('english', ${query})) DESC
+            LIMIT ${CANDIDATES}
+          )
+          SELECT id, container_id, path, language,
                  ts_headline('english', content, websearch_to_tsquery('english', ${query}),
                              'MaxWords=30, MinWords=10') AS snippet
-          FROM repository_files
-          WHERE repository_id = ANY(${uuidArray(repositoryIds)})
-            AND fts @@ websearch_to_tsquery('english', ${query})
-          ORDER BY ts_rank(fts, websearch_to_tsquery('english', ${query})) DESC
-          LIMIT ${CANDIDATES}
+          FROM top_code
         `)
       : await db.execute(sql`
           SELECT id, repository_id AS container_id, path, language, left(content, 200) AS snippet
@@ -250,8 +281,8 @@ export async function searchNotes(
   const includeSymbols = options.includeSymbols ?? false
 
   const [noteKeyword, noteSemantic, codeKeyword, codeSemantic, symKeyword, symSemantic] = await Promise.all([
-    noteRows(vaultIds, query, 'keyword'),
-    noteRows(vaultIds, query, 'semantic', vec),
+    noteRows(vaultIds, query, 'keyword', undefined, filters),
+    noteRows(vaultIds, query, 'semantic', vec, filters),
     codeRows(repositoryIds, query, 'keyword'),
     codeRows(repositoryIds, query, 'semantic', vec),
     includeSymbols ? symbolRows(repositoryIds, query, 'keyword') : Promise.resolve([]),
