@@ -129,6 +129,33 @@ function toMemberSimEdges(edges: GraphEdge[]): MemberSimEdge[] {
 // units (clientX/clientY, unscaled by devicePixelRatio).
 const TAP_MAX_SCREEN_DRIFT = 6
 
+function getUnobstructedViewport(
+  container: HTMLElement,
+  hasShell: boolean,
+  isContextOpen: boolean,
+  isInspectorOpen: boolean,
+  isSidebarExpanded: boolean,
+) {
+  if (!hasShell) {
+    return {
+      leftPad: 0,
+      rightPad: 0,
+      topPad: 0,
+      bottomPad: 0,
+      visibleW: container.clientWidth,
+      visibleH: container.clientHeight,
+    }
+  }
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768
+  const leftPad = isMobile ? 0 : isContextOpen ? 308 : isSidebarExpanded ? 264 : 68
+  const rightPad = isMobile ? 0 : isInspectorOpen ? 340 : 20
+  const topPad = 60
+  const bottomPad = 60
+  const visibleW = Math.max(100, container.clientWidth - leftPad - rightPad)
+  const visibleH = Math.max(100, container.clientHeight - topPad - bottomPad)
+  return { leftPad, rightPad, topPad, bottomPad, visibleW, visibleH }
+}
+
 interface GraphCanvasProps {
   leadControl?: ReactNode
 }
@@ -172,6 +199,13 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
   const isContextMounted = (shell?.panels.context.mounted ?? 0) > 0
   const isContextOpen = !!(shell?.panels.context.open && isContextMounted)
   const isSidebarExpanded = !!shell?.sidebarExpanded
+
+  const panelStateRef = useRef({ hasShell: Boolean(shell), isInspectorOpen, isContextOpen, isSidebarExpanded })
+  useEffect(() => {
+    panelStateRef.current = { hasShell: Boolean(shell), isInspectorOpen, isContextOpen, isSidebarExpanded }
+  }, [shell, isInspectorOpen, isContextOpen, isSidebarExpanded])
+  const hasUserInteractedRef = useRef(false)
+
   const colorMode: ColorMode = searchParams.get('color') === 'community' ? 'community' : 'attribute'
   const filters = graphFiltersFromSearchParams(searchParams)
   const graph = useGraph(null, filters)
@@ -265,6 +299,7 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
 
 
   useEffect(() => {
+    hasUserInteractedRef.current = false
     // No `setSettled(false)` reset here on purpose: react-hooks bans a
     // synchronous setState call at the top of an effect body (cascading
     // renders). A drill-down or filter change rebuilding mid-mount simply
@@ -284,7 +319,7 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
     if (!ctx) return
 
     let dpr = 1
-    function resize() {
+    function applyDimensions() {
       dpr = window.devicePixelRatio || 1
       const { clientWidth, clientHeight } = container!
       canvas!.width = Math.max(1, Math.round(clientWidth * dpr))
@@ -292,9 +327,7 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       canvas!.style.width = `${clientWidth}px`
       canvas!.style.height = `${clientHeight}px`
     }
-    resize()
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(resize) : null
-    ro?.observe(container)
+    applyDimensions()
 
     // Tapping a community super-node drills into its real members
     // (VaultGraph) instead of leaving the aggregated super-nodes on screen
@@ -353,7 +386,6 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       })
     }
 
-
     function requestFrame() {
       if (rafId === null) rafId = requestAnimationFrame(frame)
     }
@@ -363,8 +395,14 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       if (mode === 'running') {
         sim.tick()
         draw()
-        mode = sim.alpha() < sim.alphaMin() ? 'idle' : 'running'
-        if (mode === 'running') requestFrame()
+        if (sim.alpha() < sim.alphaMin()) {
+          mode = 'idle'
+          if (!hasUserInteractedRef.current) {
+            fitToViewport()
+          }
+        } else {
+          requestFrame()
+        }
         return
       }
       if (mode === 'settling') {
@@ -377,6 +415,9 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
           draw()
           mode = 'idle'
           setSettled(true)
+          if (!hasUserInteractedRef.current) {
+            fitToViewport()
+          }
         } else {
           requestFrame()
         }
@@ -394,8 +435,21 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
     // (slice-8 QA screenshots). Centring the origin once centres the cluster
     // for the life of the mount; later rebuilds keep the user's own camera.
     const t0 = transformRef.current
-    if (t0.x === 0 && t0.y === 0 && t0.k === 1) {
-      transformRef.current = { x: container.clientWidth / 2, y: container.clientHeight / 2, k: 1 }
+    if (t0.x === 0 && t0.y === 0 && t0.k === 1 && container.clientWidth > 0) {
+      const { hasShell, isContextOpen: ctxOpen, isInspectorOpen: inspOpen, isSidebarExpanded: sbExpanded } =
+        panelStateRef.current
+      const { leftPad, visibleW } = getUnobstructedViewport(
+        container,
+        hasShell,
+        ctxOpen,
+        inspOpen,
+        sbExpanded,
+      )
+      transformRef.current = {
+        x: hasShell ? leftPad + visibleW / 2 : container.clientWidth / 2,
+        y: container.clientHeight / 2,
+        k: 1,
+      }
     }
 
     const panzoom = createPanZoom(
@@ -414,6 +468,40 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       },
       transformRef.current,
     )
+
+    function fitToViewport() {
+      if (!container || container.clientWidth <= 0 || container.clientHeight <= 0) return
+      const { hasShell, isContextOpen: ctxOpen, isInspectorOpen: inspOpen, isSidebarExpanded: sbExpanded } =
+        panelStateRef.current
+      const { leftPad, topPad, visibleW, visibleH } = getUnobstructedViewport(
+        container,
+        hasShell,
+        ctxOpen,
+        inspOpen,
+        sbExpanded,
+      )
+      const baseT = fitTransform(nodes, visibleW, visibleH, { padding: 36, maxK: 2 })
+      if (baseT) {
+        panzoom.setTransform({
+          k: baseT.k,
+          x: baseT.x + leftPad,
+          y: baseT.y + topPad,
+        })
+      }
+    }
+
+    function onResize() {
+      applyDimensions()
+      if (!hasUserInteractedRef.current) {
+        fitToViewport()
+      }
+      if (mode === 'idle') {
+        mode = 'redraw'
+        requestFrame()
+      }
+    }
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onResize) : null
+    ro?.observe(container)
 
     // Same idle -> redraw transition as panzoom's onChange above, triggered
     // by a colour-mode change or a node-size/edge-width slider instead of a
@@ -463,7 +551,10 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       const candidate = tap
       tap = null
       if (!candidate || candidate.pointerId !== e.pointerId) return
-      if (Math.hypot(e.clientX - candidate.x, e.clientY - candidate.y) > TAP_MAX_SCREEN_DRIFT) return
+      if (Math.hypot(e.clientX - candidate.x, e.clientY - candidate.y) > TAP_MAX_SCREEN_DRIFT) {
+        hasUserInteractedRef.current = true
+        return
+      }
 
       const rect = canvas!.getBoundingClientRect()
       const world = screenToWorld(panzoom.transform, e.clientX - rect.left, e.clientY - rect.top)
@@ -525,20 +616,27 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       setHoveredTooltip(null)
     }
 
+    function onWheel() {
+      hasUserInteractedRef.current = true
+    }
+
     canvas.addEventListener('pointerdown', onPointerDownForTap)
     canvas.addEventListener('pointerup', onPointerUpForTap)
     canvas.addEventListener('pointercancel', onPointerCancelForTap)
     canvas.addEventListener('pointermove', onPointerMoveForHover)
     canvas.addEventListener('pointerleave', onPointerLeaveForHover)
+    canvas.addEventListener('wheel', onWheel, { passive: true })
 
     // The bottom-right zoom buttons. zoomBy zooms about the element centre;
     // fit recentres the current node set in the viewport. Both emit through
     // panzoom's onChange, which already schedules the redraw.
     zoomApiRef.current = {
-      zoomBy: (factor) => panzoom.zoomBy(factor),
+      zoomBy: (factor) => {
+        hasUserInteractedRef.current = true
+        panzoom.zoomBy(factor)
+      },
       fit: () => {
-        const t = fitTransform(nodes, container!.clientWidth, container!.clientHeight)
-        if (t) panzoom.setTransform(t)
+        fitToViewport()
       },
     }
 
@@ -556,10 +654,17 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       canvas.removeEventListener('pointercancel', onPointerCancelForTap)
       canvas.removeEventListener('pointermove', onPointerMoveForHover)
       canvas.removeEventListener('pointerleave', onPointerLeaveForHover)
+      canvas.removeEventListener('wheel', onWheel)
       hoveredNodeIdRef.current = null
       ro?.disconnect()
     }
   }, [graph.data, memberData, reducedMotion, navigate])
+
+  useEffect(() => {
+    if (!hasUserInteractedRef.current && zoomApiRef.current) {
+      zoomApiRef.current.fit()
+    }
+  }, [isContextOpen, isInspectorOpen, isSidebarExpanded])
 
   // Non-reduced-motion has nothing to hide behind the skeleton for — the
   // canvas starts drawing live on its very first frame. Only the
@@ -609,7 +714,7 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       {/* Stats strip floating at the top center — mono numerals, always computed
           from the aggregated graph even while drilled into a community. */}
       {graph.data && isCommunityGraph(graph.data) && (
-        <div className="pointer-events-none absolute top-2.5 left-1/2 -translate-x-1/2 z-10 flex items-center">
+        <div className="pointer-events-none absolute top-2.5 left-1/2 -translate-x-1/2 z-10 hidden xl:flex items-center">
           <StatsStrip vaultCount={vaults.data?.length ?? null} graph={graph.data} />
         </div>
       )}
@@ -632,7 +737,7 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
           className="h-8 gap-1.5 rounded-[var(--radius-md,4px)] border border-border bg-card/90 px-2.5 text-xs text-muted-foreground shadow-floating hover:bg-muted hover:text-foreground"
         >
           <Route className="size-3.5" aria-hidden="true" />
-          <span className="hidden sm:inline">Pathfinder</span>
+          <span className="hidden md:inline">Pathfinder</span>
         </Button>
         <ColorModeToggle />
       </div>
@@ -792,12 +897,12 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       </div>
 
       <ContextPanel
-        label="Outline"
+        label="Communities"
         collapsed={
-          <PanelRailNav label="Graph outline">
+          <PanelRailNav label="Graph communities">
             <PanelRailButton
               icon={ListTree}
-              label="Outline"
+              label="Communities"
             />
           </PanelRailNav>
         }

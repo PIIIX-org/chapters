@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import type { LucideIcon } from 'lucide-react'
+import { X, type LucideIcon } from 'lucide-react'
 import {
   PanelContext,
   useOptionalShell,
@@ -113,9 +113,28 @@ function ShellPanel({
         <div
           data-shell-panel={kind}
           data-panel-open={open}
-          className={cn('flex min-h-full flex-col w-full', open && className)}
+          className="flex min-h-full flex-col w-full"
         >
-          {open ? children : (collapsed ?? children)}
+          {open ? (
+            <>
+              <div className="flex h-9 shrink-0 items-center justify-between border-b border-border/60 px-3 py-1 bg-card">
+                <span className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate">
+                  {label}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Close ${label}`}
+                  onClick={() => shell.setPanelOpen(kind, false)}
+                  className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                >
+                  <X className="size-3.5" aria-hidden="true" />
+                </button>
+              </div>
+              <div className={cn('min-h-0 flex-1 flex flex-col', className)}>{children}</div>
+            </>
+          ) : (
+            collapsed ?? children
+          )}
         </div>
       </PanelContext.Provider>,
       node,

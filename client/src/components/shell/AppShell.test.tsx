@@ -204,6 +204,22 @@ describe('AppShell', () => {
     expect(within(inspector).getByText('Inspector content')).toBeInTheDocument()
   })
 
+  it('closes open panel when clicking the panel header close button', async () => {
+    stubFetch()
+    renderShell('/vaults/v1')
+    const user = userEvent.setup()
+
+    const context = screen.getByRole('complementary', { name: 'Context panel' })
+    await waitFor(() => expect(within(context).getByText('Context content')).toBeInTheDocument())
+    expect(context).toHaveAttribute('data-panel-open', 'true')
+
+    const closeBtn = within(context).getByRole('button', { name: 'Close Notes' })
+    await user.click(closeBtn)
+
+    expect(context).toHaveAttribute('data-panel-open', 'false')
+    expect(within(context).getByText('Collapsed context')).toBeInTheDocument()
+  })
+
   it('shows the page breadcrumb and status pill in the top bar', async () => {
     stubFetch()
     renderShell('/vaults/v1')
