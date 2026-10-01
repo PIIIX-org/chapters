@@ -10,6 +10,17 @@ import './index.css'
 // so this only ever changes anything for a stored light/system preference.
 themeStore.boot()
 
+// Auto-recover once from stale dynamic chunk imports following redeployments
+window.addEventListener('vite:preloadError', (event) => {
+  const key = 'chapters_chunk_reload'
+  const last = Number(sessionStorage.getItem(key) ?? 0)
+  if (Date.now() - last > 10_000) {
+    sessionStorage.setItem(key, String(Date.now()))
+    event.preventDefault()
+    window.location.reload()
+  }
+})
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />

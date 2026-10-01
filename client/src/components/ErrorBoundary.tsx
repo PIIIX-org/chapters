@@ -46,12 +46,33 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 }
 
+function isChunkLoadError(error: unknown): boolean {
+  if (!error) return false
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase()
+  return (
+    msg.includes('failed to fetch dynamically imported module') ||
+    msg.includes('error loading dynamically imported module') ||
+    msg.includes('unexpected token') ||
+    msg.includes('importing a module script failed')
+  )
+}
+
 /**
  * Route-level error boundary used as `errorElement` in React Router.
  * Handles both HTTP RouteErrorResponses (404, 403, 500) and unhandled component throws.
  */
 export function RouteErrorBoundary() {
   const error = useRouteError()
+
+  if (isChunkLoadError(error)) {
+    const key = 'chapters_chunk_reload'
+    const last = typeof sessionStorage !== 'undefined' ? Number(sessionStorage.getItem(key) ?? 0) : 0
+    if (typeof window !== 'undefined' && Date.now() - last > 10_000) {
+      sessionStorage.setItem(key, String(Date.now()))
+      window.location.reload()
+      return null
+    }
+  }
 
   if (isRouteErrorResponse(error)) {
     if (error.status === 404) {

@@ -104,7 +104,10 @@ function sendFile(reply: FastifyReply, file: string): FastifyReply {
   const immutable = file.includes(`${sep}assets${sep}`)
   return reply
     .type(type)
-    .header('cache-control', immutable ? 'public, max-age=31536000, immutable' : 'no-cache')
+    .header(
+      'cache-control',
+      immutable ? 'public, max-age=31536000, immutable' : 'no-cache, no-store, must-revalidate',
+    )
     .send(createReadStream(file))
 }
 
@@ -126,6 +129,10 @@ export async function registerStatic(app: FastifyInstance, dir: string): Promise
     const file = safeJoin(root, pathname)
     if (!file) return reply.code(404).send({ error: 'not found' })
     if (await isFile(file)) return sendFile(reply, file)
+    // Missing static assets or file paths must 404, never return the HTML shell.
+    if (pathname.startsWith('/assets/') || Boolean(extname(pathname))) {
+      return reply.code(404).send({ error: 'not found' })
+    }
     return sendFile(reply, index)
   })
 
