@@ -18,6 +18,7 @@ export const config = {
     env.CLIENT_DIST ?? fileURLToPath(new URL('../../client/dist', import.meta.url)),
   databaseUrl:
     env.DATABASE_URL ?? 'postgres://chapters:chapters@localhost:5432/chapters',
+  databasePoolSize: Number(env.DATABASE_POOL_SIZE ?? (env.NODE_ENV === 'production' ? 25 : 10)),
   /** Root directory for vault note files (OKF markdown on disk). */
   dataDir: env.DATA_DIR ?? './data',
   /** Optional pre-set one-time setup token; generated+logged if absent. */

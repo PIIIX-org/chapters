@@ -321,8 +321,13 @@ export async function updateNote(
     .set({ frontmatter, body, updatedAt: new Date() })
     .where(eq(notes.id, row.id))
     .returning()
-  await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
-  await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
+  // ponytail: progressive directory index.md files only catalog metadata/types/titles — skip vault-wide scans on body-only edits (GRAPH-05).
+  const frontmatterChanged =
+    input.frontmatter !== undefined &&
+    JSON.stringify(row.frontmatter) !== JSON.stringify(frontmatter)
+  if (frontmatterChanged) {
+    await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
+  }
   await syncLinks(row.id, body)
   scheduleEmbedding(row.id)
   await recordRevision(row.id, 'update', frontmatter, body, actor)

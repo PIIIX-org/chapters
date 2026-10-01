@@ -127,6 +127,13 @@
       "when": 1790520253564,
       "tag": "0017_nervous_jack_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790800000000,
+      "tag": "0018_ast_symbol_hnsw_and_indexes",
+      "breakpoints": true
     }
   ]
 }

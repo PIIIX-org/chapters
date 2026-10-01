@@ -163,14 +163,28 @@ function categoryColor(node: DrawNode, colorMode: ColorMode, isDark: boolean, mu
   return hueAt(hashString(key), isDark)
 }
 
+const rgbCache = new Map<string, [number, number, number]>()
+
 function hexToRgb(hex: string): [number, number, number] {
-  return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number]
+  const cached = rgbCache.get(hex)
+  if (cached) return cached
+  const parsed: [number, number, number] = [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ]
+  rgbCache.set(hex, parsed)
+  return parsed
 }
 
 function mixToward(hex: string, towardHex: string, fraction: number): string {
+  if (fraction <= 0) return hex
+  if (fraction >= 1) return towardHex
   const a = hexToRgb(hex)
   const b = hexToRgb(towardHex)
-  const [r, g, bl] = a.map((v, i) => Math.round(v + (b[i]! - v) * fraction))
+  const r = Math.round(a[0] + (b[0] - a[0]) * fraction)
+  const g = Math.round(a[1] + (b[1] - a[1]) * fraction)
+  const bl = Math.round(a[2] + (b[2] - a[2]) * fraction)
   return `rgb(${r},${g},${bl})`
 }
 
@@ -236,9 +250,18 @@ export function drawGraph(ctx: CanvasRenderingContext2D, opts: DrawGraphOptions)
 
   const isPathActive = Boolean(opts.highlightPathNodeIds && opts.highlightPathNodeIds.size > 0)
 
-  const machine = edges.filter((e): e is DrawMemberEdge => 'kind' in e && e.kind !== 'extracted')
-  const human = edges.filter((e): e is DrawMemberEdge => 'kind' in e && e.kind === 'extracted')
-  const aggregated = edges.filter((e): e is DrawAggregatedEdge => !('kind' in e))
+  const machine: DrawMemberEdge[] = []
+  const human: DrawMemberEdge[] = []
+  const aggregated: DrawAggregatedEdge[] = []
+
+  for (const e of edges) {
+    if ('kind' in e) {
+      if (e.kind === 'extracted') human.push(e)
+      else machine.push(e)
+    } else {
+      aggregated.push(e)
+    }
+  }
 
   if (isPathActive) ctx.globalAlpha = 0.15
   strokeBatch(ctx, machine, teal, (edgeScale * 1) / transform.k)
@@ -253,7 +276,18 @@ export function drawGraph(ctx: CanvasRenderingContext2D, opts: DrawGraphOptions)
     strokeBatch(ctx, opts.highlightPathEdges, highlight, (edgeScale * 3) / transform.k)
   }
 
+  const canvasW = ctx.canvas?.width ?? 0
+  const canvasH = ctx.canvas?.height ?? 0
+  const hasBounds = canvasW > 0 && canvasH > 0
+  const minX = hasBounds ? -transform.x / transform.k - 50 : -Infinity
+  const maxX = hasBounds ? (canvasW - transform.x) / transform.k + 50 : Infinity
+  const minY = hasBounds ? -transform.y / transform.k - 50 : -Infinity
+  const maxY = hasBounds ? (canvasH - transform.y) / transform.k + 50 : Infinity
+
   for (const node of nodes) {
+    if (hasBounds && (node.x < minX || node.x > maxX || node.y < minY || node.y > maxY)) {
+      continue
+    }
     const timestamp = isCommunityNode(node) ? node.lastActivity : node.updatedAt
     const rawAlpha = decayAlpha(timestamp, now)
     const inPath = opts.highlightPathNodeIds?.has(node.id)
@@ -284,6 +318,7 @@ export function drawGraph(ctx: CanvasRenderingContext2D, opts: DrawGraphOptions)
     ctx.beginPath()
     for (const node of nodes) {
       if (node.community !== opts.highlightCommunity) continue
+      if (hasBounds && (node.x < minX || node.x > maxX || node.y < minY || node.y > maxY)) continue
       const r = node.radius * nodeScale + ringOffset
       ctx.moveTo(node.x + r, node.y)
       ctx.arc(node.x, node.y, r, 0, Math.PI * 2)

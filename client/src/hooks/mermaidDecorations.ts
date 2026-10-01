@@ -2,23 +2,26 @@ import { Decoration, EditorView, WidgetType } from '@codemirror/view'
 import type { DecorationSet } from '@codemirror/view'
 import { RangeSetBuilder, StateField } from '@codemirror/state'
 import type { EditorState } from '@codemirror/state'
-import mermaid from 'mermaid'
-
 import DOMPurify from 'dompurify'
 
-// Initialize mermaid once with sensible defaults
-let mermaidInitialized = false
-function ensureMermaidInitialized() {
-  if (!mermaidInitialized) {
-    mermaid.initialize({
-      startOnLoad: false,
-      securityLevel: 'strict',
-      htmlLabels: false,
-      fontFamily: 'inherit',
-      theme: 'default',
+// Lazy dynamic import helper for mermaid to keep diagram engines out of the initial bundle
+let mermaidPromise: Promise<typeof import('mermaid').default> | null = null
+
+function getMermaid() {
+  if (!mermaidPromise) {
+    mermaidPromise = import('mermaid').then((m) => {
+      const instance = m.default ?? m
+      instance.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        htmlLabels: false,
+        fontFamily: 'inherit',
+        theme: 'default',
+      })
+      return instance
     })
-    mermaidInitialized = true
   }
+  return mermaidPromise
 }
 
 let nextId = 0
@@ -36,8 +39,6 @@ class MermaidWidget extends WidgetType {
   }
 
   override toDOM(view: EditorView) {
-    ensureMermaidInitialized()
-
     const wrapper = document.createElement('div')
     wrapper.className =
       'cm-mermaid-container my-3 rounded-md border border-border bg-card/60 p-3 select-none cursor-pointer transition-colors hover:border-primary/50'
@@ -59,8 +60,8 @@ class MermaidWidget extends WidgetType {
 
     const renderId = `mermaid-diagram-${++nextId}`
 
-    mermaid
-      .render(renderId, this.code.trim())
+    getMermaid()
+      .then((m) => m.render(renderId, this.code.trim()))
       .then(({ svg }) => {
         viewport.innerHTML = DOMPurify.sanitize(svg, {
           USE_PROFILES: { svg: true, svgFilters: true },
@@ -110,15 +111,24 @@ export function findMermaidBlocks(doc: string): MermaidBlock[] {
   return blocks.sort((a, b) => a.from - b.from)
 }
 
+let cachedDoc: unknown = null
+let cachedBlocks: MermaidBlock[] = []
+
+function getBlocks(doc: { toString(): string }): MermaidBlock[] {
+  if (doc === cachedDoc) return cachedBlocks
+  cachedDoc = doc
+  cachedBlocks = findMermaidBlocks(doc.toString())
+  return cachedBlocks
+}
+
 function buildMermaidDecorations(state: EditorState): DecorationSet {
-  const doc = state.doc.toString()
   const builder = new RangeSetBuilder<Decoration>()
 
   const activeRanges = state.selection.ranges
   const isSelected = (from: number, to: number) =>
     activeRanges.some((r) => r.from <= to && r.to >= from)
 
-  const blocks = findMermaidBlocks(doc)
+  const blocks = getBlocks(state.doc)
 
   for (const block of blocks) {
     if (!isSelected(block.from, block.to)) {
@@ -141,10 +151,26 @@ export const mermaidLivePreview = StateField.define<DecorationSet>({
     return buildMermaidDecorations(state)
   },
   update(decorations, tr) {
-    if (tr.docChanged || tr.selection) {
-      return buildMermaidDecorations(tr.state)
+    if (!tr.docChanged) {
+      if (!tr.selection) return decorations
+      const blocks = cachedBlocks
+      if (blocks.length === 0) return decorations
+
+      const prevRanges = tr.startState.selection.ranges
+      const currRanges = tr.newSelection.ranges
+
+      let changed = false
+      for (const b of blocks) {
+        const wasIn = prevRanges.some((r) => r.from <= b.to && r.to >= b.from)
+        const isIn = currRanges.some((r) => r.from <= b.to && r.to >= b.from)
+        if (wasIn !== isIn) {
+          changed = true
+          break
+        }
+      }
+      if (!changed) return decorations
     }
-    return decorations
+    return buildMermaidDecorations(tr.state)
   },
   provide: (f) => EditorView.decorations.from(f),
 })

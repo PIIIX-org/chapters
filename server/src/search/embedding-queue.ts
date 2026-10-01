@@ -39,25 +39,35 @@ export async function scheduleMissingEmbeddings(limit?: number): Promise<number>
 }
 
 async function drain(): Promise<void> {
-  while (queue.length > 0) {
-    const item = queue.shift()!
-    try {
-      await processNote(item.noteId)
-    } catch (err) {
-      const nextAttempt = item.attempts + 1
-      if (nextAttempt < MAX_ATTEMPTS) {
-        console.warn(
-          `[embedding-queue] embedding failed for note ${item.noteId} (attempt ${nextAttempt}/${MAX_ATTEMPTS}), retrying:`,
-          err,
-        )
-        queue.push({ noteId: item.noteId, attempts: nextAttempt })
-      } else {
-        console.error(
-          `[embedding-queue] embedding permanently failed for note ${item.noteId} after ${MAX_ATTEMPTS} attempts:`,
-          err,
-        )
+  let head = 0
+  try {
+    while (head < queue.length) {
+      const item = queue[head++]!
+      try {
+        await processNote(item.noteId)
+      } catch (err) {
+        const nextAttempt = item.attempts + 1
+        if (nextAttempt < MAX_ATTEMPTS) {
+          console.warn(
+            `[embedding-queue] embedding failed for note ${item.noteId} (attempt ${nextAttempt}/${MAX_ATTEMPTS}), retrying:`,
+            err,
+          )
+          queue.push({ noteId: item.noteId, attempts: nextAttempt })
+        } else {
+          console.error(
+            `[embedding-queue] embedding permanently failed for note ${item.noteId} after ${MAX_ATTEMPTS} attempts:`,
+            err,
+          )
+        }
+      }
+      // ponytail: O(1) amortized compaction to avoid O(N^2) array shifting (INGEST-02).
+      if (head > 1000 && head > queue.length / 2) {
+        queue.splice(0, head)
+        head = 0
       }
     }
+  } finally {
+    queue.length = 0
   }
 }
 

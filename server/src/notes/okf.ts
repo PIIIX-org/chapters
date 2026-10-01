@@ -239,8 +239,13 @@ export function parseNote(raw: string): OkfNote {
 
 /** Extracts `[[wikilink]]` targets from a note body (for the graph engine). */
 export function extractWikilinks(body: string): string[] {
+  // ponytail: strip code blocks, inline backticks, and HTML comments to prevent phantom graph edges (GRAPH-09).
+  const stripped = body
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`[^`\n]+`/g, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
   const links: string[] = []
-  for (const match of body.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g)) {
+  for (const match of stripped.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g)) {
     const target = match[1]!.trim()
     if (target) links.push(target)
   }

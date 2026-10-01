@@ -25,6 +25,7 @@ function parseDocName(name: string): { vaultId: string; path: string } {
 
 interface ConnectionContext {
   userId: string
+  accessVerifiedAt?: number
 }
 
 function docState(document: Y.Doc): { frontmatter: Record<string, unknown>; body: string } {
@@ -129,12 +130,18 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * re-resolves live access. Throwing drops the message and kills the
      * connection — independent of the event-driven kick below.
      */
-    // ponytail: per-message DB re-check; event-invalidated per-connection state if profiling demands
+    // ponytail: per-message DB re-check cached for 10s; wireKick handles instant event-driven revocation (GR-03)
     async beforeHandleMessage({ documentName, context }) {
-      const { userId } = context as ConnectionContext
+      const ctx = context as ConnectionContext
+      const now = Date.now()
+      if (ctx.accessVerifiedAt && now - ctx.accessVerifiedAt < 10_000) {
+        return
+      }
+      const { userId } = ctx
       const { vaultId } = parseDocName(documentName)
       const access = await resolveAccess(userId, vaultId)
       if (!atLeast(access, 'edit')) throw new Error('access revoked')
+      ctx.accessVerifiedAt = now
     },
 
     async onStoreDocument({ documentName, document }) {
@@ -185,13 +192,14 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
   }
   httpServer.on('upgrade', onUpgrade)
 
-  wireKick(hocuspocus)
+  const unbindKick = wireKick(hocuspocus)
   currentInstance = hocuspocus
 
   return {
     hocuspocus,
     destroy: async () => {
       httpServer.off('upgrade', onUpgrade)
+      unbindKick()
       await server.destroy()
       for (const client of wss.clients) client.terminate()
       wss.close()
@@ -201,14 +209,15 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
 }
 
 /** Event-driven kick: revocation closes affected sockets immediately. */
-function wireKick(hocuspocus: Hocuspocus): void {
-  onPermissionChange((change) => {
+function wireKick(hocuspocus: Hocuspocus): () => void {
+  return onPermissionChange((change) => {
     hocuspocus.documents.forEach((doc, documentName) => {
       const { vaultId } = parseDocName(documentName)
       doc.getConnections().forEach((connection) => {
-        const { userId } = connection.context as ConnectionContext
-        if (!affects(change, userId, vaultId)) return
-        void resolveAccess(userId, vaultId).then((access) => {
+        const ctx = connection.context as ConnectionContext
+        if (!affects(change, ctx.userId, vaultId)) return
+        ctx.accessVerifiedAt = undefined
+        void resolveAccess(ctx.userId, vaultId).then((access) => {
           if (!atLeast(access, 'edit')) connection.close()
         })
       })
