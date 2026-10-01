@@ -6,6 +6,7 @@ import { scheduleMissingEmbeddings } from './search/embedding-queue.js'
 import { startLocalWatchers, startPollingScheduler, reconcileOrphanedSyncs } from './repositories/scheduler.js'
 import { startBackupScheduler } from './export/backup-service.js'
 import { config } from './config.js'
+import { sql } from './db/client.js'
 import { COLLAB_PATH } from './sync/routes.js'
 
 const app = await buildApp()
@@ -31,6 +32,7 @@ try {
       void collab
         .destroy()
         .then(() => app.close())
+        .then(() => sql.end({ timeout: 5 }))
         .finally(() => process.exit(0))
     })
   }
@@ -39,6 +41,7 @@ try {
     void collab
       .destroy()
       .then(() => app.close())
+      .then(() => sql.end({ timeout: 5 }))
       .finally(() => process.exit(1))
   })
   process.on('unhandledRejection', (reason) => {
@@ -46,6 +49,7 @@ try {
     void collab
       .destroy()
       .then(() => app.close())
+      .then(() => sql.end({ timeout: 5 }))
       .finally(() => process.exit(1))
   })
   startPollingScheduler(config.pollIntervalMs, config.webhookStaleThresholdMs)

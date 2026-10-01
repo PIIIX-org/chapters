@@ -1,6 +1,6 @@
 import { UndirectedGraph } from 'graphology'
 import louvainModule from 'graphology-communities-louvain'
-import { and, inArray, isNull, or } from 'drizzle-orm'
+import { and, inArray, isNull, sql } from 'drizzle-orm'
 
 /** louvain ships CJS-flavored typings that fight NodeNext default imports. */
 type LouvainFn = (
@@ -373,10 +373,17 @@ export async function buildGraph(
     // Semantic: stored pairs (now spanning notes and code — spec 9)
     // filtered to the permitted, live node set.
     const allIds = [...byId.keys()]
-    const sem = await db
-      .select()
-      .from(semanticEdges)
-      .where(or(inArray(semanticEdges.sourceId, allIds), inArray(semanticEdges.targetId, allIds)))
+    // ponytail: bind allIds as Postgres array literal to prevent 65,535 parameter ceiling crash on large repositories (DB-08).
+    const pgIds = `{${allIds.join(',')}}`
+    const sem =
+      allIds.length > 0
+        ? await db
+            .select()
+            .from(semanticEdges)
+            .where(
+              sql`${semanticEdges.sourceId} = ANY(${pgIds}::uuid[]) OR ${semanticEdges.targetId} = ANY(${pgIds}::uuid[])`,
+            )
+        : []
     for (const edge of sem) {
       if (byId.has(edge.sourceId) && byId.has(edge.targetId)) {
         addEdge(edge.sourceId, edge.targetId, 'semantic')

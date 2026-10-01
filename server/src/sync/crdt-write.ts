@@ -16,7 +16,7 @@ export async function writeThroughCollab(
 ): Promise<NoteRow | null> {
   const collab = getCollab()
   const docName = `${vaultId}/${path}`
-  if (collab && (collab.documents.has(docName) || collab.getConnectionsCount() > 0)) {
+  if (collab && collab.documents.has(docName)) {
     const existing = await getLiveNote(vaultId, path)
     if (!existing) return null
     const connection = await collab.openDirectConnection(docName, {

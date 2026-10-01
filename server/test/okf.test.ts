@@ -274,4 +274,16 @@ describe('OKF validation', () => {
     const body = 'See [[projects/apollo]] and [[people/jane|Jane]] and [[projects/apollo#goals]].'
     expect(extractWikilinks(body).sort()).toEqual(['people/jane', 'projects/apollo'])
   })
+
+  it('ignores wikilinks within fenced code blocks, inline code, and HTML comments', () => {
+    const body = `
+      Real link: [[real/target]]
+      \`\`\`ts
+      const ignored = [[code/ignored]]
+      \`\`\`
+      Inline \`[[inline/ignored]]\`
+      <!-- [[comment/ignored]] -->
+    `
+    expect(extractWikilinks(body)).toEqual(['real/target'])
+  })
 })

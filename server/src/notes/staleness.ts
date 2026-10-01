@@ -1,6 +1,7 @@
-import { eq, isNull } from 'drizzle-orm'
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import {
+  noteLinks,
   notes,
   repositories,
   repositoryFiles,
@@ -66,6 +67,33 @@ export async function checkCodeStaleness(
     set.add(s.name)
   }
 
+  // ponytail: query note_links and frontmatter sources matching repo to avoid loading entire database into RAM (GRAPH-08).
+  const matchingLinks = await db
+    .select({ sourceNoteId: noteLinks.sourceNoteId })
+    .from(noteLinks)
+    .where(
+      sql`${noteLinks.targetPath} ILIKE ${'repo:' + repositoryId + '%'}
+       OR ${noteLinks.targetPath} ILIKE ${'repo:' + repo.name + '%'}
+       OR ${noteLinks.targetPath} ILIKE ${'code:' + repositoryId + '%'}
+       OR ${noteLinks.targetPath} ILIKE ${'code:' + repo.name + '%'}`,
+    )
+
+  const matchingFm = await db.execute(sql`
+    SELECT id FROM notes
+    WHERE deleted_at IS NULL
+      AND (
+        frontmatter::text ILIKE ${'%"repo:' + repositoryId + '/%'}
+        OR frontmatter::text ILIKE ${'%"repo:' + repo.name + '/%'}
+      )
+  `)
+
+  const candidateIds = new Set<string>()
+  for (const r of matchingLinks) candidateIds.add(r.sourceNoteId)
+  for (const r of matchingFm as unknown as Array<{ id: string }>) candidateIds.add(r.id)
+
+  if (candidateIds.size === 0) return []
+
+  const candidateIdArray = [...candidateIds]
   const liveNotes = await db
     .select({
       id: notes.id,
@@ -75,7 +103,7 @@ export async function checkCodeStaleness(
       body: notes.body,
     })
     .from(notes)
-    .where(isNull(notes.deletedAt))
+    .where(and(isNull(notes.deletedAt), inArray(notes.id, candidateIdArray)))
 
   const drifts: StalenessDrift[] = []
   const prefixId = `repo:${repositoryId}/`

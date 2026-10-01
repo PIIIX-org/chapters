@@ -10,6 +10,25 @@ import { resolveImportPath } from './import-resolution.js'
 const queue: string[] = []
 let running: Promise<void> | null = null
 
+// ponytail: repo path cache to eliminate N*N sibling queries during batch extraction (DB-09).
+const repoSiblingsCache = new Map<string, { pathToId: Map<string, string>; knownPaths: Set<string> }>()
+
+async function getRepoSiblings(repositoryId: string) {
+  let cached = repoSiblingsCache.get(repositoryId)
+  if (!cached) {
+    const siblings = await db
+      .select({ id: repositoryFiles.id, path: repositoryFiles.path })
+      .from(repositoryFiles)
+      .where(eq(repositoryFiles.repositoryId, repositoryId))
+    cached = {
+      pathToId: new Map(siblings.map((s) => [s.path, s.id])),
+      knownPaths: new Set(siblings.map((s) => s.path)),
+    }
+    repoSiblingsCache.set(repositoryId, cached)
+  }
+  return cached
+}
+
 /** Enqueue a repository file for extraction + embedding. Never blocks the caller. */
 export function scheduleExtraction(fileId: string): void {
   queue.push(fileId)
@@ -23,13 +42,24 @@ export async function flushExtraction(): Promise<void> {
 }
 
 async function drain(): Promise<void> {
-  while (queue.length > 0) {
-    const fileId = queue.shift()!
-    try {
-      await processFile(fileId)
-    } catch (err) {
-      console.error(`extraction failed for repository file ${fileId}:`, err)
+  let head = 0
+  try {
+    while (head < queue.length) {
+      const fileId = queue[head++]!
+      try {
+        await processFile(fileId)
+      } catch (err) {
+        console.error(`extraction failed for repository file ${fileId}:`, err)
+      }
+      // ponytail: O(1) amortized compaction to avoid O(N^2) array shifting (INGEST-02).
+      if (head > 1000 && head > queue.length / 2) {
+        queue.splice(0, head)
+        head = 0
+      }
     }
+  } finally {
+    queue.length = 0
+    repoSiblingsCache.clear()
   }
 }
 
@@ -40,12 +70,7 @@ async function processFile(fileId: string): Promise<void> {
   if (isSupportedLanguage(row.language)) {
     const { imports, symbols } = await extractStructure(row.language, row.content)
 
-    const siblings = await db
-      .select({ id: repositoryFiles.id, path: repositoryFiles.path })
-      .from(repositoryFiles)
-      .where(eq(repositoryFiles.repositoryId, row.repositoryId))
-    const pathToId = new Map(siblings.map((s) => [s.path, s.id]))
-    const knownPaths = new Set(siblings.map((s) => s.path))
+    const { pathToId, knownPaths } = await getRepoSiblings(row.repositoryId)
 
     await db.delete(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, fileId))
     if (imports.length > 0) {

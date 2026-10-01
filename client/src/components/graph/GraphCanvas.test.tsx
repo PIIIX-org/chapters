@@ -668,6 +668,15 @@ describe('GraphCanvas', () => {
     fireEvent.pointerMove(canvas, { clientX: 316, clientY: 80 })
     expect(canvas.style.cursor).toBe('pointer')
     expect(await screen.findByText(/Click to explore members/i)).toBeInTheDocument()
+
+    const tooltipEl = container.querySelector('.will-change-transform') as HTMLElement
+    expect(tooltipEl).not.toBeNull()
+    const initialTransform = tooltipEl.style.transform
+
+    // Move pointer within the same node: updates style.transform directly without remounting
+    fireEvent.pointerMove(canvas, { clientX: 318, clientY: 81 })
+    expect(tooltipEl.style.transform).not.toBe(initialTransform)
+    expect(tooltipEl.style.transform).toContain('translate3d(')
   })
 
   it('renders pathfinder button in top action bar and displays guidance text when not drilled down', async () => {

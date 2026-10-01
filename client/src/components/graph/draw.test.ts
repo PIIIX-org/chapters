@@ -293,3 +293,18 @@ describe('drawGraph — expanded community ring', () => {
     }
   })
 })
+
+describe('drawGraph — viewport culling', () => {
+  it('skips nodes that lie outside the visible canvas bounds', () => {
+    const { ctx, calls } = createFakeCtx() // 800x600 canvas
+    const nodes: DrawNode[] = [
+      { id: 'inside', community: 0, lastActivity: null, radius: 8, x: 100, y: 100 },
+      { id: 'outside-x', community: 0, lastActivity: null, radius: 8, x: 1000, y: 100 },
+      { id: 'outside-y', community: 0, lastActivity: null, radius: 8, x: 100, y: -200 },
+    ]
+    drawGraph(ctx, { nodes, edges: [], transform: IDENTITY, colorMode: 'community', isDark: false, now: NOW })
+    const fills = calls.filter((c) => c.op === 'fill')
+    expect(fills).toHaveLength(1)
+  })
+})
+
