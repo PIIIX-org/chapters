@@ -321,6 +321,7 @@ export async function updateNote(
     .set({ frontmatter, body, updatedAt: new Date() })
     .where(eq(notes.id, row.id))
     .returning()
+  await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
   // ponytail: progressive directory index.md files only catalog metadata/types/titles — skip vault-wide scans on body-only edits (GRAPH-05).
   const frontmatterChanged =
     input.frontmatter !== undefined &&
