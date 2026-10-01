@@ -144,13 +144,20 @@ function ShareRow({
   // bare uuid for a person (gap 5 of the unit 7 plan), so a person can only be
   // shown by id until the route carries the email the vault route already does.
   const granteeDisplay =
-    share.granteeType === 'user' ? share.granteeId : (teamName ?? `Team ${share.granteeId}`)
+    share.granteeType === 'user' ? (share.granteeEmail || share.granteeId) : (teamName ?? `Team ${share.granteeId}`)
 
   return (
     <li className="flex items-start justify-between gap-2 border-b border-border py-2 last:border-b-0">
       <div className="min-w-0 flex-1">
         {share.granteeType === 'user' ? (
-          <div className="truncate font-mono text-xs text-foreground">{share.granteeId}</div>
+          <>
+            <div className="truncate text-sm text-foreground">
+              {share.granteeEmail || share.granteeId}
+            </div>
+            {share.granteeName && (
+              <div className="truncate text-xs text-muted-foreground">{share.granteeName}</div>
+            )}
+          </>
         ) : (
           <>
             <div className="truncate text-sm text-foreground">

@@ -159,4 +159,21 @@ describe('RepositoryShareList', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('database is down')
     expect(screen.queryByText('No one else has access to this repository yet.')).toBeNull()
   })
+
+  it('renders hydrated user email and name for user shares', async () => {
+    const HYDRATED_USER_SHARE: RepositoryShare = {
+      id: 's3',
+      repositoryId: 'r1',
+      granteeType: 'user',
+      granteeId: 'linus-uuid',
+      granteeEmail: 'linus@chapters.dev',
+      granteeName: 'Linus Torvalds',
+      createdAt: '2026-08-22T09:00:00.000Z',
+    }
+    renderList({ shares: () => mockJsonResponse(200, [HYDRATED_USER_SHARE]) })
+
+    expect(await screen.findByText('linus@chapters.dev')).toBeInTheDocument()
+    expect(screen.getByText('Linus Torvalds')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Revoke access for linus@chapters.dev' })).toBeInTheDocument()
+  })
 })

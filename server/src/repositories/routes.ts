@@ -277,10 +277,23 @@ export function repositoryRoutes(app: FastifyInstance) {
           .innerJoin(users, eq(users.id, teamMemberships.userId))
           .where(inArray(teamMemberships.teamId, teamIds))
       : []
-    return shares.map((s) => ({
-      ...s,
-      members: s.granteeType === 'team' ? members.filter((m) => m.teamId === s.granteeId) : undefined,
-    }))
+    const userIds = shares.filter((s) => s.granteeType === 'user').map((s) => s.granteeId)
+    const userList = userIds.length
+      ? await db
+          .select({ id: users.id, email: users.email })
+          .from(users)
+          .where(inArray(users.id, userIds))
+      : []
+    const userMap = new Map(userList.map((u) => [u.id, u]))
+    return shares.map((s) => {
+      const u = s.granteeType === 'user' ? userMap.get(s.granteeId) : undefined
+      return {
+        ...s,
+        granteeEmail: u?.email ?? null,
+        granteeName: null,
+        members: s.granteeType === 'team' ? members.filter((m) => m.teamId === s.granteeId) : undefined,
+      }
+    })
   })
 
   app.delete<{ Params: { id: string; shareId: string } }>(

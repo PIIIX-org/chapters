@@ -22,6 +22,7 @@ function TabsList({
 
 function TabsTrigger({
   className,
+  onClick,
   ...props
 }: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
   return (
@@ -31,6 +32,14 @@ function TabsTrigger({
         '-mb-px inline-flex items-center gap-1.5 border-b-2 border-transparent px-2.5 font-mono text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=active]:border-primary data-[state=active]:text-foreground disabled:pointer-events-none disabled:opacity-50',
         className,
       )}
+      onClick={(e) => {
+        onClick?.(e)
+        if (!e.defaultPrevented && e.currentTarget.getAttribute('data-state') !== 'active') {
+          e.currentTarget.dispatchEvent(
+            new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }),
+          )
+        }
+      }}
       {...props}
     />
   )

@@ -669,4 +669,19 @@ describe('GraphCanvas', () => {
     expect(canvas.style.cursor).toBe('pointer')
     expect(await screen.findByText(/Click to explore members/i)).toBeInTheDocument()
   })
+
+  it('renders pathfinder button in top action bar and displays guidance text when not drilled down', async () => {
+    stubFetch()
+    stubMatchMedia(false)
+    stubCanvasContext()
+    stubManualRaf()
+    renderGraphCanvas()
+
+    expect(screen.getByRole('button', { name: 'Open Pathfinder' })).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        /Drill down into a community cluster or select a vault to find paths between individual concept nodes./i,
+      ),
+    ).toBeInTheDocument()
+  })
 })

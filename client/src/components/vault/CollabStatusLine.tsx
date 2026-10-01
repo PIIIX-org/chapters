@@ -60,7 +60,7 @@ export function CollabStatusLine({ status, synced, syncedAt }: CollabStatusLineP
   if (status === 'connected') {
     return (
       <span role="status" className="flex min-w-0 items-center gap-2">
-        <Pill tone={synced ? 'live' : 'idle'} dot>
+        <Pill tone={synced ? 'live' : 'idle'} dot className="hidden sm:inline-flex">
           {synced ? 'Synced' : 'Syncing…'}
         </Pill>
         {synced && syncedAt && (
@@ -78,7 +78,7 @@ export function CollabStatusLine({ status, synced, syncedAt }: CollabStatusLineP
   const whisper = WHISPER[status]
   return (
     <span role="status" className="flex min-w-0 items-center gap-2">
-      <Pill tone={whisper.tone} dot>
+      <Pill tone={whisper.tone} dot className="hidden sm:inline-flex">
         {whisper.label}
       </Pill>
       {whisper.detail && (
