@@ -2,13 +2,16 @@
 
 **Date**: 2026-10-01  
 **Target Environment**: Chapters Platform (React 19 + Vite 6 + Tailwind v4 + Fastify + Yjs + MCP)  
-**Branch**: `dev` (HEAD commit `27c0ed0`)  
+**Status**: **100% Remediated, Verified, Merged to `dev` (PR #321), and Promoted to `prod` (PR #322)**  
+**Branch**: `prod` (commit `46ccb9d`), `dev` (commit `2e53f9e`)  
 **Scope**: Full architectural remediation plan and 4-batch execution roadmap for all 20 cataloged defects (DEF-01 through DEF-20) identified in the 2026-09-30 visual & behavioral audit.  
 **Deliverables**:
 - Standalone Interactive Report: [`docs/remediation-plan-report.html`](../remediation-plan-report.html)
 - Node Report Generator: [`docs/build-remediation-report.mjs`](../build-remediation-report.mjs)
 - Visual Audit Report: [`docs/visual-and-behavioral-audit-report.html`](../visual-and-behavioral-audit-report.html)
 - Chapters Knowledge Graph Spec Note: `spec/2026-10-01-defect-remediation-plan`
+- Implementation PR on `dev`: [PR #321](https://github.com/PIIIX-org/chapters/pull/321)
+- Production Promotion PR on `prod`: [PR #322](https://github.com/PIIIX-org/chapters/pull/322)
 
 ---
 
@@ -186,3 +189,20 @@ This document establishes the approved remediation plan for all 20 defects. Adhe
    Initial gzipped chunk size must remain strictly under 300KB.
 3. **Responsive Visual Verification**:
    Verify layout across 375px mobile and 1440px desktop breakpoints via CDP runner.
+
+---
+
+## 5. Resolution & Promotion Audit
+
+All 20 defects (DEF-01 through DEF-20) were successfully remediated using subagents following Ponytail Senior Dev Mode principles, verified against quality gates, merged to `dev`, and promoted to `prod`:
+
+- **Implementation PR (`dev`)**: [PR #321](https://github.com/PIIIX-org/chapters/pull/321) (Merged commit `2e53f9e`)
+- **Promotion PR (`prod`)**: [PR #322](https://github.com/PIIIX-org/chapters/pull/322) (Merged commit `46ccb9d`)
+- **Quality Gates Audit**:
+  - `pnpm typecheck`: 0 errors across `@chapters/client` and `@chapters/server`.
+  - `pnpm lint`: 0 errors, 0 warnings across the entire repository.
+  - `npm --prefix client test -- --run`: 135 / 135 suites passed, 898 / 898 tests passed (100% green).
+  - `npm --prefix client test src/bundle.test.ts -- --run`: Initial gzipped chunk remains strictly under 300KB budget.
+  - Report generator: `node docs/build-remediation-report.mjs` executed cleanly, compiling self-contained dashboard.
+  - Chapters Knowledge Graph: Spec note `spec/2026-10-01-defect-remediation-plan` updated to `status: stable` and synced.
+
