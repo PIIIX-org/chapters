@@ -4,8 +4,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { UniversalNewButton } from './UniversalNewButton.js'
 import { mockJsonResponse } from '../../lib/api.js'
+import type { Vault } from '../../api/vaults.js'
 
-function renderComponent(initialRoute = '/', initialVaults?: unknown[]) {
+function renderComponent(initialRoute = '/', initialVaults?: Vault[]) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -77,9 +78,9 @@ describe('UniversalNewButton', () => {
   })
 
   it('opens New Note modal with vault picker when selecting New note outside a vault', async () => {
-    const vaults = [
-      { id: 'v1', name: 'Engineering', access: 'owner', mergeable: false },
-      { id: 'v2', name: 'Design', access: 'owner', mergeable: false },
+    const vaults: Vault[] = [
+      { id: 'v1', name: 'Engineering', access: 'owner', mergeable: false, ownerId: 'u1' },
+      { id: 'v2', name: 'Design', access: 'owner', mergeable: false, ownerId: 'u1' },
     ]
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockJsonResponse(200, vaults)))
     renderComponent('/', vaults)
