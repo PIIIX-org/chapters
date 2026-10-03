@@ -145,23 +145,11 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     let cancelled = false
     let everConnected = false
     let revoked = false
-    let authFailures = 0
     let retry: ReturnType<typeof setTimeout> | undefined
 
     const kicked = () => {
       // The relay refused us: the share was revoked, or it was never ours.
-      // Differentiate true access revocation from transient rollout reconnect failures
-      // with a 3-attempt budget and jitter before declaring terminal revocation.
-      authFailures++
-      if (everConnected && authFailures < 3) {
-        setStatus('reconnecting')
-        retry = setTimeout(() => {
-          if (cancelled) return
-          setStatus('connecting')
-          void connect()
-        }, 1000 + Math.random() * 1000)
-        return
-      }
+      // Retrying would only fail again, so stop and say so.
       revoked = true
       setStatus('revoked')
       // Nobody is "in the note with you" once you are out of it.
@@ -240,7 +228,6 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           if (revoked) return
           if (socketStatus === WebSocketStatus.Connected) {
             everConnected = true
-            authFailures = 0
             setStatus('connected')
           } else {
             setStatus(everConnected ? 'reconnecting' : 'connecting')
