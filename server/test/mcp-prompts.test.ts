@@ -46,8 +46,8 @@ beforeAll(async () => {
     headers: { cookie: ownerCookie },
     body: {
       type: 'project',
-      name: 'chapters',
-      body: 'Chapters flagship knowledge base project note.',
+      name: 'elara',
+      body: 'Elara flagship knowledge base project note.',
     },
   })
 
@@ -120,7 +120,7 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
     const prompt = await client.getPrompt({
       name: 'active_project_companion',
       arguments: {
-        projectName: 'chapters',
+        projectName: 'elara',
         taskDescription: 'Implement MCP prompts suite with 20 engineering workflows',
         vaultId,
       },
@@ -128,10 +128,10 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
 
     expect(prompt.messages).toHaveLength(1)
     const text = (prompt.messages[0]?.content as { type: string; text: string }).text
-    expect(text).toContain('You are actively pairing on project "chapters"')
+    expect(text).toContain('You are actively pairing on project "elara"')
     expect(text).toContain('Implement MCP prompts suite with 20 engineering workflows')
     expect(text).toContain('session/')
-    expect(text).toContain('Chapters flagship knowledge base project note')
+    expect(text).toContain('Elara flagship knowledge base project note')
     expect(text).toContain('create_note')
   })
 
@@ -178,7 +178,7 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
     const prompt = await client.getPrompt({
       name: 'summarize_concept_chain',
       arguments: {
-        sourceNode: 'project/chapters',
+        sourceNode: 'project/elara',
         targetNode: 'spec/scheduled-backups',
         vaultId,
       },
@@ -186,7 +186,7 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
 
     expect(prompt.messages).toHaveLength(1)
     const text = (prompt.messages[0]?.content as { type: string; text: string }).text
-    expect(text).toContain('project/chapters')
+    expect(text).toContain('project/elara')
     expect(text).toContain('spec/scheduled-backups')
     expect(text).toContain('Explain the architectural connection')
   })
@@ -196,7 +196,7 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
     const prompt = await client.getPrompt({
       name: 'explain_code_architecture',
       arguments: {
-        repositoryName: 'chapters',
+        repositoryName: 'elara',
         filePath: 'server/src/sync/collab-server.ts',
         symbol: 'writeThroughCollab',
         vaultId,

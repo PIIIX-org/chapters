@@ -43,7 +43,7 @@ export function SetupPage() {
   }
 
   return (
-    <AuthFrame eyebrow="first run" title="Set up Chapters">
+    <AuthFrame eyebrow="first run" title="Set up Elara">
       {alreadySetUp ? (
         <p className="text-sm text-muted-foreground">
           This instance is already set up. Go to{' '}

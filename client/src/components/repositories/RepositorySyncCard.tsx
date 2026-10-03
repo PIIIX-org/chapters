@@ -30,7 +30,7 @@ function formatTimestamp(iso: string): string {
 const NEVER_SYNCED_NEXT: Record<AccessibleRepository['ingestionMethod'], string> = {
   git: 'The first clone runs on the next poll after connecting. Nothing to do.',
   local_path:
-    'Chapters does not read connected folders yet — no watcher runs and the poller skips them — so nothing will be indexed here.',
+    'Elara does not read connected folders yet — no watcher runs and the poller skips them — so nothing will be indexed here.',
   agent_push: 'Nothing arrives until an agent holding a sync token pushes this repository.',
 }
 
@@ -144,7 +144,7 @@ export function RepositorySyncCard({ repositoryId, titleAs = 'h3' }: RepositoryS
       </p>
 
       {health === 'syncing' && (
-        <p className="text-xs text-muted-foreground">Chapters is indexing this repository right now.</p>
+        <p className="text-xs text-muted-foreground">Elara is indexing this repository right now.</p>
       )}
 
       {health === 'error' && (
@@ -184,7 +184,7 @@ export function RepositorySyncCard({ repositoryId, titleAs = 'h3' }: RepositoryS
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">
-            No webhook deliveries yet — Chapters is polling this remote on a schedule instead, so changes
+            No webhook deliveries yet — Elara is polling this remote on a schedule instead, so changes
             take minutes to appear.
           </p>
         ))}

@@ -6,7 +6,7 @@ import { pillVariants } from './pill-variants'
 export type PillTone = NonNullable<VariantProps<typeof pillVariants>['tone']>
 
 const dotColor: Record<PillTone, string> = {
-  neutral: 'bg-muted-foreground',
+  neutral: 'bg-muted-foreground dark:bg-zinc-300',
   live: 'bg-success',
   idle: 'bg-warning',
   error: 'bg-destructive',

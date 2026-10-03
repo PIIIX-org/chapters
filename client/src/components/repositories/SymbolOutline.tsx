@@ -40,7 +40,7 @@ export function SymbolOutline({ symbols, onSelect }: SymbolOutlineProps) {
         // from here, and both are ordinary — say so instead of showing a
         // blank column that reads as a failure.
         <p className="text-xs text-muted-foreground">
-          No symbols in this file. Chapters extracts an outline only from the languages it parses; the
+          No symbols in this file. Elara extracts an outline only from the languages it parses; the
           code itself still reads normally.
         </p>
       ) : (

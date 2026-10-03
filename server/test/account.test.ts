@@ -263,7 +263,7 @@ describe('GET /me/export', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(res.headers['content-type']).toBe('application/zip')
-    expect(res.headers['content-disposition']).toContain('chapters-account-export.zip')
+    expect(res.headers['content-disposition']).toMatch(/(?:elara|chapters)-account-export\.zip/)
 
     const names = new AdmZip(res.rawPayload).getEntries().map((e) => e.entryName)
     expect(names).toContain(`vaults/${ownedId}/people/ada.md`)

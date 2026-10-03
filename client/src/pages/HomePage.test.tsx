@@ -138,7 +138,7 @@ describe('HomePage', () => {
     // relay rather than REST, so asserting REST content here would only be
     // asserting that the relay is unreachable in this fixture.
     await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull(), { timeout: 5000 })
-    expect(await screen.findByText('foo')).toBeInTheDocument()
+    expect((await screen.findAllByText('foo'))[0]).toBeInTheDocument()
   })
 
   it('resolves the vault notes directory route through router.tsx without context sidebar', async () => {

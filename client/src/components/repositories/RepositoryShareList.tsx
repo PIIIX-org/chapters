@@ -217,7 +217,7 @@ export function RepositoryShareList({ repositoryId, titleAs: Title = 'h3' }: { r
     <section className="flex flex-col gap-3">
       <Title className="font-display text-base text-foreground">Sharing</Title>
       <p className="text-xs text-muted-foreground">
-        Everyone here can read this repository&rsquo;s files — there is no edit level, because Chapters never
+        Everyone here can read this repository&rsquo;s files — there is no edit level, because Elara never
         writes code back. Access is re-checked on every request, so a change here takes effect immediately.
       </p>
 

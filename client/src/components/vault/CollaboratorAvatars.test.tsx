@@ -53,8 +53,8 @@ describe('CollaboratorAvatars', () => {
     // AI peer here to wear it — and the only way one could appear was a
     // self-declared awareness id, which any co-editor could have forged.
     // A hashed hue for an id that merely looks like 'mcp' is still a person's.
-    render(<CollaboratorAvatars peers={[JANE, TAHA, peer(14, 'mcp', 'Chapters MCP')]} />)
-    for (const name of ['ada.lovelace', 'taha', 'Chapters MCP']) {
+    render(<CollaboratorAvatars peers={[JANE, TAHA, peer(14, 'mcp', 'Elara MCP')]} />)
+    for (const name of ['ada.lovelace', 'taha', 'Elara MCP']) {
       const face = screen.getByLabelText(`${name} is editing this note`)
       expect(face.style.getPropertyValue('--ink')).not.toBe(AI_INK.color)
       // Teal in either theme, not just the hue this reader happens to be in.
@@ -63,8 +63,8 @@ describe('CollaboratorAvatars', () => {
   })
 
   it('labels every face with a name, because colour on its own is not a label', () => {
-    render(<CollaboratorAvatars peers={[peer(14, 'mcp', 'Chapters MCP')]} />)
-    expect(screen.getByLabelText('Chapters MCP is editing this note').textContent).toBe('CM')
+    render(<CollaboratorAvatars peers={[peer(14, 'mcp', 'Elara MCP')]} />)
+    expect(screen.getByLabelText('Elara MCP is editing this note').textContent).toBe('EM')
   })
 
   it('reduces a name to initials, one letter or two', () => {

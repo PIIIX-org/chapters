@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { resolveMcpToken } from '../vaults/mcp-connection-routes.js'
 import { logSecurityEvent } from '../auth/security-events.js'
@@ -10,9 +10,10 @@ import { checkRateLimit } from './rate-limit.js'
  * request, authenticated per request against live permissions (spec 6:
  * access is recomputed on every call, no cross-connection caching — the
  * per-request lifecycle makes shared caching impossible by construction).
+ * Registers both canonical `/elara/mcp` and permanent backward-compatible `/mcp`.
  */
 export function mcpRoutes(app: FastifyInstance) {
-  app.post('/mcp', async (req, reply) => {
+  const handler = async (req: FastifyRequest, reply: FastifyReply) => {
     const header = req.headers.authorization
     const token = header?.startsWith('Bearer ') ? header.slice(7) : null
     const auth = token ? await resolveMcpToken(token) : null
@@ -36,5 +37,8 @@ export function mcpRoutes(app: FastifyInstance) {
       void transport.close()
       void server.close()
     })
-  })
+  }
+
+  app.post('/mcp', handler)
+  app.post('/elara/mcp', handler)
 }
