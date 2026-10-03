@@ -98,7 +98,7 @@ describe('useVaultFolders', () => {
     expect(result.current.getFolderColor('Engineering')).toBe('emerald')
 
     // Verify localStorage has the changes
-    expect(JSON.parse(localStorage.getItem('chapters_vault_folders') || '{}')).toEqual({
+    expect(JSON.parse(localStorage.getItem('elara_vault_folders') || '{}')).toEqual({
       v1: 'Engineering',
     })
   })
@@ -127,13 +127,13 @@ describe('useVaultFolders', () => {
     })
 
     expect(result.current.storageMode).toBe('local')
-    expect(JSON.parse(localStorage.getItem('chapters_vault_storage_mode') || '""')).toBe('local')
+    expect(JSON.parse(localStorage.getItem('elara_vault_storage_mode') || '""')).toBe('local')
 
     await act(async () => {
       await result.current.setStorageMode('online')
     })
 
     expect(result.current.storageMode).toBe('online')
-    expect(JSON.parse(localStorage.getItem('chapters_vault_storage_mode') || '""')).toBe('online')
+    expect(JSON.parse(localStorage.getItem('elara_vault_storage_mode') || '""')).toBe('online')
   })
 })

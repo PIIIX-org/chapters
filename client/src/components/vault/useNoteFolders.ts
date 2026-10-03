@@ -1,9 +1,10 @@
 import { useCallback, useState } from 'react'
+import { getMigratedStorageItem } from '../../lib/storage.js'
 import type { VaultColor } from './useVaultFolders.js'
 
-function readStorage<T>(key: string, fallback: T): T {
+function readStorage<T>(key: string, legacyKey: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(key)
+    const raw = getMigratedStorageItem(key, legacyKey)
     return raw ? JSON.parse(raw) : fallback
   } catch {
     return fallback
@@ -19,22 +20,26 @@ function writeStorage<T>(key: string, value: T): void {
 }
 
 export function useNoteFolders(vaultId: string) {
-  const storageKeyFolders = `chapters_note_folders_${vaultId}`
-  const storageKeyFolderColors = `chapters_note_folder_colors_${vaultId}`
-  const storageKeyNoteColors = `chapters_note_colors_${vaultId}`
-  const storageKeyFavorites = `chapters_note_favorites_${vaultId}`
+  const storageKeyFolders = `elara_note_folders_${vaultId}`
+  const legacyStorageKeyFolders = `chapters_note_folders_${vaultId}`
+  const storageKeyFolderColors = `elara_note_folder_colors_${vaultId}`
+  const legacyStorageKeyFolderColors = `chapters_note_folder_colors_${vaultId}`
+  const storageKeyNoteColors = `elara_note_colors_${vaultId}`
+  const legacyStorageKeyNoteColors = `chapters_note_colors_${vaultId}`
+  const storageKeyFavorites = `elara_note_favorites_${vaultId}`
+  const legacyStorageKeyFavorites = `chapters_note_favorites_${vaultId}`
 
   const [noteFolders, setNoteFolders] = useState<Record<string, string>>(() =>
-    readStorage(storageKeyFolders, {}),
+    readStorage(storageKeyFolders, legacyStorageKeyFolders, {}),
   )
   const [folderColors, setFolderColors] = useState<Record<string, VaultColor>>(() =>
-    readStorage(storageKeyFolderColors, {}),
+    readStorage(storageKeyFolderColors, legacyStorageKeyFolderColors, {}),
   )
   const [noteColors, setNoteColors] = useState<Record<string, VaultColor>>(() =>
-    readStorage(storageKeyNoteColors, {}),
+    readStorage(storageKeyNoteColors, legacyStorageKeyNoteColors, {}),
   )
   const [favorites, setFavorites] = useState<string[]>(() =>
-    readStorage(storageKeyFavorites, []),
+    readStorage(storageKeyFavorites, legacyStorageKeyFavorites, []),
   )
 
   const setNoteFolder = useCallback(

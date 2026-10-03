@@ -4,10 +4,13 @@
  * is what every existing reader (`ColorModeToggle`, `GraphCanvas`,
  * `useCodeViewer`) and Tailwind's `dark:` variant already key on.
  */
+import { getMigratedStorageItem } from './storage.js'
+
 export type ThemePreference = 'dark' | 'light' | 'system'
 export type ResolvedTheme = 'dark' | 'light'
 
-export const THEME_STORAGE_KEY = 'chapters.theme'
+export const THEME_STORAGE_KEY = 'elara.theme'
+export const LEGACY_THEME_STORAGE_KEY = 'chapters.theme'
 export const THEME_PREFERENCES: readonly ThemePreference[] = [
   'dark',
   'light',
@@ -31,7 +34,7 @@ function storage(): Storage | null {
 }
 
 export function readThemePreference(): ThemePreference {
-  const raw = storage()?.getItem(THEME_STORAGE_KEY)
+  const raw = getMigratedStorageItem(THEME_STORAGE_KEY, LEGACY_THEME_STORAGE_KEY)
   return isThemePreference(raw) ? raw : 'dark'
 }
 

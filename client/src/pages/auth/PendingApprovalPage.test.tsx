@@ -11,7 +11,7 @@ describe('PendingApprovalPage', () => {
       </MemoryRouter>,
     )
 
-    expect(screen.getByRole('heading', { name: /Welcome to Chapters/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Welcome to Elara/i })).toBeInTheDocument()
     expect(screen.getByText(/Email confirmed/i)).toBeInTheDocument()
     expect(screen.getByText(/Waiting for approval/i)).toBeInTheDocument()
     expect(

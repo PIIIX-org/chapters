@@ -10,11 +10,11 @@
  * ponytail: plain text, edited here by hand. Templating engine when there is
  * a second marketing mail to share it with.
  */
-export const WELCOME_SUBJECT = 'Welcome to Chapters — your account is active'
+export const WELCOME_SUBJECT = 'Welcome to Elara — your account is active'
 
-export const WELCOME_TEXT = `Your Chapters account has been approved. You can log in now.
+export const WELCOME_TEXT = `Your Elara account has been approved. You can log in now.
 
-Chapters is a second brain you own: plain markdown files, a live-preview
+Elara is a second brain you own: plain markdown files, a live-preview
 editor, and a knowledge graph you can actually navigate. Nothing is locked
 in a database you cannot read.
 
@@ -46,5 +46,5 @@ We build other things, all open source, all free to use:
 
 --
 
-You are getting this because you created a Chapters account. Turn these
+You are getting this because you created an Elara account. Turn these
 emails off any time under Settings → Account.`

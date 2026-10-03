@@ -20,7 +20,7 @@ try {
   const { setupPending, setupToken } = await ensureInstanceState()
   if (setupPending && setupToken) {
     // The only place the setup token ever appears in plaintext.
-    console.log(`\n=== Chapters one-time setup token: ${setupToken} ===\n`)
+    console.log(`\n=== Elara one-time setup token: ${setupToken} ===\n`)
   }
   await app.listen({ port: config.port, host: '0.0.0.0' })
   // One process, one port: the relay rides Fastify's own HTTP server.
@@ -58,7 +58,7 @@ try {
   // repository connected before the last restart silently stops ingesting.
   const watching = await startLocalWatchers()
   if (watching > 0) console.log(`watching ${watching} local repository folder(s)`)
-  console.log(`Chapters server listening on :${config.port} (collab on ${COLLAB_PATH})`)
+  console.log(`Elara server listening on :${config.port} (collab on ${COLLAB_PATH})`)
 } catch (err) {
   console.error(err)
   process.exit(1)

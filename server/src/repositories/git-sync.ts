@@ -51,7 +51,7 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     .set({ syncStatus: 'syncing' })
     .where(eq(repositories.id, repositoryId))
 
-  const workDir = join(tmpdir(), 'chapters-repo-clones', randomBytes(8).toString('hex'))
+  const workDir = join(tmpdir(), 'elara-repo-clones', randomBytes(8).toString('hex'))
   try {
     const credential = repo.gitCredentialEncrypted
       ? decryptCredential(repo.gitCredentialEncrypted)

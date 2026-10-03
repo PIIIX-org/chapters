@@ -1,11 +1,14 @@
 ---
 name: chapters
-description: Connects AI agents to Chapters — an open-source, self-hostable second brain and AI-navigable knowledge graph platform with synced code repositories. Use whenever interacting with Chapters vaults, notes, knowledge graphs, codebase mappings, or when navigating projects via Chapters MCP tools.
+description: Connects AI agents to Chapters (now Elara) — an open-source, self-hostable second brain and AI-navigable knowledge graph platform with synced code repositories. Backward-compatibility proxy for the Elara skill.
 ---
 
-# Chapters Agent Skill
+# Chapters Agent Skill (Legacy Compatibility Proxy)
 
-This skill enables AI agents to natively understand, navigate, and operate **Chapters** — an open-source, self-hostable "second brain" web platform with plain markdown/YAML notes (Open Knowledge Format v0.2), synced code repositories, and an AI-navigable knowledge graph accessible via Model Context Protocol (MCP).
+> [!NOTE]
+> **Chapters is now Elara.** This skill is maintained as a permanent backward-compatibility proxy. The canonical, actively maintained agent skill is [`skills/elara/SKILL.md`](../elara/SKILL.md). All `/chapters-*` slash commands transparently forward to their canonical `/elara-*` counterparts.
+
+This skill enables AI agents to natively understand, navigate, and operate **Chapters** (now Elara) — an open-source, self-hostable "second brain" web platform with plain markdown/YAML notes (Open Knowledge Format v0.2), synced code repositories, and an AI-navigable knowledge graph accessible via Model Context Protocol (MCP).
 
 When this skill is active, **you do not need to ask the user what Chapters is or whether the MCP server is available.** You already know Chapters is active, understand its architecture, and proactively use the Chapters MCP tools for project navigation, AST code symbol retrieval, concept pathfinding, note management, and code exploration.
 
