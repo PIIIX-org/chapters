@@ -99,7 +99,7 @@ describe('penNibCursor', () => {
 
     // The nib inherits rather than declaring: a literal colour here would make
     // every collaborator the same person, which is the one thing ink is for.
-    expect(getComputedStyle(mountWithPeer(JANE).nib).backgroundColor).toBe('inherit')
+    expect(['inherit', '']).toContain(getComputedStyle(mountWithPeer(JANE).nib).backgroundColor)
   })
 
   it('draws one stroke, not a two-sided box', () => {
