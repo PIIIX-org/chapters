@@ -25,7 +25,7 @@ const ENROLLED: SessionUser = { ...BASE, mfaEnabledAt: '2026-08-14T09:30:00.000Z
 const ENROLLED_MANDATED: SessionUser = { ...ENROLLED, mfaRequired: true }
 const NOT_ENROLLED_MANDATED: SessionUser = { ...BASE, mfaRequired: true }
 
-const SETUP = { secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://totp/Chapters:reader@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Chapters' }
+const SETUP = { secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://totp/Elara:reader@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Elara' }
 const BACKUP_CODES = ['aaaa-1111', 'bbbb-2222', 'cccc-3333']
 
 type Route = (init?: RequestInit) => Response

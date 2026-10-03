@@ -122,7 +122,7 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
       await createEmailToken(user!.id, 'verify_email', code)
       await sendMail({
         to: email,
-        subject: 'Chapters: verify your email',
+        subject: 'Elara: verify your email',
         text: `Your verification code is ${code}`,
       })
       return reply.send({ status: 'pending_approval' })
@@ -239,7 +239,11 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
 
   app.post('/logout', { preHandler: app.requireAuth }, async (req, reply) => {
     if (req.sessionToken) await destroySession(req.sessionToken)
-    return reply.clearCookie(SESSION_COOKIE, { path: '/' }).send({ status: 'logged_out' })
+    return reply
+      .clearCookie(SESSION_COOKIE, { path: '/' })
+      .clearCookie('chapters_session', { path: '/' })
+      .clearCookie('sid', { path: '/' })
+      .send({ status: 'logged_out' })
   })
 
   app.get('/me', { preHandler: app.requireAuth }, async (req) => {
@@ -278,7 +282,7 @@ export function authRoutes(app: FastifyInstance, opts: { isProd: boolean }) {
         await createEmailToken(user.id, 'password_reset', raw)
         await sendMail({
           to: email,
-          subject: 'Chapters: password reset',
+          subject: 'Elara: password reset',
           text: `Your password reset token: ${raw}`,
         })
       }

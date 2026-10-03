@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { undo, redo } from '@codemirror/commands'
+import { getMigratedStorageItem } from '../../lib/storage.js'
 
 export type NoteWidth = 'compact' | 'standard' | 'wide' | 'full'
 
@@ -11,12 +12,13 @@ export const NOTE_WIDTH_CLASSES: Record<NoteWidth, string> = {
   full: 'max-w-full',
 }
 
-const WIDTH_STORAGE_KEY = 'chapters:note-width-preference'
+const WIDTH_STORAGE_KEY = 'elara:note-width-preference'
+const LEGACY_WIDTH_STORAGE_KEY = 'chapters:note-width-preference'
 
 export function useNoteWidth() {
   const [width, setWidth] = useState<NoteWidth>(() => {
     if (typeof localStorage === 'undefined') return 'standard'
-    const stored = localStorage.getItem(WIDTH_STORAGE_KEY)
+    const stored = getMigratedStorageItem(WIDTH_STORAGE_KEY, LEGACY_WIDTH_STORAGE_KEY)
     if (stored === 'compact' || stored === 'standard' || stored === 'wide' || stored === 'full') {
       return stored
     }
@@ -47,17 +49,20 @@ export function detectTextDirection(text?: string | null): NoteDirection {
 
 export function getNoteDirectionKey(vaultId?: string, path?: string): string {
   if (vaultId && path) {
-    return `chapters:note-direction:${vaultId}:${path}`
+    return `elara:note-direction:${vaultId}:${path}`
   }
-  return 'chapters:note-direction-default'
+  return 'elara:note-direction-default'
 }
 
 function readStoredDirection(vaultId?: string, path?: string, initialBody?: string): NoteDirection {
   if (typeof localStorage === 'undefined') return detectTextDirection(initialBody)
-  const specificKey = getNoteDirectionKey(vaultId, path)
-  const stored = localStorage.getItem(specificKey)
-  if (stored === 'ltr' || stored === 'rtl') return stored
-  const defaultStored = localStorage.getItem('chapters:note-direction-default')
+  if (vaultId && path) {
+    const specificKey = `elara:note-direction:${vaultId}:${path}`
+    const legacySpecificKey = `chapters:note-direction:${vaultId}:${path}`
+    const stored = getMigratedStorageItem(specificKey, legacySpecificKey)
+    if (stored === 'ltr' || stored === 'rtl') return stored
+  }
+  const defaultStored = getMigratedStorageItem('elara:note-direction-default', 'chapters:note-direction-default')
   if (defaultStored === 'ltr' || defaultStored === 'rtl') return defaultStored
   return detectTextDirection(initialBody)
 }
@@ -78,7 +83,7 @@ export function useNoteDirection(vaultId?: string, path?: string, initialBody?: 
       try {
         const specificKey = getNoteDirectionKey(vaultId, path)
         localStorage.setItem(specificKey, newDirection)
-        localStorage.setItem('chapters:note-direction-default', newDirection)
+        localStorage.setItem('elara:note-direction-default', newDirection)
       } catch {
         // Ignore quota error
       }
