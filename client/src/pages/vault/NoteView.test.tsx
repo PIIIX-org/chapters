@@ -268,8 +268,8 @@ describe('NoteView — editors take the collab path', () => {
     // The stale REST body is never inserted alongside it.
     expect(bodyText()).not.toContain('the REST copy')
     expect(contentEditable()).toBe('true')
-    // The property panel is bound to the same document's frontmatter map.
-    expect(screen.getByText('people')).toBeInTheDocument()
+    // The property panel and note bar are bound to the same document's frontmatter map.
+    expect(screen.getAllByText('people')[0]).toBeInTheDocument()
     expect(screen.getByDisplayValue('https://kintsugi.test/ada')).toBeInTheDocument()
     // Presence is labelled with the local part of the address, never the whole
     // one: until unit 4 adds display names, a full email here would be shown to
@@ -614,5 +614,18 @@ describe('NoteView — the inspector tabs', () => {
     // The reason, not a request that can only fail: nothing was fetched for it.
     const fetchMock = vi.mocked(globalThis.fetch)
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/revisions'))).toBe(false)
+  })
+
+  it('renders note type pill in the bar and removes top breadcrumb link', async () => {
+    stubFetch()
+    renderNote(EDIT_VAULT)
+    await relay()
+
+    // Note type pill is rendered in the bar with neutral tone
+    const typePills = screen.getAllByText('people')
+    expect(typePills.some((el) => el.getAttribute('data-slot') === 'pill')).toBe(true)
+
+    // Redundant top breadcrumbs link to vault is not present in the note bar
+    expect(screen.queryByRole('link', { name: 'Engineering' })).toBeNull()
   })
 })

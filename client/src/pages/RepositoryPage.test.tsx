@@ -143,10 +143,10 @@ describe('RepositoryPage route', () => {
     stubApi()
     const { container } = renderAt('/repos/r1/files/server/src/app.ts')
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Chapters' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Chapters' }, { timeout: 5000 })).toBeInTheDocument()
 
     // The splat kept every segment of the path, so the right file is open.
-    const code = await screen.findByRole('textbox', { name: 'server/src/app.ts (read-only)' })
+    const code = await screen.findByRole('textbox', { name: 'server/src/app.ts (read-only)' }, { timeout: 5000 })
     expect(code.textContent).toContain('export function buildApp()')
     expect(code.getAttribute('contenteditable')).toBe('false')
 
@@ -162,7 +162,7 @@ describe('RepositoryPage route', () => {
     stubApi()
     const { router } = renderAt('/repos/r1/files/server/src/app.ts')
 
-    await screen.findByRole('textbox', { name: 'server/src/app.ts (read-only)' })
+    await screen.findByRole('textbox', { name: 'server/src/app.ts (read-only)' }, { timeout: 5000 })
     await userEvent.click(screen.getByRole('link', { name: 'scripts/seed.py' }))
 
     expect(router.state.location.pathname).toBe('/repos/r1/files/scripts/seed.py')

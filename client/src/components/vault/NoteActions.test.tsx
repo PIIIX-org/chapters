@@ -66,6 +66,26 @@ describe('NoteActions', () => {
     expect(calls(fetchMock, 'POST')).toHaveLength(0)
   })
 
+  it('renders live slug requirements checklist and clears error dynamically when valid', () => {
+    renderActions()
+
+    fireEvent.click(screen.getByRole('button', { name: /rename jane/i }))
+    const input = screen.getByLabelText('New name')
+
+    // Initial valid value
+    expect(screen.getByText(/starts with a lowercase letter or number/i)).toBeInTheDocument()
+    expect(screen.getByText(/lowercase letters, numbers, and hyphens only/i)).toBeInTheDocument()
+
+    // Type invalid value and submit
+    fireEvent.change(input, { target: { value: 'Jane_Invalid' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(screen.getByText(/name must be/i)).toBeInTheDocument()
+
+    // Fix the value dynamically -> error clears
+    fireEvent.change(input, { target: { value: 'jane-valid' } })
+    expect(screen.queryByText(/name must be/i)).not.toBeInTheDocument()
+  })
+
   it('deletes a note after confirming (DELETE)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, { status: 'trashed', id: 'n1' }))
     vi.stubGlobal('fetch', fetchMock)
