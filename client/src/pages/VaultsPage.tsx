@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import { Button } from '../components/ui/button.js'
+import { getMigratedStorageItem } from '../lib/storage.js'
 import {
   Dialog,
   DialogContent,
@@ -89,14 +90,14 @@ export function VaultsPage() {
   const [creating, setCreating] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     try {
-      return (localStorage.getItem('chapters_vaults_view') as ViewMode) || 'card'
+      return (getMigratedStorageItem('elara_vaults_view', 'chapters_vaults_view') as ViewMode) || 'card'
     } catch {
       return 'card'
     }
   })
   const [groupByFolder, setGroupByFolder] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('chapters_vaults_group_by_folder') === 'true'
+      return getMigratedStorageItem('elara_vaults_group_by_folder', 'chapters_vaults_group_by_folder') === 'true'
     } catch {
       return false
     }
@@ -113,7 +114,7 @@ export function VaultsPage() {
   function handleViewModeChange(mode: ViewMode) {
     setViewMode(mode)
     try {
-      localStorage.setItem('chapters_vaults_view', mode)
+      localStorage.setItem('elara_vaults_view', mode)
     } catch {
       // Ignore
     }
@@ -123,7 +124,7 @@ export function VaultsPage() {
     const next = !groupByFolder
     setGroupByFolder(next)
     try {
-      localStorage.setItem('chapters_vaults_group_by_folder', String(next))
+      localStorage.setItem('elara_vaults_group_by_folder', String(next))
     } catch {
       // Ignore
     }
@@ -904,7 +905,7 @@ export function VaultsPage() {
                   )}
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  Folders, groups, and colors are saved to your Chapters account and automatically stay in sync across your Mac, Windows laptop, and all browsers.
+                  Folders, groups, and colors are saved to your Elara account and automatically stay in sync across your Mac, Windows laptop, and all browsers.
                 </span>
               </div>
             </button>

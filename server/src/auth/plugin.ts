@@ -3,11 +3,13 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import { getSessionUser, type SessionUser } from './sessions.js'
 import { logSecurityEvent } from './security-events.js'
 import { instanceRequiresMfa } from './mfa.js'
+import { config } from '../config.js'
 
 declare module 'fastify' {
   interface FastifyRequest {
     user: SessionUser | null
     sessionToken: string | null
+    needsSessionCookieUpgrade?: boolean
   }
   interface FastifyInstance {
     requireAuth: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
@@ -15,17 +17,46 @@ declare module 'fastify' {
   }
 }
 
-export const SESSION_COOKIE = 'sid'
+export const SESSION_COOKIE = 'elara_session'
+export const LEGACY_SESSION_COOKIES = ['chapters_session', 'sid'] as const
 
 export const authPlugin = fp(async (app) => {
   app.decorateRequest('user', null)
   app.decorateRequest('sessionToken', null)
+  app.decorateRequest('needsSessionCookieUpgrade', false)
 
   app.addHook('onRequest', async (req) => {
-    const token = req.cookies[SESSION_COOKIE]
+    let token = req.cookies[SESSION_COOKIE]
+    let isLegacy = false
+
+    if (!token) {
+      for (const legacyName of LEGACY_SESSION_COOKIES) {
+        if (req.cookies[legacyName]) {
+          token = req.cookies[legacyName]
+          isLegacy = true
+          break
+        }
+      }
+    }
+
     if (token) {
       req.sessionToken = token
       req.user = await getSessionUser(token)
+      if (req.user && isLegacy) {
+        req.needsSessionCookieUpgrade = true
+      }
+    }
+  })
+
+  app.addHook('onSend', async (req, reply) => {
+    if (req.needsSessionCookieUpgrade && req.sessionToken) {
+      reply.setCookie(SESSION_COOKIE, req.sessionToken, {
+        path: '/',
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: config.isProd,
+        maxAge: 30 * 24 * 60 * 60,
+      })
     }
   })
 

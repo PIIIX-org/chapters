@@ -22,7 +22,7 @@ function lazyRoute<T extends React.ComponentType<any>>(
     try {
       return await factory()
     } catch (err: unknown) {
-      const key = 'chapters_chunk_reload'
+      const key = 'elara_chunk_reload'
       const last = typeof sessionStorage !== 'undefined' ? Number(sessionStorage.getItem(key) ?? 0) : 0
       if (typeof window !== 'undefined' && Date.now() - last > 10_000) {
         sessionStorage.setItem(key, String(Date.now()))

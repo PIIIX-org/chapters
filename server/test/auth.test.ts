@@ -135,16 +135,52 @@ describe('signup → verify → approve → login', () => {
 })
 
 describe('sessions', () => {
-  it('logout invalidates the session', async () => {
+  it('logout invalidates the session and clears all 3 cookies', async () => {
     const user = await createActiveUser()
     const cookie = await loginCookie(app, user.email)
     expect(
       (await app.inject({ method: 'GET', url: '/api/me', headers: { cookie } })).statusCode,
     ).toBe(200)
-    await app.inject({ method: 'POST', url: '/api/logout', headers: { cookie } })
+    const logoutRes = await app.inject({ method: 'POST', url: '/api/logout', headers: { cookie } })
+    expect(logoutRes.statusCode).toBe(200)
+    const setCookies = logoutRes.headers['set-cookie']
+    const cookieStr = Array.isArray(setCookies) ? setCookies.join('; ') : String(setCookies)
+    expect(cookieStr).toContain('elara_session=;')
+    expect(cookieStr).toContain('chapters_session=;')
+    expect(cookieStr).toContain('sid=;')
     expect(
       (await app.inject({ method: 'GET', url: '/api/me', headers: { cookie } })).statusCode,
     ).toBe(401)
+  })
+
+  it('supports legacy session cookies with rolling upgrade to elara_session', async () => {
+    const user = await createActiveUser()
+    const cookie = await loginCookie(app, user.email)
+    const token = cookie.split(';')[0]!.split('=')[1]!
+
+    // Request with legacy 'sid' cookie
+    const legacyRes = await app.inject({
+      method: 'GET',
+      url: '/api/me',
+      headers: { cookie: `sid=${token}` },
+    })
+    expect(legacyRes.statusCode).toBe(200)
+    const setCookies = legacyRes.headers['set-cookie']
+    const cookieStr = Array.isArray(setCookies) ? setCookies.join('; ') : String(setCookies)
+    expect(cookieStr).toContain(`elara_session=${token}`)
+
+    // Request with legacy 'chapters_session' cookie
+    const chaptersRes = await app.inject({
+      method: 'GET',
+      url: '/api/me',
+      headers: { cookie: `chapters_session=${token}` },
+    })
+    expect(chaptersRes.statusCode).toBe(200)
+    const chaptersSetCookies = chaptersRes.headers['set-cookie']
+    const chaptersCookieStr = Array.isArray(chaptersSetCookies)
+      ? chaptersSetCookies.join('; ')
+      : String(chaptersSetCookies)
+    expect(chaptersCookieStr).toContain(`elara_session=${token}`)
   })
 
   it('deactivation kills live sessions immediately', async () => {

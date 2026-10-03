@@ -142,7 +142,7 @@ describe('AppShell', () => {
     await user.click(await screen.findByRole('menuitemradio', { name: 'Light' }))
 
     expect(document.documentElement.classList.contains('dark')).toBe(false)
-    expect(localStorage.getItem('chapters.theme')).toBe('light')
+    expect(localStorage.getItem('elara.theme')).toBe('light')
   })
 
   it('jumps between areas with g-chords, but never while typing', async () => {
@@ -172,7 +172,7 @@ describe('AppShell', () => {
     await waitFor(() => expect(within(context).getByText('Context content')).toBeInTheDocument())
     expect(within(inspector).getByText('Inspector content')).toBeInTheDocument()
     expect(context).toBeVisible()
-    expect(context).toHaveClass('absolute', 'top-[194px]', 'bottom-[222px]', 'left-[68px]', 'z-20')
+    expect(context).toHaveClass('absolute', 'top-[54px]', 'bottom-[54px]', 'left-[68px]', 'z-20')
     expect(inspector).toHaveClass('absolute', 'top-[54px]', 'bottom-[54px]', 'z-20', 'right-2.5')
 
     const toggle = screen.getByRole('button', { name: 'Toggle context panel' })
@@ -186,7 +186,7 @@ describe('AppShell', () => {
     expect(context).toHaveClass('w-11')
     expect(within(context).getByText('Collapsed context')).toBeInTheDocument()
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
-    expect(localStorage.getItem('chapters.shell.context')).toBe('closed')
+    expect(localStorage.getItem('elara.shell.context')).toBe('closed')
 
     const inspectorToggle = screen.getByRole('button', { name: 'Toggle inspector' })
     expect(inspectorToggle).toHaveAttribute('aria-pressed', 'true')
@@ -260,7 +260,7 @@ describe('AppShell', () => {
     stubFetch()
     renderShell()
     const user = userEvent.setup()
-    const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+    const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
     const rail = screen.getByRole('navigation', { name: 'Primary' })
     const graphLink = within(rail).getByRole('link', { name: 'Graph' })
     const vaultsLink = within(rail).getByRole('link', { name: 'Vaults' })
@@ -300,7 +300,7 @@ describe('AppShell', () => {
     const user = userEvent.setup()
     await screen.findByText('Context content')
 
-    const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+    const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
     const rail = screen.getByRole('navigation', { name: 'Primary' })
     expect(chButton).toHaveAttribute('aria-expanded', 'false')
     expect(rail).toHaveClass('w-11')
@@ -477,7 +477,7 @@ describe('AppShell', () => {
       renderShell('/vaults/v1')
       const user = userEvent.setup()
 
-      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+      const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
       expect(chButton).toHaveAttribute('aria-expanded', 'false')
       expect(screen.queryByTestId('shell-backdrop')).toBeNull()
 
@@ -497,7 +497,7 @@ describe('AppShell', () => {
       renderShell('/vaults/v1')
       const user = userEvent.setup()
 
-      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+      const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
       await user.click(chButton)
       expect(chButton).toHaveAttribute('aria-expanded', 'true')
 
@@ -515,7 +515,7 @@ describe('AppShell', () => {
       renderShell('/vaults/v1')
       const user = userEvent.setup()
 
-      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+      const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
       await user.click(chButton)
       expect(chButton).toHaveAttribute('aria-expanded', 'true')
       expect(screen.getByTestId('shell-backdrop')).toBeInTheDocument()
@@ -532,7 +532,7 @@ describe('AppShell', () => {
       const user = userEvent.setup()
 
       const contextToggle = screen.getByRole('button', { name: 'Toggle context panel' })
-      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+      const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
 
       // Open context panel
       await user.click(contextToggle)

@@ -39,7 +39,9 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/piiix-org/chapters
+          images: |
+            ghcr.io/piiix-org/elara
+            ghcr.io/piiix-org/chapters
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/prod' }}
             type=semver,pattern=v{{version}}

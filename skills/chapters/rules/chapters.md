@@ -25,3 +25,7 @@ You are connected to **Chapters**, an open-source, self-hostable second brain an
    - Always recognize and execute `/chapters-status`, `/chapters-search`, `/chapters-symbols`, `/chapters-graph`, `/chapters-path`, `/chapters-perspective`, `/chapters-prompt`, `/chapters-map`, `/chapters-note`, `/chapters-repo`, `/chapters-vault`, and `/chapters-export`.
 7. **Post-Task Note Evaluation Protocol**:
    - At the conclusion of any task that modifies or maps code, evaluate if existing notes need updating or if a new note should be added, and proceed accordingly.
+8. **Pre-Task Codebase Drift & Note Freshness Protocol (MANDATORY)**:
+   - When returning to or starting work on a project after an interval or recent commits, first check if existing vault notes are outdated compared to recent repository commits and file modifications.
+   - If outdated, explicitly inform the user which notes are stale and why they need to be updated first.
+   - Update the notes first via Chapters MCP (`edit_note` / `create_note`), and only then proceed with the task.

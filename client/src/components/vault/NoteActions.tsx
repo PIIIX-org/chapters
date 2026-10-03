@@ -10,7 +10,7 @@ import { useDeleteNote } from '../../hooks/useDeleteNote'
 import type { NoteSummary } from '../../api/notes'
 import { cn } from '../../lib/utils'
 
-const SLUG = /^[a-z0-9][a-z0-9-]*$/
+import { SLUG, SlugRequirements } from './SlugRequirements.js'
 
 interface NoteActionsProps {
   vaultId: string
@@ -24,13 +24,24 @@ export function NoteActions({ vaultId, note, compact = false }: NoteActionsProps
   const [mode, setMode] = useState<'idle' | 'renaming' | 'confirmDelete'>('idle')
   const [name, setName] = useState(note.name)
   const [error, setError] = useState<string | null>(null)
+  const [submitted, setSubmitted] = useState(false)
   const renameNote = useRenameNote(vaultId)
   const deleteNote = useDeleteNote(vaultId)
   const navigate = useNavigate()
   const isOpen = useParams()['*'] === note.path
 
+  const isNameValid = SLUG.test(name)
+
+  function handleNameChange(val: string) {
+    setName(val)
+    if (error && SLUG.test(val)) {
+      setError(null)
+    }
+  }
+
   function submitRename(e: FormEvent) {
     e.preventDefault()
+    setSubmitted(true)
     if (!SLUG.test(name)) {
       setError('Name must be lowercase letters, numbers, and hyphens.')
       return
@@ -41,6 +52,7 @@ export function NoteActions({ vaultId, note, compact = false }: NoteActionsProps
       {
         onSuccess: (renamed) => {
           setMode('idle')
+          setSubmitted(false)
           if (isOpen) navigate(`/vaults/${vaultId}/notes/${renamed.path}`)
         },
         onError: (err) => setError(err.message || 'Could not rename the note.'),
@@ -63,7 +75,19 @@ export function NoteActions({ vaultId, note, compact = false }: NoteActionsProps
     return (
       <form onSubmit={submitRename} className="flex flex-col gap-1">
         <div className="flex items-center gap-1">
-          <Input value={name} onChange={(e) => setName(e.target.value)} aria-label="New name" className="h-6" />
+          <Input
+            value={name}
+            onChange={(e) => handleNameChange(e.target.value)}
+            aria-label="New name"
+            className={cn(
+              'h-6 text-xs font-mono',
+              name.length > 0 &&
+                (isNameValid
+                  ? 'border-emerald-500 focus-visible:ring-emerald-500'
+                  : 'border-red-500 focus-visible:ring-red-500'),
+              (error || (submitted && !isNameValid)) && 'border-red-500 focus-visible:ring-red-500',
+            )}
+          />
           <Button type="submit" size="xs" disabled={renameNote.isPending}>Save</Button>
           <Button
             type="button"
@@ -73,11 +97,13 @@ export function NoteActions({ vaultId, note, compact = false }: NoteActionsProps
               setMode('idle')
               setName(note.name)
               setError(null)
+              setSubmitted(false)
             }}
           >
             Cancel
           </Button>
         </div>
+        <SlugRequirements value={name} />
         <FormError message={error} />
       </form>
     )

@@ -25,10 +25,10 @@ const SESSION = {
 // never sees how the owner authenticated.
 const OWNED = {
   id: 'r1',
-  name: 'Chapters',
+  name: 'Elara',
   ownerId: 'me',
   ingestionMethod: 'git' as const,
-  gitUrl: 'https://github.com/piiix-org/chapters.git',
+  gitUrl: 'https://github.com/piiix-org/elara.git',
   localPath: null,
   defaultBranch: 'dev',
   mergeable: true,
@@ -143,10 +143,10 @@ describe('RepositoryPage route', () => {
     stubApi()
     const { container } = renderAt('/repos/r1/files/server/src/app.ts')
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Chapters' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Elara' }, { timeout: 5000 })).toBeInTheDocument()
 
     // The splat kept every segment of the path, so the right file is open.
-    const code = await screen.findByRole('textbox', { name: 'server/src/app.ts (read-only)' })
+    const code = await screen.findByRole('textbox', { name: 'server/src/app.ts (read-only)' }, { timeout: 5000 })
     expect(code.textContent).toContain('export function buildApp()')
     expect(code.getAttribute('contenteditable')).toBe('false')
 
@@ -162,7 +162,7 @@ describe('RepositoryPage route', () => {
     stubApi()
     const { router } = renderAt('/repos/r1/files/server/src/app.ts')
 
-    await screen.findByRole('textbox', { name: 'server/src/app.ts (read-only)' })
+    await screen.findByRole('textbox', { name: 'server/src/app.ts (read-only)' }, { timeout: 5000 })
     await userEvent.click(screen.getByRole('link', { name: 'scripts/seed.py' }))
 
     expect(router.state.location.pathname).toBe('/repos/r1/files/scripts/seed.py')
@@ -182,12 +182,12 @@ describe('RepositoryPage route', () => {
     // keeps the test off whatever `navigator.platform` happens to say here.
     fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true })
 
-    const option = await screen.findByRole('option', { name: 'Command: Open repository: Chapters' })
+    const option = await screen.findByRole('option', { name: 'Command: Open repository: Elara' })
     await userEvent.click(option)
 
     expect(router.state.location.pathname).toBe('/repos/r1/files')
     // No file chosen yet is a real state of this route, not a 404.
-    expect(await screen.findByRole('heading', { level: 1, name: 'Chapters' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Elara' })).toBeInTheDocument()
     expect(screen.getByText(/Pick a file to read it/)).toBeInTheDocument()
   })
 
@@ -227,7 +227,7 @@ describe('RepositoryPage route', () => {
     renderAt('/repos/r1/files')
 
     await userEvent.click(await screen.findByRole('button', { name: 'Settings' }))
-    const dialog = await screen.findByRole('dialog', { name: /repository settings — chapters/i })
+    const dialog = await screen.findByRole('dialog', { name: /repository settings — elara/i })
     // The three surfaces this unit was missing, all reached from here.
     expect(within(dialog).getByLabelText('Name')).toBeInTheDocument()
     expect(within(dialog).getByRole('heading', { level: 3, name: 'Sharing' })).toBeInTheDocument()

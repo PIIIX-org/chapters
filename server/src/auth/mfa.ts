@@ -9,7 +9,7 @@ const BACKUP_CODE_COUNT = 10
 
 function totpFor(secret: string, email: string): OTPAuth.TOTP {
   return new OTPAuth.TOTP({
-    issuer: 'Chapters',
+    issuer: 'Elara',
     label: email,
     secret: OTPAuth.Secret.fromBase32(secret),
   })

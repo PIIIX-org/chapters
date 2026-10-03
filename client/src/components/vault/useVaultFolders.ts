@@ -4,6 +4,7 @@ import {
   getVaultUserPreferences,
   updateVaultUserPreferences,
 } from '../../api/vaults.js'
+import { getMigratedStorageItem } from '../../lib/storage.js'
 
 export type VaultColor =
   | 'blue'
@@ -175,15 +176,20 @@ export function getColorDef(color?: VaultColor | null): ColorDef | null {
 
 export type VaultStorageMode = 'online' | 'local'
 
-const STORAGE_KEY_STORAGE_MODE = 'chapters_vault_storage_mode'
-const STORAGE_KEY_FOLDERS = 'chapters_vault_folders'
-const STORAGE_KEY_FOLDER_COLORS = 'chapters_folder_colors'
-const STORAGE_KEY_VAULT_COLORS = 'chapters_vault_colors'
-const STORAGE_KEY_FAVORITES = 'chapters_vault_favorites'
+const STORAGE_KEY_STORAGE_MODE = 'elara_vault_storage_mode'
+const LEGACY_STORAGE_KEY_STORAGE_MODE = 'chapters_vault_storage_mode'
+const STORAGE_KEY_FOLDERS = 'elara_vault_folders'
+const LEGACY_STORAGE_KEY_FOLDERS = 'chapters_vault_folders'
+const STORAGE_KEY_FOLDER_COLORS = 'elara_folder_colors'
+const LEGACY_STORAGE_KEY_FOLDER_COLORS = 'chapters_folder_colors'
+const STORAGE_KEY_VAULT_COLORS = 'elara_vault_colors'
+const LEGACY_STORAGE_KEY_VAULT_COLORS = 'chapters_vault_colors'
+const STORAGE_KEY_FAVORITES = 'elara_vault_favorites'
+const LEGACY_STORAGE_KEY_FAVORITES = 'chapters_vault_favorites'
 
-function readStorage<T>(key: string, fallback: T): T {
+function readStorage<T>(key: string, legacyKey: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(key)
+    const raw = getMigratedStorageItem(key, legacyKey)
     return raw ? JSON.parse(raw) : fallback
   } catch {
     return fallback
@@ -197,25 +203,25 @@ function readStorage<T>(key: string, fallback: T): T {
  */
 export function useVaultFolders() {
   const [storageMode, setStorageModeState] = useState<VaultStorageMode>(() =>
-    readStorage<VaultStorageMode>(STORAGE_KEY_STORAGE_MODE, 'online'),
+    readStorage<VaultStorageMode>(STORAGE_KEY_STORAGE_MODE, LEGACY_STORAGE_KEY_STORAGE_MODE, 'online'),
   )
 
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'saved' | 'error'>('idle')
 
   const [folders, setFolders] = useState<Record<string, string>>(() =>
-    readStorage<Record<string, string>>(STORAGE_KEY_FOLDERS, {}),
+    readStorage<Record<string, string>>(STORAGE_KEY_FOLDERS, LEGACY_STORAGE_KEY_FOLDERS, {}),
   )
 
   const [folderColors, setFolderColors] = useState<Record<string, VaultColor>>(() =>
-    readStorage<Record<string, VaultColor>>(STORAGE_KEY_FOLDER_COLORS, {}),
+    readStorage<Record<string, VaultColor>>(STORAGE_KEY_FOLDER_COLORS, LEGACY_STORAGE_KEY_FOLDER_COLORS, {}),
   )
 
   const [vaultColors, setVaultColors] = useState<Record<string, VaultColor>>(() =>
-    readStorage<Record<string, VaultColor>>(STORAGE_KEY_VAULT_COLORS, {}),
+    readStorage<Record<string, VaultColor>>(STORAGE_KEY_VAULT_COLORS, LEGACY_STORAGE_KEY_VAULT_COLORS, {}),
   )
 
   const [favorites, setFavorites] = useState<Record<string, boolean>>(() =>
-    readStorage<Record<string, boolean>>(STORAGE_KEY_FAVORITES, {}),
+    readStorage<Record<string, boolean>>(STORAGE_KEY_FAVORITES, LEGACY_STORAGE_KEY_FAVORITES, {}),
   )
 
   const foldersRef = useRef(folders)

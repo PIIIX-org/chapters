@@ -12,7 +12,7 @@ describe('AuthFrame', () => {
     )
 
     expect(screen.getByRole('heading', { level: 1, name: 'Log in' })).toBeInTheDocument()
-    expect(screen.getByText('Chapters')).toBeInTheDocument()
+    expect(screen.getByText('Elara')).toBeInTheDocument()
     expect(screen.getByText('sign in')).toBeInTheDocument()
     expect(screen.getByText('form goes here')).toBeInTheDocument()
     // The whole card sits in the page's main landmark — these pages have no shell.
