@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
-import { Link, useNavigate, useOutletContext, useParams } from 'react-router'
+import { useNavigate, useOutletContext, useParams } from 'react-router'
 import { EditorView } from '@codemirror/view'
 import { useNote } from '../../hooks/useNote.js'
 import { useCreateNote } from '../../hooks/useCreateNote.js'
@@ -34,7 +34,7 @@ import {
 import type { NoteDirection } from '../../components/vault/note-toolbar-utils.js'
 import { History, Link2, Network, Share2, SlidersHorizontal } from 'lucide-react'
 import { Inspector, PanelRailButton, PanelRailNav } from '../../components/shell/ShellPanels.js'
-import { useOptionalShell, usePanel, useShellStatus } from '../../components/shell/shell-context.js'
+import { useOptionalShell, usePanel, useShellBreadcrumb, useShellStatus } from '../../components/shell/shell-context.js'
 import type { ShellStatus } from '../../components/shell/shell-context.js'
 import { Pill } from '../../components/ui/pill.js'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js'
@@ -57,6 +57,17 @@ export function NoteView() {
   const path = useParams()['*']
   const vault = useOutletContext<Vault | undefined>()
   const note = useNote(vaultId!, path!)
+
+  const breadcrumbItems =
+    vaultId && path
+      ? [
+          { label: 'Vaults', to: '/vaults' },
+          { label: vault?.name ?? 'Vault', to: `/vaults/${vaultId}` },
+          { label: path },
+        ]
+      : [{ label: 'Vaults', to: '/vaults' }]
+
+  useShellBreadcrumb(breadcrumbItems)
 
   // Conservative default: unknown access (vault undefined) => reader.
   // `canEdit(vault.access)` is what picks the transport, and that is the
@@ -109,7 +120,6 @@ export function NoteView() {
       key={key}
       vaultId={vaultId!}
       path={path!}
-      vaultName={vault?.name}
       accessRevoked={!editable}
       initialBody={note.data!.body}
       access={vault?.access ?? 'read'}
@@ -119,7 +129,6 @@ export function NoteView() {
       key={key}
       vaultId={vaultId!}
       path={path!}
-      vaultName={vault?.name}
       initialFrontmatter={note.data!.frontmatter}
       initialBody={note.data!.body}
     />
@@ -156,11 +165,14 @@ function NoteFrame({
   const [width, setWidth] = useNoteWidth()
   const shell = useOptionalShell()
   const contextOpen = Boolean(shell?.panels?.context?.mounted && shell?.panels?.context?.open)
-  const leftPad = contextOpen
-    ? 'pl-[320px]'
-    : shell?.sidebarExpanded
-      ? 'pl-[264px]'
-      : 'pl-20'
+  const leftPad =
+    contextOpen && shell?.sidebarExpanded
+      ? 'pl-[524px]'
+      : contextOpen
+        ? 'pl-[320px]'
+        : shell?.sidebarExpanded
+          ? 'pl-[264px]'
+          : 'pl-20'
 
   return (
     <>
@@ -208,19 +220,6 @@ function NoteFrame({
         {inspector}
       </Inspector>
     </>
-  )
-}
-
-/** The note bar's path: `vault / path`, mono like every machine label. */
-function NotePath({ vaultName, vaultId, path }: { vaultName: string | undefined; vaultId: string; path: string }) {
-  return (
-    <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-      <Link to={`/vaults/${vaultId}`} className="hover:text-foreground transition-colors hover:underline">
-        {vaultName ?? vaultId}
-      </Link>
-      {' / '}
-      <span className="text-foreground">{path}</span>
-    </span>
   )
 }
 
@@ -342,7 +341,6 @@ function useWikilinks(vaultId: string, canCreate: boolean) {
 interface NoteIdentity {
   vaultId: string
   path: string
-  vaultName: string | undefined
 }
 
 interface CollabNoteProps extends NoteIdentity {
@@ -363,7 +361,7 @@ interface CollabNoteProps extends NoteIdentity {
  * The editor path: one Yjs document, shared with everyone else holding `edit`.
  * No `PUT`, no local copy of the body — the `Y.Text` is the document.
  */
-function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, access }: CollabNoteProps) {
+function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: CollabNoteProps) {
   const session = useSession()
   // isError before .data, as everywhere.
   const me = session.isPending || session.isError ? null : session.data
@@ -429,6 +427,10 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
   // so the two can never disagree (spec: shell shows the page's live status).
   useShellStatus(collabShellStatus(collab.status, collab.synced))
 
+  const rawType = collab.ydoc.getMap('frontmatter').get('type')
+  const noteType =
+    (typeof rawType === 'string' && rawType.trim().length > 0 ? rawType.trim() : path.split('/')[0]) || ''
+
   return (
     <NoteFrame
       editorRef={editorRef}
@@ -439,7 +441,14 @@ function CollabNote({ vaultId, path, vaultName, accessRevoked, initialBody, acce
       vaultId={vaultId}
       bar={
         <>
-          <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />
+          {noteType && (
+            <Pill
+              tone="neutral"
+              className="font-mono text-xs uppercase tracking-wider"
+            >
+              {noteType}
+            </Pill>
+          )}
           <CollabStatusLine status={collab.status} synced={collab.synced} syncedAt={mark.at} />
           {/* Presence lives in this bar and nowhere else — never a global
               "who's online", which leaks who is working on what. */}
@@ -494,7 +503,7 @@ interface LiveNoteProps extends NoteIdentity {
  * The reader path: the SSE live view, which sends whole note states and no
  * presence data of any kind. Locked, but never stale.
  */
-function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }: LiveNoteProps) {
+function LiveNote({ vaultId, path, initialFrontmatter, initialBody }: LiveNoteProps) {
   const live = useLiveNote({ vaultId, path, enabled: true })
   useShellStatus(LIVE_SHELL[live.status])
   // The REST fetch is what is on screen until the first frame arrives.
@@ -525,6 +534,11 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: state.body } })
   }, [editorRef, state.body])
 
+  const noteType =
+    (typeof state.frontmatter?.type === 'string' && state.frontmatter.type.trim().length > 0
+      ? state.frontmatter.type.trim()
+      : path.split('/')[0]) || ''
+
   return (
     <NoteFrame
       editorRef={editorRef}
@@ -535,7 +549,14 @@ function LiveNote({ vaultId, path, vaultName, initialFrontmatter, initialBody }:
       vaultId={vaultId}
       bar={
         <>
-          <NotePath vaultName={vaultName} vaultId={vaultId} path={path} />
+          {noteType && (
+            <Pill
+              tone="neutral"
+              className="font-mono text-xs uppercase tracking-wider"
+            >
+              {noteType}
+            </Pill>
+          )}
           <Pill>Read-only</Pill>
           <span role="status" className="truncate text-xs text-muted-foreground">
             {LIVE_WHISPER[live.status]}

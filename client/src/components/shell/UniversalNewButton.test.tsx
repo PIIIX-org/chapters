@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router'
 import { UniversalNewButton } from './UniversalNewButton.js'
 import { mockJsonResponse } from '../../lib/api.js'
 
-function renderComponent(initialRoute = '/', initialVaults?: any[]) {
+function renderComponent(initialRoute = '/', initialVaults?: unknown[]) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })

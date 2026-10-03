@@ -9,7 +9,7 @@ export const pillVariants = cva(
   {
     variants: {
       tone: {
-        neutral: 'border-border bg-muted text-muted-foreground',
+        neutral: 'border-border bg-muted text-muted-foreground dark:text-zinc-100 dark:bg-zinc-800/80 dark:border-zinc-700/80 font-medium',
         live: 'border-success/40 bg-success/10 text-success',
         idle: 'border-warning/40 bg-warning/10 text-warning',
         error: 'border-destructive/40 bg-destructive/10 text-destructive',
