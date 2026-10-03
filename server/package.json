@@ -33,7 +33,7 @@
     "nodemailer": "^10.0.13",
     "otpauth": "^9.5.2",
     "postgres": "^3.4.7",
-    "simple-git": "^3.36.0",
+    "simple-git": "^4.0.2",
     "tree-sitter-go": "^0.25.0",
     "tree-sitter-javascript": "^0.25.0",
     "tree-sitter-python": "^0.25.0",
