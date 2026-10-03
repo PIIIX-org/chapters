@@ -38,15 +38,21 @@ flowchart TD
 
 ### Phase 0: Target Vault & Repository Binding
 
-1. **Resolve Repository**:
+1. **Interactive Target Vault Selection**:
+   - When mapping starts, if `--vault` is not explicitly supplied, **prompt the user**:
+     - *Question*: "Should this codebase be mapped into a **new vault** or an **existing vault**?"
+     - *Naming*: If creating a new vault, ask whether to use the repository's name (e.g. `repo-name`) or provide a custom vault name.
+     - If choosing an existing vault, present accessible vaults via `list_vaults` and bind to the chosen `vaultId`.
+2. **Git Repository Connection & Ingestion Choice**:
    - Check if the repository is already connected using Chapters MCP `list_repositories`.
-   - If not connected, connect it using `connect_repository` (providing git URL or local path).
-   - Retrieve the exact repository ID (e.g. `chapters`, `repo-uuid`).
-2. **Resolve Vault**:
-   - If `--vault <vault-id>` is provided, verify it exists using `list_vaults`.
-   - If no vault ID is provided, look for an existing vault matching the project name (e.g., `Project Documentation` or `Codebase Map`).
-   - If none exists, create a dedicated vault using `create_vault` with a descriptive name (e.g., `Chapters Architecture`).
-   - Record the target `vaultId`.
+   - If not connected, **ask the user if they also wish to add/connect the repository to Chapters** (`connect_repository`) for continuous background git synchronization and AST code symbol indexing.
+   - **Mandatory Invariant**: Regardless of whether connected for continuous git sync, when mapping a GitHub repository of any programming job, **you must always map the codebase** into structured OKF notes.
+   - Retrieve or assign the repository reference ID (e.g. `repo:chapters` or `repo:<repo-uuid>`) for deep-linking.
+3. **Post-Task Note Evaluation Protocol**:
+   - At the completion of any task involving codebase mapping, refactoring, or architectural change:
+     - **Evaluate existing notes**: Determine if any domain concept, spec, or model notes need to be updated.
+     - **Evaluate new notes**: Determine if newly introduced invariants, decisions (ADRs), or workflows warrant a new note.
+     - **Execute updates**: Call `edit_note` or `create_note` and confirm changes to the user.
 
 ---
 

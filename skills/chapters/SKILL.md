@@ -5,9 +5,9 @@ description: Connects AI agents to Chapters — an open-source, self-hostable se
 
 # Chapters Agent Skill
 
-This skill enables AI agents to natively understand, navigate, and operate **Chapters** — an open-source, self-hostable "second brain" web platform with plain markdown/YAML notes (Open Knowledge Format), synced code repositories, and an AI-navigable knowledge graph accessible via Model Context Protocol (MCP).
+This skill enables AI agents to natively understand, navigate, and operate **Chapters** — an open-source, self-hostable "second brain" web platform with plain markdown/YAML notes (Open Knowledge Format v0.2), synced code repositories, and an AI-navigable knowledge graph accessible via Model Context Protocol (MCP).
 
-When this skill is active, **you do not need to ask the user what Chapters is or whether the MCP server is available.** You already know Chapters is active, understand its architecture, and proactively use the Chapters MCP tools for project navigation, retrieval, note management, and code exploration.
+When this skill is active, **you do not need to ask the user what Chapters is or whether the MCP server is available.** You already know Chapters is active, understand its architecture, and proactively use the Chapters MCP tools for project navigation, AST code symbol retrieval, concept pathfinding, note management, and code exploration.
 
 ---
 
@@ -15,14 +15,18 @@ When this skill is active, **you do not need to ask the user what Chapters is or
 
 Chapters is a team knowledge base and codebase mapping platform built on four foundational pillars:
 
-1. **Notes as Plain Files (OKF)**: Every note is a markdown file with YAML frontmatter following Google's [Open Knowledge Format (OKF v0.2)](https://github.com/GoogleCloudPlatform/open-knowledge-format). Notes support typed relationships and bidirectional wikilinks (`[[note-name]]`, `[[note-name|display text]]`, and `[[repo:repo-id/path/to/file]]`).
+1. **Notes as Plain Files (OKF v0.2)**: Every note is a markdown file with YAML frontmatter following Google's [Open Knowledge Format (OKF v0.2)](https://github.com/GoogleCloudPlatform/open-knowledge-format). Notes support typed relationships, strict ISO 8601 UTC offsets, 8-level nested slug paths, progressive disclosure indices, and bidirectional wikilinks:
+   - Note-to-note: `[[note-name]]` or `[[path/to/note|display text]]`
+   - Note-to-code: `[[repo:repo-id/path/to/file]]`
+   - Symbol-anchored: `[[repo:repo-id/path/to/file#symbol:FunctionName]]`
+   - Line-anchored: `[[repo:repo-id/path/to/file#L12-L34]]`
 2. **AI-Navigable Knowledge Graph**: The graph links notes and code via three edge types:
-   - `EXTRACTED`: Explicit wikilinks and code imports/calls derived via Tree-sitter.
-   - `STRUCTURAL`: Notes sharing metadata properties, tags, or hierarchies.
+   - `EXTRACTED`: Explicit wikilinks and code imports/calls derived via Tree-sitter AST analysis.
+   - `STRUCTURAL`: Notes sharing metadata properties, tags, or directory hierarchies.
    - `INFERRED` / `SEMANTIC`: Top-k nearest neighbors computed from local ONNX embeddings in a shared vector space.
-   - Nodes are clustered using Louvain community detection and ranked via PageRank.
-3. **Synced Code Repositories**: Read-only ingestion of git repositories (via git clone/poll/webhook, local filesystem watch, or CLI push) indexed with Tree-sitter AST symbol extraction and semantic embeddings.
-4. **First-Class MCP Server**: A stateless, permission-scoped MCP server (`POST /mcp` via Streamable HTTP transport or stdio) providing 50 tools with full system parity.
+   - Topological features include Louvain community detection, PageRank centrality ranking, shortest path finding (`find_graph_path`), and saved graph perspectives with filter presets.
+3. **Synced Code Repositories**: Read-only ingestion of git repositories (via git clone/poll/webhook, local filesystem watch, or CLI push) indexed with Tree-sitter AST symbol extraction (functions, classes, interfaces, types) and fine-grained semantic vector embeddings (`find_symbols`).
+4. **First-Class MCP Server & Prompts**: A stateless, permission-scoped MCP server (`POST /mcp` via Streamable HTTP transport or stdio) providing **57 tools** with full system parity and **20 first-class engineering prompts** with live context hydration.
 
 ---
 
@@ -31,27 +35,46 @@ Chapters is a team knowledge base and codebase mapping platform built on four fo
 ### 1. Graph-First Navigation Protocol
 When exploring a project or answering questions about architecture, concepts, or code:
 - **Do not scan all files blindly.**
-- **Step 1 — Search**: Run `search` (or `/chapters-search`) with a query to find relevant notes and code symbols using hybrid (lexical + vector) retrieval.
-- **Step 2 — Graph Topology**: Use `graph` (or `/chapters-graph`) with `aggregate: "community"` to view high-level community clusters, or inspect immediate neighbors (`neighbors_of`) and backlinks.
-- **Step 3 — Read Context**: Use `read_note` or `read_file` only for the specific notes and code files identified by the search/graph.
+- **Step 1 — Search & Symbols**:
+  - Run `search` (or `/chapters-search`) with a query to find relevant notes and code files using hybrid (lexical + vector) retrieval.
+  - Run `find_symbols` (or `/chapters-symbols`) to pinpoint specific functions, classes, interfaces, or types with exact declaration line numbers without reading whole files.
+- **Step 2 — Graph Topology & Pathfinding**:
+  - Use `graph` (or `/chapters-graph`) with `aggregate: "community"` to view high-level community clusters, or inspect immediate neighbors (`neighbors_of`) and backlinks.
+  - Use `find_graph_path` (or `/chapters-path`) to trace the shortest conceptual path between two components, notes, or code files.
+  - Use `list_graph_perspectives` to see curated domain or subsystem perspectives.
+- **Step 3 — Read Context**:
+  - Use `read_note` or `read_file` only for the specific notes and code files identified by the search/graph.
 
 ### 2. Note Creation & Editing (OKF Standard)
 When creating or editing notes via `create_note` or `edit_note`:
-- Always include valid YAML frontmatter at the top:
+- Always include valid YAML frontmatter conforming to OKF v0.2:
   ```markdown
   ---
   title: "Descriptive Title"
-  type: concept # or spec, guide, meeting, reference, decision
-  tags: [tag1, tag2]
-  created: YYYY-MM-DD
+  type: concept # concept, spec, guide, meeting, reference, decision
+  status: stable # draft, active, stable, deprecated, superseded, archived
+  tags: [subsystem, architecture]
+  created: 2026-10-02T22:00:00Z
+  sources:
+    - id: "src-1"
+      resource: "repo:chapters/server/src/graph/assemble.ts"
+      title: "Graph Assembly Engine"
   ---
 
   # Descriptive Title
 
   Body content with [[wikilinks]] connecting related concepts.
   Link to code files using [[repo:repo-id/path/to/file]].
+  Anchor to symbols using [[repo:repo-id/path/to/file#symbol:FunctionName]].
   ```
 - Edits flow through the collaborative CRDT engine, creating attributed audit revisions.
+- Validate vaults periodically using `audit_okf_conformance`.
+
+### 3. Post-Task Note Evaluation Protocol
+At the conclusion of any task that inspects, refactors, or extends the codebase or notes:
+- **Evaluate Existing Notes**: Check if any concept, spec, domain, or data model notes were impacted. Update them via `edit_note`.
+- **Evaluate New Notes**: If a new capability, bounded domain, or architectural decision was made, create a new note via `create_note` (e.g. `spec/...` or `decisions/ADR-...`).
+- **Confirm to User**: Report note updates and additions as part of the task completion summary.
 
 ---
 
@@ -62,33 +85,40 @@ This skill equips agents and users with standard slash commands:
 ### `/chapters-status`
 Checks Chapters MCP connection, lists active vaults, connected repositories, and unread notifications.
 - **Tools called**: `list_vaults`, `list_repositories`, `list_notifications`
-- **Output**: Connection health, token scope (`account`, `vault`, or `repository`), vault count, repo count, and pending notifications.
 
-### `/chapters-search <query> [--type notes|repos|all] [--vault <id>] [--repo <id>]`
+### `/chapters-search <query> [--type notes|repos|all] [--vault <id>] [--repo <id>] [--no-symbols]`
 Executes hybrid lexical + semantic search across notes and codebases.
 - **Tool called**: `search`
-- **Options**:
-  - `--type`: Filter by `notes`, `repos`, or `all` (default: `all`).
-  - `--vault`: Restrict search to a specific vault ID.
-  - `--repo`: Restrict search to a specific repository ID.
-- **Example**: `/chapters-search "authentication session validation" --type all`
+- **Example**: `/chapters-search "authentication session validation"`
+
+### `/chapters-symbols <query> [--kind function|class|interface|type] [--repo <id>] [--everywhere]`
+Fine-grained search for code declarations, AST symbols, signatures, and line spans across repositories.
+- **Tool called**: `find_symbols`
+- **Example**: `/chapters-symbols "buildGraph" --kind function`
 
 ### `/chapters-graph [query] [--vault <id>] [--repo <id>] [--aggregate] [--community <id>]`
 Queries and traverses the knowledge graph.
 - **Tool called**: `graph`
-- **Options**:
-  - `--aggregate`: Aggregate nodes into Louvain communities (high-level view).
-  - `--community <id>`: Drill down into a specific Louvain community cluster.
-  - `--vault <id>`: Filter to a specific vault.
-  - `--repo <id>`: Filter to a specific repository.
 - **Example**: `/chapters-graph --aggregate`
+
+### `/chapters-path <source> <target> [--vault <id>] [--repo <id>]`
+Finds the shortest conceptual path connecting two notes, concepts, or code files.
+- **Tool called**: `find_graph_path`
+- **Example**: `/chapters-path "domains/auth" "server/src/auth/session.ts"`
+
+### `/chapters-perspective [list|save|delete] [...]`
+Manages saved graph perspectives and filter presets.
+- **Tools called**: `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`
+
+### `/chapters-prompt <name> [args...]`
+Invokes one of the 20 first-class Chapters MCP engineering prompts (e.g. `active_project_companion`, `plan_feature_implementation`, `draft_adr`, `refactor_impact_analysis`).
 
 ### `/chapters-note <action> [arguments...]`
 Performs operations on notes:
 - `/chapters-note read <vault-id> <path>`: Read note content and frontmatter.
 - `/chapters-note create <vault-id> <path> [content]`: Create a new OKF note.
-- `/chapters-note edit <vault-id> <path> <content>`: Update existing note content.
-- `/chapters-note rename <vault-id> <old-path> <new-path>`: Rename a note.
+- `/chapters-note edit <vault-id> <path> <content>`: Update existing note content via CRDT.
+- `/chapters-note rename <vault-id> <old-path> <new-path>`: Rename a note and refactor incoming wikilinks.
 - `/chapters-note delete <vault-id> <path>`: Move note to trash.
 - `/chapters-note history <vault-id> <path>`: View revision history and attribution.
 - `/chapters-note revert <vault-id> <path> <revision-id>`: Revert to a previous revision.
@@ -99,7 +129,7 @@ Performs operations on connected codebase repositories:
 - `/chapters-repo list`: List all connected repositories.
 - `/chapters-repo browse <repo-id> [path]`: Browse file and folder hierarchy.
 - `/chapters-repo read <repo-id> <file-path>`: Read file content and AST symbol outline.
-- `/chapters-repo status <repo-id>`: View sync freshness, commit hash, and indexing status.
+- `/chapters-repo status <repo-id>`: View sync freshness, commit SHA, and indexing status.
 - `/chapters-repo sync <repo-id>`: Trigger an immediate repository sync.
 
 ### `/chapters-vault <action> [arguments...]`
@@ -110,15 +140,18 @@ Manages vaults and sharing:
 - `/chapters-vault preference <vault-id> [include true|false]`: View or set merged-graph preference.
 
 ### `/chapters-map <repo-id-or-path> [--vault <vault-id>] [--name <vault-name>]`
-Maps an entire project or codebase repository into an interconnected, Open Knowledge Format (OKF v0.2) Knowledge Bundle within Chapters following the **5-Phase Flawless OKF Mapping Protocol** ([`references/codebase-mapping-protocol.md`](references/codebase-mapping-protocol.md)), engineered from Google's Open Knowledge Format standards ([`GoogleCloudPlatform/open-knowledge-format`](https://github.com/GoogleCloudPlatform/open-knowledge-format), [`references/okf-format.md`](references/okf-format.md)).
+Maps an entire project or codebase repository into an interconnected, Open Knowledge Format (OKF v0.2) Knowledge Bundle within Chapters following the **5-Phase Flawless OKF Mapping Protocol** ([`references/codebase-mapping-protocol.md`](references/codebase-mapping-protocol.md)).
 
 - **Workflow for Agents (The 5-Phase OKF Protocol)**:
-  1. **Phase 0 — Target Binding**: Check repository connection (`list_repositories` / `connect_repository`) and locate or initialize the target vault (`list_vaults` / `create_vault`).
+  1. **Phase 0 — Target Binding & Ingestion Choice**:
+     - **Vault Destination**: Ask if the codebase should be mapped in a new vault or an existing vault, and choose whether to name the vault or use the repository's name.
+     - **Git Connection**: Ask if they also want to add/connect the repo to Chapters (`connect_repository`) for continuous background sync. When mapping a GitHub repository of any programming job, you must always map the codebase.
+     - Bind to the target `vaultId`.
   2. **Phase 1 — Discovery & Manifest Analysis**:
      - Parse build manifests (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `Dockerfile`).
-     - Detect runtime engines, primary web/API frameworks, database/ORM layers, and all ingress boundaries (HTTP, WebSockets, CLI binaries, MCP servers, background worker queues).
+     - Detect runtime engines, primary web/API frameworks, database/ORM layers, and all ingress boundaries.
   3. **Phase 2 — Architectural Domain Partitioning**:
-     - Decompose the codebase into 4 to 8 cohesive bounded domains (e.g. Auth/Security, Data/Storage, API/Ingress, Core Domain Engine, Client/UI).
+     - Decompose the codebase into 4 to 8 cohesive bounded domains.
      - Identify lead implementation files, exported symbol interfaces, and hard architectural invariants.
   4. **Phase 3 — Structured OKF Note Synthesis**:
      - Create notes via Chapters MCP `create_note` conforming to OKF v0.2 schemas:
@@ -131,20 +164,21 @@ Maps an entire project or codebase repository into an interconnected, Open Knowl
      - Ensure every directory level contains an `index.md` summarizing child concepts, allowing AI agents to navigate progressively without overflowing context windows.
   6. **Phase 5 — Knowledge Graph Audit & Validation**:
      - Audit link integrity: zero broken `[[wikilinks]]` and valid `[[repo:...]]` code targets.
-     - Call Chapters MCP `graph` with `aggregate: "community"` to verify cohesive Louvain community clusters and confirm zero orphan notes.
-     - Call Chapters MCP `search` to verify top-k hybrid search retrieval across all mapped domains.
+     - Call `audit_okf_conformance` to verify strict ISO 8601 UTC offsets, index presence, and zero orphan notes.
+     - Call `graph` with `aggregate: "community"` to verify cohesive Louvain community clusters.
+     - Call `search` to verify top-k hybrid search retrieval across all mapped domains.
 
 ### `/chapters-export <vault-id|note-path>`
-Exports a vault or note archive.
+Exports a vault zip archive or single note markdown file.
 - **Tools called**: `export_vault`, `export_note`
 
 ---
 
-## Chapters MCP Tool Reference
+## Chapters MCP Tool Reference (57 Tools)
 
-Chapters exposes 50 tools across 6 functional domains:
+Chapters exposes 57 tools across 7 functional domains:
 
-### 1. Vault Management
+### 1. Vault Management (14 tools)
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `list_vaults` | Account | List all vaults accessible to the current user. |
@@ -153,6 +187,8 @@ Chapters exposes 50 tools across 6 functional domains:
 | `update_vault` | Vault/Account | Update vault name, description, or mergeable settings. |
 | `get_vault_graph_preference` | Vault/Account | Get user's personal merged-graph inclusion preference. |
 | `set_vault_graph_preference` | Vault/Account | Set user's personal merged-graph inclusion preference. |
+| `get_vault_preferences` | Account | Get user vault preferences including storage mode (online/local), folders, colors, and favorites. |
+| `update_vault_preferences` | Account | Update user vault preferences including storage mode, folders, colors, and favorites. |
 | `delete_vault` | Vault/Account | Soft-delete a vault into trash (owner only). |
 | `restore_vault` | Vault/Account | Restore a soft-deleted vault from trash. |
 | `purge_vault` | Vault/Account | Permanently purge a trashed vault from disk and DB. |
@@ -160,14 +196,13 @@ Chapters exposes 50 tools across 6 functional domains:
 | `share_vault` | Vault/Account | Grant read or edit access to a user or team. |
 | `revoke_vault_share` | Vault/Account | Revoke a user or team share from a vault. |
 
-### 2. Note Operations
+### 2. Note Operations & OKF Conformance (12 tools)
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `read_note` | Vault/Account | Read note markdown content, frontmatter, and metadata. |
 | `create_note` | Vault/Account | Create a new OKF note with unified `path` (or `type` and `name`) and frontmatter. |
-| `audit_okf_conformance` | Vault/Account | Audit an OKF Knowledge Bundle vault for OKF v0.2 conformance (strict ISO 8601 UTC offsets, wikilinks, repo links, progressive disclosure indices, orphan notes). |
 | `edit_note` | Vault/Account | Update note content through CRDT live collaboration. |
-| `rename_note` | Vault/Account | Rename or move a note within the vault. |
+| `rename_note` | Vault/Account | Rename or move a note within the vault with automatic wikilink refactoring. |
 | `delete_note` | Vault/Account | Soft-delete a note to the vault trash. |
 | `list_trash` | Vault/Account | List soft-deleted notes in the vault trash. |
 | `restore_note` | Vault/Account | Restore a trashed note back to the vault. |
@@ -175,8 +210,9 @@ Chapters exposes 50 tools across 6 functional domains:
 | `note_history` | Vault/Account | View revision history with user/AI attribution. |
 | `revert_note` | Vault/Account | Revert a note to a prior revision without losing history. |
 | `purge_revision` | Vault/Account | Permanently erase a recorded revision (owner only). |
+| `audit_okf_conformance` | Vault/Account | Audit an OKF Knowledge Bundle vault for OKF v0.2 conformance (ISO 8601 UTC offsets, wikilinks, repo links, progressive disclosure, orphan notes). |
 
-### 3. Repository & Codebase Mapping
+### 3. Repository & Codebase Mapping (13 tools)
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `list_repositories` | Account | List all connected codebase repositories. |
@@ -193,43 +229,103 @@ Chapters exposes 50 tools across 6 functional domains:
 | `share_repository` | Repo/Account | Share read access with a user or team. |
 | `revoke_repository_share` | Repo/Account | Revoke repository read access. |
 
-### 4. Search & Knowledge Graph
+### 4. Search & AST Code Symbols (2 tools)
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
-| `search` | Any | Hybrid search (lexical + semantic) across notes and code. |
-| `graph` | Any | Query graph nodes, edges (extracted/structural/semantic), Louvain communities (`aggregate: "community"`). |
+| `search` | Any | Hybrid search (lexical + semantic) across notes and code with `symbols` support. |
+| `find_symbols` | Repo/Account | Fine-grained semantic and keyword search for AST code symbols (functions, classes, interfaces, types) with exact signatures and line ranges. |
 
-### 5. Teams & Users
+### 5. Knowledge Graph & Perspectives (5 tools)
+| Tool | Scope | Description |
+| :--- | :--- | :--- |
+| `graph` | Any | Query graph nodes, edges (extracted/structural/semantic), Louvain communities (`aggregate: "community"`). |
+| `find_graph_path` | Any | Find shortest path connecting two concepts, notes, or code files in the knowledge graph. |
+| `list_graph_perspectives` | Any | List saved graph perspectives and filter presets for a vault or merged graph. |
+| `save_graph_perspective` | Vault/Account | Save a scoped graph perspective with filter presets (types, tags, date range, color mode). |
+| `delete_graph_perspective` | Any | Delete a saved graph perspective by its ID. |
+
+### 6. Teams & Users (7 tools)
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `list_teams` | Account | List teams the user belongs to or manages. |
 | `create_team` | Account | Create a new team. |
 | `list_team_members` | Account | List members in a team. |
-| `add_team_member` | Account | Add a user to a team. |
-| `remove_team_member` | Account | Remove a user from a team. |
+| `add_team_member` | Account | Add an active user to a team. |
+| `remove_team_member` | Account | Remove a member from a team. |
 | `delete_team` | Account | Delete a team. |
-| `lookup_user` | Account | Lookup a user by exact email address. |
+| `lookup_user` | Account | Look up an active user by exact email address. |
 
-### 6. Export & Notifications
+### 7. Export & Notifications (4 tools)
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `export_vault` | Vault/Account | Export an entire vault as a zip archive. |
-| `export_note` | Vault/Account | Export a single note as markdown. |
+| `export_note` | Vault/Account | Export a single note as raw serialized markdown. |
 | `list_notifications` | Account | List in-app notifications and activity feed. |
-| `mark_notification_read` | Account | Mark notifications as read. |
+| `mark_notification_read` | Account | Mark a notification as read. |
+
+---
+
+## Chapters MCP Engineering Prompts (20 Prompts)
+
+Chapters supports the Model Context Protocol Prompts standard with 20 pre-engineered prompts with context hydration:
+
+| Prompt | Purpose |
+| :--- | :--- |
+| `active_project_companion` | Continuous session companion: anchors agent to project vault, capturing decisions in real time. |
+| `sync_local_docs_to_vault` | Ingests local markdown notes into the Chapters vault. |
+| `plan_feature_implementation` | Formulates grounded, zero-hallucination implementation plans from existing specs. |
+| `prepare_task_context` | Bundles relevant notes, AST symbols, and graph context for an upcoming task. |
+| `draft_adr` | Synthesizes an Architecture Decision Record (ADR) in strict OKF format. |
+| `draft_rfc` | Generates a comprehensive Request for Comments (RFC) with rollout and risk plans. |
+| `generate_api_spec` | Generates an OpenAPI/REST or MCP protocol specification from code entrypoints. |
+| `explain_code_architecture` | Explains subsystem architecture, entrypoints, and invariants using the graph and AST symbols. |
+| `onboard_subsystem` | Generates an accelerated onboarding guide for a specific domain. |
+| `summarize_concept_chain` | Leverages `find_graph_path` to explain how two distinct concepts or code files connect. |
+| `audit_architecture_drift` | Compares documented OKF specifications against actual code AST symbols. |
+| `refactor_impact_analysis` | Traces backlinks, call sites, and graph dependencies to calculate refactor blast radius. |
+| `audit_orphaned_code` | Identifies unlinked notes, unused AST symbols, and undocumented code. |
+| `test_gap_analysis` | Audits core domain notes and specs against existing test suites. |
+| `pr_review_against_specs` | Evaluates a PR or code change against established OKF architecture specifications. |
+| `generate_release_notes` | Compiles release notes and technical changelog from recent notes, ADRs, and commits. |
+| `audit_security_surface` | Analyzes ingress points, auth routes, and trust boundaries in the knowledge graph. |
+| `database_schema_evolution` | Reviews data model notes and migration files for backward compatibility and index hygiene. |
+| `supernode_bottleneck_audit` | Identifies graph supernodes (PageRank hotspots) indicating architectural tight coupling. |
+| `incident_postmortem` | Structures a blameless post-mortem note referencing affected components and remediation tasks. |
+
+See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter definitions and response structures.
 
 ---
 
 ## Platform Installation & Configuration Guides
 
-### 1. Anthropic Claude (Claude Desktop & Claude Code)
+### 1. Google Gemini & Antigravity
+- **Antigravity CLI**:
+  Configure in `~/.gemini/config/mcp_config.json`:
+  ```json
+  {
+    "mcpServers": {
+      "chapters": {
+        "url": "https://chapters.piiix.org/mcp",
+        "headers": {
+          "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
+        }
+      }
+    }
+  }
+  ```
+  Install the agent skill:
+  ```bash
+  mkdir -p ~/.agents/skills/chapters && cp -r skills/chapters/* ~/.agents/skills/chapters/
+  ```
+
+### 2. Anthropic Claude (Claude Desktop & Claude Code)
 - **Claude Desktop**:
   Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
   ```json
   {
     "mcpServers": {
       "chapters": {
-        "url": "http://localhost:3000/mcp",
+        "url": "https://chapters.piiix.org/mcp",
         "headers": {
           "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
         }
@@ -238,20 +334,16 @@ Chapters exposes 50 tools across 6 functional domains:
   }
   ```
 - **Claude Code**:
-  Add MCP server via CLI:
   ```bash
-  claude mcp add chapters http://localhost:3000/mcp --header "Authorization: Bearer YOUR_CHAPTERS_MCP_TOKEN"
-  ```
-  Install skill:
-  ```bash
+  claude mcp add chapters https://chapters.piiix.org/mcp --header "Authorization: Bearer YOUR_CHAPTERS_MCP_TOKEN"
   mkdir -p ~/.claude/skills/chapters && cp -r skills/chapters/* ~/.claude/skills/chapters/
   ```
 
-### 2. Cursor & Windsurf
+### 3. Cursor & Windsurf
 - **Cursor**:
   1. Open **Cursor Settings** > **Features** > **MCP**.
   2. Click **+ Add New MCP Server**.
-  3. Set Name: `chapters`, Type: `sse` or `http`, URL: `http://localhost:3000/mcp`.
+  3. Set Name: `chapters`, Type: `sse` or `http`, URL: `https://chapters.piiix.org/mcp`.
   4. Add Header: `Authorization: Bearer YOUR_CHAPTERS_MCP_TOKEN`.
   5. Install skill for Cursor rules:
      ```bash
@@ -263,7 +355,7 @@ Chapters exposes 50 tools across 6 functional domains:
   {
     "mcpServers": {
       "chapters": {
-        "url": "http://localhost:3000/mcp",
+        "url": "https://chapters.piiix.org/mcp",
         "headers": {
           "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
         }
@@ -272,62 +364,23 @@ Chapters exposes 50 tools across 6 functional domains:
   }
   ```
 
-### 3. Google Gemini & Antigravity
-- **Antigravity CLI**:
-  Add to `~/.gemini/antigravity-cli/mcp/chapters.json` or through MCP configuration:
-  ```json
-  {
-    "url": "http://localhost:3000/mcp",
-    "headers": {
-      "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
-    }
-  }
-  ```
-  Install the agent skill:
-  ```bash
-  mkdir -p ~/.agents/skills/chapters && cp -r skills/chapters/* ~/.agents/skills/chapters/
-  ```
-- **Gemini CLI / Extensions**:
-  Set environment variables:
-  ```bash
-  export CHAPTERS_URL="http://localhost:3000/mcp"
-  export CHAPTERS_TOKEN="YOUR_CHAPTERS_MCP_TOKEN"
-  ```
-
-### 4. OpenAI Codex & Open Agent Frameworks
-- **Skills CLI (`npx skills`)**:
-  ```bash
-  npx skills add PIIIX-org/chapters@skills/chapters
-  ```
-- **Workspace-level installation**:
-  ```bash
-  mkdir -p .agents/skills/chapters && cp -r skills/chapters/* .agents/skills/chapters/
-  ```
-
 ---
 
 ## Keeping the Skill Always Active (Always-On Mode)
 
-If you want your AI agent to keep Chapters **permanently active** across every session without needing keyword triggers or manual reminders:
+If you want your AI agent to keep Chapters **permanently active** across every session:
 
 ### One-Command Setup
 Run the included installer script from the repository root:
 ```bash
-# Install for all agents:
 ./skills/chapters/scripts/install-always-on.sh all
-
-# Or for a specific tool:
-./skills/chapters/scripts/install-always-on.sh antigravity  # Gemini / Antigravity
-./skills/chapters/scripts/install-always-on.sh claude       # Anthropic Claude
-./skills/chapters/scripts/install-always-on.sh cursor       # Cursor
-./skills/chapters/scripts/install-always-on.sh windsurf     # Windsurf
 ```
 
 ### Manual Setup
 - **Google Gemini / Antigravity**:
-  Copy [`skills/chapters/rules/chapters.md`](rules/chapters.md) to `~/.gemini/config/rules/chapters.md`. It will be automatically injected into every conversation.
-- **Anthropic Claude (Claude Code / Desktop)**:
-  Append the contents of [`skills/chapters/rules/chapters.md`](rules/chapters.md) to `~/.claude/CLAUDE.md` or your project's `CLAUDE.md`.
+  Copy [`skills/chapters/rules/chapters.md`](rules/chapters.md) to `~/.gemini/config/rules/chapters.md` (or `~/.agents/rules/chapters.md`). It will be automatically injected into every conversation.
+- **Anthropic Claude**:
+  Append the contents of [`skills/chapters/rules/chapters.md`](rules/chapters.md) to `~/.claude/CLAUDE.md`.
 - **Cursor**:
   Create `.cursor/rules/chapters.mdc` with `alwaysApply: true` and the contents of `rules/chapters.md`.
 - **Windsurf**:

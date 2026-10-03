@@ -74,4 +74,36 @@ describe('NewNoteForm', () => {
 
     await waitFor(() => expect(screen.getByText(/already exists/i)).toBeInTheDocument())
   })
+
+  it('reports errors for both fields simultaneously when both are invalid', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    renderForm()
+
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'Invalid Type!' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invalid Name!' } })
+    fireEvent.click(screen.getByRole('button', { name: /create note/i }))
+
+    expect(screen.getByText(/type must be lowercase/i)).toBeInTheDocument()
+    expect(screen.getByText(/name must be lowercase/i)).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('displays live validation requirements feedback as user types and clears errors once corrected', () => {
+    renderForm()
+
+    const typeInput = screen.getByLabelText('Type')
+    fireEvent.change(typeInput, { target: { value: 'bad_type' } })
+
+    // Live requirement hints are rendered
+    expect(screen.getByText(/lowercase letters, numbers, and hyphens only/i)).toBeInTheDocument()
+
+    // Submit with invalid type
+    fireEvent.click(screen.getByRole('button', { name: /create note/i }))
+    expect(screen.getByText(/type must be lowercase/i)).toBeInTheDocument()
+
+    // Correcting type clears the type error immediately
+    fireEvent.change(typeInput, { target: { value: 'good-type' } })
+    expect(screen.queryByText(/type must be lowercase/i)).not.toBeInTheDocument()
+  })
 })
