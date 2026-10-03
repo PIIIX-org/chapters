@@ -1,5 +1,5 @@
 {
-  "name": "@chapters/client",
+  "name": "@elara/client",
   "private": true,
   "type": "module",
   "scripts": {

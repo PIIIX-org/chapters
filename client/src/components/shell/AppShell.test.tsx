@@ -142,7 +142,7 @@ describe('AppShell', () => {
     await user.click(await screen.findByRole('menuitemradio', { name: 'Light' }))
 
     expect(document.documentElement.classList.contains('dark')).toBe(false)
-    expect(localStorage.getItem('chapters.theme')).toBe('light')
+    expect(localStorage.getItem('elara.theme')).toBe('light')
   })
 
   it('jumps between areas with g-chords, but never while typing', async () => {
@@ -186,7 +186,7 @@ describe('AppShell', () => {
     expect(context).toHaveClass('w-11')
     expect(within(context).getByText('Collapsed context')).toBeInTheDocument()
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
-    expect(localStorage.getItem('chapters.shell.context')).toBe('closed')
+    expect(localStorage.getItem('elara.shell.context')).toBe('closed')
 
     const inspectorToggle = screen.getByRole('button', { name: 'Toggle inspector' })
     expect(inspectorToggle).toHaveAttribute('aria-pressed', 'true')

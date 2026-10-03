@@ -16,13 +16,13 @@ jobs:
       db:
         image: pgvector/pgvector:pg17
         env:
-          POSTGRES_USER: chapters
-          POSTGRES_PASSWORD: chapters
-          POSTGRES_DB: chapters
+          POSTGRES_USER: elara
+          POSTGRES_PASSWORD: elara
+          POSTGRES_DB: elara
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U chapters"
+          --health-cmd "pg_isready -U elara"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
