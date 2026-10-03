@@ -57,7 +57,7 @@ const CONTENT_TYPES: Record<string, string> = {
  * an uptime probe, would get 200 and a page of HTML — which reads as healthy
  * while the endpoint is not being exercised at all.
  */
-const RESERVED = ['/api', COLLAB_PATH, '/mcp', '/repositories']
+const RESERVED = ['/api', COLLAB_PATH, '/elara-collab', '/mcp', '/elara/mcp', '/repositories']
 
 /**
  * `req.url` is usually origin-form (`/api/vaults`) but is legally absolute-form

@@ -11,10 +11,10 @@ import { RepositorySettingsDialog } from './RepositorySettingsDialog.js'
 // code actually lives. A dialog with one hardcoded sentence cannot pass both.
 const GIT: AccessibleRepository = {
   id: 'r1',
-  name: 'Chapters',
+  name: 'Elara',
   ownerId: 'me',
   ingestionMethod: 'git',
-  gitUrl: 'https://github.com/piiix-org/chapters.git',
+  gitUrl: 'https://github.com/piiix-org/elara.git',
   localPath: null,
   defaultBranch: 'dev',
   mergeable: false,
@@ -95,15 +95,15 @@ describe('RepositorySettingsDialog', () => {
 
   it('names the repository in the dialog and renames it with one PATCH', async () => {
     const { fetchMock } = renderDialog()
-    expect(screen.getByRole('dialog', { name: /repository settings — chapters/i })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: /repository settings — elara/i })).toBeInTheDocument()
 
     const nameField = screen.getByLabelText('Name')
-    expect(nameField).toHaveValue('Chapters')
+    expect(nameField).toHaveValue('Elara')
     await userEvent.clear(nameField)
-    await userEvent.type(nameField, 'Chapters dev')
+    await userEvent.type(nameField, 'Elara dev')
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-    await waitFor(() => expect(bodyOf(fetchMock, 'PATCH')).toEqual({ name: 'Chapters dev' }))
+    await waitFor(() => expect(bodyOf(fetchMock, 'PATCH')).toEqual({ name: 'Elara dev' }))
     expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit)?.method === 'PATCH')).toHaveLength(1)
   })
 
@@ -153,9 +153,9 @@ describe('RepositorySettingsDialog', () => {
     await screen.findByText('No one else has access to this repository yet.')
     const callsBefore = fetchMock.mock.calls.length
 
-    await userEvent.click(screen.getByRole('button', { name: 'Delete Chapters' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Elara' }))
 
-    expect(screen.getByText(/removes this connection and everything Chapters indexed from it/)).toBeInTheDocument()
+    expect(screen.getByText(/removes this connection and everything Elara indexed from it/)).toBeInTheDocument()
     // The consequence is about the connection, not about the codebase.
     expect(screen.getByText(/the remote and its history stay exactly as they are/)).toBeInTheDocument()
     expect(screen.queryByText(/cannot be undone/)).toBeNull()
@@ -191,7 +191,7 @@ describe('RepositorySettingsDialog', () => {
   it('keeps a failed delete on screen with the reason instead of navigating away', async () => {
     const { onDeleted } = renderDialog(GIT, { del: () => mockJsonResponse(404, { error: 'not found' }) })
 
-    await userEvent.click(screen.getByRole('button', { name: 'Delete Chapters' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Elara' }))
     await userEvent.click(screen.getByRole('button', { name: 'Delete repository' }))
 
     expect(await screen.findByText('not found')).toBeInTheDocument()

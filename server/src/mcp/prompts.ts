@@ -15,7 +15,7 @@ export interface PromptHelpers {
 }
 
 /**
- * Registers Chapters' 20 first-class MCP Prompts implementing the standard
+ * Registers Elara' 20 first-class MCP Prompts implementing the standard
  * `prompts/list` and `prompts/get` protocol endpoints.
  */
 export function registerMcpPrompts(
@@ -37,7 +37,7 @@ export function registerMcpPrompts(
       argsSchema: {
         projectName: z.string().describe('Name of the project or repository being worked on'),
         taskDescription: z.string().describe('Description of the feature, refactor, or bug being addressed'),
-        vaultId: z.string().optional().describe('Target vault ID in Chapters'),
+        vaultId: z.string().optional().describe('Target vault ID in Elara'),
       },
     },
     async ({ projectName, taskDescription, vaultId: reqVaultId }) => {
@@ -54,14 +54,14 @@ export function registerMcpPrompts(
         // Fallback gracefully if vault not yet linked
       }
 
-      const instructions = `You are actively pairing on project "${projectName}" using Chapters as the project's living second brain.
+      const instructions = `You are actively pairing on project "${projectName}" using Elara as the project's living second brain.
 
 TASK OBJECTIVE:
 "${taskDescription}"
 ${baselineContext ? `\nBASELINE KNOWLEDGE BASE CONTEXT:${baselineContext}` : ''}
 CONTINUOUS WORKFLOW MANDATE:
 1. ANCHOR: Establish or update a session log note at \`session/${new Date().toISOString().slice(0, 10)}-${projectName}\` using the \`create_note\` or \`edit_note\` tool.
-2. CONTINUOUS CAPTURE: As you make architectural decisions, discover invariants, or modify code, IMMEDIATELY record them in Chapters notes. Never let technical context stay trapped in this chat session.
+2. CONTINUOUS CAPTURE: As you make architectural decisions, discover invariants, or modify code, IMMEDIATELY record them in Elara notes. Never let technical context stay trapped in this chat session.
 3. AST CODE LINKS: Cross-link technical documentation directly to code using \`[[repo:${projectName}/<filepath>#<symbol>]]\` format.
 4. WRAP-UP SUMMARY: At the conclusion of this task, update the session note and relevant specs so future developers or AI agents have complete continuity.`
 
@@ -80,7 +80,7 @@ CONTINUOUS WORKFLOW MANDATE:
     {
       title: 'Sync Local Documentation to Vault',
       description:
-        'Zero-friction uploader: scans local markdown notes in project directories (docs/, specs/, etc.) and uploads them to the Chapters vault.',
+        'Zero-friction uploader: scans local markdown notes in project directories (docs/, specs/, etc.) and uploads them to the Elara vault.',
       argsSchema: {
         directoryPath: z.string().describe('Relative path to local directory containing markdown docs (e.g. "docs/")'),
         vaultId: z.string().optional().describe('Target vault ID'),
@@ -90,7 +90,7 @@ CONTINUOUS WORKFLOW MANDATE:
       const vaultId = vaultFor(reqVaultId)
       await requireAccess(vaultId, 'edit')
 
-      const text = `You are uploading local project documentation from directory "${directoryPath}" into Chapters vault "${vaultId}".
+      const text = `You are uploading local project documentation from directory "${directoryPath}" into Elara vault "${vaultId}".
 
 INSTRUCTIONS:
 1. INSPECT: Read the markdown files in "${directoryPath}" using your local filesystem tools.
@@ -98,7 +98,7 @@ INSTRUCTIONS:
    - File path must follow \`<type>/<name>\` slug format (e.g., \`spec/auth\`, \`docs/architecture\`, \`adr/storage-layer\`).
    - Frontmatter must contain \`type: <type>\` matching the path prefix.
    - Slugs must be lowercase alphanumeric with hyphens (^[a-z0-9][a-z0-9-]*$).
-3. UPLOAD / UPSERT: For each valid file, call Chapters MCP \`create_note\` or \`edit_note\` with the target \`vaultId: "${vaultId}"\`.
+3. UPLOAD / UPSERT: For each valid file, call Elara MCP \`create_note\` or \`edit_note\` with the target \`vaultId: "${vaultId}"\`.
 4. REPORT: Output a summary table of all uploaded notes, their resolved paths, and any files skipped due to format issues.`
 
       return {
@@ -116,7 +116,7 @@ INSTRUCTIONS:
     {
       title: 'Plan Feature Implementation',
       description:
-        'Grounded implementation planner: inspects existing specs and codebase patterns in Chapters to formulate a step-by-step, zero-hallucination plan.',
+        'Grounded implementation planner: inspects existing specs and codebase patterns in Elara to formulate a step-by-step, zero-hallucination plan.',
       argsSchema: {
         featureRequest: z.string().describe('The user request, bug, or feature to plan'),
         repositoryName: z.string().describe('Target repository name'),
@@ -143,16 +143,16 @@ INSTRUCTIONS:
 
 FEATURE REQUEST:
 "${featureRequest}"
-${relevantNotes ? `\nRELEVANT SPECIFICATIONS IN CHAPTERS:\n${relevantNotes}\n` : ''}
+${relevantNotes ? `\nRELEVANT SPECIFICATIONS IN ELARA:\n${relevantNotes}\n` : ''}
 PLANNING GUIDELINES:
-1. INVESTIGATE: Use Chapters MCP tools (\`search\`, \`find_symbols\`, \`browse_repository\`) to examine existing code patterns and invariants.
+1. INVESTIGATE: Use Elara MCP tools (\`search\`, \`find_symbols\`, \`browse_repository\`) to examine existing code patterns and invariants.
 2. ARCHITECTURAL CONSTRAINTS: Review any matching ADRs or specs before deciding on approach. Avoid anti-patterns previously decided against.
 3. STEP-BY-STEP PLAN:
    - Phase 1: Schema / data model changes (if any).
    - Phase 2: Core server logic and API contracts.
    - Phase 3: Client UI components, routing, and state.
    - Phase 4: Automated unit, integration, and accessibility tests.
-4. SPEC UPDATES: List which documentation notes in Chapters should be updated when this feature ships.`
+4. SPEC UPDATES: List which documentation notes in Elara should be updated when this feature ships.`
 
       return {
         description: `Implementation plan for ${featureRequest}`,
@@ -238,7 +238,7 @@ INSTRUCTIONS:
         }
       }
 
-      const text = `Draft an Architecture Decision Record (ADR) in Google Open Knowledge Format (OKF v0.2) ready to be stored in Chapters.
+      const text = `Draft an Architecture Decision Record (ADR) in Google Open Knowledge Format (OKF v0.2) ready to be stored in Elara.
 
 INPUTS:
 - Title: ${title}
@@ -320,7 +320,7 @@ REQUIRED SECTIONS:
 type: rfc
 title: "RFC: ${systemChange}"
 status: draft
-author: Chapters Agent
+author: Elara Agent
 created: "${new Date().toISOString().slice(0, 10)}"
 tags:
   - rfc
@@ -444,9 +444,9 @@ Include curl examples, payload schemas, and error tables. Offer to save it as \`
       }
 
       const text = `Explain the architectural context, design rationale, and invariants of "${filePath}"${symbol ? ` (symbol: ${symbol})` : ''} in repository "${repositoryName}".
-${linkedNotesSummary ? `\nCONNECTED CHAPTERS NOTES:\n${linkedNotesSummary}\n` : ''}
+${linkedNotesSummary ? `\nCONNECTED ELARA NOTES:\n${linkedNotesSummary}\n` : ''}
 ANALYSIS GUIDELINES:
-1. Trace backwards from the code to existing design documents and ADRs in Chapters.
+1. Trace backwards from the code to existing design documents and ADRs in Elara.
 2. Explain WHY this component was designed this way:
    - What problems or constraints was it built to solve?
    - What architectural trade-offs were made?
@@ -563,7 +563,7 @@ INSTRUCTIONS:
       const text = `Audit code-to-documentation drift in repository "${repositoryName}"${filePath ? ` for "${filePath}"` : ''}.
 ${gitDiff ? `\nRECENT CODE MODIFICATIONS / DIFF:\n${gitDiff.slice(0, 1500)}\n` : ''}
 DRIFT AUDIT PROTOCOL:
-1. IDENTIFY LINKED NOTES: Use Chapters MCP \`search\` or \`find_symbols\` to identify notes, specs, and ADRs referencing the modified files/symbols.
+1. IDENTIFY LINKED NOTES: Use Elara MCP \`search\` or \`find_symbols\` to identify notes, specs, and ADRs referencing the modified files/symbols.
 2. CHECK CONTRACT DIVERGENCE:
    - Have function signatures, parameter names, or return shapes changed?
    - Have documented security invariants or error codes been modified?
@@ -599,7 +599,7 @@ DRIFT AUDIT PROTOCOL:
 
 BLAST RADIUS CHECKLIST:
 1. CODE CONSUMERS: Find all repository files importing or invoking "${targetSymbol}".
-2. KNOWLEDGE BASE LINKS: Search Chapters for specs, ADRs, and wikilinks targeting this symbol (\`[[repo:${repositoryName}/...#${targetSymbol}]]\`).
+2. KNOWLEDGE BASE LINKS: Search Elara for specs, ADRs, and wikilinks targeting this symbol (\`[[repo:${repositoryName}/...#${targetSymbol}]]\`).
 3. TEST SUITE EXPOSURE: Identify test files that assert this symbol's behavior.
 4. BREAKING CHANGE ASSESSMENT:
    - What downstream consumers will fail if the signature or return type changes?
@@ -627,11 +627,11 @@ BLAST RADIUS CHECKLIST:
       },
     },
     async ({ repositoryName }) => {
-      const text = `Audit repository "${repositoryName}" to identify architectural dark matter: critical code modules that lack any documentation in Chapters.
+      const text = `Audit repository "${repositoryName}" to identify architectural dark matter: critical code modules that lack any documentation in Elara.
 
 INSTRUCTIONS:
 1. List the top-level modules and services in the repository.
-2. Query Chapters notes using \`search\` to check which files or services are referenced in specs and ADRs.
+2. Query Elara notes using \`search\` to check which files or services are referenced in specs and ADRs.
 3. Highlight high-complexity files (>200 lines) with zero note references.
 4. Output a prioritized list of documentation gaps for the engineering team.`
 
@@ -693,7 +693,7 @@ AUDIT PROTOCOL:
     {
       title: 'Pull Request Review Against Specifications',
       description:
-        'Reviews a PR diff against established ADRs and invariants in Chapters to prevent architectural regressions.',
+        'Reviews a PR diff against established ADRs and invariants in Elara to prevent architectural regressions.',
       argsSchema: {
         prDiffOrSummary: z.string().describe('Git diff or PR summary to review'),
         repositoryName: z.string().describe('Repository name'),
@@ -710,7 +710,7 @@ REVIEW CRITERIA:
 1. ADR COMPLIANCE: Does this PR introduce patterns or libraries previously decided against in an ADR?
 2. INVARIANT PRESERVATION: Does it violate any system invariants (e.g. auth bypass, unindexed database queries, leaky abstractions)?
 3. SECURITY & ACCESSIBILITY: Does it introduce new endpoints without authentication or UI components without accessibility?
-4. DOCUMENTATION SYNC: What notes in Chapters need to be updated before this PR merges?`
+4. DOCUMENTATION SYNC: What notes in Elara need to be updated before this PR merges?`
 
       return {
         description: `Architectural PR review for ${repositoryName}`,
@@ -809,7 +809,7 @@ MIGRATION SAFETY CHECKLIST:
 1. LOCK RISKS: Does the migration add columns with non-null defaults without nullable backfills or hold table locks?
 2. DATA LOSS & BACKWARD COMPATIBILITY: Can the currently running application code run safely against this schema before new code deploys?
 3. INDEXING: Are foreign keys and query filter columns indexed properly?
-4. DOCUMENTATION: Does the data model note in Chapters reflect these changes?`
+4. DOCUMENTATION: Does the data model note in Elara reflect these changes?`
 
       return {
         description: `Database schema migration review for ${repositoryName}`,
@@ -844,7 +844,7 @@ MIGRATION SAFETY CHECKLIST:
       const text = `Analyze the knowledge graph topology to identify supernodes and tight coupling bottlenecks.
 
 INVESTIGATION STEPS:
-1. Using Chapters MCP graph tools, identify nodes with unusually high in-degree or out-degree connections.
+1. Using Elara MCP graph tools, identify nodes with unusually high in-degree or out-degree connections.
 2. Distinguish intentional hubs (e.g. main index notes) from problematic God objects (code files or specs that everything depends on).
 3. Outline refactoring and decoupling strategies to reduce architectural fragility.`
 
@@ -874,7 +874,7 @@ INVESTIGATION STEPS:
     },
     async ({ incidentTitle, symptoms, rootCause, affectedSymbols }) => {
       const slug = incidentTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
-      const text = `Draft a blameless incident post-mortem in OKF format ready for Chapters.
+      const text = `Draft a blameless incident post-mortem in OKF format ready for Elara.
 
 INPUTS:
 - Title: ${incidentTitle}
@@ -913,7 +913,7 @@ ${rootCause}
 ## 5. Preventative Action Items
 - [ ] Add regression test in ...
 - [ ] Add alert / monitoring for ...
-- [ ] Update architecture spec in Chapters ...
+- [ ] Update architecture spec in Elara ...
 
 Output the post-mortem note and offer to save it at \`incident/${slug}\`.`
 

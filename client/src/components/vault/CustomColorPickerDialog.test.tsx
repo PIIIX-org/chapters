@@ -59,7 +59,7 @@ describe('CustomColorPickerDialog component', () => {
     fireEvent.click(saveBtn)
 
     // Check saved in localStorage
-    const saved = JSON.parse(localStorage.getItem('chapters_custom_palette') || '[]')
+    const saved = JSON.parse(localStorage.getItem('elara_custom_palette') || '[]')
     expect(saved).toContain('#e11d48')
 
     // Click saved color swatch
