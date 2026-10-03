@@ -260,7 +260,7 @@ describe('AppShell', () => {
     stubFetch()
     renderShell()
     const user = userEvent.setup()
-    const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+    const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
     const rail = screen.getByRole('navigation', { name: 'Primary' })
     const graphLink = within(rail).getByRole('link', { name: 'Graph' })
     const vaultsLink = within(rail).getByRole('link', { name: 'Vaults' })
@@ -300,7 +300,7 @@ describe('AppShell', () => {
     const user = userEvent.setup()
     await screen.findByText('Context content')
 
-    const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+    const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
     const rail = screen.getByRole('navigation', { name: 'Primary' })
     expect(chButton).toHaveAttribute('aria-expanded', 'false')
     expect(rail).toHaveClass('w-11')
@@ -477,7 +477,7 @@ describe('AppShell', () => {
       renderShell('/vaults/v1')
       const user = userEvent.setup()
 
-      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+      const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
       expect(chButton).toHaveAttribute('aria-expanded', 'false')
       expect(screen.queryByTestId('shell-backdrop')).toBeNull()
 
@@ -497,7 +497,7 @@ describe('AppShell', () => {
       renderShell('/vaults/v1')
       const user = userEvent.setup()
 
-      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+      const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
       await user.click(chButton)
       expect(chButton).toHaveAttribute('aria-expanded', 'true')
 
@@ -515,7 +515,7 @@ describe('AppShell', () => {
       renderShell('/vaults/v1')
       const user = userEvent.setup()
 
-      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+      const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
       await user.click(chButton)
       expect(chButton).toHaveAttribute('aria-expanded', 'true')
       expect(screen.getByTestId('shell-backdrop')).toBeInTheDocument()
@@ -532,7 +532,7 @@ describe('AppShell', () => {
       const user = userEvent.setup()
 
       const contextToggle = screen.getByRole('button', { name: 'Toggle context panel' })
-      const chButton = screen.getByRole('button', { name: 'Chapters logo, toggle sidebar' })
+      const chButton = screen.getByRole('button', { name: 'Elara logo, toggle sidebar' })
 
       // Open context panel
       await user.click(contextToggle)
