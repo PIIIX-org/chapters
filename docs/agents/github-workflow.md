@@ -66,3 +66,8 @@ simply doesn't get promoted until fixed — `prod` never waits on a revert.
 GitHub Actions runs typecheck + lint + tests on every PR (added with the
 first code scaffold). Green CI is a merge precondition on `dev` and a
 promotion precondition on `prod`.
+
+Both `dev` and `prod` enforce strict GitHub branch protection with
+`required_status_checks` on `checks` and `enforce_admins: true`. No PR
+can be merged unless all CI checks are green; bypassing is blocked at the
+repository level.
