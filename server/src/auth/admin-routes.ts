@@ -49,7 +49,7 @@ export function adminRoutes(app: FastifyInstance) {
     await notify({
       recipientId: user.id,
       type: 'signup_approved',
-      message: 'Your Chapters account has been approved. You can now log in.',
+      message: 'Your Elara account has been approved. You can now log in.',
       emailSubject: WELCOME_SUBJECT,
       emailText: WELCOME_TEXT,
     })
@@ -209,7 +209,7 @@ export function adminRoutes(app: FastifyInstance) {
     await notify({
       recipientId: user.id,
       type: 'account_status_changed',
-      message: 'Your Chapters account has been deactivated by an admin.',
+      message: 'Your Elara account has been deactivated by an admin.',
     })
     return { status: 'deactivated' }
   })
@@ -230,7 +230,7 @@ export function adminRoutes(app: FastifyInstance) {
     await notify({
       recipientId: user.id,
       type: 'account_status_changed',
-      message: 'Your Chapters account has been reactivated by an admin. You can now log in.',
+      message: 'Your Elara account has been reactivated by an admin. You can now log in.',
     })
     return { status: 'active' }
   })

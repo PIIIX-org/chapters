@@ -58,4 +58,4 @@ jobs:
       - name: Run OKF Conformance Tests
         env:
           SKIP_DB_SETUP: '1'
-        run: pnpm --filter @chapters/server exec vitest run test/okf-conformance.test.ts test/okf.test.ts test/paths.test.ts
+        run: pnpm --filter @elara/server exec vitest run test/okf-conformance.test.ts test/okf.test.ts test/paths.test.ts

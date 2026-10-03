@@ -17,6 +17,7 @@ import {
 import { Panel, PanelHeader } from '../../components/ui/panel.js'
 import { PanelState } from '../../components/ui/empty-state.js'
 import { Button } from '../../components/ui/button.js'
+import { getMigratedStorageItem } from '../../lib/storage.js'
 import { Input } from '../../components/ui/input.js'
 import { Pill } from '../../components/ui/pill.js'
 import {
@@ -55,10 +56,10 @@ export function VaultNotesPage() {
   ])
 
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    return (localStorage.getItem('chapters_notes_view_mode') as ViewMode) || 'card'
+    return (getMigratedStorageItem('elara_notes_view_mode', 'chapters_notes_view_mode') as ViewMode) || 'card'
   })
   const [groupByFolder, setGroupByFolder] = useState<boolean>(() => {
-    return localStorage.getItem('chapters_notes_group_by_folder') === 'true'
+    return getMigratedStorageItem('elara_notes_group_by_folder', 'chapters_notes_group_by_folder') === 'true'
   })
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({})
   const [selectedFolder, setSelectedFolder] = useState<string>('all')
@@ -99,13 +100,13 @@ export function VaultNotesPage() {
 
   function handleViewModeChange(mode: ViewMode) {
     setViewMode(mode)
-    localStorage.setItem('chapters_notes_view_mode', mode)
+    localStorage.setItem('elara_notes_view_mode', mode)
   }
 
   function handleToggleGroupByFolder() {
     setGroupByFolder((prev) => {
       const next = !prev
-      localStorage.setItem('chapters_notes_group_by_folder', String(next))
+      localStorage.setItem('elara_notes_group_by_folder', String(next))
       return next
     })
   }

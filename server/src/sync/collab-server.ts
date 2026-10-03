@@ -12,6 +12,8 @@ import { publishNoteState } from './viewers.js'
 import { consumeTicket } from './tickets.js'
 import { COLLAB_PATH } from './routes.js'
 
+export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
+
 const DEBOUNCE_MS = Number(process.env.COLLAB_DEBOUNCE_MS ?? 2000)
 
 function parseDocName(name: string): { vaultId: string; path: string } {
@@ -167,8 +169,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
     // Node destroys upgrade sockets itself only while nothing listens for the
     // event. Once we listen, every path we do not serve is ours to refuse —
-    // handing an arbitrary path to the relay would make it answer everywhere.
-    if ((req.url ?? '').split('?')[0] !== COLLAB_PATH) {
+    const pathname = (req.url ?? '').split('?')[0] ?? ''
+    if (!ALLOWED_UPGRADES.has(pathname)) {
       socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
       socket.destroy()
       return

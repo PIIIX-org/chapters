@@ -457,7 +457,7 @@ export const repositorySyncStatus = pgEnum('repository_sync_status', [
 ])
 
 /**
- * A codebase connected to Chapters (spec: repository ingestion &
+ * A codebase connected to Elara (spec: repository ingestion &
  * permissions). Mirrors Vault's owner/share pattern but read-only —
  * no edit permission tier, since nothing here is ever written to.
  */
@@ -531,9 +531,9 @@ export const repositoryGraphPreferences = pgTable(
 
 /**
  * The indexed content of a repository — derived from whatever the
- * ingestion method last synced, never authored in Chapters. Hard
+ * ingestion method last synced, never authored in Elara. Hard
  * deleted on sync (no trash/audit): git remains the record of code
- * history, not Chapters.
+ * history, not Elara.
  */
 export const repositoryFiles = pgTable(
   'repository_files',

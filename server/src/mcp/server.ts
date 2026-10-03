@@ -68,7 +68,7 @@ class McpToolError extends Error {}
  * stance; the server does not sanitize it.
  */
 export function buildMcpServer(auth: McpAuth): McpServer {
-  const server = new McpServer({ name: 'chapters', version: '0.1.0' })
+  const server = new McpServer({ name: 'elara', version: '0.2.0' })
   const actor: Actor = { type: 'mcp', id: auth.connection.id }
 
   /** Resolves the target vault under the connection's scope (hard, never narrowed). */
