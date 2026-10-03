@@ -41,3 +41,8 @@ jobs:
         run: pnpm lint
       - name: Test
         run: pnpm test
+        env:
+          DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
+          TEST_DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
+          ADMIN_DATABASE_URL: postgres://elara:elara@localhost:5432/elara
+
