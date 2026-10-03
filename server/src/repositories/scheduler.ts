@@ -128,7 +128,11 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
         if (fileStat.size > 1_048_576) {
           continue
         }
-        files.push({ path, content: await readFile(fullPath, 'utf8') })
+        const content = await readFile(fullPath, 'utf8')
+        if (content.includes('\0')) {
+          continue
+        }
+        files.push({ path, content })
       } catch (err) {
         // Vanished between listing and reading, or permission/read failure — log for diagnostics.
         console.warn(`[scheduler] failed reading repository file ${path} at ${root}:`, err)
@@ -140,9 +144,10 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
       .set({ syncStatus: 'idle', lastSyncedAt: new Date(), lastSyncError: null })
       .where(eq(repositories.id, repositoryId))
   } catch (err) {
+    const errorMsg = (err as Error).message.replace(/\0/g, '')
     await db
       .update(repositories)
-      .set({ syncStatus: 'error', lastSyncError: (err as Error).message })
+      .set({ syncStatus: 'error', lastSyncError: errorMsg })
       .where(eq(repositories.id, repositoryId))
     throw err
   }

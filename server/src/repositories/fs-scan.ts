@@ -1,7 +1,9 @@
 import { readdir } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 
-/** Every file path (relative to `root`) not matching `ignore`. Shared by local-path and git-clone ingestion. */
+export const BINARY_EXTENSIONS = /\.(png|jpe?g|gif|ico|webp|pdf|zip|tar|gz|7z|rar|exe|dll|so|dylib|bin|iso|dmg|apk|ipa|jar|war|class|pyc|pyo|woff2?|ttf|otf|eot|mp3|mp4|m4a|wav|avi|mov|webm|ogg|flac|mkv|wasm|dat|db|sqlite|sqlite3)$/i
+
+/** Every file path (relative to `root`) not matching `ignore` and not a binary asset. Shared by local-path and git-clone ingestion. */
 export async function listFilesRecursive(root: string, ignore: RegExp): Promise<string[]> {
   const result: string[] = []
 
@@ -16,7 +18,9 @@ export async function listFilesRecursive(root: string, ignore: RegExp): Promise<
       if (e.isDirectory()) {
         await walk(fullPath)
       } else if (e.isFile()) {
-        result.push(relPath)
+        if (!BINARY_EXTENSIONS.test(relPath)) {
+          result.push(relPath)
+        }
       }
     }
   }
