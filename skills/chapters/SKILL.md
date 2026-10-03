@@ -76,6 +76,17 @@ At the conclusion of any task that inspects, refactors, or extends the codebase 
 - **Evaluate New Notes**: If a new capability, bounded domain, or architectural decision was made, create a new note via `create_note` (e.g. `spec/...` or `decisions/ADR-...`).
 - **Confirm to User**: Report note updates and additions as part of the task completion summary.
 
+### 4. Pre-Task Codebase Drift & Note Freshness Protocol
+When beginning or resuming work on a project after an interval or when new commits have landed:
+- **Step 1 — Codebase Drift Audit**: Compare recent git commits, pull requests, and modified files against existing notes in the project vault (specifically architecture specs, codebase notes, component inventories, and PR resolution records).
+- **Step 2 — Identify Stale / Outdated Notes**: Check if schema migrations, new endpoints, refactored components, or modified dependencies have caused notes or specs to diverge from repository reality.
+- **Step 3 — Inform the User Explicitly**: Before implementing new features or bug fixes, alert the user with a transparent drift report:
+  - Name the specific notes that are outdated (e.g. `[[codebase/chapters]]`, `[[spec/...]]`).
+  - Explain exactly why they are stale (e.g. "PR #334 added the universal new button and modified `TopBar.tsx`, but `codebase/chapters` still references the older header layout").
+  - Explain why updating the notes first protects the knowledge graph and prevents hallucinated assumptions.
+- **Step 4 — Update Notes First**: Update the outdated notes via `edit_note` (and add missing notes via `create_note`) to synchronize the second brain with the actual repository state.
+- **Step 5 — Proceed with the Task**: Once the knowledge graph and documentation are verified fresh, continue with the user's primary request.
+
 ---
 
 ## Slash Commands

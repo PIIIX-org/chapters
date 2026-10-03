@@ -53,6 +53,12 @@ flowchart TD
      - **Evaluate existing notes**: Determine if any domain concept, spec, or model notes need to be updated.
      - **Evaluate new notes**: Determine if newly introduced invariants, decisions (ADRs), or workflows warrant a new note.
      - **Execute updates**: Call `edit_note` or `create_note` and confirm changes to the user.
+4. **Pre-Task Codebase Drift & Note Freshness Protocol (MANDATORY)**:
+   - When returning to a previously mapped project after an interval or when new commits have landed:
+     - Compare git logs, diffs, and updated files against existing vault notes.
+     - Detect outdated notes (stale domain descriptions, deprecated models, modified endpoints, new routes).
+     - **Notify the user first**: Explain which specific notes are outdated and the exact reason why they need updating.
+     - **Update notes first**: Perform `edit_note` updates and add any missing notes to bring the knowledge bundle up to date before undertaking the user's primary task.
 
 ---
 
