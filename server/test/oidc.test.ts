@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { eq } from 'drizzle-orm'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
+import { SESSION_COOKIE } from '../src/auth/plugin.js'
 
 /**
  * A minimal fake issuer: discovery, JWKS, and a token endpoint the test
@@ -153,7 +154,7 @@ describe('OIDC login', () => {
     })
     expect(res.statusCode).toBe(302)
     expect(res.headers.location).toBe('/')
-    expect(res.cookies.find((c) => c.name === 'sid')).toBeTruthy()
+    expect(res.cookies.find((c) => c.name === SESSION_COOKIE || c.name === 'sid')).toBeTruthy()
 
     // The token exchange authenticated and carried the PKCE verifier.
     expect(lastTokenRequest!.auth).toBe('Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'))
@@ -196,7 +197,7 @@ describe('OIDC login', () => {
     })
     expect(res.statusCode).toBe(302)
     expect(res.headers.location).toBe('/login?error=sso')
-    expect(res.cookies.find((c) => c.name === 'sid')).toBeUndefined()
+    expect(res.cookies.find((c) => c.name === SESSION_COOKIE || c.name === 'sid')).toBeUndefined()
   })
 
   it('rejects an id_token whose nonce does not match', async () => {

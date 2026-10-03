@@ -40,7 +40,7 @@ export function AppearanceSection() {
       <PanelHeader title="Appearance" />
       <PanelBody className="flex flex-col gap-3">
         <p className="text-sm text-muted-foreground">
-          How Chapters looks on this device. The choice is saved in this browser only.
+          How Elara looks on this device. The choice is saved in this browser only.
         </p>
         <RadioGroup
           aria-label="Theme"

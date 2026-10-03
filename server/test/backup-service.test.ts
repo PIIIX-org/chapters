@@ -189,7 +189,7 @@ describe('executeBackup & backup routes', () => {
     const result = await executeBackup()
     expect(result.destinations).toContain('local')
     expect(result.sizeBytes).toBeGreaterThan(0)
-    expect(result.filename).toMatch(/^chapters-backup-.*\.zip$/)
+    expect(result.filename).toMatch(/^(?:elara|chapters)-backup-.*\.zip$/)
 
     const files = await readdir(testBackupDir)
     expect(files).toContain(result.filename)
@@ -242,6 +242,6 @@ describe('executeBackup & backup routes', () => {
     expect(adminRes.statusCode).toBe(200)
     const body = adminRes.json() as { success: boolean; result: { filename: string } }
     expect(body.success).toBe(true)
-    expect(body.result.filename).toMatch(/^chapters-backup-.*\.zip$/)
+    expect(body.result.filename).toMatch(/^(?:elara|chapters)-backup-.*\.zip$/)
   })
 })

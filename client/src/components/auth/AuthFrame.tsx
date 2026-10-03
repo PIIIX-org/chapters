@@ -34,9 +34,9 @@ export function AuthFrame({ eyebrow, title, step, children }: AuthFrameProps) {
             aria-hidden="true"
             className="flex size-8 items-center justify-center rounded-[var(--radius-sm,2px)] bg-foreground font-mono text-[12px] font-semibold text-background"
           >
-            Ch
+            El
           </span>
-          <span className="text-sm font-medium text-foreground tracking-tight">Chapters</span>
+          <span className="text-sm font-medium text-foreground tracking-tight">Elara</span>
         </p>
         <Card className="w-full rounded-[var(--radius-md,4px)] border border-border bg-card shadow-none">
           <CardHeader>

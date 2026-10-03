@@ -1,4 +1,4 @@
-# One-command Chapters: the app and its database.
+# One-command Elara: the app and its database.
 #
 #   cp server/.env.example .env      # then fill in the values below
 #   docker compose up -d             # http://localhost:3000
@@ -21,8 +21,9 @@
 #    webhook secrets cannot be stored at all. There is no rotation
 #    story: generate it (`openssl rand -hex 32`) and back it up BEFORE
 #    you need it, not after.
-# 3. The `chapters-data` volume holds the notes. They are files on disk,
-#    not rows in Postgres. `docker compose down -v` deletes them.
+# 3. The `elara-data` (or legacy `chapters-data`) volume holds the notes.
+#    They are files on disk, not rows in Postgres. `docker compose down -v`
+#    deletes them.
 # 4. POSTGRES_PASSWORD is applied ONLY when the database volume is first
 #    created. Changing it later leaves the stored password untouched, the
 #    app's DATABASE_URL now disagrees with it, and you get a crash loop
@@ -67,10 +68,10 @@ services:
       - PORT=3000
       # `db` is the compose service name; 5432 is the container port, not
       # the published one.
-      - DATABASE_URL=postgres://${POSTGRES_USER:-chapters}:${POSTGRES_PASSWORD:-chapters}@db:5432/${POSTGRES_DB:-chapters}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-elara}:${POSTGRES_PASSWORD:-elara}@db:5432/${POSTGRES_DB:-elara}
       # Must stay under the mounted volume — see `volumes:` below.
-      - DATA_DIR=/data/chapters
-      - LOCAL_REPOS_ROOT=/data/chapters/local-repos
+      - DATA_DIR=/data/elara
+      - LOCAL_REPOS_ROOT=/data/elara/local-repos
       # 'local' = real ONNX embeddings (the first request downloads the
       # model). 'fake' = deterministic stub: search and graph relevance
       # become meaningless. Never 'fake' here.
@@ -99,14 +100,14 @@ services:
       # Not on it: the Transformers.js embedding model, which caches
       # under node_modules inside the image. Recreating the container
       # re-downloads it (~130MB, once, on the first embedding).
-      - chapters-data:/data
+      - elara-data:/data
 
   db:
     image: pgvector/pgvector:pg17
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-chapters}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chapters}
-      POSTGRES_DB: ${POSTGRES_DB:-chapters}
+      POSTGRES_USER: ${POSTGRES_USER:-elara}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-elara}
+      POSTGRES_DB: ${POSTGRES_DB:-elara}
     restart: unless-stopped
     ports:
       # Published for local development and the test suite, which run on
@@ -117,11 +118,12 @@ services:
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-chapters}']
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-elara}']
       interval: 5s
       timeout: 3s
       retries: 10
 
 volumes:
   db-data:
-  chapters-data:
+  elara-data:
+    name: chapters-data

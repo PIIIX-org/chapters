@@ -30,7 +30,7 @@ export async function notify(input: {
   if (email && recipient[0]!.emailNotifications) {
     void sendMail({
       to: email,
-      subject: emailSubject ?? `Chapters: ${input.type.replaceAll('_', ' ')}`,
+      subject: emailSubject ?? `Elara: ${input.type.replaceAll('_', ' ')}`,
       text: emailText ?? input.message,
     }).catch(() => {})
   }
