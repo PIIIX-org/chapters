@@ -184,7 +184,7 @@ export function MfaSection() {
         ) : start.data ? (
           <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/40 p-3">
             <p className="text-sm text-muted-foreground">
-              Add Chapters to your authenticator app, either by typing the key in or by opening the
+              Add Elara to your authenticator app, either by typing the key in or by opening the
               link below on the device the app is on. Then enter the 6-digit code it shows.
             </p>
             {qrSvg && (
@@ -235,7 +235,7 @@ export function MfaSection() {
           <>
             <p className="text-sm text-muted-foreground">
               {mfaRequired
-                ? 'An admin requires two-factor authentication on this instance. Set it up to carry on using Chapters.'
+                ? 'An admin requires two-factor authentication on this instance. Set it up to carry on using Elara.'
                 : 'Off. Signing in asks for your password and nothing else.'}
             </p>
             <FormError message={start.error?.message ?? null} />

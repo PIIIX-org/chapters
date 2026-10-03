@@ -8,14 +8,14 @@ export function PendingApprovalPage() {
   return (
     <AuthFrame
       eyebrow="welcome"
-      title="Welcome to Chapters"
+      title="Welcome to Elara"
       step="Admin approval"
     >
       <div className="flex flex-col gap-4">
         <div className="rounded-[var(--radius-md,4px)] border border-primary/20 bg-primary/5 p-4">
           <h3 className="font-semibold text-foreground">Email confirmed.</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Welcome to Chapters{email ? `, ${email}` : ''}! Your account has been created and your email is verified.
+            Welcome to Elara{email ? `, ${email}` : ''}! Your account has been created and your email is verified.
           </p>
         </div>
 

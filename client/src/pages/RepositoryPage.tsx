@@ -197,7 +197,7 @@ export function RepositoryPage() {
           <PanelState
             status="empty"
             title="No file open"
-            message="Pick a file to read it. Chapters never writes code back — git stays the record of truth."
+            message="Pick a file to read it. Elara never writes code back — git stays the record of truth."
           />
         )}
       </div>
