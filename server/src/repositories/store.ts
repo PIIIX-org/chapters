@@ -53,13 +53,14 @@ export async function syncRepositoryFiles(
       result.unchanged += 1
       continue
     }
+    const cleanContent = file.content.replace(/\0/g, '')
     const values = {
       repositoryId,
       path: file.path,
       language: detectLanguage(file.path),
-      content: file.content,
+      content: cleanContent,
       contentHash,
-      size: Buffer.byteLength(file.content, 'utf8'),
+      size: Buffer.byteLength(cleanContent, 'utf8'),
       sourceModifiedAt: file.sourceModifiedAt,
       updatedAt: new Date(),
     }
@@ -68,8 +69,15 @@ export async function syncRepositoryFiles(
       toExtract.push(current.id)
       result.updated += 1
     } else {
-      const [inserted] = await db.insert(repositoryFiles).values(values).returning({ id: repositoryFiles.id })
-      toExtract.push(inserted!.id)
+      const [inserted] = await db
+        .insert(repositoryFiles)
+        .values(values)
+        .onConflictDoUpdate({
+          target: [repositoryFiles.repositoryId, repositoryFiles.path],
+          set: values,
+        })
+        .returning({ id: repositoryFiles.id })
+      if (inserted) toExtract.push(inserted.id)
       result.created += 1
     }
   }
@@ -82,7 +90,7 @@ export async function syncRepositoryFiles(
         eq(repositoryFiles.repositoryId, repositoryId),
         notInArray(
           repositoryFiles.path,
-          currentPaths.length > 0 ? currentPaths : ['\0-impossible-path-\0'],
+          currentPaths.length > 0 ? currentPaths : ['__empty_repository_path__'],
         ),
       ),
     )
