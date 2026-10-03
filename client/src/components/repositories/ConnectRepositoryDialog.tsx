@@ -32,12 +32,12 @@ const METHODS: { value: IngestionMethod; label: string; blurb: string }[] = [
   {
     value: 'git',
     label: 'Git remote',
-    blurb: 'Chapters clones the remote and re-indexes it after every push.',
+    blurb: 'Elara clones the remote and re-indexes it after every push.',
   },
   {
     value: 'local_path',
     label: 'Folder on this server',
-    blurb: 'Chapters indexes a folder that already exists on the machine it runs on, then watches it for changes.',
+    blurb: 'Elara indexes a folder that already exists on the machine it runs on, then watches it for changes.',
   },
   {
     value: 'agent_push',
@@ -102,7 +102,7 @@ export function ConnectRepositoryDialog({ open, onOpenChange, onConnected }: Con
         <DialogHeader>
           <DialogTitle>Connect a repository</DialogTitle>
           <DialogDescription>
-            Chapters reads code and never writes it back — git stays the record of truth.
+            Elara reads code and never writes it back — git stays the record of truth.
           </DialogDescription>
         </DialogHeader>
 
@@ -121,7 +121,7 @@ export function ConnectRepositoryDialog({ open, onOpenChange, onConnected }: Con
           </div>
 
           <fieldset className="flex flex-col gap-2 border-0 p-0">
-            <legend className="text-sm font-medium text-foreground">How should Chapters get the code?</legend>
+            <legend className="text-sm font-medium text-foreground">How should Elara get the code?</legend>
             {METHODS.map((option) => (
               <div
                 key={option.value}

@@ -80,7 +80,7 @@ export function WebhookSetupCard({ repository, titleAs = 'h3' }: WebhookSetupCar
         ) : (
           <>
             <p className="text-xs text-muted-foreground">
-              No webhook yet — Chapters polls this remote on a schedule, so a push takes minutes to appear. A
+              No webhook yet — Elara polls this remote on a schedule, so a push takes minutes to appear. A
               webhook indexes it in seconds.
             </p>
             <Button

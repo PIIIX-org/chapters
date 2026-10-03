@@ -125,15 +125,15 @@ export function Rail() {
             <button
               type="button"
               onClick={shell.toggleSidebar}
-              aria-label="Chapters logo, toggle sidebar"
+              aria-label="Elara logo, toggle sidebar"
               aria-expanded={expanded}
               className={cn(
                 'flex items-center justify-center rounded-[var(--radius-md)] border border-border bg-card font-mono text-[13px] font-bold text-foreground outline-none transition-all duration-150 hover:bg-muted hover:border-input active:scale-95 shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40 cursor-pointer',
                 expanded ? 'h-11 w-full justify-between px-3' : 'size-11',
               )}
             >
-              <span>CH</span>
-              {expanded && <span className="font-sans text-xs font-normal text-muted-foreground">Chapters</span>}
+              <span>EL</span>
+              {expanded && <span className="font-sans text-xs font-normal text-muted-foreground">Elara</span>}
             </button>
           </TooltipTrigger>
           <TooltipContent side="right">

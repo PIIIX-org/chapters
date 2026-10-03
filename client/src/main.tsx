@@ -12,7 +12,7 @@ themeStore.boot()
 
 // Auto-recover once from stale dynamic chunk imports following redeployments
 window.addEventListener('vite:preloadError', (event) => {
-  const key = 'chapters_chunk_reload'
+  const key = 'elara_chunk_reload'
   const last = Number(sessionStorage.getItem(key) ?? 0)
   if (Date.now() - last > 10_000) {
     sessionStorage.setItem(key, String(Date.now()))

@@ -161,7 +161,7 @@ export function CodeViewer({ repository, path, meta, ref, initialAnchor }: CodeV
           {/* Permanent, not a mode: git stays the record of truth. */}
           <Pill
             className="rounded-[var(--radius-sm,2px)] font-mono text-[10px]"
-            title="Chapters never writes code back — git stays the record of truth."
+            title="Elara never writes code back — git stays the record of truth."
           >
             Read-only
           </Pill>

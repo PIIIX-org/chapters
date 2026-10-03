@@ -221,7 +221,7 @@ export function exportRoutes(app: FastifyInstance) {
       await logSecurityEvent({ type: 'account_exported', actorUserId: req.user!.id })
       return reply
         .header('content-type', 'application/zip')
-        .header('content-disposition', 'attachment; filename="chapters-account-export.zip"')
+        .header('content-disposition', 'attachment; filename="elara-account-export.zip"')
         .send(zip.toBuffer())
     })
 
@@ -233,7 +233,7 @@ export function exportRoutes(app: FastifyInstance) {
       await logSecurityEvent({ type: 'instance_backup_created', actorUserId: req.user!.id })
       return reply
         .header('content-type', 'application/zip')
-        .header('content-disposition', 'attachment; filename="chapters-backup.zip"')
+        .header('content-disposition', 'attachment; filename="elara-backup.zip"')
         .send(zip)
     })
 

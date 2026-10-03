@@ -61,7 +61,7 @@ export async function resolveRepositoryAccess(
 
 /**
  * The remote with anything that could be a credential taken off it:
- * `https://chapters:ghp_token@github.com/o/r.git` and `git@github.com:o/r.git`
+ * `https://elara:ghp_token@github.com/o/r.git` and `git@github.com:o/r.git`
  * both become `https://github.com/o/r.git`. Host, owner and name are what a
  * deep link is built from and are not secret — the userinfo is the only part
  * of a remote that ever is.
