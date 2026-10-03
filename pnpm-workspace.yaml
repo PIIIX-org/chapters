@@ -28,3 +28,4 @@ overrides:
   lodash-es: '>=4.17.24'
   postcss: '>=8.5.23'
   nanoid: '>=3.3.18'
+  vitest: ^5.0.3
