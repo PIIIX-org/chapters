@@ -89,7 +89,11 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
         if (fileStat.size > MAX_FILE_BYTES) {
           continue
         }
-        files.push({ path, content: await readFile(fullPath, 'utf8') })
+        const content = await readFile(fullPath, 'utf8')
+        if (content.includes('\0')) {
+          continue
+        }
+        files.push({ path, content })
       } catch (err) {
         console.warn(`[git-sync] failed reading ${path}:`, err)
       }
@@ -112,9 +116,10 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       })
       .where(eq(repositories.id, repositoryId))
   } catch (err) {
+    const errorMsg = (err as Error).message.replace(/\0/g, '')
     await db
       .update(repositories)
-      .set({ syncStatus: 'error', lastSyncError: (err as Error).message })
+      .set({ syncStatus: 'error', lastSyncError: errorMsg })
       .where(eq(repositories.id, repositoryId))
     throw err
   } finally {
