@@ -1,22 +1,19 @@
 ---
-name: chapters
-description: Connects AI agents to Chapters (now Elara) — an open-source, self-hostable second brain and AI-navigable knowledge graph platform with synced code repositories. Backward-compatibility proxy for the Elara skill.
+name: elara
+description: Connects AI agents to Elara — an open-source, self-hostable second brain and AI-navigable knowledge graph platform with synced code repositories. Use whenever interacting with Elara vaults, notes, knowledge graphs, codebase mappings, or when navigating projects via Elara MCP tools.
 ---
 
-# Chapters Agent Skill (Legacy Compatibility Proxy)
+# Elara Agent Skill
 
-> [!NOTE]
-> **Chapters is now Elara.** This skill is maintained as a permanent backward-compatibility proxy. The canonical, actively maintained agent skill is [`skills/elara/SKILL.md`](../elara/SKILL.md). All `/chapters-*` slash commands transparently forward to their canonical `/elara-*` counterparts.
+This skill enables AI agents to natively understand, navigate, and operate **Elara** — an open-source, self-hostable "second brain" web platform with plain markdown/YAML notes (Open Knowledge Format v0.2), synced code repositories, and an AI-navigable knowledge graph accessible via Model Context Protocol (MCP).
 
-This skill enables AI agents to natively understand, navigate, and operate **Chapters** (now Elara) — an open-source, self-hostable "second brain" web platform with plain markdown/YAML notes (Open Knowledge Format v0.2), synced code repositories, and an AI-navigable knowledge graph accessible via Model Context Protocol (MCP).
-
-When this skill is active, **you do not need to ask the user what Chapters is or whether the MCP server is available.** You already know Chapters is active, understand its architecture, and proactively use the Chapters MCP tools for project navigation, AST code symbol retrieval, concept pathfinding, note management, and code exploration.
+When this skill is active, **you do not need to ask the user what Elara is or whether the MCP server is available.** You already know Elara is active, understand its architecture, and proactively use the Elara MCP tools for project navigation, AST code symbol retrieval, concept pathfinding, note management, and code exploration.
 
 ---
 
-## What is Chapters?
+## What is Elara?
 
-Chapters is a team knowledge base and codebase mapping platform built on four foundational pillars:
+Elara is a team knowledge base and codebase mapping platform built on four foundational pillars:
 
 1. **Notes as Plain Files (OKF v0.2)**: Every note is a markdown file with YAML frontmatter following Google's [Open Knowledge Format (OKF v0.2)](https://github.com/GoogleCloudPlatform/open-knowledge-format). Notes support typed relationships, strict ISO 8601 UTC offsets, 8-level nested slug paths, progressive disclosure indices, and bidirectional wikilinks:
    - Note-to-note: `[[note-name]]` or `[[path/to/note|display text]]`
@@ -29,7 +26,7 @@ Chapters is a team knowledge base and codebase mapping platform built on four fo
    - `INFERRED` / `SEMANTIC`: Top-k nearest neighbors computed from local ONNX embeddings in a shared vector space.
    - Topological features include Louvain community detection, PageRank centrality ranking, shortest path finding (`find_graph_path`), and saved graph perspectives with filter presets.
 3. **Synced Code Repositories**: Read-only ingestion of git repositories (via git clone/poll/webhook, local filesystem watch, or CLI push) indexed with Tree-sitter AST symbol extraction (functions, classes, interfaces, types) and fine-grained semantic vector embeddings (`find_symbols`).
-4. **First-Class MCP Server & Prompts**: A stateless, permission-scoped MCP server (`POST /mcp` via Streamable HTTP transport or stdio) providing **57 tools** with full system parity and **20 first-class engineering prompts** with live context hydration.
+4. **First-Class MCP Server & Prompts**: A stateless, permission-scoped MCP server (`POST /mcp` or `POST /elara/mcp` via Streamable HTTP transport or stdio) providing **57 tools** with full system parity and **20 first-class engineering prompts** with live context hydration.
 
 ---
 
@@ -39,11 +36,11 @@ Chapters is a team knowledge base and codebase mapping platform built on four fo
 When exploring a project or answering questions about architecture, concepts, or code:
 - **Do not scan all files blindly.**
 - **Step 1 — Search & Symbols**:
-  - Run `search` (or `/chapters-search`) with a query to find relevant notes and code files using hybrid (lexical + vector) retrieval.
-  - Run `find_symbols` (or `/chapters-symbols`) to pinpoint specific functions, classes, interfaces, or types with exact declaration line numbers without reading whole files.
+  - Run `search` (or `/elara-search` / legacy `/chapters-search`) with a query to find relevant notes and code files using hybrid (lexical + vector) retrieval.
+  - Run `find_symbols` (or `/elara-symbols` / legacy `/chapters-symbols`) to pinpoint specific functions, classes, interfaces, or types with exact declaration line numbers without reading whole files.
 - **Step 2 — Graph Topology & Pathfinding**:
-  - Use `graph` (or `/chapters-graph`) with `aggregate: "community"` to view high-level community clusters, or inspect immediate neighbors (`neighbors_of`) and backlinks.
-  - Use `find_graph_path` (or `/chapters-path`) to trace the shortest conceptual path between two components, notes, or code files.
+  - Use `graph` (or `/elara-graph` / legacy `/chapters-graph`) with `aggregate: "community"` to view high-level community clusters, or inspect immediate neighbors (`neighbors_of`) and backlinks.
+  - Use `find_graph_path` (or `/elara-path` / legacy `/chapters-path`) to trace the shortest conceptual path between two components, notes, or code files.
   - Use `list_graph_perspectives` to see curated domain or subsystem perspectives.
 - **Step 3 — Read Context**:
   - Use `read_note` or `read_file` only for the specific notes and code files identified by the search/graph.
@@ -60,7 +57,7 @@ When creating or editing notes via `create_note` or `edit_note`:
   created: 2026-10-02T22:00:00Z
   sources:
     - id: "src-1"
-      resource: "repo:chapters/server/src/graph/assemble.ts"
+      resource: "repo:elara/server/src/graph/assemble.ts"
       title: "Graph Assembly Engine"
   ---
 
@@ -84,8 +81,8 @@ When beginning or resuming work on a project after an interval or when new commi
 - **Step 1 — Codebase Drift Audit**: Compare recent git commits, pull requests, and modified files against existing notes in the project vault (specifically architecture specs, codebase notes, component inventories, and PR resolution records).
 - **Step 2 — Identify Stale / Outdated Notes**: Check if schema migrations, new endpoints, refactored components, or modified dependencies have caused notes or specs to diverge from repository reality.
 - **Step 3 — Inform the User Explicitly**: Before implementing new features or bug fixes, alert the user with a transparent drift report:
-  - Name the specific notes that are outdated (e.g. `[[codebase/chapters]]`, `[[spec/...]]`).
-  - Explain exactly why they are stale (e.g. "PR #334 added the universal new button and modified `TopBar.tsx`, but `codebase/chapters` still references the older header layout").
+  - Name the specific notes that are outdated (e.g. `[[codebase/elara]]`, `[[spec/...]]`).
+  - Explain exactly why they are stale (e.g. "PR #334 added the universal new button and modified `TopBar.tsx`, but `codebase/elara` still references the older header layout").
   - Explain why updating the notes first protects the knowledge graph and prevents hallucinated assumptions.
 - **Step 4 — Update Notes First**: Update the outdated notes via `edit_note` (and add missing notes via `create_note`) to synchronize the second brain with the actual repository state.
 - **Step 5 — Proceed with the Task**: Once the knowledge graph and documentation are verified fresh, continue with the user's primary request.
@@ -94,72 +91,72 @@ When beginning or resuming work on a project after an interval or when new commi
 
 ## Slash Commands
 
-This skill equips agents and users with standard slash commands:
+This skill equips agents and users with standard slash commands (with permanent forwarding aliases for legacy `/chapters-*` commands):
 
-### `/chapters-status`
-Checks Chapters MCP connection, lists active vaults, connected repositories, and unread notifications.
+### `/elara-status` (alias: `/chapters-status`)
+Checks Elara MCP connection, lists active vaults, connected repositories, and unread notifications.
 - **Tools called**: `list_vaults`, `list_repositories`, `list_notifications`
 
-### `/chapters-search <query> [--type notes|repos|all] [--vault <id>] [--repo <id>] [--no-symbols]`
+### `/elara-search <query> [--type notes|repos|all] [--vault <id>] [--repo <id>] [--no-symbols]` (alias: `/chapters-search`)
 Executes hybrid lexical + semantic search across notes and codebases.
 - **Tool called**: `search`
-- **Example**: `/chapters-search "authentication session validation"`
+- **Example**: `/elara-search "authentication session validation"`
 
-### `/chapters-symbols <query> [--kind function|class|interface|type] [--repo <id>] [--everywhere]`
+### `/elara-symbols <query> [--kind function|class|interface|type] [--repo <id>] [--everywhere]` (alias: `/chapters-symbols`)
 Fine-grained search for code declarations, AST symbols, signatures, and line spans across repositories.
 - **Tool called**: `find_symbols`
-- **Example**: `/chapters-symbols "buildGraph" --kind function`
+- **Example**: `/elara-symbols "buildGraph" --kind function`
 
-### `/chapters-graph [query] [--vault <id>] [--repo <id>] [--aggregate] [--community <id>]`
+### `/elara-graph [query] [--vault <id>] [--repo <id>] [--aggregate] [--community <id>]` (alias: `/chapters-graph`)
 Queries and traverses the knowledge graph.
 - **Tool called**: `graph`
-- **Example**: `/chapters-graph --aggregate`
+- **Example**: `/elara-graph --aggregate`
 
-### `/chapters-path <source> <target> [--vault <id>] [--repo <id>]`
+### `/elara-path <source> <target> [--vault <id>] [--repo <id>]` (alias: `/chapters-path`)
 Finds the shortest conceptual path connecting two notes, concepts, or code files.
 - **Tool called**: `find_graph_path`
-- **Example**: `/chapters-path "domains/auth" "server/src/auth/session.ts"`
+- **Example**: `/elara-path "domains/auth" "server/src/auth/session.ts"`
 
-### `/chapters-perspective [list|save|delete] [...]`
+### `/elara-perspective [list|save|delete] [...]` (alias: `/chapters-perspective`)
 Manages saved graph perspectives and filter presets.
 - **Tools called**: `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`
 
-### `/chapters-prompt <name> [args...]`
-Invokes one of the 20 first-class Chapters MCP engineering prompts (e.g. `active_project_companion`, `plan_feature_implementation`, `draft_adr`, `refactor_impact_analysis`).
+### `/elara-prompt <name> [args...]` (alias: `/chapters-prompt`)
+Invokes one of the 20 first-class Elara MCP engineering prompts (e.g. `active_project_companion`, `plan_feature_implementation`, `draft_adr`, `refactor_impact_analysis`).
 
-### `/chapters-note <action> [arguments...]`
+### `/elara-note <action> [arguments...]` (alias: `/chapters-note`)
 Performs operations on notes:
-- `/chapters-note read <vault-id> <path>`: Read note content and frontmatter.
-- `/chapters-note create <vault-id> <path> [content]`: Create a new OKF note.
-- `/chapters-note edit <vault-id> <path> <content>`: Update existing note content via CRDT.
-- `/chapters-note rename <vault-id> <old-path> <new-path>`: Rename a note and refactor incoming wikilinks.
-- `/chapters-note delete <vault-id> <path>`: Move note to trash.
-- `/chapters-note history <vault-id> <path>`: View revision history and attribution.
-- `/chapters-note revert <vault-id> <path> <revision-id>`: Revert to a previous revision.
-- `/chapters-note audit [vault-id]`: Audit vault notes for OKF v0.2 conformance.
+- `/elara-note read <vault-id> <path>`: Read note content and frontmatter.
+- `/elara-note create <vault-id> <path> [content]`: Create a new OKF note.
+- `/elara-note edit <vault-id> <path> <content>`: Update existing note content via CRDT.
+- `/elara-note rename <vault-id> <old-path> <new-path>`: Rename a note and refactor incoming wikilinks.
+- `/elara-note delete <vault-id> <path>`: Move note to trash.
+- `/elara-note history <vault-id> <path>`: View revision history and attribution.
+- `/elara-note revert <vault-id> <path> <revision-id>`: Revert to a previous revision.
+- `/elara-note audit [vault-id]`: Audit vault notes for OKF v0.2 conformance.
 
-### `/chapters-repo <action> [arguments...]`
+### `/elara-repo <action> [arguments...]` (alias: `/chapters-repo`)
 Performs operations on connected codebase repositories:
-- `/chapters-repo list`: List all connected repositories.
-- `/chapters-repo browse <repo-id> [path]`: Browse file and folder hierarchy.
-- `/chapters-repo read <repo-id> <file-path>`: Read file content and AST symbol outline.
-- `/chapters-repo status <repo-id>`: View sync freshness, commit SHA, and indexing status.
-- `/chapters-repo sync <repo-id>`: Trigger an immediate repository sync.
+- `/elara-repo list`: List all connected repositories.
+- `/elara-repo browse <repo-id> [path]`: Browse file and folder hierarchy.
+- `/elara-repo read <repo-id> <file-path>`: Read file content and AST symbol outline.
+- `/elara-repo status <repo-id>`: View sync freshness, commit SHA, and indexing status.
+- `/elara-repo sync <repo-id>`: Trigger an immediate repository sync.
 
-### `/chapters-vault <action> [arguments...]`
+### `/elara-vault <action> [arguments...]` (alias: `/chapters-vault`)
 Manages vaults and sharing:
-- `/chapters-vault list`: List accessible vaults and permissions.
-- `/chapters-vault browse <vault-id> [path]`: Browse notes hierarchy in a vault.
-- `/chapters-vault create <name> [description]`: Create a new vault.
-- `/chapters-vault preference <vault-id> [include true|false]`: View or set merged-graph preference.
+- `/elara-vault list`: List accessible vaults and permissions.
+- `/elara-vault browse <vault-id> [path]`: Browse notes hierarchy in a vault.
+- `/elara-vault create <name> [description]`: Create a new vault.
+- `/elara-vault preference <vault-id> [include true|false]`: View or set merged-graph preference.
 
-### `/chapters-map <repo-id-or-path> [--vault <vault-id>] [--name <vault-name>]`
-Maps an entire project or codebase repository into an interconnected, Open Knowledge Format (OKF v0.2) Knowledge Bundle within Chapters following the **5-Phase Flawless OKF Mapping Protocol** ([`references/codebase-mapping-protocol.md`](references/codebase-mapping-protocol.md)).
+### `/elara-map <repo-id-or-path> [--vault <vault-id>] [--name <vault-name>]` (alias: `/chapters-map`)
+Maps an entire project or codebase repository into an interconnected, Open Knowledge Format (OKF v0.2) Knowledge Bundle within Elara following the **5-Phase Flawless OKF Mapping Protocol** ([`references/codebase-mapping-protocol.md`](references/codebase-mapping-protocol.md)).
 
 - **Workflow for Agents (The 5-Phase OKF Protocol)**:
   1. **Phase 0 — Target Binding & Ingestion Choice**:
      - **Vault Destination**: Ask if the codebase should be mapped in a new vault or an existing vault, and choose whether to name the vault or use the repository's name.
-     - **Git Connection**: Ask if they also want to add/connect the repo to Chapters (`connect_repository`) for continuous background sync. When mapping a GitHub repository of any programming job, you must always map the codebase.
+     - **Git Connection**: Ask if they also want to add/connect the repo to Elara (`connect_repository`) for continuous background sync. When mapping a GitHub repository of any programming job, you must always map the codebase.
      - Bind to the target `vaultId`.
   2. **Phase 1 — Discovery & Manifest Analysis**:
      - Parse build manifests (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `Dockerfile`).
@@ -168,7 +165,7 @@ Maps an entire project or codebase repository into an interconnected, Open Knowl
      - Decompose the codebase into 4 to 8 cohesive bounded domains.
      - Identify lead implementation files, exported symbol interfaces, and hard architectural invariants.
   4. **Phase 3 — Structured OKF Note Synthesis**:
-     - Create notes via Chapters MCP `create_note` conforming to OKF v0.2 schemas:
+     - Create notes via Elara MCP `create_note` conforming to OKF v0.2 schemas:
        - **Root System Index (`index.md`)**: High-level overview, architecture blueprint, domain roster, entrypoints, and technology stack table with `[[repo:...]]` links.
        - **Domain Concept Notes (`domains/<domain>/index.md`)**: Architectural responsibilities, invariants, and implementation files.
        - **End-to-End Workflow Specs (`specs/<flow>.md`)**: Sequence steps, trust boundaries, and error recovery contracts.
@@ -182,15 +179,15 @@ Maps an entire project or codebase repository into an interconnected, Open Knowl
      - Call `graph` with `aggregate: "community"` to verify cohesive Louvain community clusters.
      - Call `search` to verify top-k hybrid search retrieval across all mapped domains.
 
-### `/chapters-export <vault-id|note-path>`
+### `/elara-export <vault-id|note-path>` (alias: `/chapters-export`)
 Exports a vault zip archive or single note markdown file.
 - **Tools called**: `export_vault`, `export_note`
 
 ---
 
-## Chapters MCP Tool Reference (57 Tools)
+## Elara MCP Tool Reference (57 Tools)
 
-Chapters exposes 57 tools across 7 functional domains:
+Elara exposes 57 tools across 7 functional domains:
 
 ### 1. Vault Management (14 tools)
 | Tool | Scope | Description |
@@ -279,14 +276,14 @@ Chapters exposes 57 tools across 7 functional domains:
 
 ---
 
-## Chapters MCP Engineering Prompts (20 Prompts)
+## Elara MCP Engineering Prompts (20 Prompts)
 
-Chapters supports the Model Context Protocol Prompts standard with 20 pre-engineered prompts with context hydration:
+Elara supports the Model Context Protocol Prompts standard with 20 pre-engineered prompts with context hydration:
 
 | Prompt | Purpose |
 | :--- | :--- |
 | `active_project_companion` | Continuous session companion: anchors agent to project vault, capturing decisions in real time. |
-| `sync_local_docs_to_vault` | Ingests local markdown notes into the Chapters vault. |
+| `sync_local_docs_to_vault` | Ingests local markdown notes into the Elara vault. |
 | `plan_feature_implementation` | Formulates grounded, zero-hallucination implementation plans from existing specs. |
 | `prepare_task_context` | Bundles relevant notes, AST symbols, and graph context for an upcoming task. |
 | `draft_adr` | Synthesizes an Architecture Decision Record (ADR) in strict OKF format. |
@@ -318,10 +315,10 @@ See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter defi
   ```json
   {
     "mcpServers": {
-      "chapters": {
-        "url": "https://chapters.piiix.org/mcp",
+      "elara": {
+        "url": "https://elara.piiix.org/mcp",
         "headers": {
-          "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
+          "Authorization": "Bearer YOUR_ELARA_MCP_TOKEN"
         }
       }
     }
@@ -329,7 +326,7 @@ See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter defi
   ```
   Install the agent skill:
   ```bash
-  mkdir -p ~/.agents/skills/chapters && cp -r skills/chapters/* ~/.agents/skills/chapters/
+  mkdir -p ~/.agents/skills/elara && cp -r skills/elara/* ~/.agents/skills/elara/
   ```
 
 ### 2. Anthropic Claude (Claude Desktop & Claude Code)
@@ -338,10 +335,10 @@ See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter defi
   ```json
   {
     "mcpServers": {
-      "chapters": {
-        "url": "https://chapters.piiix.org/mcp",
+      "elara": {
+        "url": "https://elara.piiix.org/mcp",
         "headers": {
-          "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
+          "Authorization": "Bearer YOUR_ELARA_MCP_TOKEN"
         }
       }
     }
@@ -349,29 +346,29 @@ See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter defi
   ```
 - **Claude Code**:
   ```bash
-  claude mcp add chapters https://chapters.piiix.org/mcp --header "Authorization: Bearer YOUR_CHAPTERS_MCP_TOKEN"
-  mkdir -p ~/.claude/skills/chapters && cp -r skills/chapters/* ~/.claude/skills/chapters/
+  claude mcp add elara https://elara.piiix.org/mcp --header "Authorization: Bearer YOUR_ELARA_MCP_TOKEN"
+  mkdir -p ~/.claude/skills/elara && cp -r skills/elara/* ~/.claude/skills/elara/
   ```
 
 ### 3. Cursor & Windsurf
 - **Cursor**:
   1. Open **Cursor Settings** > **Features** > **MCP**.
   2. Click **+ Add New MCP Server**.
-  3. Set Name: `chapters`, Type: `sse` or `http`, URL: `https://chapters.piiix.org/mcp`.
-  4. Add Header: `Authorization: Bearer YOUR_CHAPTERS_MCP_TOKEN`.
+  3. Set Name: `elara`, Type: `sse` or `http`, URL: `https://elara.piiix.org/mcp`.
+  4. Add Header: `Authorization: Bearer YOUR_ELARA_MCP_TOKEN`.
   5. Install skill for Cursor rules:
      ```bash
-     mkdir -p .cursor/rules && cp skills/chapters/SKILL.md .cursor/rules/chapters.mdc
+     mkdir -p .cursor/rules && cp skills/elara/SKILL.md .cursor/rules/elara.mdc
      ```
 - **Windsurf (Codeium)**:
   Configure `~/.codeium/windsurf/mcp_config.json`:
   ```json
   {
     "mcpServers": {
-      "chapters": {
-        "url": "https://chapters.piiix.org/mcp",
+      "elara": {
+        "url": "https://elara.piiix.org/mcp",
         "headers": {
-          "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
+          "Authorization": "Bearer YOUR_ELARA_MCP_TOKEN"
         }
       }
     }
@@ -382,22 +379,22 @@ See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter defi
 
 ## Keeping the Skill Always Active (Always-On Mode)
 
-If you want your AI agent to keep Chapters **permanently active** across every session:
+If you want your AI agent to keep Elara **permanently active** across every session:
 
 ### One-Command Setup
 Run the included installer script from the repository root:
 ```bash
-./skills/chapters/scripts/install-always-on.sh all
+./skills/elara/scripts/install-always-on.sh all
 ```
 
 ### Manual Setup
 - **Google Gemini / Antigravity**:
-  Copy [`skills/chapters/rules/chapters.md`](rules/chapters.md) to `~/.gemini/config/rules/chapters.md` (or `~/.agents/rules/chapters.md`). It will be automatically injected into every conversation.
+  Copy [`skills/elara/rules/elara.md`](rules/elara.md) to `~/.gemini/config/rules/elara.md` (or `~/.agents/rules/elara.md`). It will be automatically injected into every conversation.
 - **Anthropic Claude**:
-  Append the contents of [`skills/chapters/rules/chapters.md`](rules/chapters.md) to `~/.claude/CLAUDE.md`.
+  Append the contents of [`skills/elara/rules/elara.md`](rules/elara.md) to `~/.claude/CLAUDE.md`.
 - **Cursor**:
-  Create `.cursor/rules/chapters.mdc` with `alwaysApply: true` and the contents of `rules/chapters.md`.
+  Create `.cursor/rules/elara.mdc` with `alwaysApply: true` and the contents of `rules/elara.md`.
 - **Windsurf**:
-  Append the contents of `rules/chapters.md` to `.windsurfrules`.
+  Append the contents of `rules/elara.md` to `.windsurfrules`.
 
-*Note: Generate an MCP bearer token in the Chapters UI at `/settings` (Settings > MCP Connections) or through the Admin panel.*
+*Note: Generate an MCP bearer token in the Elara UI at `/settings` (Settings > MCP Connections) or through the Admin panel.*
