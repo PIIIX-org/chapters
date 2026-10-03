@@ -99,6 +99,20 @@ describe('MCP integration', () => {
     expect(textOf(result)).toContain('quantum flux capacitor')
   })
 
+  it('supports dual ingress on /elara/mcp with server name elara', async () => {
+    const client = new Client({ name: 'test-client', version: '0.0.0' })
+    const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/elara/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${accountToken}` } },
+    })
+    await client.connect(transport)
+    clients.push(client)
+
+    expect(client.getServerVersion()?.name).toBe('elara')
+
+    const tools = await client.listTools()
+    expect(tools.tools.length).toBeGreaterThan(0)
+  })
+
   it('hard-rejects account surfaces for vault-scoped tokens', async () => {
     const client = await mcpClient(vaultToken)
 

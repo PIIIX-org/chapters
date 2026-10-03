@@ -126,7 +126,7 @@ export function RepositorySettingsDialog({
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            The name is Chapters&rsquo; own label for this connection. Nothing is renamed in git or on disk.
+            The name is Elara&rsquo;s own label for this connection. Nothing is renamed in git or on disk.
           </p>
           <FormError message={nameError} />
         </form>
@@ -197,7 +197,7 @@ export function RepositorySettingsDialog({
             destructive
             pending={deleteRepository.isPending}
             error={deleteError}
-            consequence={`Deleting removes this connection and everything Chapters indexed from it — files, symbols, shares and sync tokens. Your code is untouched: ${
+            consequence={`Deleting removes this connection and everything Elara indexed from it — files, symbols, shares and sync tokens. Your code is untouched: ${
               repository.ingestionMethod === 'git'
                 ? 'the remote and its history stay exactly as they are.'
                 : repository.ingestionMethod === 'local_path'

@@ -10,6 +10,7 @@ import { Input } from '../ui/input.js'
 import { Label } from '../ui/label.js'
 import { Button } from '../ui/button.js'
 import { Plus, X } from 'lucide-react'
+import { getMigratedStorageItem } from '../../lib/storage.js'
 
 // --- Color Conversion Helpers ---
 
@@ -115,12 +116,13 @@ function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
   return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)]
 }
 
-const STORAGE_KEY_SAVED_PALETTE = 'chapters_custom_palette'
+const STORAGE_KEY_SAVED_PALETTE = 'elara_custom_palette'
+const LEGACY_STORAGE_KEY_SAVED_PALETTE = 'chapters_custom_palette'
 const DEFAULT_PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#ef4444']
 
 function getSavedPalette(): string[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_SAVED_PALETTE)
+    const raw = getMigratedStorageItem(STORAGE_KEY_SAVED_PALETTE, LEGACY_STORAGE_KEY_SAVED_PALETTE)
     return raw ? JSON.parse(raw) : DEFAULT_PALETTE
   } catch {
     return DEFAULT_PALETTE

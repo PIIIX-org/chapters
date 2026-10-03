@@ -20,12 +20,12 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY client/package.json ./client/
 COPY server/package.json ./server/
 
-RUN pnpm install --frozen-lockfile --filter @chapters/client
+RUN pnpm install --frozen-lockfile --filter @elara/client
 
 COPY tsconfig.base.json ./
 COPY client ./client
 
-RUN pnpm --filter @chapters/client build
+RUN pnpm --filter @elara/client build
 
 # --------------------------------------------------------------- runtime
 FROM node:24-slim AS runtime
@@ -49,7 +49,9 @@ RUN apt-get update \
 # layer duplicating the (very large) node_modules tree — and the
 # Transformers.js model cache, which lives under node_modules, stays
 # writable at runtime.
-RUN mkdir -p /app /data/chapters && chown -R node:node /app /data
+RUN mkdir -p /app /data/elara \
+ && ln -s /data/elara /data/chapters \
+ && chown -R node:node /app /data
 WORKDIR /app
 USER node
 
@@ -57,7 +59,7 @@ COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --chown=node:node client/package.json ./client/
 COPY --chown=node:node server/package.json ./server/
 
-RUN pnpm install --frozen-lockfile --filter @chapters/server
+RUN pnpm install --frozen-lockfile --filter @elara/server
 
 COPY --chown=node:node tsconfig.base.json ./
 COPY --chown=node:node server ./server
@@ -74,8 +76,8 @@ ENV NODE_ENV=production
 # under the working directory, i.e. inside the container's writable
 # layer — set here so the data lands under /data, which a deployment can
 # actually mount a volume on. Losing /data loses the notes.
-ENV DATA_DIR=/data/chapters
-ENV LOCAL_REPOS_ROOT=/data/chapters/local-repos
+ENV DATA_DIR=/data/elara
+ENV LOCAL_REPOS_ROOT=/data/elara/local-repos
 
 # One process, one port: the Yjs collaboration relay is attached to
 # Fastify's own HTTP server (server/src/index.ts) and answers websocket

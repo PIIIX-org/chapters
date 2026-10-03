@@ -2,7 +2,7 @@ import { Link } from 'react-router'
 import type { BreadcrumbItem } from './shell-context.js'
 
 export function Breadcrumb({ items }: { items: BreadcrumbItem[] }) {
-  const shown = items.length > 0 ? items : [{ label: 'Chapters' }]
+  const shown = items.length > 0 ? items : [{ label: 'Elara' }]
   return (
     <nav aria-label="Breadcrumb" className="min-w-0">
       <ol className="flex min-w-0 items-center gap-1.5 font-mono text-[12px]">

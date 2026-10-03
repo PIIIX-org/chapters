@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { getMigratedStorageItem } from '../../lib/storage.js'
 import {
   ShellContext,
   type BreadcrumbItem,
@@ -13,7 +14,8 @@ interface PanelState {
   node: HTMLElement | null
 }
 
-const STORAGE_PREFIX = 'chapters.shell.'
+const STORAGE_PREFIX = 'elara.shell.'
+const LEGACY_STORAGE_PREFIX = 'chapters.shell.'
 /** Below this the tracks would leave the content cell too narrow to use. */
 const WIDE_VIEWPORT = 1024
 const MOBILE_BREAKPOINT = 768
@@ -25,7 +27,7 @@ function isMobile(): boolean {
 function readOpen(kind: PanelKind): boolean {
   if (isMobile()) return false
   try {
-    const raw = localStorage.getItem(STORAGE_PREFIX + kind)
+    const raw = getMigratedStorageItem(STORAGE_PREFIX + kind, LEGACY_STORAGE_PREFIX + kind)
     if (raw === 'open') return true
     if (raw === 'closed') return false
   } catch {
@@ -51,7 +53,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const [sidebarExpanded, setSidebarExpandedState] = useState<boolean>(() => {
     if (isMobile()) return false
     try {
-      return localStorage.getItem('chapters.shell.sidebar') === 'expanded'
+      return getMigratedStorageItem('elara.shell.sidebar', 'chapters.shell.sidebar') === 'expanded'
     } catch {
       return false
     }
@@ -148,7 +150,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     setSidebarExpandedState((prev) => {
       const next = !prev
       try {
-        localStorage.setItem('chapters.shell.sidebar', next ? 'expanded' : 'collapsed')
+        localStorage.setItem('elara.shell.sidebar', next ? 'expanded' : 'collapsed')
       } catch {
         // ignore storage errors
       }
@@ -169,7 +171,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const setSidebarExpanded = useCallback((expanded: boolean) => {
     setSidebarExpandedState(expanded)
     try {
-      localStorage.setItem('chapters.shell.sidebar', expanded ? 'expanded' : 'collapsed')
+      localStorage.setItem('elara.shell.sidebar', expanded ? 'expanded' : 'collapsed')
     } catch {
       // ignore storage errors
     }

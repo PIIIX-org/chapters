@@ -20,6 +20,7 @@ import { RepoFolderDialog } from '../components/repositories/RepoFolderDialog.js
 import { useRepoFolders } from '../components/repositories/useRepoFolders.js'
 import { getColorDef, type VaultColor } from '../components/vault/useVaultFolders.js'
 import { Button } from '../components/ui/button.js'
+import { getMigratedStorageItem } from '../lib/storage.js'
 import { PanelState } from '../components/ui/empty-state.js'
 import { Panel, PanelHeader } from '../components/ui/panel.js'
 import { Pill, type PillTone } from '../components/ui/pill.js'
@@ -74,10 +75,10 @@ export function ReposPage() {
   const [folderModalRepo, setFolderModalRepo] = useState<Repository | null>(null)
 
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    return (localStorage.getItem('chapters_repos_view_mode') as ViewMode) || 'card'
+    return (getMigratedStorageItem('elara_repos_view_mode', 'chapters_repos_view_mode') as ViewMode) || 'card'
   })
   const [groupByFolder, setGroupByFolder] = useState<boolean>(() => {
-    return localStorage.getItem('chapters_repos_group_by_folder') === 'true'
+    return getMigratedStorageItem('elara_repos_group_by_folder', 'chapters_repos_group_by_folder') === 'true'
   })
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({})
   const [selectedFolder, setSelectedFolder] = useState<string>('all')
@@ -99,13 +100,13 @@ export function ReposPage() {
 
   function handleViewModeChange(mode: ViewMode) {
     setViewMode(mode)
-    localStorage.setItem('chapters_repos_view_mode', mode)
+    localStorage.setItem('elara_repos_view_mode', mode)
   }
 
   function handleToggleGroupByFolder() {
     setGroupByFolder((prev) => {
       const next = !prev
-      localStorage.setItem('chapters_repos_group_by_folder', String(next))
+      localStorage.setItem('elara_repos_group_by_folder', String(next))
       return next
     })
   }
@@ -508,7 +509,7 @@ export function ReposPage() {
             <PanelState
               status="empty"
               title="No repositories yet"
-              message="Connect one and its files join the graph beside your notes. Chapters never writes code back — git stays the record of truth."
+              message="Connect one and its files join the graph beside your notes. Elara never writes code back — git stays the record of truth."
             />
           ) : filteredRepos.length === 0 ? (
             <div className="p-8 text-center flex flex-col items-center gap-2">

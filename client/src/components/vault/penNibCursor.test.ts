@@ -83,7 +83,7 @@ function injectedCss(): string {
 // everyone shared a colour could not tell "reads awareness" from "hardcoded".
 const JANE = { name: 'jane', ink: inkFor('b7') }
 const TAHA = { name: 'taha', ink: inkFor('9') }
-const AI = { name: 'Chapters MCP', ink: AI_INK }
+const AI = { name: 'Elara MCP', ink: AI_INK }
 
 describe('penNibCursor', () => {
   it('wears the ink each peer broadcast, and names no colour of its own', () => {

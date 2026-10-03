@@ -76,7 +76,7 @@ export async function pruneLocalBackups(dir: string, retentionCount: number): Pr
   try {
     const entries = await readdir(dir)
     const backupFiles = entries
-      .filter((name) => /^chapters-backup-.*\.zip$/.test(name))
+      .filter((name) => /^(?:elara|chapters)-backup-.*\.zip$/.test(name))
       .sort()
       .reverse()
 
@@ -125,7 +125,7 @@ export async function executeBackup(options?: { actorUserId?: string }): Promise
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const filename = `chapters-backup-${timestamp}.zip`
+  const filename = `elara-backup-${timestamp}.zip`
   const zip = await buildInstanceBackup()
   const sizeBytes = zip.byteLength
   let totalPruned = 0
