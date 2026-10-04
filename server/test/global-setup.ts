@@ -55,7 +55,7 @@ export default async function setup(): Promise<void> {
   await test.unsafe('DROP SCHEMA IF EXISTS drizzle CASCADE')
   await test.end()
 
-  process.env.DATABASE_URL = TEST_URL
+  process.env.DATABASE_URL = testUrl
   const { runMigrations } = await import('../src/db/migrate.js')
   await runMigrations()
   const { sql } = await import('../src/db/client.js')
