@@ -1023,10 +1023,10 @@ describe('SearchOverlay connect-repository command', () => {
 
   const CONNECTED = {
     id: 'r7',
-    name: 'chapters',
+    name: 'elara',
     ownerId: 'u1',
     ingestionMethod: 'git',
-    gitUrl: 'https://github.com/PIIIX-org/chapters.git',
+    gitUrl: 'https://github.com/PIIIX-org/elara.git',
     localPath: null,
     defaultBranch: null,
     mergeable: true,
@@ -1079,10 +1079,10 @@ describe('SearchOverlay connect-repository command', () => {
     await userEvent.click(
       await screen.findByRole('option', { name: 'Command: Connect a repository' }),
     )
-    await userEvent.type(await screen.findByLabelText('Repository name'), 'chapters')
+    await userEvent.type(await screen.findByLabelText('Repository name'), 'elara')
     await userEvent.type(
       screen.getByLabelText('Git remote URL'),
-      'https://github.com/PIIIX-org/chapters.git',
+      'https://github.com/PIIIX-org/elara.git',
     )
     await userEvent.click(screen.getByRole('button', { name: 'Connect repository' }))
 

@@ -21,7 +21,7 @@ const providers: HocuspocusProvider[] = []
 const failures = new WeakMap<HocuspocusProvider, boolean>()
 
 /** POSTs the real endpoint; `host` proves the URL is built from the request. */
-async function mintTicket(cookie: string, host = 'chapters.test:3000') {
+async function mintTicket(cookie: string, host = 'elara.test:3000') {
   return app.inject({
     method: 'POST',
     url: '/api/collab/ticket',
@@ -129,7 +129,7 @@ describe('collab ticket', () => {
     // client/src/api/collab.ts derives wss:// from an https page), so no
     // header a proxy sets can change the answer here.
     for (const headers of [
-      { cookie: ownerCookie, host: 'chapters.test', 'x-forwarded-proto': 'https' },
+      { cookie: ownerCookie, host: 'elara.test', 'x-forwarded-proto': 'https' },
       { cookie: ownerCookie, host: 'localhost:5173' },
     ]) {
       const res = await app.inject({ method: 'POST', url: '/api/collab/ticket', headers })

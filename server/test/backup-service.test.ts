@@ -56,14 +56,14 @@ describe('S3 SigV4 Client', () => {
     const { url, headers } = signS3Request(
       s3Config,
       'PUT',
-      'chapters-backups/test.zip',
+      'elara-backups/test.zip',
       {},
       Buffer.from('test data'),
       'application/zip',
       fixedDate,
     )
 
-    expect(url).toContain('test-bucket/chapters-backups/test.zip')
+    expect(url).toContain('test-bucket/elara-backups/test.zip')
     expect(headers['x-amz-date']).toBe('20260927T120000Z')
     expect(headers['content-type']).toBe('application/zip')
     expect(headers.authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=AKIA_TEST_KEY\/20260927\/us-east-1\/s3\/aws4_request/)
@@ -90,15 +90,15 @@ describe('S3 SigV4 Client', () => {
     const xmlResponse = `
       <ListBucketResult>
         <Contents>
-          <Key>chapters-backups/chapters-backup-2026-09-25.zip</Key>
+          <Key>elara-backups/elara-backup-2026-09-25.zip</Key>
           <LastModified>2026-09-25T12:00:00.000Z</LastModified>
         </Contents>
         <Contents>
-          <Key>chapters-backups/chapters-backup-2026-09-26.zip</Key>
+          <Key>elara-backups/elara-backup-2026-09-26.zip</Key>
           <LastModified>2026-09-26T12:00:00.000Z</LastModified>
         </Contents>
         <Contents>
-          <Key>chapters-backups/chapters-backup-2026-09-27.zip</Key>
+          <Key>elara-backups/elara-backup-2026-09-27.zip</Key>
           <LastModified>2026-09-27T12:00:00.000Z</LastModified>
         </Contents>
       </ListBucketResult>
@@ -116,10 +116,10 @@ describe('S3 SigV4 Client', () => {
       }),
     )
 
-    const pruned = await pruneS3Backups(s3Config, 'chapters-backups/', 2)
+    const pruned = await pruneS3Backups(s3Config, 'elara-backups/', 2)
     expect(pruned).toBe(1)
     expect(deletedKeys.length).toBe(1)
-    expect(deletedKeys[0]).toContain('chapters-backup-2026-09-25.zip')
+    expect(deletedKeys[0]).toContain('elara-backup-2026-09-25.zip')
   })
 
   it('performs S3 upload, list, and delete operations via fetch', async () => {
@@ -159,11 +159,11 @@ describe('S3 SigV4 Client', () => {
 describe('pruneLocalBackups', () => {
   it('prunes oldest backup files exceeding retention count', async () => {
     const filenames = [
-      'chapters-backup-2026-09-21-00-00-00.zip',
-      'chapters-backup-2026-09-22-00-00-00.zip',
-      'chapters-backup-2026-09-23-00-00-00.zip',
-      'chapters-backup-2026-09-24-00-00-00.zip',
-      'chapters-backup-2026-09-25-00-00-00.zip',
+      'elara-backup-2026-09-21-00-00-00.zip',
+      'elara-backup-2026-09-22-00-00-00.zip',
+      'elara-backup-2026-09-23-00-00-00.zip',
+      'elara-backup-2026-09-24-00-00-00.zip',
+      'elara-backup-2026-09-25-00-00-00.zip',
     ]
 
     for (const name of filenames) {
@@ -175,9 +175,9 @@ describe('pruneLocalBackups', () => {
 
     const remaining = await readdir(testBackupDir)
     expect(remaining.sort()).toEqual([
-      'chapters-backup-2026-09-23-00-00-00.zip',
-      'chapters-backup-2026-09-24-00-00-00.zip',
-      'chapters-backup-2026-09-25-00-00-00.zip',
+      'elara-backup-2026-09-23-00-00-00.zip',
+      'elara-backup-2026-09-24-00-00-00.zip',
+      'elara-backup-2026-09-25-00-00-00.zip',
     ])
   })
 })

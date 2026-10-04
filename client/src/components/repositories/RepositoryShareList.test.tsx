@@ -166,14 +166,14 @@ describe('RepositoryShareList', () => {
       repositoryId: 'r1',
       granteeType: 'user',
       granteeId: 'linus-uuid',
-      granteeEmail: 'linus@chapters.dev',
+      granteeEmail: 'linus@elara.dev',
       granteeName: 'Linus Torvalds',
       createdAt: '2026-08-22T09:00:00.000Z',
     }
     renderList({ shares: () => mockJsonResponse(200, [HYDRATED_USER_SHARE]) })
 
-    expect(await screen.findByText('linus@chapters.dev')).toBeInTheDocument()
+    expect(await screen.findByText('linus@elara.dev')).toBeInTheDocument()
     expect(screen.getByText('Linus Torvalds')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Revoke access for linus@chapters.dev' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Revoke access for linus@elara.dev' })).toBeInTheDocument()
   })
 })

@@ -29,13 +29,13 @@ async function makeBareRemote(): Promise<{
   workDir: string
   git: ReturnType<typeof simpleGit>
 }> {
-  const bareDir = await makeTempDir('chapters-bare-')
+  const bareDir = await makeTempDir('elara-bare-')
   await simpleGit(bareDir).init(true)
 
-  const workDir = await makeTempDir('chapters-work-')
+  const workDir = await makeTempDir('elara-work-')
   const git = simpleGit(workDir)
   await git.init()
-  await git.addConfig('user.email', 'test@chapters.local')
+  await git.addConfig('user.email', 'test@elara.local')
   await git.addConfig('user.name', 'Test')
   await git.addRemote('origin', bareDir)
 

@@ -18,12 +18,12 @@ Run it on the port `client/vite.config.ts` already proxies `/api` to:
 
 ```sh
 # bash
-MOCK_PORT=3000 pnpm --filter @chapters/client mock
+MOCK_PORT=3000 pnpm --filter @elara/client mock
 # PowerShell
-$env:MOCK_PORT = 3000; pnpm --filter @chapters/client mock
+$env:MOCK_PORT = 3000; pnpm --filter @elara/client mock
 ```
 
-then `pnpm --filter @chapters/client dev` and open http://localhost:5173.
+then `pnpm --filter @elara/client dev` and open http://localhost:5173.
 
 ## Layout check + screenshots
 

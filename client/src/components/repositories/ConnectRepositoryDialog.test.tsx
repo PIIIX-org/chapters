@@ -9,10 +9,10 @@ import { ConnectRepositoryDialog } from './ConnectRepositoryDialog.js'
 
 const CREATED: Repository = {
   id: 'r1',
-  name: 'chapters',
+  name: 'elara',
   ownerId: 'u1',
   ingestionMethod: 'git',
-  gitUrl: 'https://github.com/PIIIX-org/chapters.git',
+  gitUrl: 'https://github.com/PIIIX-org/elara.git',
   localPath: null,
   defaultBranch: null,
   mergeable: true,
@@ -67,8 +67,8 @@ describe('ConnectRepositoryDialog', () => {
     const fetchMock = stubFetch()
     const { container, onConnected, onOpenChange } = renderDialog()
 
-    await userEvent.type(screen.getByLabelText('Repository name'), 'chapters')
-    await userEvent.type(screen.getByLabelText('Git remote URL'), 'https://github.com/PIIIX-org/chapters.git')
+    await userEvent.type(screen.getByLabelText('Repository name'), 'elara')
+    await userEvent.type(screen.getByLabelText('Git remote URL'), 'https://github.com/PIIIX-org/elara.git')
     await userEvent.type(screen.getByLabelText('Access token or password (optional)'), 'ghp_secret')
     // The one moment the credential is visible to anyone, said where it is typed.
     expect(screen.getByText(/stored encrypted and never shown again/i)).toBeInTheDocument()
@@ -77,9 +77,9 @@ describe('ConnectRepositoryDialog', () => {
 
     await waitFor(() => expect(onConnected).toHaveBeenCalledWith(CREATED))
     expect(postBody(fetchMock)).toEqual({
-      name: 'chapters',
+      name: 'elara',
       ingestionMethod: 'git',
-      gitUrl: 'https://github.com/PIIIX-org/chapters.git',
+      gitUrl: 'https://github.com/PIIIX-org/elara.git',
       gitCredential: 'ghp_secret',
     })
     expect(onOpenChange).toHaveBeenCalledWith(false)
@@ -91,8 +91,8 @@ describe('ConnectRepositoryDialog', () => {
     const fetchMock = stubFetch()
     renderDialog()
 
-    await userEvent.type(screen.getByLabelText('Repository name'), 'chapters')
-    await userEvent.type(screen.getByLabelText('Git remote URL'), 'https://github.com/PIIIX-org/chapters.git')
+    await userEvent.type(screen.getByLabelText('Repository name'), 'elara')
+    await userEvent.type(screen.getByLabelText('Git remote URL'), 'https://github.com/PIIIX-org/elara.git')
     await userEvent.click(screen.getByRole('button', SUBMIT))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
@@ -144,7 +144,7 @@ describe('ConnectRepositoryDialog', () => {
     const fetchMock = stubFetch()
     const { onOpenChange } = renderDialog()
 
-    await userEvent.type(screen.getByLabelText('Repository name'), 'chapters')
+    await userEvent.type(screen.getByLabelText('Repository name'), 'elara')
     expect(screen.getByRole('radio', GIT)).toBeChecked()
     await userEvent.click(screen.getByRole('button', SUBMIT))
 

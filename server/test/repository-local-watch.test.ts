@@ -38,7 +38,7 @@ async function makeRepo(localPath: string) {
 
 describe('local path ingestion', () => {
   it('syncs existing files, then live changes, then stops on unsubscribe', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'chapters-watch-'))
+    dir = await mkdtemp(join(tmpdir(), 'elara-watch-'))
     await writeFile(join(dir, 'a.py'), 'print(1)')
     await mkdir(join(dir, 'node_modules'))
     await writeFile(join(dir, 'node_modules', 'noise.py'), 'ignored')
@@ -74,7 +74,7 @@ describe('local path ingestion', () => {
     // inside it is an unhandled rejection, and Node terminates on those. Since
     // watchers are started at boot for every local_path repository, one folder
     // that has been deleted or unmounted would kill the server on startup.
-    dir = await mkdtemp(join(tmpdir(), 'chapters-watch-fail-'))
+    dir = await mkdtemp(join(tmpdir(), 'elara-watch-fail-'))
     await writeFile(join(dir, 'a.py'), 'print(1)')
 
     const rejections: unknown[] = []

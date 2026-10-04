@@ -3,7 +3,7 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 
 export default tseslint.config(
-  { ignores: ['**/dist/', '**/coverage/', '**/node_modules/', 'runs/**'] },
+  { ignores: ['**/dist/', '**/coverage/', '**/node_modules/', 'runs/**', 'seed_local.ts'] },
   ...tseslint.configs.recommended,
   {
     rules: {

@@ -1,4 +1,4 @@
-# Chapters — Handling Protocols
+# Elara — Handling Protocols
 
 How to handle files, context, failure, parallelism, testing, and tokens.
 These are standing rules for every session and every agent.

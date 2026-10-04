@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Dependency-free mock of the Chapters API.
+ * Dependency-free mock of the Elara API.
  *
  * Serves every endpoint the React client calls (see `client/src/api/*.ts`)
  * from in-memory fixtures, so the UI can be run and screenshotted without
@@ -9,7 +9,7 @@
  *
  *   MOCK_PORT    listen port (default 3999; use 3000 to sit behind vite's proxy)
  *   MOCK_ROLE    'admin' (default) or 'member' for the session user
- *   MOCK_EMAIL   session user's address (default taha@chapters.dev)
+ *   MOCK_EMAIL   session user's address (default taha@elara.dev)
  *   MOCK_COLLAB  'offline' (default): POST /collab/ticket answers 503 so the
  *                editor falls back to the REST body with an "offline" status.
  *                'ticket': answer a well-formed ticket instead; the websocket
@@ -23,7 +23,7 @@ import { createHash, randomUUID, randomBytes } from 'node:crypto'
 const PORT = Number(process.env.MOCK_PORT ?? 3999)
 const ROLE = process.env.MOCK_ROLE === 'member' ? 'member' : 'admin'
 const COLLAB = process.env.MOCK_COLLAB === 'ticket' ? 'ticket' : 'offline'
-const MY_EMAIL = process.env.MOCK_EMAIL ?? 'taha@chapters.dev'
+const MY_EMAIL = process.env.MOCK_EMAIL ?? 'taha@elara.dev'
 
 // ---------------------------------------------------------------------------
 // Deterministic ids and times so URLs survive a restart.
@@ -66,14 +66,14 @@ const mkUser = (email, extra = {}) => ({
   ...extra,
 })
 const ME = mkUser(MY_EMAIL, { role: ROLE, createdAt: ago(121), emailVerifiedAt: ago(120) })
-const ADA = mkUser('ada@chapters.dev', { role: 'admin', mfaEnabledAt: ago(40) })
-const GRACE = mkUser('grace@chapters.dev')
-const LINUS = mkUser('linus@chapters.dev', { createdAt: ago(30), emailVerifiedAt: ago(30) })
-const NOOR = mkUser('noor@chapters.dev', { role: 'admin', mfaEnabledAt: ago(10) })
+const ADA = mkUser('ada@elara.dev', { role: 'admin', mfaEnabledAt: ago(40) })
+const GRACE = mkUser('grace@elara.dev')
+const LINUS = mkUser('linus@elara.dev', { createdAt: ago(30), emailVerifiedAt: ago(30) })
+const NOOR = mkUser('noor@elara.dev', { role: 'admin', mfaEnabledAt: ago(10) })
 const PRIYA = mkUser('priya.n@meridianlabs.io', { status: 'pending_approval', emailVerifiedAt: ago(0, 5), createdAt: ago(0, 6) })
 const SAM = mkUser('sam.ortega@fastmail.com', { status: 'pending_approval', emailVerifiedAt: null, createdAt: ago(1, 2) })
-const WEI = mkUser('wei@chapters.dev', { status: 'pending_approval', emailVerifiedAt: ago(2), createdAt: ago(2, 1) })
-const OLD = mkUser('former.intern@chapters.dev', { status: 'deactivated', createdAt: ago(200), emailVerifiedAt: ago(199) })
+const WEI = mkUser('wei@elara.dev', { status: 'pending_approval', emailVerifiedAt: ago(2), createdAt: ago(2, 1) })
+const OLD = mkUser('former.intern@elara.dev', { status: 'deactivated', createdAt: ago(200), emailVerifiedAt: ago(199) })
 const users = [ME, ADA, GRACE, LINUS, NOOR, PRIYA, SAM, WEI, OLD]
 
 // ---------------------------------------------------------------------------
@@ -779,7 +779,7 @@ async function main() {
 void main()
 `,
   'package.json': `{
-  "name": "chapters",
+  "name": "elara",
   "private": true,
   "scripts": {
     "typecheck": "pnpm -r typecheck",
@@ -787,7 +787,7 @@ void main()
   }
 }
 `,
-  'README.md': `# Chapters
+  'README.md': `# Elara
 
 Notes, people and projects in vaults; code in repositories; one graph over
 all of it.
@@ -795,8 +795,8 @@ all of it.
 ## Development
 
     pnpm install
-    pnpm --filter @chapters/server dev
-    pnpm --filter @chapters/client dev
+    pnpm --filter @elara/server dev
+    pnpm --filter @elara/client dev
 `,
   'docs/architecture.md': `# Architecture
 
@@ -807,7 +807,7 @@ all of it.
 }
 
 const PY_FILES = {
-  'pipeline/__init__.py': `"""Embedding and evaluation pipeline for Chapters search."""
+  'pipeline/__init__.py': `"""Embedding and evaluation pipeline for Elara search."""
 
 __version__ = "0.4.1"
 `,
@@ -1018,7 +1018,7 @@ testpaths = ["tests"]
 `,
   'README.md': `# ml-pipeline
 
-Chunk, embed, index and evaluate. Pushed into Chapters by the sync agent.
+Chunk, embed, index and evaluate. Pushed into Elara by the sync agent.
 
     pipeline eval --snapshot 2026-08-20
 `,
@@ -1075,12 +1075,12 @@ function seedRepository(repo, files) {
   return repo
 }
 
-const CHAPTERS_REPO = seedRepository(
+const ELARA_REPO = seedRepository(
   {
-    name: 'chapters',
+    name: 'elara',
     ownerId: ME.id,
     ingestionMethod: 'git',
-    gitUrl: 'https://github.com/successbyte/chapters.git',
+    gitUrl: 'https://github.com/PIIIX-org/elara.git',
     localPath: null,
     defaultBranch: 'main',
     mergeable: true,
@@ -1117,7 +1117,7 @@ syncTokensByRepo.get(PIPELINE_REPO.id).push(
   { id: uuid(), createdAt: ago(20), lastUsedAt: ago(2, 4), revokedAt: null },
   { id: uuid(), createdAt: ago(30), lastUsedAt: ago(21), revokedAt: ago(20) },
 )
-repoGraphPreference.set(CHAPTERS_REPO.id, true)
+repoGraphPreference.set(ELARA_REPO.id, true)
 repoGraphPreference.set(PIPELINE_REPO.id, false)
 
 // ---------------------------------------------------------------------------
@@ -1137,23 +1137,23 @@ const shares = [
   { id: uuid(), vaultId: PRODUCT.id, granteeType: 'user', granteeId: LINUS.id, permission: 'read', createdAt: ago(12) },
 ]
 const repoShares = [
-  { id: uuid(), repositoryId: CHAPTERS_REPO.id, granteeType: 'team', granteeId: teams[0].id, createdAt: ago(10) },
-  { id: uuid(), repositoryId: CHAPTERS_REPO.id, granteeType: 'user', granteeId: LINUS.id, createdAt: ago(3) },
+  { id: uuid(), repositoryId: ELARA_REPO.id, granteeType: 'team', granteeId: teams[0].id, createdAt: ago(10) },
+  { id: uuid(), repositoryId: ELARA_REPO.id, granteeType: 'user', granteeId: LINUS.id, createdAt: ago(3) },
 ]
 
 const mcpConnections = [
   { id: uuid(), userId: ME.id, name: 'Claude Desktop', scope: 'account', vaultId: null, repositoryId: null, createdAt: ago(33), lastUsedAt: ago(0, 1), expiresAt: null, revokedAt: null },
   { id: uuid(), userId: ME.id, name: 'Research agent', scope: 'vault', vaultId: RESEARCH.id, repositoryId: null, createdAt: ago(14), lastUsedAt: ago(1), expiresAt: ago(-76), revokedAt: null },
-  { id: uuid(), userId: ME.id, name: 'Code indexer', scope: 'repository', vaultId: null, repositoryId: CHAPTERS_REPO.id, createdAt: ago(9), lastUsedAt: ago(0, 3), expiresAt: null, revokedAt: null },
+  { id: uuid(), userId: ME.id, name: 'Code indexer', scope: 'repository', vaultId: null, repositoryId: ELARA_REPO.id, createdAt: ago(9), lastUsedAt: ago(0, 3), expiresAt: null, revokedAt: null },
   { id: uuid(), userId: ME.id, name: 'Old laptop', scope: 'account', vaultId: null, repositoryId: null, createdAt: ago(80), lastUsedAt: ago(41), expiresAt: null, revokedAt: ago(40) },
   { id: uuid(), userId: ADA.id, name: 'Ada — Cursor', scope: 'vault', vaultId: PRODUCT.id, repositoryId: null, createdAt: ago(5), lastUsedAt: ago(0, 6), expiresAt: null, revokedAt: null },
 ]
 
 const notifications = [
-  { id: uuid(), recipientId: ME.id, type: 'share_granted', entityType: 'vault', entityId: PRODUCT.id, message: 'ada@chapters.dev shared the vault "Product" with you (edit).', readAt: null, createdAt: ago(0, 2) },
+  { id: uuid(), recipientId: ME.id, type: 'share_granted', entityType: 'vault', entityId: PRODUCT.id, message: 'ada@elara.dev shared the vault "Product" with you (edit).', readAt: null, createdAt: ago(0, 2) },
   { id: uuid(), recipientId: ME.id, type: 'note_reverted', entityType: 'note', entityId: notesByVault.get(RESEARCH.id)[3].id, message: 'Note notes/semantic-knn-recall was reverted to an earlier version.', readAt: null, createdAt: ago(0, 9) },
-  { id: uuid(), recipientId: ME.id, type: 'team_member_added', entityType: 'team', entityId: teams[0].id, message: 'grace@chapters.dev was added to the team "Platform".', readAt: ago(1), createdAt: ago(1, 3) },
-  { id: uuid(), recipientId: ME.id, type: 'repository_synced', entityType: 'repository', entityId: CHAPTERS_REPO.id, message: 'Repository "chapters" synced 15 files from main.', readAt: ago(2), createdAt: ago(2, 5) },
+  { id: uuid(), recipientId: ME.id, type: 'team_member_added', entityType: 'team', entityId: teams[0].id, message: 'grace@elara.dev was added to the team "Platform".', readAt: ago(1), createdAt: ago(1, 3) },
+  { id: uuid(), recipientId: ME.id, type: 'repository_synced', entityType: 'repository', entityId: ELARA_REPO.id, message: 'Repository "elara" synced 15 files from main.', readAt: ago(2), createdAt: ago(2, 5) },
   { id: uuid(), recipientId: ME.id, type: 'user_pending_approval', entityType: 'user', entityId: PRIYA.id, message: 'priya.n@meridianlabs.io signed up and is waiting for approval.', readAt: ago(0, 4), createdAt: ago(0, 6) },
 ]
 
@@ -1203,7 +1203,7 @@ let loggedIn = true
 // Derived views
 // ---------------------------------------------------------------------------
 const userById = (id) => users.find((u) => u.id === id)
-const emailOf = (id) => userById(id)?.email ?? 'unknown@chapters.dev'
+const emailOf = (id) => userById(id)?.email ?? 'unknown@elara.dev'
 const nameOf = (id) => userById(id)?.name ?? null
 const liveNotes = (vaultId) => (notesByVault.get(vaultId) ?? []).filter((n) => !n.deletedAt)
 const findVault = (id) => vaults.find((v) => v.id === id && !v.deletedAt)
@@ -1618,7 +1618,7 @@ post('/me/password', ({ body }) => {
 })
 post('/mfa/setup', () => {
   const secret = randomBytes(10).toString('hex').toUpperCase().slice(0, 16)
-  return { secret, uri: `otpauth://totp/Chapters:${encodeURIComponent(ME.email)}?secret=${secret}&issuer=Chapters` }
+  return { secret, uri: `otpauth://totp/Elara:${encodeURIComponent(ME.email)}?secret=${secret}&issuer=Elara` }
 })
 post('/mfa/enable', ({ body }) => {
   if (!/^\d{6}$/.test(body?.code ?? '')) throw bad('six-digit code required')
@@ -2290,7 +2290,7 @@ server.on('connection', (socket) => socket.on('error', () => {}))
 server.on('clientError', (_err, socket) => socket.destroy())
 
 server.listen(PORT, () => {
-  console.log(`chapters mock api listening on http://localhost:${PORT}`)
+  console.log(`elara mock api listening on http://localhost:${PORT}`)
   console.log(`  session: ${ME.email} (${ME.role}); collab tickets: ${COLLAB}`)
   console.log(`  vaults: ${vaults.map((v) => `${v.name}=${v.id}`).join('  ')}`)
   console.log(`  repositories: ${repositories.map((r) => `${r.name}=${r.id}`).join('  ')}`)

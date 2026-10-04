@@ -231,7 +231,7 @@ describe('useCollabDoc', () => {
           { clientId: 7, user: { id: 'u-taha', name: 'taha' } },
           { clientId: 11, user: { id: 'u-jane', name: 'jane' } },
           { clientId: 12, user: { id: 'u-omar', name: 'omar' } },
-          { clientId: 13, user: { id: 'mcp', name: 'Chapters MCP' } },
+          { clientId: 13, user: { id: 'mcp', name: 'Elara MCP' } },
           // Connected, but hasn't published who it is yet.
           { clientId: 14 },
         ],
@@ -254,7 +254,7 @@ describe('useCollabDoc', () => {
       {
         clientId: 13,
         userId: 'mcp',
-        name: 'Chapters MCP',
+        name: 'Elara MCP',
         // A human ink, not teal: see below.
         ink: inkFor('mcp'),
       },
@@ -269,7 +269,7 @@ describe('useCollabDoc', () => {
         // A human on a patched client, broadcasting the AI's id. Awareness is
         // the peer's own claim about itself, so this is indistinguishable from
         // the real MCP connection — which is why neither one gets teal.
-        states: [{ clientId: 21, user: { id: 'mcp', name: 'Chapters MCP' } }],
+        states: [{ clientId: 21, user: { id: 'mcp', name: 'Elara MCP' } }],
       }),
     )
 

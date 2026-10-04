@@ -14,7 +14,7 @@ import { tags } from '@lezer/highlight'
  * The read-only code viewer's editor: a non-editable CodeMirror plus the
  * language mode for whatever `language` the index recorded (plan task 3).
  *
- * Read-only is permanent — editing code through Chapters is "explicitly out of
+ * Read-only is permanent — editing code through Elara is "explicitly out of
  * scope" in `2026-07-18-code-graph-integration-design.md` — so there is no
  * `onChange`, no autosave and no revert, and the view is non-editable in both
  * of the two ways CM6 offers.

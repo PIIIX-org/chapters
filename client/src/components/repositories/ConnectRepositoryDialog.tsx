@@ -23,7 +23,7 @@ interface ConnectRepositoryDialogProps {
 
 /**
  * The three ingestion methods differ in where the code comes from, not in
- * what Chapters does with it, so they are three branches of one form rather
+ * what Elara does with it, so they are three branches of one form rather
  * than three dialogs. Each branch carries only its own fields — the request
  * body is built from the chosen method, never from whatever is still sitting
  * in a field the user has switched away from.
@@ -116,7 +116,7 @@ export function ConnectRepositoryDialog({ open, onOpenChange, onConnected }: Con
                 setName(e.target.value)
                 setError(null)
               }}
-              placeholder="e.g. chapters"
+              placeholder="e.g. elara"
             />
           </div>
 

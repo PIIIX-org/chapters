@@ -11,7 +11,7 @@ import { buildApp } from '../src/app.js'
  * the SPA shell must NOT answer for.
  */
 
-const SHELL = '<!doctype html><title>Chapters</title><div id="root"></div>'
+const SHELL = '<!doctype html><title>Elara</title><div id="root"></div>'
 const BUNDLE = 'console.log("client bundle")'
 
 let dist: string
@@ -21,7 +21,7 @@ let app: FastifyInstance
 let apiOnly: FastifyInstance
 
 beforeAll(async () => {
-  const base = await mkdtemp(join(tmpdir(), 'chapters-dist-'))
+  const base = await mkdtemp(join(tmpdir(), 'elara-dist-'))
   dist = join(base, 'dist')
   outside = join(base, 'secret.txt')
   await mkdir(join(dist, 'assets'), { recursive: true })
@@ -202,8 +202,8 @@ describe('with no built client', () => {
         let buf = ''
         const socket = net.connect(port, '127.0.0.1', () => {
           socket.write(
-            'GET http://chapters.test/api/definitely-not-a-route HTTP/1.1\r\n' +
-              'Host: chapters.test\r\nConnection: close\r\n\r\n',
+            'GET http://elara.test/api/definitely-not-a-route HTTP/1.1\r\n' +
+              'Host: elara.test\r\nConnection: close\r\n\r\n',
           )
         })
         socket.on('data', (d) => (buf += d.toString()))

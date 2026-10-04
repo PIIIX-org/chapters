@@ -1,9 +1,19 @@
 import { useCallback, useState } from 'react'
 import type { VaultColor } from '../vault/useVaultFolders.js'
+import { getMigratedStorageItem } from '../../lib/storage.js'
 
-function readStorage<T>(key: string, fallback: T): T {
+export const STORAGE_KEY_REPO_FOLDERS = 'elara_repo_folders'
+export const LEGACY_STORAGE_KEY_REPO_FOLDERS = 'chapters_repo_folders'
+export const STORAGE_KEY_REPO_FOLDER_COLORS = 'elara_repo_folder_colors'
+export const LEGACY_STORAGE_KEY_REPO_FOLDER_COLORS = 'chapters_repo_folder_colors'
+export const STORAGE_KEY_REPO_COLORS = 'elara_repo_colors'
+export const LEGACY_STORAGE_KEY_REPO_COLORS = 'chapters_repo_colors'
+export const STORAGE_KEY_REPO_FAVORITES = 'elara_repo_favorites'
+export const LEGACY_STORAGE_KEY_REPO_FAVORITES = 'chapters_repo_favorites'
+
+function readStorage<T>(key: string, legacyKey: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(key)
+    const raw = getMigratedStorageItem(key, legacyKey)
     return raw ? JSON.parse(raw) : fallback
   } catch {
     return fallback
@@ -19,22 +29,17 @@ function writeStorage<T>(key: string, value: T): void {
 }
 
 export function useRepoFolders() {
-  const storageKeyFolders = 'chapters_repo_folders'
-  const storageKeyFolderColors = 'chapters_repo_folder_colors'
-  const storageKeyRepoColors = 'chapters_repo_colors'
-  const storageKeyFavorites = 'chapters_repo_favorites'
-
   const [repoFolders, setRepoFolders] = useState<Record<string, string>>(() =>
-    readStorage(storageKeyFolders, {}),
+    readStorage(STORAGE_KEY_REPO_FOLDERS, LEGACY_STORAGE_KEY_REPO_FOLDERS, {}),
   )
   const [folderColors, setFolderColors] = useState<Record<string, VaultColor>>(() =>
-    readStorage(storageKeyFolderColors, {}),
+    readStorage(STORAGE_KEY_REPO_FOLDER_COLORS, LEGACY_STORAGE_KEY_REPO_FOLDER_COLORS, {}),
   )
   const [repoColors, setRepoColors] = useState<Record<string, VaultColor>>(() =>
-    readStorage(storageKeyRepoColors, {}),
+    readStorage(STORAGE_KEY_REPO_COLORS, LEGACY_STORAGE_KEY_REPO_COLORS, {}),
   )
   const [favorites, setFavorites] = useState<string[]>(() =>
-    readStorage(storageKeyFavorites, []),
+    readStorage(STORAGE_KEY_REPO_FAVORITES, LEGACY_STORAGE_KEY_REPO_FAVORITES, []),
   )
 
   const setRepoFolder = useCallback(
@@ -51,7 +56,7 @@ export function useRepoFolders() {
         } else {
           delete next[repoId]
         }
-        writeStorage(storageKeyFolders, next)
+        writeStorage(STORAGE_KEY_REPO_FOLDERS, next)
         return next
       })
 
@@ -63,7 +68,7 @@ export function useRepoFolders() {
           } else {
             delete next[folder.trim().toLowerCase()]
           }
-          writeStorage(storageKeyFolderColors, next)
+          writeStorage(STORAGE_KEY_REPO_FOLDER_COLORS, next)
           return next
         })
       }
@@ -75,11 +80,11 @@ export function useRepoFolders() {
         } else {
           delete next[repoId]
         }
-        writeStorage(storageKeyRepoColors, next)
+        writeStorage(STORAGE_KEY_REPO_COLORS, next)
         return next
       })
     },
-    [storageKeyFolders, storageKeyFolderColors, storageKeyRepoColors],
+    [],
   )
 
   const getRepoFolder = useCallback(
@@ -117,11 +122,11 @@ export function useRepoFolders() {
         const next = prev.includes(repoId)
           ? prev.filter((id) => id !== repoId)
           : [...prev, repoId]
-        writeStorage(storageKeyFavorites, next)
+        writeStorage(STORAGE_KEY_REPO_FAVORITES, next)
         return next
       })
     },
-    [storageKeyFavorites],
+    [],
   )
 
   const allFolders = Array.from(

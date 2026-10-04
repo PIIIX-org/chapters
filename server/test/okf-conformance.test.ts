@@ -87,7 +87,7 @@ describe('Strict ISO 8601 UTC / Offset Validation', () => {
       sources: [
         {
           id: 'lead-file',
-          resource: 'repo:chapters/server/src/auth.ts',
+          resource: 'repo:elara/server/src/auth.ts',
           last_modified: '2026-09-21T18:00:00Z',
         },
       ],
@@ -167,12 +167,12 @@ describe('audit_okf_conformance Engine', () => {
           status: 'active',
           sources: [
             {
-              resource: 'repo:chapters/server/src/session.ts',
+              resource: 'repo:elara/server/src/session.ts',
               last_modified: '2026-09-22T00:00:00Z',
             },
           ],
         },
-        body: 'Session token validation via [[domains/auth/tokens]] and [[repo:chapters/server/src/session.ts]].',
+        body: 'Session token validation via [[domains/auth/tokens]] and [[repo:elara/server/src/session.ts]].',
       },
       'domains/auth/tokens': {
         frontmatter: {
@@ -281,12 +281,12 @@ describe('Path Resolution & Browse Vault progressive disclosure', () => {
   it('extracts wikilinks with anchors and aliases cleanly', () => {
     const body = `
     Refer to [[concepts/session-lifecycle|Session Engine]] for details.
-    See deep link [[repo:chapters/server/src/mcp/server.ts#L45-L75]] in the codebase.
+    See deep link [[repo:elara/server/src/mcp/server.ts#L45-L75]] in the codebase.
     Also check [[models/vault#Properties]].
     `
     const links = extractWikilinks(body)
     expect(links).toContain('concepts/session-lifecycle')
-    expect(links).toContain('repo:chapters/server/src/mcp/server.ts')
+    expect(links).toContain('repo:elara/server/src/mcp/server.ts')
     expect(links).toContain('models/vault')
   })
 
@@ -356,21 +356,21 @@ describe('Code Staleness Drift Detection', () => {
       {
         noteId: 'n1',
         notePath: 'domains/auth/spec',
-        resource: 'repo:chapters/server/src/db.ts',
+        resource: 'repo:elara/server/src/db.ts',
         expectedHash: 'hash-222-matching',
       },
       // Drifted hash - code modified upstream
       {
         noteId: 'n2',
         notePath: 'domains/auth/session',
-        resource: 'repo:chapters/server/src/auth.ts',
+        resource: 'repo:elara/server/src/auth.ts',
         expectedHash: 'hash-111-old',
       },
       // Missing file - deleted in repo
       {
         noteId: 'n3',
         notePath: 'domains/auth/deleted-module',
-        resource: 'repo:chapters/server/src/removed.ts',
+        resource: 'repo:elara/server/src/removed.ts',
         expectedHash: 'hash-333-old',
       },
     ]
@@ -394,14 +394,14 @@ describe('Code Staleness Drift Detection', () => {
     expect(drifts[0]).toEqual({
       noteId: 'n2',
       notePath: 'domains/auth/session',
-      resource: 'repo:chapters/server/src/auth.ts',
+      resource: 'repo:elara/server/src/auth.ts',
       expectedHash: 'hash-111-old',
       currentHash: 'hash-111-current',
     })
     expect(drifts[1]).toEqual({
       noteId: 'n3',
       notePath: 'domains/auth/deleted-module',
-      resource: 'repo:chapters/server/src/removed.ts',
+      resource: 'repo:elara/server/src/removed.ts',
       expectedHash: 'hash-333-old',
       currentHash: null,
     })

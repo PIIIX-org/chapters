@@ -1,4 +1,4 @@
-# Chapters
+# Elara
 
 An open-source, self-hostable "second brain" platform: a team knowledge base
 built on plain markdown files, a live-preview editor, and an AI-navigable
@@ -108,7 +108,7 @@ Unit 4 (Settings & MFA), Unit 5 (Trash, history & import), Unit 6
 On top of that, the **Observatory Bridge interface**
 ([spec](docs/superpowers/specs/2026-09-21-ui-ux-observatory-bridge-redesign.md)) provides
 a floating full-screen workspace architecture: an edge-to-edge canvas underneath an overlay
-layer featuring an expandable navigation rail with standalone CH logo button, dual-card floating
+layer featuring an expandable navigation rail with standalone logo button, dual-card floating
 navigation, a top-right expandable search bar, and a bottom navigation bar with history navigation
 and breadcrumbs. Sidebars (Context panel and Inspector) float between navigation chrome and
 collapse to a 44px (`w-11`) icon rail displaying child section icons with tooltips. Safe-area
@@ -117,9 +117,9 @@ Tracked in [`docs/agents/STATE.md`](docs/agents/STATE.md).
 
 **Running it**: `Dockerfile` (repo root) + `server/.env.example` cover a
 real deployment. That same root image is published to
-`ghcr.io/piiix-org/chapters` (`:latest` from `prod`, `:vX.Y.Z` from tags)
+`ghcr.io/piiix-org/elara` (`:latest` from `prod`, `:vX.Y.Z` from tags)
 by [`.github/workflows/publish.yml`](.github/workflows/publish.yml), and it is
-what every **hosted** instance runs — `chapters-cloud` provisions customers by
+what every **hosted** instance runs — `elara-cloud` provisions customers by
 pulling it. `Dockerfile.client` and the two-container `compose.deploy.yml`
 split are the older single-tenant shape. Security headers are on by default,
 CORS off (same-origin only) unless `CORS_ORIGIN` is set, Dependabot watching
@@ -434,11 +434,11 @@ How an agent uses search + graph via MCP.
 
 [![AI navigation flow](docs/superpowers/specs/diagrams/08-ai-navigation-flow.png)](docs/superpowers/specs/diagrams/08-ai-navigation-flow.html)
 
-## Chapters Agent Skill
+## Elara Agent Skill
 
-Chapters includes an installable **Agent Skill** for AI coding assistants and agents (Antigravity, Claude Code, Cursor, Windsurf, and open agent frameworks).
+Elara includes an installable **Agent Skill** for AI coding assistants and agents (Antigravity, Claude Code, Cursor, Windsurf, and open agent frameworks).
 
-Installing the skill gives AI agents native awareness of Chapters: they automatically recognize Chapters as the active second-brain and codebase mapping platform, navigate the project using the 49 Chapters MCP tools (following the graph-first navigation protocol), and support slash commands.
+Installing the skill gives AI agents native awareness of Elara: they automatically recognize Elara as the active second-brain and codebase mapping platform, navigate the project using the 49 Elara MCP tools (following the graph-first navigation protocol), and support slash commands.
 
 ### Installing the Skill
 
@@ -446,35 +446,37 @@ Install into your agent environment:
 
 ```bash
 # Copy into your agent's global skills directory:
-cp -r skills/chapters ~/.agents/skills/chapters
+cp -r skills/elara ~/.agents/skills/elara
 
 # Or into your project workspace:
-cp -r skills/chapters .agents/skills/chapters
+cp -r skills/elara .agents/skills/elara
 ```
+
+*(Note: `skills/chapters` is retained in the repository as a permanent backward-compatibility proxy).*
 
 ### Supported Slash Commands
 
-- `/chapters-status` — Check MCP connection, list active vaults, repos, and notifications.
-- `/chapters-search <query>` — Hybrid lexical + semantic search across notes and code.
-- `/chapters-graph [query]` — Traverse knowledge graph, Louvain communities, and backlinks.
-- `/chapters-map <repo-id-or-path> [--vault <vault-id>]` — Map an entire codebase into structured OKF notes in a vault, establishing an interconnected knowledge graph.
-- `/chapters-note <action>` — Read, create, edit, rename, view history, or revert notes.
-- `/chapters-repo <action>` — Browse, read files (with AST symbol outlines), and sync repos.
-- `/chapters-vault <action>` — List, browse, create vaults, or manage graph preferences.
-- `/chapters-export <target>` — Export vaults or notes.
+- `/elara-status` (alias `/chapters-status`) — Check MCP connection, list active vaults, repos, and notifications.
+- `/elara-search <query>` — Hybrid lexical + semantic search across notes and code.
+- `/elara-graph [query]` — Traverse knowledge graph, Louvain communities, and backlinks.
+- `/elara-map <repo-id-or-path> [--vault <vault-id>]` — Map an entire codebase into structured OKF notes in a vault, establishing an interconnected knowledge graph.
+- `/elara-note <action>` — Read, create, edit, rename, view history, or revert notes.
+- `/elara-repo <action>` — Browse, read files (with AST symbol outlines), and sync repos.
+- `/elara-vault <action>` — List, browse, create vaults, or manage graph preferences.
+- `/elara-export <target>` — Export vaults or notes.
 
 ### Installing the Skill Across AI Platforms
 
 #### 1. Anthropic Claude (Claude Desktop & Claude Code)
 - **Claude Desktop**:
-  Add Chapters MCP to `claude_desktop_config.json`:
+  Add Elara MCP to `claude_desktop_config.json`:
   ```json
   {
     "mcpServers": {
-      "chapters": {
+      "elara": {
         "url": "http://localhost:3000/mcp",
         "headers": {
-          "Authorization": "Bearer YOUR_CHAPTERS_MCP_TOKEN"
+          "Authorization": "Bearer YOUR_ELARA_MCP_TOKEN"
         }
       }
     }
@@ -483,60 +485,60 @@ cp -r skills/chapters .agents/skills/chapters
 - **Claude Code**:
   Register the MCP server and install the skill:
   ```bash
-  claude mcp add chapters http://localhost:3000/mcp --header "Authorization: Bearer YOUR_CHAPTERS_MCP_TOKEN"
-  mkdir -p ~/.claude/skills/chapters && cp -r skills/chapters/* ~/.claude/skills/chapters/
+  claude mcp add elara http://localhost:3000/mcp --header "Authorization: Bearer YOUR_ELARA_MCP_TOKEN"
+  mkdir -p ~/.claude/skills/elara && cp -r skills/elara/* ~/.claude/skills/elara/
   ```
 
 #### 2. Cursor & Windsurf
 - **Cursor**:
   1. Open **Cursor Settings** > **Features** > **MCP**.
   2. Click **+ Add New MCP Server**:
-     - Name: `chapters`
+     - Name: `elara`
      - Type: `sse` or `http`
      - URL: `http://localhost:3000/mcp`
-     - Header: `Authorization: Bearer YOUR_CHAPTERS_MCP_TOKEN`
+     - Header: `Authorization: Bearer YOUR_ELARA_MCP_TOKEN`
   3. Copy skill to Cursor project rules:
      ```bash
-     mkdir -p .cursor/rules && cp skills/chapters/SKILL.md .cursor/rules/chapters.mdc
+     mkdir -p .cursor/rules && cp skills/elara/SKILL.md .cursor/rules/elara.mdc
      ```
 - **Windsurf (Codeium)**:
-  Configure `~/.codeium/windsurf/mcp_config.json` with the Chapters HTTP endpoint and auth header.
+  Configure `~/.codeium/windsurf/mcp_config.json` with the Elara HTTP endpoint and auth header.
 
 #### 3. Google Gemini & Antigravity
 - **Antigravity CLI**:
-  Register Chapters MCP in `~/.gemini/antigravity-cli/mcp/chapters.json` and install the skill:
+  Register Elara MCP in `~/.gemini/antigravity-cli/mcp/elara.json` and install the skill:
   ```bash
-  mkdir -p ~/.agents/skills/chapters && cp -r skills/chapters/* ~/.agents/skills/chapters/
+  mkdir -p ~/.agents/skills/elara && cp -r skills/elara/* ~/.agents/skills/elara/
   ```
 - **Gemini CLI / Workspaces**:
-  Export environment variables `CHAPTERS_URL="http://localhost:3000/mcp"` and `CHAPTERS_TOKEN="YOUR_CHAPTERS_MCP_TOKEN"`.
+  Export environment variables `ELARA_URL="http://localhost:3000/mcp"` and `ELARA_TOKEN="YOUR_ELARA_MCP_TOKEN"` (legacy `CHAPTERS_URL` / `CHAPTERS_TOKEN` are also supported).
 
 #### 4. OpenAI Codex & Open Agent Frameworks
 - **Via Skills CLI (`npx skills`)**:
   ```bash
-  npx skills add PIIIX-org/chapters@skills/chapters
+  npx skills add PIIIX-org/chapters@skills/elara
   ```
 - **Manual Workspace Installation**:
   ```bash
-  mkdir -p .agents/skills/chapters && cp -r skills/chapters/* .agents/skills/chapters/
+  mkdir -p .agents/skills/elara && cp -r skills/elara/* .agents/skills/elara/
   ```
 
 ### Keeping the Skill Always Active (Always-On Mode)
 
-To make your AI agent keep Chapters **permanently active** across all sessions without requiring trigger words or manual reminders, install the persistent rule:
+To make your AI agent keep Elara **permanently active** across all sessions without requiring trigger words or manual reminders, install the persistent rule:
 
 ```bash
 # Run one-command setup for your agent:
-./skills/chapters/scripts/install-always-on.sh all
+./skills/elara/scripts/install-always-on.sh all
 # Or target: antigravity | claude | cursor | windsurf
 ```
 
-- **Google Gemini / Antigravity**: Adds [`skills/chapters/rules/chapters.md`](skills/chapters/rules/chapters.md) to `~/.gemini/config/rules/chapters.md` (loaded in every conversation).
+- **Google Gemini / Antigravity**: Adds [`skills/elara/rules/elara.md`](skills/elara/rules/elara.md) to `~/.gemini/config/rules/elara.md` (loaded in every conversation).
 - **Anthropic Claude**: Appends rule to `~/.claude/CLAUDE.md` or workspace `CLAUDE.md`.
-- **Cursor**: Creates `.cursor/rules/chapters.mdc` with `alwaysApply: true`.
+- **Cursor**: Creates `.cursor/rules/elara.mdc` with `alwaysApply: true`.
 - **Windsurf**: Appends rule to `.windsurfrules`.
 
-See [`skills/chapters/SKILL.md`](skills/chapters/SKILL.md) for full instructions and [`skills/chapters/references/mcp-tools.md`](skills/chapters/references/mcp-tools.md) for tool schemas.
+See [`skills/elara/SKILL.md`](skills/elara/SKILL.md) for full instructions and [`skills/elara/references/mcp-tools.md`](skills/elara/references/mcp-tools.md) for tool schemas.
 
 ## Known gaps / future work
 
@@ -558,17 +560,17 @@ below are tracked but not yet designed:
   [obsidian-claude-code-mcp](https://github.com/iansinnott/obsidian-claude-code-mcp),
   the ["Vault as MCP" Obsidian plugin](https://community.obsidian.md/plugins/vault-as-mcp)).
   Their tool surface (read/search/create/update/delete/rename notes, daily
-  notes, templates) is narrower than Chapters' own 14-tool MCP layer
+  notes, templates) is narrower than Elara's own 14-tool MCP layer
   (permission-scoped tokens, CRDT-safe collaborative writes, RRF-fused
   search over notes *and* code, revision history/revert — see
   `docs/agents/backend-reference.md` §5.8) — so the pattern itself isn't
-  something Chapters needs to adopt. One concrete gap did turn up: `rename`
+  something Elara needs to adopt. One concrete gap did turn up: `rename`
   has a REST route and a `renameNote()` store function already (used by the
   UI's upcoming note-lifecycle work in Slice 2b) but no MCP tool wraps it
   yet, unlike `search`/`graph`, which share their REST implementation.
   Low-effort addition once Slice 2b's note lifecycle lands. Daily/periodic
   notes and template tools were considered and not adopted — they assume a
-  journaling workflow that doesn't fit Chapters' OKF-typed note model.
+  journaling workflow that doesn't fit Elara's OKF-typed note model.
 - **`buildGraph()` Louvain profiling** — `graph/assemble.ts` runs Louvain
   over the whole assembled graph on every request, uncached, against a
   stated 10k-note budget, and it has never been measured

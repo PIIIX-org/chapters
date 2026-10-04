@@ -41,7 +41,7 @@ describe('shouldPoll', () => {
 describe('syncLocalRepository file read failure diagnostics', () => {
   it('logs a warning when a repository file fails to be read during directory scan', async () => {
     const user = await createActiveUser()
-    const tempDir = await mkdtemp(join(tmpdir(), 'chapters-repo-test-'))
+    const tempDir = await mkdtemp(join(tmpdir(), 'elara-repo-test-'))
     await writeFile(join(tempDir, 'file1.txt'), 'hello')
     await writeFile(join(tempDir, 'file2.txt'), 'world')
 

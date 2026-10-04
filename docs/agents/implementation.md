@@ -1,4 +1,4 @@
-# Chapters — Implementation Prompt
+# Elara — Implementation Prompt
 
 This is the operating prompt for Claude Code (and any coding agent)
 working in this repository. Follow it every session.
@@ -42,7 +42,7 @@ Full decision + rationale: `docs/superpowers/specs/2026-07-17-tech-stack-decisio
 ## Project structure
 
 ```
-chapters/
+elara/
 ├── CLAUDE.md                  # thin pointer to docs/agents/
 ├── README.md                  # public entry point — keep current
 ├── docs/
@@ -127,7 +127,7 @@ critical path at that size.
 
 ## Product shape (decided 2026-08-27 — read before proposing a fork)
 
-Chapters ships two ways and **is not forked to do it**:
+Elara ships two ways and **is not forked to do it**:
 
 - **Self-hosted OSS** — someone runs the image themselves.
 - **Hosted** — one container and its own Postgres **per customer**, fully

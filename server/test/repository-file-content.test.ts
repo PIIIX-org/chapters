@@ -149,12 +149,12 @@ async function makeTempDir(prefix: string): Promise<string> {
 
 describe('defaultBranch (addition 4)', () => {
   it('captures the remote HEAD branch on a real clone, and only for git repos', async () => {
-    const bareDir = await makeTempDir('chapters-bare-')
+    const bareDir = await makeTempDir('elara-bare-')
     await simpleGit(bareDir).init(true)
-    const workDir = await makeTempDir('chapters-work-')
+    const workDir = await makeTempDir('elara-work-')
     const git = simpleGit(workDir)
     await git.init()
-    await git.addConfig('user.email', 'test@chapters.local')
+    await git.addConfig('user.email', 'test@elara.local')
     await git.addConfig('user.name', 'Test')
     await git.addRemote('origin', bareDir)
     await writeFile(join(workDir, 'a.ts'), 'export const a = 1')

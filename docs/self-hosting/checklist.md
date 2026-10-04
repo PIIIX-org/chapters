@@ -1,4 +1,4 @@
-# Chapters Self-Hosting & Production Deployment Checklist
+# Elara Self-Hosting & Production Deployment Checklist
 
 Before going public or admitting production users, verify each of the following configuration requirements.
 
@@ -28,7 +28,7 @@ Before going public or admitting production users, verify each of the following 
 - [ ] **`SMTP_PORT`** (usually 587 or 465)
 - [ ] **`SMTP_USER`**
 - [ ] **`SMTP_PASS`**
-- [ ] **`SMTP_FROM`** (e.g. `Chapters <noreply@yourdomain.com>`)
+- [ ] **`SMTP_FROM`** (e.g. `Elara <noreply@yourdomain.com>`)
 
 > **CRITICAL**: If `SMTP_HOST` is unset, outgoing emails are captured in memory and **never delivered**. Users will not receive signup verification or password reset links.
 

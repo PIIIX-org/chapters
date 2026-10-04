@@ -28,7 +28,7 @@ describe('client bundle budget', () => {
     'keeps the initial shell under 300KB gzipped and the graph renderer in a lazy chunk',
     { timeout: 120_000 },
     async () => {
-      const outDir = mkdtempSync(path.join(tmpdir(), 'chapters-bundle-'))
+      const outDir = mkdtempSync(path.join(tmpdir(), 'elara-bundle-'))
       const clientRoot = path.resolve(__dirname, '..')
 
       // Vitest sets process.env.NODE_ENV = 'test'. Vite's define plugin

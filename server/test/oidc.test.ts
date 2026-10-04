@@ -10,7 +10,7 @@ import { SESSION_COOKIE } from '../src/auth/plugin.js'
  * A minimal fake issuer: discovery, JWKS, and a token endpoint the test
  * scripts per call. The app must never know it is not Keycloak.
  */
-const CLIENT_ID = 'chapters-test'
+const CLIENT_ID = 'elara-test'
 const CLIENT_SECRET = 'test-secret'
 
 let issuer: Server

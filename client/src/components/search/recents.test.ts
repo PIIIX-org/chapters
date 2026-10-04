@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  LEGACY_RECENTS_STORAGE_KEY,
   MAX_RECENTS,
   RECENTS_STORAGE_KEY,
   pushRecent,
@@ -86,10 +87,16 @@ describe('readRecents', () => {
     })
     expect(readRecents()).toEqual([])
   })
+
+  it('migrates legacy chapters.recents key to elara.recents', () => {
+    localStorage.setItem(LEGACY_RECENTS_STORAGE_KEY, JSON.stringify([recent(1)]))
+    expect(readRecents().map((r) => r.label)).toEqual(['note-1'])
+    expect(localStorage.getItem(RECENTS_STORAGE_KEY)).toBe(JSON.stringify([recent(1)]))
+  })
 })
 
 describe('recentsStore', () => {
-  it('record() persists under the chapters.recents key and get() returns the new list', () => {
+  it('record() persists under the elara.recents key and get() returns the new list', () => {
     recentsStore.record(recent(1))
     recentsStore.record(recent(2, 'vault'))
 

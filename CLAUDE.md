@@ -1,4 +1,4 @@
-# Chapters — agent entry point
+# Elara — agent entry point
 
 Operating docs live in `docs/agents/`. Read in this order, every session:
 

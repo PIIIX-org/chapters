@@ -96,15 +96,15 @@ describe('InstanceOverview', () => {
           mockJsonResponse(200, {
             configured: true,
             destinations: ['local', 's3'],
-            localPath: '/var/backups/chapters',
-            s3Bucket: 'my-chapters-bucket',
-            s3Prefix: 'chapters-backups/',
+            localPath: '/var/backups/elara',
+            s3Bucket: 'my-elara-bucket',
+            s3Prefix: 'elara-backups/',
             retentionCount: 5,
             intervalHours: 12,
             lastRunAt: '2026-09-27T10:00:00.000Z',
             lastStatus: 'success',
             lastError: null,
-            lastFilename: 'chapters-backup-2026-09-27.zip',
+            lastFilename: 'elara-backup-2026-09-27.zip',
             lastSizeBytes: 5242880,
           }),
         )
@@ -115,7 +115,7 @@ describe('InstanceOverview', () => {
           mockJsonResponse(200, {
             success: true,
             result: {
-              filename: 'chapters-backup-2026-09-27T12-00-00.zip',
+              filename: 'elara-backup-2026-09-27T12-00-00.zip',
               sizeBytes: 5242880,
               destinations: ['local', 's3'],
               prunedCount: 1,
@@ -131,8 +131,8 @@ describe('InstanceOverview', () => {
     const { container } = renderWithClient(<InstanceOverview />)
 
     expect(await screen.findByText('Configured')).toBeInTheDocument()
-    expect(screen.getByText('/var/backups/chapters')).toBeInTheDocument()
-    expect(screen.getByText(/my-chapters-bucket/)).toBeInTheDocument()
+    expect(screen.getByText('/var/backups/elara')).toBeInTheDocument()
+    expect(screen.getByText(/my-elara-bucket/)).toBeInTheDocument()
     expect(screen.getByText(/every 12h/)).toBeInTheDocument()
 
     const runButton = screen.getByRole('button', { name: 'Run backup now' })
@@ -154,7 +154,7 @@ describe('InstanceOverview', () => {
           mockJsonResponse(200, {
             configured: true,
             destinations: ['s3'],
-            s3Bucket: 'my-chapters-bucket',
+            s3Bucket: 'my-elara-bucket',
             retentionCount: 7,
             intervalHours: 24,
             lastRunAt: '2026-09-27T10:00:00.000Z',

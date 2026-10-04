@@ -117,7 +117,7 @@ for (const path of paths) {
   if (opt.theme) {
     await send(
       'Page.addScriptToEvaluateOnNewDocument',
-      { source: `localStorage.setItem('chapters.theme','${opt.theme}')` },
+      { source: `localStorage.setItem('elara.theme','${opt.theme}');localStorage.setItem('chapters.theme','${opt.theme}')` },
       sessionId,
     )
   }

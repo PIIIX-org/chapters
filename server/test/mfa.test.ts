@@ -9,7 +9,7 @@ let app: FastifyInstance
 
 function codeFor(secret: string, email: string): string {
   return new OTPAuth.TOTP({
-    issuer: 'Chapters',
+    issuer: 'Elara',
     label: email,
     secret: OTPAuth.Secret.fromBase32(secret),
   }).generate()

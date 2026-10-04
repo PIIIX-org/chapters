@@ -9,3 +9,5 @@ coverage/
 !.env.example
 *.log
 docs/chapters-audit-media
+seed_local.ts
+chapters-audit-report.html

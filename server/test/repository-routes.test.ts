@@ -209,7 +209,7 @@ describe('the repository view the sync and webhook cards read', () => {
         name: 'Field carrier',
         ownerId: owner.id,
         ingestionMethod: 'git',
-        gitUrl: 'https://github.com/piiix-org/chapters.git',
+        gitUrl: 'https://github.com/piiix-org/elara.git',
         // Deliberately not "main": a hardcoded branch passes on the usual name.
         defaultBranch: 'trunk',
         mergeable: true, // column default is false
@@ -229,7 +229,7 @@ describe('the repository view the sync and webhook cards read', () => {
       name: 'Field carrier',
       ownerId: owner.id,
       ingestionMethod: 'git',
-      gitUrl: 'https://github.com/piiix-org/chapters.git',
+      gitUrl: 'https://github.com/piiix-org/elara.git',
       localPath: null,
       defaultBranch: 'trunk',
       mergeable: true,
@@ -259,7 +259,7 @@ describe('the repository view the sync and webhook cards read', () => {
     expect(patched).toMatchObject({
       name: 'Renamed',
       defaultBranch: 'trunk',
-      gitUrl: 'https://github.com/piiix-org/chapters.git',
+      gitUrl: 'https://github.com/piiix-org/elara.git',
       lastSyncError: 'fatal: could not read Username',
       webhookConfigured: true,
     })
@@ -275,7 +275,7 @@ describe('the repository view the sync and webhook cards read', () => {
         name: 'Folder',
         ownerId: owner.id,
         ingestionMethod: 'local_path',
-        localPath: '/srv/chapters-repos/notes',
+        localPath: '/srv/elara-repos/notes',
       })
       .returning()
 
@@ -289,7 +289,7 @@ describe('the repository view the sync and webhook cards read', () => {
       expect(served).toHaveProperty(key)
       expect(served[key]).toBeNull()
     }
-    expect(served.localPath).toBe('/srv/chapters-repos/notes')
+    expect(served.localPath).toBe('/srv/elara-repos/notes')
     expect(served.webhookConfigured).toBe(false)
   })
 

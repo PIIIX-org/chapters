@@ -16,7 +16,7 @@ type RepoProp = Pick<Repository, 'id' | 'ingestionMethod' | 'gitUrl' | 'defaultB
 const GIT_REPO: RepoProp = {
   id: 'r1',
   ingestionMethod: 'git',
-  gitUrl: 'https://github.com/piiix-org/chapters.git',
+  gitUrl: 'https://github.com/piiix-org/elara.git',
   defaultBranch: 'dev',
 }
 const LOCAL_REPO: RepoProp = {
@@ -126,7 +126,7 @@ describe('CodeViewer', () => {
     const link = await screen.findByRole('link', { name: `Open ${TS_FILE.path} on GitHub` })
     expect(link).toHaveAttribute(
       'href',
-      'https://github.com/piiix-org/chapters/blob/dev/client/src/thing.ts',
+      'https://github.com/piiix-org/elara/blob/dev/client/src/thing.ts',
     )
     expect(fetch).toHaveBeenCalledWith(
       '/api/repositories/r1/files/content?path=client%2Fsrc%2Fthing.ts',

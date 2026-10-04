@@ -200,7 +200,7 @@ function ShareRow({
 /**
  * Who can read this repository. Deliberately not the vault `SharingPanel`:
  * that one carries a read/edit selector, and a repository grant has no levels
- * because Chapters never writes code back — everyone reached here is a viewer
+ * because Elara never writes code back — everyone reached here is a viewer
  * (`2026-07-18-repository-ingestion-design.md`).
  *
  * Owner-only, like every other call on this route.

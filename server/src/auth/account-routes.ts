@@ -94,7 +94,7 @@ export function accountRoutes(app: FastifyInstance) {
       await createEmailToken(user.id, 'verify_email', code)
       await sendMail({
         to: email,
-        subject: 'Chapters: verify your email',
+        subject: 'Elara: verify your email',
         text: `Your verification code is ${code}`,
       })
       await logSecurityEvent({ type: 'email_changed', subjectUserId: user.id, ip: req.ip })

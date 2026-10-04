@@ -14,7 +14,7 @@ import type { Repository } from './repositories'
 
 const gitRepo: Pick<Repository, 'ingestionMethod' | 'gitUrl' | 'defaultBranch'> = {
   ingestionMethod: 'git',
-  gitUrl: 'https://github.com/PIIIX-org/chapters.git',
+  gitUrl: 'https://github.com/PIIIX-org/elara.git',
   defaultBranch: 'dev',
 }
 
@@ -53,12 +53,12 @@ describe('repositories api', () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, { id: 'r1' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await createRepository({ name: 'chapters', ingestionMethod: 'agent_push' })
+    await createRepository({ name: 'elara', ingestionMethod: 'agent_push' })
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('/api/repositories')
     expect(init.method).toBe('POST')
-    expect(JSON.parse(init.body as string)).toEqual({ name: 'chapters', ingestionMethod: 'agent_push' })
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'elara', ingestionMethod: 'agent_push' })
   })
 
   it('createSyncToken POSTs with no body, so Fastify does not reject an empty JSON declaration', async () => {
@@ -78,18 +78,18 @@ describe('repositories api', () => {
 describe('remoteFileInfo and remoteFileUrl', () => {
   it('builds a GitHub blob link at the default branch for an https remote', () => {
     expect(remoteFileUrl(gitRepo, 'server/src/app.ts')).toBe(
-      'https://github.com/PIIIX-org/chapters/blob/dev/server/src/app.ts',
+      'https://github.com/PIIIX-org/elara/blob/dev/server/src/app.ts',
     )
     expect(remoteFileInfo(gitRepo, 'server/src/app.ts')).toEqual({
-      url: 'https://github.com/PIIIX-org/chapters/blob/dev/server/src/app.ts',
+      url: 'https://github.com/PIIIX-org/elara/blob/dev/server/src/app.ts',
       label: 'Open on GitHub',
       provider: 'GitHub',
     })
   })
 
   it('handles the GitHub ssh remote form', () => {
-    expect(gitHubFileUrl({ ...gitRepo, gitUrl: 'git@github.com:PIIIX-org/chapters.git' }, 'a.ts')).toBe(
-      'https://github.com/PIIIX-org/chapters/blob/dev/a.ts',
+    expect(gitHubFileUrl({ ...gitRepo, gitUrl: 'git@github.com:PIIIX-org/elara.git' }, 'a.ts')).toBe(
+      'https://github.com/PIIIX-org/elara/blob/dev/a.ts',
     )
   })
 
@@ -128,7 +128,7 @@ describe('remoteFileInfo and remoteFileUrl', () => {
 
   it('falls back to HEAD when the repository has not synced a default branch yet', () => {
     expect(gitHubFileUrl({ ...gitRepo, defaultBranch: null }, 'a.ts')).toBe(
-      'https://github.com/PIIIX-org/chapters/blob/HEAD/a.ts',
+      'https://github.com/PIIIX-org/elara/blob/HEAD/a.ts',
     )
   })
 

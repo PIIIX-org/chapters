@@ -1,9 +1,12 @@
+import { getMigratedStorageItem } from '../../lib/storage.js'
+
 /**
  * Recent destinations for ⌘K — the last few places a person went through
  * the palette, shown before they type. Persisted per browser in
  * localStorage; nothing here is shared or synced.
  */
-export const RECENTS_STORAGE_KEY = 'chapters.recents'
+export const RECENTS_STORAGE_KEY = 'elara.recents'
+export const LEGACY_RECENTS_STORAGE_KEY = 'chapters.recents'
 export const MAX_RECENTS = 8
 
 export type RecentKind = 'area' | 'vault' | 'repo' | 'note' | 'symbol'
@@ -39,7 +42,9 @@ function isRecent(value: unknown): value is Recent {
 
 export function readRecents(): Recent[] {
   try {
-    const raw = storage()?.getItem(RECENTS_STORAGE_KEY)
+    const raw = typeof localStorage === 'undefined'
+      ? null
+      : getMigratedStorageItem(RECENTS_STORAGE_KEY, LEGACY_RECENTS_STORAGE_KEY)
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
@@ -94,6 +99,7 @@ export const recentsStore = {
     cache = []
     try {
       storage()?.removeItem(RECENTS_STORAGE_KEY)
+      storage()?.removeItem(LEGACY_RECENTS_STORAGE_KEY)
     } catch {
       // Nothing to clear if storage is unreachable.
     }

@@ -151,12 +151,12 @@ describe('CollabPropertyPanel (editors)', () => {
   it('renders sources list correctly', () => {
     const map = seededDoc({
       ...SEED,
-      sources: [{ resource: 'repo:chapters/app.ts', title: 'Main App' }],
+      sources: [{ resource: 'repo:elara/app.ts', title: 'Main App' }],
     })
     render(<CollabPropertyPanel frontmatter={map} readOnly={false} />)
 
     expect(screen.getByText('Main App')).toBeInTheDocument()
-    expect(screen.getByText('repo:chapters/app.ts')).toBeInTheDocument()
+    expect(screen.getByText('repo:elara/app.ts')).toBeInTheDocument()
   })
 
   it('has no accessibility violations', async () => {
@@ -171,7 +171,7 @@ describe('CollabPropertyPanel (editors)', () => {
       verified: [{ tier: 'human-reviewed', by: 'alice' }, { tier: 'machine-confirmed' }],
       generated: { by: 'gemini-2.5', at: '2026-09-22T12:00:00Z' },
       sources: [
-        { resource: 'repo:chapters/app.ts', title: 'Main App', last_modified: '2026-09-22T10:00:00Z' },
+        { resource: 'repo:elara/app.ts', title: 'Main App', last_modified: '2026-09-22T10:00:00Z' },
         { resource: 'https://example.com/docs', title: 'External Docs' },
       ],
       timestamp: '2026-09-22T14:00:00Z',

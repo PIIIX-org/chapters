@@ -1,10 +1,10 @@
-# Chapters — Backend Reference
+# Elara — Backend Reference
 
 A full technical reference for the backend: what was built, how it
 works, every piece of technology involved, and how to maintain it. This
 is the deep-dive companion to the other files in `docs/agents/`:
 
-- `brief.md` — what Chapters is and why, one page.
+- `brief.md` — what Elara is and why, one page.
 - `STATE.md` — where the project is *right now*, resume anchor.
 - `implementation.md` — the operating prompt agents follow while
   building (stack decisions, structure rules, performance budgets).
@@ -59,7 +59,7 @@ it were ever lost. Repositories (codebase mapping) follow the same
 principle in reverse: git itself is the source of truth, and
 `repositoryFiles` is a fully disposable index — file rows are **hard**
 deleted and recreated on every sync, no trash, because "git remains the
-record of code history, not Chapters."
+record of code history, not Elara."
 
 **Permissions are always resolved live**, never cached across a
 request or a connection. `resolveAccess()` (vaults) and
@@ -104,7 +104,7 @@ reconnect.
 ## 3. Project structure
 
 ```
-chapters/
+elara/
 ├── Dockerfile, .dockerignore       # app image (Debian-based — see §10)
 ├── docker-compose.yml              # dev/test Postgres (pgvector/pgvector:pg17)
 ├── docs/
@@ -397,12 +397,12 @@ re-resolved live.
   result instead of an uncaught exception. `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
-- **Chapters Agent Skill (`skills/chapters/SKILL.md`)**: Equips AI assistants
+- **Elara Agent Skill (`skills/elara/SKILL.md`)**: Equips AI assistants
   with graph-first navigation, the full 49-tool MCP catalog, slash commands
-  (`/chapters-status`, `/chapters-search`, `/chapters-graph`, `/chapters-map`,
-  `/chapters-note`, `/chapters-repo`, `/chapters-vault`, `/chapters-export`),
-  and an always-active mode (`skills/chapters/rules/chapters.md`).
-- **Architecture decision — rejected client-side WebMCP**: Evaluated the W3C Web Machine Learning Community Group's `navigator.modelContext` proposal (`webmachinelearning/webmcp`) and decided against implementing client-side WebMCP. Chapters is deliberately headless and backend-first (`POST /mcp` via Fastify); AI coding agents interact with full system parity without requiring active browser tabs, DOM rendering, or frontend runtime dependencies (ADR-001).
+  (`/elara-status`, `/elara-search`, `/elara-graph`, `/elara-map`,
+  `/elara-note`, `/elara-repo`, `/elara-vault`, `/elara-export`),
+  and an always-active mode (`skills/elara/rules/elara.md`).
+- **Architecture decision — rejected client-side WebMCP**: Evaluated the W3C Web Machine Learning Community Group's `navigator.modelContext` proposal (`webmachinelearning/webmcp`) and decided against implementing client-side WebMCP. Elara is deliberately headless and backend-first (`POST /mcp` via Fastify); AI coding agents interact with full system parity without requiring active browser tabs, DOM rendering, or frontend runtime dependencies (ADR-001).
 
 ### 5.9 Export & backup (`server/src/export/`)
 
@@ -439,7 +439,7 @@ graph opt-in mechanism.
 up calling `syncRepositoryFiles()` (`store.ts`), which diffs against
 what's already indexed: unchanged content hashes are no-ops, changed/
 new files upsert, anything no longer present is **hard-deleted** (git
-is the history record, not Chapters).
+is the history record, not Elara).
 
 1. **git** (`git-sync.ts`) — a fresh shallow clone (`--depth 1`) into a
    scratch temp dir on every sync, discarded after reading; no
@@ -560,9 +560,9 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
   not Alpine — `onnxruntime-node` and `sharp` need prebuilt glibc
   binaries).
   - *client stage*: `pnpm install --frozen-lockfile --filter
-    @chapters/client`, then `vite build`.
+    @elara/client`, then `vite build`.
   - *runtime stage*: `pnpm install --frozen-lockfile --filter
-    @chapters/server`, the server source, and the built client copied to
+    @elara/server`, the server source, and the built client copied to
     `/app/client/dist` — which is exactly where `config.clientDist`
     (`../../client/dist` from `server/src`) looks, so `CLIENT_DIST` needs
     no override. Filtering each install to one package keeps the client

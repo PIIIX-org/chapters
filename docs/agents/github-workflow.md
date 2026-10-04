@@ -1,4 +1,4 @@
-# Chapters — GitHub Workflow
+# Elara — GitHub Workflow
 
 Two long-lived branches, everything else is short-lived.
 

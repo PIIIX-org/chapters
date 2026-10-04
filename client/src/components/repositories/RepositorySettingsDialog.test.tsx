@@ -32,7 +32,7 @@ const FOLDER: AccessibleRepository = {
   name: 'Notes',
   ingestionMethod: 'local_path',
   gitUrl: null,
-  localPath: '/srv/chapters-repos/notes',
+  localPath: '/srv/elara-repos/notes',
   defaultBranch: null,
   mergeable: true,
 }

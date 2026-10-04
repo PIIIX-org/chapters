@@ -128,7 +128,7 @@ export function InstanceOverview() {
                   )}
                   {backup.data.s3Bucket && (
                     <span>
-                      <strong className="text-foreground">S3:</strong> {backup.data.s3Bucket} ({backup.data.s3Prefix ?? 'chapters-backups/'})
+                      <strong className="text-foreground">S3:</strong> {backup.data.s3Bucket} ({backup.data.s3Prefix ?? 'elara-backups/'})
                     </span>
                   )}
                   <span>

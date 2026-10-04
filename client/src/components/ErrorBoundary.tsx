@@ -67,8 +67,12 @@ export function RouteErrorBoundary() {
 
   useEffect(() => {
     if (!isChunk) return
-    const key = 'chapters_chunk_reload'
-    const last = typeof sessionStorage !== 'undefined' ? Number(sessionStorage.getItem(key) ?? 0) : 0
+    const key = 'elara_chunk_reload'
+    const legacyKey = 'chapters_chunk_reload'
+    const last =
+      typeof sessionStorage !== 'undefined'
+        ? Number(sessionStorage.getItem(key) ?? sessionStorage.getItem(legacyKey) ?? 0)
+        : 0
     if (typeof window !== 'undefined' && Date.now() - last > 10_000) {
       sessionStorage.setItem(key, String(Date.now()))
       window.location.reload()

@@ -102,8 +102,8 @@ describe('resolveRepositoryAccess', () => {
  * is what let a shared mapper hand out `gitUrl` and `localPath` unnoticed.
  */
 describe('listAccessibleRepositories field visibility', () => {
-  const CREDENTIALED_URL = 'https://chapters:ghp_not_a_real_token@github.com/piiix-org/chapters.git'
-  const FOLDER = '/srv/chapters-repos/notes'
+  const CREDENTIALED_URL = 'https://elara:ghp_not_a_real_token@github.com/piiix-org/elara.git'
+  const FOLDER = '/srv/elara-repos/notes'
 
   async function ownerAndViewerRepos() {
     const owner = await createActiveUser()
@@ -160,11 +160,11 @@ describe('listAccessibleRepositories field visibility', () => {
     expect(listedGit.access).toBe('viewer')
     // The credential in the remote's userinfo is the reason this matters…
     expect(JSON.stringify(listed)).not.toContain('ghp_not_a_real_token')
-    expect(JSON.stringify(listed)).not.toContain('/srv/chapters-repos')
+    expect(JSON.stringify(listed)).not.toContain('/srv/elara-repos')
     // …but host, owner and name are not secret, and are the whole input to
     // "Open on GitHub". Redacting them to null took the link away from every
     // viewer of a git repository.
-    expect(listedGit.gitUrl).toBe('https://github.com/piiix-org/chapters.git')
+    expect(listedGit.gitUrl).toBe('https://github.com/piiix-org/elara.git')
     // Null, not absent: the client reads a missing key as a bug and `null` as
     // "there is nothing to deep-link to".
     expect(listedLocal).toHaveProperty('localPath')
@@ -210,7 +210,7 @@ describe('listAccessibleRepositories field visibility', () => {
         name: 'scp',
         ownerId: owner.id,
         ingestionMethod: 'git',
-        gitUrl: 'git@github.com:piiix-org/chapters.git',
+        gitUrl: 'git@github.com:piiix-org/elara.git',
       })
       .returning()
     const [odd] = await db
@@ -231,7 +231,7 @@ describe('listAccessibleRepositories field visibility', () => {
 
     const listed = await listAccessibleRepositories(viewer.id)
     expect(listed.find((r) => r.id === scp!.id)!.gitUrl).toBe(
-      'https://github.com/piiix-org/chapters.git',
+      'https://github.com/piiix-org/elara.git',
     )
     expect(listed.find((r) => r.id === odd!.id)!.gitUrl).toBeNull()
   })
@@ -280,9 +280,9 @@ describe('isSafeGitUrl (SEC-03 SSRF & Git Argument Injection prevention)', () =>
   })
 
   it('accepts legitimate https and ssh/scp git URLs', () => {
-    expect(isSafeGitUrl('https://github.com/piiix-org/chapters.git')).toBe(true)
+    expect(isSafeGitUrl('https://github.com/piiix-org/elara.git')).toBe(true)
     expect(isSafeGitUrl('https://gitlab.com/group/project.git')).toBe(true)
-    expect(isSafeGitUrl('git@github.com:piiix-org/chapters.git')).toBe(true)
-    expect(isSafeGitUrl('ssh://git@github.com/piiix-org/chapters.git')).toBe(true)
+    expect(isSafeGitUrl('git@github.com:piiix-org/elara.git')).toBe(true)
+    expect(isSafeGitUrl('ssh://git@github.com/piiix-org/elara.git')).toBe(true)
   })
 })

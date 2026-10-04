@@ -1,10 +1,10 @@
-# Chapters — Project Brief
+# Elara — Project Brief
 
 One page. Read this first, every session.
 
 ## What
 
-Chapters is an open-source, self-hostable "second brain" web platform: a
+Elara is an open-source, self-hostable "second brain" web platform: a
 team knowledge base of plain markdown + YAML notes (OKF format), a
 live-preview editor (CodeMirror 6), real-time collaboration (Yjs CRDT),
 and — its defining promise — **an AI-navigable knowledge graph** with
@@ -14,7 +14,7 @@ permission-scoped MCP access. One deployment serves one organization.
 
 Every existing tool forces a trade-off: Obsidian has no server/team mode,
 SaaS tools hold notes hostage in proprietary formats, enterprise catalogs
-aren't for note-taking. Chapters keeps plain files on disk, adds a real
+aren't for note-taking. Elara keeps plain files on disk, adds a real
 server, and structures the graph so an AI assistant can navigate it
 accurately. Full origin story: repo `README.md`.
 

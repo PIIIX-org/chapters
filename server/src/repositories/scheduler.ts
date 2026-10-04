@@ -97,7 +97,7 @@ async function tick(thresholdMs: number): Promise<void> {
 // ---------------------------------------------------------------------------
 // local_path ingestion (spec 8). Until this existed, `startWatching` had no
 // caller anywhere in `server/src`: a folder repository was connected and then
-// stayed empty forever, while the connect dialog promised Chapters was
+// stayed empty forever, while the connect dialog promised Elara was
 // watching it. The watchers below are what make that promise true.
 // ---------------------------------------------------------------------------
 

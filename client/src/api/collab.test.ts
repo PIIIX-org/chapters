@@ -13,8 +13,8 @@ describe('collabSocketUrl', () => {
   })
 
   it('gives an https page wss, or the browser blocks it as mixed content', () => {
-    expect(collabSocketUrl('/collab', 'https://chapters.example.com/vaults/v1')).toBe(
-      'wss://chapters.example.com/collab',
+    expect(collabSocketUrl('/collab', 'https://elara.example.com/vaults/v1')).toBe(
+      'wss://elara.example.com/collab',
     )
   })
 
@@ -22,8 +22,8 @@ describe('collabSocketUrl', () => {
     // Both cases in one test on purpose: a fixture with only the default port
     // cannot tell "keeps the origin" from "hardcodes the host".
     expect(collabSocketUrl('/collab', 'http://192.168.1.9:4321/')).toBe('ws://192.168.1.9:4321/collab')
-    expect(collabSocketUrl('/collab', 'https://chapters.example.com/')).toBe(
-      'wss://chapters.example.com/collab',
+    expect(collabSocketUrl('/collab', 'https://elara.example.com/')).toBe(
+      'wss://elara.example.com/collab',
     )
   })
 })

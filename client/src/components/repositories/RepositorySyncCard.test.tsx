@@ -17,10 +17,10 @@ import { RepositorySyncCard } from './RepositorySyncCard.js'
 // from "rendered whatever came first".
 const GIT: AccessibleRepository = {
   id: 'r1',
-  name: 'chapters',
+  name: 'elara',
   ownerId: 'u1',
   ingestionMethod: 'git',
-  gitUrl: 'https://github.com/PIIIX-org/chapters.git',
+  gitUrl: 'https://github.com/PIIIX-org/elara.git',
   localPath: null,
   defaultBranch: 'main',
   mergeable: true,
@@ -159,7 +159,7 @@ describe('RepositorySyncCard', () => {
           ...GIT,
           syncStatus: 'error',
           lastSyncedAt: '2026-08-24T11:00:00.000Z',
-          lastSyncError: 'authentication failed for https://github.com/PIIIX-org/chapters.git',
+          lastSyncError: 'authentication failed for https://github.com/PIIIX-org/elara.git',
         },
         AGENT,
       ],
@@ -168,7 +168,7 @@ describe('RepositorySyncCard', () => {
 
     expect(await screen.findByText('Last sync failed')).toBeInTheDocument()
     expect(
-      screen.getByText('authentication failed for https://github.com/PIIIX-org/chapters.git'),
+      screen.getByText('authentication failed for https://github.com/PIIIX-org/elara.git'),
     ).toBeInTheDocument()
     expect(screen.queryByText(/^Synced/)).toBeNull()
   })
@@ -223,7 +223,7 @@ describe('RepositorySyncCard', () => {
           noteId: 'n1',
           notePath: 'docs/api-guide',
           vaultId: 'v1',
-          resource: 'repo:chapters/src/app.ts#runServer',
+          resource: 'repo:elara/src/app.ts#runServer',
           kind: 'missing_symbol' as const,
           detail: 'Referenced symbol "#runServer" not found in "src/app.ts".',
         },
