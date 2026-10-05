@@ -24,8 +24,12 @@ export class ChromaVectorStore implements VectorStore {
 
   constructor(options?: ChromaStoreOptions) {
     this.prefix = options?.prefix ?? 'elara'
+    const u = new URL(options?.url ?? 'http://localhost:8000')
+    const port = u.port ? parseInt(u.port, 10) : u.protocol === 'https:' ? 443 : 80
     this.client = new ChromaClient({
-      path: options?.url ?? 'http://localhost:8000',
+      ssl: u.protocol === 'https:',
+      host: u.hostname,
+      port,
       auth: options?.authToken
         ? {
             provider: 'token',
@@ -47,16 +51,19 @@ export class ChromaVectorStore implements VectorStore {
         this.notesCol = await this.client.getOrCreateCollection({
           name: `${this.prefix}_notes`,
           metadata: spaceConfig,
+          embeddingFunction: null as unknown as undefined,
         })
 
         this.codeCol = await this.client.getOrCreateCollection({
           name: `${this.prefix}_code_files`,
           metadata: spaceConfig,
+          embeddingFunction: null as unknown as undefined,
         })
 
         this.symbolsCol = await this.client.getOrCreateCollection({
           name: `${this.prefix}_symbols`,
           metadata: spaceConfig,
+          embeddingFunction: null as unknown as undefined,
         })
       })()
     }
