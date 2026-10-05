@@ -41,7 +41,7 @@ RUN corepack enable
 # of them. (Node's own fetch/TLS uses a bundle compiled into node and is
 # unaffected, which is exactly why this is easy to miss.)
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates \
+ && apt-get install -y --no-install-recommends git ca-certificates postgresql-client \
  && rm -rf /var/lib/apt/lists/*
 
 # node:24-slim ships an unprivileged `node` user (uid 1000). Installing
@@ -63,6 +63,7 @@ RUN pnpm install --frozen-lockfile --filter @elara/server
 
 COPY --chown=node:node tsconfig.base.json ./
 COPY --chown=node:node server ./server
+COPY --chown=node:node vendor ./vendor
 
 # Where server/src/config.ts resolves CLIENT_DIST to by default
 # (`../../client/dist` from server/src). Last, so a server-only change
