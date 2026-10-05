@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { embedder } from './embeddings.js'
@@ -33,7 +33,7 @@ export async function scheduleMissingEmbeddings(limit?: number): Promise<number>
   const query = db
     .select({ id: notes.id })
     .from(notes)
-    .where(and(isNull(notes.deletedAt), sql`${notes.embedding} is null`))
+    .where(and(isNull(notes.deletedAt), isNull(notes.embeddedAt)))
   const missing = limit ? await query.limit(limit) : await query
   for (const row of missing) scheduleEmbedding(row.id)
   return missing.length
@@ -91,11 +91,7 @@ async function processNote(noteId: string): Promise<void> {
     text,
   )
 
-  try {
-    await db.update(notes).set({ embedding }).where(eq(notes.id, noteId))
-  } catch {
-    // Column might be dropped in decoupled schema
-  }
+  await db.update(notes).set({ embeddedAt: new Date() }).where(eq(notes.id, noteId))
 
   await recomputeSemanticEdges('note', noteId, embedding)
 }

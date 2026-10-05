@@ -37,7 +37,7 @@ describe('embedding queue reliability', () => {
     await flushEmbeddings()
 
     const updated = (await db.select().from(notes).where(eq(notes.id, note.id)))[0]
-    expect(updated?.embedding).not.toBeNull()
+    expect(updated?.embeddedAt).not.toBeNull()
   })
 
   it('retries up to 3 times on embedding error before marking permanently failed', async () => {
@@ -73,7 +73,7 @@ describe('embedding queue reliability', () => {
 
   it('scheduleMissingEmbeddings enqueues all notes with null embeddings', async () => {
     const { note } = await makeVaultAndNote('Unembedded note')
-    expect(note.embedding).toBeNull()
+    expect(note.embeddedAt).toBeNull()
 
     const embedSpy = vi.spyOn(embedder, 'embed').mockResolvedValue([new Array(384).fill(0.1)])
 

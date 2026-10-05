@@ -123,14 +123,13 @@ async function processFile(fileId: string): Promise<void> {
       const inserted = await db
         .insert(repositoryFileSymbols)
         .values(
-          symbolPayloads.map((s, i) => ({
+          symbolPayloads.map((s) => ({
             fileId: s.fileId,
             name: s.name,
             kind: s.kind,
             startLine: s.startLine,
             endLine: s.endLine,
             snippet: s.snippet,
-            embedding: symbolEmbeddings[i],
           })),
         )
         .returning({ id: repositoryFileSymbols.id })
@@ -159,9 +158,7 @@ async function processFile(fileId: string): Promise<void> {
       { repositoryId: row.repositoryId, path: row.path, language: row.language },
       row.content,
     )
-    try {
-      await db.update(repositoryFiles).set({ embedding: fileEmbedding }).where(eq(repositoryFiles.id, fileId))
-    } catch {}
+    await db.update(repositoryFiles).set({ embeddedAt: new Date() }).where(eq(repositoryFiles.id, fileId))
     await recomputeSemanticEdges('code', fileId, fileEmbedding)
     return
   }
@@ -174,9 +171,7 @@ async function processFile(fileId: string): Promise<void> {
       { repositoryId: row.repositoryId, path: row.path, language: row.language },
       row.content,
     )
-    try {
-      await db.update(repositoryFiles).set({ embedding }).where(eq(repositoryFiles.id, fileId))
-    } catch {}
+    await db.update(repositoryFiles).set({ embeddedAt: new Date() }).where(eq(repositoryFiles.id, fileId))
     await recomputeSemanticEdges('code', fileId, embedding)
   }
 }

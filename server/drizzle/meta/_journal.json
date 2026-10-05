@@ -134,6 +134,13 @@
       "when": 1790800000000,
       "tag": "0018_ast_symbol_hnsw_and_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791200000000,
+      "tag": "0019_chroma_vector_decoupling",
+      "breakpoints": true
     }
   ]
 }

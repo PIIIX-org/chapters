@@ -38,7 +38,7 @@ describe('extraction queue', () => {
     await flushExtraction()
 
     const indexFile = await fileByPath(repo.id, 'src/index.ts')
-    expect(indexFile.embedding).not.toBeNull()
+    expect(indexFile.embeddedAt).not.toBeNull()
 
     const symbols = await db
       .select()
@@ -85,7 +85,7 @@ describe('extraction queue', () => {
     await flushExtraction()
 
     const file = await fileByPath(repo.id, 'README.rs')
-    expect(file.embedding).not.toBeNull()
+    expect(file.embeddedAt).not.toBeNull()
     const symbols = await db
       .select()
       .from(repositoryFileSymbols)

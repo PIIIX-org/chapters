@@ -1,78 +1,22 @@
-import { and, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm'
+import { and, eq, inArray, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { notes, repositoryFiles, semanticEdges } from '../db/schema.js'
+import { semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
 import { vectorStore } from './vector/index.js'
 
 export type SemanticNodeType = 'note' | 'code'
 
-interface Neighbor {
-  type: SemanticNodeType
-  id: string
-  similarity: number
-}
-
-async function fallbackPgKnn(
-  embedding: number[],
-  excludeType: SemanticNodeType,
-  excludeId: string,
-): Promise<Neighbor[]> {
-  try {
-    const vec = JSON.stringify(embedding)
-    const noteRows = await db
-      .select({ id: notes.id, similarity: sql<number>`1 - (${notes.embedding} <=> ${vec}::vector)` })
-      .from(notes)
-      .where(
-        and(
-          isNull(notes.deletedAt),
-          sql`${notes.embedding} is not null`,
-          excludeType === 'note' ? ne(notes.id, excludeId) : sql`true`,
-        ),
-      )
-      .orderBy(sql`${notes.embedding} <=> ${vec}::vector`)
-      .limit(config.semanticK)
-
-    const codeRows = await db
-      .select({
-        id: repositoryFiles.id,
-        similarity: sql<number>`1 - (${repositoryFiles.embedding} <=> ${vec}::vector)`,
-      })
-      .from(repositoryFiles)
-      .where(
-        and(
-          sql`${repositoryFiles.embedding} is not null`,
-          excludeType === 'code' ? ne(repositoryFiles.id, excludeId) : sql`true`,
-        ),
-      )
-      .orderBy(sql`${repositoryFiles.embedding} <=> ${vec}::vector`)
-      .limit(config.semanticK)
-
-    return [
-      ...noteRows.map((r) => ({ type: 'note' as const, id: r.id, similarity: r.similarity })),
-      ...codeRows.map((r) => ({ type: 'code' as const, id: r.id, similarity: r.similarity })),
-    ]
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, config.semanticK)
-  } catch {
-    return []
-  }
-}
-
 /**
  * Recomputes one node's semantic neighbors across both notes and code
- * (spec 9: one shared embedding space, semantic edges span both content
- * types) and stores the strong ones. Called by both the note embedding
- * queue and the repository file extraction queue.
+ * via Chroma vector store and stores the strong ones. Called by both the note
+ * embedding queue and the repository file extraction queue.
  */
 export async function recomputeSemanticEdges(
   nodeType: SemanticNodeType,
   nodeId: string,
   embedding: number[],
 ): Promise<void> {
-  let knnResults = await vectorStore.knn(embedding, nodeType, nodeId, config.semanticK)
-  if (knnResults.length === 0) {
-    knnResults = await fallbackPgKnn(embedding, nodeType, nodeId)
-  }
+  const knnResults = await vectorStore.knn(embedding, nodeType, nodeId, config.semanticK)
   const neighbors = knnResults.filter((n) => n.similarity >= config.semanticThreshold)
 
   await db.transaction(async (tx) => {

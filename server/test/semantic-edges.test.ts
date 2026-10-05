@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { db } from '../src/db/client.js'
 import { notes, semanticEdges, vaults } from '../src/db/schema.js'
 import { recomputeSemanticEdges } from '../src/search/semantic-edges.js'
+import { vectorStore } from '../src/search/vector/index.js'
 import { createActiveUser } from './helpers.js'
 
 /** Dense 384-d normalized unit vector — avoids HNSW tie-breaking artifacts (#123). */
@@ -23,10 +24,11 @@ async function createNote(vaultId: string, name: string, embedding: number[]): P
       path: `notes/${name}.md`,
       frontmatter: { type: 'notes' },
       body: name,
-      embedding,
     })
     .returning({ id: notes.id })
-  return row!.id
+  const id = row!.id
+  await vectorStore.upsertNote(id, embedding, { vaultId, path: `notes/${name}.md`, type: 'notes' }, name)
+  return id
 }
 
 function edgesOwnedBy(nodeId: string) {

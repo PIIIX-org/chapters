@@ -12,7 +12,6 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
-  vector,
 } from 'drizzle-orm/pg-core'
 
 export const userStatus = pgEnum('user_status', [
@@ -322,8 +321,8 @@ export const notes = pgTable(
     frontmatter: jsonb('frontmatter').notNull(),
     body: text('body').notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
-    /** One embedding per note, computed at save-time (specs 3+4's shared index). */
-    embedding: vector('embedding', { dimensions: 384 }),
+    /** Timestamp when vector embedding was synced to Chroma. */
+    embeddedAt: timestamp('embedded_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -548,8 +547,8 @@ export const repositoryFiles = pgTable(
     contentHash: text('content_hash').notNull(),
     size: integer('size').notNull(),
     sourceModifiedAt: timestamp('source_modified_at', { withTimezone: true }),
-    /** Shared embedding index with notes (spec 9) — one model, one vector space. */
-    embedding: vector('embedding', { dimensions: 384 }),
+    /** Timestamp when vector embedding was synced to Chroma. */
+    embeddedAt: timestamp('embedded_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -591,7 +590,6 @@ export const repositoryFileSymbols = pgTable(
     startLine: integer('start_line').notNull(),
     endLine: integer('end_line').notNull(),
     snippet: text('snippet'),
-    embedding: vector('embedding', { dimensions: 384 }),
   },
   (t) => [
     index('repository_file_symbols_file_idx').on(t.fileId),
