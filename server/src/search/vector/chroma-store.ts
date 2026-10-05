@@ -36,42 +36,51 @@ export class ChromaVectorStore implements VectorStore {
     })
   }
 
+  private initPromise: Promise<void> | null = null
+
   async init(): Promise<void> {
-    const spaceConfig = { 'hnsw:space': 'cosine' }
+    if (this.notesCol && this.codeCol && this.symbolsCol) return
+    if (!this.initPromise) {
+      this.initPromise = (async () => {
+        const spaceConfig = { 'hnsw:space': 'cosine' }
 
-    this.notesCol = await this.client.getOrCreateCollection({
-      name: `${this.prefix}_notes`,
-      metadata: spaceConfig,
-    })
+        this.notesCol = await this.client.getOrCreateCollection({
+          name: `${this.prefix}_notes`,
+          metadata: spaceConfig,
+        })
 
-    this.codeCol = await this.client.getOrCreateCollection({
-      name: `${this.prefix}_code_files`,
-      metadata: spaceConfig,
-    })
+        this.codeCol = await this.client.getOrCreateCollection({
+          name: `${this.prefix}_code_files`,
+          metadata: spaceConfig,
+        })
 
-    this.symbolsCol = await this.client.getOrCreateCollection({
-      name: `${this.prefix}_symbols`,
-      metadata: spaceConfig,
-    })
+        this.symbolsCol = await this.client.getOrCreateCollection({
+          name: `${this.prefix}_symbols`,
+          metadata: spaceConfig,
+        })
+      })()
+    }
+    await this.initPromise
   }
 
-  private getNotes(): Collection {
-    if (!this.notesCol) throw new Error('ChromaVectorStore notes collection not initialized')
-    return this.notesCol
+  private async getNotes(): Promise<Collection> {
+    if (!this.notesCol) await this.init()
+    return this.notesCol!
   }
 
-  private getCode(): Collection {
-    if (!this.codeCol) throw new Error('ChromaVectorStore code collection not initialized')
-    return this.codeCol
+  private async getCode(): Promise<Collection> {
+    if (!this.codeCol) await this.init()
+    return this.codeCol!
   }
 
-  private getSymbols(): Collection {
-    if (!this.symbolsCol) throw new Error('ChromaVectorStore symbols collection not initialized')
-    return this.symbolsCol
+  private async getSymbols(): Promise<Collection> {
+    if (!this.symbolsCol) await this.init()
+    return this.symbolsCol!
   }
 
   async upsertNote(id: string, embedding: number[], meta: NoteVectorMeta, doc?: string): Promise<void> {
-    await this.getNotes().upsert({
+    const notes = await this.getNotes()
+    await notes.upsert({
       ids: [id],
       embeddings: [embedding],
       metadatas: [meta as unknown as Metadata],
@@ -80,15 +89,18 @@ export class ChromaVectorStore implements VectorStore {
   }
 
   async deleteNote(id: string): Promise<void> {
-    await this.getNotes().delete({ ids: [id] })
+    const notes = await this.getNotes()
+    await notes.delete({ ids: [id] })
   }
 
   async deleteNotesByVault(vaultId: string): Promise<void> {
-    await this.getNotes().delete({ where: { vaultId: { $eq: vaultId } } })
+    const notes = await this.getNotes()
+    await notes.delete({ where: { vaultId: { $eq: vaultId } } })
   }
 
   async upsertFile(id: string, embedding: number[], meta: FileVectorMeta, doc?: string): Promise<void> {
-    await this.getCode().upsert({
+    const code = await this.getCode()
+    await code.upsert({
       ids: [id],
       embeddings: [embedding],
       metadatas: [meta as unknown as Metadata],
@@ -97,18 +109,21 @@ export class ChromaVectorStore implements VectorStore {
   }
 
   async deleteFile(id: string): Promise<void> {
-    await this.getCode().delete({ ids: [id] })
+    const code = await this.getCode()
+    await code.delete({ ids: [id] })
   }
 
   async deleteFilesByRepository(repositoryId: string): Promise<void> {
-    await this.getCode().delete({ where: { repositoryId: { $eq: repositoryId } } })
+    const code = await this.getCode()
+    await code.delete({ where: { repositoryId: { $eq: repositoryId } } })
   }
 
   async upsertSymbols(
     symbols: Array<{ id: string; embedding: number[]; meta: SymbolVectorMeta; snippet?: string }>,
   ): Promise<void> {
     if (symbols.length === 0) return
-    await this.getSymbols().upsert({
+    const syms = await this.getSymbols()
+    await syms.upsert({
       ids: symbols.map((s) => s.id),
       embeddings: symbols.map((s) => s.embedding),
       metadatas: symbols.map((s) => s.meta as unknown as Metadata),
@@ -118,11 +133,13 @@ export class ChromaVectorStore implements VectorStore {
 
   async deleteSymbols(symbolIds: string[]): Promise<void> {
     if (symbolIds.length === 0) return
-    await this.getSymbols().delete({ ids: symbolIds })
+    const syms = await this.getSymbols()
+    await syms.delete({ ids: symbolIds })
   }
 
   async deleteSymbolsByRepository(repositoryId: string): Promise<void> {
-    await this.getSymbols().delete({ where: { repositoryId: { $eq: repositoryId } } })
+    const syms = await this.getSymbols()
+    await syms.delete({ where: { repositoryId: { $eq: repositoryId } } })
   }
 
   async queryNotes(
@@ -147,7 +164,8 @@ export class ChromaVectorStore implements VectorStore {
     const where: Where | undefined =
       whereClauses.length === 1 ? whereClauses[0] : whereClauses.length > 1 ? { $and: whereClauses } : undefined
 
-    const res = await this.getNotes().query({
+    const notes = await this.getNotes()
+    const res = await notes.query({
       queryEmbeddings: [embedding],
       nResults: limit,
       where,
@@ -192,7 +210,8 @@ export class ChromaVectorStore implements VectorStore {
         ? { repositoryId: { $eq: firstRepId } }
         : { repositoryId: { $in: repositoryIds } }
 
-    const res = await this.getCode().query({
+    const code = await this.getCode()
+    const res = await code.query({
       queryEmbeddings: [embedding],
       nResults: limit,
       where,
@@ -244,7 +263,8 @@ export class ChromaVectorStore implements VectorStore {
     const where: Where | undefined =
       whereClauses.length === 1 ? whereClauses[0] : whereClauses.length > 1 ? { $and: whereClauses } : undefined
 
-    const res = await this.getSymbols().query({
+    const syms = await this.getSymbols()
+    const res = await syms.query({
       queryEmbeddings: [embedding],
       nResults: limit,
       where,
@@ -286,9 +306,10 @@ export class ChromaVectorStore implements VectorStore {
     limit: number,
   ): Promise<NeighborResult[]> {
     const fetchLimit = limit + 1
+    const [notesCol, codeCol] = await Promise.all([this.getNotes(), this.getCode()])
     const [notesRes, codeRes] = await Promise.all([
-      this.getNotes().query({ queryEmbeddings: [embedding], nResults: fetchLimit }),
-      this.getCode().query({ queryEmbeddings: [embedding], nResults: fetchLimit }),
+      notesCol.query({ queryEmbeddings: [embedding], nResults: fetchLimit }),
+      codeCol.query({ queryEmbeddings: [embedding], nResults: fetchLimit }),
     ])
 
     const neighbors: NeighborResult[] = []

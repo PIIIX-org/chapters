@@ -8,11 +8,13 @@ import { startBackupScheduler } from './export/backup-service.js'
 import { config } from './config.js'
 import { sql } from './db/client.js'
 import { COLLAB_PATH } from './sync/routes.js'
+import { vectorStore } from './search/vector/index.js'
 
 const app = await buildApp()
 
 try {
   await runMigrations()
+  await vectorStore.init()
   const missing = await scheduleMissingEmbeddings()
   if (missing > 0) console.log(`embedding catch-up scheduled for ${missing} notes`)
   const reconciled = await reconcileOrphanedSyncs()
