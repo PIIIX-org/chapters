@@ -3,6 +3,7 @@ import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFileSymbols, repositoryFiles } from '../db/schema.js'
 import { embedder } from '../search/embeddings.js'
 import { recomputeSemanticEdges } from '../search/semantic-edges.js'
+import { vectorStore } from '../search/vector/index.js'
 import { extractStructure, isSupportedLanguage } from './extraction.js'
 import { resolveImportPath } from './import-resolution.js'
 
@@ -119,25 +120,63 @@ async function processFile(fileId: string): Promise<void> {
     const symbolEmbeddings = allEmbeddings.slice(1)
 
     if (symbolPayloads.length > 0) {
-      await db.insert(repositoryFileSymbols).values(
-        symbolPayloads.map((s, i) => ({
-          fileId: s.fileId,
-          name: s.name,
-          kind: s.kind,
-          startLine: s.startLine,
-          endLine: s.endLine,
-          snippet: s.snippet,
-          embedding: symbolEmbeddings[i],
+      const inserted = await db
+        .insert(repositoryFileSymbols)
+        .values(
+          symbolPayloads.map((s, i) => ({
+            fileId: s.fileId,
+            name: s.name,
+            kind: s.kind,
+            startLine: s.startLine,
+            endLine: s.endLine,
+            snippet: s.snippet,
+            embedding: symbolEmbeddings[i],
+          })),
+        )
+        .returning({ id: repositoryFileSymbols.id })
+
+      await vectorStore.upsertSymbols(
+        inserted.map((item, i) => ({
+          id: item.id,
+          embedding: symbolEmbeddings[i]!,
+          meta: {
+            fileId: symbolPayloads[i]!.fileId,
+            repositoryId: row.repositoryId,
+            name: symbolPayloads[i]!.name,
+            kind: symbolPayloads[i]!.kind,
+            path: row.path,
+            startLine: symbolPayloads[i]!.startLine,
+            endLine: symbolPayloads[i]!.endLine,
+          },
+          snippet: symbolPayloads[i]!.snippet ?? undefined,
         })),
       )
     }
 
-    await db.update(repositoryFiles).set({ embedding: fileEmbedding }).where(eq(repositoryFiles.id, fileId))
+    await vectorStore.upsertFile(
+      fileId,
+      fileEmbedding,
+      { repositoryId: row.repositoryId, path: row.path, language: row.language },
+      row.content,
+    )
+    try {
+      await db.update(repositoryFiles).set({ embedding: fileEmbedding }).where(eq(repositoryFiles.id, fileId))
+    } catch {}
     await recomputeSemanticEdges('code', fileId, fileEmbedding)
     return
   }
 
   const [embedding] = await embedder.embed([`${row.path}\n${row.content}`])
-  await db.update(repositoryFiles).set({ embedding }).where(eq(repositoryFiles.id, fileId))
-  await recomputeSemanticEdges('code', fileId, embedding!)
+  if (embedding) {
+    await vectorStore.upsertFile(
+      fileId,
+      embedding,
+      { repositoryId: row.repositoryId, path: row.path, language: row.language },
+      row.content,
+    )
+    try {
+      await db.update(repositoryFiles).set({ embedding }).where(eq(repositoryFiles.id, fileId))
+    } catch {}
+    await recomputeSemanticEdges('code', fileId, embedding)
+  }
 }

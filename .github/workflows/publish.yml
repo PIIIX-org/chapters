@@ -10,8 +10,8 @@ name: Publish image
 
 on:
   push:
-    # `prod` is the production branch in this repo, not `main`.
-    branches: [prod]
+    # `prod` and `prod-chroma` are production release branches in this repo.
+    branches: [prod, prod-chroma]
     tags: ['v*']
   workflow_dispatch:
 
@@ -44,6 +44,7 @@ jobs:
             ghcr.io/piiix-org/chapters
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/prod' }}
+            type=raw,value=chroma-latest,enable=${{ github.ref == 'refs/heads/prod-chroma' }}
             type=semver,pattern=v{{version}}
             type=sha,format=short
 

@@ -1,6 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { embedder } from './embeddings.js'
+import { vectorStore } from './vector/index.js'
 import { passesFilters, type GraphFilters } from '../graph/assemble.js'
 
 function uuidArray(ids: string[]): SQL {
@@ -91,7 +92,7 @@ async function noteRows(
   vaultIds: string[],
   query: string,
   mode: 'keyword' | 'semantic',
-  vec?: string,
+  vec?: string | number[],
   filters?: GraphFilters,
 ): Promise<Row[]> {
   if (vaultIds.length === 0) return []
@@ -115,20 +116,34 @@ async function noteRows(
                              'MaxWords=30, MinWords=10') AS snippet
           FROM top_notes
         `)
-      : await db.execute(sql`
-          SELECT id, vault_id AS container_id, path, type, frontmatter, left(body, 200) AS snippet
-          FROM notes
-          WHERE vault_id = ANY(${uuidArray(vaultIds)})
-            AND deleted_at IS NULL
-            AND embedding IS NOT NULL
-            ${filterSql}
-          ORDER BY embedding <=> ${vec}::vector
-          LIMIT ${CANDIDATES}
-        `)
+      : await (async () => {
+          const queryEmbedding: number[] = typeof vec === 'string' ? JSON.parse(vec) : (vec ?? [])
+          if (queryEmbedding.length === 0) return []
+          const hits = await vectorStore.queryNotes(
+            queryEmbedding,
+            vaultIds,
+            CANDIDATES,
+            filters?.types && filters.types.length === 1 ? { type: filters.types[0] } : undefined,
+          )
+          if (hits.length === 0) return []
+          const hitIds = hits.map((h) => h.id)
+          const dbRows = await db.execute(sql`
+            SELECT id, vault_id AS container_id, path, type, frontmatter, left(body, 200) AS snippet
+            FROM notes
+            WHERE id = ANY(${uuidArray(hitIds)}) AND deleted_at IS NULL
+          `)
+          const rowMap = new Map((dbRows as unknown as Row[]).map((r) => [r.id, r]))
+          return hitIds.map((id) => rowMap.get(id)).filter(Boolean) as Row[]
+        })()
   return rows as unknown as Row[]
 }
 
-async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' | 'semantic', vec?: string): Promise<Row[]> {
+async function codeRows(
+  repositoryIds: string[],
+  query: string,
+  mode: 'keyword' | 'semantic',
+  vec?: string | number[],
+): Promise<Row[]> {
   if (repositoryIds.length === 0) return []
   // ponytail: CTE wraps candidate search so ts_headline only runs on top 30 files (DB-12).
   const rows =
@@ -147,14 +162,20 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
                              'MaxWords=30, MinWords=10') AS snippet
           FROM top_code
         `)
-      : await db.execute(sql`
-          SELECT id, repository_id AS container_id, path, language, left(content, 200) AS snippet
-          FROM repository_files
-          WHERE repository_id = ANY(${uuidArray(repositoryIds)})
-            AND embedding IS NOT NULL
-          ORDER BY embedding <=> ${vec}::vector
-          LIMIT ${CANDIDATES}
-        `)
+      : await (async () => {
+          const queryEmbedding: number[] = typeof vec === 'string' ? JSON.parse(vec) : (vec ?? [])
+          if (queryEmbedding.length === 0) return []
+          const hits = await vectorStore.queryFiles(queryEmbedding, repositoryIds, CANDIDATES)
+          if (hits.length === 0) return []
+          const hitIds = hits.map((h) => h.id)
+          const dbRows = await db.execute(sql`
+            SELECT id, repository_id AS container_id, path, language, left(content, 200) AS snippet
+            FROM repository_files
+            WHERE id = ANY(${uuidArray(hitIds)})
+          `)
+          const rowMap = new Map((dbRows as unknown as Row[]).map((r) => [r.id, r]))
+          return hitIds.map((id) => rowMap.get(id)).filter(Boolean) as Row[]
+        })()
   return rows as unknown as Row[]
 }
 
@@ -162,7 +183,7 @@ async function symbolRows(
   repositoryIds: string[],
   query: string,
   mode: 'keyword' | 'semantic',
-  vec?: string,
+  vec?: string | number[],
   kindFilter?: string,
 ): Promise<SymbolRow[]> {
   if (repositoryIds.length === 0) return []
@@ -188,18 +209,22 @@ async function symbolRows(
             END
           LIMIT ${CANDIDATES}
         `)
-      : await db.execute(sql`
-          SELECT s.id, s.file_id, f.repository_id AS container_id, f.path,
-                 s.name, s.kind, s.start_line, s.end_line,
-                 coalesce(s.snippet, s.name) AS snippet
-          FROM repository_file_symbols s
-          JOIN repository_files f ON f.id = s.file_id
-          WHERE f.repository_id = ANY(${uuidArray(repositoryIds)})
-            ${kindFilter ? sql`AND s.kind = ${kindFilter}` : sql``}
-            AND s.embedding IS NOT NULL
-          ORDER BY s.embedding <=> ${vec}::vector
-          LIMIT ${CANDIDATES}
-        `)
+      : await (async () => {
+          const queryEmbedding: number[] = typeof vec === 'string' ? JSON.parse(vec) : (vec ?? [])
+          if (queryEmbedding.length === 0) return []
+          const hits = await vectorStore.querySymbols(queryEmbedding, repositoryIds, CANDIDATES, kindFilter)
+          return hits.map((h) => ({
+            id: h.id,
+            file_id: h.fileId,
+            container_id: h.containerId,
+            path: h.path,
+            name: h.name,
+            kind: h.kind,
+            start_line: h.startLine,
+            end_line: h.endLine,
+            snippet: h.snippet ?? h.name,
+          }))
+        })()
   return rows as unknown as SymbolRow[]
 }
 

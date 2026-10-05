@@ -11,6 +11,7 @@ import {
   users,
 } from '../db/schema.js'
 import { config } from '../config.js'
+import { vectorStore } from '../search/vector/index.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { EncryptionKeyMissingError, encryptCredential } from './credentials.js'
 import { generateToken } from '../auth/tokens.js'
@@ -203,6 +204,10 @@ export function repositoryRoutes(app: FastifyInstance) {
     if (!(await requireOwner(req.user!.id, req.params.id))) {
       return reply.code(404).send({ error: 'not found' })
     }
+    await Promise.all([
+      vectorStore.deleteFilesByRepository(req.params.id),
+      vectorStore.deleteSymbolsByRepository(req.params.id),
+    ])
     await db.delete(repositories).where(eq(repositories.id, req.params.id))
     // Otherwise the watcher outlives the row and keeps re-inserting files for
     // a repository nobody can reach.

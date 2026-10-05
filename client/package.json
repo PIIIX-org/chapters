@@ -1,5 +1,7 @@
 {
   "name": "@elara/client",
+  "version": "0.3.0-chroma.0",
+  "edition": "chroma",
   "private": true,
   "type": "module",
   "scripts": {

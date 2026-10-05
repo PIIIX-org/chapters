@@ -55,6 +55,10 @@ export const config = {
   embeddings: env.EMBEDDINGS ?? (env.NODE_ENV === 'production' ? 'local' : 'fake'),
   semanticThreshold: Number(env.SEMANTIC_THRESHOLD ?? 0.75),
   semanticK: Number(env.SEMANTIC_K ?? 8),
+  chromaUrl: env.ELARA_CHROMA_URL ?? env.CHROMA_URL ?? 'http://localhost:8000',
+  chromaAuthToken: env.ELARA_CHROMA_AUTH_TOKEN ?? env.CHROMA_AUTH_TOKEN,
+  chromaPrefix: env.ELARA_CHROMA_PREFIX ?? 'elara',
+  vectorStore: (env.VECTOR_STORE ?? (env.NODE_ENV === 'test' ? 'memory' : 'chroma')) as 'chroma' | 'memory',
   smtp: (env.ELARA_SMTP_HOST ?? env.CHAPTERS_SMTP_HOST ?? env.SMTP_HOST)
     ? {
         host: (env.ELARA_SMTP_HOST ?? env.CHAPTERS_SMTP_HOST ?? env.SMTP_HOST)!,

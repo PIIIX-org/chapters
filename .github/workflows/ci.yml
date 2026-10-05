@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [dev, prod]
+    branches: [dev, prod, dev-chroma, prod-chroma]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,6 +26,15 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      chroma:
+        image: chromadb/chroma:0.6.3
+        ports:
+          - 8000:8000
+        options: >-
+          --health-cmd "curl -f http://localhost:8000/api/v1/heartbeat || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -33,7 +42,6 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Type check
         run: pnpm typecheck
@@ -45,4 +53,5 @@ jobs:
           DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           TEST_DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           ADMIN_DATABASE_URL: postgres://elara:elara@localhost:5432/elara
+          CHROMA_URL: http://localhost:8000
 

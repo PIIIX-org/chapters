@@ -3,6 +3,7 @@ import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { embedder } from './embeddings.js'
 import { recomputeSemanticEdges } from './semantic-edges.js'
+import { vectorStore } from './vector/index.js'
 
 interface QueueEntry {
   noteId: string
@@ -76,6 +77,25 @@ async function processNote(noteId: string): Promise<void> {
   if (!row || row.deletedAt) return
   const text = `${row.path}\n${JSON.stringify(row.frontmatter)}\n${row.body}`
   const [embedding] = await embedder.embed([text])
-  await db.update(notes).set({ embedding }).where(eq(notes.id, noteId))
-  await recomputeSemanticEdges('note', noteId, embedding!)
+  if (!embedding) return
+
+  await vectorStore.upsertNote(
+    noteId,
+    embedding,
+    {
+      vaultId: row.vaultId,
+      path: row.path,
+      type: row.type,
+      updatedAt: row.updatedAt?.toISOString(),
+    },
+    text,
+  )
+
+  try {
+    await db.update(notes).set({ embedding }).where(eq(notes.id, noteId))
+  } catch {
+    // Column might be dropped in decoupled schema
+  }
+
+  await recomputeSemanticEdges('note', noteId, embedding)
 }

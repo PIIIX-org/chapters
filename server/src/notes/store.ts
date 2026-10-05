@@ -7,6 +7,7 @@ import { noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
 import { scheduleEmbedding } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
+import { vectorStore } from '../search/vector/index.js'
 import {
   OkfValidationError,
   extractWikilinks,
@@ -485,6 +486,7 @@ export async function softDeleteNote(
   await rename(noteFile(vaultId, resolved.fullPath), trashFile(vaultId, row.id))
   await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
   await recordRevision(row.id, 'delete', row.frontmatter, row.body, actor)
+  await vectorStore.deleteNote(row.id)
   return updated!
 }
 
@@ -1024,6 +1026,7 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
   // semanticEdges is polymorphic and has no FK (spec 9), so it does not
   // cascade — clear it by hand or the rows leak (#92).
   await deleteSemanticEdgesFor('note', [row.id])
+  await vectorStore.deleteNote(row.id)
   await rm(trashFile(vaultId, row.id), { force: true })
   return true
 }

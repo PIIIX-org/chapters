@@ -17,6 +17,7 @@ import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
+import { vectorStore } from '../search/vector/index.js'
 import { listAccessibleVaults, resolveAccess } from './permissions.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 
@@ -32,6 +33,7 @@ export async function purgeVaultRecord(vaultId: string): Promise<void> {
     await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, vaultId))
   ).map((n) => n.id)
   await deleteSemanticEdgesFor('note', noteIds)
+  await vectorStore.deleteNotesByVault(vaultId)
   // notifications is the other polymorphic table with no FK (#101): a
   // grantee's feed would otherwise keep `vault_shared` rows pointing at a
   // vault that no longer exists.

@@ -42,6 +42,8 @@ services:
         # exits(1) if it cannot connect, so it must not start before
         # Postgres is accepting connections.
         condition: service_healthy
+      chroma:
+        condition: service_healthy
     # tini as PID 1, to reap the `git` processes simple-git spawns for
     # every repository clone and fetch. It forwards SIGTERM, so index.ts
     # still gets to flush debounced note edits on shutdown (verified: the
@@ -76,6 +78,8 @@ services:
       # model). 'fake' = deterministic stub: search and graph relevance
       # become meaningless. Never 'fake' here.
       - EMBEDDINGS=local
+      - VECTOR_STORE=chroma
+      - CHROMA_URL=http://chroma:8000
       # ⚠ Unset = MAIL IS NEVER SENT, silently. See the warning above.
       - SMTP_HOST
       - SMTP_PORT
@@ -103,7 +107,7 @@ services:
       - elara-data:/data
 
   db:
-    image: pgvector/pgvector:pg17
+    image: postgres:17-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-elara}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-elara}
@@ -123,7 +127,24 @@ services:
       timeout: 3s
       retries: 10
 
+  chroma:
+    image: chromadb/chroma:0.6.3
+    restart: unless-stopped
+    ports:
+      - '${CHROMA_PORT:-8000}:8000'
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:8000/api/v1/heartbeat || exit 1']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   db-data:
   elara-data:
     name: chapters-data
+  chroma-data:

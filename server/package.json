@@ -1,5 +1,7 @@
 {
   "name": "@elara/server",
+  "version": "0.3.0-chroma.0",
+  "edition": "chroma",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +11,7 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "reindex": "tsx src/scripts/reindex.ts",
+    "chroma:reindex": "tsx src/scripts/chroma-reindex.ts",
     "profile-graph": "tsx src/scripts/profile-graph.ts",
     "restore-backup": "tsx src/scripts/restore-backup.ts"
   },
@@ -24,6 +27,7 @@
     "@node-rs/argon2": "^2.2.1",
     "adm-zip": "^0.6.1",
     "chokidar": "^5.0.0",
+    "chromadb": "^3.5.0",
     "drizzle-orm": "^0.45.3",
     "fastify": "^5.12.5",
     "fastify-plugin": "^6.0.0",

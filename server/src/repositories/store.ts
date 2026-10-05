@@ -3,6 +3,7 @@ import { and, eq, notInArray } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositoryFiles, repositoryFileSymbols } from '../db/schema.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
+import { vectorStore } from '../search/vector/index.js'
 import { detectLanguage } from './language.js'
 import { scheduleExtraction } from './extraction-queue.js'
 import { checkCodeStaleness } from '../notes/staleness.js'
@@ -96,6 +97,9 @@ export async function syncRepositoryFiles(
     )
     // Same as notes: semanticEdges has no FK and does not cascade (#92).
     await deleteSemanticEdgesFor('code', toDelete.map((r) => r.id))
+    for (const f of toDelete) {
+      await vectorStore.deleteFile(f.id)
+    }
     result.deleted = toDelete.length
   }
 

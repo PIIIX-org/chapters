@@ -1,5 +1,7 @@
 {
   "name": "elara",
+  "version": "0.3.0-chroma.0",
+  "edition": "chroma",
   "private": true,
   "packageManager": "pnpm@11.13.1",
   "engines": {
