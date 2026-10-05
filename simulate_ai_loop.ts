@@ -1,5 +1,4 @@
 import { performance } from 'node:perf_hooks'
-import { execSync } from 'node:child_process'
 
 interface RequestResult {
   status: number
@@ -290,7 +289,7 @@ async function runConcurrentSwarmLoop(
 
   let healthCheckResult: { ok: boolean; latencyMs: number } = { ok: false, latencyMs: 0 }
 
-  const workerPromises = Array.from({ length: concurrency }).map(async (_, workerIdx) => {
+  const workerPromises = Array.from({ length: concurrency }).map(async () => {
     const workerResults: RequestResult[] = []
     for (let i = 0; i < requestsPerWorker; i++) {
       const res = await executeRestRead(baseUrl, vaultId, notePath, sid)
