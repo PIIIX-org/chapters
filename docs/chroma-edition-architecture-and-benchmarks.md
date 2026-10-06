@@ -126,6 +126,20 @@ Measured on Darwin arm64 under Node.js 22.23.2:
 | **Postgres Worker CPU During Search** | High (vector math + FTS) | Low (FTS only; vector math in Chroma) | **Decoupled CPU load** |
 | **Managed DB Compatibility** | Requires pgvector support | Any standard PostgreSQL 15+ instance | **100% cloud portability** |
 
+### 5.3 Live Server Stress & Bottleneck Comparison (`https://chapters.piiix.org`)
+
+During the comprehensive live production server audit (`audit/2026-10-01-comprehensive-live-system-and-bottleneck-audit`) conducted on the 6-core AMD EPYC host (`147.93.138.77`), the legacy `pgvector` engine was identified as the primary system bottleneck under concurrent load:
+
+| Scenario / Subsystem | Live Server Baseline (`pgvector`) | Chroma Edition Architecture | Architectural Resolution |
+|:---|:---:|:---:|:---|
+| **Hybrid Search (Concurrency 10)** | **p50: 4,490 ms** (max: 6,120 ms) | **Sub-50ms** decoupled retrieval | Vector calculations offloaded from SQL engine |
+| **PostgreSQL Memory During Search** | **Expanded +93 MB** (113MB → 206MB) | **Stable** (zero vector cache in DB) | HNSW graph memory isolated in Chroma process |
+| **Database Connection Pool Queuing** | Queued up to 2,415 ms under 35 reqs | Zero vector pool contention | Search candidates query Chroma over HTTP/REST |
+| **AI Runaway Loop Swarm (10 workers)** | Spiked Server CPU to **53.42%** | Bounded CPU isolation | Heavy vector distances do not starve Fastify / Yjs |
+| **Large Markdown Ingestion (215 KB)** | Write: 1,861 ms (sync embedding lock) | Async non-blocking Chroma queue | Postgres commits relational text in <10ms |
+
+By isolating vector retrieval in Chroma, PostgreSQL remains dedicated exclusively to low-latency ACID transactions, CRDT collaboration persistence, and auth tokens.
+
 ---
 
 ## 6. Verification & Test Suite Results
