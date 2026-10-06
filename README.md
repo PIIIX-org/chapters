@@ -4,6 +4,9 @@ An open-source, self-hostable "second brain" platform: a team knowledge base
 built on plain markdown files, a live-preview editor, and an AI-navigable
 knowledge graph.
 
+> [!NOTE]
+> **Elara (Chroma Edition)**: This branch (`dev-chroma`) is the dedicated ChromaDB edition of Elara. It decouples vector storage and similarity search from PostgreSQL, utilizing [ChromaDB](https://github.com/chroma-core/chroma) (`chromadb/chroma:0.6.3`) and pure vanilla PostgreSQL (`postgres:17-alpine`) with zero `vector(384)` columns. See [`docs/chroma-edition-architecture-and-benchmarks.md`](docs/chroma-edition-architecture-and-benchmarks.md) for architecture, benchmarks, and operational guides.
+
 **Status: backend and UI complete, including the 2026-08-30 command
 redesign (dark command-console shell, all 8 slices merged and QA'd) and
 generic OIDC login for hosted or self-hosted SSO.** All specs

@@ -12,6 +12,7 @@
     "db:generate": "drizzle-kit generate",
     "reindex": "tsx src/scripts/reindex.ts",
     "chroma:reindex": "tsx src/scripts/chroma-reindex.ts",
+    "benchmark:chroma": "tsx src/scripts/benchmark-chroma.ts",
     "profile-graph": "tsx src/scripts/profile-graph.ts",
     "restore-backup": "tsx src/scripts/restore-backup.ts"
   },
