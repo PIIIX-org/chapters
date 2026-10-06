@@ -213,3 +213,18 @@ To run the automated performance benchmark harness:
 ```bash
 pnpm benchmark:chroma
 ```
+
+---
+
+## 8. Live Scale Benchmarks & Comprehensive Production Verdict
+
+For the exhaustive head-to-head empirical evaluation between `pgvector` and `ChromaDB` across all 15 master test plans (`TP-01` to `TP-15`) and live Contabo VPS telemetry, consult:
+- **Comprehensive Benchmark Report:** [`docs/benchmarks/pgvector-vs-chromadb-production-comparison.md`](benchmarks/pgvector-vs-chromadb-production-comparison.md)
+- **Architectural Decision Record:** `decision/adr-002-pgvector-vs-chromadb-production-architecture-verdict`
+- **Master Test Plan Scoreboard:** `plan/00-master-test-execution-orchestrator`
+
+### Key Verdict Summary:
+- **Throughput & Concurrency**: `pgvector` delivers **+23.1% higher QPS** at $c=25$ workers (10.87 vs 8.83 QPS) and **84% lower p95 tail latency** at $c=10$ workers (1,425ms vs 2,620ms).
+- **Memory Predictability**: `pgvector` maintains a strictly flat memory line (+3.13 MB drift) compared to ChromaDB's +152.7 MB client buffer drift under load.
+- **Operational Recommendation**: `pgvector` remains the **primary recommended production default** for self-hosted instances. `ChromaDB` remains supported as a modular pluggable adapter for environments that disallow PostgreSQL C-extensions.
+
