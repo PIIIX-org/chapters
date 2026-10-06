@@ -99,6 +99,29 @@ search/MCP engines rather than a parallel one:
   type. See
   [`2026-07-18-code-graph-integration-design.md`](docs/superpowers/specs/2026-07-18-code-graph-integration-design.md).
 
+## Why Elara? (How We Compare)
+
+Traditional tools force software teams to choose between abandoned wikis, single-player desktop apps, or headless code scrapers. Elara unifies these paradigms into a single, self-hostable system:
+
+| Capability / Dimension | **Elara (Chapters)** | **Swimm** | **Graphify** | **`okf-mcp`** | **Outline** | **Obsidian** |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Open-Source & Self-Hostable** | ✅ (MIT) | ❌ (SaaS) | ✅ | ✅ | ✅ | ⚠️ (Local only) |
+| **Plain Files on Disk (OKF v0.2)** | ✅ Strict ISO 8601 | ❌ | ❌ | ✅ | ❌ | ⚠️ (Generic MD) |
+| **Real-Time CRDT Multiplayer** | ✅ (Yjs / Relay) | ❌ (Git PRs) | ❌ | ❌ | ✅ | ❌ (Git conflicts) |
+| **Git Ingestion & Tree-sitter AST** | ✅ (Dual index) | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **AST Symbol Anchoring (`[[repo:...#symbol]]`)** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Unified Note + Code Knowledge Graph** | ✅ Extracted/Struct/Semantic | ❌ | ⚠️ (Code only) | ⚠️ (Notes only) | ❌ | ⚠️ (Notes only) |
+| **Louvain Clustering & Shortest Path** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **First-Class MCP Server Suite** | ✅ (57 tools, 20 prompts) | ❌ | ⚠️ (CLI only) | ⚠️ (8 tools) | ❌ | ⚠️ (Community) |
+| **Decoupled Vector DB (Chroma & pgvector)** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+- **Love Obsidian?** Get the same local-first Markdown speed and wikilink graph, but with zero Git merge conflicts and real-time team CRDT multiplayer.
+- **Tired of Stale Documentation?** Link notes directly to functions, classes, and types with Tree-sitter AST anchors (`[[repo:...#symbol:...]]`).
+- **Building with AI Agents?** Give Claude, Cursor, and Antigravity 57 tools and 20 prompts via Model Context Protocol (MCP) using progressive disclosure to save 70%+ on tokens.
+
+See our [Marketing Positioning & GTM Strategy](docs/marketing/positioning-and-gtm.md) and [Deep Market Research Report](docs/research/market-research.md).
+
+
 The UI (React + CodeMirror 6) is complete — Slice 1 (Scaffold + Auth),
 Slice 2a (vault tree + read-only note view), and Slice 2b (the Editor —
 CodeMirror 6 editing, permission-aware lock, editable frontmatter property
