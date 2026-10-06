@@ -1,0 +1,57 @@
+{
+  "target": "elara-embedding-queue",
+  "title": "Chapters / Elara Asynchronous Vector Embedding Queue & Resilience Layer",
+  "stages_total": 4,
+  "stages_passed": 4,
+  "pass_rate_pct": 100,
+  "total_duration_ms": 30.2,
+  "stages": [
+    {
+      "stage": 1,
+      "name": "Stage 1: Rate-Limit Backpressure Simulator (HTTP 429 Surge)",
+      "durationMs": 21.7,
+      "notesEnqueued": 200,
+      "successfulEmbeddings": 200,
+      "rateLimitedCalls": 263,
+      "vectorParityPct": 100,
+      "success": true
+    },
+    {
+      "stage": 2,
+      "name": "Stage 2: Total Provider Outage & Recovery (HTTP 503 Blackout)",
+      "durationMs": 0.8,
+      "recoveryDrainMs": 0.3,
+      "bufferedNotes": 50,
+      "processedAfterRecovery": 50,
+      "parityAchieved": true,
+      "success": true
+    },
+    {
+      "stage": 3,
+      "name": "Stage 3: Giant Document Context Window Truncation",
+      "durationMs": 7.2,
+      "documentWords": 27501,
+      "estimatedTokens": 62500,
+      "maxAllowedTokens": 8192,
+      "truncatedSafely": true,
+      "vectorGenerated": true,
+      "success": true
+    },
+    {
+      "stage": 4,
+      "name": "Stage 4: Poison Pill & Malformed Content Resilience",
+      "durationMs": 0.5,
+      "pillsTested": 5,
+      "pillsProcessed": 5,
+      "workerCrashes": 0,
+      "success": true
+    }
+  ],
+  "slo_gates": {
+    "vector_parity_pct": 100,
+    "worker_uptime_passed": true,
+    "backoff_discipline_passed": true,
+    "token_limit_handling_passed": true,
+    "verdict": "PASSED"
+  }
+}

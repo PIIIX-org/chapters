@@ -1,0 +1,63 @@
+{
+  "target": "elara-treesitter-engine",
+  "title": "Test Plan 09: Polyglot Tree-sitter Parser Torture & Pathological AST Benchmark",
+  "phases_total": 5,
+  "phases_passed": 5,
+  "pass_rate_pct": 100,
+  "slo_gates": {
+    "worker_process_survivability_pct": 100,
+    "per_file_parse_timeout_violations": 0,
+    "baseline_polyglot_throughput_loc_s": 68984,
+    "stack_overflow_rate_pct": 0,
+    "malformed_partial_symbol_yield_pct": 100,
+    "peak_resident_memory_delta_mb": 137.31,
+    "database_symbol_batching_max": 1000,
+    "database_parameter_overflow_errors": 0,
+    "verdict": "PASSED"
+  },
+  "phases": [
+    {
+      "name": "Phase 1: Baseline Polyglot Ingestion",
+      "filesParsed": 100,
+      "totalLines": 7460,
+      "totalBytes": 185964,
+      "totalSymbols": 1060,
+      "durationMs": 108.14025000000001,
+      "throughputLocSec": 68984,
+      "gate": ">= 25,000 LOC/sec",
+      "passed": true
+    },
+    {
+      "name": "Phase 2: Recursion & Stack Torture",
+      "testFiles": 10,
+      "stackOverflowErrors": 0,
+      "stackOverflowRatePct": 0,
+      "maxAstDepthObserved": 2000,
+      "passed": true
+    },
+    {
+      "name": "Phase 3: Monster Single-Line & Minification Torture",
+      "maxMemoryDeltaMb": 32.28,
+      "filesTested": 2,
+      "passed": true
+    },
+    {
+      "name": "Phase 4: Malformed, Merge-Conflict & Binary Injection",
+      "totalExpectedSymbols": 27,
+      "validExtractedSymbols": 27,
+      "symbolYieldPct": 100,
+      "passed": true
+    },
+    {
+      "name": "Phase 5: Mega-Generated Code & Symbol Flooding",
+      "symbolsExtracted": 15000,
+      "fileSizeMb": 14.72,
+      "parseDurationMs": 1920.6,
+      "memDeltaMb": 137.31,
+      "batchesWritten": 15,
+      "parameterOverflowErrors": 0,
+      "liveMcpHealthy": true,
+      "passed": true
+    }
+  ]
+}

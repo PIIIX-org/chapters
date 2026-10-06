@@ -1,0 +1,11 @@
+{
+  "target": "chapters-chaos-resilience",
+  "title": "Test Plan 04: Chaos Engineering, Process Crash & Crash Recovery Benchmark",
+  "scenarios_total": 4,
+  "scenarios_passed": 4,
+  "pass_rate_pct": 100,
+  "corrupted_notes": 0,
+  "self_healing_recovery_ms": 525.8,
+  "unhandled_crashes": 0,
+  "verdict": "PASSED"
+}

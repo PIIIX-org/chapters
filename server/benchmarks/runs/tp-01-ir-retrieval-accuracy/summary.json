@@ -1,0 +1,23 @@
+{
+  "target": "mcppgvector-vs-choromamcp",
+  "title": "Test Plan 01: Information Retrieval Accuracy Benchmark (NDCG & MRR)",
+  "verdict": "PASSED_WITH_FINDINGS",
+  "metrics": {
+    "pgvector": {
+      "ndcg10": 1.1557,
+      "mrr": 0.425,
+      "recall5": 0.5,
+      "p50Ms": 385.15,
+      "p95Ms": 1159.91,
+      "qps": 0.88
+    },
+    "chroma": {
+      "ndcg10": 1.3708,
+      "mrr": 0.5363,
+      "recall5": 0.65,
+      "p50Ms": 370.17,
+      "p95Ms": 1040.99,
+      "qps": 1.03
+    }
+  }
+}
