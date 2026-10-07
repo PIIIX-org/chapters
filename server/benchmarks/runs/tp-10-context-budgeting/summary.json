@@ -1,0 +1,63 @@
+{
+  "target": "elara-mcp-context-budgeting",
+  "title": "Test Plan 10: Context Window Overflow, Prompt Token Budgeting & MCP Payload Compaction Benchmark",
+  "phases_total": 5,
+  "phases_passed": 5,
+  "pass_rate_pct": 100,
+  "slo_gates": {
+    "zero_context_overflow_pct": 100,
+    "deterministic_pagination_parity_duplicates": 0,
+    "deterministic_pagination_parity_missing": 0,
+    "truncation_guidance_compliance_pct": 100,
+    "token_estimation_accuracy_mape_pct": 1.52,
+    "serialization_p99_latency_ms": 3.21,
+    "graceful_error_handling_passed": true,
+    "verdict": "PASSED"
+  },
+  "phases": [
+    {
+      "name": "Phase 1: Baseline Token Estimation Accuracy",
+      "samplesCount": 20,
+      "mapePct": 1.52,
+      "maxDivergencePct": 3.77,
+      "passed": true
+    },
+    {
+      "name": "Phase 2: Oversize Document & Code Truncation Mechanics",
+      "docRawBytes": 353644,
+      "docDeliveredBytes": 14301,
+      "docEstimatedTokens": 2563,
+      "codeRawBytes": 8265000,
+      "codeDeliveredBytes": 102372,
+      "codeDeliveredLines": 1796,
+      "passed": true
+    },
+    {
+      "name": "Phase 3: Recursive Client Pagination Traverse",
+      "totalEntries": 5000,
+      "pagesQueried": 10,
+      "duplicatesCount": 0,
+      "missingCount": 0,
+      "durationMs": 8.2,
+      "passed": true
+    },
+    {
+      "name": "Phase 4: Graph Subgraph Budget Compaction",
+      "rawEdges": 1200,
+      "retainedEdges": 50,
+      "prunedEdges": 1150,
+      "rawTokens": 67238,
+      "deliveredTokens": 3087,
+      "serializationDurationMs": 3.21,
+      "passed": true
+    },
+    {
+      "name": "Phase 5: Low-Budget Agent Simulation",
+      "agentBudgetTokens": 4000,
+      "cumulativeTokensUsed": 979,
+      "contextOverflowViolations": 0,
+      "liveMcpHealthy": true,
+      "passed": true
+    }
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "target": "elara-request-scheduler-and-pooling",
+  "title": "Test Plan 11: Multi-Tenant Noisy Neighbor, Fair Scheduling & Resource Quota Benchmark",
+  "phases_total": 4,
+  "phases_passed": 4,
+  "pass_rate_pct": 100,
+  "slo_gates": {
+    "interactive_availability_pct": 100,
+    "interactive_contended_p95_ms": 27.3,
+    "max_event_loop_lag_ms": 22.74,
+    "fair_connection_allocation_wait_ms": 1.4,
+    "deterministic_rate_limiting_triggered": true,
+    "instantaneous_recovery_seconds": 1.35,
+    "verdict": "PASSED"
+  },
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Baseline Interactive Measurement",
+      "passed": true,
+      "stats": {
+        "min": 11.51,
+        "p50": 19.33,
+        "p90": 25.94,
+        "p95": 26.26,
+        "p99": 26.82,
+        "max": 26.82,
+        "avg": 19.33
+      },
+      "count": 100,
+      "successCount": 100
+    },
+    {
+      "phase": 2,
+      "name": "Aggressor Saturation & Fair Queueing",
+      "passed": true,
+      "tenantB": {
+        "total": 61,
+        "success": 61,
+        "stats": {
+          "min": 13.5,
+          "p50": 21.03,
+          "p90": 27.21,
+          "p95": 27.3,
+          "p99": 28.39,
+          "max": 28.39,
+          "avg": 21.08
+        }
+      },
+      "tenantA": {
+        "total": 12857,
+        "success": 120,
+        "throttled": 12737,
+        "stats": {
+          "min": 0,
+          "p50": 0,
+          "p90": 0,
+          "p95": 0,
+          "p99": 0.01,
+          "max": 89.35,
+          "avg": 0.62
+        }
+      },
+      "maxEventLoopDelayMs": 22.74
+    },
+    {
+      "phase": 4,
+      "name": "Extreme Burst & Rate Limiter Trip",
+      "passed": true,
+      "tenantABurst": {
+        "total": 500,
+        "accepted": 120,
+        "throttled": 380
+      },
+      "tenantB": {
+        "total": 30,
+        "success": 30,
+        "throttled": 0
+      }
+    },
+    {
+      "phase": 5,
+      "name": "Recovery & Cache Repopulation",
+      "passed": true,
+      "recoveryTimeSec": 1.35,
+      "stats": {
+        "min": 13.51,
+        "p50": 15.18,
+        "p90": 16.24,
+        "p95": 16.43,
+        "p99": 16.46,
+        "max": 16.46,
+        "avg": 15.27
+      }
+    }
+  ]
+}

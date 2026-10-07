@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TP-10: Context Window Overflow, Prompt Token Budgeting & MCP Compaction Benchmark Report</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --card-border: #1f2937;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent: #38bdf8;
+      --accent-green: #34d399;
+      --accent-red: #f87171;
+      --accent-amber: #fbbf24;
+      --accent-purple: #c084fc;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding: 2rem; line-height: 1.5; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    .header { margin-bottom: 2rem; border-bottom: 1px solid var(--card-border); padding-bottom: 1.5rem; }
+    .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.875rem; font-weight: 600; text-transform: uppercase; }
+    .badge-pass { background: rgba(52, 211, 153, 0.2); color: var(--accent-green); border: 1px solid var(--accent-green); }
+    .badge-warn { background: rgba(251, 191, 36, 0.2); color: var(--accent-amber); border: 1px solid var(--accent-amber); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+    .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 0.75rem; padding: 1.5rem; }
+    .card h3 { font-size: 0.875rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem; }
+    .card .val { font-size: 2rem; font-weight: 700; color: var(--text); }
+    .card .sub { font-size: 0.875rem; color: var(--text-muted); margin-top: 0.25rem; }
+    .chart-container { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 0.75rem; padding: 1.5rem; margin-bottom: 2rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { text-align: left; padding: 0.75rem 1rem; border-bottom: 1px solid var(--card-border); }
+    th { color: var(--text-muted); font-size: 0.875rem; }
+    .pass { color: var(--accent-green); font-weight: 600; }
+    .warn { color: var(--accent-amber); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <h1>TP-10: Context Window Overflow, Prompt Token Budgeting & MCP Compaction Benchmark</h1>
+          <p style="color: var(--text-muted); margin-top: 0.5rem;">Target: Chapters / Elara MCP Context Budgeting & Compaction Engine</p>
+        </div>
+        <span class="badge badge-pass">PASSED</span>
+      </div>
+    </div>
+
+    <div class="grid">
+      
+      <div class="card">
+        <h3>Context Overflow Violations</h3>
+        <div class="val" style="color: var(--accent-green);">0</div>
+        <div class="sub">Zero prompts exceeded target budget</div>
+      </div>
+      <div class="card">
+        <h3>Token Estimation Accuracy</h3>
+        <div class="val" style="color: var(--accent-green);">1.52% MAPE</div>
+        <div class="sub">Gate: <= 5.0% MAPE (sub-2% error)</div>
+      </div>
+      <div class="card">
+        <h3>Pagination Parity</h3>
+        <div class="val" style="color: var(--accent-green);">100%</div>
+        <div class="sub">0 duplicate / 0 missing across 5,000 entries</div>
+      </div>
+      <div class="card">
+        <h3>Graph Edge Pruning</h3>
+        <div class="val" style="color: var(--accent-green);">1,200 -> 50</div>
+        <div class="sub">67k tokens compacted to 3k tokens</div>
+      </div>
+    </div>
+
+    <div class="chart-container">
+      <h2>Payload Size & Token Compaction Ratio Before vs After</h2>
+      <canvas id="budgetChart" style="max-height: 380px;"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>SLO Gate Verification Matrix</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Phase ID</th><th>Lifecycle Phase</th><th>Raw Input Scale</th><th>Compacted Delivered Scale</th><th>Compliance</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+          <tr>
+            <td>Phase 1</td><td>Baseline Token Estimation Accuracy</td><td>20 sample documents</td><td>1.52% MAPE error (max 3.77%)</td><td><= 5.0% MAPE</td><td class="pass">PASSED</td>
+          </tr>
+          <tr>
+            <td>Phase 2</td><td>Oversize Document & Code Truncation Mechanics</td><td>353 KB doc / 8.2 MB code</td><td>14.3 KB doc / 102 KB code (1.8k LOC)</td><td>Strict budget limit</td><td class="pass">PASSED</td>
+          </tr>
+          <tr>
+            <td>Phase 3</td><td>Recursive Client Pagination Traverse</td><td>5,000 entries across 10 pages</td><td>0 duplicate, 0 missing in 8.2 ms</td><td>100% parity</td><td class="pass">PASSED</td>
+          </tr>
+          <tr>
+            <td>Phase 4</td><td>Graph Subgraph Budget Compaction</td><td>1,200 edges (67,238 tokens)</td><td>50 edges (3,087 tokens) in 3.2 ms</td><td>Bounded token budget</td><td class="pass">PASSED</td>
+          </tr>
+          <tr>
+            <td>Phase 5</td><td>Low-Budget Agent Simulation (4,000 token budget)</td><td>10 agent exploration turns</td><td>979 cumulative tokens (0 overflows)</td><td>100% budget compliance</td><td class="pass">PASSED</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    
+      new Chart(document.getElementById('budgetChart'), {
+        type: 'bar',
+        data: {
+          labels: ['Document Size (KB)', 'Code Size (KB x10)', 'Graph Tokens (x1k)', 'Cumulative Agent Tokens (x100)'],
+          datasets: [
+            {
+              label: 'Raw Unbudgeted Payload',
+              data: [353.6, 826.5, 67.2, 40.0],
+              backgroundColor: 'rgba(248, 113, 113, 0.7)',
+              borderColor: '#f87171',
+              borderWidth: 1
+            },
+            {
+              label: 'Compacted Delivered Payload',
+              data: [14.3, 10.2, 3.1, 9.79],
+              backgroundColor: 'rgba(52, 211, 153, 0.7)',
+              borderColor: '#34d399',
+              borderWidth: 1
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { labels: { color: '#f3f4f6' } } },
+          scales: {
+            x: { ticks: { color: '#9ca3af' }, grid: { color: '#1f2937' } },
+            y: { ticks: { color: '#9ca3af' }, grid: { color: '#1f2937' }, title: { display: true, text: 'Scale / Metric', color: '#9ca3af' } }
+          }
+        }
+      });
+    
+  </script>
+</body>
+</html>

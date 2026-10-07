@@ -1,0 +1,60 @@
+{
+  "target": "elara-security-subsystem",
+  "title": "Chapters / Elara Multi-Tenant Security & Isolation Engine",
+  "vectors_total": 5,
+  "vectors_passed": 5,
+  "pass_rate_pct": 100,
+  "total_duration_ms": 14344.1,
+  "vectors": [
+    {
+      "vectorId": "ATK-01",
+      "name": "Vector 1: Cross-Vault Data Leakage & Unauthorized Vault Access",
+      "durationMs": 2191.1,
+      "probesTotal": 3,
+      "probesBlocked": 3,
+      "leaksDetected": 0,
+      "success": true
+    },
+    {
+      "vectorId": "ATK-02",
+      "name": "Vector 2: Path Traversal & Null Byte Injection",
+      "durationMs": 5904.4,
+      "probesTotal": 7,
+      "probesBlocked": 7,
+      "escapesDetected": 0,
+      "success": true
+    },
+    {
+      "vectorId": "ATK-03",
+      "name": "Vector 3: Git Clone SSRF & Internal Loopback Probe",
+      "durationMs": 2775.2,
+      "probesTotal": 6,
+      "probesBlocked": 6,
+      "ssrfBypasses": 0,
+      "success": true
+    },
+    {
+      "vectorId": "ATK-04",
+      "name": "Vector 4: RBAC Role Escalation & Privilege Boundary Enforcement",
+      "durationMs": 1790.2,
+      "probesTotal": 4,
+      "probesBlocked": 4,
+      "escalations": 0,
+      "success": true
+    },
+    {
+      "vectorId": "ATK-05",
+      "name": "Vector 5: Adversarial Markdown Prompt Injection Defense",
+      "durationMs": 1683.2,
+      "payloadPreservedAsInert": true,
+      "zeroSystemEscape": true,
+      "success": true
+    }
+  ],
+  "slo_gates": {
+    "breach_zero_tolerance": true,
+    "deterministic_rejection": true,
+    "audit_trail_integrity": true,
+    "verdict": "PASSED"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "target": "chapters-git-sync-ast",
+  "title": "Test Plan 03: Incremental Git Sync, Code Diff Ingestion & Ghost Symbol Purge Benchmark",
+  "phases_total": 5,
+  "phases_passed": 5,
+  "pass_rate_pct": 100,
+  "ghost_symbols_found": 0,
+  "baseline_clone_ms": 5126.7,
+  "incremental_sync_ms": 2404.1,
+  "verdict": "PASSED"
+}

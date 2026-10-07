@@ -1,11 +1,15 @@
 {
-  "target": "chapters",
-  "title": "Chapters Flagship Live MCP",
+  "target": "chapters-live-mcp",
+  "title": "Test Plan 02: Autonomous Multi-Turn AI Agent Navigation & Goal Completion Benchmark",
   "scenarios_total": 10,
   "scenarios_passed": 9,
   "pass_rate_pct": 90,
+  "average_turns": 3,
   "avg_turns_per_scenario": 3,
+  "hallucination_rate_pct": 0,
+  "average_duration_ms": 1493.9,
   "avg_scenario_duration_ms": 1493.9,
+  "verdict": "PASSED",
   "scenarios": [
     {
       "scenario_id": "SC-01",

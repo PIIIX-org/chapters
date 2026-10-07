@@ -114,42 +114,63 @@ async function processFile(fileId: string): Promise<void> {
       })
     }
 
+    // ponytail: batch embeddings and symbol inserts <= 1,000 to prevent Postgres parameter overflow (INGEST-06)
+    const SYMBOL_BATCH_SIZE = 1000
     const allTexts = [`${row.path}\n${row.content}`, ...symbolPayloads.map((s) => s.embedText)]
-    const allEmbeddings = await embedder.embed(allTexts)
+
+    const allEmbeddings: number[][] = []
+    for (let i = 0; i < allTexts.length; i += SYMBOL_BATCH_SIZE) {
+      const textChunk = allTexts.slice(i, i + SYMBOL_BATCH_SIZE)
+      const chunkEmbeddings = await embedder.embed(textChunk)
+      allEmbeddings.push(...chunkEmbeddings)
+    }
     const fileEmbedding = allEmbeddings[0]!
     const symbolEmbeddings = allEmbeddings.slice(1)
 
     if (symbolPayloads.length > 0) {
-      const inserted = await db
-        .insert(repositoryFileSymbols)
-        .values(
-          symbolPayloads.map((s) => ({
-            fileId: s.fileId,
-            name: s.name,
-            kind: s.kind,
-            startLine: s.startLine,
-            endLine: s.endLine,
-            snippet: s.snippet,
+      const insertedIds: string[] = []
+      for (let i = 0; i < symbolPayloads.length; i += SYMBOL_BATCH_SIZE) {
+        const batchPayloads = symbolPayloads.slice(i, i + SYMBOL_BATCH_SIZE)
+        const batchInserted = await db
+          .insert(repositoryFileSymbols)
+          .values(
+            batchPayloads.map((s) => ({
+              fileId: s.fileId,
+              name: s.name,
+              kind: s.kind,
+              startLine: s.startLine,
+              endLine: s.endLine,
+              snippet: s.snippet,
+            })),
+          )
+          .returning({ id: repositoryFileSymbols.id })
+        for (const item of batchInserted) {
+          insertedIds.push(item.id)
+        }
+      }
+
+      for (let i = 0; i < insertedIds.length; i += SYMBOL_BATCH_SIZE) {
+        const batchIds = insertedIds.slice(i, i + SYMBOL_BATCH_SIZE)
+        const batchPayloads = symbolPayloads.slice(i, i + SYMBOL_BATCH_SIZE)
+        const batchEmbeddings = symbolEmbeddings.slice(i, i + SYMBOL_BATCH_SIZE)
+
+        await vectorStore.upsertSymbols(
+          batchIds.map((id, j) => ({
+            id,
+            embedding: batchEmbeddings[j]!,
+            meta: {
+              fileId: batchPayloads[j]!.fileId,
+              repositoryId: row.repositoryId,
+              name: batchPayloads[j]!.name,
+              kind: batchPayloads[j]!.kind,
+              path: row.path,
+              startLine: batchPayloads[j]!.startLine,
+              endLine: batchPayloads[j]!.endLine,
+            },
+            snippet: batchPayloads[j]!.snippet ?? undefined,
           })),
         )
-        .returning({ id: repositoryFileSymbols.id })
-
-      await vectorStore.upsertSymbols(
-        inserted.map((item, i) => ({
-          id: item.id,
-          embedding: symbolEmbeddings[i]!,
-          meta: {
-            fileId: symbolPayloads[i]!.fileId,
-            repositoryId: row.repositoryId,
-            name: symbolPayloads[i]!.name,
-            kind: symbolPayloads[i]!.kind,
-            path: row.path,
-            startLine: symbolPayloads[i]!.startLine,
-            endLine: symbolPayloads[i]!.endLine,
-          },
-          snippet: symbolPayloads[i]!.snippet ?? undefined,
-        })),
-      )
+      }
     }
 
     await vectorStore.upsertFile(

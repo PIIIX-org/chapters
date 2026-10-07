@@ -1,0 +1,63 @@
+{
+  "target": "elara-crdt-engine",
+  "title": "Chapters / Elara Yjs CRDT Real-Time Collaboration Engine",
+  "stages_total": 4,
+  "stages_passed": 4,
+  "pass_rate_pct": 100,
+  "total_duration_ms": 2771.6,
+  "stages": [
+    {
+      "stage": 1,
+      "name": "Stage 1: Single Document Storm (20 Simultaneous Writers)",
+      "durationMs": 1972.6,
+      "clientsCount": 20,
+      "totalEdits": 500,
+      "allConverged": true,
+      "convergedSha256": "560fed789bca84b968d928d8fc7e497f8006f1510fb8dafbcc64669e6f975d43",
+      "missingPhrases": 0,
+      "p95BroadcastLatencyMs": 0.09,
+      "success": true
+    },
+    {
+      "stage": 2,
+      "name": "Stage 2: Overlapping Range Conflicts (Character-Level Collision)",
+      "durationMs": 157,
+      "converged": true,
+      "bothWordsPresent": true,
+      "finalText": "The exceptionally extraordinarily quick brown fox jumps over the lazy dog.",
+      "hashA": "3a930766f190f4d5fb395b607b7856e916ec55092224ec5c044ac76271ebce7e",
+      "success": true
+    },
+    {
+      "stage": 3,
+      "name": "Stage 3: High-Frequency Compaction & Disk Persistence",
+      "durationMs": 277,
+      "totalMicroEdits": 2000,
+      "compactedSizeBytes": 4018,
+      "memoryFootprintMb": 0.004,
+      "maxEventLoopLagMs": 0.91,
+      "boundedMemory": true,
+      "success": true
+    },
+    {
+      "stage": 4,
+      "name": "Stage 4: Disconnected Client Reconnect & Offline Reconciliation",
+      "durationMs": 365,
+      "reconciliationDeltaMs": 52.2,
+      "converged": true,
+      "allEditsPresent": true,
+      "onlineEditsCount": 50,
+      "offlineEditsCount": 10,
+      "success": true
+    }
+  ],
+  "slo_gates": {
+    "mathematical_convergence_100pct": true,
+    "zero_data_loss": true,
+    "sync_fanout_latency_p95_ms": 0.09,
+    "sync_fanout_latency_passed": true,
+    "bounded_memory_mb": 0.004,
+    "bounded_memory_passed": true,
+    "verdict": "PASSED"
+  }
+}
