@@ -36,12 +36,13 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Type check
         run: pnpm typecheck
