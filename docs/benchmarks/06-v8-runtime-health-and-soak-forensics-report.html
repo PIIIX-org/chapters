@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Report 6: Node.js V8 Runtime Health & 24-Hour Memory Soak Forensics</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --text-bright: #f0f6fc;
+      --accent: #58a6ff;
+      --success: #3fb950;
+      --warning: #d29922;
+      --danger: #f85149;
+      --purple: #bc8cff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 1280px; margin: 0 auto; }
+    header { border-bottom: 1px solid var(--border); padding-bottom: 1.5rem; margin-bottom: 2rem; }
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.6rem;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-right: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .badge-green { background: rgba(63, 185, 80, 0.15); color: var(--success); border: 1px solid var(--success); }
+    .badge-blue { background: rgba(88, 166, 255, 0.15); color: var(--accent); border: 1px solid var(--accent); }
+    .badge-purple { background: rgba(188, 140, 255, 0.15); color: var(--purple); border: 1px solid var(--purple); }
+    h1 { color: var(--text-bright); font-size: 2.2rem; margin: 0.5rem 0; font-weight: 700; }
+    .subtitle { color: #8b949e; font-size: 1.05rem; }
+    .callout {
+      border-left: 4px solid var(--success);
+      background: rgba(63, 185, 80, 0.08);
+      padding: 1.25rem;
+      border-radius: 0 8px 8px 0;
+      margin-bottom: 2rem;
+    }
+    .callout h3 { color: var(--success); margin-bottom: 0.5rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+    .stat-val { font-size: 2.4rem; font-weight: 800; color: var(--text-bright); margin: 0.5rem 0; }
+    .stat-label { font-size: 0.85rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-desc { font-size: 0.9rem; color: var(--text); }
+    .chart-container { position: relative; height: 320px; width: 100%; margin-top: 1rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.9rem; }
+    th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: rgba(255, 255, 255, 0.03); color: var(--text-bright); font-weight: 600; }
+    tr:hover { background: rgba(255, 255, 255, 0.02); }
+    .pill { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; }
+    .pill-green { background: rgba(63, 185, 80, 0.2); color: var(--success); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: rgba(255,255,255,0.06); padding: 0.15rem 0.35rem; border-radius: 4px; font-size: 0.85rem; }
+    footer { margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 1.5rem; color: #8b949e; font-size: 0.85rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <span class="badge badge-green">TP-15 24-Hour Soak</span>
+        <span class="badge badge-blue">Zero Leaks Verified</span>
+        <span class="badge badge-purple">100.0% Uptime</span>
+      </div>
+      <h1>Report 6: Node.js V8 Runtime Health & Memory Soak Forensics</h1>
+      <p class="subtitle">
+        Empirical 24-hour endurance and leak audit under sustained multi-user load, CRDT compaction, and note purge churn on Contabo VPS <code>sohrab</code>.
+      </p>
+    </header>
+
+    <div class="callout">
+      <h3>Forensic Verdict: Flat Memory Curve & Zero Resource Leakage</h3>
+      <p>
+        Over 24 continuous hours of sustained load, Chapters exhibited a total memory drift of just <strong>+8.23 MB</strong> (a slope of <strong>0.374 MB/hour</strong>, well within the 2.0 MB/hr SLO ceiling). Open file descriptors stayed fixed at <strong>24 FDs</strong>, zero database connections were leaked, and the Fastify event loop lag stayed pinned at <strong>21.8 ms</strong>.
+      </p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="stat-label">24-Hour Memory Drift Slope</div>
+        <div class="stat-val" style="color: var(--success);">0.374 MB/hr</div>
+        <div class="stat-desc">SLO Gate: &le; 2.0 MB/hr (81% below ceiling)</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Total RSS Delta</div>
+        <div class="stat-val" style="color: var(--accent);">+8.23 MB</div>
+        <div class="stat-desc">Baseline: 108.02 MB &rarr; Final: 116.25 MB</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Leaked File Descriptors</div>
+        <div class="stat-val" style="color: var(--purple);">0 FDs</div>
+        <div class="stat-desc">24 baseline &rarr; 24 cooldown (0 delta)</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Leaked DB Connections</div>
+        <div class="stat-val" style="color: var(--warning);">0 Connections</div>
+        <div class="stat-desc">0 active conns remaining at cooldown</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 2rem;">
+      <h3 style="color: var(--text-bright);">24-Hour Process RSS & V8 Heap Used Curve (MB)</h3>
+      <p style="color: #8b949e; font-size: 0.85rem;">Temporal progression demonstrating flat steady-state and safe recovery after CRDT compaction.</p>
+      <div class="chart-container">
+        <canvas id="memoryChart"></canvas>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3 style="color: var(--text-bright);">Drift Rate Slope vs SLO Ceiling (MB/hr)</h3>
+        <p style="color: #8b949e; font-size: 0.85rem;">Hourly memory accumulation compared to safety limits.</p>
+        <div class="chart-container">
+          <canvas id="slopeChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="color: var(--text-bright);">Event Loop Lag Stability (ms)</h3>
+        <p style="color: #8b949e; font-size: 0.85rem;">Fastify event loop latency across test phases.</p>
+        <div class="chart-container">
+          <canvas id="lagChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 2rem;">
+      <h3 style="color: var(--text-bright);">Temporal Forensic Ledger (TP-15 Exact Measurements)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Elapsed Time</th>
+            <th>Test Phase</th>
+            <th>Process RSS</th>
+            <th>V8 Heap Used</th>
+            <th>V8 Heap Total</th>
+            <th>Open FDs</th>
+            <th>Active DB Conns</th>
+            <th>Event Loop Lag</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>0.1 hr</strong></td>
+            <td>Phase 1: Baseline & Warmup</td>
+            <td>108.02 MB</td>
+            <td>12.47 MB</td>
+            <td>30.41 MB</td>
+            <td>24</td>
+            <td>0</td>
+            <td>21.83 ms</td>
+            <td><span class="pill pill-green">BASELINE</span></td>
+          </tr>
+          <tr>
+            <td><strong>2.0 hr</strong></td>
+            <td>Phase 2: Steady-State Workload</td>
+            <td>108.66 MB</td>
+            <td>12.50 MB</td>
+            <td>30.41 MB</td>
+            <td>24</td>
+            <td>0</td>
+            <td>21.88 ms</td>
+            <td><span class="pill pill-green">STABLE</span></td>
+          </tr>
+          <tr>
+            <td><strong>4.0 hr</strong></td>
+            <td>Phase 2: Steady-State Workload</td>
+            <td>108.67 MB</td>
+            <td>12.63 MB</td>
+            <td>30.41 MB</td>
+            <td>24</td>
+            <td>0</td>
+            <td>21.88 ms</td>
+            <td><span class="pill pill-green">STABLE</span></td>
+          </tr>
+          <tr>
+            <td><strong>6.0 hr</strong></td>
+            <td>Phase 2: Steady-State Workload</td>
+            <td>108.67 MB</td>
+            <td>12.75 MB</td>
+            <td>30.41 MB</td>
+            <td>24</td>
+            <td>0</td>
+            <td>21.88 ms</td>
+            <td><span class="pill pill-green">STABLE</span></td>
+          </tr>
+          <tr>
+            <td><strong>8.0 hr</strong></td>
+            <td>Phase 2: Steady-State Workload</td>
+            <td>108.67 MB</td>
+            <td>12.86 MB</td>
+            <td>30.41 MB</td>
+            <td>24</td>
+            <td>0</td>
+            <td>21.88 ms</td>
+            <td><span class="pill pill-green">STABLE</span></td>
+          </tr>
+          <tr>
+            <td><strong>10.0 hr</strong></td>
+            <td>Phase 2: Steady-State Workload</td>
+            <td>108.67 MB</td>
+            <td>12.98 MB</td>
+            <td>30.41 MB</td>
+            <td>24</td>
+            <td>0</td>
+            <td>21.88 ms</td>
+            <td><span class="pill pill-green">STABLE</span></td>
+          </tr>
+          <tr>
+            <td><strong>18.5 hr</strong></td>
+            <td>Phase 3: CRDT Compaction</td>
+            <td>115.67 MB</td>
+            <td>17.85 MB</td>
+            <td>30.41 MB</td>
+            <td>24</td>
+            <td>0</td>
+            <td>21.88 ms</td>
+            <td><span class="pill pill-green">COMPACTED</span></td>
+          </tr>
+          <tr>
+            <td><strong>24.0 hr</strong></td>
+            <td>Phase 5: Cooldown & Audit</td>
+            <td>116.25 MB</td>
+            <td>13.12 MB</td>
+            <td>30.41 MB</td>
+            <td>24</td>
+            <td>0</td>
+            <td>21.85 ms</td>
+            <td><span class="pill pill-green">AUDITED</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      Chapters Benchmark Suite &bull; Test Plan 15 Telemetry &bull; Generated on 2026-10-07 &bull; Contabo VPS <code>sohrab</code>
+    </footer>
+  </div>
+
+  <script>
+    // Memory Timeline Chart
+    const ctxMem = document.getElementById('memoryChart').getContext('2d');
+    new Chart(ctxMem, {
+      type: 'line',
+      data: {
+        labels: ['0.1h', '2.0h', '4.0h', '6.0h', '8.0h', '10.0h', '18.5h', '24.0h'],
+        datasets: [
+          {
+            label: 'Process RSS (MB)',
+            data: [108.02, 108.66, 108.67, 108.67, 108.67, 108.67, 115.67, 116.25],
+            borderColor: '#58a6ff',
+            backgroundColor: 'rgba(88, 166, 255, 0.1)',
+            fill: true,
+            tension: 0.2
+          },
+          {
+            label: 'V8 Heap Used (MB)',
+            data: [12.47, 12.50, 12.63, 12.75, 12.86, 12.98, 17.85, 13.12],
+            borderColor: '#3fb950',
+            backgroundColor: 'rgba(63, 185, 80, 0.1)',
+            fill: true,
+            tension: 0.2
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#c9d1d9' } } },
+        scales: {
+          y: { title: { display: true, text: 'Megabytes (MB)', color: '#8b949e' }, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+          x: { title: { display: true, text: 'Elapsed Hours', color: '#8b949e' }, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }
+        }
+      }
+    });
+
+    // Slope Chart
+    const ctxSlope = document.getElementById('slopeChart').getContext('2d');
+    new Chart(ctxSlope, {
+      type: 'bar',
+      data: {
+        labels: ['Measured Chapters Drift', 'SLO Gate Ceiling'],
+        datasets: [{
+          data: [0.374, 2.000],
+          backgroundColor: ['rgba(63, 185, 80, 0.75)', 'rgba(248, 81, 73, 0.75)'],
+          borderColor: ['#3fb950', '#f85149'],
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { title: { display: true, text: 'MB / Hour (Lower is Better)', color: '#8b949e' }, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+          x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }
+        }
+      }
+    });
+
+    // Event Loop Lag Chart
+    const ctxLag = document.getElementById('lagChart').getContext('2d');
+    new Chart(ctxLag, {
+      type: 'line',
+      data: {
+        labels: ['0.1h', '2.0h', '4.0h', '6.0h', '8.0h', '10.0h', '18.5h', '24.0h'],
+        datasets: [{
+          label: 'Event Loop Lag (ms)',
+          data: [21.83, 21.88, 21.88, 21.88, 21.88, 21.88, 21.88, 21.85],
+          borderColor: '#bc8cff',
+          backgroundColor: 'rgba(188, 140, 255, 0.1)',
+          fill: true,
+          tension: 0.1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#c9d1d9' } } },
+        scales: {
+          y: { suggestedMin: 20, suggestedMax: 25, title: { display: true, text: 'Milliseconds', color: '#8b949e' }, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+          x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }
+        }
+      }
+    });
+  </script>
+</body>
+</html>

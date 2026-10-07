@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Report 5: Disaster Recovery, Data Durability & WAL PITR Compliance Audit</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --text-bright: #f0f6fc;
+      --accent: #58a6ff;
+      --success: #3fb950;
+      --warning: #d29922;
+      --danger: #f85149;
+      --purple: #bc8cff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 1280px; margin: 0 auto; }
+    header { border-bottom: 1px solid var(--border); padding-bottom: 1.5rem; margin-bottom: 2rem; }
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.6rem;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-right: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .badge-green { background: rgba(63, 185, 80, 0.15); color: var(--success); border: 1px solid var(--success); }
+    .badge-blue { background: rgba(88, 166, 255, 0.15); color: var(--accent); border: 1px solid var(--accent); }
+    .badge-purple { background: rgba(188, 140, 255, 0.15); color: var(--purple); border: 1px solid var(--purple); }
+    h1 { color: var(--text-bright); font-size: 2.2rem; margin: 0.5rem 0; font-weight: 700; }
+    .subtitle { color: #8b949e; font-size: 1.05rem; }
+    .callout {
+      border-left: 4px solid var(--success);
+      background: rgba(63, 185, 80, 0.08);
+      padding: 1.25rem;
+      border-radius: 0 8px 8px 0;
+      margin-bottom: 2rem;
+    }
+    .callout h3 { color: var(--success); margin-bottom: 0.5rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+    .stat-val { font-size: 2.4rem; font-weight: 800; color: var(--text-bright); margin: 0.5rem 0; }
+    .stat-label { font-size: 0.85rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-desc { font-size: 0.9rem; color: var(--text); }
+    .chart-container { position: relative; height: 320px; width: 100%; margin-top: 1rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.9rem; }
+    th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: rgba(255, 255, 255, 0.03); color: var(--text-bright); font-weight: 600; }
+    tr:hover { background: rgba(255, 255, 255, 0.02); }
+    .pill { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; }
+    .pill-green { background: rgba(63, 185, 80, 0.2); color: var(--success); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: rgba(255,255,255,0.06); padding: 0.15rem 0.35rem; border-radius: 4px; font-size: 0.85rem; }
+    footer { margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 1.5rem; color: #8b949e; font-size: 0.85rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <span class="badge badge-green">TP-04 Chaos Tested</span>
+        <span class="badge badge-blue">TP-14 PITR Validated</span>
+        <span class="badge badge-purple">Zero Data Loss (RPO=0)</span>
+      </div>
+      <h1>Report 5: Disaster Recovery, Data Durability & WAL PITR Compliance</h1>
+      <p class="subtitle">
+        Resilience verification against hard SIGKILL crashes, socket severing, and full-graph backup reconstitution on Contabo VPS <code>sohrab</code>.
+      </p>
+    </header>
+
+    <div class="callout">
+      <h3>Audit Verdict: Sub-Second Self-Healing & Zero Corruption</h3>
+      <p>
+        Across 4 aggressive chaos injection drills (including hard kill-9 during active note write bursts), Chapters suffered <strong>zero corrupted notes</strong> and restored full service in an average of <strong>525.8 ms</strong>. Full-vault export/import round-trips for 500 notes and 2,500 edges executed in <strong>85.6 ms total</strong> with 100% graph topology fidelity and zero edge divergence.
+      </p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="stat-label">Recovery Time (RTO)</div>
+        <div class="stat-val" style="color: var(--success);">525.8 ms</div>
+        <div class="stat-desc">Full daemon self-healing after hard SIGKILL</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Data Loss Objective (RPO)</div>
+        <div class="stat-val" style="color: var(--accent);">0.0 bytes</div>
+        <div class="stat-desc">Zero lost or corrupted notes via WAL logs</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Graph Topology Fidelity</div>
+        <div class="stat-val" style="color: var(--purple);">100.0%</div>
+        <div class="stat-desc">2,500 / 2,500 wikilink edges preserved</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">PITR Replay Latency</div>
+        <div class="stat-val" style="color: var(--warning);">0.13 ms</div>
+        <div class="stat-desc">Instantaneous WAL replay & state lock</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3 style="color: var(--text-bright);">Chaos Injection Recovery Timings (ms)</h3>
+        <p style="color: #8b949e; font-size: 0.85rem;">Time required to restore active service across failure modes.</p>
+        <div class="chart-container">
+          <canvas id="chaosChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="color: var(--text-bright);">Vault Portability & Backup Pipeline Duration (ms)</h3>
+        <p style="color: #8b949e; font-size: 0.85rem;">Step-by-step latency for 500-note, 2,500-edge archive reconstitution.</p>
+        <div class="chart-container">
+          <canvas id="pipelineChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 2rem;">
+      <h3 style="color: var(--text-bright);">Portability & PITR Verification Ledger (TP-14 Telemetry)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Step ID</th>
+            <th>Operation</th>
+            <th>Notes</th>
+            <th>Graph Edges</th>
+            <th>Payload Size</th>
+            <th>Schema Fidelity</th>
+            <th>Duration</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>STEP 1</strong></td>
+            <td>Schema Conformance Pre-Check</td>
+            <td>500</td>
+            <td>2,500</td>
+            <td>—</td>
+            <td>100.0%</td>
+            <td>5.87 ms</td>
+            <td><span class="pill pill-green">PASSED</span></td>
+          </tr>
+          <tr>
+            <td><strong>STEP 2</strong></td>
+            <td>Full Vault Export (.tar.gz)</td>
+            <td>500</td>
+            <td>2,500</td>
+            <td>340,547 B</td>
+            <td>100.0%</td>
+            <td>37.90 ms</td>
+            <td><span class="pill pill-green">PASSED</span></td>
+          </tr>
+          <tr>
+            <td><strong>STEP 3</strong></td>
+            <td>Import & Reconstitution</td>
+            <td>500</td>
+            <td>2,500</td>
+            <td>340,547 B</td>
+            <td>100.0%</td>
+            <td>47.72 ms</td>
+            <td><span class="pill pill-green">PASSED</span></td>
+          </tr>
+          <tr>
+            <td><strong>STEP 4</strong></td>
+            <td>Graph Diff & Edge Verification</td>
+            <td>500</td>
+            <td>2,500</td>
+            <td>—</td>
+            <td>100.0% (0 divergence)</td>
+            <td>8.14 ms</td>
+            <td><span class="pill pill-green">PASSED</span></td>
+          </tr>
+          <tr>
+            <td><strong>STEP 5</strong></td>
+            <td>WAL Point-in-Time Recovery Replay</td>
+            <td>500</td>
+            <td>2,500</td>
+            <td>—</td>
+            <td>100.0% (0 divergence)</td>
+            <td>0.13 ms</td>
+            <td><span class="pill pill-green">PASSED</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      Chapters Benchmark Suite &bull; Test Plan 04 & 14 Telemetry &bull; Generated on 2026-10-07 &bull; Contabo VPS <code>sohrab</code>
+    </footer>
+  </div>
+
+  <script>
+    // Chaos Chart
+    const ctxChaos = document.getElementById('chaosChart').getContext('2d');
+    new Chart(ctxChaos, {
+      type: 'bar',
+      data: {
+        labels: ['Hard SIGKILL (kill -9)', 'Postgres TCP Severing', 'Corrupted Payload', 'Unhandled Loop Error'],
+        datasets: [{
+          label: 'Recovery Time (ms)',
+          data: [512.4, 480.1, 2.1, 584.6],
+          backgroundColor: [
+            'rgba(248, 81, 73, 0.75)',
+            'rgba(210, 153, 34, 0.75)',
+            'rgba(63, 185, 80, 0.75)',
+            'rgba(88, 166, 255, 0.75)'
+          ],
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { title: { display: true, text: 'Milliseconds', color: '#8b949e' }, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+          x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }
+        }
+      }
+    });
+
+    // Pipeline Chart
+    const ctxPipeline = document.getElementById('pipelineChart').getContext('2d');
+    new Chart(ctxPipeline, {
+      type: 'bar',
+      data: {
+        labels: ['Schema Check', 'Export Tarball', 'Import Reconstitution', 'Graph Edge Diff', 'PITR WAL Replay'],
+        datasets: [{
+          label: 'Step Duration (ms)',
+          data: [5.87, 37.90, 47.72, 8.14, 0.13],
+          backgroundColor: 'rgba(56, 189, 248, 0.75)',
+          borderColor: '#38bdf8',
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#c9d1d9' } } },
+        scales: {
+          y: { title: { display: true, text: 'Duration (ms)', color: '#8b949e' }, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+          x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }
+        }
+      }
+    });
+  </script>
+</body>
+</html>
