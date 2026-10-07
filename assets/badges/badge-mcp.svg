@@ -1,0 +1,39 @@
+<svg width="230" height="28" viewBox="0 0 230 28" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AI MCP: 57 Tools · 20 Prompts">
+  <defs>
+    <linearGradient id="bg_AI_MCP" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#121826"/>
+      <stop offset="100%" stop-color="#0A0E17"/>
+    </linearGradient>
+    <linearGradient id="badgeSheen" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="badgeClip">
+      <rect width="230" height="28" rx="3"/>
+    </clipPath>
+    <style>
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      @keyframes sheenSweep {
+        0% { transform: translateX(-230px); }
+        30%, 100% { transform: translateX(230px); }
+      }
+      .badge-sheen { animation: sheenSweep 5s infinite ease-in-out; }
+      @media (prefers-reduced-motion: reduce) {
+        .badge-sheen { animation: none !important; }
+      }
+    </style>
+  </defs>
+  <rect width="230" height="28" rx="3" fill="url(#bg_AI_MCP)" stroke="#1C2433" stroke-width="1"/>
+  
+  <!-- Subtle linear shimmer sheen (zero pulse, zero dot movement) -->
+  <g clip-path="url(#badgeClip)">
+    <rect x="0" y="0" width="115" height="28" fill="url(#badgeSheen)" class="badge-sheen"/>
+  </g>
+
+  <!-- Perfectly aligned static indicator pip -->
+  <circle cx="12" cy="14.0" r="3" fill="#3FB8AE"/>
+  <text x="22" y="17.8" class="mono" font-size="10" font-weight="700" fill="#8B9BB4" letter-spacing="0.5">AI MCP</text>
+  <line x1="66.8" y1="5" x2="66.8" y2="23" stroke="#1C2433" stroke-width="1"/>
+  <text x="74.8" y="17.8" class="mono" font-size="10.5" font-weight="600" fill="#3FB8AE">57 Tools · 20 Prompts</text>
+</svg>
