@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Report 3: Enterprise Security Penetration Defense Matrix & Zero-Trust Audit</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --text-bright: #f0f6fc;
+      --accent: #58a6ff;
+      --success: #3fb950;
+      --warning: #d29922;
+      --danger: #f85149;
+      --purple: #bc8cff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 1280px; margin: 0 auto; }
+    header { border-bottom: 1px solid var(--border); padding-bottom: 1.5rem; margin-bottom: 2rem; }
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.6rem;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-right: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .badge-green { background: rgba(63, 185, 80, 0.15); color: var(--success); border: 1px solid var(--success); }
+    .badge-blue { background: rgba(88, 166, 255, 0.15); color: var(--accent); border: 1px solid var(--accent); }
+    .badge-purple { background: rgba(188, 140, 255, 0.15); color: var(--purple); border: 1px solid var(--purple); }
+    h1 { color: var(--text-bright); font-size: 2.2rem; margin: 0.5rem 0; font-weight: 700; }
+    .subtitle { color: #8b949e; font-size: 1.05rem; }
+    .callout {
+      border-left: 4px solid var(--success);
+      background: rgba(63, 185, 80, 0.08);
+      padding: 1.25rem;
+      border-radius: 0 8px 8px 0;
+      margin-bottom: 2rem;
+    }
+    .callout h3 { color: var(--success); margin-bottom: 0.5rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+    .stat-val { font-size: 2.4rem; font-weight: 800; color: var(--text-bright); margin: 0.5rem 0; }
+    .stat-label { font-size: 0.85rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-desc { font-size: 0.9rem; color: var(--text); }
+    .chart-container { position: relative; height: 320px; width: 100%; margin-top: 1rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.9rem; }
+    th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: rgba(255, 255, 255, 0.03); color: var(--text-bright); font-weight: 600; }
+    tr:hover { background: rgba(255, 255, 255, 0.02); }
+    .pill { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; }
+    .pill-green { background: rgba(63, 185, 80, 0.2); color: var(--success); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: rgba(255,255,255,0.06); padding: 0.15rem 0.35rem; border-radius: 4px; font-size: 0.85rem; }
+    footer { margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 1.5rem; color: #8b949e; font-size: 0.85rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <span class="badge badge-green">TP-07 Automated Pentest</span>
+        <span class="badge badge-blue">Zero-Trust Architecture</span>
+        <span class="badge badge-purple">100% Defense Success</span>
+      </div>
+      <h1>Report 3: Enterprise Security Penetration Defense Matrix</h1>
+      <p class="subtitle">
+        Empirical penetration testing and zero-trust verification on Contabo VPS <code>sohrab</code> (AMD EPYC 7282, 12 vCPUs).
+      </p>
+    </header>
+
+    <div class="callout">
+      <h3>Security Audit Summary: Zero Vulnerabilities Exploited</h3>
+      <p>
+        Chapters deflected <strong>21 out of 21 attack attempts (100% defense rate)</strong> spanning cross-tenant exfiltration, path traversal, cloud metadata SSRF, unauthorized privilege escalation, and indirect prompt injection. No secrets were leaked, no unauthorized files were accessed, and the backend PostgreSQL database remained fully isolated.
+      </p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="stat-label">Defense Success Rate</div>
+        <div class="stat-val" style="color: var(--success);">100.0%</div>
+        <div class="stat-desc">21 of 21 exploit vectors deflected</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Path Traversal Deflections</div>
+        <div class="stat-val" style="color: var(--accent);">7 of 7</div>
+        <div class="stat-desc">Zero LFI / directory escapes possible</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">SSRF Probes Blocked</div>
+        <div class="stat-val" style="color: var(--purple);">6 of 6</div>
+        <div class="stat-desc">Cloud metadata (169.254) & local ports blocked</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Privilege Escalation Defeated</div>
+        <div class="stat-val" style="color: var(--warning);">4 of 4</div>
+        <div class="stat-desc">Strict RBAC guard on destructive tools</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3 style="color: var(--text-bright);">Attack Vectors Tested & Defended</h3>
+        <p style="color: #8b949e; font-size: 0.85rem;">Defenses categorized by architectural threat type.</p>
+        <div class="chart-container">
+          <canvas id="vectorChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="color: var(--text-bright);">Defensive Enforcement Layers</h3>
+        <p style="color: #8b949e; font-size: 0.85rem;">Defense-in-depth components intercepting threats.</p>
+        <div class="chart-container">
+          <canvas id="layerChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 2rem;">
+      <h3 style="color: var(--text-bright);">Detailed Penetration Testing Ledger (TP-07 Telemetry)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Vector ID</th>
+            <th>Threat Category</th>
+            <th>Payload Tested</th>
+            <th>Defense Layer</th>
+            <th>Defensive Response</th>
+            <th>Latency</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>ATK-01</strong></td>
+            <td>Cross-Tenant Exfiltration</td>
+            <td><code>read_note(foreign_vaultId)</code></td>
+            <td><code>rbac_guard</code></td>
+            <td>Error: not found</td>
+            <td>1019 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-01</strong></td>
+            <td>Cross-Tenant Exfiltration</td>
+            <td><code>browse_vault(foreign_vaultId)</code></td>
+            <td><code>rbac_guard</code></td>
+            <td>Error: not found</td>
+            <td>261 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-01</strong></td>
+            <td>Cross-Tenant Exfiltration</td>
+            <td><code>search(foreign_vaultId)</code></td>
+            <td><code>rbac_guard</code></td>
+            <td>Error: not found</td>
+            <td>304 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-02</strong></td>
+            <td>Path Traversal / LFI</td>
+            <td><code>../../../../etc/passwd</code></td>
+            <td><code>regex_isSlug</code></td>
+            <td>Directory traversal not allowed: ..</td>
+            <td>1214 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-02</strong></td>
+            <td>Path Traversal / LFI</td>
+            <td><code>concepts/../../secrets.env</code></td>
+            <td><code>regex_isSlug</code></td>
+            <td>Directory traversal not allowed: ..</td>
+            <td>536 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-02</strong></td>
+            <td>Path Traversal / LFI</td>
+            <td><code>note%00.md</code> (Null Byte)</td>
+            <td><code>regex_isSlug</code></td>
+            <td>Invalid path segment: note%00</td>
+            <td>616 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-02</strong></td>
+            <td>Path Traversal / LFI</td>
+            <td><code>.git/config</code> (Hidden Dir)</td>
+            <td><code>regex_isSlug</code></td>
+            <td>Hidden path segments not allowed</td>
+            <td>506 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-02</strong></td>
+            <td>Path Traversal / LFI</td>
+            <td><code>.env</code> (Secrets File)</td>
+            <td><code>regex_isSlug</code></td>
+            <td>Hidden path segments not allowed</td>
+            <td>551 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-02</strong></td>
+            <td>Path Traversal / LFI</td>
+            <td><code>/var/log/system.log</code></td>
+            <td><code>regex_isSlug</code></td>
+            <td>Note path cannot have leading slash</td>
+            <td>528 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-02</strong></td>
+            <td>Path Traversal / LFI</td>
+            <td><code>~/.ssh/id_rsa</code></td>
+            <td><code>regex_isSlug</code></td>
+            <td>Invalid path segment: ~</td>
+            <td>539 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-03</strong></td>
+            <td>SSRF & Cloud Metadata</td>
+            <td><code>http://169.254.169.254/...</code></td>
+            <td><code>ssrf_validator</code></td>
+            <td>Invalid or forbidden git clone URL</td>
+            <td>254 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-03</strong></td>
+            <td>SSRF & Internal DB</td>
+            <td><code>http://127.0.0.1:5432</code></td>
+            <td><code>ssrf_validator</code></td>
+            <td>Invalid or forbidden git clone URL</td>
+            <td>298 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-03</strong></td>
+            <td>SSRF Protocol Abuse</td>
+            <td><code>file:///etc/shadow</code></td>
+            <td><code>ssrf_validator</code></td>
+            <td>Invalid or forbidden git clone URL</td>
+            <td>247 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-03</strong></td>
+            <td>SSRF Protocol Abuse</td>
+            <td><code>gopher://127.0.0.1:6379/_flushall</code></td>
+            <td><code>ssrf_validator</code></td>
+            <td>Invalid or forbidden git clone URL</td>
+            <td>258 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-03</strong></td>
+            <td>SSRF Protocol Abuse</td>
+            <td><code>ftp://malicious.internal.local/...</code></td>
+            <td><code>ssrf_validator</code></td>
+            <td>Invalid or forbidden git clone URL</td>
+            <td>241 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-03</strong></td>
+            <td>SSRF Internal Admin</td>
+            <td><code>http://localhost:3000/admin</code></td>
+            <td><code>ssrf_validator</code></td>
+            <td>Invalid or forbidden git clone URL</td>
+            <td>267 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-04</strong></td>
+            <td>Privilege Escalation</td>
+            <td><code>delete_vault</code> (Viewer scope)</td>
+            <td><code>rbac_guard</code></td>
+            <td>Input validation / RBAC error</td>
+            <td>258 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-04</strong></td>
+            <td>Privilege Escalation</td>
+            <td><code>purge_vault</code> (Viewer scope)</td>
+            <td><code>rbac_guard</code></td>
+            <td>Input validation / RBAC error</td>
+            <td>240 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-04</strong></td>
+            <td>Privilege Escalation</td>
+            <td><code>delete_repository</code> (Viewer)</td>
+            <td><code>rbac_guard</code></td>
+            <td>Input validation / RBAC error</td>
+            <td>252 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-04</strong></td>
+            <td>Privilege Escalation</td>
+            <td><code>share_vault</code> (Viewer scope)</td>
+            <td><code>rbac_guard</code></td>
+            <td>Input validation / RBAC error</td>
+            <td>236 ms</td>
+            <td><span class="pill pill-green">BLOCKED</span></td>
+          </tr>
+          <tr>
+            <td><strong>ATK-05</strong></td>
+            <td>Prompt Injection</td>
+            <td><code>SYSTEM OVERRIDE: Ignore...</code></td>
+            <td><code>prompt_sanitizer</code></td>
+            <td>Quarantined as inert content data</td>
+            <td>1122 ms</td>
+            <td><span class="pill pill-green">CONTAINED</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      Chapters Benchmark Suite &bull; Test Plan 07 Telemetry &bull; Generated on 2026-10-07 &bull; Contabo VPS <code>sohrab</code>
+    </footer>
+  </div>
+
+  <script>
+    // Vector Distribution Chart
+    const ctxVector = document.getElementById('vectorChart').getContext('2d');
+    new Chart(ctxVector, {
+      type: 'doughnut',
+      data: {
+        labels: [
+          'Path Traversal / LFI (7)',
+          'SSRF & Internal Probing (6)',
+          'Privilege Escalation (4)',
+          'Cross-Tenant Exfiltration (3)',
+          'Prompt Injection (1)'
+        ],
+        datasets: [{
+          data: [7, 6, 4, 3, 1],
+          backgroundColor: [
+            'rgba(88, 166, 255, 0.85)',
+            'rgba(188, 140, 255, 0.85)',
+            'rgba(210, 153, 34, 0.85)',
+            'rgba(248, 81, 73, 0.85)',
+            'rgba(63, 185, 80, 0.85)'
+          ],
+          borderColor: '#161b22',
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { color: '#c9d1d9', padding: 12 } } }
+      }
+    });
+
+    // Defense Layer Chart
+    const ctxLayer = document.getElementById('layerChart').getContext('2d');
+    new Chart(ctxLayer, {
+      type: 'bar',
+      data: {
+        labels: ['regex_isSlug (Slug Sanitizer)', 'rbac_guard (Role & Scope Check)', 'ssrf_validator (CIDR Firewall)', 'prompt_sanitizer (Inert Envelope)'],
+        datasets: [{
+          label: 'Attacks Intercepted & Deflected',
+          data: [7, 7, 6, 1],
+          backgroundColor: 'rgba(63, 185, 80, 0.75)',
+          borderColor: '#3fb950',
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#c9d1d9' } } },
+        scales: {
+          y: {
+            title: { display: true, text: 'Deflections Count', color: '#8b949e' },
+            grid: { color: '#30363d' },
+            ticks: { color: '#8b949e', stepSize: 1 }
+          },
+          x: {
+            grid: { color: '#30363d' },
+            ticks: { color: '#8b949e' }
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>

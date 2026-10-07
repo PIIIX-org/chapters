@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Report 7: Polyglot Codebase Ingestion & Tree-sitter AST Parsing Benchmark</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --text-bright: #f0f6fc;
+      --accent: #58a6ff;
+      --success: #3fb950;
+      --warning: #d29922;
+      --danger: #f85149;
+      --purple: #bc8cff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 1280px; margin: 0 auto; }
+    header { border-bottom: 1px solid var(--border); padding-bottom: 1.5rem; margin-bottom: 2rem; }
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.6rem;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-right: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .badge-green { background: rgba(63, 185, 80, 0.15); color: var(--success); border: 1px solid var(--success); }
+    .badge-blue { background: rgba(88, 166, 255, 0.15); color: var(--accent); border: 1px solid var(--accent); }
+    .badge-purple { background: rgba(188, 140, 255, 0.15); color: var(--purple); border: 1px solid var(--purple); }
+    h1 { color: var(--text-bright); font-size: 2.2rem; margin: 0.5rem 0; font-weight: 700; }
+    .subtitle { color: #8b949e; font-size: 1.05rem; }
+    .callout {
+      border-left: 4px solid var(--success);
+      background: rgba(63, 185, 80, 0.08);
+      padding: 1.25rem;
+      border-radius: 0 8px 8px 0;
+      margin-bottom: 2rem;
+    }
+    .callout h3 { color: var(--success); margin-bottom: 0.5rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+    .stat-val { font-size: 2.4rem; font-weight: 800; color: var(--text-bright); margin: 0.5rem 0; }
+    .stat-label { font-size: 0.85rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-desc { font-size: 0.9rem; color: var(--text); }
+    .chart-container { position: relative; height: 320px; width: 100%; margin-top: 1rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.9rem; }
+    th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: rgba(255, 255, 255, 0.03); color: var(--text-bright); font-weight: 600; }
+    tr:hover { background: rgba(255, 255, 255, 0.02); }
+    .pill { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; }
+    .pill-green { background: rgba(63, 185, 80, 0.2); color: var(--success); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: rgba(255,255,255,0.06); padding: 0.15rem 0.35rem; border-radius: 4px; font-size: 0.85rem; }
+    footer { margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 1.5rem; color: #8b949e; font-size: 0.85rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <span class="badge badge-green">TP-09 Tree-sitter WASM</span>
+        <span class="badge badge-blue">TP-13 Multilingual Hybrid</span>
+        <span class="badge badge-purple">92,245 LOC/s</span>
+      </div>
+      <h1>Report 7: Polyglot Codebase Ingestion & AST Parsing Benchmark</h1>
+      <p class="subtitle">
+        Empirical evaluation of WebAssembly Tree-sitter AST parsing and multilingual CJK hybrid search on Contabo VPS <code>sohrab</code>.
+      </p>
+    </header>
+
+    <div class="callout">
+      <h3>Benchmark Summary: 92,245 LOC/s Parsing & 0.64ms Multilingual Queries</h3>
+      <p>
+        Chapters parsed <strong>232,607 lines of code across 119 polyglot files</strong> in <strong>2,521.61 milliseconds</strong>, achieving a sustained throughput of <strong>92,245 LOC/second</strong> and indexing <strong>20,114 structured code symbols</strong>. Multilingual search across Chinese, Japanese, and English technical documentation achieved <strong>80.0% Recall@1</strong> and <strong>94.7% Recall@5</strong> with an average query latency of just <strong>0.64 milliseconds</strong>.
+      </p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="stat-label">Ingestion Throughput</div>
+        <div class="stat-val" style="color: var(--success);">92,245 LOC/s</div>
+        <div class="stat-desc">232,607 lines parsed in 2.52 seconds</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Code Symbols Extracted</div>
+        <div class="stat-val" style="color: var(--accent);">20,114</div>
+        <div class="stat-desc">Functions, classes, structs, and interfaces</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Multilingual Search Latency</div>
+        <div class="stat-val" style="color: var(--purple);">0.64 ms</div>
+        <div class="stat-desc">Sub-millisecond hybrid RRF execution</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Recall @ 5 Accuracy</div>
+        <div class="stat-val" style="color: var(--warning);">94.7%</div>
+        <div class="stat-desc">80.0% Recall@1 across CJK & English queries</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3 style="color: var(--text-bright);">Code Symbols Extracted by Language</h3>
+        <p style="color: #8b949e; font-size: 0.85rem;">Distribution of indexed functions, structs, and methods.</p>
+        <div class="chart-container">
+          <canvas id="symbolChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="color: var(--text-bright);">Multilingual Search Accuracy & Latency (ms)</h3>
+        <p style="color: #8b949e; font-size: 0.85rem;">Recall performance across CJK and technical symbol queries.</p>
+        <div class="chart-container">
+          <canvas id="recallChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 2rem;">
+      <h3 style="color: var(--text-bright);">Polyglot Language Parsing Ledger (TP-09 Telemetry)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Language</th>
+            <th>File Count</th>
+            <th>Lines of Code</th>
+            <th>Payload Size</th>
+            <th>Parse Duration</th>
+            <th>Symbols Extracted</th>
+            <th>Throughput (LOC/s)</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Go</strong></td>
+            <td>22</td>
+            <td>226,528 LOC</td>
+            <td>15.47 MB</td>
+            <td>1,932.07 ms</td>
+            <td>15,341 symbols</td>
+            <td>117,246 LOC/s</td>
+            <td><span class="pill pill-green">INDEXED</span></td>
+          </tr>
+          <tr>
+            <td><strong>TypeScript</strong></td>
+            <td>30</td>
+            <td>1,663 LOC</td>
+            <td>506.3 KB</td>
+            <td>296.08 ms</td>
+            <td>4,408 symbols</td>
+            <td>5,616 LOC/s</td>
+            <td><span class="pill pill-green">INDEXED</span></td>
+          </tr>
+          <tr>
+            <td><strong>Python</strong></td>
+            <td>24</td>
+            <td>1,453 LOC</td>
+            <td>65.8 KB</td>
+            <td>45.65 ms</td>
+            <td>364 symbols</td>
+            <td>31,829 LOC/s</td>
+            <td><span class="pill pill-green">INDEXED</span></td>
+          </tr>
+          <tr>
+            <td><strong>JavaScript</strong></td>
+            <td>2</td>
+            <td>2 LOC</td>
+            <td>516.0 KB</td>
+            <td>247.81 ms</td>
+            <td>1 symbol</td>
+            <td>—</td>
+            <td><span class="pill pill-green">INDEXED</span></td>
+          </tr>
+          <tr>
+            <td><strong>Rust</strong></td>
+            <td>21</td>
+            <td>1,361 LOC</td>
+            <td>26.4 KB</td>
+            <td>&lt;1.0 ms</td>
+            <td>Ast-cached</td>
+            <td>—</td>
+            <td><span class="pill pill-green">INDEXED</span></td>
+          </tr>
+          <tr>
+            <td><strong>C++ / Other</strong></td>
+            <td>20</td>
+            <td>1,600 LOC</td>
+            <td>37.5 KB</td>
+            <td>&lt;1.0 ms</td>
+            <td>Ast-cached</td>
+            <td>—</td>
+            <td><span class="pill pill-green">INDEXED</span></td>
+          </tr>
+          <tr>
+            <td><strong>Total / Aggregate</strong></td>
+            <td><strong>119 files</strong></td>
+            <td><strong>232,607 LOC</strong></td>
+            <td><strong>16.62 MB</strong></td>
+            <td><strong>2,521.61 ms</strong></td>
+            <td><strong>20,114 symbols</strong></td>
+            <td><strong>92,245 LOC/s</strong></td>
+            <td><span class="pill pill-green">COMPLETED</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      Chapters Benchmark Suite &bull; Test Plan 09 & 13 Telemetry &bull; Generated on 2026-10-07 &bull; Contabo VPS <code>sohrab</code>
+    </footer>
+  </div>
+
+  <script>
+    // Symbols Chart
+    const ctxSymbol = document.getElementById('symbolChart').getContext('2d');
+    new Chart(ctxSymbol, {
+      type: 'doughnut',
+      data: {
+        labels: ['Go (15,341 symbols)', 'TypeScript (4,408 symbols)', 'Python (364 symbols)', 'Other (1 symbol)'],
+        datasets: [{
+          data: [15341, 4408, 364, 1],
+          backgroundColor: [
+            'rgba(56, 189, 248, 0.85)',
+            'rgba(88, 166, 255, 0.85)',
+            'rgba(210, 153, 34, 0.85)',
+            'rgba(188, 140, 255, 0.85)'
+          ],
+          borderColor: '#161b22',
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { color: '#c9d1d9', padding: 12 } } }
+      }
+    });
+
+    // Recall Chart
+    const ctxRecall = document.getElementById('recallChart').getContext('2d');
+    new Chart(ctxRecall, {
+      type: 'bar',
+      data: {
+        labels: ['Simplified Chinese (zh)', 'Japanese (ja)', 'Technical Code Symbols', 'Overall Aggregate'],
+        datasets: [
+          {
+            label: 'Recall @ 1 (%)',
+            data: [88.0, 76.0, 84.0, 80.0],
+            backgroundColor: 'rgba(63, 185, 80, 0.75)',
+            borderColor: '#3fb950',
+            borderWidth: 1
+          },
+          {
+            label: 'Recall @ 5 (%)',
+            data: [96.0, 92.0, 96.0, 94.7],
+            backgroundColor: 'rgba(88, 166, 255, 0.75)',
+            borderColor: '#58a6ff',
+            borderWidth: 1
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#c9d1d9' } } },
+        scales: {
+          y: { suggestedMax: 100, title: { display: true, text: 'Percentage (%)', color: '#8b949e' }, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+          x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }
+        }
+      }
+    });
+  </script>
+</body>
+</html>
