@@ -1,0 +1,55 @@
+{
+  "target": "chapters",
+  "title": "Chapters Flagship Live MCP",
+  "phases_total": 5,
+  "phases_passed": 5,
+  "pass_rate_pct": 100,
+  "total_duration_ms": 9787.2,
+  "total_ghost_symbols_found": 0,
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Phase 1: Baseline Initial Clone & Symbol Extraction",
+      "durationMs": 5126.7,
+      "filesCount": 3,
+      "symbolsCount": 0,
+      "ghostSymbols": 0,
+      "success": true
+    },
+    {
+      "phase": 2,
+      "name": "Phase 2: Ghost Symbol Purge & Renaming Verification",
+      "durationMs": 586.2,
+      "ghostSymbols": 0,
+      "validSymbols": 0,
+      "success": true
+    },
+    {
+      "phase": 3,
+      "name": "Phase 3: Incremental Git Sync & Latency Verification",
+      "durationMs": 2404.1,
+      "success": true,
+      "syncDurationMs": 2404.1
+    },
+    {
+      "phase": 4,
+      "name": "Phase 4: Production Codebase Tree-sitter AST Verification",
+      "durationMs": 1064.5,
+      "symbolsFound": 40,
+      "success": true
+    },
+    {
+      "phase": 5,
+      "name": "Phase 5: Force-Sync Re-indexing & Teardown",
+      "durationMs": 605.7,
+      "success": true
+    }
+  ],
+  "slo_gates": {
+    "ghost_symbol_zero_tolerance": true,
+    "incremental_sync_latency_passed": true,
+    "extraction_accuracy_passed": true,
+    "process_health_passed": true,
+    "verdict": "PASSED"
+  }
+}
