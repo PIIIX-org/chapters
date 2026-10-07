@@ -5,7 +5,118 @@
   "scenarios_passed": 9,
   "pass_rate_pct": 90,
   "average_turns": 3,
+  "avg_turns_per_scenario": 3,
   "hallucination_rate_pct": 0,
   "average_duration_ms": 1493.9,
-  "verdict": "PASSED"
+  "avg_scenario_duration_ms": 1493.9,
+  "verdict": "PASSED",
+  "scenarios": [
+    {
+      "scenario_id": "SC-01",
+      "name": "Code-to-Doc Reverse Exploration",
+      "description": "Code-to-Doc Reverse Exploration",
+      "turns_count": 4,
+      "duration_ms": 2988,
+      "success": "340c97cf-21b7-4ae0-925f-700db1f08d50",
+      "hallucinations_count": 0,
+      "hiccups_count": 0
+    },
+    {
+      "scenario_id": "SC-02",
+      "name": "Impact Analysis & Refactoring Ripple",
+      "description": "Impact Analysis & Refactoring Ripple",
+      "turns_count": 3,
+      "duration_ms": 1293.7,
+      "success": "53a3e0bd-9142-4597-9645-6edb0952d4ae",
+      "hallucinations_count": 0,
+      "hiccups_count": 0
+    },
+    {
+      "scenario_id": "SC-03",
+      "name": "Graph Pathfinding Discovery",
+      "description": "Graph Pathfinding Discovery",
+      "turns_count": 2,
+      "duration_ms": 802.1,
+      "success": true,
+      "hallucinations_count": 0,
+      "hiccups_count": 0
+    },
+    {
+      "scenario_id": "SC-04",
+      "name": "Bug Hunting via AST Symbols",
+      "description": "Bug Hunting via AST Symbols",
+      "turns_count": 2,
+      "duration_ms": 878.7,
+      "success": true,
+      "hallucinations_count": 0,
+      "hiccups_count": 0
+    },
+    {
+      "scenario_id": "SC-05",
+      "name": "Cross-Domain Historical Synthesis",
+      "description": "Cross-Domain Historical Synthesis",
+      "turns_count": 3,
+      "duration_ms": 1079.8,
+      "success": "b0cb0b30-fffd-4379-abeb-d86c1111a771",
+      "hallucinations_count": 0,
+      "hiccups_count": 0
+    },
+    {
+      "scenario_id": "SC-06",
+      "name": "Ingest Git Repo & AST Summarization",
+      "description": "Ingest Git Repo & AST Summarization",
+      "turns_count": 4,
+      "duration_ms": 3755.9,
+      "success": true,
+      "hallucinations_count": 0,
+      "hiccups_count": 0
+    },
+    {
+      "scenario_id": "SC-07",
+      "name": "Refactoring Propagation via Note Rename",
+      "description": "Refactoring Propagation via Note Rename",
+      "turns_count": 4,
+      "duration_ms": 1166.2,
+      "success": false,
+      "hallucinations_count": 0,
+      "hiccups_count": 0
+    },
+    {
+      "scenario_id": "SC-08",
+      "name": "OKF Conformance Audit Execution",
+      "description": "OKF Conformance Audit Execution",
+      "turns_count": 1,
+      "duration_ms": 274.3,
+      "success": true,
+      "hallucinations_count": 0,
+      "hiccups_count": 0
+    },
+    {
+      "scenario_id": "SC-09",
+      "name": "Multi-Tenant Vault Isolation & Sharing",
+      "description": "Multi-Tenant Vault Isolation & Sharing",
+      "turns_count": 2,
+      "duration_ms": 726.5,
+      "success": true,
+      "hallucinations_count": 0,
+      "hiccups_count": 0
+    },
+    {
+      "scenario_id": "SC-10",
+      "name": "Rapid Loop & Rate-Limit Backpressure Recovery",
+      "description": "Rapid Loop & Rate-Limit Backpressure Recovery",
+      "turns_count": 5,
+      "duration_ms": 1974.1,
+      "success": true,
+      "hallucinations_count": 0,
+      "hiccups_count": 0
+    }
+  ],
+  "slo_gates": {
+    "task_success_gate_passed": true,
+    "navigation_efficiency_gate_passed": true,
+    "hallucination_gate_passed": true,
+    "turn_to_goal_speed_gate_passed": true,
+    "verdict": "PASSED"
+  }
 }

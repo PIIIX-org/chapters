@@ -140,6 +140,25 @@ During the comprehensive live production server audit (`audit/2026-10-01-compreh
 
 By isolating vector retrieval in Chroma, PostgreSQL remains dedicated exclusively to low-latency ACID transactions, CRDT collaboration persistence, and auth tokens.
 
+### 5.4 Live Scale MCP Benchmark & Telemetry on Contabo VPS (`173.249.3.57`)
+
+A comprehensive head-to-head live scale benchmark was executed comparing live deployments (`mcppgvector` at `https://elara.pgvector.piiix.org/mcp` vs. `choromamcp` at `https://elara.choromadb.piiix.org/mcp`) on a 12 vCPU Contabo VPS with 500ms synchronous host cgroups v2 telemetry:
+
+| Benchmark Dimension | `mcppgvector` (Postgres + pgvector) | `choromamcp` (Postgres + Chroma) | Empirical Delta / Root Cause |
+|:---|:---:|:---:|:---|
+| **Search QPS ($c=25$ workers)** | **10.87 QPS** (p50: 1,681ms, p95: 3,740ms) | **8.83 QPS** (p50: 1,866ms, p95: 4,449ms) | 🏆 **`pgvector` is +23.1% faster** under high concurrency |
+| **Search QPS ($c=10$ workers)** | **8.80 QPS** (p50: 982ms, p95: 1,425ms) | **6.68 QPS** (p50: 1,127ms, p95: 2,620ms) | 🏆 **`pgvector` is +31.7% faster**; Chroma tail latency +84% higher |
+| **Bulk Ingestion (250 notes)** | 54.37 s (4.60 QPS, p50: 1,159ms) | **50.23 s** (4.98 QPS, p50: 852ms) | 🥈 Chroma is +8.2% faster at bulk write ingestion |
+| **App Process RAM Drift** | **+3.13 MB delta** (574.2MB → 577.4MB) | **+152.7 MB delta** (345.0MB → 497.7MB) | ⚠️ Chroma client buffers accumulated memory; `pgvector` stayed flat |
+| **Total Resident Memory** | **700.7 MB** (App: 577MB + DB: 123MB) | **725.5 MB** (App: 498MB + DB: 107MB + Chroma: 120MB) | `pgvector` is lighter overall |
+| **Infrastructure Overhead** | **2 Containers** (`app`, `db`) | **3 Containers** (`app`, `db`, `chroma`) | `pgvector` has zero inter-container IPC |
+
+**Architectural Takeaways & Guidance:**
+1. **Zero IPC Wins at Scale**: Under heavy agent concurrency (10+ workers), `pgvector` evaluates relational filters, full-text search, and HNSW cosine distance in a single database buffer cache. ChromaDB incurs a double HTTP serialization hop (Node.js ↔ Python FastAPI) that backs up queues under parallel agent load.
+2. **Production Verdict**: `pgvector` is the recommended default for self-hosted instances and agent-heavy workloads due to flat memory behavior and superior query throughput. ChromaDB remains supported as a pluggable adapter for managed cloud databases where custom PostgreSQL C extensions are prohibited.
+
+See full report: [`docs/live-scale-mcp-benchmark-pgvector-vs-chromadb.md`](./live-scale-mcp-benchmark-pgvector-vs-chromadb.md) and [`live-vs-local-mcp-benchmark-report.html`](./live-vs-local-mcp-benchmark-report.html).
+
 ---
 
 ## 6. Verification & Test Suite Results

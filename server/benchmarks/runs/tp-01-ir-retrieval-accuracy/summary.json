@@ -19,5 +19,95 @@
       "p95Ms": 1040.99,
       "qps": 1.03
     }
+  },
+  "mcppgvector": {
+    "target": "mcppgvector",
+    "title": "PostgreSQL 17 + pgvector",
+    "vaultId": "8310b644-96ff-4450-ae64-7201531f9ccb",
+    "seededNotes": 100,
+    "queryCount": 50,
+    "totalDurationMs": 56614.9,
+    "metrics": {
+      "ndcg_at_10_avg": 0.4623,
+      "mrr_avg": 0.17,
+      "recall_at_5_pct": 20,
+      "recall_at_10_pct": 22,
+      "ndcg_by_category": {
+        "A": 1.1557,
+        "B": 0,
+        "C": 0
+      },
+      "mrr_by_category": {
+        "A": 0.425,
+        "B": 0,
+        "C": 0
+      },
+      "p50_latency_ms": 385.15,
+      "p95_latency_ms": 1159.91,
+      "p99_latency_ms": 1516.69,
+      "min_latency_ms": 328.11,
+      "max_latency_ms": 1516.69,
+      "avg_latency_ms": 506.47,
+      "qps": 0.88
+    },
+    "hiccups": {
+      "total": 72,
+      "latency_spikes": 2,
+      "rate_limits": 31,
+      "retrieval_misses": 39,
+      "socket_drops": 0
+    },
+    "slo_gates": {
+      "ndcg_gate_passed": false,
+      "mrr_gate_passed": false,
+      "recall_gate_passed": false,
+      "hiccup_gate_passed": true,
+      "verdict": "FAILED"
+    }
+  },
+  "choromamcp": {
+    "target": "choromamcp",
+    "title": "PostgreSQL 17 + ChromaDB 0.6.3",
+    "vaultId": "d62514fc-deef-4a4e-a9b7-eae2cd5546b6",
+    "seededNotes": 100,
+    "queryCount": 50,
+    "totalDurationMs": 48353.6,
+    "metrics": {
+      "ndcg_at_10_avg": 0.5483,
+      "mrr_avg": 0.2145,
+      "recall_at_5_pct": 26,
+      "recall_at_10_pct": 28,
+      "ndcg_by_category": {
+        "A": 1.3708,
+        "B": 0,
+        "C": 0
+      },
+      "mrr_by_category": {
+        "A": 0.5363,
+        "B": 0,
+        "C": 0
+      },
+      "p50_latency_ms": 370.17,
+      "p95_latency_ms": 1040.99,
+      "p99_latency_ms": 1304.79,
+      "min_latency_ms": 329.85,
+      "max_latency_ms": 1304.79,
+      "avg_latency_ms": 510.88,
+      "qps": 1.03
+    },
+    "hiccups": {
+      "total": 69,
+      "latency_spikes": 2,
+      "rate_limits": 31,
+      "retrieval_misses": 36,
+      "socket_drops": 0
+    },
+    "slo_gates": {
+      "ndcg_gate_passed": false,
+      "mrr_gate_passed": false,
+      "recall_gate_passed": false,
+      "hiccup_gate_passed": true,
+      "verdict": "FAILED"
+    }
   }
 }

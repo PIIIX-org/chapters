@@ -4,8 +4,52 @@
   "scenarios_total": 4,
   "scenarios_passed": 4,
   "pass_rate_pct": 100,
+  "total_duration_ms": 7252,
   "corrupted_notes": 0,
+  "total_corruptions_detected": 0,
   "self_healing_recovery_ms": 525.8,
   "unhandled_crashes": 0,
-  "verdict": "PASSED"
+  "verdict": "PASSED",
+  "scenarios": [
+    {
+      "scenario": 1,
+      "name": "Scenario 1: Abrupt Ingestion Interruption & Transaction Integrity",
+      "durationMs": 2984.4,
+      "recoveryDeltaMs": 1716.8,
+      "notesInspected": 5,
+      "corruptedNotes": 0,
+      "success": true
+    },
+    {
+      "scenario": 2,
+      "name": "Scenario 2: Vector Degradation & Fallback Gracefulness",
+      "durationMs": 1336.4,
+      "searchSuccesses": 3,
+      "unhandledErrors": 0,
+      "success": true
+    },
+    {
+      "scenario": 3,
+      "name": "Scenario 3: Network Timeout & Clean Error Boundaries",
+      "durationMs": 542.6,
+      "recoveryDeltaMs": 525.8,
+      "recoveredStatus": 200,
+      "success": true
+    },
+    {
+      "scenario": 4,
+      "name": "Scenario 4: Atomic Write & Overwrite Race Safety",
+      "durationMs": 2388.6,
+      "finalBodyLength": 74,
+      "isCorrupted": false,
+      "success": true
+    }
+  ],
+  "slo_gates": {
+    "data_loss_zero_tolerance": true,
+    "self_healing_recovery_passed": true,
+    "process_uptime_passed": true,
+    "clean_error_boundaries_passed": true,
+    "verdict": "PASSED"
+  }
 }

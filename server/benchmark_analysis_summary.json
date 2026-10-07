@@ -1,0 +1,707 @@
+{
+  "mcppgvector": {
+    "title": "PostgreSQL 17 + pgvector",
+    "totalDurationSec": 207.3,
+    "phases": [
+      {
+        "phase": 1,
+        "title": "Administrative Vault Lifecycle & Scoping",
+        "durationSec": 7.02,
+        "stats": {
+          "count": 7,
+          "p50Ms": 631.84,
+          "p95Ms": 2342.72,
+          "p99Ms": 2342.72,
+          "minMs": 403.88,
+          "maxMs": 2342.72,
+          "avgMs": 1001.73,
+          "rps": 1,
+          "successCount": 7,
+          "errorCount": 0,
+          "rateLimitedCount": 0
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 2,
+        "title": "High-Volume OKF v0.2 Note Lifecycle & Mutation",
+        "durationSec": 57.46,
+        "stats": {
+          "count": 312,
+          "p50Ms": 901.1,
+          "p95Ms": 2619.2,
+          "p99Ms": 3239.15,
+          "minMs": 375.12,
+          "maxMs": 3435.48,
+          "avgMs": 1188.99,
+          "rps": 5.43,
+          "successCount": 101,
+          "errorCount": 0,
+          "rateLimitedCount": 211
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 3,
+        "title": "Codebase Ingestion & AST Tree-sitter Mapping",
+        "durationSec": 19.54,
+        "stats": {
+          "count": 19,
+          "p50Ms": 398.85,
+          "p95Ms": 1060.97,
+          "p99Ms": 1060.97,
+          "minMs": 344.91,
+          "maxMs": 1060.97,
+          "avgMs": 444.31,
+          "rps": 0.97,
+          "successCount": 19,
+          "errorCount": 0,
+          "rateLimitedCount": 0
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 4,
+        "title": "Search & Hybrid RRF Concurrency Ladder",
+        "durationSec": 42.83,
+        "stats": {
+          "count": 200,
+          "p50Ms": 526.27,
+          "p95Ms": 4433.84,
+          "p99Ms": 5539.87,
+          "minMs": 328.33,
+          "maxMs": 5543.25,
+          "avgMs": 1012.21,
+          "rps": 4.67,
+          "successCount": 138,
+          "errorCount": 0,
+          "rateLimitedCount": 62
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 5,
+        "title": "Knowledge Graph Topology & Pathfinding",
+        "durationSec": 3.25,
+        "stats": {
+          "count": 5,
+          "p50Ms": 430.93,
+          "p95Ms": 545.82,
+          "p99Ms": 545.82,
+          "minMs": 370.65,
+          "maxMs": 545.82,
+          "avgMs": 452.62,
+          "rps": 1.54,
+          "successCount": 5,
+          "errorCount": 0,
+          "rateLimitedCount": 0
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 6,
+        "title": "Multi-User Collaboration & RBAC",
+        "durationSec": 5.52,
+        "stats": {
+          "count": 10,
+          "p50Ms": 399.84,
+          "p95Ms": 1441.8,
+          "p99Ms": 1441.8,
+          "minMs": 366.58,
+          "maxMs": 1441.8,
+          "avgMs": 504.4,
+          "rps": 1.81,
+          "successCount": 10,
+          "errorCount": 0,
+          "rateLimitedCount": 0
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 7,
+        "title": "MCP Engineering Prompts Hydration",
+        "durationSec": 3.8,
+        "stats": {
+          "count": 21,
+          "p50Ms": 596.62,
+          "p95Ms": 1137.92,
+          "p99Ms": 1241.48,
+          "minMs": 363.27,
+          "maxMs": 1241.48,
+          "avgMs": 685.76,
+          "rps": 5.52,
+          "successCount": 21,
+          "errorCount": 0,
+          "rateLimitedCount": 0
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 8,
+        "title": "High-Scale AI Agent Swarm & Rate-Limiting Stress",
+        "durationSec": 66.57,
+        "stats": {
+          "count": 225,
+          "p50Ms": 433.61,
+          "p95Ms": 1620.33,
+          "p99Ms": 2319.41,
+          "minMs": 325.86,
+          "maxMs": 2405.29,
+          "avgMs": 592.99,
+          "rps": 3.38,
+          "successCount": 96,
+          "errorCount": 0,
+          "rateLimitedCount": 129
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      }
+    ],
+    "system_overall": {
+      "cpu_avg": 0,
+      "cpu_max": 0,
+      "load_max": 0
+    },
+    "app_overall": {
+      "cpu_avg": 0,
+      "cpu_max": 0,
+      "mem_avg": 0,
+      "mem_max": 0,
+      "mem_min": 0
+    },
+    "db_overall": {
+      "cpu_avg": 0,
+      "cpu_max": 0,
+      "mem_avg": 0,
+      "mem_max": 0,
+      "mem_min": 0
+    }
+  },
+  "choromamcp": {
+    "title": "PostgreSQL 17 + ChromaDB 0.6.3",
+    "totalDurationSec": 209.0,
+    "phases": [
+      {
+        "phase": 1,
+        "title": "Administrative Vault Lifecycle & Scoping",
+        "durationSec": 4.74,
+        "stats": {
+          "count": 7,
+          "p50Ms": 378.52,
+          "p95Ms": 1579.87,
+          "p99Ms": 1579.87,
+          "minMs": 342.17,
+          "maxMs": 1579.87,
+          "avgMs": 676.37,
+          "rps": 1.48,
+          "successCount": 7,
+          "errorCount": 0,
+          "rateLimitedCount": 0
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "chroma_server": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 2,
+        "title": "High-Volume OKF v0.2 Note Lifecycle & Mutation",
+        "durationSec": 53.35,
+        "stats": {
+          "count": 312,
+          "p50Ms": 956.16,
+          "p95Ms": 2331.67,
+          "p99Ms": 3404.47,
+          "minMs": 368.34,
+          "maxMs": 3448.25,
+          "avgMs": 1156.64,
+          "rps": 5.85,
+          "successCount": 113,
+          "errorCount": 0,
+          "rateLimitedCount": 199
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "chroma_server": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 3,
+        "title": "Codebase Ingestion & AST Tree-sitter Mapping",
+        "durationSec": 23.18,
+        "stats": {
+          "count": 16,
+          "p50Ms": 984.8,
+          "p95Ms": 1939.39,
+          "p99Ms": 1939.39,
+          "minMs": 347.74,
+          "maxMs": 1939.39,
+          "avgMs": 947.48,
+          "rps": 0.69,
+          "successCount": 13,
+          "errorCount": 0,
+          "rateLimitedCount": 3
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "chroma_server": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 4,
+        "title": "Search & Hybrid RRF Concurrency Ladder",
+        "durationSec": 61.09,
+        "stats": {
+          "count": 200,
+          "p50Ms": 807.47,
+          "p95Ms": 4228.28,
+          "p99Ms": 4417.62,
+          "minMs": 344.05,
+          "maxMs": 4431.81,
+          "avgMs": 1188.53,
+          "rps": 3.27,
+          "successCount": 171,
+          "errorCount": 0,
+          "rateLimitedCount": 29
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "chroma_server": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 5,
+        "title": "Knowledge Graph Topology & Pathfinding",
+        "durationSec": 1.37,
+        "stats": {
+          "count": 4,
+          "p50Ms": 347.13,
+          "p95Ms": 348.97,
+          "p99Ms": 348.97,
+          "minMs": 336.49,
+          "maxMs": 348.97,
+          "avgMs": 342.85,
+          "rps": 2.92,
+          "successCount": 0,
+          "errorCount": 0,
+          "rateLimitedCount": 4
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "chroma_server": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 6,
+        "title": "Multi-User Collaboration & RBAC",
+        "durationSec": 1.7,
+        "stats": {
+          "count": 5,
+          "p50Ms": 336.22,
+          "p95Ms": 359.27,
+          "p99Ms": 359.27,
+          "minMs": 332.49,
+          "maxMs": 359.27,
+          "avgMs": 339.76,
+          "rps": 2.94,
+          "successCount": 0,
+          "errorCount": 0,
+          "rateLimitedCount": 5
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "chroma_server": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 7,
+        "title": "MCP Engineering Prompts Hydration",
+        "durationSec": 0.33,
+        "stats": {
+          "count": 1,
+          "p50Ms": 330.09,
+          "p95Ms": 330.09,
+          "p99Ms": 330.09,
+          "minMs": 330.09,
+          "maxMs": 330.09,
+          "avgMs": 330.09,
+          "rps": 3.03,
+          "successCount": 1,
+          "errorCount": 0,
+          "rateLimitedCount": 0
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "chroma_server": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      },
+      {
+        "phase": 8,
+        "title": "High-Scale AI Agent Swarm & Rate-Limiting Stress",
+        "durationSec": 60.52,
+        "stats": {
+          "count": 225,
+          "p50Ms": 383.77,
+          "p95Ms": 1295.81,
+          "p99Ms": 2183.25,
+          "minMs": 328.75,
+          "maxMs": 2206.41,
+          "avgMs": 500.01,
+          "rps": 3.72,
+          "successCount": 57,
+          "errorCount": 0,
+          "rateLimitedCount": 168
+        },
+        "system": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "load_max": 0
+        },
+        "app": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "db": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        },
+        "chroma_server": {
+          "cpu_avg": 0,
+          "cpu_max": 0,
+          "mem_avg": 0,
+          "mem_max": 0,
+          "mem_min": 0
+        }
+      }
+    ],
+    "system_overall": {
+      "cpu_avg": 0,
+      "cpu_max": 0,
+      "load_max": 0
+    },
+    "app_overall": {
+      "cpu_avg": 0,
+      "cpu_max": 0,
+      "mem_avg": 0,
+      "mem_max": 0,
+      "mem_min": 0
+    },
+    "db_overall": {
+      "cpu_avg": 0,
+      "cpu_max": 0,
+      "mem_avg": 0,
+      "mem_max": 0,
+      "mem_min": 0
+    },
+    "chroma_server_overall": {
+      "cpu_avg": 0,
+      "cpu_max": 0,
+      "mem_avg": 0,
+      "mem_max": 0,
+      "mem_min": 0
+    }
+  }
+}
