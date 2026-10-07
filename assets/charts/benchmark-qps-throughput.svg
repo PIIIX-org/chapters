@@ -1,0 +1,177 @@
+<svg width="100%" height="380" viewBox="0 0 900 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Query Throughput Scaling Comparison: pgvector vs ChromaDB under concurrency">
+  <defs>
+    <linearGradient id="cardBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0E1422"/>
+      <stop offset="100%" stop-color="#070A0F"/>
+    </linearGradient>
+    <linearGradient id="pgGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2EC47C"/>
+      <stop offset="100%" stop-color="#5B8DEF"/>
+    </linearGradient>
+    <linearGradient id="chromaGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+    <linearGradient id="qpsSheen" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <style>
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Geist Mono", monospace; }
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Geist", Helvetica, Arial, sans-serif; }
+      
+      /* Fiber optic data stream along the performance curve */
+      @keyframes flowCurve {
+        to { stroke-dashoffset: -36; }
+      }
+      /* Shimmer sweep across winning badges */
+      @keyframes winSheen {
+        0% { transform: translateX(-100px); }
+        40%, 100% { transform: translateX(120px); }
+      }
+      
+      .curve-stream {
+        stroke-dasharray: 8 4;
+        animation: flowCurve 1.5s linear infinite;
+      }
+      .sheen-badge {
+        animation: winSheen 4.5s infinite ease-in-out;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .curve-stream, .sheen-badge {
+          animation: none !important;
+        }
+      }
+    </style>
+  </defs>
+
+  <rect width="900" height="380" rx="4" fill="url(#cardBg)" stroke="#1C2433" stroke-width="1"/>
+
+  <!-- Chart Header -->
+  <g transform="translate(30, 25)">
+    <text x="0" y="16" class="sans" font-size="18" font-weight="700" fill="#E2E8F4">Vector Query Throughput Under Concurrency (QPS)</text>
+    <text x="0" y="36" class="mono" font-size="11.5" fill="#8B9BB4">
+      Contabo VPS <tspan fill="#5B8DEF">sohrab</tspan> (12 vCPUs AMD EPYC 7282, 48GB RAM) · Reciprocal Rank Fusion (BM25 + 384d Cosine)
+    </text>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(550, 28)">
+    <rect x="0" y="2" width="14" height="14" rx="2" fill="url(#pgGrad)"/>
+    <text x="20" y="14" class="mono" font-size="11" font-weight="600" fill="#E2E8F4">pgvector (In-Engine)</text>
+
+    <rect x="175" y="2" width="14" height="14" rx="2" fill="url(#chromaGrad)"/>
+    <text x="195" y="14" class="mono" font-size="11" font-weight="600" fill="#8B9BB4">ChromaDB (HTTP)</text>
+  </g>
+
+  <!-- Chart Canvas Area (Left 140 to 860, Y from 90 to 290) -->
+  <g transform="translate(40, 85)">
+    <!-- Y Axis Gridlines (0, 3, 6, 9, 12 QPS) -->
+    <line x1="80" y1="0" x2="820" y2="0" stroke="#1C2433" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="70" y="4" class="mono" font-size="10" fill="#8B9BB4" text-anchor="end">12 QPS</text>
+
+    <line x1="80" y1="50" x2="820" y2="50" stroke="#1C2433" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="70" y="54" class="mono" font-size="10" fill="#8B9BB4" text-anchor="end">9 QPS</text>
+
+    <line x1="80" y1="100" x2="820" y2="100" stroke="#1C2433" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="70" y="104" class="mono" font-size="10" fill="#8B9BB4" text-anchor="end">6 QPS</text>
+
+    <line x1="80" y1="150" x2="820" y2="150" stroke="#1C2433" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="70" y="154" class="mono" font-size="10" fill="#8B9BB4" text-anchor="end">3 QPS</text>
+
+    <line x1="80" y1="200" x2="820" y2="200" stroke="#1C2433" stroke-width="1.5"/>
+    <text x="70" y="204" class="mono" font-size="10" fill="#8B9BB4" text-anchor="end">0 QPS</text>
+
+    <!-- Concurrency Group 1: c = 1 worker -->
+    <g transform="translate(130, 0)">
+      <!-- 100% full geometry always visible -->
+      <rect x="0" y="174.5" width="38" height="25.5" rx="2" fill="url(#pgGrad)"/>
+      <text x="19" y="166" class="mono" font-size="11" font-weight="700" fill="#2EC47C" text-anchor="middle">1.53</text>
+
+      <rect x="44" y="177.7" width="38" height="22.3" rx="2" fill="url(#chromaGrad)"/>
+      <text x="63" y="169" class="mono" font-size="11" font-weight="600" fill="#F59E0B" text-anchor="middle">1.34</text>
+
+      <text x="41" y="222" class="mono" font-size="11" font-weight="600" fill="#E2E8F4" text-anchor="middle">c = 1</text>
+      <text x="41" y="236" class="mono" font-size="9.5" fill="#8B9BB4" text-anchor="middle">worker</text>
+    </g>
+
+    <!-- Concurrency Group 2: c = 5 workers -->
+    <g transform="translate(320, 0)">
+      <rect x="0" y="117.2" width="38" height="82.8" rx="2" fill="url(#pgGrad)"/>
+      <text x="19" y="108" class="mono" font-size="11" font-weight="700" fill="#2EC47C" text-anchor="middle">4.97</text>
+
+      <rect x="44" y="112.7" width="38" height="87.3" rx="2" fill="url(#chromaGrad)"/>
+      <text x="63" y="104" class="mono" font-size="11" font-weight="600" fill="#F59E0B" text-anchor="middle">5.24</text>
+
+      <text x="41" y="222" class="mono" font-size="11" font-weight="600" fill="#E2E8F4" text-anchor="middle">c = 5</text>
+      <text x="41" y="236" class="mono" font-size="9.5" fill="#8B9BB4" text-anchor="middle">workers</text>
+    </g>
+
+    <!-- Concurrency Group 3: c = 10 workers -->
+    <g transform="translate(510, 0)">
+      <rect x="0" y="53.4" width="38" height="146.6" rx="2" fill="url(#pgGrad)"/>
+      <text x="19" y="44" class="mono" font-size="12" font-weight="700" fill="#2EC47C" text-anchor="middle">8.80</text>
+
+      <rect x="44" y="88.7" width="38" height="111.3" rx="2" fill="url(#chromaGrad)"/>
+      <text x="63" y="80" class="mono" font-size="11" font-weight="600" fill="#F59E0B" text-anchor="middle">6.68</text>
+
+      <!-- Advantage Callout with Shimmer Sheen -->
+      <g>
+        <clipPath id="win10Clip">
+          <rect x="-5" y="12" width="92" height="18" rx="3"/>
+        </clipPath>
+        <rect x="-5" y="12" width="92" height="18" rx="3" fill="#161D2B" stroke="#2EC47C" stroke-width="1"/>
+        <g clip-path="url(#win10Clip)">
+          <rect x="-5" y="12" width="40" height="18" fill="url(#qpsSheen)" class="sheen-badge"/>
+        </g>
+        <text x="41" y="24" class="mono" font-size="9.5" font-weight="700" fill="#2EC47C" text-anchor="middle">+31.7% WIN</text>
+      </g>
+
+      <text x="41" y="222" class="mono" font-size="11" font-weight="600" fill="#E2E8F4" text-anchor="middle">c = 10</text>
+      <text x="41" y="236" class="mono" font-size="9.5" fill="#8B9BB4" text-anchor="middle">workers</text>
+    </g>
+
+    <!-- Concurrency Group 4: c = 25 workers -->
+    <g transform="translate(700, 0)">
+      <rect x="0" y="18.9" width="38" height="181.1" rx="2" fill="url(#pgGrad)"/>
+      <text x="19" y="10" class="mono" font-size="12" font-weight="700" fill="#2EC47C" text-anchor="middle">10.87</text>
+
+      <rect x="44" y="52.9" width="38" height="147.1" rx="2" fill="url(#chromaGrad)"/>
+      <text x="63" y="44" class="mono" font-size="11" font-weight="600" fill="#F59E0B" text-anchor="middle">8.83</text>
+
+      <!-- Advantage Callout with Shimmer Sheen -->
+      <g>
+        <clipPath id="win25Clip">
+          <rect x="-5" y="-18" width="92" height="18" rx="3"/>
+        </clipPath>
+        <rect x="-5" y="-18" width="92" height="18" rx="3" fill="#161D2B" stroke="#2EC47C" stroke-width="1"/>
+        <g clip-path="url(#win25Clip)">
+          <rect x="-5" y="-18" width="40" height="18" fill="url(#qpsSheen)" class="sheen-badge"/>
+        </g>
+        <text x="41" y="-6" class="mono" font-size="9.5" font-weight="700" fill="#2EC47C" text-anchor="middle">+23.1% WIN</text>
+      </g>
+
+      <text x="41" y="222" class="mono" font-size="11" font-weight="600" fill="#E2E8F4" text-anchor="middle">c = 25</text>
+      <text x="41" y="236" class="mono" font-size="9.5" fill="#8B9BB4" text-anchor="middle">workers</text>
+    </g>
+
+    <!-- Base Telemetry Line Curve (Always 100% visible) -->
+    <path d="M 149 174.5 Q 339 117.2, 529 53.4 T 719 18.9" fill="none" stroke="#164E36" stroke-width="2.5" stroke-linecap="round"/>
+    <!-- Animated Fiber-Optic Data Stream along Curve -->
+    <path d="M 149 174.5 Q 339 117.2, 529 53.4 T 719 18.9" fill="none" stroke="#2EC47C" stroke-width="2.5" stroke-linecap="round" class="curve-stream"/>
+    
+    <!-- Line Marker Dots - Fixed Geometry, Clean Solid Status -->
+    <circle cx="149" cy="174.5" r="3.5" fill="#070A0F" stroke="#2EC47C" stroke-width="2"/>
+    <circle cx="339" cy="117.2" r="3.5" fill="#070A0F" stroke="#2EC47C" stroke-width="2"/>
+    <circle cx="529" cy="53.4" r="3.5" fill="#070A0F" stroke="#2EC47C" stroke-width="2"/>
+    <circle cx="719" cy="18.9" r="4" fill="#2EC47C" stroke="#E2E8F4" stroke-width="1.5"/>
+  </g>
+
+  <!-- Architectural Callout Bottom Strip -->
+  <rect x="30" y="325" width="840" height="38" rx="3" fill="#0A0E17" stroke="#1C2433" stroke-width="1"/>
+  <circle cx="48" cy="344" r="3.5" fill="#2EC47C"/>
+  <text x="62" y="348" class="mono" font-size="9" fill="#8B9BB4">
+    <tspan fill="#E2E8F4" font-weight="700">Root Cause Discovery:</tspan> pgvector executes in shared memory with zero IPC; ChromaDB bottlenecks on Docker bridge HTTP JSON serialization.
+  </text>
+</svg>
