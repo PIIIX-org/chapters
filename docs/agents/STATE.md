@@ -2,8 +2,8 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Status**: Mobile UI Adaptation Phase 2 (Note View, single-row formatting scroll, mobile bottom sheet, backdrop dismiss); Phase 3 (#365); Phase 1 (#364).
-  - Mobile UI Adaptation Phase 2 (2026-10-08): NoteRichToolbar horizontal scroll + touch targets, hidden desktop width pickers on mobile, NoteView mobile padding & pb-24 keyboard clearance, mobile backdrop drawer dismiss, iOS auto-zoom prevention. 919 client tests green (137 suites), zero bundle regressions (< 300KB).
+- **Status**: Mobile UI Adaptation Phase 4 (Repos & Code Browser); Phase 2 (#366); Phase 3 (#365); Phase 1 (#364).
+  - Mobile UI Adaptation Phase 4 (2026-10-09): ReposPage symmetric padding & overflow table wrapper, RepoCard/FileTree/Dialog touch target expansions, RepositoryPage shell clearance, CodeViewer file bar responsiveness & bottom clearance, iOS zoom prevention. 920 client tests green (137 suites), zero bundle regressions (< 300KB).
   - Docked Panels & Ribbon Rail (#362, 2026-10-08): Transitioned from floating sidebars to sticky in-flow flex columns and contiguous rail.
   - Chunk Load & Graph Framing Fixes (2026-10-01): Resolved #327 (stale Vite asset 404 guard under `/assets/`, index.html no-cache header, vite:preloadError auto-reload, resilient lazyRoute) and #328 (unobstructed viewport centering, simulation settle auto-fit, resize redraw, panel close button). PR #329 merged to `dev`, PR #330 promoted to `prod`.
   - Resource & Performance Optimizations (2026-10-01): 48/48 optimizations implemented across 4 subsystems (DB/pgvector, Graph/Collab, Workers/AST, Canvas/UI). HNSW AST index (migration 0018), tuned hnsw.ef_search = 100, connection pool config + graceful drain, Tree-sitter WASM leak fix, O(1) queue dequeue, Canvas 2D edge partition & viewport culling, lazy Mermaid bundle (<300KB). PR #325 merged into `dev`, PR #326 promoted to `prod`.

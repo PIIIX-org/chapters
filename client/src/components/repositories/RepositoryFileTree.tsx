@@ -106,7 +106,7 @@ function TreeRow({
           title={node.path}
           style={indent}
           className={cn(
-            'group relative flex h-6 w-full items-center rounded-[var(--radius-sm,2px)] pr-2 font-mono text-xs outline-none transition-colors duration-100 select-none focus-visible:ring-2 focus-visible:ring-ring/40',
+            'group relative flex min-h-[32px] sm:min-h-[24px] h-auto sm:h-6 py-1 sm:py-0 w-full items-center rounded-[var(--radius-sm,2px)] pr-2 font-mono text-xs outline-none transition-colors duration-100 select-none touch-manipulation focus-visible:ring-2 focus-visible:ring-ring/40',
             active
               ? 'bg-muted font-medium text-foreground before:absolute before:bottom-0.5 before:left-0 before:top-0.5 before:w-0.5 before:rounded-[var(--radius-sm,2px)] before:bg-primary'
               : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
@@ -145,12 +145,12 @@ function TreeRow({
             onSetOpen(node.path, false)
           }
         }}
-        className="group relative flex h-6 w-full items-center gap-1 rounded-[var(--radius-sm,2px)] pr-2 text-left font-mono text-xs text-muted-foreground outline-none transition-colors duration-100 select-none hover:bg-muted/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="group relative flex min-h-[32px] sm:min-h-[24px] h-auto sm:h-6 py-1 sm:py-0 w-full items-center gap-1 rounded-[var(--radius-sm,2px)] pr-2 text-left font-mono text-xs text-muted-foreground outline-none transition-colors duration-100 select-none touch-manipulation hover:bg-muted/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
       >
         <ChevronRight
           aria-hidden="true"
           className={cn(
-            'size-3 shrink-0 text-faint transition-transform duration-100',
+            'size-3.5 sm:size-3 shrink-0 text-faint transition-transform duration-100',
             open && 'rotate-90',
           )}
         />

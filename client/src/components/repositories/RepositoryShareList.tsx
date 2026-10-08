@@ -16,7 +16,7 @@ import type { RepositoryShare } from '../../api/repositories.js'
 // Native <select>, same as the vault sharing panel — no shadcn select is
 // installed and one field does not earn one.
 const selectClassName =
-  'h-8 rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50'
+  'h-9 sm:h-8 rounded-lg border border-input bg-transparent px-2 text-base sm:text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 touch-manipulation'
 
 function AddPersonForm({ repositoryId }: { repositoryId: string }) {
   const [email, setEmail] = useState('')
@@ -53,7 +53,7 @@ function AddPersonForm({ repositoryId }: { repositoryId: string }) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-      <div className="flex items-end gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-end gap-2">
         <div className="flex flex-1 flex-col gap-1">
           <Label htmlFor="repository-share-email">Share with a person</Label>
           <Input
@@ -66,9 +66,14 @@ function AddPersonForm({ repositoryId }: { repositoryId: string }) {
               setError(null)
             }}
             placeholder="ada@example.com"
+            className="text-base sm:text-sm"
           />
         </div>
-        <Button type="submit" disabled={pending}>
+        <Button
+          type="submit"
+          disabled={pending}
+          className="w-full sm:w-auto min-h-[38px] sm:min-h-0 touch-manipulation"
+        >
           Add
         </Button>
       </div>
@@ -98,7 +103,7 @@ function AddTeamForm({ repositoryId }: { repositoryId: string }) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-      <div className="flex items-end gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-end gap-2">
         <div className="flex flex-1 flex-col gap-1">
           <Label htmlFor="repository-share-team">Share with a team</Label>
           <select
@@ -115,7 +120,11 @@ function AddTeamForm({ repositoryId }: { repositoryId: string }) {
             ))}
           </select>
         </div>
-        <Button type="submit" disabled={createShare.isPending || !teamId}>
+        <Button
+          type="submit"
+          disabled={createShare.isPending || !teamId}
+          className="w-full sm:w-auto min-h-[38px] sm:min-h-0 touch-manipulation"
+        >
           Add
         </Button>
       </div>
