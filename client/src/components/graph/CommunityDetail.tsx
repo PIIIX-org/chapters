@@ -66,7 +66,13 @@ export function CommunityDetail({
         titleAs="h3"
         actions={
           expandedCommunity !== null && (
-            <Button type="button" variant="outline" size="xs" onClick={onCollapse} className="rounded-[var(--radius-sm,2px)]">
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={onCollapse}
+              className="min-h-[28px] sm:min-h-0 rounded-[var(--radius-sm,2px)] touch-manipulation"
+            >
               Back to all communities
             </Button>
           )
@@ -123,7 +129,7 @@ export function CommunityDetail({
                             <Link
                               to={target}
                               title={n.path}
-                              className="group flex items-center gap-1.5 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                              className="group flex min-h-[32px] sm:min-h-[24px] items-center gap-1.5 rounded px-2 py-1 sm:px-1.5 sm:py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors touch-manipulation"
                             >
                               <span
                                 className={cn(

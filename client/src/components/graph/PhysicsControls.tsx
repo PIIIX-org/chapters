@@ -101,7 +101,7 @@ function Slider(spec: SliderSpec) {
         value={spec.value}
         onChange={(e) => spec.onChange(Number(e.currentTarget.value))}
         onKeyDown={handleKeyDown}
-        className="h-1.5 w-full cursor-pointer accent-muted-foreground"
+        className="h-5 sm:h-1.5 w-full cursor-pointer accent-muted-foreground touch-manipulation"
         style={{ accentColor: 'var(--muted-foreground)' }}
       />
     </div>

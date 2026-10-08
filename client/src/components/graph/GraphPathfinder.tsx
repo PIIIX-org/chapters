@@ -76,7 +76,7 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
             onChange={(e) => setFilterText(e.target.value)}
             placeholder="Search concepts by path…"
             aria-label="Filter concepts"
-            className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            className="w-full rounded border border-border bg-background px-2 py-1 text-base sm:text-xs min-h-[36px] sm:min-h-0 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           />
         </div>
 
@@ -88,7 +88,7 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
             id={sourceSelectId}
             value={sourceId}
             onChange={(e) => setSourceId(e.target.value)}
-            className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            className="w-full rounded border border-border bg-background px-2 py-1.5 text-base sm:text-xs min-h-[38px] sm:min-h-0 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           >
             <option value="">Select source note or file…</option>
             {sourceOptions.map((n) => (
@@ -104,7 +104,7 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
             size="xs"
             variant="ghost"
             type="button"
-            className="h-6 gap-1 text-[11px] text-muted-foreground"
+            className="min-h-[32px] sm:h-6 gap-1 px-2.5 text-xs sm:text-[11px] text-muted-foreground touch-manipulation"
             onClick={handleSwap}
             disabled={!sourceId && !targetId}
             aria-label="Swap start and target concepts"
@@ -122,7 +122,7 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
             id={targetSelectId}
             value={targetId}
             onChange={(e) => setTargetId(e.target.value)}
-            className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            className="w-full rounded border border-border bg-background px-2 py-1.5 text-base sm:text-xs min-h-[38px] sm:min-h-0 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           >
             <option value="">Select target note or file…</option>
             {targetOptions.map((n) => (
@@ -137,7 +137,7 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
           <Button
             size="sm"
             variant="secondary"
-            className="w-full gap-1.5 rounded"
+            className="w-full min-h-[38px] sm:min-h-0 gap-1.5 rounded touch-manipulation"
             onClick={handleFindPath}
             disabled={!sourceId || !targetId || sourceId === targetId}
           >
@@ -145,7 +145,7 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
             <span>Find shortest path</span>
           </Button>
           {hasSearched && (
-            <Button size="sm" variant="ghost" onClick={handleClear} className="rounded">
+            <Button size="sm" variant="ghost" onClick={handleClear} className="min-h-[38px] sm:min-h-0 rounded touch-manipulation">
               Reset
             </Button>
           )}

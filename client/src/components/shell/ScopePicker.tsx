@@ -86,14 +86,14 @@ export function ScopePicker() {
         className="flex h-9 items-center gap-2 rounded-[var(--radius-md,4px)] border border-border bg-card/95 backdrop-blur-xs px-3 text-sm font-medium text-foreground hover:bg-muted hover:border-input shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40 active:scale-95 transition-all cursor-pointer disabled:opacity-100"
       >
         <Waypoints className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
-        <span className="max-w-[160px] truncate">{label}</span>
+        <span className="max-w-[100px] sm:max-w-[160px] truncate">{label}</span>
         <ChevronDown
           className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-150', open && 'rotate-180')}
           aria-hidden="true"
         />
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1.5 min-w-[16rem] max-w-sm rounded-[var(--radius-lg,8px)] border border-border bg-popover text-popover-foreground py-1 shadow-2xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-100">
+        <div className="absolute left-0 top-full z-50 mt-1.5 min-w-[16rem] max-w-[calc(100vw-1.5rem)] sm:max-w-sm rounded-[var(--radius-lg,8px)] border border-border bg-popover text-popover-foreground py-1 shadow-2xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-100">
           <ul id="scope-list" role="listbox" aria-label="Scope" className="max-h-64 overflow-y-auto overscroll-contain py-0.5 divide-y divide-border/20">
             <li role="presentation">
               <button
@@ -144,7 +144,7 @@ export function ScopePicker() {
               <button
                 type="button"
                 onClick={() => setSettingsOpen(true)}
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-0.5 rounded border border-border/50 bg-card hover:bg-muted active:scale-95 transition-all cursor-pointer shadow-xs"
+                className="inline-flex min-h-[28px] sm:min-h-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-0.5 rounded border border-border/50 bg-card hover:bg-muted active:scale-95 transition-all cursor-pointer shadow-xs touch-manipulation"
               >
                 <Settings className="size-3" aria-hidden="true" />
                 <span>Vault settings</span>
@@ -160,7 +160,7 @@ export function ScopePicker() {
               <button
                 type="button"
                 onClick={() => setCreating(true)}
-                className="inline-flex items-center gap-2 w-full rounded-md px-2.5 py-1.5 text-left text-xs font-medium text-foreground hover:bg-muted/80 active:scale-95 transition-all cursor-pointer border border-dashed border-border/70 hover:border-border"
+                className="inline-flex min-h-[36px] sm:min-h-0 items-center gap-2 w-full rounded-md px-2.5 py-1.5 text-left text-xs font-medium text-foreground hover:bg-muted/80 active:scale-95 transition-all cursor-pointer border border-dashed border-border/70 hover:border-border touch-manipulation"
               >
                 <Plus className="size-3.5 text-primary" aria-hidden="true" />
                 <span>+ New vault</span>
