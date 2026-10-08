@@ -11,6 +11,7 @@ import type { NoteSummary } from '../../api/notes'
 import { cn } from '../../lib/utils'
 
 import { SLUG, SlugRequirements } from './SlugRequirements.js'
+import { toast } from '../../lib/toast.js'
 
 interface NoteActionsProps {
   vaultId: string
@@ -53,9 +54,14 @@ export function NoteActions({ vaultId, note, compact = false }: NoteActionsProps
         onSuccess: (renamed) => {
           setMode('idle')
           setSubmitted(false)
+          toast.success('Note renamed', `${note.name} renamed to ${renamed.name || name}.`)
           if (isOpen) navigate(`/vaults/${vaultId}/notes/${renamed.path}`)
         },
-        onError: (err) => setError(err.message || 'Could not rename the note.'),
+        onError: (err) => {
+          const msg = err.message || 'Could not rename the note.'
+          toast.error('Failed to rename note', msg)
+          setError(msg)
+        },
       },
     )
   }
@@ -65,9 +71,14 @@ export function NoteActions({ vaultId, note, compact = false }: NoteActionsProps
     deleteNote.mutate(note.path, {
       onSuccess: () => {
         setMode('idle')
+        toast.success('Note deleted', `${note.name} moved to trash.`)
         if (isOpen) navigate(`/vaults/${vaultId}`)
       },
-      onError: (err) => setError(err.message || 'Could not delete the note.'),
+      onError: (err) => {
+        const msg = err.message || 'Could not delete the note.'
+        toast.error('Failed to delete note', msg)
+        setError(msg)
+      },
     })
   }
 

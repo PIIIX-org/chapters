@@ -87,6 +87,9 @@ export function ShellProvider({ children }: { children: ReactNode }) {
 
   const setPanelOpen = useCallback((kind: PanelKind, open: boolean) => {
     writeOpen(kind, open)
+    if (open && kind === 'context') {
+      setSidebarExpandedState(false)
+    }
     setPanels((prev) => {
       if (prev[kind].open === open) return prev
       if (isMobile() && open) {
@@ -106,6 +109,9 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     setPanels((prev) => {
       const open = !prev[kind].open
       writeOpen(kind, open)
+      if (open && kind === 'context') {
+        setSidebarExpandedState(false)
+      }
       if (isMobile() && open) {
         setSidebarExpandedState(false)
         const otherKind: PanelKind = kind === 'context' ? 'inspector' : 'context'

@@ -7,6 +7,7 @@ import { Eyebrow } from '../ui/eyebrow.js'
 import { FormError } from '../FormError.js'
 import { useCreateShare, useLookupUser, useRevokeShare, useShares, useTeams } from '../../hooks/useShares.js'
 import type { Share, SharePermission } from '../../api/shares.js'
+import { toast } from '../../lib/toast.js'
 
 interface SharingPanelProps {
   vaultId: string
@@ -57,17 +58,25 @@ function AddByEmailForm({ vaultId }: { vaultId: string }) {
         createShare.mutate(
           { granteeType: 'user', granteeId: user.id, permission },
           {
-            onSuccess: () => setEmail(''),
-            onError: (err) => setError(err.message || 'Could not share this vault.'),
+            onSuccess: () => {
+              setEmail('')
+              toast.success('Access granted', `Shared with ${trimmed}.`)
+            },
+            onError: (err) => {
+              const msg = err.message || 'Could not share this vault.'
+              toast.error('Failed to share vault', msg)
+              setError(msg)
+            },
           },
         )
       },
       onError: (err) => {
-        setError(
+        const msg =
           err.status === 404
             ? 'No active account with that email. They need an account on this instance before you can share with them.'
-            : err.message || 'Could not look up that email.',
-        )
+            : err.message || 'Could not look up that email.'
+        toast.error('User not found', msg)
+        setError(msg)
       },
     })
   }
@@ -114,8 +123,15 @@ function AddTeamForm({ vaultId }: { vaultId: string }) {
     createShare.mutate(
       { granteeType: 'team', granteeId: teamId, permission },
       {
-        onSuccess: () => setTeamId(''),
-        onError: (err) => setError(err.message || 'Could not share this vault with that team.'),
+        onSuccess: () => {
+          setTeamId('')
+          toast.success('Access granted', 'Shared with team.')
+        },
+        onError: (err) => {
+          const msg = err.message || 'Could not share this vault with that team.'
+          toast.error('Failed to share with team', msg)
+          setError(msg)
+        },
       },
     )
   }
@@ -172,8 +188,15 @@ function ShareRow({
   function handleRevoke() {
     setError(null)
     revokeShare.mutate(share.id, {
-      onSuccess: () => setConfirming(false),
-      onError: (err) => setError(err.message || 'Could not revoke this share.'),
+      onSuccess: () => {
+        setConfirming(false)
+        toast.info('Access revoked', `Access revoked for ${granteeDisplay}.`)
+      },
+      onError: (err) => {
+        const msg = err.message || 'Could not revoke this share.'
+        toast.error('Failed to revoke access', msg)
+        setError(msg)
+      },
     })
   }
 

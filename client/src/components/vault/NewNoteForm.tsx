@@ -9,6 +9,7 @@ import type { CreateNoteResult } from '../../api/notes'
 import { cn } from '../../lib/utils'
 
 import { SLUG, SlugRequirements } from './SlugRequirements.js'
+import { toast } from '../../lib/toast.js'
 
 interface NewNoteFormProps {
   vaultId: string
@@ -69,8 +70,15 @@ export function NewNoteForm({ vaultId, existingTypes, onCreated }: NewNoteFormPr
     createNote.mutate(
       { type, name },
       {
-        onSuccess: (note) => onCreated(note),
-        onError: (err) => setServerError(err.message || 'Could not create the note.'),
+        onSuccess: (note) => {
+          toast.success('Note created', `${note.name || name} created successfully.`)
+          onCreated(note)
+        },
+        onError: (err) => {
+          const msg = err.message || 'Could not create the note.'
+          toast.error('Failed to create note', msg)
+          setServerError(msg)
+        },
       },
     )
   }
