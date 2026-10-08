@@ -63,7 +63,7 @@ export function VaultCard({
             type="button"
             onClick={() => onOrganizeFolder(vault)}
             title={folder ? `Folder: ${folder}` : 'Assign to folder'}
-            className={`flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 sm:py-0.5 min-h-[28px] sm:min-h-0 rounded border transition-colors touch-manipulation ${
+            className={`flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 sm:py-0.5 min-h-[32px] sm:min-h-0 rounded border transition-colors touch-manipulation cursor-pointer ${
               fColorDef
                 ? fColorDef.badge
                 : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
@@ -75,19 +75,19 @@ export function VaultCard({
               style={fColorDef?.style?.folderIcon}
               aria-hidden="true"
             />
-            <span className="truncate max-w-[140px] sm:max-w-[120px]">
+            <span className="truncate max-w-[130px] sm:max-w-[140px]">
               {folder || 'Add folder'}
             </span>
           </button>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1 sm:gap-1.5">
             {onToggleFavorite && (
               <button
                 type="button"
                 onClick={() => onToggleFavorite(vault.id)}
                 title={isFavorite ? 'Unfavorite' : 'Favorite'}
                 aria-label={isFavorite ? `Unfavorite ${vault.name}` : `Favorite ${vault.name}`}
-                className={`p-1.5 sm:p-1 rounded transition-colors touch-manipulation ${
+                className={`p-2 sm:p-1 rounded-md transition-colors touch-manipulation cursor-pointer ${
                   isFavorite
                     ? 'text-amber-500 hover:text-amber-600'
                     : 'text-muted-foreground/40 hover:text-amber-500'
@@ -130,13 +130,13 @@ export function VaultCard({
         {/* Additional metadata or stats can slot here */}
       </CardContent>
 
-      <CardFooter className="flex items-center justify-between border-t border-border bg-muted/20 px-3.5 sm:px-4 py-2 sm:py-2.5 min-h-[42px]">
+      <CardFooter className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap border-t border-border bg-muted/20 px-3.5 sm:px-4 py-2 sm:py-2.5 min-h-[44px] sm:min-h-[42px]">
         {vault.access === 'owner' ? (
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
             aria-label={`Settings for ${vault.name}`}
-            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground font-medium px-2.5 py-1 rounded-md border border-border/70 bg-card hover:bg-muted/90 hover:border-border active:scale-95 transition-all duration-100 cursor-pointer shadow-xs"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground font-medium px-2.5 py-1.5 sm:py-1 min-h-[34px] sm:min-h-0 rounded-md border border-border/70 bg-card hover:bg-muted/90 hover:border-border active:scale-95 transition-all duration-100 cursor-pointer shadow-xs touch-manipulation"
           >
             <Settings className="size-3.5 text-muted-foreground shrink-0" aria-hidden="true" />
             <span>Vault settings</span>
@@ -144,7 +144,7 @@ export function VaultCard({
         ) : (
           <Link
             to={`/vaults/${vault.id}`}
-            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground font-medium px-2.5 py-1 rounded-md border border-border/70 bg-card hover:bg-muted/90 hover:border-border active:scale-95 transition-all duration-100 cursor-pointer shadow-xs"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground font-medium px-2.5 py-1.5 sm:py-1 min-h-[34px] sm:min-h-0 rounded-md border border-border/70 bg-card hover:bg-muted/90 hover:border-border active:scale-95 transition-all duration-100 cursor-pointer shadow-xs touch-manipulation"
           >
             <span>Open vault &rarr;</span>
           </Link>

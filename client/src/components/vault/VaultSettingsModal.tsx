@@ -79,7 +79,7 @@ export function VaultSettingsModal({ vault, open, onOpenChange }: VaultSettingsM
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="w-[calc(100vw-1.5rem)] sm:max-w-lg max-h-[88vh] sm:max-h-[90vh] overflow-y-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle>Vault settings — {vault.name}</DialogTitle>
         </DialogHeader>
