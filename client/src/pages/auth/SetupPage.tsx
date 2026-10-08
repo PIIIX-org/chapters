@@ -56,17 +56,38 @@ export function SetupPage() {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="setup-token">Setup token</Label>
-            <Input id="setup-token" value={token} onChange={(e) => setToken(e.target.value)} required className="rounded-[var(--radius-sm,2px)] font-mono" />
+            <Input
+              id="setup-token"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              required
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className="rounded-[var(--radius-sm,2px)] font-mono"
+            />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="setup-email">Email</Label>
-            <Input id="setup-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="rounded-[var(--radius-sm,2px)]" />
+            <Input
+              id="setup-email"
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="none"
+              autoCorrect="off"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className="rounded-[var(--radius-sm,2px)]"
+            />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="setup-password">Password</Label>
             <Input
               id="setup-password"
               type="password"
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               minLength={8}
@@ -75,7 +96,7 @@ export function SetupPage() {
             />
           </div>
           <FormError message={error} />
-          <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
+          <Button type="submit" disabled={submitting} className="w-full min-h-[40px] sm:min-h-9 rounded-[var(--radius-sm,2px)] touch-manipulation">
             Create admin account
           </Button>
         </form>

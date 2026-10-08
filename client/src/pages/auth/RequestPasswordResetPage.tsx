@@ -38,17 +38,21 @@ export function RequestPasswordResetPage() {
             <Input
               id="reset-request-email"
               type="email"
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="none"
+              autoCorrect="off"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
               className="rounded-[var(--radius-sm,2px)]"
             />
           </div>
-          <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
+          <Button type="submit" disabled={submitting} className="w-full min-h-[40px] sm:min-h-9 rounded-[var(--radius-sm,2px)] touch-manipulation">
             Send reset link
           </Button>
-          <p className="text-center text-sm text-muted-foreground">
-            <Link to="/login" className="text-foreground underline">
+          <p className="text-center text-sm text-muted-foreground py-0.5">
+            <Link to="/login" className="text-foreground underline underline-offset-4 py-1 touch-manipulation hover:text-primary transition-colors">
               Back to sign in
             </Link>
           </p>

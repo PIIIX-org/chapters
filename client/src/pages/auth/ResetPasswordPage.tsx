@@ -38,6 +38,7 @@ export function ResetPasswordPage() {
           <Input
             id="reset-password"
             type="password"
+            autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             minLength={8}
@@ -46,7 +47,7 @@ export function ResetPasswordPage() {
           />
         </div>
         <FormError message={error} />
-        <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
+        <Button type="submit" disabled={submitting} className="w-full min-h-[40px] sm:min-h-9 rounded-[var(--radius-sm,2px)] touch-manipulation">
           Reset password
         </Button>
       </form>
