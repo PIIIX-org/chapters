@@ -54,7 +54,7 @@ function ToolbarButton({ label, icon, onClick, active, disabled }: ToolbarButton
       aria-label={label}
       title={label}
       className={cn(
-        'inline-flex size-7 items-center justify-center rounded-[var(--radius-md,4px)] text-muted-foreground transition-all duration-100',
+        'inline-flex size-8 sm:size-7 items-center justify-center rounded-[var(--radius-md,4px)] text-muted-foreground transition-all duration-100 shrink-0 touch-manipulation',
         'hover:bg-muted hover:text-foreground hover:scale-105',
         'active:scale-95 active:bg-muted/80',
         'focus-visible:ring-2 focus-visible:ring-ring/40 outline-none',
@@ -89,9 +89,9 @@ export function NoteRichToolbar({
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-1 border-b border-border bg-card/60 px-3 py-1 text-xs backdrop-blur-xs select-none">
+    <div className="flex items-center justify-between gap-1 border-b border-border bg-card/60 px-2 sm:px-3 py-1 text-xs backdrop-blur-xs select-none min-w-0">
       {/* Formatting Tools */}
-      <div className="flex flex-wrap items-center gap-0.5">
+      <div className="flex items-center gap-0.5 overflow-x-auto no-scrollbar scroll-smooth flex-nowrap shrink min-w-0 py-0.5">
         {/* Undo / Redo */}
         <ToolbarButton
           label="Undo"
@@ -271,7 +271,7 @@ export function NoteRichToolbar({
       </div>
 
       {/* Action & Layout Controls */}
-      <div className="flex items-center gap-2.5 shrink-0 ml-auto pl-2">
+      <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0 ml-auto pl-1 sm:pl-2">
         {/* Text Direction Controls (LTR / RTL) */}
         {onDirectionChange && (
           <div className="flex items-center gap-1">
@@ -290,7 +290,7 @@ export function NoteRichToolbar({
                 aria-pressed={direction === 'ltr'}
                 title="Left-to-Right (LTR)"
                 className={cn(
-                  'flex h-6 items-center px-1.5 gap-1 rounded-[var(--radius-sm,2px)] text-[11px] font-mono transition-colors',
+                  'flex h-6 items-center px-1.5 gap-1 rounded-[var(--radius-sm,2px)] text-[11px] font-mono transition-colors touch-manipulation',
                   direction === 'ltr'
                     ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
                     : 'text-muted-foreground hover:text-foreground',
@@ -306,7 +306,7 @@ export function NoteRichToolbar({
                 aria-pressed={direction === 'rtl'}
                 title="Right-to-Left (RTL)"
                 className={cn(
-                  'flex h-6 items-center px-1.5 gap-1 rounded-[var(--radius-sm,2px)] text-[11px] font-mono transition-colors',
+                  'flex h-6 items-center px-1.5 gap-1 rounded-[var(--radius-sm,2px)] text-[11px] font-mono transition-colors touch-manipulation',
                   direction === 'rtl'
                     ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
                     : 'text-muted-foreground hover:text-foreground',
@@ -320,8 +320,8 @@ export function NoteRichToolbar({
         )}
 
         {/* Note Area Adjustable Width Controls */}
-        <div className="flex items-center gap-1">
-          <span className="text-[10px] text-muted-foreground uppercase tracking-wider mr-1 hidden sm:inline">
+        <div className="hidden sm:flex items-center gap-1">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-wider mr-1 hidden md:inline">
             Width:
           </span>
           <div className="flex items-center rounded-[var(--radius-md,4px)] border border-border bg-background p-0.5" role="group" aria-label="Note width">
@@ -448,11 +448,11 @@ export function NoteFloatingSelectionToolbar({
       style={{
         position: 'fixed',
         top: `${Math.max(10, coords.top)}px`,
-        left: `${coords.left}px`,
+        left: `${Math.max(16, Math.min(typeof window !== 'undefined' ? window.innerWidth - 16 : 800, coords.left))}px`,
         transform: 'translateX(-50%)',
         zIndex: 50,
       }}
-      className="flex items-center gap-0.5 rounded-[var(--radius-md,4px)] border border-border bg-popover/95 p-1 text-popover-foreground shadow-floating backdrop-blur-md animate-in fade-in zoom-in-95 duration-100"
+      className="flex items-center gap-0.5 rounded-[var(--radius-md,4px)] border border-border bg-popover/95 p-1 text-popover-foreground shadow-floating backdrop-blur-md animate-in fade-in zoom-in-95 duration-100 max-w-[calc(100vw-1.5rem)] overflow-x-auto no-scrollbar"
       onMouseDown={(e) => {
         // Prevent losing selection on click
         e.preventDefault()
