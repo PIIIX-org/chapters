@@ -2,8 +2,8 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Status**: Mobile UI Adaptation Phase 6 (Team, Admin Oversight & Settings); Phase 5 (#368); Phase 4 (#367); Phase 2 (#366); Phase 3 (#365); Phase 1 (#364).
-  - Mobile UI Adaptation Phase 6 (2026-10-09): Shared Input text-base iOS zoom fix; Table primitive overscroll-x-contain touch-pan-x; TeamPage/AdminPage/SettingsPage normalized padding (px-3 sm:px-6 pb-20 sm:pb-16); mobile segmented pill navigation in Admin & Settings; 32–44px touch targets across ConfirmAction, UserRoster, ApprovalQueue, VaultOversight, MfaSection, SecretReveal, NotificationPreferences. 925 client tests green (137 suites), bundle budget < 300KB.
+- **Status**: Mobile UI Adaptation Documentation & Knowledge Sync; Phase 6 (#369); Phase 5 (#368); Phase 4 (#367); Phase 2 (#366); Phase 3 (#365); Phase 1 (#364).
+  - Mobile UI Adaptation Spec (2026-10-09): Documented full 6-phase mobile architecture, touch ergonomics invariants, and ADR-003 in `docs/superpowers/specs/2026-10-09-mobile-ui-adaptation-spec.md` and OKF notes. All 925 client tests green (137 suites), bundle budget < 300KB (157.18 KB gzip).
   - Docked Panels & Ribbon Rail (#362, 2026-10-08): Transitioned from floating sidebars to sticky in-flow flex columns and contiguous rail.
   - Chunk Load & Graph Framing Fixes (2026-10-01): Resolved #327 (stale Vite asset 404 guard under `/assets/`, index.html no-cache header, vite:preloadError auto-reload, resilient lazyRoute) and #328 (unobstructed viewport centering, simulation settle auto-fit, resize redraw, panel close button). PR #329 merged to `dev`, PR #330 promoted to `prod`.
   - Resource & Performance Optimizations (2026-10-01): 48/48 optimizations implemented across 4 subsystems (DB/pgvector, Graph/Collab, Workers/AST, Canvas/UI). HNSW AST index (migration 0018), tuned hnsw.ef_search = 100, connection pool config + graceful drain, Tree-sitter WASM leak fix, O(1) queue dequeue, Canvas 2D edge partition & viewport culling, lazy Mermaid bundle (<300KB). PR #325 merged into `dev`, PR #326 promoted to `prod`.
