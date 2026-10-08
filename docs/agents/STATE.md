@@ -2,8 +2,8 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Status**: Mobile UI Adaptation Phase 3 (Vaults Dashboard, symmetric padding, table horizontal scroll, mobile sheets); Phase 1 (#364); Ribbon Rail (#362).
-  - Mobile UI Adaptation Phase 3 (2026-10-08): VaultsPage symmetric mobile padding (px-3/pb-20), horizontal table scroll wrapper, mobile NewVaultForm cancel button, VaultCard touch targets & responsive footer, mobile sheet DialogContent. 917 client tests green (137 suites), zero bundle regressions (< 300KB).
+- **Status**: Mobile UI Adaptation Phase 2 (Note View, single-row formatting scroll, mobile bottom sheet, backdrop dismiss); Phase 3 (#365); Phase 1 (#364).
+  - Mobile UI Adaptation Phase 2 (2026-10-08): NoteRichToolbar horizontal scroll + touch targets, hidden desktop width pickers on mobile, NoteView mobile padding & pb-24 keyboard clearance, mobile backdrop drawer dismiss, iOS auto-zoom prevention. 919 client tests green (137 suites), zero bundle regressions (< 300KB).
   - Docked Panels & Ribbon Rail (#362, 2026-10-08): Transitioned from floating sidebars to sticky in-flow flex columns and contiguous rail.
   - Chunk Load & Graph Framing Fixes (2026-10-01): Resolved #327 (stale Vite asset 404 guard under `/assets/`, index.html no-cache header, vite:preloadError auto-reload, resilient lazyRoute) and #328 (unobstructed viewport centering, simulation settle auto-fit, resize redraw, panel close button). PR #329 merged to `dev`, PR #330 promoted to `prod`.
   - Resource & Performance Optimizations (2026-10-01): 48/48 optimizations implemented across 4 subsystems (DB/pgvector, Graph/Collab, Workers/AST, Canvas/UI). HNSW AST index (migration 0018), tuned hnsw.ef_search = 100, connection pool config + graceful drain, Tree-sitter WASM leak fix, O(1) queue dequeue, Canvas 2D edge partition & viewport culling, lazy Mermaid bundle (<300KB). PR #325 merged into `dev`, PR #326 promoted to `prod`.
@@ -30,7 +30,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   - 1 container + 1 Postgres per customer. Control plane in separate private repo.
   - Collab is a person, no autosave PUT (CRDT is the note). Viewer read-only forever.
   - Exact seq scan for semantic edge recompute (#123). Mutation-verify every test.
-- **Suite**: 1,310 automated tests (917 client, 393 server across 188 test files), 100% passing. Zero open bugs. Zero vulnerabilities. Bundle budget strictly < 300KB.
+- **Suite**: 1,312 automated tests (919 client, 393 server across 188 test files), 100% passing. Zero open bugs. Zero vulnerabilities. Bundle budget strictly < 300KB.
 - **Deferred**: cli-visualizer (#9, assigned), partial restore (#261), per-type notification prefs (#263).
 - **Decided against (do NOT re-open)**: WebMCP browser standard (adr-001), Leiden (#265), graph DB (#268), GraphRAG (#267), cross-file calls (#266).
 - **Open issues**: #9 (assigned).

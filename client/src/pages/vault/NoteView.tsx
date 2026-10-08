@@ -269,11 +269,23 @@ function NoteFrame({
     <>
       <div className="flex h-full min-h-0 flex-col">
         {/* Note bar: padded left to clear the CH logo and right to clear TopBar search */}
-        <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 pr-16 py-1">
+        <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-2 sm:gap-x-3 gap-y-1 border-b border-border px-3 sm:px-4 sm:pr-16 py-1.5 sm:py-1">
           {bar}
+          <button
+            type="button"
+            aria-label="Note drawer"
+            title="Note drawer"
+            onClick={() => handleTabClick('properties')}
+            className={cn(
+              'md:hidden flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors shrink-0 touch-manipulation ml-auto',
+              drawerOpen && 'bg-primary/10 text-primary font-semibold',
+            )}
+          >
+            <SlidersHorizontal className="size-4" />
+          </button>
         </div>
         {notice}
-        <div className="px-4">
+        <div className="px-2 sm:px-4">
           <NoteRichToolbar
             view={view}
             readOnly={readOnly}
@@ -285,7 +297,7 @@ function NoteFrame({
           />
         </div>
         <NoteFloatingSelectionToolbar view={view} readOnly={readOnly} />
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4 pb-16">
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 sm:p-4 pb-24 sm:pb-16">
           <div
             ref={editorRef}
             dir={direction}
@@ -302,7 +314,7 @@ function NoteFrame({
       <TooltipProvider delayDuration={300}>
         <nav
           aria-label="Note quick actions"
-          className="fixed right-3.5 top-1/2 -translate-y-1/2 z-20 flex flex-col items-center gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 shadow-lg backdrop-blur-md opacity-20 hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200"
+          className="hidden md:flex fixed right-3.5 top-1/2 -translate-y-1/2 z-20 flex-col items-center gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 shadow-lg backdrop-blur-md opacity-20 hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200"
         >
           <Tooltip>
             <TooltipTrigger asChild>
@@ -430,25 +442,34 @@ function NoteFrame({
         </nav>
       </TooltipProvider>
 
+      {/* Mobile Drawer Backdrop Overlay */}
+      {drawerOpen && (
+        <div
+          role="presentation"
+          onClick={() => setDrawerOpen(false)}
+          className="fixed inset-0 z-35 bg-background/60 backdrop-blur-xs md:hidden animate-in fade-in duration-150"
+        />
+      )}
+
       {/* Dynamic Bottom Drawer (Drawing 4) */}
       {drawerOpen && (
         <aside
           aria-label="Note drawer"
-          className="fixed bottom-0 inset-x-0 md:inset-x-8 md:bottom-2 z-25 max-w-5xl mx-auto flex flex-col rounded-t-xl md:rounded-xl border border-border bg-card shadow-2xl backdrop-blur max-h-[60vh] min-h-[180px] animate-in slide-in-from-bottom duration-200"
+          className="fixed bottom-0 inset-x-0 md:inset-x-8 md:bottom-2 z-40 max-w-5xl mx-auto flex flex-col rounded-t-2xl md:rounded-xl border border-border bg-card shadow-2xl backdrop-blur max-h-[75vh] md:max-h-[60vh] min-h-[200px] pb-safe animate-in slide-in-from-bottom duration-200"
         >
           {/* Drag handle */}
-          <div className="flex justify-center pt-2 pb-1 shrink-0">
+          <div className="flex justify-center pt-2.5 pb-1 shrink-0">
             <div className="h-1.5 w-12 rounded-full bg-muted-foreground/30" />
           </div>
 
           {/* Drawer Header with Tab Navigation and Close Button */}
-          <div className="flex items-center justify-between border-b border-border/60 px-4 py-1.5 shrink-0">
-            <div className="flex items-center gap-1 overflow-x-auto">
+          <div className="flex items-center justify-between border-b border-border/60 px-3 sm:px-4 py-1.5 shrink-0 gap-2">
+            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar scroll-smooth flex-nowrap min-w-0">
               <button
                 type="button"
                 onClick={() => setDrawerTab('properties')}
                 className={cn(
-                  'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                  'rounded-md px-2.5 py-1 text-xs font-medium transition-colors shrink-0 touch-manipulation',
                   drawerTab === 'properties'
                     ? 'bg-primary/10 text-primary font-semibold'
                     : 'text-muted-foreground hover:text-foreground',
@@ -461,7 +482,7 @@ function NoteFrame({
                   type="button"
                   onClick={() => setDrawerTab('backlinks')}
                   className={cn(
-                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors shrink-0 touch-manipulation',
                     drawerTab === 'backlinks'
                       ? 'bg-primary/10 text-primary font-semibold'
                       : 'text-muted-foreground hover:text-foreground',
@@ -475,7 +496,7 @@ function NoteFrame({
                   type="button"
                   onClick={() => setDrawerTab('graph')}
                   className={cn(
-                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors shrink-0 touch-manipulation',
                     drawerTab === 'graph'
                       ? 'bg-primary/10 text-primary font-semibold'
                       : 'text-muted-foreground hover:text-foreground',
@@ -488,7 +509,7 @@ function NoteFrame({
                 type="button"
                 onClick={() => setDrawerTab('history')}
                 className={cn(
-                  'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                  'rounded-md px-2.5 py-1 text-xs font-medium transition-colors shrink-0 touch-manipulation',
                   drawerTab === 'history'
                     ? 'bg-primary/10 text-primary font-semibold'
                     : 'text-muted-foreground hover:text-foreground',
@@ -501,7 +522,7 @@ function NoteFrame({
                   type="button"
                   onClick={() => setDrawerTab('sharing')}
                   className={cn(
-                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors shrink-0 touch-manipulation',
                     drawerTab === 'sharing'
                       ? 'bg-primary/10 text-primary font-semibold'
                       : 'text-muted-foreground hover:text-foreground',
@@ -516,14 +537,14 @@ function NoteFrame({
               type="button"
               onClick={() => setDrawerOpen(false)}
               aria-label="Close drawer"
-              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors shrink-0 touch-manipulation"
             >
               <X className="size-4" />
             </button>
           </div>
 
           {/* Drawer Content */}
-          <div className="flex-1 overflow-y-auto p-4 min-h-0">
+          <div className="flex-1 overflow-y-auto p-3 sm:p-4 min-h-0">
             {drawerTab === 'properties' && properties}
             {drawerTab === 'backlinks' && backlinks}
             {drawerTab === 'graph' && graph}
@@ -535,7 +556,7 @@ function NoteFrame({
 
       {/* Rename Dialog */}
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
-        <DialogContent>
+        <DialogContent className="w-[calc(100vw-1.5rem)] sm:max-w-md mx-auto">
           <DialogHeader>
             <DialogTitle>Rename Note</DialogTitle>
             <DialogDescription>
@@ -553,7 +574,7 @@ function NoteFrame({
                   if (renameError && SLUG.test(e.target.value)) setRenameError(null)
                 }}
                 className={cn(
-                  'font-mono text-xs',
+                  'font-mono text-base sm:text-xs',
                   newName.length > 0 &&
                     (SLUG.test(newName)
                       ? 'border-emerald-500 focus-visible:ring-emerald-500'
@@ -566,10 +587,10 @@ function NoteFrame({
               <FormError message={renameError} />
             </div>
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setRenameOpen(false)}>
+              <Button type="button" variant="ghost" className="min-h-[38px] sm:min-h-0 touch-manipulation" onClick={() => setRenameOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={renameNote.isPending}>
+              <Button type="submit" className="min-h-[38px] sm:min-h-0 touch-manipulation" disabled={renameNote.isPending}>
                 Save
               </Button>
             </div>
@@ -579,7 +600,7 @@ function NoteFrame({
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent>
+        <DialogContent className="w-[calc(100vw-1.5rem)] sm:max-w-md mx-auto">
           <DialogHeader>
             <DialogTitle>Delete Note</DialogTitle>
             <DialogDescription>
@@ -587,12 +608,13 @@ function NoteFrame({
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="ghost" onClick={() => setDeleteOpen(false)}>
+            <Button type="button" variant="ghost" className="min-h-[38px] sm:min-h-0 touch-manipulation" onClick={() => setDeleteOpen(false)}>
               Cancel
             </Button>
             <Button
               type="button"
               variant="destructive"
+              className="min-h-[38px] sm:min-h-0 touch-manipulation"
               onClick={handleDeleteConfirm}
               disabled={deleteNote.isPending}
             >

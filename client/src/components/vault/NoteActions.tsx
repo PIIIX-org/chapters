@@ -91,7 +91,7 @@ export function NoteActions({ vaultId, note, compact = false }: NoteActionsProps
             onChange={(e) => handleNameChange(e.target.value)}
             aria-label="New name"
             className={cn(
-              'h-6 text-xs font-mono',
+              'h-7 sm:h-6 text-base sm:text-xs font-mono',
               name.length > 0 &&
                 (isNameValid
                   ? 'border-emerald-500 focus-visible:ring-emerald-500'
