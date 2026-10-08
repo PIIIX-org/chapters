@@ -10,9 +10,10 @@ import { toast } from '../../lib/toast.js'
 
 interface NewVaultFormProps {
   onCreated: (vault: Vault) => void
+  onCancel?: () => void
 }
 
-export function NewVaultForm({ onCreated }: NewVaultFormProps) {
+export function NewVaultForm({ onCreated, onCancel }: NewVaultFormProps) {
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const createVault = useCreateVault()
@@ -44,18 +45,34 @@ export function NewVaultForm({ onCreated }: NewVaultFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-      <Label htmlFor="nv-name">Vault name</Label>
+    <form onSubmit={handleSubmit} className="flex flex-col gap-2.5">
+      <Label htmlFor="nv-name" className="text-xs font-medium">Vault name</Label>
       <Input
         id="nv-name"
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="e.g. Engineering"
+        autoFocus
+        className="h-9 sm:h-8 text-sm sm:text-xs"
       />
       <FormError message={error} />
-      <Button type="submit" disabled={createVault.isPending}>
-        {createVault.isPending ? 'Creating…' : 'Create vault'}
-      </Button>
+      <div className="flex items-center gap-2 pt-0.5">
+        <Button type="submit" disabled={createVault.isPending} className="flex-1 sm:flex-initial h-9 sm:h-8 text-xs">
+          {createVault.isPending ? 'Creating…' : 'Create vault'}
+        </Button>
+        {onCancel && (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onCancel}
+            disabled={createVault.isPending}
+            className="flex-1 sm:flex-initial h-9 sm:h-8 text-xs text-muted-foreground"
+          >
+            Cancel
+          </Button>
+        )}
+      </div>
     </form>
   )
 }
+

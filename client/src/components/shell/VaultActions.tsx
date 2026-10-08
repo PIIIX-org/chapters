@@ -149,7 +149,7 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
         type="button"
         onClick={() => setMode('renaming')}
         aria-label={`Rename ${vault.name}`}
-        className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/80 active:bg-muted active:scale-95 rounded-md border border-border/50 hover:border-border transition-all duration-100 touch-manipulation cursor-pointer shadow-xs"
+        className="inline-flex items-center gap-1 px-2.5 py-1 sm:px-2 sm:py-0.5 min-h-[32px] sm:min-h-0 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/80 active:bg-muted active:scale-95 rounded-md border border-border/50 hover:border-border transition-all duration-100 touch-manipulation cursor-pointer shadow-xs"
       >
         <Edit2 className="size-3 shrink-0" aria-hidden="true" />
         <span>Rename</span>
@@ -161,7 +161,7 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
           setTypedName('')
         }}
         aria-label={`Delete ${vault.name}`}
-        className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-destructive/80 hover:text-destructive hover:bg-destructive/15 active:bg-destructive/25 active:scale-95 rounded-md border border-destructive/20 hover:border-destructive/40 transition-all duration-100 touch-manipulation cursor-pointer shadow-xs"
+        className="inline-flex items-center gap-1 px-2.5 py-1 sm:px-2 sm:py-0.5 min-h-[32px] sm:min-h-0 text-xs font-medium text-destructive/80 hover:text-destructive hover:bg-destructive/15 active:bg-destructive/25 active:scale-95 rounded-md border border-destructive/20 hover:border-destructive/40 transition-all duration-100 touch-manipulation cursor-pointer shadow-xs"
       >
         <Trash2 className="size-3 shrink-0" aria-hidden="true" />
         <span>Delete</span>
@@ -198,53 +198,55 @@ export function VaultTrashSection({ heading = true }: { heading?: boolean } = {}
     <div className="border-t border-border px-3 py-2">
       {heading && <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Trash</div>}
       {trash.data.map((v) => (
-        <div key={v.id} className="flex items-center justify-between gap-2 py-1">
+        <div key={v.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 py-2 border-b border-border/40 last:border-b-0">
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm">{v.name}</div>
+            <div className="truncate text-sm font-medium">{v.name}</div>
             <div className="font-mono text-xs text-muted-foreground">{relativeIsh(v.deletedAt)}</div>
           </div>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            aria-label={`Restore ${v.name}`}
-            disabled={restoreVault.isPending}
-            className="gap-1 shadow-xs"
-            onClick={() => {
-              setError(null)
-              restoreVault.mutate(v.id, {
-                onSuccess: () => {
-                  toast.success('Vault restored', `${v.name} restored successfully.`)
-                },
-                onError: (err) => {
-                  const msg = err.message || 'Could not restore the vault.'
-                  toast.error('Failed to restore vault', msg)
-                  setError(msg)
-                },
-              })
-            }}
-          >
-            <RotateCcw className="size-3" aria-hidden="true" />
-            <span>Restore</span>
-          </Button>
-          {/* The delete confirmation above already promises "until you purge
-              it". Until this existed, that sentence pointed at nothing. */}
-          {purging !== v.id && (
+          <div className="flex items-center gap-2 shrink-0">
             <Button
               type="button"
               size="xs"
-              variant="destructive"
-              aria-label={`Delete ${v.name} permanently`}
-              className="gap-1 shadow-xs"
+              variant="outline"
+              aria-label={`Restore ${v.name}`}
+              disabled={restoreVault.isPending}
+              className="gap-1 shadow-xs h-8 sm:h-7 px-2.5 text-xs touch-manipulation"
               onClick={() => {
                 setError(null)
-                setPurging(v.id)
+                restoreVault.mutate(v.id, {
+                  onSuccess: () => {
+                    toast.success('Vault restored', `${v.name} restored successfully.`)
+                  },
+                  onError: (err) => {
+                    const msg = err.message || 'Could not restore the vault.'
+                    toast.error('Failed to restore vault', msg)
+                    setError(msg)
+                  },
+                })
               }}
             >
-              <Trash2 className="size-3" aria-hidden="true" />
-              <span>Delete forever</span>
+              <RotateCcw className="size-3" aria-hidden="true" />
+              <span>Restore</span>
             </Button>
-          )}
+            {/* The delete confirmation above already promises "until you purge
+                it". Until this existed, that sentence pointed at nothing. */}
+            {purging !== v.id && (
+              <Button
+                type="button"
+                size="xs"
+                variant="destructive"
+                aria-label={`Delete ${v.name} permanently`}
+                className="gap-1 shadow-xs h-8 sm:h-7 px-2.5 text-xs touch-manipulation"
+                onClick={() => {
+                  setError(null)
+                  setPurging(v.id)
+                }}
+              >
+                <Trash2 className="size-3" aria-hidden="true" />
+                <span>Delete forever</span>
+              </Button>
+            )}
+          </div>
         </div>
       ))}
       {purging &&
