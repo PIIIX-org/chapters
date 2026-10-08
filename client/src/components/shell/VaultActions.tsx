@@ -8,6 +8,7 @@ import { useDeleteVault, useRenameVault, useRestoreVault } from '../../hooks/use
 import { useTrashedVaults } from '../../hooks/useVaults.js'
 import { usePurgeVault } from '../../hooks/useTrash.js'
 import type { Vault } from '../../api/vaults.js'
+import { toast } from '../../lib/toast.js'
 
 // ponytail: "3 days ago" granularity is enough for a trash list; no library.
 function relativeIsh(iso: string): string {
@@ -42,8 +43,15 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
     renameVault.mutate(
       { id: vault.id, name: trimmed },
       {
-        onSuccess: () => setMode('idle'),
-        onError: (err) => setError(err.message || 'Could not rename the vault.'),
+        onSuccess: () => {
+          setMode('idle')
+          toast.success('Vault renamed', `${trimmed} updated successfully.`)
+        },
+        onError: (err) => {
+          const msg = err.message || 'Could not rename the vault.'
+          toast.error('Failed to rename vault', msg)
+          setError(msg)
+        },
       },
     )
   }
@@ -54,8 +62,13 @@ export function VaultRowActions({ vault }: VaultRowActionsProps) {
       onSuccess: () => {
         setMode('idle')
         setTypedName('')
+        toast.success('Vault deleted', `${vault.name} moved to trash.`)
       },
-      onError: (err) => setError(err.message || 'Could not move the vault to trash.'),
+      onError: (err) => {
+        const msg = err.message || 'Could not move the vault to trash.'
+        toast.error('Failed to delete vault', msg)
+        setError(msg)
+      },
     })
   }
 
@@ -200,7 +213,14 @@ export function VaultTrashSection({ heading = true }: { heading?: boolean } = {}
             onClick={() => {
               setError(null)
               restoreVault.mutate(v.id, {
-                onError: (err) => setError(err.message || 'Could not restore the vault.'),
+                onSuccess: () => {
+                  toast.success('Vault restored', `${v.name} restored successfully.`)
+                },
+                onError: (err) => {
+                  const msg = err.message || 'Could not restore the vault.'
+                  toast.error('Failed to restore vault', msg)
+                  setError(msg)
+                },
               })
             }}
           >
@@ -246,8 +266,15 @@ export function VaultTrashSection({ heading = true }: { heading?: boolean } = {}
                   disabled={purgeVault.isPending}
                   onClick={() =>
                     purgeVault.mutate(target.id, {
-                      onSuccess: () => setPurging(null),
-                      onError: (err) => setError(err.message || 'Could not delete the vault.'),
+                      onSuccess: () => {
+                        setPurging(null)
+                        toast.success('Vault deleted forever', `${target.name} permanently deleted.`)
+                      },
+                      onError: (err) => {
+                        const msg = err.message || 'Could not delete the vault.'
+                        toast.error('Failed to purge vault', msg)
+                        setError(msg)
+                      },
                     })
                   }
                 >

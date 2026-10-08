@@ -44,7 +44,7 @@ export function BottomBar() {
       {/* Left: History navigation & Breadcrumbs */}
       <div
         className={cn(
-          'flex items-center gap-1.5 min-w-0 pointer-events-auto transition-[margin] duration-200',
+          'flex items-center gap-1.5 min-w-0 pointer-events-auto opacity-20 hover:opacity-100 focus-within:opacity-100 transition-all duration-200',
           shell.sidebarExpanded ? 'md:ml-[256px] ml-0' : 'ml-0 md:ml-[60px]',
         )}
       >
@@ -85,7 +85,7 @@ export function BottomBar() {
       </div>
 
       {/* Right: Layout panel toggles */}
-      <div className="flex items-center gap-1.5 shrink-0 pointer-events-auto">
+      <div className="flex items-center gap-1.5 shrink-0 pointer-events-auto opacity-20 hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
         <PanelToggle kind="context" />
         <PanelToggle kind="inspector" />
       </div>

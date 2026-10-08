@@ -140,6 +140,7 @@ function stubFetch(note: unknown = NOTE, noteStatus = 200) {
   const fetchMock = vi.fn().mockImplementation((url: string) => {
     if (url.endsWith('/me')) return Promise.resolve(mockJsonResponse(200, ME))
     if (url.endsWith('/tree')) return Promise.resolve(mockJsonResponse(200, {}))
+    if (url.includes('/backlinks')) return Promise.resolve(mockJsonResponse(200, []))
     return Promise.resolve(mockJsonResponse(noteStatus, note))
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -628,4 +629,26 @@ describe('NoteView — the inspector tabs', () => {
     // Redundant top breadcrumbs link to vault is not present in the note bar
     expect(screen.queryByRole('link', { name: 'Engineering' })).toBeNull()
   })
+
+  it('renders floating action toolbar and opens dynamic bottom drawer on button click', async () => {
+    stubFetch()
+    renderNote(OWNER_VAULT)
+    await relay()
+
+    const toolbar = screen.getByRole('navigation', { name: 'Note quick actions' })
+    expect(toolbar).toBeInTheDocument()
+
+    // Clicking Backlinks button in floating toolbar opens the dynamic bottom drawer
+    const backlinksBtn = screen.getByRole('button', { name: 'Backlinks' })
+    await userEvent.click(backlinksBtn)
+
+    const drawer = screen.getByRole('complementary', { name: 'Note drawer' })
+    expect(drawer).toBeInTheDocument()
+
+    // Clicking close button dismisses the drawer
+    const closeBtn = screen.getByRole('button', { name: 'Close drawer' })
+    await userEvent.click(closeBtn)
+    expect(screen.queryByRole('complementary', { name: 'Note drawer' })).toBeNull()
+  })
 })
+
