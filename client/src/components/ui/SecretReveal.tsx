@@ -54,7 +54,7 @@ export function SecretReveal({ label, secret, note, onDismiss }: SecretRevealPro
           size="xs"
           variant="outline"
           onClick={handleCopy}
-          className="rounded-[var(--radius-md,4px)]"
+          className="rounded-[var(--radius-md,4px)] shrink-0 min-h-[32px] sm:min-h-0 touch-manipulation"
         >
           {copied ? 'Copied' : 'Copy'}
         </Button>
@@ -67,7 +67,7 @@ export function SecretReveal({ label, secret, note, onDismiss }: SecretRevealPro
         type="button"
         size="sm"
         onClick={handleDone}
-        className="self-start rounded-[var(--radius-md,4px)]"
+        className="self-start rounded-[var(--radius-md,4px)] min-h-[36px] sm:min-h-0 touch-manipulation"
       >
         Done
       </Button>

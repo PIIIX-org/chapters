@@ -94,4 +94,20 @@ describe('AdminPage', () => {
     )
     expect(screen.getByRole('button', { name: 'Access' })).toHaveAttribute('aria-current', 'page')
   })
+
+  it('switches sections using the mobile navigation tabs', async () => {
+    const fetch = fetchMock(ADMIN)
+    vi.stubGlobal('fetch', fetch)
+    renderPage()
+
+    await screen.findByText(/Nobody is waiting/)
+    const mobileAccessTab = screen.getByRole('button', { name: 'Access section' })
+    expect(mobileAccessTab).toBeInTheDocument()
+
+    await userEvent.click(mobileAccessTab)
+    await waitFor(() =>
+      expect(fetch.mock.calls.map((c) => c[0] as string)).toContain('/api/admin/shares'),
+    )
+    expect(mobileAccessTab).toHaveAttribute('aria-current', 'page')
+  })
 })

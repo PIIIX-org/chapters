@@ -201,4 +201,13 @@ describe('TeamPage', () => {
     await screen.findByRole('table')
     await expectNoA11yViolations(container)
   })
+
+  it('wraps the roster table in an overflow-x-auto scroll container for responsive viewports', async () => {
+    stubFetch()
+    renderPage()
+
+    const table = await screen.findByRole('table')
+    const wrapper = table.parentElement
+    expect(wrapper).toHaveClass('overflow-x-auto', 'overscroll-x-contain')
+  })
 })

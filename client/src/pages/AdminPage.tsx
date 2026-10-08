@@ -107,7 +107,37 @@ export function AdminPage() {
         </nav>
       </ContextPanel>
       <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto max-w-4xl pl-16 pr-6 sm:px-6 pt-5 pb-16">{section.render()}</div>
+        <div className="mx-auto max-w-4xl px-3 sm:px-6 pt-3 sm:pt-5 pb-20 sm:pb-16 flex flex-col gap-4">
+          {/* Mobile Segmented Section Navigation */}
+          <nav
+            aria-label="Admin mobile navigation"
+            className="flex md:hidden items-center gap-1.5 overflow-x-auto overscroll-x-contain touch-pan-x no-scrollbar pb-1 border-b border-border"
+          >
+            {SECTIONS.map((s) => {
+              const Icon = s.icon
+              const isSelected = s.id === active
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  aria-label={`${s.label} section`}
+                  aria-current={isSelected ? 'page' : undefined}
+                  onClick={() => setActive(s.id)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs shrink-0 min-h-[36px] touch-manipulation transition-colors border',
+                    isSelected
+                      ? 'bg-primary text-primary-foreground border-primary font-medium shadow-xs'
+                      : 'bg-card text-muted-foreground border-border hover:bg-muted hover:text-foreground',
+                  )}
+                >
+                  <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span>{s.label}</span>
+                </button>
+              )
+            })}
+          </nav>
+          {section.render()}
+        </div>
       </div>
     </>
   )

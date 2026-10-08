@@ -33,10 +33,10 @@ export function NotificationPreferences() {
     <Panel>
       <PanelHeader title="Notifications" />
       <PanelBody className="flex flex-col gap-2">
-        <label className="flex cursor-pointer items-start gap-2.5 rounded-md px-1.5 py-1 transition-colors duration-100 hover:bg-muted">
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-md px-1.5 py-1 min-h-[44px] touch-manipulation transition-colors duration-100 hover:bg-muted">
           <input
             type="checkbox"
-            className="mt-1 accent-primary"
+            className="mt-1 size-4 shrink-0 accent-primary touch-manipulation"
             checked={prefs.data.emailNotifications}
             disabled={update.isPending}
             onChange={(e) => update.mutate({ emailNotifications: e.target.checked })}
