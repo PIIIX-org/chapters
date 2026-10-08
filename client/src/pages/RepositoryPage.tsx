@@ -13,7 +13,7 @@ import { RepositorySyncCard } from '../components/repositories/RepositorySyncCar
 import { SymbolOutline } from '../components/repositories/SymbolOutline.js'
 import { SyncTokenList } from '../components/repositories/SyncTokenList.js'
 import { WebhookSetupCard } from '../components/repositories/WebhookSetupCard.js'
-import { Code2, FolderGit2, RefreshCw, Shield, Webhook } from 'lucide-react'
+import { Code2, FolderGit2, Plus, RefreshCw, Shield, Webhook } from 'lucide-react'
 import { ContextPanel, Inspector, PanelRailButton, PanelRailNav } from '../components/shell/ShellPanels.js'
 import {
   useOptionalShell,
@@ -348,30 +348,45 @@ interface ShellProps {
 function Shell({ children, connectDialog, onConnect, title, subtitle, onSettings }: ShellProps) {
   useShellBreadcrumb([{ label: 'Repositories', to: '/repos' }, { label: title ?? 'Repository' }])
   const shell = useOptionalShell()
-  const leftPad = shell?.sidebarExpanded ? 'pl-[264px]' : 'pl-16'
+  const leftPad = shell?.sidebarExpanded ? 'md:pl-[264px]' : 'md:pl-16'
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header
         className={cn(
-          'flex h-10 shrink-0 items-center gap-3 border-b border-border pr-52 transition-[padding] duration-200',
+          'flex h-10 shrink-0 items-center gap-2 sm:gap-3 border-b border-border px-3 sm:px-4 md:pr-52 transition-[padding] duration-200',
           leftPad,
         )}
       >
         <h1 className="truncate text-sm font-medium text-foreground">{title ?? 'Repository'}</h1>
         {subtitle && <Pill>{subtitle}</Pill>}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
           {onSettings && (
-            <Button type="button" variant="outline" size="sm" onClick={onSettings}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onSettings}
+              className="h-8 px-2.5 sm:px-3 text-xs touch-manipulation"
+            >
               Settings
             </Button>
           )}
-          <Button type="button" variant="outline" size="sm" onClick={onConnect}>
-            Connect a repository
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onConnect}
+            aria-label="Connect a repository"
+            className="h-8 px-2 sm:px-3 text-xs gap-1 touch-manipulation"
+          >
+            <Plus aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="hidden sm:inline">Connect a repository</span>
+            <span className="sm:hidden">Connect</span>
           </Button>
         </div>
       </header>
-      <div className={cn('flex min-h-0 flex-1 pb-16 transition-[padding] duration-200', leftPad)}>
+      <div className={cn('flex min-h-0 flex-1 px-3 sm:px-4 pb-20 sm:pb-16 transition-[padding] duration-200', leftPad)}>
         {children}
       </div>
       {connectDialog}

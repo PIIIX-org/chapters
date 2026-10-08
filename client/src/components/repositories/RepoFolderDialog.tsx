@@ -102,7 +102,7 @@ export function RepoFolderDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="w-[calc(100vw-1.5rem)] sm:max-w-md max-h-[88vh] overflow-y-auto mx-auto p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle>Organize Repository</DialogTitle>
             <DialogDescription>
@@ -119,6 +119,7 @@ export function RepoFolderDialog({
                 value={folderName}
                 onChange={(e) => setFolderName(e.target.value)}
                 autoFocus
+                className="text-base sm:text-sm"
               />
               {allFolders.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-1">
@@ -130,7 +131,7 @@ export function RepoFolderDialog({
                       key={f}
                       type="button"
                       onClick={() => setFolderName(f)}
-                      className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                      className={`text-xs px-2.5 py-1 min-h-[28px] rounded border transition-colors touch-manipulation ${
                         folderName === f
                           ? 'bg-primary text-primary-foreground border-primary'
                           : 'bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground border-border'
@@ -164,7 +165,7 @@ export function RepoFolderDialog({
                     type="button"
                     title={c.label}
                     onClick={() => setFolderColor(c.id)}
-                    className={`size-6 rounded-full ${c.accent} transition-transform hover:scale-110 ${
+                    className={`size-7 sm:size-6 min-h-[28px] min-w-[28px] rounded-full ${c.accent} transition-transform hover:scale-110 touch-manipulation ${
                       folderColor === c.id
                         ? 'ring-2 ring-primary ring-offset-2 ring-offset-background scale-105'
                         : 'opacity-80 hover:opacity-100'
@@ -187,7 +188,7 @@ export function RepoFolderDialog({
                   <button
                     type="button"
                     onClick={() => setRepoColor(undefined)}
-                    className="text-xs text-muted-foreground hover:text-foreground underline"
+                    className="text-xs text-muted-foreground hover:text-foreground underline touch-manipulation"
                   >
                     Reset
                   </button>
@@ -200,7 +201,7 @@ export function RepoFolderDialog({
                     type="button"
                     title={c.label}
                     onClick={() => setRepoColor(c.id)}
-                    className={`size-6 rounded-full ${c.accent} transition-transform hover:scale-110 ${
+                    className={`size-7 sm:size-6 min-h-[28px] min-w-[28px] rounded-full ${c.accent} transition-transform hover:scale-110 touch-manipulation ${
                       repoColor === c.id
                         ? 'ring-2 ring-primary ring-offset-2 ring-offset-background scale-105'
                         : 'opacity-80 hover:opacity-100'
@@ -215,14 +216,14 @@ export function RepoFolderDialog({
               </div>
             </div>
 
-            <div className="flex items-center justify-between pt-2">
+            <div className="flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-2 pt-2">
               {currentFolder ? (
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
                   onClick={handleRemove}
-                  className="text-destructive hover:text-destructive"
+                  className="w-full sm:w-auto min-h-[38px] sm:min-h-0 text-destructive hover:text-destructive touch-manipulation"
                 >
                   Remove from folder
                 </Button>
@@ -235,10 +236,15 @@ export function RepoFolderDialog({
                   variant="outline"
                   size="sm"
                   onClick={() => onOpenChange(false)}
+                  className="flex-1 sm:flex-none min-h-[38px] sm:min-h-0 touch-manipulation"
                 >
                   Cancel
                 </Button>
-                <Button type="submit" size="sm">
+                <Button
+                  type="submit"
+                  size="sm"
+                  className="flex-1 sm:flex-none min-h-[38px] sm:min-h-0 touch-manipulation"
+                >
                   Save
                 </Button>
               </div>

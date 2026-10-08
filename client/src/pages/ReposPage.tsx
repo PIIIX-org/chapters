@@ -253,7 +253,7 @@ export function ReposPage() {
 
   return (
     <div className="h-full min-h-0 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-full sm:max-w-[94%] md:max-w-[88%] lg:max-w-[80%] flex-col gap-3 sm:gap-4 pl-[72px] sm:pl-20 pr-2.5 sm:pr-4 pt-3 pb-16 sm:pt-5 sm:pb-16">
+      <div className="mx-auto flex w-full max-w-full sm:max-w-[94%] md:max-w-[88%] lg:max-w-[80%] flex-col gap-3 sm:gap-4 px-3 sm:px-4 md:px-6 py-3 sm:py-5 pb-20 sm:pb-16">
         <Panel>
           <PanelHeader
             className="min-h-9 h-auto py-2 sm:h-9 sm:py-0 flex-wrap sm:flex-nowrap gap-y-2"
@@ -273,7 +273,7 @@ export function ReposPage() {
                     onClick={handleToggleGroupByFolder}
                     title="Group by folder"
                     aria-label="Group by folder"
-                    className="h-7 px-2 gap-1 text-xs"
+                    className="h-7 px-2 gap-1 text-xs touch-manipulation"
                   >
                     <FolderTree className="size-3.5" aria-hidden="true" />
                     <span className="hidden sm:inline">Group</span>
@@ -293,7 +293,7 @@ export function ReposPage() {
                       variant={viewMode === 'card' ? 'secondary' : 'ghost'}
                       onClick={() => handleViewModeChange('card')}
                       aria-label="Card view"
-                      className="h-7 px-2"
+                      className="h-7 px-2 touch-manipulation"
                     >
                       <LayoutGrid className="size-3.5" aria-hidden="true" />
                     </Button>
@@ -303,7 +303,7 @@ export function ReposPage() {
                       variant={viewMode === 'list' ? 'secondary' : 'ghost'}
                       onClick={() => handleViewModeChange('list')}
                       aria-label="List view"
-                      className="h-7 px-2"
+                      className="h-7 px-2 touch-manipulation"
                     >
                       <List className="size-3.5" aria-hidden="true" />
                     </Button>
@@ -315,10 +315,12 @@ export function ReposPage() {
                   size="sm"
                   variant="outline"
                   onClick={() => setConnecting(true)}
-                  className="h-7 sm:h-8 px-2 sm:px-3 text-xs gap-1"
+                  aria-label="Connect a repository"
+                  className="h-7 sm:h-8 px-2 sm:px-3 text-xs gap-1 touch-manipulation"
                 >
-                  <Plus aria-hidden="true" className="size-3.5" />
-                  <span>Connect a repository</span>
+                  <Plus aria-hidden="true" className="size-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Connect a repository</span>
+                  <span className="sm:hidden">Connect</span>
                 </Button>
               </div>
             }
@@ -339,14 +341,14 @@ export function ReposPage() {
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search repositories by name, folder, or source..."
                     aria-label="Search repositories"
-                    className="pl-8 pr-8 h-8 text-xs w-full"
+                    className="pl-8 pr-8 h-9 sm:h-8 text-base sm:text-xs w-full"
                   />
                   {search && (
                     <button
                       type="button"
                       onClick={() => setSearch('')}
                       aria-label="Clear search"
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 touch-manipulation"
                     >
                       <X className="size-3.5" aria-hidden="true" />
                     </button>
@@ -360,7 +362,7 @@ export function ReposPage() {
                     value={sourceFilter}
                     onChange={(e) => setSourceFilter(e.target.value)}
                     aria-label="Filter by source"
-                    className="h-8 flex-1 sm:flex-none rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="h-9 sm:h-8 flex-1 sm:flex-none rounded-md border border-border bg-background px-2 text-base sm:text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring touch-manipulation"
                   >
                     <option value="all">All sources</option>
                     <option value="git">Git</option>
@@ -375,7 +377,7 @@ export function ReposPage() {
                       value={sortBy}
                       onChange={(e) => setSortBy(e.target.value as SortOption)}
                       aria-label="Sort repositories"
-                      className="h-8 w-full sm:w-auto rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="h-9 sm:h-8 w-full sm:w-auto rounded-md border border-border bg-background px-2 text-base sm:text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring touch-manipulation"
                     >
                       <option value="synced">Last synced</option>
                       <option value="name-asc">Name (A–Z)</option>
@@ -387,7 +389,7 @@ export function ReposPage() {
               </div>
 
               {/* Visual Folder Tabs / Shelf */}
-              <div className="flex items-end gap-2 overflow-x-auto pt-2 pb-1.5 text-xs -mx-2.5 px-2.5 sm:mx-0 sm:px-0 scroll-smooth">
+              <div className="flex items-end gap-2 overflow-x-auto pt-2 pb-1.5 text-xs -mx-2.5 px-2.5 sm:mx-0 sm:px-0 overscroll-x-contain touch-pan-x no-scrollbar scroll-smooth">
                 <span className="text-muted-foreground font-medium text-[11px] uppercase tracking-wider shrink-0 mb-1.5 mr-1">
                   Folders:
                 </span>
@@ -404,7 +406,7 @@ export function ReposPage() {
                   <button
                     type="button"
                     onClick={() => setSelectedFolder('all')}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-b-md rounded-tr-md border transition-colors ${
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 min-h-[32px] sm:min-h-0 rounded-b-md rounded-tr-md border transition-colors touch-manipulation ${
                       selectedFolder === 'all'
                         ? 'border-primary bg-primary text-primary-foreground font-medium'
                         : 'border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -428,7 +430,7 @@ export function ReposPage() {
                     <button
                       type="button"
                       onClick={() => setSelectedFolder('uncategorized')}
-                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-b-md rounded-tr-md border transition-colors ${
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 min-h-[32px] sm:min-h-0 rounded-b-md rounded-tr-md border transition-colors touch-manipulation ${
                         selectedFolder === 'uncategorized'
                           ? 'border-primary bg-primary text-primary-foreground font-medium'
                           : 'border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -470,7 +472,7 @@ export function ReposPage() {
                       <button
                         type="button"
                         onClick={() => setSelectedFolder(folder)}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-b-md rounded-tr-md border transition-colors ${
+                        className={`inline-flex items-center gap-1.5 px-3 py-1 min-h-[32px] sm:min-h-0 rounded-b-md rounded-tr-md border transition-colors touch-manipulation ${
                           isSelected
                             ? colorDef
                               ? `${colorDef.badge} border-current font-medium shadow-sm`
@@ -601,8 +603,9 @@ export function ReposPage() {
                           ))}
                         </div>
                       ) : (
-                        <Table>
-                          <TableHeader>
+                        <div className="overflow-x-auto min-w-0">
+                          <Table>
+                            <TableHeader>
                             <TableRow>
                               <TableHead>Name</TableHead>
                               <TableHead>Folder</TableHead>
@@ -632,7 +635,7 @@ export function ReposPage() {
                                             ? `Unfavorite ${repo.name}`
                                             : `Favorite ${repo.name}`
                                         }
-                                        className={`p-0.5 rounded transition-colors ${
+                                        className={`p-0.5 rounded transition-colors touch-manipulation ${
                                           isFav
                                             ? 'text-amber-500'
                                             : 'text-muted-foreground/30 hover:text-amber-500'
@@ -669,7 +672,7 @@ export function ReposPage() {
                                           ? `Folder: ${folder} for ${repo.name}`
                                           : `Assign folder for ${repo.name}`
                                       }
-                                      className={`flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded border transition-colors ${
+                                      className={`flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded border transition-colors touch-manipulation ${
                                         fColor
                                           ? fColor.badge
                                           : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
@@ -707,7 +710,8 @@ export function ReposPage() {
                             })}
                           </TableBody>
                         </Table>
-                      )}
+                      </div>
+                    )}
                     </div>
                   </div>
                 )
@@ -731,8 +735,9 @@ export function ReposPage() {
             </div>
           ) : (
             /* Flat Table View */
-            <Table>
-              <TableHeader>
+            <div className="overflow-x-auto min-w-0">
+              <Table>
+                <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Folder</TableHead>
@@ -762,7 +767,7 @@ export function ReposPage() {
                                 ? `Unfavorite ${repo.name}`
                                 : `Favorite ${repo.name}`
                             }
-                            className={`p-0.5 rounded transition-colors ${
+                            className={`p-0.5 rounded transition-colors touch-manipulation ${
                               isFav
                                 ? 'text-amber-500'
                                 : 'text-muted-foreground/30 hover:text-amber-500'
@@ -799,7 +804,7 @@ export function ReposPage() {
                               ? `Folder: ${folder} for ${repo.name}`
                               : `Assign folder for ${repo.name}`
                           }
-                          className={`flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded border transition-colors ${
+                          className={`flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded border transition-colors touch-manipulation ${
                             fColor
                               ? fColor.badge
                               : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
@@ -837,7 +842,8 @@ export function ReposPage() {
                 })}
               </TableBody>
             </Table>
-          )}
+          </div>
+        )}
         </Panel>
       </div>
 

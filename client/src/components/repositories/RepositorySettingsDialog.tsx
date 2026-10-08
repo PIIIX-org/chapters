@@ -104,14 +104,14 @@ export function RepositorySettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto">
+      <DialogContent className="w-[calc(100vw-1.5rem)] sm:max-w-lg max-h-[88vh] overflow-y-auto mx-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle>Repository settings — {repository.name}</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleRename} className="flex flex-col gap-2">
           <Label htmlFor="repository-name">Name</Label>
-          <div className="flex items-end gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-end gap-2">
             <Input
               id="repository-name"
               value={name}
@@ -119,9 +119,13 @@ export function RepositorySettingsDialog({
                 setName(e.target.value)
                 setNameError(null)
               }}
-              className="flex-1"
+              className="flex-1 text-base sm:text-sm"
             />
-            <Button type="submit" disabled={updateRepository.isPending || name.trim() === repository.name}>
+            <Button
+              type="submit"
+              disabled={updateRepository.isPending || name.trim() === repository.name}
+              className="w-full sm:w-auto min-h-[38px] sm:min-h-0 touch-manipulation"
+            >
               Save
             </Button>
           </div>

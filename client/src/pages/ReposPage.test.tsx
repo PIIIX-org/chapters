@@ -202,6 +202,26 @@ describe('ReposPage', () => {
     expect(searchInput).toHaveValue('')
   })
 
+  it('renders responsive mobile container, actions, and overflow table wrapper', async () => {
+    stubFetch()
+    const { container } = renderPage()
+    await screen.findByRole('link', { name: 'Atlas ERP' })
+
+    // Check main container has symmetric mobile padding and lacks legacy desktop rail padding
+    const mainContainer = container.querySelector('.max-w-full')
+    expect(mainContainer).toBeInTheDocument()
+    expect(mainContainer?.className).toContain('px-3')
+    expect(mainContainer?.className).not.toContain('pl-[72px]')
+
+    // Switch to list view and verify table overflow container
+    const listBtn = screen.getByRole('button', { name: 'List view' })
+    await userEvent.click(listBtn)
+
+    const table = container.querySelector('table')
+    expect(table).toBeInTheDocument()
+    expect(table?.parentElement?.className).toContain('overflow-x-auto')
+  })
+
   it('has no accessibility violations', async () => {
     stubFetch()
     const { container } = renderPage()

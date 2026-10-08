@@ -157,10 +157,10 @@ export function CodeViewer({ repository, path, meta, ref, initialAnchor }: CodeV
             {formatBytes(size)}
           </span>
         )}
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
           {/* Permanent, not a mode: git stays the record of truth. */}
           <Pill
-            className="rounded-[var(--radius-sm,2px)] font-mono text-[10px]"
+            className="hidden sm:inline-flex rounded-[var(--radius-sm,2px)] font-mono text-[10px]"
             title="Elara never writes code back — git stays the record of truth."
           >
             Read-only
@@ -170,7 +170,7 @@ export function CodeViewer({ repository, path, meta, ref, initialAnchor }: CodeV
               asChild
               variant="ghost"
               size="xs"
-              className="h-6 rounded-[var(--radius-sm,2px)] font-mono text-xs"
+              className="h-6 rounded-[var(--radius-sm,2px)] font-mono text-xs touch-manipulation"
             >
               <a
                 href={remote.url}
@@ -178,7 +178,7 @@ export function CodeViewer({ repository, path, meta, ref, initialAnchor }: CodeV
                 rel="noreferrer"
                 aria-label={`Open ${path} on ${remote.provider}`}
               >
-                {remote.label}
+                <span className="hidden sm:inline">{remote.label}</span>
                 <ExternalLink aria-hidden="true" />
               </a>
             </Button>
