@@ -6,6 +6,7 @@ import { Button } from '../ui/button.js'
 import { FormError } from '../FormError.js'
 import { useCreateVault } from '../../hooks/useVaultMutations.js'
 import type { Vault } from '../../api/vaults.js'
+import { toast } from '../../lib/toast.js'
 
 interface NewVaultFormProps {
   onCreated: (vault: Vault) => void
@@ -31,9 +32,14 @@ export function NewVaultForm({ onCreated }: NewVaultFormProps) {
     createVault.mutate(trimmed, {
       onSuccess: (vault) => {
         setName('')
+        toast.success('Vault created', `${vault.name} created successfully.`)
         onCreated(vault)
       },
-      onError: (err) => setError(err.message || 'Could not create the vault.'),
+      onError: (err) => {
+        const msg = err.message || 'Could not create the vault.'
+        toast.error('Failed to create vault', msg)
+        setError(msg)
+      },
     })
   }
 

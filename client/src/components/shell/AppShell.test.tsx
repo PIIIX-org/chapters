@@ -172,8 +172,8 @@ describe('AppShell', () => {
     await waitFor(() => expect(within(context).getByText('Context content')).toBeInTheDocument())
     expect(within(inspector).getByText('Inspector content')).toBeInTheDocument()
     expect(context).toBeVisible()
-    expect(context).toHaveClass('absolute', 'top-[54px]', 'bottom-[54px]', 'left-[68px]', 'z-20')
-    expect(inspector).toHaveClass('absolute', 'top-[54px]', 'bottom-[54px]', 'z-20', 'right-2.5')
+    expect(context).toHaveClass('h-full', 'border-r', 'border-border', 'bg-card')
+    expect(inspector).toHaveClass('h-full', 'border-l', 'border-border', 'bg-card')
 
     const toggle = screen.getByRole('button', { name: 'Toggle context panel' })
     expect(toggle).toHaveAttribute('aria-pressed', 'true')

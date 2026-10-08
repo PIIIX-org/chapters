@@ -64,13 +64,11 @@ function ShellFrame({ children }: { children?: ReactNode }) {
   }, [contextOpen, inspectorOpen, sidebarExpanded, shell])
 
   return (
-    <div className="relative h-dvh w-full overflow-hidden bg-background text-foreground">
-      {/* Full-screen workspace canvas */}
-      <main className="relative h-full w-full min-h-0 min-w-0 overflow-hidden">
-        {children ?? <Outlet />}
-      </main>
+    <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
+      {/* 1. Sticky Navigation Rail on the far left */}
+      <Rail />
 
-      {/* Floating Side Panels */}
+      {/* 2. Sticky Context Panel adjacent to Rail */}
       <aside
         ref={contextRef}
         data-shell-panel="context"
@@ -78,14 +76,42 @@ function ShellFrame({ children }: { children?: ReactNode }) {
         aria-label="Context panel"
         hidden={!contextMounted}
         className={cn(
-          'pointer-events-auto absolute top-[54px] bottom-[54px] max-md:left-0 z-20 flex flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0',
-          sidebarExpanded ? 'left-[264px]' : 'left-[68px]',
+          'h-full border-r border-border bg-card transition-all duration-200 shrink-0 min-h-0 flex flex-col',
           contextOpen
             ? 'w-[var(--shell-context,240px)] overflow-y-auto max-md:fixed max-md:inset-y-0 max-md:top-0 max-md:bottom-0 max-md:left-0 max-md:z-40 max-md:w-[min(320px,85vw)] max-md:rounded-none max-md:shadow-2xl'
             : 'w-11 items-center p-1 overflow-hidden max-md:hidden',
         )}
       />
 
+      {/* 3. Center Workspace: Flex column holding canvas and chrome */}
+      <div className="relative flex flex-1 flex-col min-h-0 min-w-0 h-full overflow-hidden">
+        {/* Floating TopBar on Top Right (Search & New) */}
+        <div
+          className={cn(
+            'pointer-events-none absolute top-2.5 right-2.5 z-20 flex items-center justify-end transition-opacity duration-150',
+            sidebarExpanded && 'max-md:opacity-0 max-md:pointer-events-none',
+          )}
+        >
+          <TopBar />
+        </div>
+
+        {/* Workspace Canvas */}
+        <main className="relative flex-1 min-h-0 min-w-0 overflow-hidden">
+          {children ?? <Outlet />}
+        </main>
+
+        {/* Floating BottomBar along the Bottom (History & Capped Breadcrumbs) */}
+        <div
+          className={cn(
+            'pointer-events-none absolute bottom-2.5 inset-x-0 z-20 flex items-center justify-between px-2.5 transition-opacity duration-150',
+            sidebarExpanded && 'max-md:opacity-0 max-md:pointer-events-none',
+          )}
+        >
+          <BottomBar />
+        </div>
+      </div>
+
+      {/* 4. Sticky Inspector Panel on the Right */}
       <aside
         ref={inspectorRef}
         data-shell-panel="inspector"
@@ -93,7 +119,7 @@ function ShellFrame({ children }: { children?: ReactNode }) {
         aria-label="Inspector"
         hidden={!inspectorMounted}
         className={cn(
-          'pointer-events-auto absolute top-[54px] bottom-[54px] right-2.5 z-20 flex flex-col rounded-[var(--radius-lg)] border border-border bg-card shadow-floating transition-all duration-200 min-h-0',
+          'h-full border-l border-border bg-card transition-all duration-200 shrink-0 min-h-0 flex flex-col',
           inspectorOpen
             ? 'w-[var(--shell-inspector,320px)] overflow-y-auto max-md:fixed max-md:inset-y-0 max-md:top-0 max-md:bottom-0 max-md:right-0 max-md:z-40 max-md:w-[min(320px,85vw)] max-md:rounded-none max-md:shadow-2xl'
             : 'w-11 items-center p-1 overflow-hidden max-md:hidden',
@@ -113,39 +139,6 @@ function ShellFrame({ children }: { children?: ReactNode }) {
           }}
         />
       )}
-
-      {/* Floating navigation overlay layer */}
-      <div
-        className={cn(
-          'pointer-events-none fixed inset-0 z-30 select-none overflow-hidden',
-          sidebarExpanded && 'max-md:z-40',
-        )}
-      >
-        {/* Floating Rail on the Left */}
-        <div className="pointer-events-none absolute inset-y-2.5 left-2.5 flex flex-col">
-          <Rail />
-        </div>
-
-        {/* Floating TopBar on the Top Right */}
-        <div
-          className={cn(
-            'pointer-events-none absolute top-2.5 right-2.5 flex items-center justify-end transition-opacity duration-150',
-            sidebarExpanded && 'max-md:opacity-0 max-md:pointer-events-none',
-          )}
-        >
-          <TopBar />
-        </div>
-
-        {/* Floating BottomBar along the Bottom */}
-        <div
-          className={cn(
-            'pointer-events-none absolute bottom-2.5 inset-x-0 flex items-center justify-between px-2.5 transition-opacity duration-150',
-            sidebarExpanded && 'max-md:opacity-0 max-md:pointer-events-none',
-          )}
-        >
-          <BottomBar />
-        </div>
-      </div>
 
       <GlobalSearch />
     </div>

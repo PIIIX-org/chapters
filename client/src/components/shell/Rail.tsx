@@ -102,56 +102,55 @@ function RailLink({ item, expanded }: { item: RailItem; expanded: boolean }) {
   )
 }
 
-/** The primary navigation rail with standalone CH logo button and centered dual-card navigation. */
 export function Rail() {
   const shell = useShell()
   const session = useSession()
   const isAdmin = isAdminRole(session.data?.role)
-  const primary = PRIMARY
-  const secondary = SECONDARY.filter((item) => !item.admin || isAdmin)
+  const navItems = [...PRIMARY, ...SECONDARY.filter((item) => !item.admin || isAdmin)]
   const expanded = shell.sidebarExpanded
 
   return (
     <nav
       aria-label="Primary"
       className={cn(
-        'flex h-full flex-col items-center gap-2 bg-transparent border-none pointer-events-none transition-[width] duration-200 ease-in-out select-none',
-        expanded ? 'w-[var(--shell-context,240px)]' : 'w-11',
+        'flex h-full flex-col justify-between border-r border-border bg-card shrink-0 transition-[width] duration-200 ease-in-out select-none p-1 z-20',
+        expanded ? 'w-[var(--shell-context,240px)]' : 'w-11 items-center',
       )}
     >
-      <div className={cn('flex w-full items-center pointer-events-auto', expanded ? 'justify-start' : 'justify-center')}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={shell.toggleSidebar}
-              aria-label="Elara logo, toggle sidebar"
-              aria-expanded={expanded}
-              className={cn(
-                'flex items-center justify-center rounded-[var(--radius-md)] border border-border bg-card font-mono text-[13px] font-bold text-foreground outline-none transition-all duration-150 hover:bg-muted hover:border-input active:scale-95 shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40 cursor-pointer',
-                expanded ? 'h-11 w-full justify-between px-3' : 'size-11',
-              )}
-            >
-              <span>EL</span>
-              {expanded && <span className="font-sans text-xs font-normal text-muted-foreground">Elara</span>}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">
-            <span>Toggle navigation</span>
-            <Kbd aria-hidden="true">\</Kbd>
-          </TooltipContent>
-        </Tooltip>
-      </div>
+      <div className="flex flex-col gap-1 w-full items-center">
+        {/* Permanent Logo / Sidebar Toggle */}
+        <div className={cn('flex w-full items-center', expanded ? 'justify-start' : 'justify-center')}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={shell.toggleSidebar}
+                aria-label="Elara logo, toggle sidebar"
+                aria-expanded={expanded}
+                className={cn(
+                  'flex items-center justify-center rounded-[var(--radius-md)] border border-border bg-card font-mono text-[13px] font-bold text-foreground outline-none transition-all duration-150 hover:bg-muted hover:border-input active:scale-95 focus-visible:ring-2 focus-visible:ring-ring/40 cursor-pointer',
+                  expanded ? 'h-9 w-full justify-between px-3' : 'size-9',
+                )}
+              >
+                <span>EL</span>
+                {expanded && <span className="font-sans text-xs font-normal text-muted-foreground">Elara</span>}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <span>Toggle navigation</span>
+              <Kbd aria-hidden="true">\</Kbd>
+            </TooltipContent>
+          </Tooltip>
+        </div>
 
-      {/* Upper Navigation Card (Graphs, Vaults, Repos) */}
-      <div
-        className={cn(
-          'flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating shrink-0',
-          expanded ? 'w-full' : 'w-11 items-center max-md:hidden',
-        )}
-      >
+        {/* User Profile (Drawing 1) */}
+        <div className="w-full flex justify-center shrink-0">
+          <AccountMenu showLabel={expanded} />
+        </div>
+
+        {/* Unbroken Contiguous Navigational Tabs (Drawings 1 & 2) */}
         <ul className="flex flex-col gap-1 w-full items-center">
-          {primary.map((item) => (
+          {navItems.map((item) => (
             <li key={item.to} className="w-full flex justify-center shrink-0">
               <RailLink item={item} expanded={expanded} />
             </li>
@@ -159,24 +158,11 @@ export function Rail() {
         </ul>
       </div>
 
-      {/* Lower Navigation Card (Team, Admin, Settings, Notifications, Profile) */}
-      <div
-        className={cn(
-          'mt-auto flex flex-col gap-1 rounded-[var(--radius-lg)] border border-border bg-card p-1 pointer-events-auto shadow-floating shrink-0',
-          expanded ? 'w-full' : 'w-11 items-center max-md:hidden',
-        )}
-      >
+      {/* Notifications Card Stack & Bell at bottom (Drawing 1) */}
+      <div className="flex flex-col gap-1 w-full items-center shrink-0 pt-2">
         <ul className="flex flex-col gap-1 w-full items-center">
-          {secondary.map((item) => (
-            <li key={item.to} className="w-full flex justify-center shrink-0">
-              <RailLink item={item} expanded={expanded} />
-            </li>
-          ))}
           <li data-slot="notifications" className="w-full flex justify-center shrink-0">
             <NotificationBell showLabel={expanded} />
-          </li>
-          <li className="w-full flex justify-center shrink-0">
-            <AccountMenu showLabel={expanded} />
           </li>
         </ul>
       </div>

@@ -32,12 +32,28 @@ import {
   useNoteDirection,
 } from '../../components/vault/note-toolbar-utils.js'
 import type { NoteDirection } from '../../components/vault/note-toolbar-utils.js'
-import { History, Link2, Network, Share2, SlidersHorizontal } from 'lucide-react'
+import { Edit2, History, Link2, Network, Share2, SlidersHorizontal, Trash2, X } from 'lucide-react'
 import { Inspector, PanelRailButton, PanelRailNav } from '../../components/shell/ShellPanels.js'
-import { useOptionalShell, usePanel, useShellBreadcrumb, useShellStatus } from '../../components/shell/shell-context.js'
+import { usePanel, useShellBreadcrumb, useShellStatus } from '../../components/shell/shell-context.js'
 import type { ShellStatus } from '../../components/shell/shell-context.js'
 import { Pill } from '../../components/ui/pill.js'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../components/ui/tooltip.js'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '../../components/ui/dialog.js'
+import { Input } from '../../components/ui/input.js'
+import { Label } from '../../components/ui/label.js'
+import { Button } from '../../components/ui/button.js'
+import { FormError } from '../../components/FormError.js'
+import { SLUG, SlugRequirements } from '../../components/vault/SlugRequirements.js'
+import { useRenameNote } from '../../hooks/useRenameNote.js'
+import { useDeleteNote } from '../../hooks/useDeleteNote.js'
+import { toast } from '../../lib/toast.js'
 import { handleWikilinkClick } from '../../lib/handleWikilinkClick.js'
 import { cn } from '../../lib/utils.js'
 
@@ -149,6 +165,12 @@ interface NoteFrameProps {
   direction?: NoteDirection
   onDirectionChange?: (direction: NoteDirection) => void
   vaultId?: string
+  path?: string
+  properties?: ReactNode
+  backlinks?: ReactNode
+  graph?: ReactNode
+  history?: ReactNode
+  sharing?: ReactNode
 }
 
 function NoteFrame({
@@ -161,33 +183,97 @@ function NoteFrame({
   direction = 'ltr',
   onDirectionChange,
   vaultId,
+  path,
+  properties,
+  backlinks,
+  graph,
+  history,
+  sharing,
 }: NoteFrameProps) {
   const [width, setWidth] = useNoteWidth()
-  const shell = useOptionalShell()
-  const contextOpen = Boolean(shell?.panels?.context?.mounted && shell?.panels?.context?.open)
-  const leftPad =
-    contextOpen && shell?.sidebarExpanded
-      ? 'pl-[524px]'
-      : contextOpen
-        ? 'pl-[320px]'
-        : shell?.sidebarExpanded
-          ? 'pl-[264px]'
-          : 'pl-20'
+  const navigate = useNavigate()
+
+  // Dynamic bottom drawer state (Drawing 3 & Drawing 4)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerTab, setDrawerTab] = useState<'properties' | 'backlinks' | 'graph' | 'history' | 'sharing'>('properties')
+
+  // Rename & Delete dialogs
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const noteName = path ? (path.split('/').pop() ?? path) : ''
+  const [newName, setNewName] = useState(noteName)
+  const [renameError, setRenameError] = useState<string | null>(null)
+  const [renameSubmitted, setRenameSubmitted] = useState(false)
+
+  const renameNote = useRenameNote(vaultId ?? '')
+  const deleteNote = useDeleteNote(vaultId ?? '')
+
+  function handleOpenRename() {
+    setNewName(noteName)
+    setRenameError(null)
+    setRenameSubmitted(false)
+    setRenameOpen(true)
+  }
+
+  function handleTabClick(tab: typeof drawerTab) {
+    if (drawerOpen && drawerTab === tab) {
+      setDrawerOpen(false)
+    } else {
+      setDrawerTab(tab)
+      setDrawerOpen(true)
+    }
+  }
+
+  function handleRenameSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setRenameSubmitted(true)
+    if (!SLUG.test(newName)) {
+      setRenameError('Name must be lowercase letters, numbers, and hyphens.')
+      return
+    }
+    setRenameError(null)
+    if (!vaultId || !path) return
+    renameNote.mutate(
+      { from: path, to: newName },
+      {
+        onSuccess: (renamed) => {
+          setRenameOpen(false)
+          toast.success('Note renamed', `${noteName} renamed to ${renamed.name || newName}.`)
+          navigate(`/vaults/${vaultId}/notes/${renamed.path}`)
+        },
+        onError: (err) => {
+          const msg = err.message || 'Could not rename the note.'
+          toast.error('Failed to rename note', msg)
+          setRenameError(msg)
+        },
+      },
+    )
+  }
+
+  function handleDeleteConfirm() {
+    if (!vaultId || !path) return
+    deleteNote.mutate(path, {
+      onSuccess: () => {
+        setDeleteOpen(false)
+        toast.success('Note deleted', `${noteName} moved to trash.`)
+        navigate(`/vaults/${vaultId}`)
+      },
+      onError: (err) => {
+        const msg = err.message || 'Could not delete the note.'
+        toast.error('Failed to delete note', msg)
+      },
+    })
+  }
 
   return (
     <>
       <div className="flex h-full min-h-0 flex-col">
         {/* Note bar: padded left to clear the CH logo and right to clear TopBar search */}
-        <div
-          className={cn(
-            'flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pr-16 py-1 transition-[padding] duration-200',
-            leftPad,
-          )}
-        >
+        <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 pr-16 py-1">
           {bar}
         </div>
         {notice}
-        <div className={cn('transition-[padding] duration-200', leftPad)}>
+        <div className="px-4">
           <NoteRichToolbar
             view={view}
             readOnly={readOnly}
@@ -199,12 +285,7 @@ function NoteFrame({
           />
         </div>
         <NoteFloatingSelectionToolbar view={view} readOnly={readOnly} />
-        <div
-          className={cn(
-            'min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4 pb-16 transition-[padding] duration-200',
-            leftPad,
-          )}
-        >
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4 pb-16">
           <div
             ref={editorRef}
             dir={direction}
@@ -216,6 +297,311 @@ function NoteFrame({
           />
         </div>
       </div>
+
+      {/* Floating Action Toolbar on right (Drawing 3) */}
+      <TooltipProvider delayDuration={300}>
+        <nav
+          aria-label="Note quick actions"
+          className="fixed right-3.5 top-1/2 -translate-y-1/2 z-20 flex flex-col items-center gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 shadow-lg backdrop-blur-md opacity-20 hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200"
+        >
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="Properties"
+                onClick={() => handleTabClick('properties')}
+                className={cn(
+                  'flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors',
+                  drawerOpen && drawerTab === 'properties' && 'bg-primary/10 text-primary font-semibold',
+                )}
+              >
+                <SlidersHorizontal className="size-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">Properties</TooltipContent>
+          </Tooltip>
+
+          {backlinks != null && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Backlinks"
+                  onClick={() => handleTabClick('backlinks')}
+                  className={cn(
+                    'flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors',
+                    drawerOpen && drawerTab === 'backlinks' && 'bg-primary/10 text-primary font-semibold',
+                  )}
+                >
+                  <Link2 className="size-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left">Backlinks</TooltipContent>
+            </Tooltip>
+          )}
+
+          {graph != null && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Graph"
+                  onClick={() => handleTabClick('graph')}
+                  className={cn(
+                    'flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors',
+                    drawerOpen && drawerTab === 'graph' && 'bg-primary/10 text-primary font-semibold',
+                  )}
+                >
+                  <Network className="size-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left">Graph</TooltipContent>
+            </Tooltip>
+          )}
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="History"
+                onClick={() => handleTabClick('history')}
+                className={cn(
+                  'flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors',
+                  drawerOpen && drawerTab === 'history' && 'bg-primary/10 text-primary font-semibold',
+                )}
+              >
+                <History className="size-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">History</TooltipContent>
+          </Tooltip>
+
+          {sharing != null && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Sharing"
+                  onClick={() => handleTabClick('sharing')}
+                  className={cn(
+                    'flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors',
+                    drawerOpen && drawerTab === 'sharing' && 'bg-primary/10 text-primary font-semibold',
+                  )}
+                >
+                  <Share2 className="size-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left">Sharing</TooltipContent>
+            </Tooltip>
+          )}
+
+          {!readOnly && Boolean(vaultId && path) && (
+            <>
+              <div className="my-1 h-px w-5 bg-border/60" />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={`Rename ${noteName}`}
+                    onClick={handleOpenRename}
+                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                  >
+                    <Edit2 className="size-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">Rename</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={`Delete ${noteName}`}
+                    onClick={() => setDeleteOpen(true)}
+                    className="flex size-8 items-center justify-center rounded-lg text-destructive/80 hover:bg-destructive/15 hover:text-destructive transition-colors"
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">Delete</TooltipContent>
+              </Tooltip>
+            </>
+          )}
+        </nav>
+      </TooltipProvider>
+
+      {/* Dynamic Bottom Drawer (Drawing 4) */}
+      {drawerOpen && (
+        <aside
+          aria-label="Note drawer"
+          className="fixed bottom-0 inset-x-0 md:inset-x-8 md:bottom-2 z-25 max-w-5xl mx-auto flex flex-col rounded-t-xl md:rounded-xl border border-border bg-card shadow-2xl backdrop-blur max-h-[60vh] min-h-[180px] animate-in slide-in-from-bottom duration-200"
+        >
+          {/* Drag handle */}
+          <div className="flex justify-center pt-2 pb-1 shrink-0">
+            <div className="h-1.5 w-12 rounded-full bg-muted-foreground/30" />
+          </div>
+
+          {/* Drawer Header with Tab Navigation and Close Button */}
+          <div className="flex items-center justify-between border-b border-border/60 px-4 py-1.5 shrink-0">
+            <div className="flex items-center gap-1 overflow-x-auto">
+              <button
+                type="button"
+                onClick={() => setDrawerTab('properties')}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                  drawerTab === 'properties'
+                    ? 'bg-primary/10 text-primary font-semibold'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                Properties
+              </button>
+              {backlinks != null && (
+                <button
+                  type="button"
+                  onClick={() => setDrawerTab('backlinks')}
+                  className={cn(
+                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                    drawerTab === 'backlinks'
+                      ? 'bg-primary/10 text-primary font-semibold'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  Backlinks
+                </button>
+              )}
+              {graph != null && (
+                <button
+                  type="button"
+                  onClick={() => setDrawerTab('graph')}
+                  className={cn(
+                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                    drawerTab === 'graph'
+                      ? 'bg-primary/10 text-primary font-semibold'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  Graph
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setDrawerTab('history')}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                  drawerTab === 'history'
+                    ? 'bg-primary/10 text-primary font-semibold'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                History
+              </button>
+              {sharing != null && (
+                <button
+                  type="button"
+                  onClick={() => setDrawerTab('sharing')}
+                  className={cn(
+                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                    drawerTab === 'sharing'
+                      ? 'bg-primary/10 text-primary font-semibold'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  Sharing
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(false)}
+              aria-label="Close drawer"
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+
+          {/* Drawer Content */}
+          <div className="flex-1 overflow-y-auto p-4 min-h-0">
+            {drawerTab === 'properties' && properties}
+            {drawerTab === 'backlinks' && backlinks}
+            {drawerTab === 'graph' && graph}
+            {drawerTab === 'history' && history}
+            {drawerTab === 'sharing' && sharing}
+          </div>
+        </aside>
+      )}
+
+      {/* Rename Dialog */}
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename Note</DialogTitle>
+            <DialogDescription>
+              Enter a new URL-safe slug for this note.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleRenameSubmit} className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="rename-slug-input">Name</Label>
+              <Input
+                id="rename-slug-input"
+                value={newName}
+                onChange={(e) => {
+                  setNewName(e.target.value)
+                  if (renameError && SLUG.test(e.target.value)) setRenameError(null)
+                }}
+                className={cn(
+                  'font-mono text-xs',
+                  newName.length > 0 &&
+                    (SLUG.test(newName)
+                      ? 'border-emerald-500 focus-visible:ring-emerald-500'
+                      : 'border-red-500 focus-visible:ring-red-500'),
+                  (renameError || (renameSubmitted && !SLUG.test(newName))) &&
+                    'border-red-500 focus-visible:ring-red-500',
+                )}
+              />
+              <SlugRequirements value={newName} />
+              <FormError message={renameError} />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setRenameOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={renameNote.isPending}>
+                Save
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Note</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete &ldquo;{noteName}&rdquo;? It will be moved to trash.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleDeleteConfirm}
+              disabled={deleteNote.isPending}
+            >
+              Delete
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Inspector label="Note" className="min-h-0">
         {inspector}
       </Inspector>
@@ -431,6 +817,12 @@ function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: Colla
   const noteType =
     (typeof rawType === 'string' && rawType.trim().length > 0 ? rawType.trim() : path.split('/')[0]) || ''
 
+  const propertiesNode = <CollabPropertyPanel frontmatter={collab.ydoc.getMap('frontmatter')} readOnly={locked} />
+  const backlinksNode = <BacklinksPanel vaultId={vaultId} path={path} />
+  const graphNode = <LocalGraphPanel vaultId={vaultId} path={path} />
+  const historyNode = <RevisionHistory vaultId={vaultId} path={path} access={access} />
+  const sharingNode = access === 'owner' ? <SharingPanel vaultId={vaultId} /> : undefined
+
   return (
     <NoteFrame
       editorRef={editorRef}
@@ -439,6 +831,12 @@ function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: Colla
       direction={direction}
       onDirectionChange={setDirection}
       vaultId={vaultId}
+      path={path}
+      properties={propertiesNode}
+      backlinks={backlinksNode}
+      graph={graphNode}
+      history={historyNode}
+      sharing={sharingNode}
       bar={
         <>
           {noteType && (
@@ -465,13 +863,13 @@ function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: Colla
       notice={revoked ? <RevokedNotice /> : null}
       inspector={
         <NoteInspector
-          properties={<CollabPropertyPanel frontmatter={collab.ydoc.getMap('frontmatter')} readOnly={locked} />}
-          backlinks={<BacklinksPanel vaultId={vaultId} path={path} />}
-          graph={<LocalGraphPanel vaultId={vaultId} path={path} />}
+          properties={propertiesNode}
+          backlinks={backlinksNode}
+          graph={graphNode}
           // RevisionHistory explains itself to a downgraded (now read) viewer
           // instead of firing a request that can only 403.
-          history={<RevisionHistory vaultId={vaultId} path={path} access={access} />}
-          sharing={access === 'owner' ? <SharingPanel vaultId={vaultId} /> : undefined}
+          history={historyNode}
+          sharing={sharingNode}
         />
       }
     />
@@ -539,6 +937,11 @@ function LiveNote({ vaultId, path, initialFrontmatter, initialBody }: LiveNotePr
       ? state.frontmatter.type.trim()
       : path.split('/')[0]) || ''
 
+  const propertiesNode = <LivePropertyPanel frontmatter={state.frontmatter} />
+  const backlinksNode = <BacklinksPanel vaultId={vaultId} path={path} />
+  const graphNode = <LocalGraphPanel vaultId={vaultId} path={path} />
+  const historyNode = <RevisionHistory vaultId={vaultId} path={path} access="read" />
+
   return (
     <NoteFrame
       editorRef={editorRef}
@@ -547,6 +950,11 @@ function LiveNote({ vaultId, path, initialFrontmatter, initialBody }: LiveNotePr
       direction={direction}
       onDirectionChange={setDirection}
       vaultId={vaultId}
+      path={path}
+      properties={propertiesNode}
+      backlinks={backlinksNode}
+      graph={graphNode}
+      history={historyNode}
       bar={
         <>
           {noteType && (
@@ -565,12 +973,12 @@ function LiveNote({ vaultId, path, initialFrontmatter, initialBody }: LiveNotePr
       }
       inspector={
         <NoteInspector
-          properties={<LivePropertyPanel frontmatter={state.frontmatter} />}
-          backlinks={<BacklinksPanel vaultId={vaultId} path={path} />}
-          graph={<LocalGraphPanel vaultId={vaultId} path={path} />}
+          properties={propertiesNode}
+          backlinks={backlinksNode}
+          graph={graphNode}
           // Same layout as an editor's, locked: RevisionHistory says why a
           // read-only viewer gets no list instead of rendering a 403.
-          history={<RevisionHistory vaultId={vaultId} path={path} access="read" />}
+          history={historyNode}
         />
       }
     />

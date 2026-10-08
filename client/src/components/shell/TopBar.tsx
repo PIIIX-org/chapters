@@ -19,9 +19,8 @@ export function TopBar() {
         </div>
       )}
 
-      <UniversalNewButton />
-
-      <div className="pointer-events-auto">
+      <div className="flex items-center gap-2 pointer-events-auto opacity-20 hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
+        <UniversalNewButton />
         <ExpandableSearch />
       </div>
     </header>

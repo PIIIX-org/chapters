@@ -13,6 +13,7 @@ import { Button } from '../ui/button.js'
 import { FormError } from '../FormError.js'
 import { useCreateRepository } from '../../hooks/useRepositories.js'
 import type { CreateRepositoryInput, IngestionMethod, Repository } from '../../api/repositories.js'
+import { toast } from '../../lib/toast.js'
 
 interface ConnectRepositoryDialogProps {
   open: boolean
@@ -89,10 +90,15 @@ export function ConnectRepositoryDialog({ open, onOpenChange, onConnected }: Con
         setGitUrl('')
         setGitCredential('')
         setLocalPath('')
+        toast.success('Repository connected', `${repository.name} connected successfully.`)
         onConnected?.(repository)
         onOpenChange(false)
       },
-      onError: (err) => setError(err.message || 'Could not connect the repository.'),
+      onError: (err) => {
+        const msg = err.message || 'Could not connect the repository.'
+        toast.error('Failed to connect repository', msg)
+        setError(msg)
+      },
     })
   }
 

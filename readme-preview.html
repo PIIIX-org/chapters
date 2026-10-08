@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapters / Elara — README.md Live Preview</title>
+  <link rel="icon" href="assets/badges/badge-vector.svg" type="image/svg+xml">
+  <style>
+    :root {
+      --bg: #070A0F;
+      --card-bg: #0D1117;
+      --border: #1C2433;
+      --text: #C9D1D9;
+      --text-bright: #F0F6FC;
+      --text-muted: #8B949E;
+      --accent: #5B8DEF;
+      --teal: #3FB8AE;
+      --green: #2EC47C;
+      --code-bg: #161B22;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.65;
+      padding: 0;
+    }
+    /* Top Sticky Observatory Control Header */
+    .top-bar {
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      background: #0B0F19;
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    .top-title {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--teal);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .led-live {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      display: inline-block;
+    }
+    .top-meta {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .top-meta span { color: var(--text-bright); }
+    .page-container {
+      max-width: 1020px;
+      margin: 32px auto 80px auto;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 48px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    /* GitHub Markdown Typography */
+    h1, h2, h3, h4, h5, h6 {
+      color: var(--text-bright);
+      font-weight: 700;
+      line-height: 1.3;
+      margin-top: 32px;
+      margin-bottom: 16px;
+    }
+    h1 { font-size: 32px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+    h2 { font-size: 24px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+    h3 { font-size: 18px; }
+    p { margin-bottom: 16px; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    hr {
+      border: 0;
+      height: 1px;
+      background: var(--border);
+      margin: 32px 0;
+    }
+    img {
+      max-width: 100%;
+      height: auto;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    /* Tables */
+    .table-wrapper {
+      width: 100%;
+      overflow-x: auto;
+      margin: 20px 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border-spacing: 0;
+      font-size: 14px;
+    }
+    table th, table td {
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      text-align: left;
+    }
+    table th {
+      background: #121824;
+      font-weight: 700;
+      color: var(--text-bright);
+    }
+    table tr:nth-child(2n) {
+      background: #0A0E17;
+    }
+    /* Code Blocks */
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 16px;
+      overflow-x: auto;
+      margin: 18px 0;
+      font-size: 13.5px;
+      line-height: 1.5;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Geist Mono", monospace;
+      font-size: 13.5px;
+      background: rgba(110, 118, 129, 0.2);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #E2E8F0;
+    }
+    pre code {
+      background: transparent;
+      padding: 0;
+      border-radius: 0;
+    }
+    /* Lists */
+    ul, ol {
+      margin-left: 28px;
+      margin-bottom: 18px;
+    }
+    li { margin-bottom: 6px; }
+    /* Blockquotes */
+    blockquote {
+      border-left: 4px solid var(--accent);
+      padding: 10px 18px;
+      background: #0B101B;
+      color: var(--text-muted);
+      border-radius: 0 4px 4px 0;
+      margin: 18px 0;
+    }
+    /* Details */
+    details {
+      background: #0A0E17;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 18px;
+      margin: 18px 0;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--text-bright);
+      outline: none;
+    }
+    /* Mermaid Diagram Container */
+    .mermaid {
+      background: #070A0F;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 20px;
+      margin: 20px 0;
+      display: flex;
+      justify-content: center;
+    }
+  </style>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        darkMode: true,
+        background: '#070A0F',
+        primaryColor: '#121826',
+        primaryTextColor: '#E2E8F4',
+        primaryBorderColor: '#5B8DEF',
+        lineColor: '#3FB8AE',
+        secondaryColor: '#0E1422',
+        tertiaryColor: '#0A0E17'
+      }
+    });
+  </script>
+</head>
+<body>
+  <!-- Top Telemetry Header -->
+  <div class="top-bar">
+    <div class="top-title">
+      <span class="led-live"></span>
+      <span>CHAPTERS / ELARA — README.MD OBSERVATORY PREVIEW</span>
+    </div>
+    <div class="top-meta">
+      TARGET: <span>PIIIX-org/chapters</span> &nbsp;|&nbsp;
+      BRANCH: <span>feat/master-test-plans-tp01-tp15-dashboards</span> &nbsp;|&nbsp;
+      PREFLIGHT: <span style="color:#2EC47C">PASS (100%)</span>
+    </div>
+  </div>
+
+  <div class="page-container markdown-body">
+<h1 id="chapters-elara">Chapters / Elara</h1>
+<div align="center">
+<p><img src="assets/hero.svg" alt="Chapters Knowledge Engine Observatory Flight Deck" /></p>
+<p align="center">
+  <a href="#overview"><img src="assets/badges/badge-okf.svg" alt="Format: OKF v0.2 ISO 8601"/></a>
+  <a href="#system-architecture"><img src="assets/badges/badge-crdt.svg" alt="Collab: Yjs CRDT 0.09ms p95"/></a>
+  <a href="docs/benchmarks/README.md"><img src="assets/badges/badge-vector.svg" alt="Vector Engine: pgvector 17 10.87 QPS"/></a>
+  <a href="#model-context-protocol-mcp-interface"><img src="assets/badges/badge-mcp.svg" alt="AI MCP: 57 Tools and 20 Prompts"/></a>
+  <br/>
+  <a href="#codebase-architecture"><img src="assets/badges/badge-ast.svg" alt="AST Engine: Tree-sitter 92k LOC/s"/></a>
+  <a href="docs/benchmarks/03-enterprise-security-penetration-matrix.md"><img src="assets/badges/badge-security.svg" alt="Security: 21 of 21 Vectors Blocked"/></a>
+  <a href="benchmarks/README.md"><img src="assets/badges/badge-tests.svg" alt="Test Suite: 15 of 15 Plans Verified"/></a>
+  <a href="LICENSE"><img src="assets/badges/badge-license.svg" alt="License: MIT Open Source"/></a>
+</p>
+<h3 id="the-open-source-self-hostable-second-brain-built-for-human-engineering-teams-and-autonomous-ai-swarms">The open-source, self-hostable second brain built for human engineering teams and autonomous AI swarms.</h3>
+<p><a href="#quickstart">Quickstart</a> • <a href="#architectural-comparison">Architectural Comparison</a> • <a href="docs/benchmarks/README.md">Benchmarks & Telemetry</a> • <a href="benchmarks/README.md">Master Test Plans</a> • <a href="#model-context-protocol-mcp-interface">MCP Server</a></p>
+</div>
+<hr />
+<h2 id="overview">Overview</h2>
+<p>Software knowledge currently fractures across two irreconcilable silos: human team wikis stored in closed cloud databases (Notion, Outline) and local code repositories indexed by headless command-line tools. Human engineers lose context as architecture documentation drifts away from source code, while autonomous AI coding agents struggle with hallucinated symbol paths and truncated context windows.</p>
+<p><strong>Chapters (Elara)</strong> resolves this divide. It stores all documentation as plain, human-readable Markdown files directly on disk using the <strong>Google Open Knowledge Format (OKF v0.2)</strong> with strict ISO 8601 UTC timestamps. Simultaneously, it connects to your Git repositories, parsing TypeScript, Go, Python, Rust, and C++ source files into a real-time <strong>Tree-sitter AST symbol index</strong>.</p>
+<p>When you write notes, you link directly to live codebase declarations using <code>[[repo:#symbol]]</code> syntax. When code changes, Chapters reconciles the AST graph automatically, pruning ghost symbols and keeping architecture documentation in lockstep with the codebase. For autonomous AI agents, Chapters exposes a native <strong>Model Context Protocol (MCP)</strong> server equipped with 57 specialized tools and 20 engineering prompts.</p>
+<hr />
+<h2 id="architectural-comparison">Architectural Comparison</h2>
+<p>How Chapters compares against existing tools across core architectural dimensions:</p>
+<p><img src="assets/charts/competitive-matrix.svg" alt="Architectural Comparison Matrix: Chapters vs Alternatives" /></p>
+<h3 id="key-architectural-differentiators">Key Architectural Differentiators</h3>
+<div class="table-wrapper"><table><thead><tr><th>Capability</th><th>Chapters (Elara)</th><th>Obsidian</th><th>Swimm</th><th>Graphify</th><th>Outline</th><th>Notion</th></tr></thead><tbody><tr><td><strong>License & Hosting</strong></td><td><strong>MIT Open-Source · Self-Host</strong></td><td>Proprietary Local App</td><td>Closed Commercial SaaS</td><td>Open-Source CLI</td><td>AGPLv3 Self-Host</td><td>Closed Commercial Cloud</td></tr><tr><td><strong>Storage Architecture</strong></td><td><strong>Plain OKF v0.2 MD on Disk</strong></td><td>Unstructured Local MD</td><td>Cloud Markdown Sync</td><td>InMemory AST Cache</td><td>PostgreSQL Database</td><td>Proprietary Block DB</td></tr><tr><td><strong>Multiplayer Engine</strong></td><td><strong>Yjs CRDT Relay (<0.1ms)</strong></td><td>Manual Git Merge Conflicts</td><td>Git Pull-Request Flow</td><td>Single User CLI</td><td>Operational Transform</td><td>Proprietary Cloud OT</td></tr><tr><td><strong>Code AST Ingestion</strong></td><td><strong>Tree-sitter WASM Engine</strong></td><td>None</td><td>IDE Extension Snippets</td><td>Headless AST Graph</td><td>None</td><td>Static Code Blocks</td></tr><tr><td><strong>Unified Graph</strong></td><td><strong>Notes + Code (Louvain/Dijkstra)</strong></td><td>Notes Only Graph</td><td>Code Documentation Only</td><td>Code Syntax Only</td><td>Document Tree Only</td><td>Relational Tables Only</td></tr><tr><td><strong>AI Interface</strong></td><td><strong>Native 57-Tool MCP Server</strong></td><td>Community REST Hacks</td><td>Webhook Ingestion</td><td>Stdout CLI Piping</td><td>REST API</td><td>Proprietary Cloud Copilot</td></tr><tr><td><strong>Vector Indexing</strong></td><td><strong>pgvector 17 + ChromaDB</strong></td><td>Third-party Plugins</td><td>Cloud Embedding API</td><td>Local Vector Store</td><td>None</td><td>Closed Embedding Service</td></tr></tbody></table></div>
+<hr />
+<h2 id="system-architecture">System Architecture</h2>
+<p>Chapters utilizes a dual-index architecture that links plain Markdown notes and polyglot Git repositories into a unified knowledge graph:</p>
+<div class="mermaid">
+flowchart TD
+  subgraph Ingestion ["Source Ingestion Layer"]
+    MD["Plain Markdown Files\n(OKF v0.2 on Disk)"]
+    GIT["Git Repositories\n(TS, Go, Python, Rust, C++)"]
+  end
+
+  subgraph Processing ["Parsing & Analysis Engines"]
+    OKF_P["OKF Validator\nStrict ISO 8601 UTC"]
+    TS_P["Tree-sitter WASM Engine\n92,245 LOC / sec"]
+    EMB["Local ONNX Embeddings\nall-MiniLM-L6-v2 (384d)"]
+  end
+
+  subgraph Storage ["Unified Storage & State Layer"]
+    PG[("PostgreSQL 17 + pgvector\nHybrid Search (BM25 + Cosine)")]
+    YJS["Yjs CRDT Relay\n(Hocuspocus WebSocket)"]
+    LOUVAIN["Louvain Community Engine\nCross-Vault & Code Bridges"]
+  end
+
+  subgraph Consumers ["Consumption & Agent Layer"]
+    MCP["Model Context Protocol (MCP)\n57 Tools · 20 Prompts"]
+    UI["Fastify + React Client\nDark Observatory Shell"]
+    AGENTS["Autonomous AI Swarms\nCursor · Claude · Antigravity"]
+    HUMANS["Engineering Teams\nReal-Time Collaborative Editing"]
+  end
+
+  MD --> OKF_P
+  GIT --> TS_P
+  OKF_P --> EMB
+  TS_P --> EMB
+  OKF_P --> YJS
+  EMB --> PG
+  TS_P --> PG
+  PG --> LOUVAIN
+  LOUVAIN --> MCP
+  YJS --> UI
+  PG --> UI
+  MCP --> AGENTS
+  UI --> HUMANS
+</div>
+<hr />
+<h3 id="benchmarks-telemetry">Benchmarks & Telemetry</h3>
+<p>Production concurrency benchmarks, query throughput scaling curves, tail latency diagnostics, and 7 executive architectural reports are documented in the benchmark suite:</p>
+<p>👉 <strong><a href="docs/benchmarks/README.md">Empirical Benchmark Telemetry & Executive Reports →</a></strong>  </p>
+<p><em>Hardware capacity models, multi-tenant QoS isolation, V8 soak forensics, and pgvector vs ChromaDB empirical comparison.</em></p>
+<hr />
+<h2 id="testing-quality-assurance">Testing & Quality Assurance</h2>
+<p>Chapters is verified through 15 rigorous, automated Master Test Plans covering retrieval accuracy, CRDT stress, chaos recovery, and security penetration:</p>
+<p>👉 <strong><a href="benchmarks/README.md">The 15 Master Test Plans (TP-01 to TP-15) →</a></strong>  </p>
+<p><em>Complete verification matrix, empirical SLO compliance targets, and 15 interactive HTML run dashboards.</em></p>
+<hr />
+<h2 id="model-context-protocol-mcp-interface">Model Context Protocol (MCP) Interface</h2>
+<p>Chapters exposes a complete, permission-scoped Model Context Protocol (MCP) server that transforms any AI agent into an active collaborator on your knowledge base and codebases.</p>
+<h3 id="mcp-configuration">MCP Configuration</h3>
+<p>Add Chapters to your <code>claude_desktop_config.json</code>, Cursor MCP settings, or Antigravity configuration:</p>
+<pre><code class="language-json">{
+  "mcpServers": {
+    "chapters": {
+      "command": "node",
+      "args": ["/path/to/chapters/server/dist/mcp/index.js"],
+      "env": {
+        "ELARA_API_URL": "http://localhost:3000",
+        "ELARA_API_TOKEN": "your-api-token"
+      }
+    }
+  }
+}</code></pre>
+<h3 id="key-mcp-capabilities">Key MCP Capabilities</h3>
+<ul>
+<li><strong>57 First-Class Tools</strong>:</li>
+<li><code>list_vaults</code>, <code>browse_vault</code>, <code>read_note</code>, <code>create_note</code>, <code>edit_note</code>, <code>delete_note</code></li>
+<li><code>list_repositories</code>, <code>browse_repository</code>, <code>read_file</code>, <code>find_symbols</code>, <code>repository_status</code></li>
+<li><code>search</code> (hybrid BM25 + 384d semantic vector search with permission scoping)</li>
+<li><code>graph</code> (subgraph extraction, Louvain community detection, shortest path via Dijkstra)</li>
+<li><code>audit_okf_conformance</code> (automated schema validation against OKF v0.2)</li>
+<li><strong>20 Pre-Configured Engineering Prompts</strong>:</li>
+<li><code>draft_adr</code> — Contextual Architectural Decision Record drafting linking relevant notes and code AST symbols.</li>
+<li><code>audit_architecture_drift</code> — Scans AST graph against design notes to identify stale references.</li>
+<li><code>shortest_path_navigation</code> — Guides agents through unfamiliar codebases via knowledge graph traversal.</li>
+<li><code>session_capture</code> — Distills ongoing debugging sessions into structured OKF notes.</li>
+</ul>
+<hr />
+<h2 id="codebase-architecture">Codebase Architecture</h2>
+<details>
+<summary>📁&nbsp;&nbsp;<b>Curated Repository Map</b> — Browse the codebase structure <code>TypeScript / SQL</code></summary>
+<br>
+<pre><code class="language-">chapters/
+├── client/                     # Web Frontend Application (React + Vite + Tailwind)
+│   ├── src/components/         # UI Components (Dark Observatory command console)
+│   ├── src/editor/             # Live-preview Markdown editor (Milkdown + Yjs)
+│   ├── src/graph/              # Canvas 2D Louvain knowledge graph renderer
+│   └── src/stores/             # Client state management (Zustand + WebSockets)
+│
+├── server/                     # Backend API &amp; Engine (Fastify + TypeScript)
+│   ├── src/auth/               # OIDC, session handling, and MFA verification
+│   ├── src/crdt/               # Hocuspocus WebSocket relay for live Yjs sync
+│   ├── src/graph/              # Louvain community clustering &amp; Dijkstra routing
+│   ├── src/mcp/                # Model Context Protocol server (57 tools, 20 prompts)
+│   ├── src/notes/              # OKF v0.2 Markdown parser and disk storage engine
+│   ├── src/repositories/       # Git shallow-clone manager &amp; filesystem watchers
+│   ├── src/search/             # Hybrid search (PostgreSQL pgvector + BM25)
+│   └── src/treesitter/         # WebAssembly Tree-sitter polyglot symbol extractor
+│
+├── docs/                       # Specifications &amp; Benchmark Documentation
+│   ├── benchmarks/             # 7 Executive Benchmark Reports (.md &amp; .html)
+│   └── superpowers/specs/      # Architectural Decision Records &amp; Specs
+│
+├── benchmarks/                 # Automated Performance &amp; Chaos Test Harness
+│   ├── runs/                   # 15 Master Test Run Artifacts (TP-01 to TP-15)
+│   └── suites/                 # K6, Autocannon, and Chaos injection scripts
+│
+└── assets/                     # Observatory Asset Kit (Committed SVGs)
+    ├── hero.svg                # Signature animated flight deck banner
+    ├── badges/                 # Monolithic telemetry status badges
+    └── charts/                 # Animated performance &amp; competitive matrix charts</code></pre>
+</details>
+<hr />
+<h2 id="quickstart">Quickstart</h2>
+<h3 id="prerequisites">Prerequisites</h3>
+<ul>
+<li><strong>Node.js</strong>: <code>v20.x</code> or later</li>
+<li><strong>pnpm</strong>: <code>v9.x</code> or later</li>
+<li><strong>PostgreSQL</strong>: <code>v17.x</code> with <code>pgvector</code> extension (or Docker Compose)</li>
+</ul>
+<h3 id="1-launch-with-docker-compose-recommended">1. Launch with Docker Compose (Recommended)</h3>
+<p>Run the full stack (PostgreSQL 17, pgvector, and Chapters backend):</p>
+<pre><code class="language-bash"># Clone the repository
+git clone https://github.com/PIIIX-org/chapters.git
+cd chapters
+
+# Start all services
+docker compose up -d
+
+# Open the Observatory
+open http://localhost:3000</code></pre>
+<h3 id="2-manual-local-development">2. Manual Local Development</h3>
+<pre><code class="language-bash"># Install dependencies across workspaces
+pnpm install
+
+# Run database migrations
+pnpm --filter @elara/server db:migrate
+
+# Start server and client in development mode
+pnpm dev</code></pre>
+<hr />
+<h2 id="license">License</h2>
+<p>Chapters is open-source software licensed under the <strong><a href="LICENSE">MIT License</a></strong>.</p>
+<!-- forged-with: git-a-profile -->
+<div align="center">
+<p><img src="assets/footer.svg" alt="Chapters Observatory Telemetry Footer" /></p>
+<sub>Forged with <a href="https://github.com/PIIIX-org/git-a-profile">git-a-profile</a> · <a href="https://github.com/PIIIX-org">PIIIX</a></sub>
+</div>
+  </div>
+</body>
+</html>

@@ -26,7 +26,7 @@ export function BacklinksPanel({ vaultId, path }: BacklinksPanelProps) {
         <p role="alert" className="text-sm text-destructive">
           {backlinks.error.message}
         </p>
-      ) : backlinks.data.length === 0 ? (
+      ) : !Array.isArray(backlinks.data) || backlinks.data.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No notes link here yet. Add a wikilink <code className="font-mono text-xs">[[{path}]]</code> in another note to connect them.
         </p>
