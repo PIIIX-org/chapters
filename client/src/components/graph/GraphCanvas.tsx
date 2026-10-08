@@ -128,6 +128,7 @@ function toMemberSimEdges(edges: GraphEdge[]): MemberSimEdge[] {
 // up is a pan, not a tap — matches the panzoom module's own screen-space
 // units (clientX/clientY, unscaled by devicePixelRatio).
 const TAP_MAX_SCREEN_DRIFT = 6
+const TOUCH_MAX_SCREEN_DRIFT = 12
 
 function getUnobstructedViewport(
   container: HTMLElement,
@@ -551,15 +552,27 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       const candidate = tap
       tap = null
       if (!candidate || candidate.pointerId !== e.pointerId) return
-      if (Math.hypot(e.clientX - candidate.x, e.clientY - candidate.y) > TAP_MAX_SCREEN_DRIFT) {
+      const maxDrift = e.pointerType === 'touch' ? TOUCH_MAX_SCREEN_DRIFT : TAP_MAX_SCREEN_DRIFT
+      if (Math.hypot(e.clientX - candidate.x, e.clientY - candidate.y) > maxDrift) {
         hasUserInteractedRef.current = true
+        if (e.pointerType === 'touch') {
+          setHoveredTooltip(null)
+          setHoveredCommunity(null)
+        }
         return
       }
 
       const rect = canvas!.getBoundingClientRect()
       const world = screenToWorld(panzoom.transform, e.clientX - rect.left, e.clientY - rect.top)
-      const hitNode = hitTest(nodes, world.x, world.y, (n) => n.radius)
-      if (!hitNode) return
+      const hitSlop = e.pointerType === 'touch' ? 12 / panzoom.transform.k : 0
+      const hitNode = hitTest(nodes, world.x, world.y, (n) => n.radius + hitSlop)
+      if (!hitNode) {
+        if (e.pointerType === 'touch') {
+          setHoveredTooltip(null)
+          setHoveredCommunity(null)
+        }
+        return
+      }
 
       if ('path' in hitNode) {
         const target =
@@ -572,8 +585,12 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       }
     }
 
-    function onPointerCancelForTap() {
+    function onPointerCancelForTap(e: PointerEvent) {
       tap = null
+      if (e.pointerType === 'touch') {
+        setHoveredTooltip(null)
+        setHoveredCommunity(null)
+      }
     }
 
     // Hover: the inspector mirrors whatever community is under the cursor.
@@ -721,8 +738,8 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
       {/* Top controls: optional lead control (e.g. ScopePicker) + Colour-mode toggle */}
       <div
         className={cn(
-          'pointer-events-auto absolute top-2.5 z-30 flex items-center gap-2 transition-[left] duration-200',
-          isSidebarExpanded ? 'left-[264px]' : 'left-14 sm:left-16',
+          'pointer-events-auto absolute top-2.5 z-30 flex max-w-[calc(100vw-1.5rem)] items-center gap-2 overflow-x-auto no-scrollbar transition-[left] duration-200',
+          isSidebarExpanded ? 'left-[264px]' : 'left-3 sm:left-4 md:left-14 lg:left-16',
         )}
       >
         {leadControl}
@@ -734,7 +751,7 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
           onClick={() => {
             shell?.setPanelOpen('inspector', true)
           }}
-          className="h-8 gap-1.5 rounded-[var(--radius-md,4px)] border border-border bg-card/90 px-2.5 text-xs text-muted-foreground shadow-floating hover:bg-muted hover:text-foreground"
+          className="h-8 gap-1.5 rounded-[var(--radius-md,4px)] border border-border bg-card/90 px-2.5 text-xs text-muted-foreground shadow-floating hover:bg-muted hover:text-foreground touch-manipulation"
         >
           <Route className="size-3.5" aria-hidden="true" />
           <span className="hidden md:inline">Pathfinder</span>
@@ -751,8 +768,8 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
         {/* Zoom controls: shifted left of Inspector when open, positioned above BottomBar toggles */}
         <div
           className={cn(
-            'absolute bottom-14 z-10 flex flex-col gap-1 transition-[right] duration-200',
-            isInspectorOpen ? 'right-[340px]' : 'right-3',
+            'absolute bottom-20 sm:bottom-14 z-10 flex flex-col gap-1 transition-[right] duration-200',
+            isInspectorOpen ? 'right-3 md:right-[340px]' : 'right-3',
           )}
         >
           <Button
@@ -761,7 +778,7 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
             size="icon-sm"
             aria-label="Zoom in"
             onClick={() => zoomApiRef.current?.zoomBy(1.4)}
-            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-floating text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
+            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-floating text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95 touch-manipulation"
           >
             <ZoomIn aria-hidden="true" />
           </Button>
@@ -771,7 +788,7 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
             size="icon-sm"
             aria-label="Zoom out"
             onClick={() => zoomApiRef.current?.zoomBy(1 / 1.4)}
-            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-floating text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
+            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-floating text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95 touch-manipulation"
           >
             <ZoomOut aria-hidden="true" />
           </Button>
@@ -781,7 +798,7 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
             size="icon-sm"
             aria-label="Fit graph to view"
             onClick={() => zoomApiRef.current?.fit()}
-            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-floating text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95"
+            className="rounded-[var(--radius-md,4px)] border border-border bg-card/90 backdrop-blur-xs shadow-floating text-muted-foreground hover:text-foreground hover:bg-muted active:scale-95 touch-manipulation"
           >
             <Maximize aria-hidden="true" />
           </Button>
@@ -790,18 +807,18 @@ export default function GraphCanvas({ leadControl }: GraphCanvasProps = {}) {
         {/* Non-blocking: capped/truncation notices clear of lower rail and above BottomBar */}
         <div
           className={cn(
-            'absolute bottom-14 z-10 flex max-w-[calc(100vw-360px)] flex-col items-start gap-2 transition-[left] duration-200',
+            'absolute bottom-20 sm:bottom-14 z-10 flex max-w-[calc(100vw-1.5rem)] md:max-w-[calc(100vw-360px)] flex-col items-start gap-2 transition-[left] duration-200 pointer-events-none [&>*]:pointer-events-auto',
             isSidebarExpanded
               ? isContextOpen
-                ? 'left-[516px]'
+                ? 'left-3 md:left-[516px]'
                 : isContextMounted
-                  ? 'left-[318px]'
-                  : 'left-[264px]'
+                  ? 'left-3 md:left-[318px]'
+                  : 'left-3 md:left-[264px]'
               : isContextOpen
-                ? 'left-[316px]'
+                ? 'left-3 md:left-[316px]'
                 : isContextMounted
-                  ? 'left-[118px]'
-                  : 'left-16',
+                  ? 'left-3 md:left-[118px]'
+                  : 'left-3 md:left-16',
           )}
         >
           <CappedGroupsNotice groups={graph.data?.cappedGroups ?? []} />

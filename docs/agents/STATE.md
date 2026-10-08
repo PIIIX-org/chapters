@@ -2,8 +2,8 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Status**: Mobile UI Adaptation Phase 4 (Repos & Code Browser); Phase 2 (#366); Phase 3 (#365); Phase 1 (#364).
-  - Mobile UI Adaptation Phase 4 (2026-10-09): ReposPage symmetric padding & overflow table wrapper, RepoCard/FileTree/Dialog touch target expansions, RepositoryPage shell clearance, CodeViewer file bar responsiveness & bottom clearance, iOS zoom prevention. 920 client tests green (137 suites), zero bundle regressions (< 300KB).
+- **Status**: Mobile UI Adaptation Phase 5 (Knowledge Graph Canvas); Phase 4 (#367); Phase 2 (#366); Phase 3 (#365); Phase 1 (#364).
+  - Mobile UI Adaptation Phase 5 (2026-10-09): GraphCanvas top controls & notices responsive offset/width, zoom controls mobile tab bar clearance (bottom-20), touch tap drift tolerance (12px) & node hit slop, tooltip dismissal; ScopePicker compact label & responsive popover; GraphOutline/CommunityDetail/Filters/Pathfinder/Physics touch targets & iOS zoom prevention. 922 client tests green (137 suites), bundle budget < 300KB.
   - Docked Panels & Ribbon Rail (#362, 2026-10-08): Transitioned from floating sidebars to sticky in-flow flex columns and contiguous rail.
   - Chunk Load & Graph Framing Fixes (2026-10-01): Resolved #327 (stale Vite asset 404 guard under `/assets/`, index.html no-cache header, vite:preloadError auto-reload, resilient lazyRoute) and #328 (unobstructed viewport centering, simulation settle auto-fit, resize redraw, panel close button). PR #329 merged to `dev`, PR #330 promoted to `prod`.
   - Resource & Performance Optimizations (2026-10-01): 48/48 optimizations implemented across 4 subsystems (DB/pgvector, Graph/Collab, Workers/AST, Canvas/UI). HNSW AST index (migration 0018), tuned hnsw.ef_search = 100, connection pool config + graceful drain, Tree-sitter WASM leak fix, O(1) queue dequeue, Canvas 2D edge partition & viewport culling, lazy Mermaid bundle (<300KB). PR #325 merged into `dev`, PR #326 promoted to `prod`.
@@ -30,7 +30,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   - 1 container + 1 Postgres per customer. Control plane in separate private repo.
   - Collab is a person, no autosave PUT (CRDT is the note). Viewer read-only forever.
   - Exact seq scan for semantic edge recompute (#123). Mutation-verify every test.
-- **Suite**: 1,312 automated tests (919 client, 393 server across 188 test files), 100% passing. Zero open bugs. Zero vulnerabilities. Bundle budget strictly < 300KB.
+- **Suite**: 1,315 automated tests (922 client, 393 server across 188 test files), 100% passing. Zero open bugs. Zero vulnerabilities. Bundle budget strictly < 300KB.
 - **Deferred**: cli-visualizer (#9, assigned), partial restore (#261), per-type notification prefs (#263).
 - **Decided against (do NOT re-open)**: WebMCP browser standard (adr-001), Leiden (#265), graph DB (#268), GraphRAG (#267), cross-file calls (#266).
 - **Open issues**: #9 (assigned).
