@@ -19,7 +19,7 @@ export function AccountExport() {
         {/* A zip, not JSON: a plain same-origin link carries the session cookie
             and streams straight to disk, where apiFetch would try to parse it.
             Button asChild keeps it an anchor, so its role stays link. */}
-        <Button asChild className="mt-1 w-fit">
+        <Button asChild className="mt-1 w-full sm:w-fit min-h-[36px] sm:min-h-0 touch-manipulation">
           <a href={ACCOUNT_EXPORT_URL} download>
             Download my vaults
           </a>

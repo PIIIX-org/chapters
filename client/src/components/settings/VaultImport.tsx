@@ -105,7 +105,7 @@ export function VaultImport() {
         </div>
         <Button
           type="button"
-          className="w-fit"
+          className="w-full sm:w-fit min-h-[36px] sm:min-h-0 touch-manipulation"
           disabled={file === null || importVault.isPending}
           onClick={() => file !== null && importVault.mutate(file)}
         >

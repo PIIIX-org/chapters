@@ -43,13 +43,13 @@ export function ConfirmStep({
           type="button"
           size="xs"
           variant={destructive ? 'destructive' : 'default'}
-          className="rounded-[var(--radius-sm,2px)]"
+          className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation"
           disabled={pending}
           onClick={onConfirm}
         >
           {label}
         </Button>
-        <Button type="button" size="xs" variant="ghost" className="rounded-[var(--radius-sm,2px)]" onClick={onCancel}>
+        <Button type="button" size="xs" variant="ghost" className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation" onClick={onCancel}>
           Cancel
         </Button>
       </div>
@@ -98,7 +98,7 @@ export function ConfirmAction({
         type="button"
         size="xs"
         variant={variant}
-        className="rounded-[var(--radius-sm,2px)]"
+        className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation"
         aria-label={ariaLabel}
         onClick={() => setConfirming(true)}
       >

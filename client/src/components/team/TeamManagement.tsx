@@ -34,10 +34,10 @@ function ConfirmBlock({ label, consequence, pending, error, onConfirm, onCancel 
     <div className="flex flex-col gap-1.5 rounded-[var(--radius-sm,2px)] border border-destructive/40 bg-destructive/5 p-2">
       <p className="text-xs whitespace-normal text-muted-foreground">{consequence}</p>
       <div className="flex items-center gap-1">
-        <Button type="button" size="xs" variant="destructive" className="rounded-[var(--radius-sm,2px)]" disabled={pending} onClick={onConfirm}>
+        <Button type="button" size="xs" variant="destructive" className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation" disabled={pending} onClick={onConfirm}>
           {label}
         </Button>
-        <Button type="button" size="xs" variant="ghost" className="rounded-[var(--radius-sm,2px)]" onClick={onCancel}>
+        <Button type="button" size="xs" variant="ghost" className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation" onClick={onCancel}>
           Cancel
         </Button>
       </div>
@@ -108,7 +108,7 @@ function TeamManagementCard({ team }: TeamManagementCardProps) {
         <PanelBody dense className="flex flex-col gap-1">
           <ul className="flex flex-col">
             {members.data.map((m) => (
-              <li key={m.userId} className="flex h-8 min-w-0 items-center gap-2 px-1 text-sm rounded-[var(--radius-sm,2px)]">
+              <li key={m.userId} className="flex min-h-9 sm:h-8 min-w-0 items-center gap-2 px-1 py-1 sm:py-0 text-sm rounded-[var(--radius-sm,2px)]">
                 <span className="min-w-0 flex-1 truncate text-foreground">{m.email}</span>
                 <Pill tone={m.role === 'owner' ? 'human' : 'neutral'} className="font-mono tabular-nums rounded-[var(--radius-sm,2px)]">{m.role}</Pill>
                 {isOwner && m.role === 'member' && removingUserId !== m.userId && (
@@ -116,7 +116,7 @@ function TeamManagementCard({ team }: TeamManagementCardProps) {
                     type="button"
                     size="xs"
                     variant="ghost"
-                    className="rounded-[var(--radius-sm,2px)]"
+                    className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation"
                     aria-label={`Remove ${m.email} from ${team.name}`}
                     onClick={() => setRemovingUserId(m.userId)}
                   >
@@ -156,9 +156,9 @@ function TeamManagementCard({ team }: TeamManagementCardProps) {
               onChange={(e) => setEmail(e.target.value)}
               aria-label={`Add member to ${team.name}`}
               placeholder="email@example.com"
-              className="h-7 flex-1 text-[13px] rounded-[var(--radius-sm,2px)]"
+              className="h-9 sm:h-7 flex-1 text-base sm:text-[13px] rounded-[var(--radius-sm,2px)]"
             />
-            <Button type="submit" size="sm" className="rounded-[var(--radius-sm,2px)]" disabled={addBusy || addMember.isPending}>
+            <Button type="submit" size="sm" className="rounded-[var(--radius-sm,2px)] min-h-[36px] sm:min-h-0 touch-manipulation" disabled={addBusy || addMember.isPending}>
               Add
             </Button>
           </form>
@@ -179,7 +179,7 @@ function TeamManagementCard({ team }: TeamManagementCardProps) {
               variant="outline"
               aria-label={`Delete ${team.name}`}
               onClick={() => setConfirmingDelete(true)}
-              className="self-start rounded-[var(--radius-sm,2px)] text-destructive border-destructive/30 hover:bg-destructive/10 hover:border-destructive/60 transition-colors"
+              className="self-start rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation text-destructive border-destructive/30 hover:bg-destructive/10 hover:border-destructive/60 transition-colors"
             >
               Delete team
             </Button>
@@ -223,9 +223,9 @@ export function TeamManagement() {
             onChange={(e) => setNewTeamName(e.target.value)}
             aria-label="New team name"
             placeholder="Team name"
-            className="h-7 flex-1 text-[13px] rounded-[var(--radius-sm,2px)]"
+            className="h-9 sm:h-7 flex-1 text-base sm:text-[13px] rounded-[var(--radius-sm,2px)]"
           />
-          <Button type="submit" size="sm" className="rounded-[var(--radius-sm,2px)]" disabled={createTeam.isPending}>
+          <Button type="submit" size="sm" className="rounded-[var(--radius-sm,2px)] min-h-[36px] sm:min-h-0 touch-manipulation" disabled={createTeam.isPending}>
             Create team
           </Button>
         </div>

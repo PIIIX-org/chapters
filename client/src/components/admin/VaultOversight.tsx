@@ -32,7 +32,7 @@ function formatActivity(iso: string | null): string {
 }
 
 const selectClassName =
-  'h-7 rounded-[var(--radius-sm,2px)] border border-input bg-card px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
+  'h-8 sm:h-7 rounded-[var(--radius-sm,2px)] border border-input bg-card px-2 text-base sm:text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 touch-manipulation'
 
 function TransferOwner({ vault }: { vault: AdminVault }) {
   const users = useAdminUsers()
@@ -52,7 +52,7 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
         type="button"
         size="xs"
         variant="ghost"
-        className="rounded-[var(--radius-sm,2px)]"
+        className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation"
         aria-label={`Reassign ownership of ${vault.name}`}
         onClick={() => setOpen(true)}
       >
@@ -67,7 +67,7 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
         <p className="text-xs text-muted-foreground">
           No other active account to hand this vault to.
         </p>
-        <Button type="button" size="xs" variant="ghost" className="rounded-[var(--radius-sm,2px)]" onClick={() => setOpen(false)}>
+        <Button type="button" size="xs" variant="ghost" className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation" onClick={() => setOpen(false)}>
           Cancel
         </Button>
       </div>
@@ -103,7 +103,7 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
         <Button
           type="button"
           size="xs"
-          className="rounded-[var(--radius-sm,2px)]"
+          className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation"
           disabled={transfer.isPending}
           onClick={() =>
             transfer.mutate(
@@ -114,7 +114,7 @@ function TransferOwner({ vault }: { vault: AdminVault }) {
         >
           Reassign
         </Button>
-        <Button type="button" size="xs" variant="ghost" className="rounded-[var(--radius-sm,2px)]" onClick={() => setOpen(false)}>
+        <Button type="button" size="xs" variant="ghost" className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation" onClick={() => setOpen(false)}>
           Cancel
         </Button>
       </div>

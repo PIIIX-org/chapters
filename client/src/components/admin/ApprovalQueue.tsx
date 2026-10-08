@@ -102,7 +102,7 @@ export function ApprovalQueue() {
                     <Button
                       type="button"
                       size="xs"
-                      className="rounded-[var(--radius-sm,2px)]"
+                      className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation"
                       aria-label={`Approve ${user.email}`}
                       disabled={approve.isPending}
                       onClick={() => approve.mutate(user.id)}

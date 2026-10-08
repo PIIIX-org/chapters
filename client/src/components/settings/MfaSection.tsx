@@ -150,14 +150,15 @@ export function MfaSection() {
                   />
                 </div>
                 <FormError message={disable.error?.message ?? null} />
-                <div className="flex items-center gap-2">
-                  <Button type="submit" size="sm" variant="destructive" disabled={disable.isPending}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="submit" size="sm" variant="destructive" className="min-h-[36px] sm:min-h-0 touch-manipulation" disabled={disable.isPending}>
                     Turn off two-factor authentication
                   </Button>
                   <Button
                     type="button"
                     size="sm"
                     variant="ghost"
+                    className="min-h-[36px] sm:min-h-0 touch-manipulation"
                     onClick={() => {
                       setDisabling(false)
                       setCode('')
@@ -173,7 +174,7 @@ export function MfaSection() {
                 type="button"
                 size="sm"
                 variant="ghost"
-                className="w-fit"
+                className="w-full sm:w-fit min-h-[36px] sm:min-h-0 touch-manipulation"
                 aria-label="Disable two-factor authentication"
                 onClick={() => setDisabling(true)}
               >
@@ -226,7 +227,7 @@ export function MfaSection() {
                 />
               </div>
               <FormError message={enable.error?.message ?? null} />
-              <Button type="submit" size="sm" className="w-fit" disabled={enable.isPending}>
+              <Button type="submit" size="sm" className="w-full sm:w-fit min-h-[36px] sm:min-h-0 touch-manipulation" disabled={enable.isPending}>
                 Turn on two-factor authentication
               </Button>
             </form>
@@ -242,7 +243,7 @@ export function MfaSection() {
             <Button
               type="button"
               size="sm"
-              className="w-fit"
+              className="w-full sm:w-fit min-h-[36px] sm:min-h-0 touch-manipulation"
               disabled={start.isPending}
               onClick={() => start.mutate()}
             >

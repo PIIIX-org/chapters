@@ -123,4 +123,18 @@ describe('SettingsPage', () => {
     expect(await screen.findByRole('heading', { name: 'Password' })).toBeInTheDocument()
     expect(screen.queryByRole('alert')).toBeNull()
   })
+
+  it('switches sections using the mobile navigation tabs', async () => {
+    stubFetch(BASE)
+    renderPage()
+    const user = userEvent.setup()
+
+    await screen.findByRole('heading', { name: 'Password' })
+    const mobileMcpTab = screen.getByRole('button', { name: 'MCP section' })
+    expect(mobileMcpTab).toBeInTheDocument()
+
+    await user.click(mobileMcpTab)
+    expect(await screen.findByRole('heading', { name: 'MCP connections' })).toBeInTheDocument()
+    expect(mobileMcpTab).toHaveAttribute('aria-current', 'page')
+  })
 })
