@@ -1,8 +1,8 @@
 # Mobile UI Adaptation Architecture & Touch Ergonomics Specification
 
 **Date**: 2026-10-09  
-**Scope**: Full-spectrum mobile viewport adaptation across the Observatory Bridge client architecture, spanning Global Shell, Note View & Collaborative Editor, Vaults Dashboard, Repositories & Code Browser, Knowledge Graph 2D Canvas, and Team, Admin Oversight & Settings.  
-**Outcome**: 6/6 adaptation phases completed, tested with 100% green suites (137 test suites, 925 client tests, 398 server tests), bundle budget preserved at 157.18 KB gzip (< 300 KB limit), merged into `dev` via PRs #364 through #369.
+**Scope**: Full-spectrum mobile viewport adaptation across the Observatory Bridge client architecture, spanning Global Shell, Note View & Collaborative Editor, Vaults Dashboard, Repositories & Code Browser, Knowledge Graph 2D Canvas, Team, Admin Oversight & Settings, Authentication & Onboarding, and Responsive Table-to-Card Mobile Transformations.  
+**Outcome**: 8/8 adaptation phases completed, tested with 100% green suites (137 test suites, 927 client tests, 400 server tests), bundle budget preserved at 157.40 KB gzip (< 300 KB limit), merged into `dev` via PRs #364 through #373, and promoted to `prod` via PRs #372 and #374.
 
 ---
 
@@ -102,6 +102,28 @@ Rather than building a separate mobile web application (`m.elara.app`) or duplic
   - Normalized container padding (`px-3 sm:px-6 pb-20 sm:pb-16`).
   - Standardized 32–44px touch targets across admin confirmation dialogues, user rosters, approval queues, MFA TOTP verification, and notification toggles.
 
+### Phase 7: Authentication & Onboarding Screens (PR #371)
+- **Files**: `LoginPage.tsx`, `RegisterPage.tsx`, `OnboardingPage.tsx`, `MfaChallengePage.tsx`, `VerifyEmailPage.tsx`.
+- **Changes**:
+  - Full mobile viewport adaptation across authentication and onboarding flows.
+  - Normalized screen container padding (`px-4 sm:px-6`) and centered single-column stacked card layouts on narrow viewports.
+  - Enforced 44px minimum touch targets on all submission, OAuth, and secondary navigation buttons.
+  - Applied iOS Safari 16px auto-zoom prevention on all authentication input fields.
+  - Responsive branding headers, clear error alert boundaries, and thumb-friendly spacing.
+
+### Phase 8: Admin & Oversight Table-to-Card Responsive Transformation (PR #373, PR #374)
+- **Files**: `ApprovalQueue.tsx`, `UserRoster.tsx`, `VaultOversight.tsx`, `AccessOversight.tsx`, `InstanceActivity.tsx`, `VaultMcpPanel.tsx`, `VaultReachExpansion.tsx`, `TeamPage.tsx`.
+- **Changes**:
+  - Eliminated horizontal scroll trapping, nested scroll collision, and cutoff content across all admin and oversight tables on mobile viewports (< 640px).
+  - Implemented an accessible CSS display transformation pattern:
+    - `Table`: `w-full` with preserved semantic structure.
+    - `TableHeader`: `hidden sm:table-header-group` (headers hidden on mobile, column context labeled inline).
+    - `TableBody`: `block sm:table-row-group divide-y divide-border sm:divide-y-0`.
+    - `TableRow`: `block sm:table-row p-3.5 sm:p-0 space-y-2.5 sm:space-y-0 rounded-lg sm:rounded-none bg-card/60 sm:bg-transparent border border-border sm:border-none mb-3 sm:mb-0`.
+    - `TableCell`: `block sm:table-cell py-1 sm:py-2.5 px-0 sm:px-3 text-left`.
+  - Transformed actions and badges into full-width flex rows with 44px touch targets on mobile and right-aligned buttons on desktop.
+  - Zero DOM duplication: maintains semantic HTML `<table>` elements and 100% Axe accessibility compliance (`role="table"`, 0 violations), preserving unit test DOM queries (`tr`/`td`).
+
 ---
 
 ## 4. Verification & Benchmarks
@@ -109,9 +131,9 @@ Rather than building a separate mobile web application (`m.elara.app`) or duplic
 | Metric | Target | Result | Status |
 | :--- | :--- | :--- | :--- |
 | Client Test Suites | 100% Passing | 137 / 137 suites passing | PASS |
-| Client Tests | 100% Passing | 925 / 925 tests passing | PASS |
-| Server Tests | 100% Passing | 398 / 398 tests passing | PASS |
-| Initial Client Bundle (gzip) | < 300 KB | 157.18 KB gzip | PASS (47.6% under budget) |
+| Client Tests | 100% Passing | 927 / 927 tests passing | PASS |
+| Server Tests | 100% Passing | 400 / 400 tests passing | PASS |
+| Initial Client Bundle (gzip) | < 300 KB | 157.40 KB gzip | PASS (47.5% under budget) |
 | TypeScript Diagnostics | 0 errors | 0 errors | PASS |
 | ESLint Diagnostics | 0 errors | 0 errors | PASS |
 | WCAG Touch Target Compliance | $\ge 44$px primary, $\ge 32$px dense | 100% compliant | PASS |
@@ -120,8 +142,9 @@ Rather than building a separate mobile web application (`m.elara.app`) or duplic
 
 ## 5. Architectural Cross-References
 
-- **OKF Spec Note**: `[[specs/mobile-ui-adaptation|Spec: Mobile UI Adaptation & Touch Ergonomics]]`
-- **OKF ADR Note**: `[[decisions/adr-003-mobile-touch-and-responsive-architecture|ADR-003: Mobile Touch Ergonomics and Responsive Architecture]]`
-- **OKF Feature Note**: `[[features/mobile-navigation-and-editor|Feature: Mobile Navigation & Responsive Workspace Experience]]`
-- **OKF UI Domain**: `[[domains/client-ui|Domain: Observatory Bridge Client]]`
-- **OKF Root Index**: `[[index|ELara Architecture & Knowledge Map]]`
+- **OKF Spec Note**: `[[spec/2026-10-09-mobile-ui-adaptation-spec]]`
+- **OKF Codebase Note**: `[[codebase/chapters]]`
+- **OKF Project Note**: `[[project/chapters]]`
+- **OKF Sticky Panels Spec**: `[[spec/2026-10-07-sticky-docked-side-panels-and-ribbon-navigation]]`
+- **OKF Observatory Bridge Design**: `[[design/observatory-bridge]]`
+
