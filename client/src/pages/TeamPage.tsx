@@ -310,7 +310,7 @@ export function TeamPage() {
                   />
                 </PanelBody>
                 <Table className="rounded-[var(--radius-sm,2px)]">
-                  <TableHeader>
+                  <TableHeader className="hidden sm:table-header-group">
                     <TableRow>
                       <TableHead scope="col">Member</TableHead>
                       <TableHead scope="col" className="font-mono tabular-nums">Notes touched</TableHead>
@@ -318,19 +318,25 @@ export function TeamPage() {
                       <TableHead scope="col">Last activity</TableHead>
                     </TableRow>
                   </TableHeader>
-                  <TableBody>
+                  <TableBody className="block sm:table-row-group divide-y divide-border sm:divide-y-0">
                     {filteredRoster.map((r) => (
-                      <TableRow key={r.userId}>
-                        <TableCell className="text-foreground">
+                      <TableRow
+                        key={r.userId}
+                        className="block sm:table-row p-3 sm:p-0 space-y-1 sm:space-y-0 align-top"
+                      >
+                        <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 text-foreground font-medium sm:font-normal h-auto whitespace-normal break-all">
                           {r.email}
                         </TableCell>
-                        <TableCell className="font-mono tabular-nums text-foreground">
+                        <TableCell className="inline-block sm:table-cell pr-3 sm:px-3 py-0 sm:py-2.5 font-mono tabular-nums text-foreground h-auto text-xs sm:text-sm">
+                          <span className="sm:hidden text-muted-foreground">Notes: </span>
                           {r.notesTouched}
                         </TableCell>
-                        <TableCell className="font-mono tabular-nums text-foreground">
+                        <TableCell className="inline-block sm:table-cell pr-3 sm:px-3 py-0 sm:py-2.5 font-mono tabular-nums text-foreground h-auto text-xs sm:text-sm">
+                          <span className="sm:hidden text-muted-foreground">Projects: </span>
                           {r.vaultsTouched}
                         </TableCell>
-                        <TableCell className="font-mono tabular-nums text-xs text-muted-foreground">
+                        <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 font-mono tabular-nums text-xs text-muted-foreground h-auto">
+                          <span className="sm:hidden text-muted-foreground/70">Activity: </span>
                           {formatLastActivity(r.lastActivityAt)}
                         </TableCell>
                       </TableRow>

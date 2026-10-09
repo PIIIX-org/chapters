@@ -84,7 +84,7 @@ export function AccessOversight() {
         ) : (
           <Table className="rounded-[var(--radius-md,4px)]">
             <caption className="sr-only">Every vault share on this instance</caption>
-            <TableHeader>
+            <TableHeader className="hidden sm:table-header-group">
               <TableRow className="border-b border-border">
                 <TableHead scope="col">Vault</TableHead>
                 <TableHead scope="col">Shared with</TableHead>
@@ -92,23 +92,27 @@ export function AccessOversight() {
                 <TableHead scope="col">Actions</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="block sm:table-row-group divide-y divide-border sm:divide-y-0">
               {shares.data.map((share) => {
                 const vault = vaultName.get(share.vaultId) ?? 'deleted vault'
                 const grantee = granteeLabel(share.granteeType, share.granteeId)
                 return (
-                  <TableRow key={share.id} className="border-b border-border last:border-b-0">
-                    <TableCell className="py-2.5 align-top text-foreground">
+                  <TableRow
+                    key={share.id}
+                    className="block sm:table-row p-3.5 sm:p-0 space-y-1.5 sm:space-y-0 align-top border-b border-border last:border-b-0"
+                  >
+                    <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top text-foreground font-medium sm:font-normal h-auto whitespace-normal break-all">
                       {vault}
                     </TableCell>
-                    <TableCell className="py-2 align-top">
+                    <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 align-top h-auto whitespace-normal">
                       <span className="mr-1.5 text-foreground">{grantee}</span>
                       <Pill tone="neutral" className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">{share.granteeType}</Pill>
                     </TableCell>
-                    <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground">
+                    <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground h-auto">
+                      <span className="sm:hidden font-mono text-muted-foreground/70">Permission: </span>
                       {share.permission}
                     </TableCell>
-                    <TableCell className="py-2 align-top">
+                    <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 align-top h-auto pt-1 sm:pt-2">
                       <ConfirmAction
                         label="Revoke"
                         destructive
@@ -147,7 +151,7 @@ export function AccessOversight() {
         ) : (
           <Table className="rounded-[var(--radius-md,4px)]">
             <caption className="sr-only">Every MCP connection on this instance</caption>
-            <TableHeader>
+            <TableHeader className="hidden sm:table-header-group">
               <TableRow className="border-b border-border">
                 <TableHead scope="col">Connection</TableHead>
                 <TableHead scope="col">Account</TableHead>
@@ -156,16 +160,21 @@ export function AccessOversight() {
                 <TableHead scope="col">Actions</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="block sm:table-row-group divide-y divide-border sm:divide-y-0">
               {connections.data.map((connection) => (
-                <TableRow key={connection.id} className="border-b border-border last:border-b-0">
-                  <TableCell className="py-2.5 align-top text-foreground">
+                <TableRow
+                  key={connection.id}
+                  className="block sm:table-row p-3.5 sm:p-0 space-y-1.5 sm:space-y-0 align-top border-b border-border last:border-b-0"
+                >
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top text-foreground font-medium sm:font-normal h-auto whitespace-normal break-all">
                     {connection.name}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top text-muted-foreground">
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top text-xs sm:text-sm text-muted-foreground h-auto whitespace-normal break-all">
+                    <span className="sm:hidden font-mono text-muted-foreground/70">Account: </span>
                     {connection.userEmail}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground">
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground h-auto">
+                    <span className="sm:hidden font-mono text-muted-foreground/70">Scope: </span>
                     {connection.scope}
                     {connection.vaultId && (
                       <span className="block">
@@ -173,10 +182,11 @@ export function AccessOversight() {
                       </span>
                     )}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground">
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground h-auto">
+                    <span className="sm:hidden font-mono text-muted-foreground/70">Last used: </span>
                     {formatStamp(connection.lastUsedAt)}
                   </TableCell>
-                  <TableCell className="py-2 align-top">
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 align-top h-auto pt-1 sm:pt-2">
                     {connection.revokedAt ? (
                       <span className="font-mono text-xs tabular-nums text-muted-foreground">
                         revoked {formatStamp(connection.revokedAt)}

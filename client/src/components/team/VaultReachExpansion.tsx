@@ -32,10 +32,10 @@ function reachablePeopleCount(shares: Share[]): number {
 function ReachRow({ person, permission }: { person: React.ReactNode; permission: string }) {
   return (
     <TableRow>
-      <TableCell className="h-8 min-w-0 max-w-40 truncate text-[13px] text-foreground">
+      <TableCell className="h-8 min-w-0 truncate text-[13px] text-foreground">
         {person}
       </TableCell>
-      <TableCell className="h-8 font-mono tabular-nums">
+      <TableCell className="h-8 font-mono tabular-nums text-right">
         <Pill tone={permission === 'owner' ? 'human' : 'neutral'} className="font-mono tabular-nums rounded-[var(--radius-sm,2px)]">{permission}</Pill>
       </TableCell>
     </TableRow>
@@ -63,7 +63,7 @@ function VaultReachList({ shares }: { shares: Share[] }) {
             <TableHead scope="col" className="h-7">
               Person
             </TableHead>
-            <TableHead scope="col" className="h-7 font-mono tabular-nums">
+            <TableHead scope="col" className="h-7 font-mono tabular-nums text-right">
               Access
             </TableHead>
           </TableRow>
