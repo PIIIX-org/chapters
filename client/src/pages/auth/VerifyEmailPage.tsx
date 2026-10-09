@@ -43,6 +43,10 @@ export function VerifyEmailPage() {
           <Input
             id="verify-email"
             type="email"
+            inputMode="email"
+            autoComplete="email"
+            autoCapitalize="none"
+            autoCorrect="off"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
@@ -56,15 +60,19 @@ export function VerifyEmailPage() {
             value={code}
             onChange={(e) => setCode(e.target.value)}
             required
-            className="rounded-[var(--radius-sm,2px)] font-mono"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            pattern="[0-9]*"
+            maxLength={6}
+            className="rounded-[var(--radius-sm,2px)] font-mono tracking-widest text-center"
           />
         </div>
         <FormError message={error} />
-        <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
+        <Button type="submit" disabled={submitting} className="w-full min-h-[40px] sm:min-h-9 rounded-[var(--radius-sm,2px)] touch-manipulation">
           Verify
         </Button>
-        <p className="text-center text-sm text-muted-foreground">
-          <Link to="/login" className="text-foreground underline underline-offset-4 hover:text-primary transition-colors">
+        <p className="text-center text-sm text-muted-foreground py-0.5">
+          <Link to="/login" className="text-foreground underline underline-offset-4 py-1 touch-manipulation hover:text-primary transition-colors">
             Back to sign in
           </Link>
         </p>
