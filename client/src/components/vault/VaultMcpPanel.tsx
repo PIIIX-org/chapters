@@ -59,20 +59,27 @@ function McpConnectionRow({ connection, reach }: { connection: McpConnection; re
   }
 
   return (
-    <TableRow>
-      <TableCell className="max-w-44 truncate text-foreground">{connection.name}</TableCell>
-      <TableCell className="font-mono text-xs text-muted-foreground">{connection.scope}</TableCell>
-      <TableCell className="font-mono text-xs text-muted-foreground">
+    <TableRow className="block sm:table-row p-3 sm:p-0 space-y-1.5 sm:space-y-0 align-top border-b border-border last:border-b-0">
+      <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 max-w-full sm:max-w-44 text-foreground font-medium sm:font-normal h-auto whitespace-normal break-all">
+        {connection.name}
+      </TableCell>
+      <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 font-mono text-xs text-muted-foreground h-auto">
+        <span className="sm:hidden font-mono text-muted-foreground/70">Scope: </span>
+        {connection.scope}
+      </TableCell>
+      <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 font-mono text-xs text-muted-foreground h-auto">
+        <span className="sm:hidden font-mono text-muted-foreground/70">Created: </span>
         {formatTimestamp(connection.createdAt)}
       </TableCell>
-      <TableCell className="font-mono text-xs text-muted-foreground">
+      <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 font-mono text-xs text-muted-foreground h-auto">
+        <span className="sm:hidden font-mono text-muted-foreground/70">Last used: </span>
         {connection.lastUsedAt ? formatTimestamp(connection.lastUsedAt) : 'Never used'}
       </TableCell>
-      <TableCell className="text-right align-top w-24 shrink-0">
+      <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 sm:text-right align-top w-full sm:w-24 shrink-0 h-auto pt-1 sm:pt-2">
         {confirming ? (
           // The consequence stays inside the row it is about — the design
           // system's inline confirmation, not a dialog.
-          <div className="ml-auto flex w-60 flex-col gap-1 py-1 text-left whitespace-normal">
+          <div className="ml-auto flex w-full sm:w-60 flex-col gap-1 py-1 text-left whitespace-normal">
             <p className="text-xs text-muted-foreground">
               Revoke {connection.name}? Any agent using this token {reach}. This cannot be undone.
             </p>
@@ -178,7 +185,7 @@ export function McpPanel(target: McpTarget) {
           <p className="text-sm text-muted-foreground">{copy.empty}</p>
         ) : (
           <Table>
-            <TableHeader>
+            <TableHeader className="hidden sm:table-header-group">
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Scope</TableHead>
@@ -189,7 +196,7 @@ export function McpPanel(target: McpTarget) {
                 </TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="block sm:table-row-group divide-y divide-border sm:divide-y-0">
               {connections.map((connection) => (
                 <McpConnectionRow key={connection.id} connection={connection} reach={copy.reach} />
               ))}

@@ -2,8 +2,8 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Status**: Mobile UI Adaptation Complete (Auth & Onboarding Pages adapted); Spec (#370); Phase 6 (#369); Phase 5 (#368); Phase 4 (#367); Phase 2 (#366); Phase 3 (#365); Phase 1 (#364).
-  - Auth Mobile Adaptation (2026-10-09): min-h-dvh AuthFrame, inputMode email/numeric, autocomplete, 40px touch buttons across LoginPage, SignupPage, VerifyEmail, ResetPassword, SetupPage. 927 client tests green (137 suites), bundle budget < 300KB (157.40 KB gzip).
+- **Status**: Mobile Responsive Card Redesign for Admin & Oversight Tables; Auth Mobile Adaptation; Spec (#370); Phase 6 (#369); Phase 5 (#368); Phase 4 (#367); Phase 2 (#366); Phase 3 (#365); Phase 1 (#364).
+  - Admin & Oversight Mobile Cards (2026-10-09): Redesigned ApprovalQueue, UserRoster, VaultOversight, AccessOversight, InstanceActivity, VaultMcpPanel, and TeamPage tables into responsive stacked cards on mobile to eliminate horizontal scroll trapping and clipping. 927 client tests + 400 server tests green, bundle < 300KB (157.40 KB gzip).
   - Docked Panels & Ribbon Rail (#362, 2026-10-08): Transitioned from floating sidebars to sticky in-flow flex columns and contiguous rail.
   - Chunk Load & Graph Framing Fixes (2026-10-01): Resolved #327 (stale Vite asset 404 guard under `/assets/`, index.html no-cache header, vite:preloadError auto-reload, resilient lazyRoute) and #328 (unobstructed viewport centering, simulation settle auto-fit, resize redraw, panel close button). PR #329 merged to `dev`, PR #330 promoted to `prod`.
   - Resource & Performance Optimizations (2026-10-01): 48/48 optimizations implemented across 4 subsystems (DB/pgvector, Graph/Collab, Workers/AST, Canvas/UI). HNSW AST index (migration 0018), tuned hnsw.ef_search = 100, connection pool config + graceful drain, Tree-sitter WASM leak fix, O(1) queue dequeue, Canvas 2D edge partition & viewport culling, lazy Mermaid bundle (<300KB). PR #325 merged into `dev`, PR #326 promoted to `prod`.
@@ -30,7 +30,7 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   - 1 container + 1 Postgres per customer. Control plane in separate private repo.
   - Collab is a person, no autosave PUT (CRDT is the note). Viewer read-only forever.
   - Exact seq scan for semantic edge recompute (#123). Mutation-verify every test.
-- **Suite**: 1,320 automated tests (927 client, 393 server across 188 test files), 100% passing. Zero open bugs. Zero vulnerabilities. Bundle budget strictly < 300KB.
+- **Suite**: 1,327 automated tests (927 client, 400 server across 191 test files), 100% passing. Zero open bugs. Zero vulnerabilities. Bundle budget strictly < 300KB.
 - **Deferred**: cli-visualizer (#9, assigned), partial restore (#261), per-type notification prefs (#263).
 - **Decided against (do NOT re-open)**: WebMCP browser standard (adr-001), Leiden (#265), graph DB (#268), GraphRAG (#267), cross-file calls (#266).
 - **Open issues**: #9 (assigned).

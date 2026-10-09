@@ -70,7 +70,7 @@ export function UserRoster() {
       ) : (
         <Table className="rounded-[var(--radius-sm,2px)]">
           <caption className="sr-only">Every account on this instance</caption>
-          <TableHeader>
+          <TableHeader className="hidden sm:table-header-group">
             <TableRow>
               <TableHead scope="col">Account</TableHead>
               <TableHead scope="col">Status</TableHead>
@@ -78,18 +78,35 @@ export function UserRoster() {
               <TableHead scope="col">Actions</TableHead>
             </TableRow>
           </TableHeader>
-          <TableBody>
+          <TableBody className="block sm:table-row-group divide-y divide-border sm:divide-y-0">
             {users.data.map((user) => {
               // Deactivating or demoting yourself would destroy your own session and, on a
               // single-admin instance, lock the instance out of its own admin
               // area. The server has no such guard, so it belongs here.
               const isSelf = user.id === session.data?.id
               return (
-                <TableRow key={user.id}>
-                  <TableCell className="py-2.5 align-top text-foreground">
-                    {user.email}
+                <TableRow
+                  key={user.id}
+                  className="block sm:table-row p-3.5 sm:p-0 space-y-2.5 sm:space-y-0 align-top"
+                >
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top text-foreground h-auto whitespace-normal">
+                    <div className="flex flex-wrap items-start justify-between gap-1.5 sm:block">
+                      <span className="font-medium sm:font-normal text-foreground break-all">
+                        {user.email}
+                      </span>
+                      <div className="flex items-center gap-1.5 sm:hidden">
+                        <Pill tone={STATUS_TONE[user.status]} dot className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">
+                          {user.status.replace('_', ' ')}
+                        </Pill>
+                      </div>
+                    </div>
+                    {!user.emailVerifiedAt && (
+                      <span className="mt-1 block font-mono text-[11px] text-faint">
+                        email unverified
+                      </span>
+                    )}
                   </TableCell>
-                  <TableCell className="py-2 align-top">
+                  <TableCell className="hidden sm:table-cell py-2 align-top">
                     <Pill tone={STATUS_TONE[user.status]} dot className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">
                       {user.status.replace('_', ' ')}
                     </Pill>
@@ -99,7 +116,7 @@ export function UserRoster() {
                       </span>
                     )}
                   </TableCell>
-                  <TableCell className="py-2 align-top">
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 align-top h-auto whitespace-normal">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <Pill tone={ROLE_TONE[user.role] ?? 'neutral'} className="rounded-[var(--radius-sm,2px)] font-mono text-[11px] uppercase tracking-[0.04em]">
                         {ROLE_LABELS[user.role] ?? user.role}
@@ -126,7 +143,7 @@ export function UserRoster() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="py-2 align-top">
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 align-top h-auto whitespace-normal">
                     <div className="flex flex-wrap items-center gap-1 whitespace-normal">
                       {!isAdminRole(user.role) && user.status === 'active' && (
                         <ConfirmAction

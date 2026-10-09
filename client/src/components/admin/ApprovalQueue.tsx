@@ -57,7 +57,7 @@ export function ApprovalQueue() {
             <caption className="sr-only">
               Accounts waiting for approval on this instance
             </caption>
-            <TableHeader>
+            <TableHeader className="hidden sm:table-header-group">
               <TableRow>
                 <TableHead scope="col">Account</TableHead>
                 <TableHead scope="col">Signed up</TableHead>
@@ -67,27 +67,50 @@ export function ApprovalQueue() {
                 </TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="block sm:table-row-group divide-y divide-border sm:divide-y-0">
               {pending.data.map((user) => (
-                <TableRow key={user.id} className="align-top">
-                  <TableCell className="py-2.5 align-top text-foreground">
-                    {user.email}
+                <TableRow
+                  key={user.id}
+                  className="block sm:table-row p-3.5 sm:p-0 space-y-2.5 sm:space-y-0 align-top"
+                >
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top text-foreground h-auto whitespace-normal">
+                    <div className="flex items-start justify-between gap-2 sm:block">
+                      <div className="min-w-0 flex-1">
+                        <span className="font-medium sm:font-normal text-foreground break-all">
+                          {user.email}
+                        </span>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 sm:hidden">
+                          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                            {formatDate(user.createdAt)}
+                          </span>
+                          {user.emailVerifiedAt ? (
+                            <Pill tone="live" dot className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">
+                              Verified
+                            </Pill>
+                          ) : (
+                            <Pill tone="idle" dot className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">
+                              Unverified
+                            </Pill>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                     {/* Approving alone is not enough: the login gate needs a
                         verified email too, so an admin who approves this row
                         and hears nothing back would otherwise have no way to
                         know why. */}
                     {!user.emailVerifiedAt && (
-                      <p className="mt-1 max-w-md text-xs whitespace-normal text-muted-foreground">
+                      <p className="mt-2 sm:mt-1 max-w-md text-xs whitespace-normal text-muted-foreground">
                         Email not verified yet — approving now is fine, but
                         they still can&rsquo;t sign in until they enter the
                         code sent to their address.
                       </p>
                     )}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground">
+                  <TableCell className="hidden sm:table-cell py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground">
                     {formatDate(user.createdAt)}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top">
+                  <TableCell className="hidden sm:table-cell py-2.5 align-top">
                     {user.emailVerifiedAt ? (
                       <Pill tone="live" dot className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">
                         Verified
@@ -98,11 +121,11 @@ export function ApprovalQueue() {
                       </Pill>
                     )}
                   </TableCell>
-                  <TableCell className="py-2 align-top text-right">
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 align-top sm:text-right h-auto">
                     <Button
                       type="button"
                       size="xs"
-                      className="rounded-[var(--radius-sm,2px)] min-h-[32px] sm:min-h-0 touch-manipulation"
+                      className="w-full sm:w-auto rounded-[var(--radius-sm,2px)] min-h-[36px] sm:min-h-0 touch-manipulation"
                       aria-label={`Approve ${user.email}`}
                       disabled={approve.isPending}
                       onClick={() => approve.mutate(user.id)}

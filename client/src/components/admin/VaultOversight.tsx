@@ -143,7 +143,7 @@ export function VaultOversight() {
             <caption className="sr-only">
               Every vault on this instance — names and counts only
             </caption>
-            <TableHeader>
+            <TableHeader className="hidden sm:table-header-group">
               <TableRow>
                 <TableHead scope="col">Vault</TableHead>
                 <TableHead scope="col">Owner</TableHead>
@@ -154,28 +154,36 @@ export function VaultOversight() {
                 <TableHead scope="col">Actions</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="block sm:table-row-group divide-y divide-border sm:divide-y-0">
               {vaults.data.map((vault) => (
-                <TableRow key={vault.id}>
-                  <TableCell className="py-2.5 align-top text-foreground">
+                <TableRow
+                  key={vault.id}
+                  className="block sm:table-row p-3.5 sm:p-0 space-y-1.5 sm:space-y-0 align-top"
+                >
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top text-foreground font-medium sm:font-normal h-auto whitespace-normal break-all">
                     {vault.name}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top text-muted-foreground">
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top text-xs sm:text-sm text-muted-foreground h-auto whitespace-normal break-all">
+                    <span className="sm:hidden font-mono text-muted-foreground/70">Owner: </span>
                     {vault.ownerEmail}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-foreground">
+                  <TableCell className="inline-block sm:table-cell pr-3 sm:px-3 py-0 sm:py-2.5 align-top font-mono text-xs tabular-nums text-foreground h-auto">
+                    <span className="sm:hidden text-muted-foreground">Notes: </span>
                     {vault.noteCount}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top font-mono text-xs tabular-nums text-foreground">
+                  <TableCell className="inline-block sm:table-cell pr-3 sm:px-3 py-0 sm:py-2.5 align-top font-mono text-xs tabular-nums text-foreground h-auto">
+                    <span className="sm:hidden text-muted-foreground">Shares: </span>
                     {vault.shareCount}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top font-mono text-xs text-muted-foreground">
+                  <TableCell className="inline-block sm:table-cell pr-3 sm:px-3 py-0 sm:py-2.5 align-top font-mono text-xs text-muted-foreground h-auto">
+                    <span className="sm:hidden">Merged: </span>
                     {vault.mergeable ? 'yes' : 'no'}
                   </TableCell>
-                  <TableCell className="py-2.5 align-top font-mono text-xs text-muted-foreground">
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top font-mono text-xs text-muted-foreground h-auto">
+                    <span className="sm:hidden">Activity: </span>
                     {formatActivity(vault.lastActivity)}
                   </TableCell>
-                  <TableCell className="py-2 align-top">
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 align-top h-auto pt-1 sm:pt-2">
                     <TransferOwner vault={vault} />
                   </TableCell>
                 </TableRow>
@@ -196,17 +204,23 @@ export function VaultOversight() {
         ) : (
           <Table className="rounded-[var(--radius-md,4px)]">
             <caption className="sr-only">Every team on this instance</caption>
-            <TableHeader>
+            <TableHeader className="hidden sm:table-header-group">
               <TableRow>
                 <TableHead scope="col">Team</TableHead>
                 <TableHead scope="col">Members</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="block sm:table-row-group divide-y divide-border sm:divide-y-0">
               {teams.data.map((team) => (
-                <TableRow key={team.id}>
-                  <TableCell className="text-foreground">{team.name}</TableCell>
-                  <TableCell className="font-mono text-xs tabular-nums text-foreground">
+                <TableRow
+                  key={team.id}
+                  className="block sm:table-row p-3 sm:p-0 space-y-1 sm:space-y-0 align-top"
+                >
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top text-foreground h-auto">
+                    {team.name}
+                  </TableCell>
+                  <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top font-mono text-xs tabular-nums text-foreground h-auto">
+                    <span className="sm:hidden text-muted-foreground">Members: </span>
                     {team.memberCount}
                   </TableCell>
                 </TableRow>
