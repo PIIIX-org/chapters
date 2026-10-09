@@ -9,7 +9,13 @@ import {
 } from '../../hooks/useNotifications.js'
 import { cn } from '../../lib/utils.js'
 
-export function NotificationBell({ showLabel = false }: { showLabel?: boolean } = {}) {
+export function NotificationBell({
+  showLabel = false,
+  align = 'left',
+}: {
+  showLabel?: boolean
+  align?: 'left' | 'right'
+} = {}) {
   const [open, setOpen] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -94,7 +100,10 @@ export function NotificationBell({ showLabel = false }: { showLabel?: boolean } 
           role="dialog"
           aria-label="Notifications"
           tabIndex={-1}
-          className="absolute left-full bottom-0 z-50 ml-3 w-80 rounded-[var(--radius-lg)] border border-border bg-popover py-1 shadow-floating focus:outline-none"
+          className={cn(
+            'absolute z-50 w-80 rounded-[var(--radius-lg)] border border-border bg-popover py-1 shadow-floating focus:outline-none',
+            align === 'right' ? 'right-0 top-full mt-2' : 'left-full bottom-0 ml-3',
+          )}
         >
           <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground font-mono">

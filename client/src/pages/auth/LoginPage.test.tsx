@@ -194,4 +194,27 @@ describe('LoginPage', () => {
 
     await waitFor(() => expect(screen.getByText(/single sign-on failed/i)).toBeInTheDocument())
   })
+
+  it('configures mobile inputMode and autocomplete attributes for touch keyboards', async () => {
+    stubFetch(NO_SSO, () =>
+      mockJsonResponse(401, { error: 'mfa_required', mfaRequired: true }),
+    )
+    renderPage()
+
+    const email = screen.getByLabelText('Email')
+    const password = screen.getByLabelText('Password')
+    expect(email).toHaveAttribute('inputMode', 'email')
+    expect(email).toHaveAttribute('autoComplete', 'email')
+    expect(password).toHaveAttribute('autoComplete', 'current-password')
+
+    // Trigger MFA challenge
+    await userEvent.type(email, 'user@example.com')
+    await userEvent.type(password, 'password123')
+    await userEvent.click(screen.getByRole('button', { name: /log in/i }))
+
+    const totp = await screen.findByLabelText(/authentication code/i)
+    expect(totp).toHaveAttribute('inputMode', 'numeric')
+    expect(totp).toHaveAttribute('autoComplete', 'one-time-code')
+    expect(totp).toHaveAttribute('pattern', '[0-9]*')
+  })
 })

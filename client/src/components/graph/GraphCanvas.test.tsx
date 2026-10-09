@@ -693,4 +693,39 @@ describe('GraphCanvas', () => {
       ),
     ).toBeInTheDocument()
   })
+
+  it('applies mobile-adapted positioning classes to top controls and zoom buttons', async () => {
+    stubFetch()
+    stubMatchMedia(false)
+    stubCanvasContext()
+    stubManualRaf()
+    renderGraphCanvas()
+
+    const pathfinderBtn = screen.getByRole('button', { name: 'Open Pathfinder' })
+    const topControls = pathfinderBtn.parentElement
+    expect(topControls?.className).toContain('left-3')
+    expect(topControls?.className).toContain('max-w-[calc(100vw-1.5rem)]')
+
+    const zoomInBtn = screen.getByRole('button', { name: 'Zoom in' })
+    const zoomControls = zoomInBtn.parentElement
+    expect(zoomControls?.className).toContain('bottom-20')
+  })
+
+  it('permits up to 12px micro-drift on touch pointer tap without discarding as pan', async () => {
+    stubFetch()
+    stubMatchMedia(false)
+    stubCanvasContext()
+    stubManualRaf()
+    const { container } = renderGraphCanvas()
+
+    await screen.findByRole('button', { name: /Community 0/ })
+    const canvas = container.querySelector('canvas')!
+    canvas.getBoundingClientRect = () =>
+      ({ left: 316, top: 80, width: 600, height: 400, right: 916, bottom: 480, x: 316, y: 80, toJSON: () => ({}) }) as DOMRect
+
+    // Down at (316, 80), up at (322, 85) -> drift hypot(6, 5) ≈ 7.8px (> 6px, <= 12px)
+    fireEvent.pointerDown(canvas, { pointerId: 2, pointerType: 'touch', clientX: 316, clientY: 80 })
+    fireEvent.pointerUp(canvas, { pointerId: 2, pointerType: 'touch', clientX: 322, clientY: 85 })
+    expect(await screen.findByRole('button', { name: /Community 0/ })).toHaveAttribute('aria-expanded', 'true')
+  })
 })

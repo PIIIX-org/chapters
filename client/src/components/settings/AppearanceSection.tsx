@@ -51,7 +51,7 @@ export function AppearanceSection() {
           className="gap-1"
         >
           {OPTIONS.map((option) => (
-            <div key={option.value} className="flex items-start gap-2.5 rounded-md p-1.5">
+            <div key={option.value} className="flex items-start gap-2.5 rounded-md p-1.5 min-h-[44px] touch-manipulation hover:bg-muted/40 transition-colors">
               <RadioGroupItem
                 id={`theme-${option.value}`}
                 value={option.value}

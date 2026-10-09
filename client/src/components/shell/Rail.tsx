@@ -113,7 +113,7 @@ export function Rail() {
     <nav
       aria-label="Primary"
       className={cn(
-        'flex h-full flex-col justify-between border-r border-border bg-card shrink-0 transition-[width] duration-200 ease-in-out select-none p-1 z-20',
+        'flex h-full flex-col justify-between border-r border-border bg-card shrink-0 transition-[width] duration-200 ease-in-out select-none p-1 z-20 max-md:hidden',
         expanded ? 'w-[var(--shell-context,240px)]' : 'w-11 items-center',
       )}
     >

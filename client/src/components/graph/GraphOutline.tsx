@@ -85,7 +85,7 @@ export function GraphOutline({ communities, expandedCommunity, onExpand, onColla
               onClick={() => (expandedCommunity === c.community ? onCollapse() : onExpand(c.community))}
               className={cn(
                 buttonVariants({ variant: 'ghost' }),
-                'h-7 sm:h-8 w-full justify-start gap-2 px-2 text-left rounded-[var(--radius-sm,2px)] transition-colors duration-100',
+                'min-h-[36px] sm:min-h-0 h-auto sm:h-8 py-1.5 sm:py-0 w-full justify-start gap-2 px-2 text-left rounded-[var(--radius-sm,2px)] transition-colors duration-100 touch-manipulation',
                 expandedCommunity === c.community ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
               )}
             >

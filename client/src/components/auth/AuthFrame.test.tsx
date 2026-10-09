@@ -37,4 +37,13 @@ describe('AuthFrame', () => {
     expect(screen.getByRole('list', { name: 'Getting in' })).toBeInTheDocument()
     expect(screen.getByText('Create account')).toHaveAttribute('aria-current', 'step')
   })
+
+  it('uses dynamic viewport height (min-h-dvh) for mobile browser viewport resilience', () => {
+    const { container } = render(
+      <AuthFrame eyebrow="sign in" title="Log in">
+        <p>content</p>
+      </AuthFrame>,
+    )
+    expect(container.firstChild).toHaveClass('min-h-dvh')
+  })
 })

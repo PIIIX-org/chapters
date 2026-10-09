@@ -104,7 +104,7 @@ export function ConnectRepositoryDialog({ open, onOpenChange, onConnected }: Con
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="w-[calc(100vw-1.5rem)] sm:max-w-lg max-h-[88vh] overflow-y-auto mx-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle>Connect a repository</DialogTitle>
           <DialogDescription>
@@ -123,6 +123,7 @@ export function ConnectRepositoryDialog({ open, onOpenChange, onConnected }: Con
                 setError(null)
               }}
               placeholder="e.g. chapters"
+              className="text-base sm:text-sm"
             />
           </div>
 
@@ -131,13 +132,13 @@ export function ConnectRepositoryDialog({ open, onOpenChange, onConnected }: Con
             {METHODS.map((option) => (
               <div
                 key={option.value}
-                className="flex items-start gap-2 rounded-lg border border-border p-2 text-sm"
+                className="flex items-start gap-2.5 rounded-lg border border-border p-2.5 text-sm cursor-pointer hover:bg-muted/30 transition-colors"
               >
                 <input
                   id={`connect-repo-method-${option.value}`}
                   type="radio"
                   name="connect-repo-method"
-                  className="mt-1"
+                  className="mt-1 size-4 cursor-pointer"
                   value={option.value}
                   checked={method === option.value}
                   aria-describedby={`connect-repo-method-${option.value}-blurb`}
@@ -176,6 +177,7 @@ export function ConnectRepositoryDialog({ open, onOpenChange, onConnected }: Con
                     setError(null)
                   }}
                   placeholder="https://github.com/owner/repo.git"
+                  className="text-base sm:text-sm"
                 />
               </div>
               <div className="flex flex-col gap-1">
@@ -189,6 +191,7 @@ export function ConnectRepositoryDialog({ open, onOpenChange, onConnected }: Con
                     setError(null)
                   }}
                   autoComplete="off"
+                  className="text-base sm:text-sm"
                 />
                 {/* Said where it is typed, not in a help page: this is the last
                     moment the value is visible to anyone, including its owner. */}
@@ -211,6 +214,7 @@ export function ConnectRepositoryDialog({ open, onOpenChange, onConnected }: Con
                   setError(null)
                 }}
                 placeholder="my-project"
+                className="text-base sm:text-sm"
               />
               {/* Without this the server's 400 reads as a bug rather than a rule. */}
               <p className="text-xs text-muted-foreground">
@@ -229,7 +233,11 @@ export function ConnectRepositoryDialog({ open, onOpenChange, onConnected }: Con
 
           <FormError message={error} />
 
-          <Button type="submit" disabled={createRepository.isPending} className="self-start">
+          <Button
+            type="submit"
+            disabled={createRepository.isPending}
+            className="w-full sm:w-auto min-h-[38px] sm:min-h-0 touch-manipulation self-start"
+          >
             {createRepository.isPending ? 'Connecting…' : 'Connect repository'}
           </Button>
         </form>

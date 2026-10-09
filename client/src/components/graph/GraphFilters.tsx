@@ -257,7 +257,7 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
                 <button
                   type="button"
                   onClick={handleDeletePerspective}
-                  className="text-[11px] text-destructive hover:underline"
+                  className="text-[11px] text-destructive hover:underline py-1 sm:py-0 touch-manipulation"
                 >
                   Delete
                 </button>
@@ -265,7 +265,7 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
               <button
                 type="button"
                 onClick={() => setIsSaving((v) => !v)}
-                className="text-[11px] font-medium text-primary hover:underline"
+                className="text-[11px] font-medium text-primary hover:underline py-1 sm:py-0 touch-manipulation"
               >
                 {isSaving ? 'Cancel' : '+ Save view'}
               </button>
@@ -277,7 +277,7 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
             aria-label="Graph perspective"
             value={selectedPerspectiveId}
             onChange={(e) => handleSelectPerspective(e.target.value)}
-            className="rounded border border-border bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            className="rounded border border-border bg-background px-2 py-1 text-base sm:text-xs min-h-[38px] sm:min-h-0 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           >
             <optgroup label="Presets">
               <option value="all">All Nodes (Reset)</option>
@@ -304,11 +304,11 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
                 placeholder="Perspective name..."
                 value={newPerspectiveName}
                 onChange={(e) => setNewPerspectiveName(e.target.value)}
-                className="rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                className="rounded border border-border bg-background px-2 py-1 text-base sm:text-xs min-h-[36px] sm:min-h-0 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                 autoFocus
               />
               <div className="flex items-center justify-between">
-                <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+                <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer touch-manipulation">
                   <input
                     type="checkbox"
                     checked={newPerspectiveShared}
@@ -320,7 +320,7 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
                 <button
                   type="submit"
                   disabled={!newPerspectiveName.trim()}
-                  className="rounded bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  className="rounded bg-primary px-2.5 py-1 sm:px-2 sm:py-0.5 text-xs sm:text-[11px] min-h-[32px] sm:min-h-0 font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 touch-manipulation"
                 >
                   Save
                 </button>
@@ -337,12 +337,12 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
             <label
               key={type}
               className={cn(
-                'flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 hover:bg-muted',
+                'flex min-h-[32px] sm:min-h-0 cursor-pointer items-center gap-2 rounded px-2 py-1.5 sm:px-1.5 sm:py-1 hover:bg-muted touch-manipulation',
                 filters.types?.includes(type) && 'bg-muted text-foreground',
               )}
             >
-              <input type="checkbox" checked={filters.types?.includes(type) ?? false} onChange={() => toggleType(type)} />
-              {type}
+              <input type="checkbox" className="size-4 sm:size-3.5 rounded border-border" checked={filters.types?.includes(type) ?? false} onChange={() => toggleType(type)} />
+              <span>{type}</span>
             </label>
           ))}
         </fieldset>
@@ -355,12 +355,12 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
             <label
               key={tag}
               className={cn(
-                'flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 hover:bg-muted',
+                'flex min-h-[32px] sm:min-h-0 cursor-pointer items-center gap-2 rounded px-2 py-1.5 sm:px-1.5 sm:py-1 hover:bg-muted touch-manipulation',
                 filters.tags?.includes(tag) && 'bg-muted text-foreground',
               )}
             >
-              <input type="checkbox" checked={filters.tags?.includes(tag) ?? false} onChange={() => toggleTag(tag)} />
-              {tag}
+              <input type="checkbox" className="size-4 sm:size-3.5 rounded border-border" checked={filters.tags?.includes(tag) ?? false} onChange={() => toggleTag(tag)} />
+              <span>{tag}</span>
             </label>
           ))}
         </fieldset>
@@ -374,7 +374,7 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
             type="date"
             value={filters.since ?? ''}
             onChange={(e) => setParam('since', e.currentTarget.value || undefined)}
-            className="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs"
+            className="rounded border border-border bg-background px-2 py-1 sm:px-1.5 sm:py-0.5 font-mono text-base sm:text-xs min-h-[36px] sm:min-h-0"
           />
         </label>
         <label className="flex items-center justify-between gap-2">
@@ -383,7 +383,7 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
             type="date"
             value={filters.until ?? ''}
             onChange={(e) => setParam('until', e.currentTarget.value || undefined)}
-            className="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs"
+            className="rounded border border-border bg-background px-2 py-1 sm:px-1.5 sm:py-0.5 font-mono text-base sm:text-xs min-h-[36px] sm:min-h-0"
           />
         </label>
       </fieldset>
@@ -392,7 +392,7 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
         <button
           type="button"
           onClick={clearFilters}
-          className="self-start rounded px-1.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
+          className="self-start rounded min-h-[36px] sm:min-h-0 px-2 py-1.5 sm:px-1.5 sm:py-1 text-xs font-medium text-foreground hover:bg-muted touch-manipulation"
         >
           Clear filters
         </button>

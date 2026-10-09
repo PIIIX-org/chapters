@@ -16,7 +16,7 @@ interface SharingPanelProps {
 // Native <select> — no shadcn select is installed here, and a form control
 // this simple doesn't earn one.
 const selectClassName =
-  'h-8 rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50'
+  'h-9 sm:h-8 rounded-lg border border-input bg-transparent px-2 text-sm sm:text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50'
 
 function PermissionSelect({
   value,
@@ -83,9 +83,9 @@ function AddByEmailForm({ vaultId }: { vaultId: string }) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-      <div className="flex items-end gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-end gap-2">
         <div className="flex flex-1 flex-col gap-1">
-          <Label htmlFor="share-email">Share with a person</Label>
+          <Label htmlFor="share-email" className="text-xs">Share with a person</Label>
           <Input
             id="share-email"
             type="email"
@@ -96,12 +96,15 @@ function AddByEmailForm({ vaultId }: { vaultId: string }) {
               setError(null)
             }}
             placeholder="ada@example.com"
+            className="h-9 sm:h-8 text-sm sm:text-xs"
           />
         </div>
-        <PermissionSelect value={permission} onChange={setPermission} label="Permission for this person" />
-        <Button type="submit" disabled={pending}>
-          Add
-        </Button>
+        <div className="flex items-center gap-2">
+          <PermissionSelect value={permission} onChange={setPermission} label="Permission for this person" />
+          <Button type="submit" disabled={pending} className="h-9 sm:h-8 text-xs px-3">
+            Add
+          </Button>
+        </div>
       </div>
       <FormError message={error} />
     </form>
@@ -138,9 +141,9 @@ function AddTeamForm({ vaultId }: { vaultId: string }) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-      <div className="flex items-end gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-end gap-2">
         <div className="flex flex-1 flex-col gap-1">
-          <Label htmlFor="share-team">Share with a team</Label>
+          <Label htmlFor="share-team" className="text-xs">Share with a team</Label>
           <select
             id="share-team"
             value={teamId}
@@ -155,10 +158,12 @@ function AddTeamForm({ vaultId }: { vaultId: string }) {
             ))}
           </select>
         </div>
-        <PermissionSelect value={permission} onChange={setPermission} label="Permission for this team" />
-        <Button type="submit" disabled={createShare.isPending || !teamId}>
-          Add
-        </Button>
+        <div className="flex items-center gap-2">
+          <PermissionSelect value={permission} onChange={setPermission} label="Permission for this team" />
+          <Button type="submit" disabled={createShare.isPending || !teamId} className="h-9 sm:h-8 text-xs px-3">
+            Add
+          </Button>
+        </div>
       </div>
       <p className="text-xs text-muted-foreground">
         You can only share with teams you belong to — ask the team&rsquo;s owner to add you, or share with people

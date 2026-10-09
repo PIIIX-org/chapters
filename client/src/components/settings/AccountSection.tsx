@@ -153,7 +153,7 @@ export function AccountSection() {
                 each need the new password.
               </p>
             )}
-            <Button type="submit" className="w-fit" disabled={changePassword.isPending}>
+            <Button type="submit" className="w-full sm:w-fit min-h-[36px] sm:min-h-0 touch-manipulation" disabled={changePassword.isPending}>
               Change password
             </Button>
           </form>

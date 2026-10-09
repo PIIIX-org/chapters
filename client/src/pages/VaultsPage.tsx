@@ -265,7 +265,7 @@ export function VaultsPage() {
 
   return (
     <div className="h-full min-h-0 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-full sm:max-w-[94%] md:max-w-[88%] lg:max-w-[80%] flex-col gap-3 sm:gap-4 pl-[72px] sm:pl-20 pr-2.5 sm:pr-4 pt-3 pb-16 sm:pt-5 sm:pb-16">
+      <div className="mx-auto flex w-full max-w-full sm:max-w-[94%] md:max-w-[88%] lg:max-w-[80%] flex-col gap-3 sm:gap-4 px-3 sm:px-4 md:px-6 pt-3 pb-20 sm:pt-5 sm:pb-16">
         <Panel>
           <PanelHeader
             className="min-h-9 h-auto py-2 sm:h-9 sm:py-0 flex-wrap sm:flex-nowrap gap-y-2"
@@ -284,7 +284,7 @@ export function VaultsPage() {
                   onClick={handleToggleGroupByFolder}
                   title={groupByFolder ? 'Ungroup folders' : 'Group by folder'}
                   aria-label="Group by folder"
-                  className="h-7 px-2 gap-1 text-xs"
+                  className="h-8 sm:h-7 px-2 gap-1 text-xs touch-manipulation"
                 >
                   <FolderTree className="size-3.5" aria-hidden="true" />
                   <span className="hidden sm:inline">Group</span>
@@ -302,7 +302,7 @@ export function VaultsPage() {
                       : 'Folders stored in this browser only (Local). Click to configure.'
                   }
                   aria-label="Vault folders storage settings"
-                  className="h-7 px-2 gap-1 text-xs"
+                  className="h-8 sm:h-7 px-2 gap-1 text-xs touch-manipulation"
                 >
                   {storageMode === 'online' ? (
                     <Cloud className="size-3.5 text-primary" aria-hidden="true" />
@@ -329,7 +329,7 @@ export function VaultsPage() {
                     variant={viewMode === 'card' ? 'secondary' : 'ghost'}
                     onClick={() => handleViewModeChange('card')}
                     aria-label="Card view"
-                    className="h-7 px-2"
+                    className="h-8 sm:h-7 px-2 touch-manipulation"
                   >
                     <LayoutGrid className="size-3.5" aria-hidden="true" />
                   </Button>
@@ -339,7 +339,7 @@ export function VaultsPage() {
                     variant={viewMode === 'list' ? 'secondary' : 'ghost'}
                     onClick={() => handleViewModeChange('list')}
                     aria-label="List view"
-                    className="h-7 px-2"
+                    className="h-8 sm:h-7 px-2 touch-manipulation"
                   >
                     <List className="size-3.5" aria-hidden="true" />
                   </Button>
@@ -351,7 +351,7 @@ export function VaultsPage() {
                   variant="outline"
                   onClick={() => setCreating((c) => !c)}
                   aria-expanded={creating}
-                  className="h-7 sm:h-8 px-2 sm:px-3 text-xs gap-1"
+                  className="h-8 px-2.5 sm:px-3 text-xs gap-1 font-medium touch-manipulation"
                 >
                   <Plus aria-hidden="true" className="size-3.5" />
                   <span>New vault</span>
@@ -361,12 +361,13 @@ export function VaultsPage() {
           />
 
           {creating && (
-            <div className="border-b border-border p-3">
+            <div className="border-b border-border p-3 bg-muted/20">
               <NewVaultForm
                 onCreated={(vault: Vault) => {
                   setCreating(false)
                   navigate(`/vaults/${vault.id}`)
                 }}
+                onCancel={() => setCreating(false)}
               />
             </div>
           )}
@@ -386,16 +387,16 @@ export function VaultsPage() {
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search vaults by name or folder..."
                     aria-label="Search vaults"
-                    className="pl-8 pr-8 h-8 text-xs w-full"
+                    className="pl-8 pr-8 h-9 sm:h-8 text-sm sm:text-xs w-full"
                   />
                   {search && (
                     <button
                       type="button"
                       onClick={() => setSearch('')}
                       aria-label="Clear search"
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-1 touch-manipulation cursor-pointer"
                     >
-                      <X className="size-3.5" aria-hidden="true" />
+                      <X className="size-4 sm:size-3.5" aria-hidden="true" />
                     </button>
                   )}
                 </div>
@@ -407,7 +408,7 @@ export function VaultsPage() {
                     value={accessFilter}
                     onChange={(e) => setAccessFilter(e.target.value)}
                     aria-label="Filter by access"
-                    className="h-8 flex-1 sm:flex-none rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="h-9 sm:h-8 flex-1 sm:flex-none rounded-md border border-border bg-background px-2 text-sm sm:text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring touch-manipulation"
                   >
                     <option value="all">All access</option>
                     <option value="owner">Role: Owner</option>
@@ -422,7 +423,7 @@ export function VaultsPage() {
                       value={sortBy}
                       onChange={(e) => setSortBy(e.target.value as SortOption)}
                       aria-label="Sort vaults"
-                      className="h-8 w-full sm:w-auto rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="h-9 sm:h-8 w-full sm:w-auto rounded-md border border-border bg-background px-2 text-sm sm:text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring touch-manipulation"
                     >
                       <option value="name-asc">Name (A–Z)</option>
                       <option value="name-desc">Name (Z–A)</option>
@@ -434,7 +435,7 @@ export function VaultsPage() {
               </div>
 
               {/* Visual Folder Tabs / Shelf */}
-              <div className="flex items-end gap-2 overflow-x-auto pt-2 pb-1.5 text-xs -mx-2.5 px-2.5 sm:mx-0 sm:px-0 scroll-smooth">
+              <div className="flex items-end gap-2 overflow-x-auto pt-2 pb-1.5 text-xs -mx-2.5 px-2.5 sm:mx-0 sm:px-0 scroll-smooth overscroll-x-contain touch-pan-x no-scrollbar">
                 <span className="text-muted-foreground font-medium text-[11px] uppercase tracking-wider shrink-0 mb-1.5 mr-1">
                   Folders:
                 </span>
@@ -442,7 +443,7 @@ export function VaultsPage() {
                 {/* "All" Folder Tab */}
                 <div className="relative inline-flex flex-col items-start shrink-0">
                   <div
-                    className={`h-1.5 w-6 rounded-t-sm border-t border-x transition-colors ${
+                    className={`h-2 sm:h-1.5 w-6 rounded-t-sm border-t border-x transition-colors ${
                       selectedFolder === 'all'
                         ? 'bg-primary border-primary'
                         : 'bg-muted/60 border-border'
@@ -451,7 +452,7 @@ export function VaultsPage() {
                   <button
                     type="button"
                     onClick={() => setSelectedFolder('all')}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-b-md rounded-tr-md border transition-colors ${
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 sm:py-1 min-h-[32px] sm:min-h-[28px] rounded-b-md rounded-tr-md border transition-colors touch-manipulation cursor-pointer ${
                       selectedFolder === 'all'
                         ? 'border-primary bg-primary text-primary-foreground font-medium'
                         : 'border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -466,7 +467,7 @@ export function VaultsPage() {
                 {folderCounts.uncategorized > 0 && (
                   <div className="relative inline-flex flex-col items-start shrink-0">
                     <div
-                      className={`h-1.5 w-6 rounded-t-sm border-t border-x transition-colors ${
+                      className={`h-2 sm:h-1.5 w-6 rounded-t-sm border-t border-x transition-colors ${
                         selectedFolder === 'uncategorized'
                           ? 'bg-primary border-primary'
                           : 'bg-muted/60 border-border'
@@ -475,7 +476,7 @@ export function VaultsPage() {
                     <button
                       type="button"
                       onClick={() => setSelectedFolder('uncategorized')}
-                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-b-md rounded-tr-md border transition-colors ${
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 sm:py-1 min-h-[32px] sm:min-h-[28px] rounded-b-md rounded-tr-md border transition-colors touch-manipulation cursor-pointer ${
                         selectedFolder === 'uncategorized'
                           ? 'border-primary bg-primary text-primary-foreground font-medium'
                           : 'border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -497,7 +498,7 @@ export function VaultsPage() {
                     <div key={folder} className="relative inline-flex flex-col items-start shrink-0">
                       {/* Top folder tab ear */}
                       <div
-                        className={`h-1.5 w-7 rounded-t-sm border-t border-x transition-colors ${
+                        className={`h-2 sm:h-1.5 w-7 rounded-t-sm border-t border-x transition-colors ${
                           isSelected
                             ? colorDef
                               ? colorDef.cardTopBar
@@ -518,7 +519,7 @@ export function VaultsPage() {
                       <button
                         type="button"
                         onClick={() => setSelectedFolder(folder)}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-b-md rounded-tr-md border transition-colors ${
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 sm:py-1 min-h-[32px] sm:min-h-[28px] rounded-b-md rounded-tr-md border transition-colors touch-manipulation cursor-pointer ${
                           isSelected
                             ? colorDef
                               ? `${colorDef.badge} border-current font-medium shadow-sm`
@@ -642,95 +643,97 @@ export function VaultsPage() {
                           ))}
                         </div>
                       ) : (
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Name</TableHead>
-                              <TableHead>Folder</TableHead>
-                              <TableHead>Access</TableHead>
-                              <TableHead>Merged view</TableHead>
-                              <TableHead className="w-0">
-                                <span className="sr-only">Actions</span>
-                              </TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {group.vaults.map((vault) => {
-                              const folder = getVaultFolder(vault.id, vault.name)
-                              const vColor = getColorDef(getVaultColor(vault.id))
-                              const fColor = getColorDef(getFolderColor(folder))
-                              const isFav = isFavorite(vault.id)
+                        <div className="overflow-x-auto min-w-0">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Name</TableHead>
+                                <TableHead>Folder</TableHead>
+                                <TableHead>Access</TableHead>
+                                <TableHead>Merged view</TableHead>
+                                <TableHead className="w-0">
+                                  <span className="sr-only">Actions</span>
+                                </TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {group.vaults.map((vault) => {
+                                const folder = getVaultFolder(vault.id, vault.name)
+                                const vColor = getColorDef(getVaultColor(vault.id))
+                                const fColor = getColorDef(getFolderColor(folder))
+                                const isFav = isFavorite(vault.id)
 
-                              return (
-                                <TableRow key={vault.id}>
-                                  <TableCell>
-                                    <div className="flex items-center gap-2">
+                                return (
+                                  <TableRow key={vault.id}>
+                                    <TableCell>
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleFavorite(vault.id)}
+                                          aria-label={isFav ? `Unfavorite ${vault.name}` : `Favorite ${vault.name}`}
+                                          className={`p-1.5 sm:p-0.5 rounded transition-colors touch-manipulation cursor-pointer ${
+                                            isFav
+                                              ? 'text-amber-500'
+                                              : 'text-muted-foreground/30 hover:text-amber-500'
+                                          }`}
+                                        >
+                                          <Star
+                                            className={`size-3.5 ${isFav ? 'fill-amber-500 text-amber-500' : ''}`}
+                                            aria-hidden="true"
+                                          />
+                                        </button>
+                                        {vColor && (
+                                          <span
+                                            className={`size-2 rounded-full shrink-0 ${vColor.accent}`}
+                                            style={vColor.style?.accent}
+                                            title={`Color: ${vColor.label}`}
+                                          />
+                                        )}
+                                        <Link
+                                          to={`/vaults/${vault.id}`}
+                                          className="font-medium text-foreground hover:underline"
+                                        >
+                                          {vault.name}
+                                        </Link>
+                                      </div>
+                                    </TableCell>
+                                    <TableCell>
                                       <button
                                         type="button"
-                                        onClick={() => toggleFavorite(vault.id)}
-                                        aria-label={isFav ? `Unfavorite ${vault.name}` : `Favorite ${vault.name}`}
-                                        className={`p-0.5 rounded transition-colors ${
-                                          isFav
-                                            ? 'text-amber-500'
-                                            : 'text-muted-foreground/30 hover:text-amber-500'
+                                        onClick={() => setFolderModalVault(vault)}
+                                        title={folder ? `Folder: ${folder}` : 'Assign folder'}
+                                        className={`flex items-center gap-1 text-xs font-mono px-2 py-1 sm:py-0.5 min-h-[30px] sm:min-h-0 rounded border transition-colors touch-manipulation cursor-pointer ${
+                                          fColor
+                                            ? fColor.badge
+                                            : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
                                         }`}
+                                        style={fColor?.style?.badge}
                                       >
-                                        <Star
-                                          className={`size-3.5 ${isFav ? 'fill-amber-500 text-amber-500' : ''}`}
+                                        <Folder
+                                          className={`size-3 ${fColor ? fColor.folderIcon : 'text-muted-foreground'}`}
+                                          style={fColor?.style?.folderIcon}
                                           aria-hidden="true"
                                         />
+                                        <span>{folder || 'Add folder'}</span>
                                       </button>
-                                      {vColor && (
-                                        <span
-                                          className={`size-2 rounded-full shrink-0 ${vColor.accent}`}
-                                          style={vColor.style?.accent}
-                                          title={`Color: ${vColor.label}`}
-                                        />
-                                      )}
-                                      <Link
-                                        to={`/vaults/${vault.id}`}
-                                        className="font-medium text-foreground hover:underline"
-                                      >
-                                        {vault.name}
-                                      </Link>
-                                    </div>
-                                  </TableCell>
-                                  <TableCell>
-                                    <button
-                                      type="button"
-                                      onClick={() => setFolderModalVault(vault)}
-                                      title={folder ? `Folder: ${folder}` : 'Assign folder'}
-                                      className={`flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded border transition-colors ${
-                                        fColor
-                                          ? fColor.badge
-                                          : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
-                                      }`}
-                                      style={fColor?.style?.badge}
-                                    >
-                                      <Folder
-                                        className={`size-3 ${fColor ? fColor.folderIcon : 'text-muted-foreground'}`}
-                                        style={fColor?.style?.folderIcon}
-                                        aria-hidden="true"
-                                      />
-                                      <span>{folder || 'Add folder'}</span>
-                                    </button>
-                                  </TableCell>
-                                  <TableCell>
-                                    <Pill tone={vault.access === 'owner' ? 'human' : 'neutral'}>
-                                      {ACCESS_LABEL[vault.access]}
-                                    </Pill>
-                                  </TableCell>
-                                  <TableCell className="text-muted-foreground">
-                                    {vault.mergeable ? 'Included' : 'Excluded'}
-                                  </TableCell>
-                                  <TableCell className="text-right">
-                                    {vault.access === 'owner' && <VaultRowActions vault={vault} />}
-                                  </TableCell>
-                                </TableRow>
-                              )
-                            })}
-                          </TableBody>
-                        </Table>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Pill tone={vault.access === 'owner' ? 'human' : 'neutral'}>
+                                        {ACCESS_LABEL[vault.access]}
+                                      </Pill>
+                                    </TableCell>
+                                    <TableCell className="text-muted-foreground whitespace-nowrap">
+                                      {vault.mergeable ? 'Included' : 'Excluded'}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                      {vault.access === 'owner' && <VaultRowActions vault={vault} />}
+                                    </TableCell>
+                                  </TableRow>
+                                )
+                              })}
+                            </TableBody>
+                          </Table>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -755,95 +758,97 @@ export function VaultsPage() {
             </div>
           ) : (
             /* Flat Table View */
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Folder</TableHead>
-                  <TableHead>Access</TableHead>
-                  <TableHead>Merged view</TableHead>
-                  <TableHead className="w-0">
-                    <span className="sr-only">Actions</span>
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredVaults.map((vault) => {
-                  const folder = getVaultFolder(vault.id, vault.name)
-                  const vColor = getColorDef(getVaultColor(vault.id))
-                  const fColor = getColorDef(getFolderColor(folder))
-                  const isFav = isFavorite(vault.id)
+            <div className="overflow-x-auto min-w-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Folder</TableHead>
+                    <TableHead>Access</TableHead>
+                    <TableHead>Merged view</TableHead>
+                    <TableHead className="w-0">
+                      <span className="sr-only">Actions</span>
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredVaults.map((vault) => {
+                    const folder = getVaultFolder(vault.id, vault.name)
+                    const vColor = getColorDef(getVaultColor(vault.id))
+                    const fColor = getColorDef(getFolderColor(folder))
+                    const isFav = isFavorite(vault.id)
 
-                  return (
-                    <TableRow key={vault.id}>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
+                    return (
+                      <TableRow key={vault.id}>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => toggleFavorite(vault.id)}
+                              aria-label={isFav ? `Unfavorite ${vault.name}` : `Favorite ${vault.name}`}
+                              className={`p-1.5 sm:p-0.5 rounded transition-colors touch-manipulation cursor-pointer ${
+                                isFav
+                                  ? 'text-amber-500'
+                                  : 'text-muted-foreground/30 hover:text-amber-500'
+                              }`}
+                            >
+                              <Star
+                                className={`size-3.5 ${isFav ? 'fill-amber-500 text-amber-500' : ''}`}
+                                aria-hidden="true"
+                              />
+                            </button>
+                            {vColor && (
+                              <span
+                                className={`size-2 rounded-full shrink-0 ${vColor.accent}`}
+                                style={vColor.style?.accent}
+                                title={`Color: ${vColor.label}`}
+                              />
+                            )}
+                            <Link
+                              to={`/vaults/${vault.id}`}
+                              className="font-medium text-foreground hover:underline"
+                            >
+                              {vault.name}
+                            </Link>
+                          </div>
+                        </TableCell>
+                        <TableCell>
                           <button
                             type="button"
-                            onClick={() => toggleFavorite(vault.id)}
-                            aria-label={isFav ? `Unfavorite ${vault.name}` : `Favorite ${vault.name}`}
-                            className={`p-0.5 rounded transition-colors ${
-                              isFav
-                                ? 'text-amber-500'
-                                : 'text-muted-foreground/30 hover:text-amber-500'
+                            onClick={() => setFolderModalVault(vault)}
+                            title={folder ? `Folder: ${folder}` : 'Assign folder'}
+                            className={`flex items-center gap-1 text-xs font-mono px-2 py-1 sm:py-0.5 min-h-[30px] sm:min-h-0 rounded border transition-colors touch-manipulation cursor-pointer ${
+                              fColor
+                                ? fColor.badge
+                                : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
                             }`}
+                            style={fColor?.style?.badge}
                           >
-                            <Star
-                              className={`size-3.5 ${isFav ? 'fill-amber-500 text-amber-500' : ''}`}
+                            <Folder
+                              className={`size-3 ${fColor ? fColor.folderIcon : 'text-muted-foreground'}`}
+                              style={fColor?.style?.folderIcon}
                               aria-hidden="true"
                             />
+                            <span>{folder || 'Add folder'}</span>
                           </button>
-                          {vColor && (
-                            <span
-                              className={`size-2 rounded-full shrink-0 ${vColor.accent}`}
-                              style={vColor.style?.accent}
-                              title={`Color: ${vColor.label}`}
-                            />
-                          )}
-                          <Link
-                            to={`/vaults/${vault.id}`}
-                            className="font-medium text-foreground hover:underline"
-                          >
-                            {vault.name}
-                          </Link>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <button
-                          type="button"
-                          onClick={() => setFolderModalVault(vault)}
-                          title={folder ? `Folder: ${folder}` : 'Assign folder'}
-                          className={`flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded border transition-colors ${
-                            fColor
-                              ? fColor.badge
-                              : 'text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted border-border/60'
-                          }`}
-                          style={fColor?.style?.badge}
-                        >
-                          <Folder
-                            className={`size-3 ${fColor ? fColor.folderIcon : 'text-muted-foreground'}`}
-                            style={fColor?.style?.folderIcon}
-                            aria-hidden="true"
-                          />
-                          <span>{folder || 'Add folder'}</span>
-                        </button>
-                      </TableCell>
-                      <TableCell>
-                        <Pill tone={vault.access === 'owner' ? 'human' : 'neutral'}>
-                          {ACCESS_LABEL[vault.access]}
-                        </Pill>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {vault.mergeable ? 'Included' : 'Excluded'}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {vault.access === 'owner' && <VaultRowActions vault={vault} />}
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
+                        </TableCell>
+                        <TableCell>
+                          <Pill tone={vault.access === 'owner' ? 'human' : 'neutral'}>
+                            {ACCESS_LABEL[vault.access]}
+                          </Pill>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground whitespace-nowrap">
+                          {vault.mergeable ? 'Included' : 'Excluded'}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {vault.access === 'owner' && <VaultRowActions vault={vault} />}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </Panel>
 

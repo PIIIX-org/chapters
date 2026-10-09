@@ -31,7 +31,7 @@ export function PendingApprovalPage() {
         </div>
 
         <div className="mt-2 text-center text-xs text-muted-foreground">
-          <Link to="/login" className="hover:underline text-foreground">
+          <Link to="/login" className="hover:underline text-foreground py-1 touch-manipulation">
             Already approved? Sign in
           </Link>
         </div>

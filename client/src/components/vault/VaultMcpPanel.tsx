@@ -77,17 +77,17 @@ function McpConnectionRow({ connection, reach }: { connection: McpConnection; re
               Revoke {connection.name}? Any agent using this token {reach}. This cannot be undone.
             </p>
             <div className="flex items-center gap-1">
-              <Button type="button" size="xs" variant="destructive" onClick={handleRevoke} disabled={revoke.isPending}>
+              <Button type="button" size="xs" variant="destructive" className="min-h-[32px] sm:min-h-0 touch-manipulation" onClick={handleRevoke} disabled={revoke.isPending}>
                 Revoke
               </Button>
-              <Button type="button" size="xs" variant="ghost" onClick={() => setConfirming(false)}>
+              <Button type="button" size="xs" variant="ghost" className="min-h-[32px] sm:min-h-0 touch-manipulation" onClick={() => setConfirming(false)}>
                 Cancel
               </Button>
             </div>
             <FormError message={error} />
           </div>
         ) : (
-          <Button type="button" size="xs" variant="ghost" className="whitespace-nowrap" onClick={() => setConfirming(true)}>
+          <Button type="button" size="xs" variant="ghost" className="whitespace-nowrap min-h-[32px] sm:min-h-0 touch-manipulation" onClick={() => setConfirming(true)}>
             Revoke
           </Button>
         )}

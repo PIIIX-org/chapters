@@ -20,14 +20,14 @@ interface AuthFrameProps {
  */
 export function AuthFrame({ eyebrow, title, step, children }: AuthFrameProps) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-[#070A0F] text-foreground font-sans p-6 selection:bg-primary/30">
+    <div className="relative flex min-h-dvh items-center justify-center bg-[#070A0F] text-foreground font-sans p-4 sm:p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] selection:bg-primary/30">
       {/* The spec's sanctioned backdrop: dotted grid in the hairline colour,
           drawn behind the card, invisible to assistive tech. */}
       <div
         aria-hidden="true"
         className="absolute inset-0 [background-image:radial-gradient(var(--border)_1px,transparent_1px)] [background-size:24px_24px] pointer-events-none"
       />
-      <main className="relative flex w-[360px] max-w-full flex-col gap-4 z-10">
+      <main className="relative flex w-full max-w-[380px] sm:w-[360px] flex-col gap-4 z-10">
         <p className="flex items-center gap-2.5">
           {/* Same mark as the shell rail, so the door matches the house. */}
           <span

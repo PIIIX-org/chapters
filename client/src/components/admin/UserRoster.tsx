@@ -115,7 +115,7 @@ export function UserRoster() {
                               role: e.target.value as UserRole,
                             })
                           }
-                          className="text-xs bg-muted/60 border border-border/80 rounded-[var(--radius-sm,2px)] px-1.5 py-0.5 text-foreground hover:border-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer font-mono"
+                          className="text-xs bg-muted/60 border border-border/80 rounded-[var(--radius-sm,2px)] px-1.5 py-1 min-h-[32px] sm:min-h-0 text-foreground hover:border-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer font-mono touch-manipulation"
                         >
                           {USER_ROLES.map((r) => (
                             <option key={r} value={r}>

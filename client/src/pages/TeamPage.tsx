@@ -183,10 +183,10 @@ export function TeamPage() {
   return (
     <>
       <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-[80%] flex-col gap-4 pl-[72px] sm:pl-20 pr-4 pt-3 pb-16">
+        <div className="mx-auto flex w-full max-w-full md:max-w-[80%] flex-col gap-4 px-3 sm:px-4 md:pl-[72px] md:pr-4 pt-3 pb-20 sm:pb-16">
           {/* Teams Navigation Shelf */}
           {teams.data.length > 1 && (
-            <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+            <div className="flex items-center gap-2 overflow-x-auto overscroll-x-contain touch-pan-x no-scrollbar pb-1 text-xs">
               <span className="text-muted-foreground font-medium text-[11px] uppercase tracking-wider shrink-0 mr-1">
                 Teams:
               </span>
@@ -197,7 +197,7 @@ export function TeamPage() {
                     key={t.id}
                     type="button"
                     onClick={() => setSelectedTeamId(t.id)}
-                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-sm,2px)] border text-xs transition-colors shrink-0 ${
+                    className={`inline-flex items-center gap-2 px-3 py-1.5 min-h-[36px] sm:min-h-0 touch-manipulation rounded-[var(--radius-sm,2px)] border text-xs transition-colors shrink-0 ${
                       isSelected
                         ? 'border-primary bg-primary text-primary-foreground font-medium'
                         : 'border-border bg-card text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -271,14 +271,14 @@ export function TeamPage() {
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search members by email..."
                     aria-label="Search members"
-                    className="pl-8 h-7 text-xs rounded-[var(--radius-sm,2px)]"
+                    className="pl-8 h-9 sm:h-7 text-base sm:text-xs rounded-[var(--radius-sm,2px)]"
                   />
                   {search && (
                     <button
                       type="button"
                       onClick={() => setSearch('')}
                       aria-label="Clear member search"
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground touch-manipulation"
                     >
                       <X className="size-3.5" aria-hidden="true" />
                     </button>

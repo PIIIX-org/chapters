@@ -63,7 +63,7 @@ export function LoginPage() {
       {authConfig?.oidc ? (
         <div className="mb-4 flex flex-col gap-4">
           {ssoFailed ? <FormError message="Single sign-on failed. Try again." /> : null}
-          <Button asChild className="rounded-[var(--radius-sm,2px)]">
+          <Button asChild className="w-full min-h-[40px] sm:min-h-9 rounded-[var(--radius-sm,2px)] touch-manipulation">
             <a href="/api/oidc/login">Continue with single sign-on</a>
           </Button>
           {!authConfig.oidcOnly && (
@@ -81,11 +81,15 @@ export function LoginPage() {
               onChange={(e) => setTotp(e.target.value)}
               required
               autoFocus
-              className="rounded-[var(--radius-sm,2px)] font-mono"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]*"
+              maxLength={6}
+              className="rounded-[var(--radius-sm,2px)] font-mono tracking-widest text-center"
             />
           </div>
           <FormError message={error} />
-          <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
+          <Button type="submit" disabled={submitting} className="w-full min-h-[40px] sm:min-h-9 rounded-[var(--radius-sm,2px)] touch-manipulation">
             Verify code
           </Button>
         </form>
@@ -96,6 +100,10 @@ export function LoginPage() {
             <Input
               id="login-email"
               type="email"
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="none"
+              autoCorrect="off"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
@@ -107,6 +115,7 @@ export function LoginPage() {
             <Input
               id="login-password"
               type="password"
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
@@ -114,10 +123,10 @@ export function LoginPage() {
             />
           </div>
           <FormError message={error} />
-          <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
+          <Button type="submit" disabled={submitting} className="w-full min-h-[40px] sm:min-h-9 rounded-[var(--radius-sm,2px)] touch-manipulation">
             Log in
           </Button>
-          <Link to="/forgot-password" className="text-center text-sm text-muted-foreground hover:text-foreground underline underline-offset-4 transition-colors">
+          <Link to="/forgot-password" className="text-center text-sm text-muted-foreground hover:text-foreground underline underline-offset-4 py-1 touch-manipulation transition-colors">
             Forgot your password?
           </Link>
           {/* Until this existed there was no route to sign-up anywhere in
@@ -125,7 +134,7 @@ export function LoginPage() {
               Same cold-start trap as vault creation and connecting a
               repository: a surface reachable only from somewhere you can
               only get to if you already have what it creates. */}
-          <p className="text-center text-sm text-muted-foreground">
+          <p className="text-center text-sm text-muted-foreground py-0.5">
             New here?{' '}
             <Link to="/signup" className="text-foreground underline underline-offset-4 hover:text-primary transition-colors">
               Create an account

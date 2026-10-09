@@ -281,9 +281,12 @@ describe('VaultsPage', () => {
 
     await screen.findByRole('link', { name: 'Engineering' })
 
-    // Fluid responsive container
+    // Fluid responsive container has symmetric mobile padding without asymmetric rail offset
     const layoutContainer = container.querySelector('.max-w-full')
     expect(layoutContainer).toBeInTheDocument()
+    expect(layoutContainer?.className).toContain('px-3')
+    expect(layoutContainer?.className).toContain('pb-20')
+    expect(layoutContainer?.className).not.toContain('pl-[72px]')
     expect(layoutContainer?.className).toContain('sm:max-w-[94%]')
     expect(layoutContainer?.className).toContain('lg:max-w-[80%]')
 
@@ -301,6 +304,40 @@ describe('VaultsPage', () => {
     expect(dialogContent).toBeInTheDocument()
     expect(dialogContent?.className).toContain('w-[calc(100vw-1.5rem)]')
     expect(dialogContent?.className).toContain('sm:max-w-md')
+  })
+
+  it('allows opening and dismissing the inline new vault creation form via Cancel', async () => {
+    stubFetch()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+    expect(screen.queryByLabelText(/vault name/i)).toBeNull()
+
+    // Open new vault form
+    fireEvent.click(screen.getByRole('button', { name: 'New vault' }))
+    expect(screen.getByLabelText(/vault name/i)).toBeInTheDocument()
+
+    // Dismiss using the inline Cancel button
+    const cancelBtn = screen.getByRole('button', { name: 'Cancel' })
+    expect(cancelBtn).toBeInTheDocument()
+    fireEvent.click(cancelBtn)
+
+    expect(screen.queryByLabelText(/vault name/i)).toBeNull()
+  })
+
+  it('renders horizontal scroll wrapper for tables in list view and passes a11y', async () => {
+    stubFetch()
+    const { container } = renderPage()
+
+    await screen.findByRole('link', { name: 'Engineering' })
+
+    // Switch to list view
+    fireEvent.click(screen.getByRole('button', { name: 'List view' }))
+    const table = screen.getByRole('table')
+    expect(table).toBeInTheDocument()
+    expect(table.parentElement?.className).toContain('overflow-x-auto')
+
+    await expectNoA11yViolations(container)
   })
 })
 

@@ -650,5 +650,40 @@ describe('NoteView — the inspector tabs', () => {
     await userEvent.click(closeBtn)
     expect(screen.queryByRole('complementary', { name: 'Note drawer' })).toBeNull()
   })
+
+  it('opens dynamic bottom drawer from mobile header button and dismisses via backdrop', async () => {
+    stubFetch()
+    renderNote(OWNER_VAULT)
+    await relay()
+
+    // Mobile drawer trigger in the note header bar
+    const mobileDrawerBtn = screen.getByRole('button', { name: 'Note drawer' })
+    expect(mobileDrawerBtn).toBeInTheDocument()
+
+    // Clicking mobile button opens drawer
+    await userEvent.click(mobileDrawerBtn)
+    const drawer = screen.getByRole('complementary', { name: 'Note drawer' })
+    expect(drawer).toBeInTheDocument()
+
+    // Backdrop overlay is rendered
+    const backdrop = document.querySelector('div[role="presentation"]')
+    expect(backdrop).toBeInTheDocument()
+
+    // Clicking backdrop dismisses drawer
+    await userEvent.click(backdrop!)
+    expect(screen.queryByRole('complementary', { name: 'Note drawer' })).toBeNull()
+  })
+
+  it('passes accessibility audit with drawer open', async () => {
+    stubFetch()
+    renderNote(OWNER_VAULT)
+    await relay()
+
+    const mobileDrawerBtn = screen.getByRole('button', { name: 'Note drawer' })
+    await userEvent.click(mobileDrawerBtn)
+
+    const drawer = screen.getByRole('complementary', { name: 'Note drawer' })
+    await expectNoA11yViolations(drawer)
+  })
 })
 

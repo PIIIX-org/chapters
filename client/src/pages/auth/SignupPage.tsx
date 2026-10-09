@@ -34,13 +34,25 @@ export function SignupPage() {
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="signup-email">Email</Label>
-          <Input id="signup-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="rounded-[var(--radius-sm,2px)]" />
+          <Input
+            id="signup-email"
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            autoCapitalize="none"
+            autoCorrect="off"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="rounded-[var(--radius-sm,2px)]"
+          />
         </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="signup-password">Password</Label>
           <Input
             id="signup-password"
             type="password"
+            autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             minLength={8}
@@ -60,12 +72,12 @@ export function SignupPage() {
           on this instance approves your account. Sign-in keeps failing until both are done.
         </p>
         <FormError message={error} />
-        <Button type="submit" disabled={submitting} className="rounded-[var(--radius-sm,2px)]">
+        <Button type="submit" disabled={submitting} className="w-full min-h-[40px] sm:min-h-9 rounded-[var(--radius-sm,2px)] touch-manipulation">
           Sign up
         </Button>
-        <p className="text-center text-sm text-muted-foreground">
+        <p className="text-center text-sm text-muted-foreground py-0.5">
           Already have an account?{' '}
-          <Link to="/login" className="text-foreground underline">
+          <Link to="/login" className="text-foreground underline underline-offset-4 py-1 touch-manipulation hover:text-primary transition-colors">
             Sign in
           </Link>
         </p>

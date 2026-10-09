@@ -17,7 +17,17 @@ import { logout } from '../../api/auth.js'
 import { isThemePreference } from '../../lib/theme.js'
 import { cn } from '../../lib/utils.js'
 
-export function AccountMenu({ showLabel = false }: { showLabel?: boolean } = {}) {
+export function AccountMenu({
+  showLabel = false,
+  side = 'right',
+  align = 'end',
+  ariaLabel = 'Account menu',
+}: {
+  showLabel?: boolean
+  side?: 'top' | 'right' | 'bottom' | 'left'
+  align?: 'start' | 'center' | 'end'
+  ariaLabel?: string
+} = {}) {
   const session = useSession()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -34,7 +44,7 @@ export function AccountMenu({ showLabel = false }: { showLabel?: boolean } = {})
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label="Account menu"
+          aria-label={ariaLabel}
           className={cn(
             'relative flex items-center justify-center rounded-[var(--radius-md)] text-muted-foreground outline-none transition-all duration-150 hover:bg-muted hover:text-foreground active:scale-95 active:bg-muted/80 focus-visible:ring-2 focus-visible:ring-ring/40 shrink-0 cursor-pointer',
             showLabel
@@ -46,7 +56,7 @@ export function AccountMenu({ showLabel = false }: { showLabel?: boolean } = {})
           {showLabel && <span className="truncate">Profile</span>}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="right" align="end" sideOffset={12} className="min-w-[14rem] shadow-floating">
+      <DropdownMenuContent side={side} align={align} sideOffset={12} className="min-w-[14rem] shadow-floating">
         <DropdownMenuLabel className="truncate font-sans text-xs normal-case tracking-normal text-foreground">
           {session.data?.email ?? 'Signed in'}
         </DropdownMenuLabel>

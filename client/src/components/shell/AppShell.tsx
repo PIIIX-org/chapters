@@ -5,6 +5,8 @@ import { GlobalSearch } from '../search/GlobalSearch.js'
 import { Rail } from './Rail.js'
 import { TopBar } from './TopBar.js'
 import { BottomBar } from './BottomBar.js'
+import { MobileHeader } from './MobileHeader.js'
+import { MobileTabBar } from './MobileTabBar.js'
 import { ShellProvider } from './ShellProvider.js'
 import { useShell } from './shell-context.js'
 import { useShellChords } from './useShellChords.js'
@@ -64,8 +66,11 @@ function ShellFrame({ children }: { children?: ReactNode }) {
   }, [contextOpen, inspectorOpen, sidebarExpanded, shell])
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
-      {/* 1. Sticky Navigation Rail on the far left */}
+    <div className="flex h-dvh w-full flex-col md:flex-row overflow-hidden bg-background text-foreground">
+      {/* Mobile Top Header (<md) */}
+      <MobileHeader />
+
+      {/* 1. Sticky Navigation Rail on the far left (>=md) */}
       <Rail />
 
       {/* 2. Sticky Context Panel adjacent to Rail */}
@@ -84,11 +89,11 @@ function ShellFrame({ children }: { children?: ReactNode }) {
       />
 
       {/* 3. Center Workspace: Flex column holding canvas and chrome */}
-      <div className="relative flex flex-1 flex-col min-h-0 min-w-0 h-full overflow-hidden">
-        {/* Floating TopBar on Top Right (Search & New) */}
+      <div className="relative flex flex-1 flex-col min-h-0 min-w-0 h-full overflow-hidden pb-16 md:pb-0">
+        {/* Floating TopBar on Top Right (Search & New) - desktop only */}
         <div
           className={cn(
-            'pointer-events-none absolute top-2.5 right-2.5 z-20 flex items-center justify-end transition-opacity duration-150',
+            'pointer-events-none absolute top-2.5 right-2.5 z-20 hidden md:flex items-center justify-end transition-opacity duration-150',
             sidebarExpanded && 'max-md:opacity-0 max-md:pointer-events-none',
           )}
         >
@@ -100,10 +105,10 @@ function ShellFrame({ children }: { children?: ReactNode }) {
           {children ?? <Outlet />}
         </main>
 
-        {/* Floating BottomBar along the Bottom (History & Capped Breadcrumbs) */}
+        {/* Floating BottomBar along the Bottom (History & Capped Breadcrumbs) - desktop only */}
         <div
           className={cn(
-            'pointer-events-none absolute bottom-2.5 inset-x-0 z-20 flex items-center justify-between px-2.5 transition-opacity duration-150',
+            'pointer-events-none absolute bottom-2.5 inset-x-0 z-20 hidden md:flex items-center justify-between px-2.5 transition-opacity duration-150',
             sidebarExpanded && 'max-md:opacity-0 max-md:pointer-events-none',
           )}
         >
@@ -125,6 +130,9 @@ function ShellFrame({ children }: { children?: ReactNode }) {
             : 'w-11 items-center p-1 overflow-hidden max-md:hidden',
         )}
       />
+
+      {/* Mobile Bottom Tab Bar (<md) */}
+      <MobileTabBar />
 
       {/* Mobile drawer backdrop */}
       {showMobileBackdrop && (
