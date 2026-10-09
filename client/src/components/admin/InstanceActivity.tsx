@@ -106,23 +106,27 @@ function SecurityEventLog() {
       ) : (
         <Table className="rounded-[var(--radius-md,4px)]">
           <caption className="sr-only">Security events on this instance</caption>
-          <TableHeader>
+          <TableHeader className="hidden sm:table-header-group">
             <TableRow>
               <TableHead scope="col">Time</TableHead>
               <TableHead scope="col">Event</TableHead>
               <TableHead scope="col">IP</TableHead>
             </TableRow>
           </TableHeader>
-          <TableBody>
+          <TableBody className="block sm:table-row-group divide-y divide-border sm:divide-y-0">
             {events.data.map((event) => (
-              <TableRow key={event.id}>
-                <TableCell className="h-8 font-mono text-xs tabular-nums text-muted-foreground">
+              <TableRow
+                key={event.id}
+                className="block sm:table-row p-3 sm:p-0 space-y-1 sm:space-y-0 align-top"
+              >
+                <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 sm:h-8 font-mono text-xs tabular-nums text-muted-foreground h-auto">
                   {formatStamp(event.createdAt)}
                 </TableCell>
-                <TableCell className="h-8 text-[13px] text-foreground">
+                <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 sm:h-8 text-[13px] font-medium sm:font-normal text-foreground h-auto">
                   {event.type.replace(/_/g, ' ')}
                 </TableCell>
-                <TableCell className="h-8 font-mono text-xs tabular-nums text-muted-foreground">
+                <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 sm:h-8 font-mono text-xs tabular-nums text-muted-foreground h-auto">
+                  <span className="sm:hidden font-mono text-muted-foreground/70">IP: </span>
                   {event.ip ?? '—'}
                 </TableCell>
               </TableRow>
@@ -169,7 +173,7 @@ function AuditTrail() {
           <caption className="sr-only">
             Who changed which note, and when — never the change itself
           </caption>
-          <TableHeader>
+          <TableHeader className="hidden sm:table-header-group">
             <TableRow>
               <TableHead scope="col">Time</TableHead>
               <TableHead scope="col">Action</TableHead>
@@ -177,19 +181,23 @@ function AuditTrail() {
               <TableHead scope="col">Actor</TableHead>
             </TableRow>
           </TableHeader>
-          <TableBody>
+          <TableBody className="block sm:table-row-group divide-y divide-border sm:divide-y-0">
             {entries.data.map((entry) => (
-              <TableRow key={entry.id}>
-                <TableCell className="h-8 font-mono text-xs tabular-nums text-muted-foreground">
+              <TableRow
+                key={entry.id}
+                className="block sm:table-row p-3 sm:p-0 space-y-1.5 sm:space-y-0 align-top"
+              >
+                <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 sm:h-8 font-mono text-xs tabular-nums text-muted-foreground h-auto">
                   {formatStamp(entry.createdAt)}
                 </TableCell>
-                <TableCell className="h-8 text-[13px] text-foreground">
+                <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 sm:h-8 text-[13px] font-medium sm:font-normal text-foreground h-auto">
                   {entry.action}
                 </TableCell>
-                <TableCell className="h-8 font-mono text-xs text-muted-foreground">
+                <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 sm:h-8 font-mono text-xs text-muted-foreground h-auto whitespace-normal break-all">
+                  <span className="sm:hidden font-mono text-muted-foreground/70">Note: </span>
                   {entry.notePath}
                 </TableCell>
-                <TableCell className="h-8">
+                <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2 sm:h-8 h-auto">
                   <Pill tone={actorTone(entry.actorType)} className="rounded-[var(--radius-sm,2px)] font-mono text-[11px]">{entry.actorType}</Pill>
                 </TableCell>
               </TableRow>
