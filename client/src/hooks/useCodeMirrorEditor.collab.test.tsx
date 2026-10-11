@@ -3,6 +3,7 @@ import { render } from '@testing-library/react'
 import * as Y from 'yjs'
 import { EditorView } from '@codemirror/view'
 import { undo } from '@codemirror/commands'
+import { applyFormat } from '../components/vault/note-toolbar-utils.js'
 import { useCodeMirrorEditor } from './useCodeMirrorEditor.js'
 import type { EditorCollab } from './useCodeMirrorEditor.js'
 import { expectNoA11yViolations } from '../test/axe.js'
@@ -148,6 +149,61 @@ describe('useCodeMirrorEditor with a collab binding', () => {
 
     expect(undo(view)).toBe(true)
     expect(view.state.doc.toString()).toBe('mine')
+  })
+
+  it('sequentially reverts multiple actions with persistent Y.UndoManager', async () => {
+    const { ytext } = crdtNote('initial')
+
+    const { getByTestId } = render(
+      <Harness doc="" onChange={vi.fn()} collab={{ ytext, awareness: null }} />,
+    )
+    const view = editorView(getByTestId('editor-container'))
+
+    // Action 1
+    view.dispatch({ changes: { from: 7, insert: ' first' } })
+    expect(view.state.doc.toString()).toBe('initial first')
+
+    // Wait past captureTimeout (300ms) to ensure distinct undo transactions
+    await new Promise((r) => setTimeout(r, 350))
+
+    // Action 2
+    view.dispatch({ changes: { from: 13, insert: ' second' } })
+    expect(view.state.doc.toString()).toBe('initial first second')
+
+    // Undo action 2
+    applyFormat(view, 'undo')
+    expect(view.state.doc.toString()).toBe('initial first')
+
+    // Undo action 1 (multiple requests sequentially revert previous actions)
+    applyFormat(view, 'undo')
+    expect(view.state.doc.toString()).toBe('initial')
+
+    // Redo action 1
+    applyFormat(view, 'redo')
+    expect(view.state.doc.toString()).toBe('initial first')
+
+    // Redo action 2
+    applyFormat(view, 'redo')
+    expect(view.state.doc.toString()).toBe('initial first second')
+  })
+
+  it('preserves the undo manager stack when awareness connects after typing', async () => {
+    const { ytext } = crdtNote('initial')
+    const collab: EditorCollab = { ytext, awareness: null }
+
+    const { getByTestId, rerender } = render(<Harness doc="" onChange={vi.fn()} collab={collab} />)
+    const view = editorView(getByTestId('editor-container'))
+
+    view.dispatch({ changes: { from: 7, insert: ' edit' } })
+    expect(view.state.doc.toString()).toBe('initial edit')
+
+    // Reconfigure with awareness (connecting relay)
+    const peer = awarenessWithPeer(ytext, '#3B4C8C')
+    rerender(<Harness doc="" onChange={vi.fn()} collab={{ ytext, awareness: peer.awareness }} />)
+
+    // Verify undo still works and was not wiped by the awareness reconfigure
+    applyFormat(view, 'undo')
+    expect(view.state.doc.toString()).toBe('initial')
   })
 
   it('renders a remote caret in the peer ink once awareness arrives after connecting', () => {
