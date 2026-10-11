@@ -10,6 +10,39 @@ import homePageSource from './HomePage.tsx?raw'
 const SESSION = { id: 'u1', email: 'taha@piiix.org', status: 'active', role: 'member', createdAt: '2026-01-01' }
 const VAULT = { id: 'v1', name: 'Engineering', ownerId: 'u1', mergeable: true, access: 'owner' }
 
+vi.mock('@hocuspocus/provider', () => {
+  class HocuspocusProvider {
+    options: unknown
+    awareness = {
+      doc: { clientID: 7 },
+      clientID: 7,
+      getLocalState: () => null,
+      setLocalStateField: () => {},
+      getStates: () => new Map(),
+      on: () => {},
+      off: () => {},
+    }
+    isSynced = false
+    hasUnsyncedChanges = false
+    fields: Record<string, unknown> = {}
+
+    constructor(options: unknown) {
+      this.options = options
+    }
+
+    setAwarenessField(field: string, value: unknown) {
+      this.fields[field] = value
+    }
+    disconnect() {}
+    destroy() {}
+  }
+
+  return {
+    HocuspocusProvider,
+    WebSocketStatus: { Connecting: 'connecting', Connected: 'connected', Disconnected: 'disconnected' },
+  }
+})
+
 function stubFetch(vaults: unknown[]) {
   vi.stubGlobal(
     'fetch',

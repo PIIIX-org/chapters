@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { undo, redo } from '@codemirror/commands'
+import { yUndoManagerKeymap } from 'y-codemirror.next'
 import { getMigratedStorageItem } from '../../lib/storage.js'
 
 export type NoteWidth = 'compact' | 'standard' | 'wide' | 'full'
@@ -122,10 +123,20 @@ export function applyFormat(view: EditorView | null, format: FormatType) {
   if (!view) return
 
   if (format === 'undo') {
+    try {
+      if (yUndoManagerKeymap[0]?.run?.(view)) return
+    } catch {
+      // Fallback if not a collab view or facet is absent
+    }
     undo(view)
     return
   }
   if (format === 'redo') {
+    try {
+      if (yUndoManagerKeymap[1]?.run?.(view)) return
+    } catch {
+      // Fallback if not a collab view or facet is absent
+    }
     redo(view)
     return
   }

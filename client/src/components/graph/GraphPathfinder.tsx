@@ -20,7 +20,7 @@ export function GraphPathfinder({ nodes, edges, onPathChange }: GraphPathfinderP
 
   const [filterText, setFilterText] = useState('')
 
-  const sortedNodes = [...nodes].sort((a, b) => a.path.localeCompare(b.path))
+  const sortedNodes = [...(nodes ?? [])].sort((a, b) => a.path.localeCompare(b.path))
   const sourceOptions = sortedNodes.filter(
     (n) => n.id === sourceId || !filterText.trim() || n.path.toLowerCase().includes(filterText.toLowerCase()),
   )
