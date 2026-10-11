@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Compartment, EditorState } from '@codemirror/state'
 import type { Extension } from '@codemirror/state'
 import { EditorView, keymap, drawSelection, dropCursor, tooltips } from '@codemirror/view'
@@ -130,30 +130,20 @@ export function useCodeMirrorEditor({
   const ytext = collab?.ytext
   const awareness = collab?.awareness ?? null
 
-  const undoManagerRef = useRef<Y.UndoManager | null>(null)
-  const lastYTextRef = useRef<Y.Text | null>(null)
-
-  if (ytext && lastYTextRef.current !== ytext) {
-    lastYTextRef.current = ytext
-    undoManagerRef.current?.destroy()
+  const undoManager = useMemo(() => {
+    if (!ytext) return null
     const frontmatterMap = ytext.doc?.getMap('frontmatter')
     const trackedTypes = frontmatterMap ? [ytext, frontmatterMap] : [ytext]
-    undoManagerRef.current = new Y.UndoManager(trackedTypes, {
+    return new Y.UndoManager(trackedTypes, {
       captureTimeout: 300,
     })
-  } else if (!ytext && lastYTextRef.current) {
-    lastYTextRef.current = null
-    undoManagerRef.current?.destroy()
-    undoManagerRef.current = null
-  }
+  }, [ytext])
 
   useEffect(() => {
     return () => {
-      undoManagerRef.current?.destroy()
-      undoManagerRef.current = null
-      lastYTextRef.current = null
+      undoManager?.destroy()
     }
-  }, [])
+  }, [undoManager])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -174,7 +164,7 @@ export function useCodeMirrorEditor({
         ...(ytext
           ? [
               collabCompartment.of(
-                yCollab(ytext, awareness, { undoManager: undoManagerRef.current || false }),
+                yCollab(ytext, awareness, { undoManager: undoManager || false }),
               ),
               penNibCursor,
             ]
@@ -262,10 +252,10 @@ export function useCodeMirrorEditor({
     if (!ytext) return
     viewRef.current?.dispatch({
       effects: collabCompartment.reconfigure(
-        yCollab(ytext, awareness, { undoManager: undoManagerRef.current || false }),
+        yCollab(ytext, awareness, { undoManager: undoManager || false }),
       ),
     })
-  }, [collabCompartment, ytext, awareness])
+  }, [collabCompartment, ytext, awareness, undoManager])
 
   // Locking is a reconfiguration, never a remount: when access is revoked
   // mid-sentence the text on screen is the user's unsent work, and rebuilding
