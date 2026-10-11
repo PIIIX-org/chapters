@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { rm, readFile } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import * as Y from 'yjs'
 import { config } from '../src/config.js'
 import {
-  crdtFile,
   loadCrdtState,
   saveCrdtState,
   deleteCrdtState,
