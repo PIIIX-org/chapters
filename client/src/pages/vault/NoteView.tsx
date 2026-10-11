@@ -30,6 +30,7 @@ import {
   useNoteWidth,
   NOTE_WIDTH_CLASSES,
   useNoteDirection,
+  applyFormat,
 } from '../../components/vault/note-toolbar-utils.js'
 import type { NoteDirection } from '../../components/vault/note-toolbar-utils.js'
 import { Edit2, History, Link2, Network, Share2, SlidersHorizontal, Trash2, X } from 'lucide-react'
@@ -264,6 +265,51 @@ function NoteFrame({
       },
     })
   }
+
+  // Improvement 6: Universal keyboard listener for undo/redo (Mod-Z / Mod-Shift-Z / Mod-Y).
+  // Sequentially reverts previous actions even when focus is on the toolbar or canvas chrome,
+  // while preserving native input behavior when editing inside form fields.
+  useEffect(() => {
+    if (!view || readOnly) return
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.defaultPrevented) return
+
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          (target.isContentEditable && !target.closest('.cm-editor')))
+      ) {
+        return
+      }
+
+      const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+      const modKey = isMac ? e.metaKey : e.ctrlKey
+
+      if (!modKey) return
+
+      if (
+        (e.key.toLowerCase() === 'z' && e.shiftKey) ||
+        (e.key.toLowerCase() === 'y' && !e.shiftKey)
+      ) {
+        e.preventDefault()
+        applyFormat(view, 'redo')
+        return
+      }
+
+      if (e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        applyFormat(view, 'undo')
+        return
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [view, readOnly])
 
   return (
     <>

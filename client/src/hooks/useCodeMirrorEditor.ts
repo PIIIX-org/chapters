@@ -8,7 +8,7 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { autocompletion } from '@codemirror/autocomplete'
 import { tags } from '@lezer/highlight'
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next'
-import type * as Y from 'yjs'
+import * as Y from 'yjs'
 import type { HocuspocusProvider } from '@hocuspocus/provider'
 import { penNibCursor } from '../components/vault/penNibCursor.js'
 import { terminalCursor } from '../components/vault/terminalCursor.js'
@@ -130,6 +130,31 @@ export function useCodeMirrorEditor({
   const ytext = collab?.ytext
   const awareness = collab?.awareness ?? null
 
+  const undoManagerRef = useRef<Y.UndoManager | null>(null)
+  const lastYTextRef = useRef<Y.Text | null>(null)
+
+  if (ytext && lastYTextRef.current !== ytext) {
+    lastYTextRef.current = ytext
+    undoManagerRef.current?.destroy()
+    const frontmatterMap = ytext.doc?.getMap('frontmatter')
+    const trackedTypes = frontmatterMap ? [ytext, frontmatterMap] : [ytext]
+    undoManagerRef.current = new Y.UndoManager(trackedTypes, {
+      captureTimeout: 300,
+    })
+  } else if (!ytext && lastYTextRef.current) {
+    lastYTextRef.current = null
+    undoManagerRef.current?.destroy()
+    undoManagerRef.current = null
+  }
+
+  useEffect(() => {
+    return () => {
+      undoManagerRef.current?.destroy()
+      undoManagerRef.current = null
+      lastYTextRef.current = null
+    }
+  }, [])
+
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -146,7 +171,14 @@ export function useCodeMirrorEditor({
         // The nib sits outside the compartment on purpose: the compartment is
         // reconfigured to a bare `yCollab(...)` when awareness arrives, and
         // anything inside it goes with the old value.
-        ...(ytext ? [collabCompartment.of(yCollab(ytext, awareness)), penNibCursor] : []),
+        ...(ytext
+          ? [
+              collabCompartment.of(
+                yCollab(ytext, awareness, { undoManager: undoManagerRef.current || false }),
+              ),
+              penNibCursor,
+            ]
+          : []),
         drawSelection({ cursorBlinkRate: 1200 }),
         dropCursor(),
         terminalCursor,
@@ -228,7 +260,11 @@ export function useCodeMirrorEditor({
 
   useEffect(() => {
     if (!ytext) return
-    viewRef.current?.dispatch({ effects: collabCompartment.reconfigure(yCollab(ytext, awareness)) })
+    viewRef.current?.dispatch({
+      effects: collabCompartment.reconfigure(
+        yCollab(ytext, awareness, { undoManager: undoManagerRef.current || false }),
+      ),
+    })
   }, [collabCompartment, ytext, awareness])
 
   // Locking is a reconfiguration, never a remount: when access is revoked

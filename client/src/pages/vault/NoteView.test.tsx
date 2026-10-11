@@ -685,5 +685,37 @@ describe('NoteView — the inspector tabs', () => {
     const drawer = screen.getByRole('complementary', { name: 'Note drawer' })
     await expectNoA11yViolations(drawer)
   })
+
+  it('handles Mod-Z keyboard shortcut outside editor without intercepting form inputs', async () => {
+    stubFetch()
+    renderNote(EDIT_VAULT)
+    await relay()
+
+    const undoButton = screen.getByRole('button', { name: 'Undo' })
+    expect(undoButton).toBeInTheDocument()
+
+    const undoEvent = new KeyboardEvent('keydown', {
+      key: 'z',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    window.dispatchEvent(undoEvent)
+    expect(undoEvent.defaultPrevented).toBe(true)
+
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+
+    const inputUndoEvent = new KeyboardEvent('keydown', {
+      key: 'z',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    input.dispatchEvent(inputUndoEvent)
+    expect(inputUndoEvent.defaultPrevented).toBe(false)
+    document.body.removeChild(input)
+  })
 })
 

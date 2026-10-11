@@ -71,6 +71,24 @@ install_windsurf() {
   echo "  ✓ Installed for Windsurf: ${file}"
 }
 
+install_project_memory() {
+  local project_dir="${PWD}"
+  mkdir -p "${project_dir}/.agents/rules"
+  cp "${RULE_SRC}" "${project_dir}/.agents/rules/elara.md"
+
+  for f in "${project_dir}/AGENTS.md" "${project_dir}/GEMINI.md"; do
+    if [[ -f "${f}" ]]; then
+      if ! grep -q "Elara — Always-Active Agent Protocol" "${f}"; then
+        echo "" >> "${f}"
+        cat "${RULE_SRC}" >> "${f}"
+      fi
+    else
+      cat "${RULE_SRC}" > "${f}"
+    fi
+  done
+  echo "  ✓ Installed permanent project memory in ${project_dir}: AGENTS.md, GEMINI.md, .agents/rules/elara.md"
+}
+
 case "${TARGET}" in
   antigravity|gemini)
     install_antigravity
@@ -84,14 +102,18 @@ case "${TARGET}" in
   windsurf)
     install_windsurf
     ;;
+  project|workspace)
+    install_project_memory
+    ;;
   all)
     install_antigravity
     install_claude
     install_cursor
     install_windsurf
+    install_project_memory
     ;;
   *)
-    echo "Unknown target: ${TARGET}. Use: all | antigravity | claude | cursor | windsurf" >&2
+    echo "Unknown target: ${TARGET}. Use: all | antigravity | claude | cursor | windsurf | project" >&2
     exit 1
     ;;
 esac
