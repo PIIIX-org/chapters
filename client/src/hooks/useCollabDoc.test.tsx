@@ -470,4 +470,75 @@ describe('useCollabDoc', () => {
     expect(view.result.current.status).toBe('reconnecting')
     expect(view.result.current.writable).toBe(true)
   })
+
+  it('resets the document when logging in after being disabled (logout then login)', async () => {
+    const view = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useCollabDoc({
+          vaultId: 'v-1',
+          path: 'journals/2026-08-25.md',
+          user: { id: 'u-taha', name: 'taha' },
+          enabled,
+        }),
+      { initialProps: { enabled: false } },
+    )
+
+    act(() => {
+      view.result.current.ydoc.getText('body').insert(0, 'stale work before login')
+    })
+    const docBefore = view.result.current.ydoc
+
+    view.rerender({ enabled: true })
+    await waitFor(() => expect(stub.providers).toHaveLength(1))
+
+    expect(view.result.current.ydoc).not.toBe(docBefore)
+    expect(view.result.current.ydoc.getText('body').toString()).toBe('')
+  })
+
+  it('resets the document when user id changes', async () => {
+    const view = renderHook(
+      ({ user }: { user: { id: string; name: string } }) =>
+        useCollabDoc({
+          vaultId: 'v-1',
+          path: 'journals/2026-08-25.md',
+          user,
+          enabled: true,
+        }),
+      { initialProps: { user: { id: 'u-alice', name: 'alice' } } },
+    )
+    await waitFor(() => expect(stub.providers).toHaveLength(1))
+
+    act(() => {
+      view.result.current.ydoc.getText('body').insert(0, "alice's edits")
+    })
+    const aliceDoc = view.result.current.ydoc
+
+    view.rerender({ user: { id: 'u-bob', name: 'bob' } })
+    await waitFor(() => expect(stub.providers).toHaveLength(2))
+
+    expect(view.result.current.ydoc).not.toBe(aliceDoc)
+    expect(view.result.current.ydoc.getText('body').toString()).toBe('')
+  })
+
+  it('preserves the document during socket reconnect while enabled remains true', async () => {
+    const { view, provider } = await connected()
+    const originalDoc = view.result.current.ydoc
+
+    act(() => provider.options.onStatus({ status: 'connected' }))
+    act(() => {
+      originalDoc.getText('body').insert(0, 'preserved content')
+    })
+
+    // Simulate transient network disconnect / reconnect
+    act(() => provider.options.onStatus({ status: 'disconnected' }))
+    expect(view.result.current.status).toBe('reconnecting')
+    expect(view.result.current.ydoc).toBe(originalDoc)
+    expect(view.result.current.ydoc.getText('body').toString()).toBe('preserved content')
+
+    act(() => provider.options.onStatus({ status: 'connected' }))
+    expect(view.result.current.status).toBe('connected')
+    expect(view.result.current.ydoc).toBe(originalDoc)
+    expect(view.result.current.ydoc.getText('body').toString()).toBe('preserved content')
+  })
 })
+

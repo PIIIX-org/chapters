@@ -7,6 +7,7 @@ import { noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
 import { scheduleEmbedding } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
+import { deleteCrdtState, renameCrdtState } from '../sync/crdt-store.js'
 import {
   OkfValidationError,
   extractWikilinks,
@@ -396,6 +397,7 @@ export async function renameNote(
   if (isMoving) {
     await atomicWrite(toFile, serializeNote({ frontmatter: newFrontmatter, body: currentBody }))
     await unlink(fromFile).catch(() => {})
+    await renameCrdtState(vaultId, fromResolved.fullPath, toResolved.fullPath).catch(() => {})
   } else {
     await atomicWrite(toFile, serializeNote({ frontmatter: newFrontmatter, body: currentBody }))
   }
@@ -419,6 +421,7 @@ export async function renameNote(
     if (isMoving) {
       await atomicWrite(fromFile, serializeNote({ frontmatter: currentFrontmatter, body: rawBody })).catch(() => {})
       await unlink(toFile).catch(() => {})
+      await renameCrdtState(vaultId, toResolved.fullPath, fromResolved.fullPath).catch(() => {})
     }
     throw err
   }
@@ -1025,6 +1028,7 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
   // cascade — clear it by hand or the rows leak (#92).
   await deleteSemanticEdgesFor('note', [row.id])
   await rm(trashFile(vaultId, row.id), { force: true })
+  await deleteCrdtState(vaultId, row.path).catch(() => {})
   return true
 }
 
