@@ -1,8 +1,8 @@
-# Chapters / Elara
+# Elara
 
 <div align="center">
 
-![Chapters Knowledge Engine Observatory Flight Deck](assets/hero.svg)
+![Elara Knowledge Engine Observatory Flight Deck](assets/hero.svg)
 
 <p align="center">
   <a href="#overview"><img src="assets/badges/badge-okf.svg" alt="Format: OKF v0.2 ISO 8601"/></a>
@@ -16,7 +16,9 @@
   <a href="LICENSE"><img src="assets/badges/badge-license.svg" alt="License: MIT Open Source"/></a>
 </p>
 
-### The open-source, self-hostable second brain built for human engineering teams and autonomous AI swarms.
+### The open-source, self-hostable second brain for engineering teams and the AI agents that work alongside them.
+
+**Status: in testing.** The repository keeps its original name, `chapters`; the product is Elara. Bugs found in testing are tracked in [Issues](https://github.com/PIIIX-org/chapters/issues).
 
 [Quickstart](#quickstart) • [Architectural Comparison](#architectural-comparison) • [Benchmarks & Telemetry](docs/benchmarks/README.md) • [Master Test Plans](benchmarks/README.md) • [MCP Server](#model-context-protocol-mcp-interface)
 
@@ -26,23 +28,23 @@
 
 ## Overview
 
-Software knowledge currently fractures across two irreconcilable silos: human team wikis stored in closed cloud databases (Notion, Outline) and local code repositories indexed by headless command-line tools. Human engineers lose context as architecture documentation drifts away from source code, while autonomous AI coding agents struggle with hallucinated symbol paths and truncated context windows.
+Software knowledge splits across two silos: human team wikis stored in closed cloud databases (Notion, Outline) and local code repositories indexed by headless command-line tools. Human engineers lose context as architecture documentation drifts away from source code, while autonomous AI coding agents struggle with hallucinated symbol paths and truncated context windows.
 
-**Chapters (Elara)** resolves this divide. It stores all documentation as plain, human-readable Markdown files directly on disk using the **Google Open Knowledge Format (OKF v0.2)** with strict ISO 8601 UTC timestamps. Simultaneously, it connects to your Git repositories, parsing TypeScript, Go, Python, Rust, and C++ source files into a real-time **Tree-sitter AST symbol index**.
+**Elara** joins the two. It stores all documentation as plain, human-readable Markdown files directly on disk using the **Google Open Knowledge Format (OKF v0.2)** with strict ISO 8601 UTC timestamps. Simultaneously, it connects to your Git repositories, parsing TypeScript, Go, Python, Rust, and C++ source files into a real-time **Tree-sitter AST symbol index**.
 
-When you write notes, you link directly to live codebase declarations using `[[repo:#symbol]]` syntax. When code changes, Chapters reconciles the AST graph automatically, pruning ghost symbols and keeping architecture documentation in lockstep with the codebase. For autonomous AI agents, Chapters exposes a native **Model Context Protocol (MCP)** server equipped with 57 specialized tools and 20 engineering prompts.
+When you write notes, you link directly to live codebase declarations using `[[repo:#symbol]]` syntax. When code changes, Elara reconciles the AST graph automatically, pruning ghost symbols and keeping architecture documentation in lockstep with the codebase. For AI agents, Elara exposes a native **Model Context Protocol (MCP)** server equipped with 57 specialized tools and 20 engineering prompts.
 
 ---
 
 ## Architectural Comparison
 
-How Chapters compares against existing tools across core architectural dimensions:
+How Elara compares against existing tools across core architectural dimensions:
 
-![Architectural Comparison Matrix: Chapters vs Alternatives](assets/charts/competitive-matrix.svg)
+![Architectural Comparison Matrix: Elara vs Alternatives](assets/charts/competitive-matrix.svg)
 
 ### Key Architectural Differentiators
 
-| Capability | Chapters (Elara) | Obsidian | Swimm | Graphify | Outline | Notion |
+| Capability | Elara | Obsidian | Swimm | Graphify | Outline | Notion |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **License & Hosting** | **MIT Open-Source · Self-Host** | Proprietary Local App | Closed Commercial SaaS | Open-Source CLI | AGPLv3 Self-Host | Closed Commercial Cloud |
 | **Storage Architecture** | **Plain OKF v0.2 MD on Disk** | Unstructured Local MD | Cloud Markdown Sync | InMemory AST Cache | PostgreSQL Database | Proprietary Block DB |
@@ -56,7 +58,7 @@ How Chapters compares against existing tools across core architectural dimension
 
 ## System Architecture
 
-Chapters utilizes a dual-index architecture that links plain Markdown notes and polyglot Git repositories into a unified knowledge graph:
+Elara uses a dual-index architecture that links plain Markdown notes and polyglot Git repositories into a unified knowledge graph:
 
 ```mermaid
 flowchart TD
@@ -80,7 +82,7 @@ flowchart TD
   subgraph Consumers ["Consumption & Agent Layer"]
     MCP["Model Context Protocol (MCP)\n57 Tools · 20 Prompts"]
     UI["Fastify + React Client\nDark Observatory Shell"]
-    AGENTS["Autonomous AI Swarms\nCursor · Claude · Antigravity"]
+    AGENTS["AI Agents\nCursor · Claude · Antigravity"]
     HUMANS["Engineering Teams\nReal-Time Collaborative Editing"]
   end
 
@@ -112,7 +114,7 @@ Production concurrency benchmarks, query throughput scaling curves, tail latency
 
 ## Testing & Quality Assurance
 
-Chapters is verified through 15 rigorous, automated Master Test Plans covering retrieval accuracy, CRDT stress, chaos recovery, and security penetration:
+Elara is verified through 15 automated Master Test Plans covering retrieval accuracy, CRDT stress, chaos recovery, and security penetration:
 
 👉 **[The 15 Master Test Plans (TP-01 to TP-15) →](benchmarks/README.md)**  
 *Complete verification matrix, empirical SLO compliance targets, and 15 interactive HTML run dashboards.*
@@ -121,16 +123,16 @@ Chapters is verified through 15 rigorous, automated Master Test Plans covering r
 
 ## Model Context Protocol (MCP) Interface
 
-Chapters exposes a complete, permission-scoped Model Context Protocol (MCP) server that transforms any AI agent into an active collaborator on your knowledge base and codebases.
+Elara exposes a complete, permission-scoped Model Context Protocol (MCP) server that transforms any AI agent into an active collaborator on your knowledge base and codebases.
 
 ### MCP Configuration
 
-Add Chapters to your `claude_desktop_config.json`, Cursor MCP settings, or Antigravity configuration:
+Add Elara to your `claude_desktop_config.json`, Cursor MCP settings, or Antigravity configuration:
 
 ```json
 {
   "mcpServers": {
-    "chapters": {
+    "elara": {
       "command": "node",
       "args": ["/path/to/chapters/server/dist/mcp/index.js"],
       "env": {
@@ -210,7 +212,7 @@ chapters/
 
 ### 1. Launch with Docker Compose (Recommended)
 
-Run the full stack (PostgreSQL 17, pgvector, and Chapters backend):
+Run the full stack (PostgreSQL 17, pgvector, and the Elara backend):
 
 ```bash
 # Clone the repository
@@ -220,7 +222,7 @@ cd chapters
 # Start all services
 docker compose up -d
 
-# Open the Observatory
+# Open Elara
 open http://localhost:3000
 ```
 
@@ -241,12 +243,12 @@ pnpm dev
 
 ## License
 
-Chapters is open-source software licensed under the **[MIT License](LICENSE)**.
+Elara is open-source software licensed under the **[MIT License](LICENSE)**.
 
 <!-- forged-with: git-a-profile -->
 <div align="center">
 
-![Chapters Observatory Telemetry Footer](assets/footer.svg)
+![Elara Observatory Telemetry Footer](assets/footer.svg)
 
 <sub>Forged with <a href="https://github.com/PIIIX-org/git-a-profile">git-a-profile</a> · <a href="https://github.com/PIIIX-org">PIIIX</a></sub>
 
