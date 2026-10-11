@@ -2,7 +2,7 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { Server, type Hocuspocus } from '@hocuspocus/server'
 import { WebSocketServer, type RawData } from 'ws'
-import type * as Y from 'yjs'
+import * as Y from 'yjs'
 import { getSessionUser } from '../auth/sessions.js'
 import { atLeast, resolveAccess } from '../vaults/permissions.js'
 import { readNote, updateNote, splitPath } from '../notes/store.js'
@@ -11,6 +11,7 @@ import { affects, onPermissionChange } from './permission-events.js'
 import { publishNoteState } from './viewers.js'
 import { consumeTicket } from './tickets.js'
 import { COLLAB_PATH } from './routes.js'
+import { loadCrdtState, saveCrdtState } from './crdt-store.js'
 
 export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
@@ -87,6 +88,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
   const server = new Server({
     debounce: DEBOUNCE_MS,
     maxDebounce: DEBOUNCE_MS * 5,
+    unloadImmediately: false,
     quiet: true,
 
     /**
@@ -118,11 +120,36 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       const { vaultId, path } = parseDocName(documentName)
       const note = await readNote(vaultId, path)
       if (!note) throw new Error(`note does not exist: ${documentName}`)
-      const body = document.getText('body')
-      if (body.length === 0) body.insert(0, note.body)
-      const fm = document.getMap('frontmatter')
-      for (const [key, value] of Object.entries(note.frontmatter)) {
-        if (fm.get(key) === undefined) fm.set(key, value)
+
+      const savedUpdate = await loadCrdtState(vaultId, path)
+      if (savedUpdate) {
+        Y.applyUpdate(document, savedUpdate)
+        const body = document.getText('body')
+        const currentBody = body.toString()
+        if (currentBody !== note.body) {
+          body.delete(0, body.length)
+          body.insert(0, note.body)
+        }
+        const fm = document.getMap('frontmatter')
+        const currentFm = fm.toJSON() as Record<string, unknown>
+        for (const key of Object.keys(currentFm)) {
+          if (!(key in note.frontmatter)) {
+            fm.delete(key)
+          }
+        }
+        for (const [key, value] of Object.entries(note.frontmatter)) {
+          if (JSON.stringify(currentFm[key]) !== JSON.stringify(value)) {
+            fm.set(key, value)
+          }
+        }
+      } else {
+        const body = document.getText('body')
+        if (body.length === 0) body.insert(0, note.body)
+        const fm = document.getMap('frontmatter')
+        for (const [key, value] of Object.entries(note.frontmatter)) {
+          if (fm.get(key) === undefined) fm.set(key, value)
+        }
+        await saveCrdtState(vaultId, path, Y.encodeStateAsUpdate(document))
       }
       return document
     },
@@ -154,6 +181,11 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       } catch (err) {
         // Invalid collab state (e.g. bad frontmatter): keep last valid file.
         console.error(`collab store rejected for ${documentName}:`, err)
+      }
+      try {
+        await saveCrdtState(vaultId, path, Y.encodeStateAsUpdate(document))
+      } catch (err) {
+        console.error(`crdt state save rejected for ${documentName}:`, err)
       }
     },
 

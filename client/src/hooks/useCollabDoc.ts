@@ -123,12 +123,23 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
   // re-runs on a docName change, and reconnecting the OLD doc under the NEW
   // name uploads note A's body into note B. React's adjust-state-during-render
   // pattern — an effect would leave one render holding the mismatched pair.
-  const [doc, setDoc] = useState(() => ({ name: docName, ydoc: new Y.Doc() }))
-  if (doc.name !== docName) {
-    setDoc({ name: docName, ydoc: new Y.Doc() })
+  const [doc, setDoc] = useState(() => ({
+    name: docName,
+    userId: user.id,
+    enabled,
+    ydoc: new Y.Doc(),
+  }))
+  if (
+    doc.name !== docName ||
+    (user.id && doc.userId && doc.userId !== user.id) ||
+    (!doc.enabled && enabled)
+  ) {
+    setDoc({ name: docName, userId: user.id, enabled, ydoc: new Y.Doc() })
     setStatus('connecting')
     setSynced(false)
     setPeers([])
+  } else if (doc.enabled !== enabled) {
+    setDoc({ ...doc, enabled })
   }
   const ydoc = doc.ydoc
 
