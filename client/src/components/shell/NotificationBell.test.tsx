@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { mockJsonResponse } from '../../lib/api'
 import { expectNoA11yViolations } from '../../test/axe'
@@ -71,19 +71,49 @@ describe('NotificationBell', () => {
     const bell = await screen.findByRole('button', { name: /notifications, 2 unread/i })
     await user.click(bell)
 
-    const rows = screen.getAllByText(/message$/)
-    expect(rows.length).toBeGreaterThan(0)
     const secondRow = screen.getByText('Second message').closest('li')
     expect(secondRow).not.toBeNull()
-    const markReadButton = secondRow!.querySelector('button')
-    expect(markReadButton).not.toBeNull()
 
-    await user.click(markReadButton!)
+    await user.click(within(secondRow!).getByRole('button', { name: 'Mark as read' }))
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith('/api/notifications/n2/read', expect.objectContaining({ method: 'POST' })),
     )
     await waitFor(() => expect(screen.getByRole('button', { name: /notifications, 1 unread/i })).toBeInTheDocument())
+  })
+
+  it('deletes the chosen row via DELETE to its own id, and the row disappears after refetch', async () => {
+    let state = [...NOTIFICATIONS]
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        state = state.filter((n) => `/api/notifications/${n.id}` !== url)
+        return Promise.resolve(mockJsonResponse(200, { status: 'deleted' }))
+      }
+      return Promise.resolve(mockJsonResponse(200, state))
+    })
+    renderBell(fetchMock)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /notifications, 2 unread/i }))
+
+    await user.click(screen.getByRole('button', { name: 'Delete notification: Second message' }))
+
+    await waitFor(() => expect(screen.queryByText('Second message')).toBeNull())
+    expect(fetchMock).toHaveBeenCalledWith('/api/notifications/n2', expect.objectContaining({ method: 'DELETE' }))
+    expect(screen.getByText('First message')).toBeInTheDocument()
+    expect(screen.getByText('Third message')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /notifications, 1 unread/i })).toBeInTheDocument()
+  })
+
+  it('the close button closes the drawer and returns focus to the bell', async () => {
+    renderBell(vi.fn().mockResolvedValue(mockJsonResponse(200, NOTIFICATIONS)))
+    const user = userEvent.setup()
+    const bell = await screen.findByRole('button', { name: /notifications, 2 unread/i })
+    await user.click(bell)
+
+    await user.click(screen.getByRole('button', { name: 'Close notifications' }))
+
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(bell)
   })
 
   it('shows an error alert with Retry on a failed fetch, never the empty state', async () => {

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import { Bell } from 'lucide-react'
+import { Bell, Trash2, X } from 'lucide-react'
 import { Button } from '../ui/button.js'
 import {
+  useDeleteNotification,
   useMarkAllNotificationsRead,
   useMarkNotificationRead,
   useNotifications,
@@ -23,6 +24,7 @@ export function NotificationBell({
   const notifications = useNotifications()
   const markRead = useMarkNotificationRead()
   const markAllRead = useMarkAllNotificationsRead()
+  const deleteNotification = useDeleteNotification()
 
   useEffect(() => {
     if (!open) return
@@ -100,27 +102,44 @@ export function NotificationBell({
           role="dialog"
           aria-label="Notifications"
           tabIndex={-1}
+          // Capped height + a flex column so only the list scrolls; without a
+          // cap the panel grew past the viewport and nothing could scroll it.
           className={cn(
-            'absolute z-50 w-80 rounded-[var(--radius-lg)] border border-border bg-popover py-1 shadow-floating focus:outline-none',
+            'absolute z-50 flex w-80 max-h-[min(32rem,calc(100dvh-2rem))] flex-col rounded-[var(--radius-lg)] border border-border bg-popover py-1 shadow-floating focus:outline-none',
             align === 'right' ? 'right-0 top-full mt-2' : 'left-full bottom-0 ml-3',
           )}
         >
-          <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1.5">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground font-mono">
               Notifications
             </span>
-            {unreadCount > 0 && (
+            <div className="flex items-center gap-1">
+              {unreadCount > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                  disabled={markAllRead.isPending}
+                  onClick={() => markAllRead.mutate()}
+                >
+                  Mark all as read
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
-                className="h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
-                disabled={markAllRead.isPending}
-                onClick={() => markAllRead.mutate()}
+                size="icon-xs"
+                aria-label="Close notifications"
+                className="text-muted-foreground hover:text-foreground cursor-pointer"
+                onClick={() => {
+                  close()
+                  triggerRef.current?.focus()
+                }}
               >
-                Mark all as read
+                <X aria-hidden="true" />
               </Button>
-            )}
+            </div>
           </div>
           {notifications.isError ? (
             // Ordered before any read of `.data`, same reasoning as
@@ -137,7 +156,7 @@ export function NotificationBell({
           ) : notifications.data.length === 0 ? (
             <p className="px-3 py-3 text-sm text-muted-foreground">No notifications yet.</p>
           ) : (
-            <ul>
+            <ul className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {notifications.data.map((n) => (
                 <li key={n.id} className="flex flex-col gap-1 border-b border-border px-3 py-2 last:border-b-0">
                   <div className="flex items-start justify-between gap-2">
@@ -145,6 +164,17 @@ export function NotificationBell({
                       {n.readAt === null && <span aria-hidden="true" className="mr-1.5 text-foreground">●</span>}
                       {n.message}
                     </p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Delete notification: ${n.message}`}
+                      className="shrink-0 text-muted-foreground hover:text-destructive cursor-pointer"
+                      disabled={deleteNotification.isPending && deleteNotification.variables === n.id}
+                      onClick={() => deleteNotification.mutate(n.id)}
+                    >
+                      <Trash2 aria-hidden="true" />
+                    </Button>
                   </div>
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-mono text-xs text-muted-foreground">

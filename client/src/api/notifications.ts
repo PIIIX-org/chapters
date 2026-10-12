@@ -29,3 +29,13 @@ export async function markNotificationRead(id: string): Promise<{ status: 'read'
 export async function markAllNotificationsRead(): Promise<{ status: 'read'; count: number }> {
   return await apiFetch('/notifications/read-all', { method: 'POST' })
 }
+
+export async function deleteNotification(id: string): Promise<{ status: 'deleted' }> {
+  try {
+    return await apiFetch(`/notifications/${id}`, { method: 'DELETE' })
+  } catch (err) {
+    // 404 means it is already gone (double-click, other tab) — the goal is met.
+    if (err instanceof ApiError && err.status === 404) return { status: 'deleted' }
+    throw err
+  }
+}
