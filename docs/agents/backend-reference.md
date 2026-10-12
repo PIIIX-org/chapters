@@ -274,12 +274,24 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   function shared by every write path (REST, CRDT persistence, MCP).
 - **`store.ts`**: the note write path. `createNote` → validate → insert
   row (unique-violation on live path collision) → atomic disk write
-  (write to `.tmp`, then `rename`) → regenerate the type's `index.md` →
-  sync `noteLinks` from extracted wikilinks → schedule an embedding
-  (async, off the request path) → record a revision. Soft delete moves
-  the file into `.trash/<noteId>.md`; hard purge (owner/admin only) is
-  a genuine irreversible delete, for cases like an accidentally
-  committed secret where "recoverable" is the wrong property.
+  (write to `.tmp`, then `rename`) → regenerate the ancestor
+  directories' progressive `index.md` → sync `noteLinks` from extracted
+  wikilinks → schedule an embedding (async, off the request path) →
+  record a revision. Soft delete moves the file into
+  `.trash/<noteId>.md`; hard purge (owner/admin only) is a genuine
+  irreversible delete, for cases like an accidentally committed secret
+  where "recoverable" is the wrong property.
+- **Progressive indexes** (`regenProgressiveIndices`): run on create,
+  rename, delete, restore, and on updates whose frontmatter really
+  changed (`isDeepStrictEqual`, so key order alone never counts: `jsonb`
+  and the collab document order keys differently). A directory with a
+  live `<dir>/index` **note** is skipped entirely: that file is the
+  user's note, and the generated table must never overwrite or unlink
+  it (#384, fixed 2026-10-12).
+- **`integrity.ts`** / `pnpm check-notes`: parses every live note's file
+  from disk the way `readNote` does and lists unparseable or missing
+  files (exit 1 if any). A note in that state cannot be opened, and
+  edit/revert cannot repair it either (#391).
 - Every mutation is attributed (`Actor {type: 'user'|'mcp'|'collab',
   id?}`), which is what makes `noteRevisions` a real audit trail across
   the UI, MCP, and live-collaboration write paths.
@@ -291,6 +303,12 @@ sends an email (failures are swallowed, never block or fail the
 request). Five trigger sites: vault shared/revoked, team membership
 changed, note reverted, signup approved. No preferences/opt-out exists
 — every trigger always fires both channels.
+Routes (`routes.ts`), all scoped to the signed-in recipient:
+`GET /notifications`, `POST /notifications/:id/read`,
+`POST /notifications/read-all`, `DELETE /notifications/:id` (404 for
+anyone else's row, 400 for a non-uuid id). The client panel is
+`client/src/components/shell/NotificationBell.tsx`: per-row delete, a
+close button, and a height-capped panel where only the list scrolls.
 `docs/superpowers/specs/2026-07-15-notifications-activity-feed-design.md`
 
 ### 5.5 Graph (`server/src/graph/`)
@@ -676,6 +694,15 @@ change and the migration file together.
 **Restore a backup**: `pnpm -C server restore-backup <path-to-zip>`
 against a **fresh, empty** instance only — it hard-refuses otherwise,
 by design. There is no HTTP restore path and no override flag.
+
+**Check note files**: `pnpm -C server check-notes` (or
+`-- --vault <uuid>`) after a restore, a disk incident, or a deploy that
+touched the note write path. It reads files directly, so it is the fast
+way to audit every vault; doing the same over MCP is ~one call per note
+under the 120/min per-connection limit. A note it reports as
+`unparseable` must currently be fixed by moving it to trash and
+recreating it from its last good revision (`note_history`), until #391
+lands.
 
 **Rotate `CREDENTIALS_ENCRYPTION_KEY`**: there is no rotation
 mechanism. Changing it makes every previously stored repository
