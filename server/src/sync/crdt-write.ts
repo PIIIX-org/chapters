@@ -1,5 +1,29 @@
+import type { DirectConnection } from '@hocuspocus/server'
+import { YAMLParseError } from 'yaml'
 import { getCollab } from './collab-server.js'
-import { getLiveNote, updateNote, type Actor, type NoteRow } from '../notes/store.js'
+import { getLiveNote, readNote, updateNote, type Actor, type NoteRow } from '../notes/store.js'
+import { OkfValidationError } from '../notes/okf.js'
+
+/** A partial write to a note whose file cannot be parsed (#391). 409 over REST. */
+export class NoteFileDamagedError extends Error {
+  readonly statusCode = 409
+  constructor(path: string) {
+    super(
+      `note file for ${path} is damaged and cannot be read; repair it by writing both frontmatter and body, or by reverting to a recorded revision`,
+    )
+  }
+}
+
+/** True when the note's file exists but does not parse; an I/O failure is rethrown. */
+async function noteFileDamaged(vaultId: string, path: string): Promise<boolean> {
+  try {
+    await readNote(vaultId, path)
+    return false
+  } catch (err) {
+    if (err instanceof OkfValidationError || err instanceof YAMLParseError) return true
+    throw err
+  }
+}
 
 /**
  * Note writes flow through the live CRDT engine when it's running (spec 6:
@@ -19,9 +43,22 @@ export async function writeThroughCollab(
   if (collab) {
     const existing = await getLiveNote(vaultId, path)
     if (!existing) return null
-    const connection = await collab.openDirectConnection(docName, {
-      userId: actor.type === 'user' ? actor.id : 'mcp',
-    })
+    let connection: DirectConnection
+    try {
+      connection = await collab.openDirectConnection(docName, {
+        userId: actor.type === 'user' ? actor.id : 'mcp',
+      })
+    } catch (err) {
+      // Loading the collab document parses the note's file. When the file is
+      // damaged (e.g. #384's fence-less index), no document can load, so no
+      // live editor holds one: a full replacement (edit with frontmatter and
+      // body, or a revert) needs nothing from the old file and is written
+      // straight to the store, which rewrites, and so repairs, the file. A
+      // partial write would have to merge with content that cannot be read.
+      if (!(await noteFileDamaged(vaultId, path))) throw err
+      if (input.frontmatter === undefined || input.body === undefined) throw new NoteFileDamagedError(path)
+      return updateNote(vaultId, path, input, actor)
+    }
     try {
       await connection.transact((document) => {
         if (input.body !== undefined) {
