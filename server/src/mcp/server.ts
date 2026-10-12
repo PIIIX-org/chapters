@@ -46,7 +46,7 @@ import { serializeNote } from '../notes/okf.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
 import { getRepositoryFile, listFileSymbols, listRepositoryFiles } from '../repositories/store.js'
-import { encryptCredential } from '../repositories/credentials.js'
+import { prepareGitRemote } from '../repositories/git-remote.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord } from '../vaults/routes.js'
@@ -905,18 +905,18 @@ export function buildMcpServer(auth: McpAuth): McpServer {
             throw new McpToolError('localPath must resolve under the configured local repos root')
           }
         }
-        let gitCredentialEncrypted: string | undefined
-        if (args.gitCredential) {
-          gitCredentialEncrypted = encryptCredential(args.gitCredential)
-        }
+        // Never store the remote as given: credentials embedded in the URL move
+        // into encrypted storage, and the URL is kept without them (#383).
+        const remote: { gitUrl?: string; gitCredentialEncrypted?: string } =
+          args.ingestionMethod === 'git' ? prepareGitRemote(args.gitUrl!, args.gitCredential) : {}
         const [repo] = await db
           .insert(repositories)
           .values({
             name: args.name,
             ownerId: auth.user.id,
             ingestionMethod: args.ingestionMethod,
-            gitUrl: args.ingestionMethod === 'git' ? args.gitUrl : undefined,
-            gitCredentialEncrypted,
+            gitUrl: remote.gitUrl,
+            gitCredentialEncrypted: remote.gitCredentialEncrypted,
             localPath:
               args.ingestionMethod === 'local_path'
                 ? resolve(config.localReposRoot, args.localPath!)

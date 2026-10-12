@@ -6,6 +6,10 @@ import { buildApp } from '../src/app.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
+import { eq } from 'drizzle-orm'
+import { db } from '../src/db/client.js'
+import { repositories } from '../src/db/schema.js'
+import { decryptCredential } from '../src/repositories/credentials.js'
 
 let app: FastifyInstance
 let baseUrl: string
@@ -181,5 +185,30 @@ describe('MCP repository tools', () => {
     const res = await client.callTool({ name: 'browse_repository', arguments: { repositoryId: repoId } })
     expect(res.isError).toBe(true)
     expect(textOf(res)).toContain('scoped to a vault')
+  })
+
+  // #383: connect_repository stored the URL as given and list_repositories
+  // returned it to the owner, token included.
+  it('connect_repository moves a URL credential into encrypted storage; list_repositories never returns it', async () => {
+    const client = await mcpClient(accountToken)
+    const connected = await client.callTool({
+      name: 'connect_repository',
+      arguments: {
+        name: 'leaky-remote',
+        ingestionMethod: 'git',
+        gitUrl: 'http://x-access-token:gho_MCPLEAK@127.0.0.1:1/o/r.git',
+      },
+    })
+    expect(connected.isError).toBeFalsy()
+    expect(textOf(connected)).not.toContain('gho_MCPLEAK')
+    const { id } = JSON.parse(textOf(connected))
+
+    const [row] = await db.select().from(repositories).where(eq(repositories.id, id))
+    expect(row!.gitUrl).toBe('http://127.0.0.1:1/o/r.git')
+    expect(decryptCredential(row!.gitCredentialEncrypted!)).toBe('x-access-token:gho_MCPLEAK')
+
+    const listed = await client.callTool({ name: 'list_repositories', arguments: {} })
+    expect(textOf(listed)).toContain('http://127.0.0.1:1/o/r.git')
+    expect(textOf(listed)).not.toContain('gho_MCPLEAK')
   })
 })
