@@ -130,7 +130,7 @@ chapters/
 │   │   ├── export/                 # backup/restore, vault export, share links, import
 │   │   ├── repositories/           # codebase ingestion (git/local/agent-push), extraction
 │   │   ├── email/                  # nodemailer wrapper
-│   │   └── scripts/                # CLI entry points (reindex, restore-backup)
+│   │   └── scripts/                # CLI entry points (reindex, restore-backup, check-notes)
 │   └── test/                       # one file per subsystem, Vitest
 ├── shared/                         # types shared server ↔ client (UI phase, not started)
 └── client/                         # React + Vite (UI phase — do not start yet)
