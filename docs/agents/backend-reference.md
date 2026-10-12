@@ -486,6 +486,19 @@ credentials and webhook secrets. Reversible by design (a stored
 credential must be usable again on the next pull) — **there is no key
 rotation mechanism**; rotating it invalidates every stored credential.
 
+**Remote URLs never hold a credential** (`git-remote.ts`, #383): a
+`gitUrl` like `https://x-access-token:TOKEN@host/o/r.git` is split on
+connect (REST and MCP): the URL is stored without userinfo and the
+userinfo goes into `gitCredentialEncrypted` (an explicit
+`gitCredential` wins). With no encryption key the connect is refused
+rather than store the token in plaintext. `authenticatedUrl` puts
+`user:password` or a bare token back for the clone. Sync errors are
+redacted before they reach `lastSyncError` (served to viewers) or the
+log. `scrubStoredGitCredentials()` runs at boot and moves credentials
+out of remotes stored before the fix (idempotent; a row it cannot
+encrypt is left as is and warned about). `repositoryFields` strips
+userinfo for owners too.
+
 **Code extraction** (`extraction.ts`): `web-tree-sitter` (WASM), four
 supported languages — TypeScript, JavaScript, Python, Go. Each
 language's grammar is loaded from its own npm package's `.wasm` file;
@@ -514,7 +527,8 @@ the MCP `read_file` tool — despite the schema comment calling them
   codes, MCP connections, repository sync tokens, export links):
   SHA-256-hashed at rest, raw value returned exactly once at creation.
 - **Repository credentials / webhook secrets**: AES-256-GCM,
-  reversible, no rotation.
+  reversible, no rotation. Never embedded in a stored or served
+  `gitUrl` (#383).
 - **Permission checks**: always live, never cached (see §1) — this is
   the load-bearing security property the whole audit trail and
   revocation-kick behavior depends on.
