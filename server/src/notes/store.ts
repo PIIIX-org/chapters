@@ -71,7 +71,7 @@ export function vaultDir(vaultId: string): string {
   return join(config.dataDir, 'vaults', vaultId)
 }
 
-function noteFile(vaultId: string, path: string): string {
+export function noteFile(vaultId: string, path: string): string {
   return join(vaultDir(vaultId), `${path}.md`)
 }
 
