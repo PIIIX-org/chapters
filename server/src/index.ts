@@ -4,6 +4,7 @@ import { runMigrations } from './db/migrate.js'
 import { ensureInstanceState } from './auth/bootstrap.js'
 import { scheduleMissingEmbeddings } from './search/embedding-queue.js'
 import { startLocalWatchers, startPollingScheduler, reconcileOrphanedSyncs } from './repositories/scheduler.js'
+import { scrubStoredGitCredentials } from './repositories/git-remote.js'
 import { startBackupScheduler } from './export/backup-service.js'
 import { config } from './config.js'
 import { sql } from './db/client.js'
@@ -13,6 +14,11 @@ const app = await buildApp()
 
 try {
   await runMigrations()
+  // Before anything serves or syncs a repository: remotes stored with a
+  // credential in the URL (before #383 was fixed) are moved to encrypted storage.
+  const scrub = await scrubStoredGitCredentials()
+  if (scrub.scrubbed > 0) console.log(`moved credentials out of ${scrub.scrubbed} repository git URL(s)`)
+  if (scrub.skipped > 0) console.warn(`${scrub.skipped} repository git URL(s) still hold a credential: set CREDENTIALS_ENCRYPTION_KEY`)
   const missing = await scheduleMissingEmbeddings()
   if (missing > 0) console.log(`embedding catch-up scheduled for ${missing} notes`)
   const reconciled = await reconcileOrphanedSyncs()

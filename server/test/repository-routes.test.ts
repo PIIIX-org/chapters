@@ -10,6 +10,9 @@ import { repositories } from '../src/db/schema.js'
 import { resolveSyncToken } from '../src/repositories/sync-tokens.js'
 import { startLocalWatchers, stopWatchingLocalRepository, reconcileOrphanedSyncs } from '../src/repositories/scheduler.js'
 import { listRepositoryFiles } from '../src/repositories/store.js'
+import { decryptCredential } from '../src/repositories/credentials.js'
+import { syncGitRepository } from '../src/repositories/git-sync.js'
+import { scrubStoredGitCredentials } from '../src/repositories/git-remote.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -54,6 +57,62 @@ describe('repository CRUD + shares', () => {
       body: { name: 'Bad', ingestionMethod: 'git' },
     })
     expect(missingGitUrl.statusCode).toBe(400)
+  })
+
+  // #383: the remote was stored as given, served raw to the owner, and a
+  // failed clone could put the authenticated URL into lastSyncError, which
+  // every viewer reads.
+  it('moves a URL credential into encrypted storage and never serves it, not even after a failed sync', async () => {
+    const owner = await createActiveUser()
+    const cookie = await loginCookie(app, owner.email)
+    // Port 1 refuses the connection, so the first sync fails fast offline.
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/repositories',
+      headers: { cookie },
+      body: { name: 'Leaky', ingestionMethod: 'git', gitUrl: 'http://x-access-token:gho_RESTLEAK@127.0.0.1:1/o/r.git' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.body).not.toContain('gho_RESTLEAK')
+    expect(res.json().gitUrl).toBe('http://127.0.0.1:1/o/r.git')
+    const id: string = res.json().id
+
+    const [row] = await db.select().from(repositories).where(eq(repositories.id, id))
+    expect(row!.gitUrl).toBe('http://127.0.0.1:1/o/r.git')
+    expect(decryptCredential(row!.gitCredentialEncrypted!)).toBe('x-access-token:gho_RESTLEAK')
+
+    await expect(syncGitRepository(id)).rejects.toThrow()
+    const [failed] = await db.select().from(repositories).where(eq(repositories.id, id))
+    expect(failed!.syncStatus).toBe('error')
+    expect(failed!.lastSyncError).not.toContain('gho_RESTLEAK')
+
+    const list = await app.inject({ method: 'GET', url: '/api/repositories', headers: { cookie } })
+    expect(list.body).toContain('Leaky')
+    expect(list.body).not.toContain('gho_RESTLEAK')
+  }, 30000)
+
+  it('boot scrub moves credentials out of remotes stored before the fix, and a second run changes nothing', async () => {
+    const owner = await createActiveUser()
+    const [legacy] = await db
+      .insert(repositories)
+      .values({
+        name: 'legacy',
+        ownerId: owner.id,
+        ingestionMethod: 'git',
+        gitUrl: 'https://gho_LEGACY@github.com/o/legacy.git',
+        lastSyncError: "fatal: unable to access 'https://gho_LEGACY@github.com/o/legacy.git/'",
+      })
+      .returning()
+
+    await scrubStoredGitCredentials()
+    const [scrubbed] = await db.select().from(repositories).where(eq(repositories.id, legacy!.id))
+    expect(scrubbed!.gitUrl).toBe('https://github.com/o/legacy.git')
+    expect(decryptCredential(scrubbed!.gitCredentialEncrypted!)).toBe('gho_LEGACY')
+    expect(scrubbed!.lastSyncError).not.toContain('gho_LEGACY')
+
+    await scrubStoredGitCredentials()
+    const [again] = await db.select().from(repositories).where(eq(repositories.id, legacy!.id))
+    expect(again).toEqual(scrubbed)
   })
 
   it('rejects a local path outside the configured root', async () => {

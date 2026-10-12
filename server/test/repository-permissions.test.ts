@@ -102,7 +102,10 @@ describe('resolveRepositoryAccess', () => {
  * is what let a shared mapper hand out `gitUrl` and `localPath` unnoticed.
  */
 describe('listAccessibleRepositories field visibility', () => {
+  // A remote stored before #383 was fixed (or left unscrubbed for lack of an
+  // encryption key): the token is in the row, and must reach nobody.
   const CREDENTIALED_URL = 'https://chapters:ghp_not_a_real_token@github.com/piiix-org/chapters.git'
+  const CLEAN_URL = 'https://github.com/piiix-org/chapters.git'
   const FOLDER = '/srv/chapters-repos/notes'
 
   async function ownerAndViewerRepos() {
@@ -139,14 +142,17 @@ describe('listAccessibleRepositories field visibility', () => {
     return { owner, viewer, git: git!, local: local! }
   }
 
-  it('serves the connection config to the owner', async () => {
+  it('serves the connection config to the owner, minus any credential in the remote', async () => {
     const { owner, git, local } = await ownerAndViewerRepos()
     const listed = await listAccessibleRepositories(owner.id)
     const listedGit = listed.find((r) => r.id === git.id)!
     const listedLocal = listed.find((r) => r.id === local.id)!
 
     expect(listedGit.access).toBe('owner')
-    expect(listedGit.gitUrl).toBe(CREDENTIALED_URL)
+    // #383: owners got the token back here, and an owner-scoped MCP
+    // connection with it, so the owner tier is no exception.
+    expect(listedGit.gitUrl).toBe(CLEAN_URL)
+    expect(JSON.stringify(listed)).not.toContain('ghp_not_a_real_token')
     expect(listedLocal.access).toBe('owner')
     expect(listedLocal.localPath).toBe(FOLDER)
   })
@@ -182,8 +188,7 @@ describe('listAccessibleRepositories field visibility', () => {
   /**
    * Owner and viewer on one row, asserted against each other: the fields the
    * deep link is built from (`ingestionMethod`, host/owner/name, `defaultBranch`)
-   * must agree, and only the credentialed original and the server's own path
-   * may differ.
+   * must agree, and neither may carry the credential.
    */
   it('gives an owner and a viewer of one git repository the same deep-link inputs', async () => {
     const { owner, viewer, git } = await ownerAndViewerRepos()
@@ -195,9 +200,7 @@ describe('listAccessibleRepositories field visibility', () => {
     // Same GitHub owner/repo — this is what `gitHubFileUrl` parses out.
     const ownerRepo = (url: string) => /github\.com[/:](.+?)(?:\.git)?$/.exec(url)![1]
     expect(ownerRepo(asViewer.gitUrl!)).toBe(ownerRepo(asOwner.gitUrl!))
-    // And only the two owner-tier fields differ.
-    expect(asOwner.gitUrl).toBe(CREDENTIALED_URL)
-    expect(asViewer.gitUrl).not.toBe(CREDENTIALED_URL)
+    expect(asOwner.gitUrl).not.toContain('@')
     expect(asViewer.gitUrl).not.toContain('@')
   })
 
@@ -255,9 +258,11 @@ describe('listAccessibleRepositories field visibility', () => {
 
     const listed = await listAccessibleRepositories(owner.id)
     // One row, and it is the owner's own view — a share row must not demote
-    // the owner into the redacted branch, nor list the repository twice.
-    expect(listed.filter((r) => r.id === repo!.id)).toHaveLength(1)
-    expect(listed.find((r) => r.id === repo!.id)!.gitUrl).toBe(CREDENTIALED_URL)
+    // the owner into the viewer tier, nor list the repository twice.
+    const own = listed.filter((r) => r.id === repo!.id)
+    expect(own).toHaveLength(1)
+    expect(own[0]!.access).toBe('owner')
+    expect(own[0]!.gitUrl).toBe(CLEAN_URL)
   })
 })
 

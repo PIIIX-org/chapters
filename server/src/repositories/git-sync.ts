@@ -8,24 +8,13 @@ import { db } from '../db/client.js'
 import { repositories } from '../db/schema.js'
 import { decryptCredential } from './credentials.js'
 import { listFilesRecursive } from './fs-scan.js'
+import { authenticatedUrl, redactGitSecrets } from './git-remote.js'
 import { isSafeGitUrl } from './permissions.js'
 import { syncRepositoryFiles, type FileUpdate } from './store.js'
 
 const IGNORED = /(^|\/)(\.git|node_modules|\.next|dist|build|\.turbo)(\/|$)/
 const MAX_FILE_BYTES = 1_048_576 // 1MB per file limit to prevent heap exhaustion
 const MAX_INDEXED_FILES = 10_000
-
-/** Injects a decrypted credential as basic-auth username — the common convention for PATs. */
-function authenticatedUrl(gitUrl: string, credential: string | null): string {
-  if (!credential) return gitUrl
-  try {
-    const url = new URL(gitUrl)
-    url.username = credential
-    return url.toString()
-  } catch {
-    return gitUrl
-  }
-}
 
 /**
  * Git URL ingestion (spec 8): a fresh shallow clone (depth 1, no
@@ -52,8 +41,9 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     .where(eq(repositories.id, repositoryId))
 
   const workDir = join(tmpdir(), 'elara-repo-clones', randomBytes(8).toString('hex'))
+  let credential: string | null = null
   try {
-    const credential = repo.gitCredentialEncrypted
+    credential = repo.gitCredentialEncrypted
       ? decryptCredential(repo.gitCredentialEncrypted)
       : null
     const cloneUrl = authenticatedUrl(repo.gitUrl, credential)
@@ -74,7 +64,9 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
         return
       }
     } catch (lsErr) {
-      console.warn(`[git-sync] listRemote check failed, falling back to clone:`, lsErr)
+      // git errors can echo the authenticated clone URL (#383).
+      const detail = lsErr instanceof Error ? lsErr.message : String(lsErr)
+      console.warn(`[git-sync] listRemote check failed, falling back to clone: ${redactGitSecrets(detail, [credential])}`)
     }
 
     await simpleGit({ timeout: { block: 300_000 } }).clone(cloneUrl, workDir, ['--depth', '1'])
@@ -116,12 +108,15 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       })
       .where(eq(repositories.id, repositoryId))
   } catch (err) {
-    const errorMsg = (err as Error).message.replace(/\0/g, '')
+    // The raw message can carry the authenticated clone URL, and lastSyncError
+    // is served to every viewer: store and rethrow only the redacted text (#383).
+    const raw = err instanceof Error ? err.message : String(err)
+    const errorMsg = redactGitSecrets(raw, [credential]).replace(/\0/g, '')
     await db
       .update(repositories)
       .set({ syncStatus: 'error', lastSyncError: errorMsg })
       .where(eq(repositories.id, repositoryId))
-    throw err
+    throw new Error(errorMsg)
   } finally {
     await rm(workDir, { recursive: true, force: true })
   }

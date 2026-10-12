@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositories, repositoryShares, teamMemberships, users } from '../db/schema.js'
+import { splitGitUrlCredential } from './git-remote.js'
 
 export type RepoAccess = 'owner' | 'viewer'
 
@@ -159,10 +160,13 @@ export interface RepositoryFields {
 /**
  * The whole repository row minus the two encrypted credentials, which are
  * write-only, and minus the owner-tier configuration when the caller is only
- * a viewer: `localPath` is a path on the server's own filesystem, and a
- * `gitUrl` can carry a credential in its userinfo
- * (`https://user:token@host/…`), which is why it is accepted once and never
- * echoed back.
+ * a viewer: `localPath` is a path on the server's own filesystem.
+ *
+ * `gitUrl` is never served with userinfo, to anyone (#383). New remotes are
+ * stored without it (`prepareGitRemote`) and old ones are scrubbed at boot
+ * (`scrubStoredGitCredentials`); stripping here too keeps a row that could
+ * not be scrubbed (no encryption key) from leaking through the API. Owners
+ * get the remote in its own form minus the userinfo.
  *
  * A viewer gets `localPath: null` and the *sanitized* remote rather than
  * nothing at all. Redacting `gitUrl` outright closed the credential leak and
@@ -189,7 +193,7 @@ export function repositoryFields(
     name: r.name,
     ownerId: r.ownerId,
     ingestionMethod: r.ingestionMethod,
-    gitUrl: isOwner ? r.gitUrl : publicGitUrl(r.gitUrl),
+    gitUrl: isOwner ? r.gitUrl && splitGitUrlCredential(r.gitUrl).url : publicGitUrl(r.gitUrl),
     localPath: isOwner ? r.localPath : null,
     defaultBranch: r.defaultBranch,
     mergeable: r.mergeable,
