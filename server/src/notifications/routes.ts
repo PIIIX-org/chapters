@@ -59,4 +59,17 @@ export function notificationRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: 'notification not found' })
     return { status: 'read' }
   })
+
+  app.delete<{ Params: { id: string } }>(
+    '/notifications/:id',
+    { schema: { params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] } } },
+    async (req, reply) => {
+      const [row] = await db
+        .delete(notifications)
+        .where(and(eq(notifications.id, req.params.id), eq(notifications.recipientId, req.user!.id)))
+        .returning({ id: notifications.id })
+      if (!row) return reply.code(404).send({ error: 'notification not found' })
+      return { status: 'deleted' }
+    },
+  )
 }
