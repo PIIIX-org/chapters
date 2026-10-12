@@ -290,8 +290,15 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   it (#384, fixed 2026-10-12).
 - **`integrity.ts`** / `pnpm check-notes`: parses every live note's file
   from disk the way `readNote` does and lists unparseable or missing
-  files (exit 1 if any). A note in that state cannot be opened, and
-  edit/revert cannot repair it either (#391).
+  files (exit 1 if any). A note in that state cannot be opened until
+  its file is rewritten.
+- **Damaged files** (`sync/crdt-write.ts`, #391): every write loads the
+  collab document from the note's file first, so a file that does not
+  parse used to block edit and revert too. When the load fails on a
+  damaged file, a full replacement (frontmatter **and** body, which a
+  revert always is) is written straight to the store and so repairs the
+  file; a partial edit is refused with `NoteFileDamagedError` (409),
+  since it would have to merge with content that cannot be read.
 - Every mutation is attributed (`Actor {type: 'user'|'mcp'|'collab',
   id?}`), which is what makes `noteRevisions` a real audit trail across
   the UI, MCP, and live-collaboration write paths.
@@ -714,9 +721,8 @@ by design. There is no HTTP restore path and no override flag.
 touched the note write path. It reads files directly, so it is the fast
 way to audit every vault; doing the same over MCP is ~one call per note
 under the 120/min per-connection limit. A note it reports as
-`unparseable` must currently be fixed by moving it to trash and
-recreating it from its last good revision (`note_history`), until #391
-lands.
+`unparseable` is repaired by a full edit (frontmatter and body) or by
+reverting it to a recorded revision (`note_history` → `revert_note`).
 
 **Rotate `CREDENTIALS_ENCRYPTION_KEY`**: there is no rotation
 mechanism. Changing it makes every previously stored repository

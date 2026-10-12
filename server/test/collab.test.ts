@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { HocuspocusProvider } from '@hocuspocus/provider'
@@ -279,5 +279,37 @@ describe('real-time collaboration', () => {
     await waitFor(() => client.document.getText('body').toString() === 'Content from REST update')
     expect(client.document.getText('body').toString()).toBe('Content from REST update')
     expect(client.document.getMap('frontmatter').get('type')).toBe('docs')
+  })
+
+  // #391: with the relay running, every write loads the collab document from
+  // the note's file first, so a damaged file (e.g. #384's fence-less index)
+  // made the note impossible to repair through edit or revert.
+  it('repairs a damaged note file through a full edit or a revert, and refuses a partial edit', async () => {
+    const send = (method: 'POST' | 'PUT' | 'GET', url: string, body?: object) =>
+      app.inject({ method, url: `/api/vaults/${vaultId}${url}`, headers: { cookie: ownerCookie }, body })
+    const file = join(config.dataDir, 'vaults', vaultId, 'docs', 'damaged.md')
+    const damage = () => writeFile(file, '## Concepts & Artifacts\n\n| Concept |\n', 'utf8')
+
+    expect((await send('POST', '/notes', { type: 'docs', name: 'damaged', body: 'Good content.' })).statusCode).toBe(200)
+    await damage()
+    expect((await send('GET', '/notes/docs/damaged')).statusCode).toBe(400)
+
+    const partial = await send('PUT', '/notes/docs/damaged', { body: 'Only a body.' })
+    expect(partial.statusCode).toBe(409)
+    expect(partial.json().error).toMatch(/damaged/)
+
+    const full = await send('PUT', '/notes/docs/damaged', { frontmatter: { type: 'docs', title: 'Fixed' }, body: 'Repaired.' })
+    expect(full.statusCode).toBe(200)
+    expect(await readFile(file, 'utf8')).toMatch(/^---\n[\s\S]*title: Fixed[\s\S]*---\nRepaired\.$/)
+    // Repaired for good: a normal partial edit goes through the relay again.
+    expect((await send('PUT', '/notes/docs/damaged', { body: 'Edited after repair.' })).statusCode).toBe(200)
+    expect((await send('GET', '/notes/docs/damaged')).json()).toMatchObject({ body: 'Edited after repair.' })
+
+    const history = (await send('GET', '/history/docs/damaged')).json()
+    const created = history.find((r: { action: string }) => r.action === 'create')
+    await damage()
+    const reverted = await send('POST', '/revert/docs/damaged', { revisionId: created.id })
+    expect(reverted.statusCode).toBe(200)
+    expect((await send('GET', '/notes/docs/damaged')).json()).toMatchObject({ body: 'Good content.' })
   })
 })
