@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
@@ -99,6 +100,8 @@ async function atomicWrite(file: string, content: string): Promise<void> {
  * OKF v0.2 Progressive Disclosure: regenerates index.md for each directory in ancestorDirs.
  * Contains subsystems (child directories) and concepts & artifacts (direct child notes).
  * If a directory has 0 notes and 0 subdirectories, index.md is unlinked.
+ * A directory whose `<dir>/index` is a live note is skipped entirely: that file is the
+ * user's note, and the generated table would overwrite or unlink it (#384).
  */
 export async function regenProgressiveIndices(
   vaultId: string,
@@ -117,7 +120,12 @@ export async function regenProgressiveIndices(
     .from(notes)
     .where(and(eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
 
+  const userIndexDirs = new Set(
+    rows.filter((note) => note.path.endsWith('/index')).map((note) => note.path.slice(0, -'/index'.length)),
+  )
+
   for (const dir of uniqueDirs) {
+    if (userIndexDirs.has(dir)) continue
     const prefix = `${dir}/`
     const subdirCounts = new Map<string, number>()
     const childNotes: Array<{
@@ -323,10 +331,10 @@ export async function updateNote(
     .where(eq(notes.id, row.id))
     .returning()
   await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
-  // ponytail: progressive directory index.md files only catalog metadata/types/titles — skip vault-wide scans on body-only edits (GRAPH-05).
+  // ponytail: progressive directory index.md files only catalog metadata/types/titles - skip vault-wide scans on body-only edits (GRAPH-05).
+  // Key order is not compared: jsonb returns keys in its own order, while the collab store sends them in document order (#384).
   const frontmatterChanged =
-    input.frontmatter !== undefined &&
-    JSON.stringify(row.frontmatter) !== JSON.stringify(frontmatter)
+    input.frontmatter !== undefined && !isDeepStrictEqual(row.frontmatter, frontmatter)
   if (frontmatterChanged) {
     await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
   }
