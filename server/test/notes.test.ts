@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { readFile, stat } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
@@ -273,6 +273,65 @@ describe('notes CRUD + OKF on disk', () => {
     const diskContent = await readFile(vaultFile('guides', 'overview.md'), 'utf8')
     expect(diskContent).toContain('[[docs/renamed-doc]]')
     expect(diskContent).not.toContain('original-doc')
+  })
+
+  // #384: a user-authored `<dir>/index` note shares its file with the generated
+  // progressive index. Regenerating it must never overwrite the user's note.
+  it('keeps a user-authored dir/index note intact across sibling create, update, and delete', async () => {
+    const send = (method: 'POST' | 'PUT' | 'DELETE', url: string, body?: object) =>
+      app.inject({ method, url: `/api/vaults/${vaultId}${url}`, headers: { cookie: ownerCookie }, body })
+
+    const index = await send('POST', '/notes', {
+      type: 'handbook',
+      name: 'index',
+      body: 'Hand-written map of the handbook.',
+      frontmatter: { type: 'handbook', title: 'Handbook Index', status: 'active' },
+    })
+    expect(index.statusCode).toBe(200)
+
+    expect((await send('POST', '/notes', { type: 'handbook', name: 'onboarding', body: 'Day one.' })).statusCode).toBe(200)
+    expect(
+      (await send('PUT', '/notes/handbook/onboarding', { frontmatter: { type: 'handbook', status: 'draft' } })).statusCode,
+    ).toBe(200)
+    expect((await send('DELETE', '/notes/handbook/onboarding')).statusCode).toBe(200)
+
+    const raw = await readFile(vaultFile('handbook', 'index.md'), 'utf8')
+    expect(raw).toMatch(/^---\n/)
+    expect(raw).toContain('Hand-written map of the handbook.')
+    const read = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/notes/handbook/index`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(read.statusCode).toBe(200)
+    expect(read.json()).toMatchObject({ frontmatter: { title: 'Handbook Index' } })
+  })
+
+  // #384: the collab store always sends the full frontmatter, in document key
+  // order; Postgres jsonb returns keys in its own order. Same keys and values
+  // in another order is not a frontmatter change and must not rescan indexes.
+  it('does not regenerate indexes when frontmatter only differs in key order', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes`,
+      headers: { cookie: ownerCookie },
+      body: { type: 'ledger', name: 'entry', frontmatter: { type: 'ledger', status: 'active', title: 'Entry' } },
+    })
+    expect(created.statusCode).toBe(200)
+    const stored: Record<string, unknown> = created.json().frontmatter
+    const reordered = Object.fromEntries(Object.entries(stored).reverse())
+    expect(Object.keys(reordered)).not.toEqual(Object.keys(stored))
+    const indexFile = vaultFile('ledger', 'index.md')
+    await writeFile(indexFile, 'sentinel\n', 'utf8')
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/vaults/${vaultId}/notes/ledger/entry`,
+      headers: { cookie: ownerCookie },
+      body: { body: 'new body', frontmatter: reordered },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(await readFile(indexFile, 'utf8')).toBe('sentinel\n')
   })
 })
 
