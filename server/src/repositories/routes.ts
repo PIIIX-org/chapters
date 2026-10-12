@@ -22,6 +22,7 @@ import {
 } from './permissions.js'
 import { createSyncToken, listSyncTokens, revokeSyncToken } from './sync-tokens.js'
 import { syncGitRepository } from './git-sync.js'
+import { prepareGitRemote } from './git-remote.js'
 import {
   stopWatchingLocalRepository,
   syncLocalRepository,
@@ -120,13 +121,13 @@ export function repositoryRoutes(app: FastifyInstance) {
         }
       }
 
-      let gitCredentialEncrypted: string | undefined
-      if (gitCredential) {
-        try {
-          gitCredentialEncrypted = encryptCredential(gitCredential)
-        } catch (err) {
-          return reply.code(400).send({ error: (err as Error).message })
-        }
+      // Never store the remote as given: credentials embedded in the URL move
+      // into encrypted storage, and the URL is kept without them (#383).
+      let remote: { gitUrl?: string; gitCredentialEncrypted?: string } = {}
+      try {
+        if (ingestionMethod === 'git') remote = prepareGitRemote(gitUrl!, gitCredential)
+      } catch (err) {
+        return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) })
       }
 
       const [repo] = await db
@@ -135,8 +136,8 @@ export function repositoryRoutes(app: FastifyInstance) {
           name,
           ownerId: req.user!.id,
           ingestionMethod,
-          gitUrl: ingestionMethod === 'git' ? gitUrl : undefined,
-          gitCredentialEncrypted,
+          gitUrl: remote.gitUrl,
+          gitCredentialEncrypted: remote.gitCredentialEncrypted,
           localPath: ingestionMethod === 'local_path' ? resolve(config.localReposRoot, localPath!) : undefined,
         })
         .returning()
