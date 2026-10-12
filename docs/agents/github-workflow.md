@@ -53,6 +53,13 @@ feature exercised end-to-end per the sandbox/visual protocols — open a PR
 verified work, and merge. If something on `dev` turns out broken, it
 simply doesn't get promoted until fixed — `prod` never waits on a revert.
 
+After the merge, confirm **Publish image** ran on `prod`
+(`gh run list --workflow publish.yml --branch prod`). On 2026-10-12 a
+promotion merge (#392) triggered no workflow runs at all; the image was
+published by dispatching it manually:
+`gh workflow run publish.yml --ref prod`. Until it runs, the hosted
+instance is still on the previous image.
+
 ## Issues
 
 - Bugs, review findings, and deferred work all become issues — labeled

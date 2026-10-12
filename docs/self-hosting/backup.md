@@ -78,3 +78,15 @@ Restoring an application-level zip archive must be done against a clean instance
 ```bash
 docker compose exec app pnpm restore-backup /path/to/backup.zip
 ```
+
+---
+
+## 4. Verify After Restoring
+
+After either restore path, check that every note file on disk can be opened:
+
+```bash
+docker compose exec app pnpm check-notes
+```
+
+It prints one `BROKEN` line per note whose file is missing or has damaged frontmatter, and exits with code 1 if there are any. A clean restore ends with `checked N notes, 0 broken`.
