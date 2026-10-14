@@ -237,6 +237,8 @@ function buildCases(tools: ToolInfo[], fx: Fixtures): Case[] {
         delete args.vaultId
         delete args.repositoryId
         add('omitted', args, fits && !policy ? 'allow' : 'deny', policy)
+        // `everywhere: true` (search, find_symbols) is an account-wide surface by definition.
+        if ('everywhere' in props) add('account-surface', { ...args, everywhere: true }, 'deny')
       }
     }
   }
