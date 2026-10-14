@@ -11,19 +11,25 @@
 // Desktop (1280x800): UI login -> open note -> steps; after each step the
 // editor text (EditorView state and DOM lines), the file on disk, the notes
 // row and a screenshot are captured once the three converge (or time out):
-//   S1  user types 40 tokens while the agent appends twice mid-typing
+//   S1  user types 40 tokens while the agent appends twice mid-typing (the
+//       race: the agent reads a file that lags the editor)
 //   S2  agent appends while the user is idle, then the user types
-//   S3  user types, agent appends, Ctrl+Z x2 (does undo touch agent text?)
+//   S3  user types, (typing on disk) agent appends, Ctrl+Z x2
 //   S4  second tab on the same note (presence control), then another page in
 //       front while the agent appends, back, type
-//   S5  type, navigate to another note in-app at once, agent appends, back
-//   S6  type, reload at once while the agent appends
-//   S7  type, log out via the account menu, agent appends, log in via UI
-//   S8a context.setOffline(true): type + agent append, back online
+//   S5  type, navigate to another note in-app at once, (typing on disk)
+//       agent appends, back
+//   S6a type, reload at once; S6b reload while the agent appends
+//   S7  type, log out via the account menu, (typing on disk) agent appends,
+//       log in via UI
+//   S8a context.setOffline(true): type + agent append; how long until the UI
+//       notices; back online
 //   S8b real socket drop (routeWebSocket closes both sides, refuses
 //       reconnects, HTTP offline): type + agent append, back online
+// "(typing on disk)" = the agent waits for the relay's store, so its read is
+// fresh and the step isolates the transition from the S1 race.
 // Mobile (iPhone 13 emulation on Chromium): login, home, vaults, vault, note,
-// type, agent append; screenshots of each screen.
+// type, (typing on disk) agent append; screenshots of each screen.
 //
 // Secrets: credentials come from ctx.env and are only typed into the login
 // form (no screenshot after fill). No Playwright trace is recorded because a
@@ -137,7 +143,8 @@ interface Snap {
 interface Expect {
   user: string[]
   agent: string[]
-  absent: string[]
+  /** Tokens already reported lost, with the step that lost them. */
+  gone: Array<{ token: string; step: string }>
 }
 
 interface Row {
@@ -282,6 +289,17 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     }
   }
 
+  /** ms until the file on disk contains every needle (the relay's debounced store landed), null on timeout. */
+  const waitDiskIncludes = async (needles: string[], timeoutMs = 15_000): Promise<number | null> => {
+    const t0 = performance.now()
+    for (;;) {
+      const d = await diskBody()
+      if (d !== null && needles.every((n) => d.includes(n))) return Math.round(performance.now() - t0)
+      if (performance.now() - t0 > timeoutMs) return null
+      await Bun.sleep(250)
+    }
+  }
+
   const waitEditorIncludes = async (page: Page, needle: string, timeoutMs = 15_000): Promise<number | null> => {
     const t0 = performance.now()
     for (;;) {
@@ -353,7 +371,13 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
 
   const snaps: Snap[] = []
   const rows: Row[] = []
-  const exp: Expect = { user: [...BASE], agent: [], absent: [] }
+  const exp: Expect = { user: [...BASE], agent: [], gone: [] }
+  /**
+   * Losses are charged to the step where they first show: a token missing
+   * from a converged snapshot leaves the expectation list (into `gone`), so
+   * later rows report only their own losses, and a `gone` token that comes
+   * back is reported as reappeared. Editor-only rows (socket cut) don't prune.
+   */
   const evaluate = (s: Snap, expectConverged = true, sources: Array<'editor' | 'disk' | 'db'> = ['editor', 'disk', 'db']) => {
     const texts = { editor: s.editor, disk: s.disk, db: s.db }
     const row: Row = {
@@ -369,6 +393,8 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
       reappeared: [],
       screenshot: s.screenshot,
     }
+    const lostUser = new Set<string>()
+    const lostAgent = new Set<string>()
     for (const name of ['editor', 'disk', 'db'] as const) {
       const text = texts[name]
       if (text === null) {
@@ -380,9 +406,18 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
         if (n > 1) row.duplicates.push(`${m}@${name}x${n}`)
       }
       if (!sources.includes(name)) continue
-      for (const m of exp.user) if (count(text, m) === 0) row.lostUser.push(`${m}@${name}`)
-      for (const m of exp.agent) if (count(text, m) === 0) row.lostAgent.push(`${m}@${name}`)
-      for (const m of exp.absent) if (count(text, m) > 0) row.reappeared.push(`${m}@${name}`)
+      for (const m of exp.user) if (count(text, m) === 0) lostUser.add(m)
+      for (const m of exp.agent) if (count(text, m) === 0) lostAgent.add(m)
+      for (const g of exp.gone) if (count(text, g.token) > 0) row.reappeared.push(`${g.token}@${name} (lost in ${g.step})`)
+    }
+    const where = (m: string) =>
+      `${m}@${sources.filter((n) => texts[n] !== null && count(texts[n], m) === 0).join('+')}`
+    row.lostUser.push(...[...lostUser].map(where))
+    row.lostAgent.push(...[...lostAgent].map(where))
+    if (expectConverged) {
+      exp.user = exp.user.filter((m) => !lostUser.has(m))
+      exp.agent = exp.agent.filter((m) => !lostAgent.has(m))
+      exp.gone.push(...[...lostUser, ...lostAgent].map((token) => ({ token, step: s.step })))
     }
     snaps.push(s)
     rows.push(row)
@@ -436,6 +471,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
   }
 
   // ---------------------------------------------------------------- desktop
+  const videos: string[] = []
   const desktop: BrowserContext = await browser.newContext({
     viewport: { width: 1280, height: 800 },
     recordVideo: { dir: join(OUT, 'video-raw'), size: { width: 1280, height: 800 } },
@@ -501,49 +537,37 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     evaluate(await settle(page, 'S2-agent-then-type', { waitFor: [m] }))
   }
 
-  // S3: undo after an agent append.
+  // S3: undo after an agent append. The agent reads only once c01..c05 are
+  // on disk, so its write is not stale and any change is the undo's doing.
   const undo: Record<string, unknown> = {}
+  const undoSteps: Array<{ label: string; changed: boolean; undone: string[]; agentMissing: string[] }> = []
   {
     const t = tokens('c', 5)
     await typeAtEnd(page, typedText(t))
     exp.user.push(...t)
-    await Bun.sleep(3000) // past the relay's 2 s store debounce: the agent's read includes c01..c05
+    undo.typingOnDiskMs = await waitDiskIncludes(t)
     const m = marker('S3')
     await agentAppend('S3', m, page)
     await waitEditorIncludes(page, m)
     await Bun.sleep(500)
-    const before = (await readEditor(page)).text
+    const texts: Array<string | null> = [(await readEditor(page)).text]
     await page.locator('.cm-content').click()
     await page.keyboard.press('Control+End')
-    await page.keyboard.press('Control+z')
-    await Bun.sleep(1500)
-    const after1 = (await readEditor(page)).text
-    // Expected: own c-typing undone, every agent line kept.
-    exp.user = exp.user.filter((x) => !t.includes(x))
-    exp.absent.push(...t)
-    const r1 = evaluate(await settle(page, 'S3-undo-1', { waitFor: exp.agent }))
-    await page.keyboard.press('Control+z')
-    await Bun.sleep(1500)
-    const after2 = (await readEditor(page)).text
-    // Undo 2 may legitimately take more of the user's own typing; accept it,
-    // but agent lines must survive.
-    const undone2 = exp.user.filter((x) => !BASE.includes(x) && count(after2, x) === 0)
-    exp.user = exp.user.filter((x) => !undone2.includes(x))
-    exp.absent.push(...undone2)
-    evaluate(await settle(page, 'S3-undo-2', { waitFor: exp.agent }))
-    const agentLostByUndo = exp.agent.filter((x) => count(after1, x) === 0 || count(after2, x) === 0)
-    undo.beforeLen = before?.length ?? null
-    undo.after1Len = after1?.length ?? null
-    undo.after2Len = after2?.length ?? null
-    undo.undo1Changed = before !== after1
-    undo.undo2Changed = after1 !== after2
-    undo.cTokensAfterUndo1 = t.filter((x) => count(after1, x) > 0)
-    undo.undone2 = undone2
-    undo.agentLostByUndo = agentLostByUndo
-    undo.reappearedAfterUndo1 = r1.reappeared
-    undo.before = before
-    undo.after1 = after1
-    undo.after2 = after2
+    for (const label of ['S3-undo-1', 'S3-undo-2']) {
+      const prev = texts.at(-1) ?? null
+      await page.keyboard.press('Control+z')
+      await Bun.sleep(1500)
+      const now = (await readEditor(page)).text
+      texts.push(now)
+      // What the user's own undo removed is not a loss.
+      const undone = exp.user.filter((x) => count(prev, x) > 0 && count(now, x) === 0)
+      exp.user = exp.user.filter((x) => !undone.includes(x))
+      undoSteps.push({ label, changed: prev !== now, undone, agentMissing: exp.agent.filter((x) => count(now, x) === 0) })
+      evaluate(await settle(page, label, { waitFor: exp.agent }))
+    }
+    undo.cTokensAfterUndo1 = t.filter((x) => count(texts[1] ?? null, x) > 0)
+    undo.steps = undoSteps
+    undo.texts = texts
   }
 
   // S4: presence control (same note in a 2nd tab), then another page in front.
@@ -570,10 +594,18 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     await typeAtEnd(page, typedText(t))
     exp.user.push(...t)
     evaluate(await settle(page, 'S4-tab-switch', { waitFor: [m] }))
+    const tab2Video = page2.video()
     await page2.close()
+    if (tab2Video) {
+      const p = join(OUT, 'desktop-tab2.webm')
+      await tab2Video.saveAs(p)
+      await tab2Video.delete()
+      videos.push(p)
+    }
   }
 
-  // S5: type, navigate in-app to note B immediately, agent appends, back.
+  // S5: type, navigate in-app to note B right after the last keystroke; once
+  // the typing is on disk (or 15 s passed) the agent appends; back.
   const nav: Record<string, unknown> = {}
   {
     const t = tokens('f', 5)
@@ -589,6 +621,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     }
     await waitReady(page, 'BASE-B')
     await screenshot(page, 'desktop', 'S5-note-b')
+    nav.typingOnDiskMs = await waitDiskIncludes(t)
     const m = marker('S5')
     await agentAppend('S5', m, null)
     await Bun.sleep(1000)
@@ -597,18 +630,25 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     evaluate(await settle(page, 'S5-navigate-away-back', { waitFor: [m] }))
   }
 
-  // S6: type then reload at once, while the agent appends.
+  // S6a: type, reload right after the last keystroke. S6b: reload while the
+  // agent appends (its read is fresh: the typing is already on disk).
+  const reload: Record<string, unknown> = {}
   {
     const t = tokens('g', 5)
     await typeAtEnd(page, typedText(t))
     exp.user.push(...t)
+    await page.reload()
+    await waitReady(page)
+    reload.typingOnDiskMs = await waitDiskIncludes(t)
+    evaluate(await settle(page, 'S6a-type-then-reload'))
     const m = marker('S6')
     await Promise.all([page.reload(), agentAppend('S6', m, null)])
     await waitReady(page)
-    evaluate(await settle(page, 'S6-reload', { waitFor: [m] }))
+    evaluate(await settle(page, 'S6b-reload-while-agent-appends', { waitFor: [m] }))
   }
 
-  // S7: type, log out, agent appends while logged out, log back in.
+  // S7: type, log out, agent appends while logged out (after the typing is
+  // on disk), log back in.
   const logout: Record<string, unknown> = {}
   {
     const t = tokens('h', 5)
@@ -619,6 +659,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     await page.getByRole('menuitem', { name: 'Log out' }).click()
     await page.waitForURL(/\/login/, { timeout: 15_000 })
     await screenshot(page, 'desktop', 'S7-logged-out')
+    logout.typingOnDiskMs = await waitDiskIncludes(t)
     const m = marker('S7')
     await agentAppend('S7', m, null)
     logout.loginMs = await uiLogin(page)
@@ -627,7 +668,8 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     evaluate(await settle(page, 'S7-logout-login', { waitFor: [m] }))
   }
 
-  // S8a: Chromium network emulation offline.
+  // S8a: Chromium network emulation offline (the socket is not closed, frames
+  // just stop: what a dead Wi-Fi looks like). How long until the UI says so?
   const offline: Record<string, unknown> = {}
   {
     await desktop.setOffline(true)
@@ -640,7 +682,20 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     await agentAppend('S8A', m, page)
     offline.agentReachedEditorWhileOfflineMs = await waitEditorIncludes(page, m, 5000)
     offline.setOfflineCutSocket = offline.agentReachedEditorWhileOfflineMs === null
-    // Editor-only expectations while offline: disk/DB can't have i01..i05 if the socket is cut.
+    const t0 = performance.now()
+    const statusSeen: string[] = []
+    offline.silentDropDetectedMs = null
+    while (performance.now() - t0 < 45_000) {
+      const status = (await readChrome(page)).status.join(' | ')
+      if (statusSeen.at(-1) !== status) statusSeen.push(status)
+      if (/reconnect|offline/i.test(status)) {
+        offline.silentDropDetectedMs = Math.round(performance.now() - t0) + 1500
+        break
+      }
+      await Bun.sleep(500)
+    }
+    offline.statusSequenceWhileOffline = statusSeen
+    // Editor-only expectations while offline: disk/DB can't have i01..i05.
     evaluate(await settle(page, 'S8a-offline-emulated', { expectConverged: false }), false, ['editor'])
     await desktop.setOffline(false)
     evaluate(await settle(page, 'S8a-back-online', { waitFor: [m], timeoutMs: 60_000 }))
@@ -678,26 +733,30 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     const m = marker('S8B')
     await agentAppend('S8B', m, page)
     offline.agentReachedEditorDuringPartitionMs = await waitEditorIncludes(page, m, 5000)
-    evaluate(await settle(page, 'S8b-socket-dropped', { expectConverged: false }), false, ['editor'])
+    const cut = await settle(page, 'S8b-socket-dropped', { expectConverged: false })
+    offline.jIndexWhilePartitioned = cut.editor?.indexOf(' j01') ?? null
+    evaluate(cut, false, ['editor'])
     const t0 = performance.now()
     partition = false
     await desktop.setOffline(false)
-    offline.reconnectToAgentTextMs = await waitEditorIncludes(page, m, 60_000)
+    // Where the offline typing lands as the merge happens.
+    const merge: Array<{ t: number; len: number; jIndex: number; agentIndex: number; head: number | null }> = []
+    while (performance.now() - t0 < 60_000) {
+      const e = await readEditor(page)
+      merge.push({ t: Math.round(performance.now() - t0), len: e.text?.length ?? -1, jIndex: e.text?.indexOf(' j01') ?? -1, agentIndex: e.text?.indexOf(m) ?? -1, head: e.head })
+      if (e.text?.includes(m) && merge.length > 1 && performance.now() - t0 > 3000) break
+      await Bun.sleep(100)
+    }
+    offline.mergeSamples = merge
+    offline.reconnectToAgentTextMs = merge.find((x) => x.agentIndex >= 0)?.t ?? null
     offline.refusedDuringPartition = refused
-    offline.reconnectWallMs = Math.round(performance.now() - t0)
     evaluate(await settle(page, 'S8b-reconnected', { waitFor: [m], timeoutMs: 60_000 }))
     offline.statusAfterReconnect = (await readChrome(page)).status
     await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {})
   }
 
-  const revisions = await ctx.docker.psqlRows<{ actor_type: string; action: string; created_at: string; body: string }>(
-    `select r.actor_type, r.action, r.created_at, r.body from note_revisions r join notes n on n.id = r.note_id
-     where n.vault_id = '${vault.id}' and n.path = '${path}' order by r.created_at`,
-  )
-
   const desktopVideo = page.video()
   await desktop.close()
-  const videos: string[] = []
   if (desktopVideo) {
     const p = join(OUT, 'desktop.webm')
     await desktopVideo.saveAs(p)
@@ -748,6 +807,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     await mp.keyboard.type(typedText(mt), { delay: TYPE_DELAY_MS })
     exp.user.push(...mt)
     await mshot('note-typed')
+    mobileData.typingOnDiskMs = await waitDiskIncludes(mt)
     const m = marker('MOBILE')
     await agentAppend('MOBILE', m, mp)
     mobileData.agentToEditorMs = await waitEditorIncludes(mp, m)
@@ -804,6 +864,17 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     )
   }
   await browser.close()
+
+  const revisions = await ctx.docker.psqlRows<{ actor_type: string; action: string; created_at: string; body: string }>(
+    `select r.actor_type, r.action, r.created_at, r.body from note_revisions r join notes n on n.id = r.note_id
+     where n.vault_id = '${vault.id}' and n.path = '${path}' order by r.created_at`,
+  )
+  // Which actor the audit trail credits with each agent append: the first
+  // revision whose body contains the agent's marker.
+  const attribution = agentWrites
+    .filter((w) => w.ok)
+    .map((w) => ({ step: w.step, firstRevisionActor: revisions.find((r) => r.body.includes(w.marker))?.actor_type ?? null }))
+  const mcpUpdates = revisions.filter((r) => r.actor_type === 'mcp' && r.action === 'update').length
 
   // ---------------------------------------------------------------- checks
   for (const r of rows) {
@@ -873,7 +944,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     ok: s1MaxDup === 0,
     severity: 'medium',
   })
-  const undoAgentLost = undo.agentLostByUndo as string[]
+  const undoAgentLost = [...new Set(undoSteps.flatMap((u) => u.agentMissing))]
   checks.push({
     name: 'undo (Ctrl+Z) never removes agent edits',
     expected: 'all agent markers in the editor after each Ctrl+Z',
@@ -885,8 +956,30 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
   checks.push({
     name: "undo (Ctrl+Z) removes the user's own last typing after an agent append",
     expected: 'c01..c05 gone after one Ctrl+Z',
-    actual: cLeft.length === 0 ? 'removed' : `still there: ${cLeft.join(' ')} (undo changed text: ${String(undo.undo1Changed)})`,
+    actual:
+      cLeft.length === 0
+        ? 'removed'
+        : `still there: ${cLeft.join(' ')}; Ctrl+Z changed the text: ${undoSteps.map((u) => `${u.label}=${u.changed}`).join(', ')}`,
     ok: cLeft.length === 0,
+    severity: 'medium',
+  })
+  checks.push({
+    name: 'note_revisions credits edit_note to the agent (actor mcp)',
+    expected: `${attribution.length} agent appends -> first revision with each marker has actor_type mcp`,
+    actual: `${attribution.filter((a) => a.firstRevisionActor === 'mcp').length}/${attribution.length} credited to mcp (${mcpUpdates} mcp update revisions total); first actors: ${[...new Set(attribution.map((a) => a.firstRevisionActor))].join(', ')}`,
+    ok: attribution.every((a) => a.firstRevisionActor === 'mcp'),
+    severity: 'high',
+  })
+  // A jump = the caret falls back >10 chars while the user only types forward.
+  const cursorJumps = s1Samples.filter((x, i) => i > 0 && x.head !== null && (s1Samples[i - 1]?.head ?? -1) - x.head > 10)
+  checks.push({
+    name: 'S1: caret stays where the user types when the agent writes',
+    expected: 'no caret jump while typing at the end',
+    actual:
+      cursorJumps.length === 0
+        ? 'no jump'
+        : `${cursorJumps.length} jumps: ${cursorJumps.map((x) => `t=${x.t}ms head->${x.head}`).join(', ')}`,
+    ok: cursorJumps.length === 0,
     severity: 'medium',
   })
   const control = presence.controlPeersOnTab1 as string[]
@@ -906,11 +999,29 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     severity: 'medium',
   })
   checks.push({
-    name: 'S8a: context.setOffline cuts the collab socket',
+    name: 'S8a: context.setOffline stops collab traffic',
     expected: 'informational (Chromium emulation, not Elara)',
-    actual: offline.setOfflineCutSocket ? 'cut (agent text did not arrive while offline)' : 'NOT cut: agent text arrived while "offline"',
+    actual: offline.setOfflineCutSocket ? 'stopped (agent text did not arrive while offline)' : 'NOT stopped: agent text arrived while "offline"',
     ok: null,
     severity: 'info',
+  })
+  checks.push({
+    name: 'S8a: UI tells the user about a silent network drop',
+    expected: 'status shows Reconnecting/Offline within 45 s of going offline',
+    actual:
+      offline.silentDropDetectedMs === null
+        ? `never in 45 s; statuses seen: ${(offline.statusSequenceWhileOffline as string[]).join(' -> ')}`
+        : `after ${String(offline.silentDropDetectedMs)} ms; statuses: ${(offline.statusSequenceWhileOffline as string[]).join(' -> ')}`,
+    ok: offline.silentDropDetectedMs !== null,
+    severity: 'medium',
+  })
+  const s8bFinal = snaps.find((x) => x.step === 'S8b-reconnected')?.editor ?? ''
+  checks.push({
+    name: 'S8b: typing done while disconnected stays where it was typed',
+    expected: '" j01 ... j05" after i05 (where the caret was), not at the top',
+    actual: `j01 at index ${s8bFinal.indexOf(' j01')}, i05 at ${s8bFinal.indexOf('i05')} (while partitioned j01 was at ${String(offline.jIndexWhilePartitioned)})`,
+    ok: s8bFinal.indexOf(' j01') > s8bFinal.indexOf('i05'),
+    severity: 'medium',
   })
   const partitionStatus = (offline.statusDuringPartition as string[]).join(' | ')
   checks.push({
@@ -951,9 +1062,11 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
       undo,
       presence,
       navigation: nav,
+      reload,
       logout,
       offline,
       mobile: mobileData,
+      attribution,
       revisions: revisions.map((r) => ({ actor: r.actor_type, action: r.action, at: r.created_at, bodyHash: sha(r.body), len: r.body.length })),
       consoleErrors,
       videos,
