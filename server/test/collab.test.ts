@@ -281,6 +281,41 @@ describe('real-time collaboration', () => {
     expect(client.document.getMap('frontmatter').get('type')).toBe('docs')
   })
 
+  // The collab load seeds the document from the note's file and the debounced
+  // store writes the document back, so a misparsed file used to be stored as
+  // the misparse: `title: alpha---beta` loaded as `alpha`, with `beta` and the
+  // rest of the frontmatter spilled into the body.
+  it('loads and stores a note with "---" in a frontmatter value without corrupting it', async () => {
+    const frontmatter = { type: 'docs', title: 'alpha---beta' }
+    const body = 'Intro\n---\nAfter the rule.'
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes`,
+      headers: { cookie: ownerCookie },
+      body: { type: 'docs', name: 'dashed', frontmatter, body },
+    })
+    expect(created.statusCode).toBe(200)
+
+    const client = connect(ownerToken, `${vaultId}/docs/dashed`)
+    await waitFor(() => client.document.getText('body').length > 0)
+    expect(client.document.getMap('frontmatter').get('title')).toBe('alpha---beta')
+    expect(client.document.getText('body').toString()).toBe(body)
+
+    client.document.getText('body').insert(0, 'STORED ')
+    const file = join(config.dataDir, 'vaults', vaultId, 'docs', 'dashed.md')
+    let raw = ''
+    await waitFor(() => {
+      void readFile(file, 'utf8').then((c) => (raw = c)).catch(() => {})
+      return raw.includes('STORED ')
+    }, 8000)
+    const read = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/notes/docs/dashed`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(read.json()).toMatchObject({ frontmatter, body: `STORED ${body}` })
+  }, 10_000)
+
   // #391: with the relay running, every write loads the collab document from
   // the note's file first, so a damaged file (e.g. #384's fence-less index)
   // made the note impossible to repair through edit or revert.

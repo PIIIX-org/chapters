@@ -126,6 +126,27 @@ describe('notes CRUD + OKF on disk', () => {
     expect(raw).toContain('vip')
   })
 
+  it('reads back a "---" inside a frontmatter value and "---" lines in the body unchanged', async () => {
+    const frontmatter = { type: 'docs', title: 'alpha---beta', description: 'before\n---\nafter' }
+    const body = 'Intro\n---\nAfter the rule.\n'
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes`,
+      headers: { cookie: ownerCookie },
+      body: { type: 'docs', name: 'dashed', frontmatter, body },
+    })
+    expect(created.statusCode).toBe(200)
+    expect(await readFile(vaultFile('docs', 'dashed.md'), 'utf8')).toContain('title: alpha---beta\n')
+
+    const read = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/notes/docs/dashed`,
+      headers: { cookie: ownerCookie },
+    })
+    expect(read.statusCode).toBe(200)
+    expect(read.json()).toMatchObject({ frontmatter, body })
+  })
+
   it('rename moves the file and refreshes index.md', async () => {
     const res = await app.inject({
       method: 'POST',
