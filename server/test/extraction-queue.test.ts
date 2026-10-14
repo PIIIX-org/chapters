@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { repositories, repositoryFileImports, repositoryFiles, repositoryFileSymbols } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
-import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { backfillUnresolvedImports, flushExtraction } from '../src/repositories/extraction-queue.js'
 import { createActiveUser } from './helpers.js'
 
 async function makeRepo() {
@@ -107,6 +107,41 @@ describe('extraction queue', () => {
     expect(resolvedBySpecifier).toEqual({
       './components/Button.js': button.id,
       '@/lib/utils': utils.id,
+    })
+  })
+
+  it('backfills imports stored unresolved by an older resolver, from their raw target path', async () => {
+    const repo = await makeRepo()
+    await syncRepositoryFiles(
+      repo.id,
+      [
+        {
+          path: 'server/src/queue.ts',
+          content: "import { resolve } from './resolve.js'\nimport { eq } from 'drizzle-orm'\nexport const q = resolve(eq)",
+        },
+        { path: 'server/src/resolve.ts', content: 'export function resolve(x: unknown) { return x }' },
+      ],
+      ['server/src/queue.ts', 'server/src/resolve.ts'],
+    )
+    await flushExtraction()
+
+    const queueFile = await fileByPath(repo.id, 'server/src/queue.ts')
+    const resolveFile = await fileByPath(repo.id, 'server/src/resolve.ts')
+    // Simulate rows written before `.js` -> `.ts` resolution existed.
+    await db
+      .update(repositoryFileImports)
+      .set({ resolvedTargetFileId: null })
+      .where(eq(repositoryFileImports.sourceFileId, queueFile.id))
+
+    expect(await backfillUnresolvedImports()).toBeGreaterThanOrEqual(1)
+
+    const imports = await db
+      .select()
+      .from(repositoryFileImports)
+      .where(eq(repositoryFileImports.sourceFileId, queueFile.id))
+    expect(Object.fromEntries(imports.map((i) => [i.targetPath, i.resolvedTargetFileId]))).toEqual({
+      './resolve.js': resolveFile.id,
+      'drizzle-orm': null,
     })
   })
 

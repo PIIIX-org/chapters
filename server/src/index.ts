@@ -4,6 +4,7 @@ import { runMigrations } from './db/migrate.js'
 import { ensureInstanceState } from './auth/bootstrap.js'
 import { scheduleMissingEmbeddings } from './search/embedding-queue.js'
 import { startLocalWatchers, startPollingScheduler, reconcileOrphanedSyncs } from './repositories/scheduler.js'
+import { backfillUnresolvedImports } from './repositories/extraction-queue.js'
 import { scrubStoredGitCredentials } from './repositories/git-remote.js'
 import { startBackupScheduler } from './export/backup-service.js'
 import { config } from './config.js'
@@ -23,6 +24,8 @@ try {
   if (missing > 0) console.log(`embedding catch-up scheduled for ${missing} notes`)
   const reconciled = await reconcileOrphanedSyncs()
   if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)
+  const backfilled = await backfillUnresolvedImports()
+  if (backfilled > 0) console.log(`resolved ${backfilled} previously unresolved code import(s)`)
   const { setupPending, setupToken } = await ensureInstanceState()
   if (setupPending && setupToken) {
     // The only place the setup token ever appears in plaintext.

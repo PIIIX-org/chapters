@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFileSymbols, repositoryFiles } from '../db/schema.js'
 import { embedder } from '../search/embeddings.js'
@@ -39,6 +39,53 @@ export function scheduleExtraction(fileId: string): void {
 
 export async function flushExtraction(): Promise<void> {
   while (running) await running
+}
+
+/**
+ * Re-resolve stored imports that have no target yet, from their raw
+ * `target_path` (no re-parse). Extraction only re-runs when content
+ * changes, so rows written by an older resolver stay unresolved until
+ * this runs. Idempotent; called once at startup. Returns rows resolved.
+ */
+export async function backfillUnresolvedImports(): Promise<number> {
+  const pending = await db
+    .select({
+      sourceFileId: repositoryFileImports.sourceFileId,
+      targetPath: repositoryFileImports.targetPath,
+      sourcePath: repositoryFiles.path,
+      repositoryId: repositoryFiles.repositoryId,
+    })
+    .from(repositoryFileImports)
+    .innerJoin(repositoryFiles, eq(repositoryFiles.id, repositoryFileImports.sourceFileId))
+    .where(isNull(repositoryFileImports.resolvedTargetFileId))
+
+  const siblingsByRepo = new Map<string, { pathToId: Map<string, string>; knownPaths: Set<string> }>()
+  let resolvedCount = 0
+  for (const imp of pending) {
+    let siblings = siblingsByRepo.get(imp.repositoryId)
+    if (!siblings) {
+      const files = await db
+        .select({ id: repositoryFiles.id, path: repositoryFiles.path })
+        .from(repositoryFiles)
+        .where(eq(repositoryFiles.repositoryId, imp.repositoryId))
+      siblings = { pathToId: new Map(files.map((f) => [f.path, f.id])), knownPaths: new Set(files.map((f) => f.path)) }
+      siblingsByRepo.set(imp.repositoryId, siblings)
+    }
+    const resolved = resolveImportPath(imp.sourcePath, imp.targetPath, siblings.knownPaths)
+    const targetId = resolved ? siblings.pathToId.get(resolved) : undefined
+    if (!targetId) continue
+    await db
+      .update(repositoryFileImports)
+      .set({ resolvedTargetFileId: targetId })
+      .where(
+        and(
+          eq(repositoryFileImports.sourceFileId, imp.sourceFileId),
+          eq(repositoryFileImports.targetPath, imp.targetPath),
+        ),
+      )
+    resolvedCount++
+  }
+  return resolvedCount
 }
 
 async function drain(): Promise<void> {
