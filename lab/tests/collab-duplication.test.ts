@@ -427,6 +427,39 @@ const test: LabTest = {
       C.destroy()
     }
 
+    // ------------------------------------------------------------ note 3: a stale .crdt is a lasting hazard
+    // onLoadDocument's reconcile (collab-server.ts:125-144) rewrites the body
+    // with NEW Yjs items but never saves the bin, and Hocuspocus attaches its
+    // store-on-update handler only after onLoadDocument (Hocuspocus.ts:445),
+    // so a session that only reads never persists that lineage. Chain after
+    // one crash-window leftover: a tab opens the note (fresh ydoc), stays idle,
+    // its network drops long enough for the doc to unload, it reconnects.
+    const p3 = 'dup/note-three'
+    const base3 = mk('BASE3')
+    markers.push(base3)
+    const n3 = { path: p3, id: await createNote(p3, `${base3}\n\n${genBody(1500, 33)}\nend of base 3`) }
+    const bin3 = `/data/elara/vaults/${vault.id}/.crdt/${p3}.bin`
+    const D = new CollabClient(ctx.baseUrl, `${vault.id}/${p3}`, sess)
+    await D.connect()
+    await settle(D)
+    await containerCp(bin3, `${bin3}.lab-bak`)
+    const m19 = await typeMarker(D, 'IDLE')
+    await settle(D)
+    D.destroy()
+    await ctx.docker.app.restart(ctx.baseUrl)
+    await containerCp(`${bin3}.lab-bak`, bin3)
+    const E = new CollabClient(ctx.baseUrl, `${vault.id}/${p3}`, sess)
+    const e1 = await E.connect()
+    await Bun.sleep(SETTLE_MS) // read-only session: nothing typed
+    await snap('S19a stale .crdt, fresh tab opens (reads only)', n3, { E }, { once: [base3, m19], checkConverged: false }, { reconnected: e1 })
+    E.disconnect()
+    await Bun.sleep(6000) // no connections, nothing to store -> the relay unloads the doc
+    const e2 = await E.reconnect()
+    await settle(E)
+    const rec19 = await snap('S19b same idle tab reconnects after the doc unloaded', n3, { E }, { once: [base3, m19] }, { reconnected: e2 })
+    E.destroy()
+    injection.push({ variant: 'idle tab after unload (no second crash)', marker: m19, after: rec19.counts[m19], base: rec19.counts[base3], duplicated: rec19.duplicated })
+
     A.destroy()
     const logs = await appLogsSince(startedIso, 300)
     const collabErrors = logs.split('\n').filter((l) => /collab store rejected|crdt state save rejected|\[collab\]/.test(l)).slice(0, 40)
