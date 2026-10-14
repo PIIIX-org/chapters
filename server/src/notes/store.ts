@@ -14,7 +14,6 @@ import {
   extractWikilinks,
   parseNote,
   serializeNote,
-  serializeNoteVerified,
   validateNote,
   isSlug,
   type Frontmatter,
@@ -230,7 +229,6 @@ export async function createNote(
   }
   const body = input.body ?? ''
   validateNote(resolved.type, resolved.name, frontmatter, body)
-  const serialized = serializeNoteVerified({ frontmatter, body })
   let row: NoteRow
   try {
     const inserted = await db
@@ -251,7 +249,7 @@ export async function createNote(
     }
     throw err
   }
-  await atomicWrite(noteFile(vaultId, resolved.fullPath), serialized)
+  await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
   await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
   await syncLinks(row.id, body)
   scheduleEmbedding(row.id)
@@ -327,13 +325,12 @@ export async function updateNote(
   }
   const body = input.body ?? row.body
   validateNote(row.type, row.name, frontmatter, body)
-  const serialized = serializeNoteVerified({ frontmatter, body })
   const [updated] = await db
     .update(notes)
     .set({ frontmatter, body, updatedAt: new Date() })
     .where(eq(notes.id, row.id))
     .returning()
-  await atomicWrite(noteFile(vaultId, resolved.fullPath), serialized)
+  await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
   // ponytail: progressive directory index.md files only catalog metadata/types/titles - skip vault-wide scans on body-only edits (GRAPH-05).
   // Key order is not compared: jsonb returns keys in its own order, while the collab store sends them in document order (#384).
   const frontmatterChanged =
@@ -401,15 +398,16 @@ export async function renameNote(
     type: toResolved.type,
   }
   validateNote(toResolved.type, toResolved.name, newFrontmatter, currentBody)
-  const serialized = serializeNoteVerified({ frontmatter: newFrontmatter, body: currentBody })
 
   const fromFile = noteFile(vaultId, fromResolved.fullPath)
   const toFile = noteFile(vaultId, toResolved.fullPath)
 
-  await atomicWrite(toFile, serialized)
   if (isMoving) {
+    await atomicWrite(toFile, serializeNote({ frontmatter: newFrontmatter, body: currentBody }))
     await unlink(fromFile).catch(() => {})
     await renameCrdtState(vaultId, fromResolved.fullPath, toResolved.fullPath).catch(() => {})
+  } else {
+    await atomicWrite(toFile, serializeNote({ frontmatter: newFrontmatter, body: currentBody }))
   }
 
   let updated: NoteRow
