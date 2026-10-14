@@ -79,6 +79,37 @@ describe('extraction queue', () => {
     expect(imports[0]?.resolvedTargetFileId).toBe(helperFile.id)
   })
 
+  it('resolves TypeScript ESM `.js` specifiers and the client `@/` alias to their .ts/.tsx files', async () => {
+    const repo = await makeRepo()
+    await syncRepositoryFiles(
+      repo.id,
+      [
+        {
+          path: 'client/src/App.tsx',
+          content:
+            "import { Button } from './components/Button.js'\nimport { cn } from '@/lib/utils'\nexport function App() { return cn(Button()) }",
+        },
+        { path: 'client/src/components/Button.tsx', content: 'export function Button() { return 1 }' },
+        { path: 'client/src/lib/utils.ts', content: 'export function cn(x: number) { return x }' },
+      ],
+      ['client/src/App.tsx', 'client/src/components/Button.tsx', 'client/src/lib/utils.ts'],
+    )
+    await flushExtraction()
+
+    const app = await fileByPath(repo.id, 'client/src/App.tsx')
+    const button = await fileByPath(repo.id, 'client/src/components/Button.tsx')
+    const utils = await fileByPath(repo.id, 'client/src/lib/utils.ts')
+    const imports = await db
+      .select()
+      .from(repositoryFileImports)
+      .where(eq(repositoryFileImports.sourceFileId, app.id))
+    const resolvedBySpecifier = Object.fromEntries(imports.map((i) => [i.targetPath, i.resolvedTargetFileId]))
+    expect(resolvedBySpecifier).toEqual({
+      './components/Button.js': button.id,
+      '@/lib/utils': utils.id,
+    })
+  })
+
   it('embeds an unsupported-language file without producing import/symbol rows', async () => {
     const repo = await makeRepo()
     await syncRepositoryFiles(repo.id, [{ path: 'README.rs', content: 'fn main() {}' }], ['README.rs'])
