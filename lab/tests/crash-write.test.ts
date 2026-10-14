@@ -13,10 +13,10 @@
 // so a kill between steps can leave: row != file, row without file, file
 // without row, missing revision, stale .crdt bin, orphan .tmp.
 //
-// Method: a control round without a kill (pure concurrency; its completion
-// times place the kills), then rounds that fire N edit_note + M create_note
-// concurrently and SIGKILL the app at spread points of that completion
-// curve, while one collab client has a dirty doc (typed, acked, inside the
+// Method: a control round without a kill (pure concurrency), then rounds
+// that fire N edit_note + M create_note concurrently and SIGKILL the app at a
+// fixed delay or after the k-th answer (KILLS), while one collab client has a
+// dirty doc (typed, acked, inside the
 // 2 s store debounce) and another client typed and closed its tab. After the
 // restart every note touched in the round is compared: file on disk (parsed
 // in-container with the app's parseNote), notes row, latest revision, .crdt
@@ -42,10 +42,12 @@ import {
 const N_EDITS = Number(process.env.LAB_CRASH_EDITS ?? 24)
 const N_CREATES = Number(process.env.LAB_CRASH_CREATES ?? 16)
 const BODY_BYTES = Number(process.env.LAB_CRASH_BODY_BYTES ?? 40_000)
-/** Fixed kill offsets (ms after dispatch); default = KILL_FACTORS x the control round's slowest completion. */
-const KILL_AFTER_FIXED = process.env.LAB_CRASH_KILL_AFTER_MS?.split(',').map(Number)
-/** Kill offsets as multiples of the control round's slowest completion. */
-const KILL_FACTORS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2]
+/**
+ * When to SIGKILL in each crash round: `tN` = N ms after dispatch, `aN` = as
+ * soon as N of the round's calls have answered (adapts to how fast this
+ * runner is: completion times varied 0.4-3 s between runs).
+ */
+const KILLS = (process.env.LAB_CRASH_KILLS ?? 't100,t400,a1,a4,a10,a20,a30,a38').split(',')
 const SETTLE_MS = 3500
 
 type OpKind = 'edit' | 'create'
@@ -82,7 +84,7 @@ interface Op {
 
 interface RoundReport {
   round: number
-  killAfterMs: number | null
+  kill: string | null
   crash?: Record<string, unknown>
   ops: { total: number; acked: number; appError: number; noAnswer: number; ackedAfterKillIssued: number }
   outcomes: Record<string, number>
@@ -204,11 +206,10 @@ const test: LabTest = {
     })
 
     const rounds: RoundReport[] = []
-    const plan: (number | null)[] = [null]
-    let killLatency = 200
+    const plan: (string | null)[] = [null, ...KILLS]
     for (let round = 0; round < plan.length; round++) {
-      const killAfterMs = plan[round]!
-      ctx.log(`round ${round}: kill after ${killAfterMs ?? 'none (control)'}`)
+      const kill = plan[round]!
+      ctx.log(`round ${round}: kill ${kill ?? 'none (control)'}`)
 
       // Dirty collab docs: acked by the relay, still inside the store debounce.
       const stayMarker = `@CW-STAY-r${round}@`
@@ -225,10 +226,12 @@ const test: LabTest = {
       const ops: Op[] = []
       const t0 = performance.now()
       const promises: Promise<void>[] = []
+      let answered = 0
       const fire = (op: Op, client: typeof editMcp, tool: string, args: Record<string, unknown>) => {
         ops.push(op)
         promises.push(
           client.call(tool, args, 120_000).then((r) => {
+            answered++
             op.endMs = Math.round(performance.now() - t0)
             op.httpStatus = r.httpStatus
             op.answer = r.ok ? 'acked' : r.httpStatus === 200 ? 'app-error' : 'no-answer'
@@ -249,13 +252,14 @@ const test: LabTest = {
 
       let crash: Record<string, unknown> | undefined
       let killIssuedMs: number | null = null
-      if (killAfterMs !== null) {
-        const wait = killAfterMs - killLatency
-        if (wait > 0) await Bun.sleep(wait)
+      if (kill !== null) {
+        const n = Number(kill.slice(1))
+        if (kill.startsWith('t')) await Bun.sleep(n)
+        else while (answered < Math.min(n, ops.length)) await Bun.sleep(2)
         killIssuedMs = performance.now() - t0
+        const answeredAtKill = answered
         const c = await crashApp(ctx.baseUrl)
-        killLatency = Math.max(50, Math.min(600, c.killMs))
-        crash = { killIssuedMs: Math.round(killIssuedMs), killMs: Math.round(c.killMs), healthyMs: Math.round(c.healthyMs), killCode: c.killCode, startCode: c.startCode }
+        crash = { killIssuedMs: Math.round(killIssuedMs), answeredAtKill, killMs: Math.round(c.killMs), healthyMs: Math.round(c.healthyMs), killCode: c.killCode, startCode: c.startCode }
       }
       await Promise.all(promises)
       const staysSynced = await stays.waitSynced(60_000)
@@ -295,7 +299,7 @@ const test: LabTest = {
 
       const rep: RoundReport = {
         round,
-        killAfterMs,
+        kill,
         crash,
         ops: {
           total: ops.length,
@@ -333,7 +337,7 @@ const test: LabTest = {
         if (r) currentRow.set(p, r.body_sha)
       }
 
-      const label = killAfterMs === null ? 'control (no kill)' : `kill +${killAfterMs} ms`
+      const label = kill === null ? 'control (no kill)' : `kill ${kill}`
       checks.push({
         name: `${label}: acknowledged writes survive`,
         expected: 'every acked edit/create is on disk and in the row',
@@ -376,7 +380,7 @@ const test: LabTest = {
         ok: touched.crdtMismatch.length === 0,
         severity: 'medium',
       })
-      if (killAfterMs !== null) {
+      if (kill !== null) {
         checks.push({
           name: `${label}: dirty collab doc (client stays) survives without duplication`,
           expected: 'marker exactly once on disk',
@@ -422,11 +426,6 @@ const test: LabTest = {
           ok: (actors.mcp ?? 0) === ackedEdits.length,
           severity: 'medium',
         })
-        // Place the kills along the control round's completion curve.
-        const ends = ops.map((o) => o.endMs ?? 0).sort((x, y) => x - y)
-        const fixed = KILL_AFTER_FIXED ?? KILL_FACTORS.map((f) => Math.round(f * (ends.at(-1) ?? 500)))
-        plan.push(...fixed)
-        ctx.log(`control completion ms: min ${ends[0]} p50 ${ends[Math.floor(ends.length / 2)]} max ${ends.at(-1)} -> kills at ${fixed.join(',')}`)
       }
     }
     stays.destroy()
@@ -448,12 +447,12 @@ const test: LabTest = {
     const logs = await appLogsSince(startedIso, 3000)
     const appErrors = [...new Set(logs.split('\n').filter((l) => /error|ENOENT|rejected|unhandled/i.test(l)).map((l) => l.replace(/^\S+\s+\|\s+\S+\s+/, '').replace(/[0-9a-f-]{36}/g, '<id>').slice(0, 240)))].slice(0, 30)
 
-    const crashRounds = rounds.filter((r) => r.killAfterMs !== null)
+    const crashRounds = rounds.filter((r) => r.kill !== null)
     const unacked = crashRounds.flatMap((r) => r.opList.filter((o) => o.answer !== 'acked'))
     const sum = (f: (r: RoundReport) => number) => crashRounds.reduce((n, r) => n + f(r), 0)
     const unackedOutcomes = tally(unacked.map((o) => `${o.kind}:${o.outcome}`))
     const summary =
-      `${rounds.length} rounds (1 control + ${crashRounds.length} SIGKILL at +${crashRounds.map((r) => r.killAfterMs).join('/')} ms) of ${N_EDITS} edit_note + ${N_CREATES} create_note (${BODY_BYTES} B bodies) each, with a dirty collab doc. ` +
+      `${rounds.length} rounds (1 control + ${crashRounds.length} SIGKILL at ${crashRounds.map((r) => `${r.kill}(${JSON.stringify(r.crash?.killIssuedMs)}ms,${JSON.stringify(r.crash?.answeredAtKill)} answered)`).join(' ')}; tN = N ms after dispatch, aN = after N answers) of ${N_EDITS} edit_note + ${N_CREATES} create_note (${BODY_BYTES} B bodies) each, with a dirty collab doc. ` +
       `Control: ${rounds[0]?.ops.acked}/${rounds[0]?.ops.total} acked. ` +
       `Crash rounds: ${sum((r) => r.ops.acked)} acked (lost: ${sum((r) => r.ackedLost.length)}), ${unacked.length} unanswered -> ${JSON.stringify(unackedOutcomes)}; ` +
       `per-round touched issues: file!=row ${sum((r) => r.touched.divergent.length)}, revision gaps ${sum((r) => r.touched.revisionGaps.length)}, .crdt!=file ${sum((r) => r.touched.crdtMismatch.length)}; ` +
@@ -464,7 +463,7 @@ const test: LabTest = {
       checks,
       data: {
         vaultId: vault.id,
-        config: { N_EDITS, N_CREATES, BODY_BYTES, kills: crashRounds.map((r) => r.killAfterMs) },
+        config: { N_EDITS, N_CREATES, BODY_BYTES, kills: KILLS },
         unackedOutcomes,
         rounds,
         final: {
