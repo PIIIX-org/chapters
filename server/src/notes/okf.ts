@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type {
   VerificationTier,
@@ -227,14 +228,49 @@ export function serializeNote(note: OkfNote): string {
   return `---\n${stringifyYaml(note.frontmatter)}---\n${note.body}`
 }
 
+/**
+ * The closing fence is a line that is exactly `---` (trailing blanks allowed),
+ * never a `---` inside a frontmatter value: `title: a --- b`, or a `---` line
+ * of an indented block scalar, used to end the frontmatter early and spill
+ * the rest of the YAML into the body. LF or CRLF line endings.
+ */
+const NOTE_FENCE = /^---\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)([\s\S]*)$/
+
 export function parseNote(raw: string): OkfNote {
-  const match = raw.match(/^---\n([\s\S]*?)\n?---\n?([\s\S]*)$/)
+  const match = raw.match(NOTE_FENCE)
   if (!match) throw new OkfValidationError('missing frontmatter fence')
-  const frontmatter = parseYaml(match[1]!) as Frontmatter
+  const frontmatter = parseYaml(match[1] ?? '') as Frontmatter
   if (typeof frontmatter !== 'object' || frontmatter === null || Array.isArray(frontmatter)) {
     throw new OkfValidationError('frontmatter must be a YAML mapping')
   }
   return { frontmatter, body: match[2] ?? '' }
+}
+
+/**
+ * Serializes a note for a store write and refuses a file that would not read
+ * back as the same note. The row stores JSON (jsonb), so the file must parse
+ * to the JSON form of the frontmatter and to the exact body; otherwise the
+ * next read (and every live-editing load seeded from it) would silently
+ * persist a different note.
+ */
+export function serializeNoteVerified(note: OkfNote): string {
+  const raw = serializeNote(note)
+  let parsed: OkfNote
+  try {
+    parsed = parseNote(raw)
+  } catch (err) {
+    throw new OkfValidationError(
+      `note would not read back after writing: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+  const expected = JSON.parse(JSON.stringify(note.frontmatter)) as Frontmatter
+  if (!isDeepStrictEqual(parsed.frontmatter, expected)) {
+    throw new OkfValidationError('note would not read back after writing: frontmatter changes on a write/read round trip')
+  }
+  if (parsed.body !== note.body) {
+    throw new OkfValidationError('note would not read back after writing: body changes on a write/read round trip')
+  }
+  return raw
 }
 
 /** Extracts `[[wikilink]]` targets from a note body (for the graph engine). */

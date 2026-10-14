@@ -4,6 +4,7 @@ import {
   OkfValidationError,
   parseNote,
   serializeNote,
+  serializeNoteVerified,
   validateNote,
   type Frontmatter,
   type OkfNote,
@@ -268,6 +269,43 @@ describe('OKF validation', () => {
     expect(parsed.frontmatter).toEqual(note.frontmatter)
     expect(parsed.body).toBe(note.body)
     expect(() => validateNote('specs', 'nested-test', parsed.frontmatter, parsed.body)).not.toThrow()
+  })
+
+  // A `---` inside a frontmatter value used to close the fence early: the
+  // rest of the YAML spilled into the body and the next write persisted it.
+  it('only closes the frontmatter on a line that is exactly ---', () => {
+    const note: OkfNote = {
+      frontmatter: {
+        type: 'docs',
+        title: 'Release --- notes',
+        description: 'trailing---',
+        summary: 'line one\n---\nline two',
+        tags: ['a---b', '---'],
+      },
+      body: '# Heading\n\n---\n\nAfter a horizontal rule.\n',
+    }
+    const parsed = parseNote(serializeNote(note))
+    expect(parsed.frontmatter).toEqual(note.frontmatter)
+    expect(parsed.body).toBe(note.body)
+  })
+
+  it('parses CRLF files and a closing fence at end of file', () => {
+    expect(parseNote('---\r\ntype: docs\r\ntitle: A --- B\r\n---\r\nBody\r\n')).toEqual({
+      frontmatter: { type: 'docs', title: 'A --- B' },
+      body: 'Body\r\n',
+    })
+    expect(parseNote('---\ntype: docs\n---')).toEqual({ frontmatter: { type: 'docs' }, body: '' })
+    expect(() => parseNote('---\ntitle: a --- b\n')).toThrow('missing frontmatter fence')
+    expect(() => parseNote('---\n---\nbody')).toThrow('frontmatter must be a YAML mapping')
+  })
+
+  it('serializeNoteVerified writes only notes that read back unchanged', () => {
+    const note: OkfNote = { frontmatter: { type: 'docs', title: 'a --- b' }, body: 'x\n---\ny' }
+    expect(serializeNoteVerified(note)).toBe(serializeNote(note))
+    // The row stores JSON (NaN becomes null) while the file would read back NaN.
+    expect(() =>
+      serializeNoteVerified({ frontmatter: { type: 'docs', score: Number.NaN }, body: '' }),
+    ).toThrow(OkfValidationError)
   })
 
   it('extracts unique wikilink targets, ignoring aliases and headings', () => {

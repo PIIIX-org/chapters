@@ -8,6 +8,7 @@ import { WebSocket } from 'ws'
 import { buildApp } from '../src/app.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { config } from '../src/config.js'
+import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
 let app: FastifyInstance
@@ -312,4 +313,42 @@ describe('real-time collaboration', () => {
     expect(reverted.statusCode).toBe(200)
     expect((await send('GET', '/notes/docs/damaged')).json()).toMatchObject({ body: 'Good content.' })
   })
+
+  // A `---` inside a frontmatter value closed the fence early. A partial write
+  // loads the live document from the file, so the relay's debounced store then
+  // wrote the misparsed frontmatter (and the YAML spilled into the body) back.
+  it('keeps a frontmatter value containing --- intact through a live-editing load and store', async () => {
+    const send = (method: 'POST' | 'PUT' | 'GET', url: string, body?: object) =>
+      app.inject({ method, url: `/api/vaults/${vaultId}${url}`, headers: { cookie: ownerCookie }, body })
+    const file = join(config.dataDir, 'vaults', vaultId, 'docs', 'fenced.md')
+
+    const created = await send('POST', '/notes', {
+      type: 'docs',
+      name: 'fenced',
+      frontmatter: { title: 'Release --- notes' },
+      body: 'Original.',
+    })
+    expect(created.statusCode).toBe(200)
+    expect((await send('PUT', '/notes/docs/fenced', { body: 'Edited live.' })).statusCode).toBe(200)
+    // The relay's debounced store writes the note, then the CRDT state; once
+    // the saved state holds the edit, the relay's note write has landed.
+    let stored = ''
+    await waitFor(() => {
+      void loadCrdtState(vaultId, 'docs/fenced')
+        .then((update) => {
+          if (!update) return
+          const doc = new Y.Doc()
+          Y.applyUpdate(doc, update)
+          stored = doc.getText('body').toString()
+        })
+        .catch(() => {})
+      return stored === 'Edited live.'
+    }, 8000)
+
+    expect(await readFile(file, 'utf8')).toMatch(/^title: Release --- notes$/m)
+    expect((await send('GET', '/notes/docs/fenced')).json()).toMatchObject({
+      frontmatter: { type: 'docs', title: 'Release --- notes' },
+      body: 'Edited live.',
+    })
+  }, 10_000)
 })
