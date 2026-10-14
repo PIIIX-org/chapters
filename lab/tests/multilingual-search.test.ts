@@ -189,23 +189,34 @@ const test: LabTest = {
     const checks: Check[] = []
     const mcp = ctx.mcp('adminAccount')
     const admin = ctx.rest('admin')
-    const vault = await ctx.createVault('admin', ctx.uniq('ml'))
-    const V = vault.id
+    // The same corpus is written to TRIALS vaults. Content is identical; only the
+    // auto-added frontmatter `timestamp` (store.ts:225-229), which is part of the
+    // embedded text (embedding-queue.ts:77), differs — so trial-to-trial rank
+    // changes measure how much ranking depends on noise rather than content.
+    const trials = Number(process.env.LAB_ML_TRIALS ?? 3)
+    const vaultIds: string[] = []
     const failures: string[] = []
-    for (const d of DOCS) {
-      const r = await mcp.call('create_note', {
-        vaultId: V,
-        path: `concepts/${d.id}`,
-        frontmatter: { type: 'concepts', title: d.title, tags: [d.lang] },
-        body: `# ${d.title}\n\n${d.body}\n`,
-      })
-      if (!r.ok) failures.push(`${d.id}: ${r.text.slice(0, 120)}`)
+    for (let t = 0; t < trials; t++) {
+      const vault = await ctx.createVault('admin', ctx.uniq(`ml-t${t + 1}`))
+      vaultIds.push(vault.id)
+      for (const d of DOCS) {
+        const r = await mcp.call('create_note', {
+          vaultId: vault.id,
+          path: `concepts/${d.id}`,
+          frontmatter: { type: 'concepts', title: d.title, tags: [d.lang] },
+          body: `# ${d.title}\n\n${d.body}\n`,
+        })
+        if (!r.ok) failures.push(`t${t + 1} ${d.id}: ${r.text.slice(0, 120)}`)
+      }
     }
-    checks.push({ name: 'corpus created', expected: `${DOCS.length} notes`, actual: `${DOCS.length - failures.length}`, ok: failures.length === 0, severity: 'high', detail: failures })
+    const V = vaultIds[0]!
+    checks.push({ name: 'corpus created', expected: `${DOCS.length} notes x ${trials} vaults`, actual: `${DOCS.length * trials - failures.length}`, ok: failures.length === 0, severity: 'high', detail: failures })
 
     const t0 = performance.now()
     const embedded = await poll(async () => {
-      const rows = await ctx.docker.psqlRows<{ missing: number }>(`select count(*)::int as missing from notes where vault_id = '${V}' and embedding is null`)
+      const rows = await ctx.docker.psqlRows<{ missing: number }>(
+        `select count(*)::int as missing from notes where vault_id in (${vaultIds.map(lit).join(',')}) and embedding is null`,
+      )
       return rows[0]?.missing === 0 ? true : undefined
     }, 15 * 60_000, 2_000)
     const embedMs = Math.round(performance.now() - t0)
@@ -231,41 +242,67 @@ const test: LabTest = {
     })
 
     const pathOf = (id: string) => `concepts/${id}`
-    const results: Ranked[] = []
-    for (const [i, q] of QUERIES.entries()) {
-      const hybrid = await admin.get<Array<{ path: string; resourceType: string }>>(`/api/vaults/${V}/search?q=${encodeURIComponent(q.q)}&limit=30`)
-      const hybridPaths = Array.isArray(hybrid.json) ? hybrid.json.filter((r) => r.resourceType === 'note').map((r) => r.path) : []
-      // Exactly noteRows(..., 'keyword') from search/search.ts:102-117 (minus ts_headline).
-      const kw = await ctx.docker.psqlRows<{ path: string }>(
-        `select path from notes where vault_id = '${V}' and deleted_at is null and fts @@ websearch_to_tsquery('english', ${lit(q.q)}) order by ts_rank(fts, websearch_to_tsquery('english', ${lit(q.q)})) desc limit 30`,
-      )
-      const v = vectors[i]
-      // Exactly noteRows(..., 'semantic') from search/search.ts:118-127.
-      const vec = v
-        ? await ctx.docker.psqlRows<{ path: string }>(
-            `select path from notes where vault_id = '${V}' and deleted_at is null and embedding is not null order by embedding <=> '${JSON.stringify(v.vec)}'::vector limit 30`,
-          )
-        : []
-      const rank = (paths: string[]) => {
-        const at = paths.indexOf(pathOf(q.target))
-        return at < 0 ? null : at + 1
+    const rankAll = async (vaultId: string): Promise<Ranked[]> => {
+      const out: Ranked[] = []
+      for (const [i, q] of QUERIES.entries()) {
+        const hybrid = await admin.get<Array<{ path: string; resourceType: string }>>(`/api/vaults/${vaultId}/search?q=${encodeURIComponent(q.q)}&limit=30`)
+        const hybridPaths = Array.isArray(hybrid.json) ? hybrid.json.filter((r) => r.resourceType === 'note').map((r) => r.path) : []
+        // Exactly noteRows(..., 'keyword') from search/search.ts:102-117 (minus ts_headline).
+        const kw = await ctx.docker.psqlRows<{ path: string }>(
+          `select path from notes where vault_id = '${vaultId}' and deleted_at is null and fts @@ websearch_to_tsquery('english', ${lit(q.q)}) order by ts_rank(fts, websearch_to_tsquery('english', ${lit(q.q)})) desc limit 30`,
+        )
+        const v = vectors[i]
+        // Exactly noteRows(..., 'semantic') from search/search.ts:118-127.
+        const vec = v
+          ? await ctx.docker.psqlRows<{ path: string }>(
+              `select path from notes where vault_id = '${vaultId}' and deleted_at is null and embedding is not null order by embedding <=> '${JSON.stringify(v.vec)}'::vector limit 30`,
+            )
+          : []
+        const rank = (paths: string[]) => {
+          const at = paths.indexOf(pathOf(q.target))
+          return at < 0 ? null : at + 1
+        }
+        out.push({
+          q: q.q,
+          target: q.target,
+          group: q.group,
+          style: q.style,
+          variant: q.variant,
+          hybrid: rank(hybridPaths),
+          keyword: rank(kw.map((r) => r.path)),
+          vector: v ? rank(vec.map((r) => r.path)) : null,
+          keywordCandidates: kw.length,
+          tokens: v?.tokens ?? 0,
+          unk: v?.unk ?? 0,
+          pieces: v?.pieces ?? [],
+          top3: hybridPaths.slice(0, 3),
+        })
       }
-      results.push({
-        q: q.q,
-        target: q.target,
-        group: q.group,
-        style: q.style,
-        variant: q.variant,
-        hybrid: rank(hybridPaths),
-        keyword: rank(kw.map((r) => r.path)),
-        vector: v ? rank(vec.map((r) => r.path)) : null,
-        keywordCandidates: kw.length,
-        tokens: v?.tokens ?? 0,
-        unk: v?.unk ?? 0,
-        pieces: v?.pieces ?? [],
-        top3: hybridPaths.slice(0, 3),
-      })
+      return out
     }
+    const perTrial: Ranked[][] = []
+    for (const id of vaultIds) perTrial.push(await rankAll(id))
+    const results = perTrial[0]!
+    const trialSummary = perTrial.map((rs, t) => {
+      const g = (grp: Group, k: 'hybrid' | 'keyword' | 'vector') => metrics(rs.filter((r) => r.group === grp), k)
+      return { trial: t + 1, faHybrid: g('fa', 'hybrid'), faVector: g('fa', 'vector'), faKeyword: g('fa', 'keyword'), enHybrid: g('en', 'hybrid'), enVector: g('en', 'vector'), normVariantHybrid: g('norm-variant', 'hybrid') }
+    })
+    const rankFlips = (grp: Group, k: 'hybrid' | 'vector') =>
+      results.filter((r, i) => r.group === grp && perTrial.some((rs) => rs[i]![k] !== r[k])).length
+    const stability = {
+      faVectorQueriesWhoseRankChanged: rankFlips('fa', 'vector'),
+      faHybridQueriesWhoseRankChanged: rankFlips('fa', 'hybrid'),
+      enVectorQueriesWhoseRankChanged: rankFlips('en', 'vector'),
+      enHybridQueriesWhoseRankChanged: rankFlips('en', 'hybrid'),
+    }
+    checks.push({
+      name: 'ranking is stable across identical copies of the corpus',
+      expected: 'same rank for every query in every trial (content identical; only auto timestamps differ)',
+      actual: `${trials} trials; queries whose rank changed — fa vector ${stability.faVectorQueriesWhoseRankChanged}/20, fa hybrid ${stability.faHybridQueriesWhoseRankChanged}/20, en vector ${stability.enVectorQueriesWhoseRankChanged}/20, en hybrid ${stability.enHybridQueriesWhoseRankChanged}/20`,
+      ok: trials < 2 ? null : stability.faHybridQueriesWhoseRankChanged + stability.enHybridQueriesWhoseRankChanged === 0,
+      severity: 'medium',
+      detail: trialSummary,
+    })
 
     const groups: Group[] = ['fa', 'en', 'mix', 'cross', 'norm-base', 'norm-variant']
     const table: Array<Record<string, unknown>> = []
@@ -339,18 +376,25 @@ const test: LabTest = {
        join (select id, embedding, frontmatter->'tags'->>0 as tags from notes where vault_id = '${V}') b on a.id < b.id
        group by 1 order by 1`,
     )
-    const faEdges = await ctx.docker.psql(
-      `select count(*) from semantic_edges e join notes a on a.id = e.node_a_id join notes b on b.id = e.node_b_id where a.vault_id = '${V}' and b.vault_id = '${V}' and a.frontmatter->'tags'->>0 = 'fa' and b.frontmatter->'tags'->>0 = 'fa'`,
-    )
-    const enEdges = await ctx.docker.psql(
-      `select count(*) from semantic_edges e join notes a on a.id = e.node_a_id join notes b on b.id = e.node_b_id where a.vault_id = '${V}' and b.vault_id = '${V}' and a.frontmatter->'tags'->>0 = 'en' and b.frontmatter->'tags'->>0 = 'en'`,
-    )
+    // semantic-edges.ts:16-56 kNN is not scoped to a vault, so with identical
+    // corpora in several vaults edges also land on the twin notes: count both.
+    const inTrials = vaultIds.map(lit).join(',')
+    const edgeCount = (lang: string, crossVault: boolean) =>
+      ctx.docker.psql(
+        `select count(*) from semantic_edges e join notes a on a.id = e.node_a_id join notes b on b.id = e.node_b_id
+         where a.vault_id in (${inTrials}) and b.vault_id in (${inTrials}) and a.vault_id ${crossVault ? '<>' : '='} b.vault_id
+           and a.frontmatter->'tags'->>0 = '${lang}' and b.frontmatter->'tags'->>0 = '${lang}'`,
+      )
+    const faEdges = await edgeCount('fa', false)
+    const enEdges = await edgeCount('en', false)
+    const faCrossVaultEdges = await edgeCount('fa', true)
+    const enCrossVaultEdges = await edgeCount('en', true)
     const faSim = similarity.find((s) => s.pair === 'fa-fa')
     const enSim = similarity.find((s) => s.pair === 'en-en')
     checks.push({
       name: 'Persian embeddings stay distinguishable (no collapse)',
       expected: 'mean pairwise cosine among unrelated fa notes close to en-en',
-      actual: `fa-fa avg ${faSim?.avg_sim} (min ${faSim?.min_sim}), en-en avg ${enSim?.avg_sim} (min ${enSim?.min_sim}); semantic edges fa-fa ${faEdges}, en-en ${enEdges}`,
+      actual: `fa-fa avg ${faSim?.avg_sim} (min ${faSim?.min_sim}), en-en avg ${enSim?.avg_sim} (min ${enSim?.min_sim}); semantic edges (threshold 0.75) fa-fa same-vault ${faEdges} / cross-vault ${faCrossVaultEdges}, en-en same-vault ${enEdges} / cross-vault ${enCrossVaultEdges}`,
       ok: faSim && enSim ? faSim.avg_sim - enSim.avg_sim < 0.15 : null,
       severity: 'medium',
     })
@@ -360,9 +404,23 @@ const test: LabTest = {
         `Hybrid hit@1/hit@5/MRR — fa ${fa.hit1}/${fa.hit5}/${fa.mrr}, en ${en.hit1}/${en.hit5}/${en.mrr}, mixed ${mix.hit1}/${mix.hit5}, cross ${cross.hit5}. ` +
         `Vector-only fa ${faVec.hit1}/${faVec.hit5} vs en ${enVec.hit1}/${enVec.hit5}; keyword-only fa ${m('fa', 'keyword').hit1}/${m('fa', 'keyword').hit5} vs en ${m('en', 'keyword').hit1}/${m('en', 'keyword').hit5}. ` +
         `Normalization pairs where the variant lost rank: ${pairs.filter((p) => p.variant_hybrid === null || (p.base_hybrid !== null && p.variant_hybrid > p.base_hybrid)).length}/${pairs.length}. ` +
-        `fa-fa mean cosine ${faSim?.avg_sim} vs en-en ${enSim?.avg_sim}.`,
+        `fa-fa mean cosine ${faSim?.avg_sim} vs en-en ${enSim?.avg_sim}. ` +
+        `Across ${trials} identical corpora fa hybrid hit@1 = ${trialSummary.map((t) => t.faHybrid.hit1).join('/')}, fa vector hit@1 = ${trialSummary.map((t) => t.faVector.hit1).join('/')}, en hybrid hit@1 = ${trialSummary.map((t) => t.enHybrid.hit1).join('/')}.`,
       checks,
-      data: { vaultId: V, embedMs, metrics: table, normalizationPairs: pairs, perQuery: results, tsDebug, similarity, semanticEdges: { faFa: Number(faEdges), enEn: Number(enEdges) }, embedStderr: emb.stderr.slice(-1000) },
+      data: {
+        vaultIds,
+        embedMs,
+        metrics: table,
+        trialSummary,
+        stability,
+        normalizationPairs: pairs,
+        perQuery: results,
+        perTrialRanks: perTrial.map((rs) => rs.map((r) => ({ q: r.q, hybrid: r.hybrid, vector: r.vector, keyword: r.keyword }))),
+        tsDebug,
+        similarity,
+        semanticEdges: { faFaSameVault: Number(faEdges), enEnSameVault: Number(enEdges), faFaCrossVault: Number(faCrossVaultEdges), enEnCrossVault: Number(enCrossVaultEdges) },
+        embedStderr: emb.stderr.slice(-1000),
+      },
     }
   },
 }
