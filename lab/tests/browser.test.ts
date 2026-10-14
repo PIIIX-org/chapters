@@ -378,7 +378,13 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
    * later rows report only their own losses, and a `gone` token that comes
    * back is reported as reappeared. Editor-only rows (socket cut) don't prune.
    */
-  const evaluate = (s: Snap, expectConverged = true, sources: Array<'editor' | 'disk' | 'db'> = ['editor', 'disk', 'db']) => {
+  const evaluate = (
+    s: Snap,
+    expectConverged = true,
+    sources: Array<'editor' | 'disk' | 'db'> = ['editor', 'disk', 'db'],
+    /** Agent markers written while the editor is cut off: it cannot have them yet. */
+    inFlight: string[] = [],
+  ) => {
     const texts = { editor: s.editor, disk: s.disk, db: s.db }
     const row: Row = {
       step: s.step,
@@ -407,7 +413,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
       }
       if (!sources.includes(name)) continue
       for (const m of exp.user) if (count(text, m) === 0) lostUser.add(m)
-      for (const m of exp.agent) if (count(text, m) === 0) lostAgent.add(m)
+      for (const m of exp.agent) if (!inFlight.includes(m) && count(text, m) === 0) lostAgent.add(m)
       for (const g of exp.gone) if (count(text, g.token) > 0) row.reappeared.push(`${g.token}@${name} (lost in ${g.step})`)
     }
     const where = (m: string) =>
@@ -695,8 +701,8 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
       await Bun.sleep(500)
     }
     offline.statusSequenceWhileOffline = statusSeen
-    // Editor-only expectations while offline: disk/DB can't have i01..i05.
-    evaluate(await settle(page, 'S8a-offline-emulated', { expectConverged: false }), false, ['editor'])
+    // Editor-only expectations while offline: disk/DB can't have i01..i05, the editor can't have the agent line.
+    evaluate(await settle(page, 'S8a-offline-emulated', { expectConverged: false }), false, ['editor'], [m])
     await desktop.setOffline(false)
     evaluate(await settle(page, 'S8a-back-online', { waitFor: [m], timeoutMs: 60_000 }))
   }
@@ -735,7 +741,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     offline.agentReachedEditorDuringPartitionMs = await waitEditorIncludes(page, m, 5000)
     const cut = await settle(page, 'S8b-socket-dropped', { expectConverged: false })
     offline.jIndexWhilePartitioned = cut.editor?.indexOf(' j01') ?? null
-    evaluate(cut, false, ['editor'])
+    evaluate(cut, false, ['editor'], [m])
     const t0 = performance.now()
     partition = false
     await desktop.setOffline(false)
@@ -875,6 +881,9 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     .filter((w) => w.ok)
     .map((w) => ({ step: w.step, firstRevisionActor: revisions.find((r) => r.body.includes(w.marker))?.actor_type ?? null }))
   const mcpUpdates = revisions.filter((r) => r.actor_type === 'mcp' && r.action === 'update').length
+  // Can the user get lost typing back from the note's history?
+  const lostTokens = exp.gone.filter((g) => /^[a-z]\d\d$/.test(g.token))
+  const unrecoverable = lostTokens.filter((g) => !revisions.some((r) => r.body.includes(g.token)))
 
   // ---------------------------------------------------------------- checks
   for (const r of rows) {
@@ -968,6 +977,16 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     expected: `${attribution.length} agent appends -> first revision with each marker has actor_type mcp`,
     actual: `${attribution.filter((a) => a.firstRevisionActor === 'mcp').length}/${attribution.length} credited to mcp (${mcpUpdates} mcp update revisions total); first actors: ${[...new Set(attribution.map((a) => a.firstRevisionActor))].join(', ')}`,
     ok: attribution.every((a) => a.firstRevisionActor === 'mcp'),
+    severity: 'high',
+  })
+  checks.push({
+    name: 'lost typing is recoverable from note history (note_revisions)',
+    expected: 'every lost token appears in some revision body',
+    actual:
+      lostTokens.length === 0
+        ? 'nothing was lost'
+        : `${lostTokens.length - unrecoverable.length}/${lostTokens.length} recoverable; never in any revision: ${unrecoverable.map((g) => g.token).slice(0, 25).join(' ')}`,
+    ok: lostTokens.length === 0 ? null : unrecoverable.length === 0,
     severity: 'high',
   })
   // A jump = the caret falls back >10 chars while the user only types forward.
@@ -1067,7 +1086,16 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
       offline,
       mobile: mobileData,
       attribution,
-      revisions: revisions.map((r) => ({ actor: r.actor_type, action: r.action, at: r.created_at, bodyHash: sha(r.body), len: r.body.length })),
+      lost: exp.gone,
+      unrecoverable: unrecoverable.map((g) => g.token),
+      revisions: revisions.map((r) => ({
+        actor: r.actor_type,
+        action: r.action,
+        at: r.created_at,
+        bodyHash: sha(r.body),
+        len: r.body.length,
+        userTokens: r.body.match(/\b[a-z]\d\d\b/g) ?? [],
+      })),
       consoleErrors,
       videos,
     },
