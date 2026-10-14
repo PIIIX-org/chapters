@@ -84,22 +84,35 @@ const test: LabTest = {
       const rows = await ctx.docker.psqlRows<{ e: boolean }>(`select embedding is not null as e from notes where vault_id = '${V}' and path = '${notePath}'`)
       return rows[0]?.e ? true : undefined
     }, 600_000, 2_000)
-    const restSearch = await admin.get<Array<{ path: string; snippet: string }>>(`/api/vaults/${V}/search?q=${PDF_TOKEN}`)
+    type Hit = { path: string; snippet: string; score: number }
+    const restSearch = await admin.get<Hit[]>(`/api/vaults/${V}/search?q=${PDF_TOKEN}`)
     const mcpSearch = await mcp.call('search', { vaultId: V, query: PDF_TOKEN })
-    const controlSearch = await admin.get<Array<{ path: string }>>(`/api/vaults/${V}/search?q=Attachments`)
-    const dbHits = await ctx.docker.psql(`select count(*) from notes where vault_id = '${V}' and (body ilike '%${PDF_TOKEN}%' or frontmatter::text ilike '%${PDF_TOKEN}%')`)
+    const nonsense = await admin.get<Hit[]>(`/api/vaults/${V}/search?q=xqzvbnmplokij`)
+    const controlSearch = await admin.get<Hit[]>(`/api/vaults/${V}/search?q=Attachments`)
+    // Ground truth: the keyword retriever's own predicate (search/search.ts:108).
+    const ftsHits = Number(await ctx.docker.psql(`select count(*) from notes where vault_id = '${V}' and fts @@ websearch_to_tsquery('english', '${PDF_TOKEN}')`))
     const assetTables = await ctx.docker.psql(
       `select coalesce(string_agg(table_name, ','), '') from information_schema.tables where table_schema = 'public' and table_name ilike any (array['%asset%','%attachment%','%file_text%'])`,
     )
-    const restHits = Array.isArray(restSearch.json) ? restSearch.json.length : -1
-    const mcpHits = Array.isArray(mcpSearch.json) ? mcpSearch.json.length : -1
+    const restHits = Array.isArray(restSearch.json) ? restSearch.json : []
+    const mcpHits = (Array.isArray(mcpSearch.json) ? mcpSearch.json : []) as Hit[]
+    const tokenInSnippet = [...restHits, ...mcpHits].some((h) => h.snippet.includes(PDF_TOKEN))
     checks.push({
       name: 'text inside an uploaded PDF is searchable',
-      expected: `search "${PDF_TOKEN}" finds the PDF (or the note that embeds it)`,
-      actual: `REST ${restSearch.status} ${restHits} hits, MCP ${mcpHits} hits; notes containing token: ${dbHits}; asset tables: ${assetTables || 'none'}`,
-      ok: restHits > 0 || mcpHits > 0,
+      expected: `"${PDF_TOKEN}" (only inside the PDF) matched by the keyword index or shown in a snippet`,
+      actual: `FTS matches ${ftsHits}; REST ${restHits.length} result(s) [${restHits.map((h) => `${h.path} score ${h.score.toFixed(4)}`).join(', ')}] — vector-only rank (1/61); token in snippet: ${tokenInSnippet}; asset tables: ${assetTables || 'none'}`,
+      ok: ftsHits > 0 || tokenInSnippet,
       severity: 'medium',
-      detail: { restSearch: restSearch.json, mcpSearch: mcpSearch.text.slice(0, 500), control: controlSearch.json },
+      detail: { restSearch: restSearch.json, mcpSearch: mcpSearch.text.slice(0, 500), code: 'notes/routes.ts:306-322 saves bytes to disk only; nothing extracts or indexes asset text' },
+    })
+    const nonsenseHits = Array.isArray(nonsense.json) ? nonsense.json : []
+    checks.push({
+      name: 'a query matching nothing returns no results',
+      expected: '0 results for "xqzvbnmplokij"',
+      actual: `${nonsenseHits.length} result(s): ${nonsenseHits.map((h) => `${h.path} score ${h.score.toFixed(4)}`).join(', ')}`,
+      ok: nonsenseHits.length === 0,
+      severity: 'low',
+      detail: { code: 'search/search.ts:118-127 vector KNN has no similarity floor; RRF (294-316) ranks whatever it returns' },
     })
     checks.push({
       name: 'control: the linking note itself is searchable',
@@ -250,13 +263,13 @@ const test: LabTest = {
 
     const failed = checks.filter((c) => c.ok === false)
     return {
-      summary: `Uploaded PNG ${png.length} B + PDF ${pdf.length} B to ${V}. PDF token search: REST ${restHits}, MCP ${mcpHits} hits. Non-member download ${memberNoShare.status}, anon ${anon.status}. After purging the linking note the PDF answers ${afterPurge.status} and ${afterPurgeDisk.length} files remain. ${failed.length} failed checks.`,
+      summary: `Uploaded PNG ${png.length} B + PDF ${pdf.length} B to ${V}. PDF-only token: FTS matches ${ftsHits}, token in any snippet ${tokenInSnippet} (REST returned ${restHits.length} vector-only result(s); a nonsense query returned ${nonsenseHits.length}). Non-member download ${memberNoShare.status}, anon ${anon.status}. After purging the linking note the PDF answers ${afterPurge.status} and ${afterPurgeDisk.length} files remain. ${failed.length} failed checks.`,
       checks,
       data: {
         vaultId: V,
         uploads: { png: pngMeta, pdf: pdfMeta, svg: upSvg.json, html: upHtml.json, empty: empty.json, dup: dup.json },
         headers: { png: dlPng.headers, pdf: dlPdf.headers, svg: svgGet?.headers, html: htmlGet?.headers },
-        search: { rest: restSearch.json, mcp: mcpSearch.json ?? mcpSearch.text, control: controlSearch.json },
+        search: { rest: restSearch.json, mcp: mcpSearch.json ?? mcpSearch.text, nonsense: nonsense.json, control: controlSearch.json, ftsHits },
         disk: { before, afterPurgeDisk, afterVaultPurge, vaultDirLeft },
         traversal,
         mcpAssetTools: assetTools,

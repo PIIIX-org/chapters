@@ -503,9 +503,23 @@ const test: LabTest = {
       })
       const row = (t: string) => diffTable.find((d) => d.table === t)!
       const same = (t: string) => row(t).missingOrChanged === 0 && row(t).extra === 0 && row(t).source === row(t).restored
-      for (const t of ['users', 'teams', 'team_memberships', 'vaults', 'vault_shares', 'mcp_connections']) {
-        checks.push({ name: `restored ${t} identical (ids, hashes, flags)`, expected: `${row(t).source}`, actual: `${row(t).restored} restored, ${row(t).missingOrChanged} missing/changed`, ok: same(t), severity: t === 'vaults' || t === 'users' ? 'high' : 'medium', detail: row(t) })
+      const patchNote: Record<string, string> = {
+        vaults: patches.includes('vault-deletedAt-null') ? ' (trashed vault came back live: effect of patch vault-deletedAt-null)' : '',
+        mcp_connections: patches.includes('drop-repo-mcp') ? ' (repository-pinned token missing: effect of patch drop-repo-mcp)' : '',
+        users: ' (users differ in has_totp: see MFA check)',
       }
+      for (const t of ['users', 'teams', 'team_memberships', 'vaults', 'vault_shares', 'mcp_connections']) {
+        const note = same(t) ? '' : (patchNote[t] ?? '')
+        checks.push({ name: `restored ${t} identical (ids, hashes, flags)`, expected: `${row(t).source}`, actual: `${row(t).restored} restored, ${row(t).missingOrChanged} missing/changed${note}`, ok: same(t), severity: t === 'vaults' || t === 'users' ? 'high' : 'medium', detail: row(t) })
+      }
+      const cliNoise = restored.stderr.match(/CONNECTION_ENDED|embedding failed|permanently failed/g) ?? []
+      checks.push({
+        name: 'restore CLI finishes without errors after "Restore complete"',
+        expected: 'clean stderr',
+        actual: `${cliNoise.length} error markers (embedding queue scheduled by createNote runs after sql.end(): ${[...new Set(cliNoise)].join(', ')})`,
+        ok: cliNoise.length === 0,
+        severity: 'low',
+      })
       checks.push({ name: 'restored live notes: frontmatter + body identical', expected: `${row('notes (live)').source}`, actual: `${row('notes (live)').restored} restored, ${row('notes (live)').missingOrChanged} missing/changed`, ok: row('notes (live)').missingOrChanged === 0, severity: 'critical', detail: noteDiff })
       checks.push({ name: 'restored trash', expected: `${row('notes (trash)').source} trashed notes`, actual: `${row('notes (trash)').restored}`, ok: same('notes (trash)'), severity: 'medium' })
       checks.push({ name: 'restored revision history', expected: `${row('note_revisions').source} revisions`, actual: `${row('note_revisions').restored}`, ok: row('note_revisions').missingOrChanged === 0, severity: 'high' })
@@ -548,6 +562,18 @@ const test: LabTest = {
         const liveTok = await new McpClient(restoredUrl, liveToken.token, 'restored-live').call('list_vaults')
         const revokedTok = await new McpClient(restoredUrl, revokedToken.token, 'restored-revoked').call('list_vaults')
         const readBack = await new McpClient(restoredUrl, ctx.env.tokens.adminAccount.token, 'restored-admin').call('read_note', { vaultId: V, path: 'concepts/persian' })
+        const t0 = performance.now()
+        const reembedded = await poll(async () => {
+          const r = await psqlRowsDb<{ missing: number }>(RESTORE_DB, 'select count(*)::int as missing from notes where deleted_at is null and embedding is null')
+          return r[0]?.missing === 0 ? true : undefined
+        }, 240_000, 3_000)
+        checks.push({
+          name: 'restored instance re-embeds restored notes on boot (search works again)',
+          expected: 'all live notes embedded',
+          actual: reembedded ? `yes after ${Math.round(performance.now() - t0)} ms` : 'not within 240 s',
+          ok: Boolean(reembedded),
+          severity: 'medium',
+        })
         const restoredSession = new RestSession(restoredUrl)
         if (adminLogin.status === 200) {
           const login2 = await RestSession.login(restoredUrl, ctx.env.users.admin.email, ctx.env.users.admin.password).catch(() => undefined)

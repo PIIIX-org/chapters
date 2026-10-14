@@ -288,19 +288,19 @@ const test: LabTest = {
     const fa = m('fa', 'hybrid')
     const en = m('en', 'hybrid')
     checks.push({
-      name: 'Persian retrieval on par with English (hybrid hit@5)',
-      expected: `fa hit@5 within 0.2 of en (${en.hit5})`,
+      name: 'Persian retrieval on par with English (hybrid hit@1)',
+      expected: `fa hit@1 within 0.2 of en (${en.hit1})`,
       actual: `fa hit@1 ${fa.hit1}, hit@5 ${fa.hit5}, MRR ${fa.mrr}; en hit@1 ${en.hit1}, hit@5 ${en.hit5}, MRR ${en.mrr}`,
-      ok: fa.hit5 !== null && en.hit5 !== null && fa.hit5 >= en.hit5 - 0.2,
+      ok: fa.hit1 !== null && en.hit1 !== null && fa.hit1 >= en.hit1 - 0.2,
       severity: 'medium',
     })
     const faVec = m('fa', 'vector')
     const enVec = m('en', 'vector')
     checks.push({
-      name: 'vector retriever contributes for Persian (bge-small-en)',
-      expected: `fa vector hit@5 within 0.2 of en vector (${enVec.hit5})`,
+      name: 'vector retriever ranks Persian answers first as often as English (bge-small-en)',
+      expected: `fa vector hit@1 within 0.2 of en vector (${enVec.hit1})`,
       actual: `fa vector hit@1 ${faVec.hit1}, hit@5 ${faVec.hit5}; en vector hit@1 ${enVec.hit1}, hit@5 ${enVec.hit5}`,
-      ok: faVec.hit5 !== null && enVec.hit5 !== null && faVec.hit5 >= enVec.hit5 - 0.2,
+      ok: faVec.hit1 !== null && enVec.hit1 !== null && faVec.hit1 >= enVec.hit1 - 0.2,
       severity: 'medium',
     })
     const pairs = results

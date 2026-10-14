@@ -376,7 +376,8 @@ const test: LabTest = {
       frontmatter: { type: 'concepts', title: 'Links' },
       body: linksBody.replace('[[concepts/old-name]]', '[[concepts/new-name]]'),
     })
-    finalIntended.set('concepts/revised', { path: 'concepts/revised', frontmatter: { type: 'concepts', title: 'Revised title', status: 'draft' }, body: 'v2\n' })
+    // revert_note restores the whole v2 revision (frontmatter as it was then + body).
+    finalIntended.set('concepts/revised', { path: 'concepts/revised', frontmatter: { type: 'concepts', title: 'Revised' }, body: 'v2\n' })
     finalIntended.set('concepts/trashed-two', { path: 'concepts/trashed-two', frontmatter: { type: 'concepts' }, body: 'second incarnation\n' })
 
     const srcRead = new Map<string, ReadNote>()
@@ -789,6 +790,21 @@ const test: LabTest = {
       })
       checks.push({ name: 'import: share to member re-created from manifest', expected: '1 share', actual: String(impShares.length), ok: impShares.length === (manifest?.shares.length ?? 0), severity: 'low' })
     }
+
+    // ------------------------------- "---" corruption: one save makes it permanent
+    const tdEdit = await mcp.call('edit_note', { vaultId: V, path: 'concepts/triple-dash', body: 'Edited body.\n' })
+    type Row = { frontmatter: Record<string, unknown>; body: string }
+    const tdRow = await poll(async () => {
+      const rows = await ctx.docker.psqlRows<Row>(`select frontmatter, body from notes where vault_id = '${V}' and path = 'concepts/triple-dash' and deleted_at is null`)
+      return rows[0]?.body === 'Edited body.\n' ? rows[0] : undefined
+    }, 20_000)
+    checks.push({
+      name: 'after one body-only edit the "---" mis-parse is persisted into the DB row (permanent loss)',
+      expected: 'row keeps title "Q3 --- plan" and description "before---after"',
+      actual: `edit ${tdEdit.ok}; row frontmatter ${JSON.stringify(tdRow?.frontmatter ?? 'edit not observed')}`,
+      ok: tdRow?.frontmatter.title === 'Q3 --- plan' && tdRow.frontmatter.description === 'before---after',
+      severity: 'high',
+    })
 
     // -------------------------------------- foreign OKF bundles / crafted
     const crafted: Record<string, unknown> = {}
