@@ -1,8 +1,9 @@
 import type { DirectConnection } from '@hocuspocus/server'
 import { YAMLParseError } from 'yaml'
 import { getCollab } from './collab-server.js'
-import { getLiveNote, readNote, updateNote, type Actor, type NoteRow } from '../notes/store.js'
+import { getLiveNote, readNote, resolveNotePath, updateNote, type Actor, type NoteRow } from '../notes/store.js'
 import { OkfValidationError } from '../notes/okf.js'
+import { withKeyLock } from '../notes/key-lock.js'
 
 /** A partial write to a note whose file cannot be parsed (#391). 409 over REST. */
 export class NoteFileDamagedError extends Error {
@@ -31,6 +32,11 @@ async function noteFileDamaged(vaultId: string, path: string): Promise<boolean> 
  * change, and in-memory Yjs documents must not clobber external writes). The
  * attributed store write happens immediately here; the relay's debounced store
  * of the same state dedupes in the audit trail.
+ *
+ * Writes to one note run one at a time, in call order: the document edit, the
+ * relay's store of it and the attributed store write form one unit, so a
+ * concurrent write can neither interleave its document edit nor land its store
+ * write in between. (The store write takes its own, separate note lock.)
  */
 export async function writeThroughCollab(
   vaultId: string,
@@ -38,43 +44,45 @@ export async function writeThroughCollab(
   input: { frontmatter?: Record<string, unknown>; body?: string },
   actor: Actor,
 ): Promise<NoteRow | null> {
-  const collab = getCollab()
-  const docName = `${vaultId}/${path}`
-  if (collab) {
-    const existing = await getLiveNote(vaultId, path)
-    if (!existing) return null
-    let connection: DirectConnection
-    try {
-      connection = await collab.openDirectConnection(docName, {
-        userId: actor.type === 'user' ? actor.id : 'mcp',
-      })
-    } catch (err) {
-      // Loading the collab document parses the note's file. When the file is
-      // damaged (e.g. #384's fence-less index), no document can load, so no
-      // live editor holds one: a full replacement (edit with frontmatter and
-      // body, or a revert) needs nothing from the old file and is written
-      // straight to the store, which rewrites, and so repairs, the file. A
-      // partial write would have to merge with content that cannot be read.
-      if (!(await noteFileDamaged(vaultId, path))) throw err
-      if (input.frontmatter === undefined || input.body === undefined) throw new NoteFileDamagedError(path)
-      return updateNote(vaultId, path, input, actor)
+  return withKeyLock(`collab:${vaultId}/${resolveNotePath(path).fullPath}`, async () => {
+    const collab = getCollab()
+    const docName = `${vaultId}/${path}`
+    if (collab) {
+      const existing = await getLiveNote(vaultId, path)
+      if (!existing) return null
+      let connection: DirectConnection
+      try {
+        connection = await collab.openDirectConnection(docName, {
+          userId: actor.type === 'user' ? actor.id : 'mcp',
+        })
+      } catch (err) {
+        // Loading the collab document parses the note's file. When the file is
+        // damaged (e.g. #384's fence-less index), no document can load, so no
+        // live editor holds one: a full replacement (edit with frontmatter and
+        // body, or a revert) needs nothing from the old file and is written
+        // straight to the store, which rewrites, and so repairs, the file. A
+        // partial write would have to merge with content that cannot be read.
+        if (!(await noteFileDamaged(vaultId, path))) throw err
+        if (input.frontmatter === undefined || input.body === undefined) throw new NoteFileDamagedError(path)
+        return updateNote(vaultId, path, input, actor)
+      }
+      try {
+        await connection.transact((document) => {
+          if (input.body !== undefined) {
+            const text = document.getText('body')
+            text.delete(0, text.length)
+            text.insert(0, input.body)
+          }
+          if (input.frontmatter !== undefined) {
+            const fm = document.getMap('frontmatter')
+            for (const key of [...fm.keys()]) fm.delete(key)
+            for (const [key, value] of Object.entries(input.frontmatter)) fm.set(key, value)
+          }
+        })
+      } finally {
+        await connection.disconnect()
+      }
     }
-    try {
-      await connection.transact((document) => {
-        if (input.body !== undefined) {
-          const text = document.getText('body')
-          text.delete(0, text.length)
-          text.insert(0, input.body)
-        }
-        if (input.frontmatter !== undefined) {
-          const fm = document.getMap('frontmatter')
-          for (const key of [...fm.keys()]) fm.delete(key)
-          for (const [key, value] of Object.entries(input.frontmatter)) fm.set(key, value)
-        }
-      })
-    } finally {
-      await connection.disconnect()
-    }
-  }
-  return updateNote(vaultId, path, input, actor)
+    return updateNote(vaultId, path, input, actor)
+  })
 }

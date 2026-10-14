@@ -1,8 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
+import { config } from '../src/config.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -168,6 +171,34 @@ describe('MCP integration', () => {
       arguments: { vaultId, path: 'docs/readme' },
     })
     expect(textOf(read)).toContain('quantum flux capacitor')
+  })
+
+  it('reports a storage failure without the server paths it touched', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes`,
+      headers: { cookie: ownerCookie },
+      body: { type: 'docs', name: 'blocked', body: 'Cannot be rewritten.' },
+    })
+    expect(created.statusCode).toBe(200)
+    // A non-empty directory where the note's file belongs: the write's final
+    // rename fails, and Node's error names both absolute paths.
+    const file = join(config.dataDir, 'vaults', vaultId, 'docs', 'blocked.md')
+    await rm(file)
+    await mkdir(file)
+    await writeFile(join(file, 'occupant'), '')
+    try {
+      const client = await mcpClient(accountToken)
+      const edit = await client.callTool({
+        name: 'edit_note',
+        arguments: { vaultId, path: 'docs/blocked', body: 'Rewritten.' },
+      })
+      expect(edit.isError).toBe(true)
+      expect(textOf(edit)).toMatch(/^Error: internal storage error \(E[A-Z]+\)$/)
+      expect(textOf(edit)).not.toContain(config.dataDir)
+    } finally {
+      await rm(file, { recursive: true, force: true })
+    }
   })
 
   it('search and graph work through MCP (same functions as the UI)', async () => {
