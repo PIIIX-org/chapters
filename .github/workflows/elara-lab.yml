@@ -60,9 +60,13 @@ jobs:
       - name: Bootstrap users and tokens
         run: bun lab/bootstrap.ts
 
+      - name: Install lab dependencies (@hocuspocus/provider, yjs)
+        working-directory: lab
+        run: bun install --frozen-lockfile
+
       - name: Run lab tests
         env:
-          LAB_TESTS: ${{ inputs.tests }}
+          LAB_TESTS: ${{ inputs.tests || 'smoke,big-notes,collab-duplication,crash-write' }}
         run: bun lab/run.ts
 
       - name: Collect compose logs

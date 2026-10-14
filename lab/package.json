@@ -1,0 +1,9 @@
+{
+  "name": "elara-lab",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@hocuspocus/provider": "^4.7.0",
+    "yjs": "^13.6.33"
+  }
+}
