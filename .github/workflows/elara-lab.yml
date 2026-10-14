@@ -62,7 +62,7 @@ jobs:
 
       - name: Run lab tests
         env:
-          LAB_TESTS: ${{ inputs.tests }}
+          LAB_TESTS: ${{ inputs.tests || 'smoke,browser' }}
         run: bun lab/run.ts
 
       - name: Collect compose logs
