@@ -1,0 +1,82 @@
+name: Elara lab
+
+# A throwaway Elara instance built from this commit with the repo's own
+# docker-compose.yml, bootstrapped through the real setup/signup/approval
+# flow (lab/bootstrap.ts), then exercised by lab/tests/*.test.ts via
+# lab/run.ts. Runs only on lab/** branches or by hand. Never deploys.
+on:
+  push:
+    branches: ['lab/**']
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: 'Comma-separated substrings of lab/tests file names (empty = all)'
+        required: false
+        default: ''
+      mcp_rate_limit:
+        description: 'MCP_RATE_LIMIT per connection per minute (production default 120)'
+        required: false
+        default: '600'
+
+concurrency:
+  group: elara-lab-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      COMPOSE: docker compose -f docker-compose.yml -f lab/docker-compose.lab.yml
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Generate secrets (.env for compose interpolation)
+        run: |
+          key=$(openssl rand -hex 32)
+          setup=$(openssl rand -hex 24)
+          pg=$(openssl rand -hex 16)
+          echo "::add-mask::$key"
+          echo "::add-mask::$setup"
+          echo "::add-mask::$pg"
+          {
+            echo "CREDENTIALS_ENCRYPTION_KEY=$key"
+            echo "SETUP_TOKEN=$setup"
+            echo "POSTGRES_PASSWORD=$pg"
+            echo "MCP_RATE_LIMIT=${{ inputs.mcp_rate_limit || '600' }}"
+          } > .env
+
+      - name: Build and start (docker compose up -d --build)
+        run: |
+          start=$(date +%s)
+          $COMPOSE up -d --build
+          echo "compose up took $(( $(date +%s) - start )) s"
+
+      - name: Bootstrap users and tokens
+        run: bun lab/bootstrap.ts
+
+      - name: Run lab tests
+        env:
+          LAB_TESTS: ${{ inputs.tests }}
+        run: bun lab/run.ts
+
+      - name: Collect compose logs
+        if: always()
+        run: |
+          mkdir -p lab-results
+          $COMPOSE ps -a > lab-results/compose-ps.txt 2>&1 || true
+          $COMPOSE logs --no-color --timestamps > lab-results/compose.log 2>&1 || true
+          [ -f lab-results/summary.md ] && cat lab-results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload lab-results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lab-results
+          path: lab-results/
+          retention-days: 30
