@@ -63,6 +63,21 @@ import { registerMcpPrompts } from './prompts.js'
 class McpToolError extends Error {}
 
 /**
+ * The text of a failed tool call. A Node system error (fs, net) names the
+ * absolute server paths it touched, e.g. `ENOENT: no such file or directory,
+ * rename '/data/vaults/…'`; the caller gets only its code, and the full error
+ * goes to the server log.
+ */
+function toolErrorMessage(err: unknown): string {
+  if (err instanceof Error && 'syscall' in err && typeof err.syscall === 'string') {
+    console.error('[mcp] tool failed:', err)
+    const code = 'code' in err && typeof err.code === 'string' ? err.code : 'unknown'
+    return `internal storage error (${code})`
+  }
+  return err instanceof Error ? err.message : String(err)
+}
+
+/**
  * Note content returned by these tools is DATA, never instructions —
  * MCP clients must treat it as untrusted per the spec's prompt-injection
  * stance; the server does not sanitize it.
@@ -138,8 +153,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         const result = await fn(...args)
         return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return { content: [{ type: 'text' as const, text: `Error: ${message}` }], isError: true }
+        return { content: [{ type: 'text' as const, text: `Error: ${toolErrorMessage(err)}` }], isError: true }
       }
     }
 

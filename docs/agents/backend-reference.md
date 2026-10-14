@@ -274,13 +274,30 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   function shared by every write path (REST, CRDT persistence, MCP).
 - **`store.ts`**: the note write path. `createNote` → validate → insert
   row (unique-violation on live path collision) → atomic disk write
-  (write to `.tmp`, then `rename`) → regenerate the ancestor
+  (`atomic-write.ts`: write to a temp file named per call —
+  `<file>.<pid>.<random>.tmp` — then `rename`) → regenerate the ancestor
   directories' progressive `index.md` → sync `noteLinks` from extracted
   wikilinks → schedule an embedding (async, off the request path) →
   record a revision. Soft delete moves the file into
   `.trash/<noteId>.md`; hard purge (owner/admin only) is a genuine
   irreversible delete, for cases like an accidentally committed secret
   where "recoverable" is the wrong property.
+- **Concurrent writes to one note** (#401): writers of one note run one
+  at a time, in call order, through an in-process per-key lock
+  (`key-lock.ts`, `withKeyLock`). `updateNote` holds `note:<vault>/<path>`
+  for its whole row → file → links → revision sequence;
+  `writeThroughCollab` holds `collab:<vault>/<path>` across the document
+  edit, the relay's store of it and the attributed store write;
+  `saveCrdtState` holds `crdt:<vault>/<path>`. The keys are distinct
+  because the lock is not reentrant and those sections nest. A shared
+  `<file>.tmp` used to let two writes truncate and rename away each
+  other's temp file (raw `ENOENT` naming server paths) and leave the row
+  and the file on different writes. The MCP tool wrapper returns only the
+  code of a Node system error (`internal storage error (ENOENT)`); the
+  full error goes to the server log. Rename, delete and restore do not
+  take the lock. The lock orders writes; it does not merge them: a body
+  write replaces the whole body, so two agents that each read a note and
+  write it back with a line appended still keep only the later one.
 - **Progressive indexes** (`regenProgressiveIndices`): run on create,
   rename, delete, restore, and on updates whose frontmatter really
   changed (`isDeepStrictEqual`, so key order alone never counts: `jsonb`
