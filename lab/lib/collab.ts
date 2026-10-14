@@ -111,7 +111,9 @@ export class CollabClient {
   async reconnect(timeoutMs = 30_000): Promise<boolean> {
     this.synced = false
     this.authFailed = null
-    await this.provider?.connect()
+    // connect() resolves only once a socket attempt succeeds and retries forever
+    // otherwise (e.g. every ticket refused after logout), so never await it.
+    void this.provider?.connect()
     return this.waitSynced(timeoutMs)
   }
 

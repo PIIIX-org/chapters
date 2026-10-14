@@ -41,7 +41,7 @@ const SIZES = (process.env.LAB_BIG_SIZES_KIB ?? '100,500,900').split(',').map((s
 const EDITS = 5
 const CHECKPOINTS = (process.env.LAB_BIG_CHECKPOINTS ?? '15,30,45,60,90,120,160,220,300').split(',').map(Number)
 /** After the fan-out: towards V8's max string length (~2^29 chars), where JSON.stringify of the history must fail. */
-const CHECKPOINTS_LATE = (process.env.LAB_BIG_CHECKPOINTS_LATE ?? '400,500,540,570,600').split(',').map(Number)
+const CHECKPOINTS_LATE = (process.env.LAB_BIG_CHECKPOINTS_LATE ?? '400,500,540,555,570').split(',').map(Number)
 const FANOUT = (process.env.LAB_BIG_FANOUT ?? '2,4,8,12,16').split(',').map(Number)
 const COLLAB_MIB = (process.env.LAB_BIG_COLLAB_MIB ?? '1.5,5,20,60').split(',').map(Number)
 const OVER_WS_MIB = Number(process.env.LAB_BIG_OVER_WS_MIB ?? 110)
@@ -119,9 +119,12 @@ const test: LabTest = {
       const health = startHealthSampler(ctx.baseUrl)
       const r = await fn()
       const [m, h] = await Promise.all([mem.stop(), health.stop()])
+      // Restart = the container's StartedAt/RestartCount moved (read once /health answers
+      // again, so a crash that Docker is still restarting is not missed). HTTP 0 alone is a
+      // hang or a client-side timeout (Bun's fetch gives up after 300 s): a failure.
+      await ctx.docker.waitHealthy(ctx.baseUrl)
       const after = await appState()
-      const restarted = restartedBetween(before, after) || r.httpStatus === 0
-      if (restarted) await ctx.docker.waitHealthy(ctx.baseUrl)
+      const restarted = restartedBetween(before, after)
       const row: Row = { phase, noteKiB, op, revs, httpStatus: r.httpStatus, ok: r.ok, bytes: r.bytes, ms: Math.round(r.ms), ttfbMs: Math.round(r.ttfbMs), mem: m, health: h, restarted, error: r.ok ? undefined : (r.error ?? r.textHead.slice(0, 300)) }
       rows.push(row)
       ctx.log(`${phase} ${op} ${noteKiB}KiB revs=${revs}: HTTP ${r.httpStatus} ${fmtMB(r.bytes)} ${Math.round(r.ms)} ms mem ${fmtMB(m.peakCurrent)} anon ${fmtMB(m.peakAnon)} restarted=${restarted}`)
@@ -207,9 +210,9 @@ const test: LabTest = {
         const results = await Promise.all(Array.from({ length: k }, () => call('note_history', { path: bigPath }, { timeoutMs: 900_000 })))
         const wall = performance.now() - t0
         const [m, h] = await Promise.all([mem.stop(), health.stop()])
+        await ctx.docker.waitHealthy(ctx.baseUrl)
         const after = await appState()
-        const restarted = restartedBetween(before, after) || results.some((r) => r.httpStatus === 0)
-        if (restarted) await ctx.docker.waitHealthy(ctx.baseUrl)
+        const restarted = restartedBetween(before, after)
         const okCount = results.filter((r) => r.ok).length
         const firstErr = results.find((r) => !r.ok)
         rows.push({ phase: 'fanout', noteKiB: bigKiB, op: 'note_history', revs, parallel: k, httpStatus: results[0]?.httpStatus ?? 0, ok: okCount === k, bytes: results.reduce((n, r) => n + r.bytes, 0), ms: Math.round(wall), ttfbMs: Math.round(Math.max(...results.map((r) => r.ttfbMs))), mem: m, health: h, restarted, error: firstErr ? (firstErr.error ?? firstErr.textHead.slice(0, 200)) : undefined })
@@ -324,9 +327,9 @@ const test: LabTest = {
         }
         const storedMs = performance.now() - t0
         const [m, h] = await Promise.all([mem.stop(), health.stop()])
+        await ctx.docker.waitHealthy(ctx.baseUrl)
         const after = await appState()
         const restarted = restartedBetween(before, after)
-        if (restarted) await ctx.docker.waitHealthy(ctx.baseUrl)
         const read = await call('read_note', { path: cPath }, { parse: true })
         const readLen = stringField(read.json, 'body')?.length ?? -1
         const closes = client.events.filter((e) => e.kind === 'close').slice(-3)
