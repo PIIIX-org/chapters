@@ -60,9 +60,16 @@ jobs:
       - name: Bootstrap users and tokens
         run: bun lab/bootstrap.ts
 
+      - name: OKF reference parser (pinned) for export conformance
+        run: |
+          mkdir -p /tmp/okf-ref
+          curl -fsSL https://raw.githubusercontent.com/GoogleCloudPlatform/open-knowledge-format/ad30107c31c06aec8a7d5636e0d1058118604e6f/src/reference_agent/bundle/document.py -o /tmp/okf-ref/okf_document.py
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --break-system-packages pyyaml
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
+
       - name: Run lab tests
         env:
-          LAB_TESTS: ${{ inputs.tests }}
+          LAB_TESTS: ${{ inputs.tests || 'smoke,attachments,backup-restore,export-roundtrip,multilingual-search' }}
         run: bun lab/run.ts
 
       - name: Collect compose logs
