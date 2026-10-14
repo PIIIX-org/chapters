@@ -61,6 +61,13 @@ export function parseJson(text: string): unknown {
   }
 }
 
+/** `json[key]` when json is an object and the value is a string (e.g. read_note's `body`). */
+export function stringField(json: unknown, key: string): string | undefined {
+  if (!json || typeof json !== 'object') return undefined
+  const value: unknown = Reflect.get(json, key)
+  return typeof value === 'string' ? value : undefined
+}
+
 function parseRpcBody(text: string): RpcBody | undefined {
   // JSON response mode; fall back to an SSE frame in case the server streams.
   const direct = parseJson(text)
