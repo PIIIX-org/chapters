@@ -144,7 +144,7 @@ function argsFor(tool: string, fx: Fixtures, v: VaultFixture | undefined, r: Rep
     browse_repository: () => ({ repositoryId }),
     read_file: () => ({ repositoryId, path: r?.files[0] ?? 'README.md' }),
     repository_status: () => ({ repositoryId }),
-    sync_repository: () => ({ repositoryId }),
+    sync_repository: () => ({ repositoryId, force: true }),
     update_repository: () => ({ repositoryId, mergeable: false }),
     get_repository_graph_preference: () => ({ repositoryId }),
     set_repository_graph_preference: () => ({ repositoryId, include: true }),
@@ -246,10 +246,52 @@ function buildCases(tools: ToolInfo[], fx: Fixtures): Case[] {
       cases.push({ ...c, token: 'account-control', expect: 'allow' })
     }
   }
-  // Least destructive first; within a level, "other"/surface before "pinned" so a successful
-  // destructive call on the pin (e.g. delete_vault) comes last for that token.
-  const kindOrder: Record<CaseKind, number> = { 'other-vault': 0, 'other-repo': 0, 'account-surface': 1, omitted: 2, pinned: 3 }
+  // Least destructive first; within a level "other"/surface, then the explicit pin, then the omitted id.
+  const kindOrder: Record<CaseKind, number> = { 'other-vault': 0, 'other-repo': 0, 'account-surface': 1, pinned: 2, omitted: 3 }
   return cases.sort((a, b) => a.level - b.level || kindOrder[a.kind] - kindOrder[b.kind])
+}
+
+/**
+ * Consuming tools (rename, delete, restore, purge, revoke) get a fresh target
+ * made by the account token right before the case, so every case acts on an
+ * object that exists and an earlier breach cannot make a later case vacuous.
+ */
+async function prepare(c: Case, acct: McpClient, fx: Fixtures, memberId: string): Promise<Record<string, unknown>> {
+  const own = c.kind === 'pinned' || c.kind === 'omitted'
+  const v = c.kind === 'other-vault' || c.token === 'account-control' ? fx.O : own && c.token === 'vault' ? fx.P : undefined
+  const r = c.kind === 'other-repo' ? fx.RO : own && c.token === 'repo' ? fx.RP : undefined
+  const args = { ...c.args }
+  const freshNote = async (vaultId: string) => {
+    const path = `concepts/lab-fresh-${seq()}`
+    await acct.must('create_note', { vaultId, path, frontmatter: { type: 'concepts' }, body: 'fresh' })
+    return path
+  }
+  const trashedNoteId = async (vaultId: string) => {
+    const path = await freshNote(vaultId)
+    await acct.must('delete_note', { vaultId, path })
+    const trash = await acct.must<Array<{ id: string; path: string }>>('list_trash', { vaultId, limit: 100 })
+    return trash.find((t) => t.path === path)!.id
+  }
+  if (v && c.tool === 'rename_note') args.from = await freshNote(v.id)
+  if (v && c.tool === 'delete_note') args.path = await freshNote(v.id)
+  if (v && (c.tool === 'restore_note' || c.tool === 'purge_note')) args.noteId = await trashedNoteId(v.id)
+  if (v && c.tool === 'purge_revision') {
+    const path = await freshNote(v.id)
+    args.revisionId = (await acct.must<Array<{ id: string }>>('note_history', { vaultId: v.id, path }))[0]!.id
+  }
+  if (v && c.tool === 'revoke_vault_share') {
+    await acct.must('share_vault', { vaultId: v.id, granteeType: 'user', granteeId: memberId, permission: 'read' })
+    args.shareId = (await acct.must<Array<{ id: string }>>('list_vault_shares', { vaultId: v.id }))[0]!.id
+  }
+  if (r && c.tool === 'revoke_repository_share') {
+    await acct.must('share_repository', { repositoryId: r.id, granteeType: 'user', granteeId: memberId })
+    args.shareId = (await acct.must<Array<{ id: string }>>('list_repository_shares', { repositoryId: r.id }))[0]!.id
+  }
+  if (c.tool === 'delete_graph_perspective') {
+    const vaultId = c.kind === 'account-surface' ? undefined : v?.id
+    args.id = (await acct.must<{ id: string }>('save_graph_perspective', { vaultId, name: `lab-fresh-perspective-${seq()}` })).id
+  }
+  return args
 }
 
 async function waitIndexed(ctx: LabContext, repoIds: string[]) {
@@ -351,10 +393,20 @@ const test: LabTest = {
       globalPerspectiveId,
     }
 
-    // Leak markers: anything outside the token's pin.
+    // Leak markers: every vault/repo id on the instance except the token's own pin (other tests'
+    // repos and vaults included), the other-vault body marker and the global perspective.
+    const allVaults = await ctx.docker.psqlRows<{ id: string }>('select id from vaults')
+    const allRepos = await ctx.docker.psqlRows<{ id: string }>('select id from repositories')
+    const markersExcept = (pin: string, extra: Record<string, string>) => ({
+      ...Object.fromEntries(allVaults.filter((x) => x.id !== pin).map((x) => [x.id, x.id === O.id ? 'other vault id' : 'a vault id'])),
+      ...Object.fromEntries(allRepos.filter((x) => x.id !== pin).map((x) => [x.id, x.id === RO.id ? 'other repo id' : 'a repository id'])),
+      [MARK.O]: 'other vault note body',
+      [globalPerspectiveId]: 'global perspective',
+      ...extra,
+    })
     const markers = {
-      vault: { [O.id]: 'other vault id', [MARK.O]: 'other vault note body', [RO.id]: 'other repo id', [RP.id]: 'repo id (vault token)', [globalPerspectiveId]: 'global perspective', [memberVault.id]: 'member vault id' },
-      repo: { [O.id]: 'other vault id', [MARK.O]: 'other vault note body', [P.id]: 'vault id (repo token)', [MARK.P]: 'vault note body (repo token)', [RO.id]: 'other repo id', [globalPerspectiveId]: 'global perspective', [memberVault.id]: 'member vault id' },
+      vault: markersExcept(P.id, {}),
+      repo: markersExcept(RP.id, { [MARK.P]: 'vault note body (repo token)' }),
     }
 
     // ---- matrix
@@ -367,7 +419,8 @@ const test: LabTest = {
     }
     const outcomes: Outcome[] = []
     for (const c of cases) {
-      const r = await clients[c.token].call(c.tool, c.args)
+      const args = await prepare(c, acct, fx, env.users.member.id)
+      const r = await clients[c.token].call(c.tool, args)
       const { actual, message } = classify(r)
       const scan = c.token === 'account-control' ? {} : markers[c.token]
       const leaks = r.ok ? Object.entries(scan).filter(([needle]) => r.text.includes(needle)).map(([, what]) => what) : []
@@ -378,7 +431,7 @@ const test: LabTest = {
       let ok: boolean | null
       if (c.expect === 'deny') ok = actual === 'denied-scope' ? true : actual === 'allowed' ? false : null
       else ok = actual === 'allowed' ? leaks.length === 0 : actual === 'denied-scope' ? false : null
-      outcomes.push({ ...c, actual, message, leaks, ms: Math.round(r.ms), ok })
+      outcomes.push({ ...c, args, actual, message, leaks, ms: Math.round(r.ms), ok })
       // Keep fixtures alive for later cases when a breach destroyed one.
       if (actual === 'allowed' && c.tool === 'delete_vault') await acct.call('restore_vault', { vaultId: String(r.text.match(/[0-9a-f-]{36}/)?.[0]) })
     }

@@ -11,6 +11,8 @@
 //            its files are embedded, `docker compose restart app` (graceful
 //            SIGTERM), wait until it settles, measure
 //   resync   POST /api/repositories/:id/sync on the restarted copy, settle, measure
+//   during-sync  connect REPO a third time, restart immediately (first sync
+//            still cloning/inserting), then POST /sync, settle, measure
 // "Settled" = sync_status is not 'syncing' and the embedded-file count has
 // not moved for STALL_MS (or every file is embedded).
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
@@ -140,6 +142,16 @@ const test: LabTest = {
     const afterResync = await perFile(ctx, restartRepo.id)
     const afterResyncStats = compare(clean, afterResync)
 
+    // ---- restart during the FIRST sync (clone/insert), then a manual sync
+    const syncRepo = await ctx.connectRepo('admin', ctx.uniq('lab-restart-sync'), REPO_URL)
+    const atSyncRestart = await progress(ctx, syncRepo.id)
+    ctx.log(`restarting app during first sync: ${JSON.stringify(atSyncRestart)}`)
+    const syncRestart = await ctx.docker.app.restart(ctx.baseUrl)
+    const afterSyncRestart = await progress(ctx, syncRepo.id)
+    const manualSync = await admin.post(`/api/repositories/${syncRepo.id}/sync`, {})
+    const duringSyncTimeline = await settle(ctx, syncRepo.id, 'during-sync+manual-sync')
+    const duringSyncStats = compare(clean, await perFile(ctx, syncRepo.id))
+
     const appLogs = await ctx.docker.app.logs('app', 400)
     const errorLines = appLogs.split('\n').filter((l) => /error|ENOENT|unhandled/i.test(l)).slice(0, 40)
 
@@ -179,6 +191,20 @@ const test: LabTest = {
         ok: afterResyncStats.lostEmbedding === 0 && afterResyncStats.lostSymbols === 0,
         severity: 'high',
       },
+      {
+        name: 'restart during first sync: not stuck in syncing',
+        expected: "sync_status != 'syncing' after restart (boot reconciliation)",
+        actual: `at restart ${atSyncRestart.status} files=${atSyncRestart.files}; after ${afterSyncRestart.status}${afterSyncRestart.lastSyncError ? ` (${afterSyncRestart.lastSyncError})` : ''}`,
+        ok: afterSyncRestart.status !== 'syncing',
+        severity: 'medium',
+      },
+      {
+        name: 'restart during first sync: manual sync then indexes everything',
+        expected: '0 lost vs clean',
+        actual: `sync HTTP ${manualSync.status}; embedded ${duringSyncStats.embedded}/${duringSyncStats.files}; ${duringSyncStats.lostEmbedding} embeddings / ${duringSyncStats.lostSymbols} symbol files lost`,
+        ok: duringSyncStats.lostEmbedding === 0 && duringSyncStats.lostSymbols === 0 && duringSyncStats.files === cleanStats.files,
+        severity: 'high',
+      },
     )
 
     return {
@@ -186,7 +212,8 @@ const test: LabTest = {
         `Repo ${REPO_URL}. Clean: ${cleanStats.embedded}/${cleanStats.files} files embedded, ${cleanStats.symbols} symbols in ${Math.round(cleanMs / 1000)} s. ` +
         `Restarted at ${atRestart.embedded}/${atRestart.files} embedded: after settling ${afterRestartStats.embedded}/${afterRestartStats.files} embedded, ` +
         `${afterRestartStats.lostSymbols} files lost all symbols, status ${statusAfterRestart.status}. ` +
-        `After re-sync: ${afterResyncStats.lostEmbedding} embeddings and ${afterResyncStats.lostSymbols} symbol files still missing.`,
+        `After re-sync: ${afterResyncStats.lostEmbedding} embeddings and ${afterResyncStats.lostSymbols} symbol files still missing. ` +
+        `Restart during first sync (caught at status ${atSyncRestart.status}, ${atSyncRestart.files} files) -> ${afterSyncRestart.status}; after manual sync ${duringSyncStats.embedded}/${duringSyncStats.files} embedded, ${duringSyncStats.lostSymbols} symbol files lost.`,
       checks,
       data: {
         repoUrl: REPO_URL,
@@ -200,7 +227,15 @@ const test: LabTest = {
         restart,
         afterRestart: afterRestartStats,
         afterResync: { syncHttp: sync.status, syncBody: sync.text.slice(0, 300), ...afterResyncStats },
-        timelines: { clean: cleanTimeline, afterRestart: afterRestartTimeline, afterResync: resyncTimeline },
+        duringSync: {
+          repoId: syncRepo.id,
+          atRestart: atSyncRestart,
+          restart: syncRestart,
+          afterRestart: afterSyncRestart,
+          manualSync: { http: manualSync.status, body: manualSync.text.slice(0, 300) },
+          ...duringSyncStats,
+        },
+        timelines: { clean: cleanTimeline, afterRestart: afterRestartTimeline, afterResync: resyncTimeline, duringSync: duringSyncTimeline },
         appErrorLines: errorLines,
       },
     }

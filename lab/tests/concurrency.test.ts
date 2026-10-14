@@ -96,6 +96,8 @@ function attribution(revs: Revision[], writers: Writer[], okWriters: number[], m
     revisions: revs.length,
     byActorType: revs.reduce<Record<string, number>>((m, r) => ((m[r.actorType] = (m[r.actorType] ?? 0) + 1), m), {}),
     missingRevisionFor: missing,
+    /** Missing writers whose content IS in history, but under a non-mcp (anonymous collab) actor. */
+    anonymized: missing.filter((i) => revs.some((r) => r.actorType !== 'mcp' && r.body.includes(marker(i)))),
     misattributed: misattributed.map((r) => ({ id: r.id, actorId: r.actorId, body: r.body.slice(0, 120) })),
   }
 }
@@ -167,11 +169,13 @@ const test: LabTest = {
         const revs = await historySince(admin, vault.id, shared, since)
         const attr = attribution(revs, writers, okWriters, line)
         const t = tally(outcomes)
-        data[`append-same N=${N}`] = { ...t, lost: lost.length, lostWriters: lost, finalLines: final.split('\n').length - 1, attribution: attr }
+        const phantom = outcomes.filter((o) => !o.ok && (final.includes(line(o.writer)) || revs.some((r) => r.body.includes(line(o.writer))))).map((o) => o.writer)
+        data[`append-same N=${N}`] = { ...t, lost: lost.length, lostWriters: lost, phantomWriters: phantom, finalLines: final.split('\n').length - 1, attribution: attr }
         checks.push(
           { name: `append-same N=${N}: lost updates`, expected: '0 of acknowledged appends lost', actual: `${lost.length} of ${okWriters.length} acknowledged appends lost`, ok: lost.length === 0, severity: 'high' },
           { name: `append-same N=${N}: write errors`, expected: '0', actual: `${t.failed} ${JSON.stringify(t.errors)}`, ok: t.failed === 0, severity: 'high' },
-          { name: `append-same N=${N}: attribution`, expected: 'every ack has its own revision; 0 misattributed', actual: `missing ${attr.missingRevisionFor.length}, misattributed ${attr.misattributed.length}, revisions ${attr.revisions} ${JSON.stringify(attr.byActorType)}`, ok: attr.missingRevisionFor.length === 0 && attr.misattributed.length === 0, severity: 'medium' },
+          { name: `append-same N=${N}: attribution`, expected: 'every ack has its own revision; 0 misattributed', actual: `missing ${attr.missingRevisionFor.length} (${attr.anonymized.length} recorded as anonymous collab), misattributed ${attr.misattributed.length}, revisions ${attr.revisions} ${JSON.stringify(attr.byActorType)}`, ok: attr.missingRevisionFor.length === 0 && attr.misattributed.length === 0, severity: 'medium' },
+          { name: `append-same N=${N}: failed writes not persisted`, expected: '0 writes that returned an error but landed', actual: `${phantom.length} of ${t.failed} failed writes landed anyway`, ok: phantom.length === 0, severity: 'high' },
         )
       }
 
@@ -194,6 +198,7 @@ const test: LabTest = {
             ),
           ),
         )
+        // Real time on purpose: the collab relay's debounced store runs on the server clock.
         await Bun.sleep(SETTLE_MS)
         const file = await admin.must<{ body: string; frontmatter: { description?: string } }>('read_note', { vaultId: vault.id, path: shared })
         const row = await dbNote(ctx, vault.id, shared)
@@ -205,12 +210,14 @@ const test: LabTest = {
         const revs = await historySince(admin, vault.id, shared, since)
         const attr = attribution(revs, writers, okWriters, marker)
         const t = tally(outcomes)
-        data[`replace-same N=${N}`] = { ...t, final: { bodyWriter, fmWriter, fileBody: file.body, db: row }, torn, diverged, attribution: attr }
+        const phantom = outcomes.filter((o) => !o.ok && (file.body.includes(marker(o.writer)) || revs.some((r) => r.body.includes(marker(o.writer))))).map((o) => o.writer)
+        data[`replace-same N=${N}`] = { ...t, final: { bodyWriter, fmWriter, fileBody: file.body, db: row }, torn, diverged, phantomWriters: phantom, attribution: attr }
         checks.push(
           { name: `replace-same N=${N}: write errors`, expected: '0', actual: `${t.failed} ${JSON.stringify(t.errors)}`, ok: t.failed === 0, severity: 'high' },
           { name: `replace-same N=${N}: torn note`, expected: 'body and frontmatter from the same writer', actual: `body w${bodyWriter}, frontmatter w${fmWriter}`, ok: !torn, severity: 'high' },
           { name: `replace-same N=${N}: file vs database`, expected: 'disk file == notes row', actual: diverged ? `diverged: file "${file.body.trim()}" db "${row?.body.trim()}"` : 'same', ok: !diverged, severity: 'high' },
-          { name: `replace-same N=${N}: attribution`, expected: 'every ack has its own revision; 0 misattributed', actual: `missing ${attr.missingRevisionFor.length}, misattributed ${attr.misattributed.length}, revisions ${attr.revisions} ${JSON.stringify(attr.byActorType)}`, ok: attr.missingRevisionFor.length === 0 && attr.misattributed.length === 0, severity: 'medium' },
+          { name: `replace-same N=${N}: attribution`, expected: 'every ack has its own revision; 0 misattributed', actual: `missing ${attr.missingRevisionFor.length} (${attr.anonymized.length} recorded as anonymous collab), misattributed ${attr.misattributed.length}, revisions ${attr.revisions} ${JSON.stringify(attr.byActorType)}`, ok: attr.missingRevisionFor.length === 0 && attr.misattributed.length === 0, severity: 'medium' },
+          { name: `replace-same N=${N}: failed writes not persisted`, expected: '0 writes that returned an error but landed', actual: `${phantom.length} of ${t.failed} failed writes landed anyway`, ok: phantom.length === 0, severity: 'high' },
         )
       }
 
@@ -270,6 +277,7 @@ const test: LabTest = {
         const wrong: Array<{ writer: number; body?: string; db?: string }> = []
         const misattributed: unknown[] = []
         const missing: number[] = []
+        const anonymized: number[] = []
         for (const o of outcomes.filter((x) => x.ok)) {
           const p = paths[o.writer]!
           const r = await admin.call('read_note', { vaultId: vault.id, path: p })
@@ -279,6 +287,7 @@ const test: LabTest = {
           const revs = await historySince(admin, vault.id, p, sinceSiblings)
           const attr = attribution(revs, writers, [o.writer], marker)
           missing.push(...attr.missingRevisionFor)
+          anonymized.push(...attr.anonymized)
           misattributed.push(...attr.misattributed)
         }
         const browse = await admin.call('browse_vault', { vaultId: vault.id, path: folder })
@@ -287,13 +296,14 @@ const test: LabTest = {
           ...t,
           wrong,
           missingRevisionFor: missing,
+          anonymized,
           misattributed,
           browseFolder: { ok: browse.ok, chars: browse.text.length, text: browse.text.slice(0, 1500) },
         }
         checks.push(
           { name: `replace-different N=${N}: write errors`, expected: '0', actual: `${t.failed} ${JSON.stringify(t.errors)}`, ok: t.failed === 0, severity: 'high' },
           { name: `replace-different N=${N}: wrong final content or file/db divergence`, expected: '0', actual: String(wrong.length), ok: wrong.length === 0, severity: 'high' },
-          { name: `replace-different N=${N}: attribution`, expected: '0 missing, 0 misattributed', actual: `missing ${missing.length}, misattributed ${misattributed.length}`, ok: missing.length === 0 && misattributed.length === 0, severity: 'medium' },
+          { name: `replace-different N=${N}: attribution`, expected: '0 missing, 0 misattributed', actual: `missing ${missing.length} (${anonymized.length} recorded as anonymous collab), misattributed ${misattributed.length}`, ok: missing.length === 0 && misattributed.length === 0, severity: 'medium' },
           { name: `replace-different N=${N}: folder still browsable`, expected: 'browse_vault ok', actual: browse.ok ? 'ok' : browse.text.slice(0, 200), ok: browse.ok, severity: 'medium' },
         )
       }
