@@ -1,14 +1,35 @@
-import { eq } from 'drizzle-orm'
+import { and, count, eq, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFileSymbols, repositoryFiles } from '../db/schema.js'
 import { embedder } from '../search/embeddings.js'
 import { recomputeSemanticEdges } from '../search/semantic-edges.js'
-import { extractStructure, isSupportedLanguage } from './extraction.js'
+import { extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import { resolveImportPath } from './import-resolution.js'
 
 // ponytail: in-process serial queue; move to a job table if multi-process
 const queue: string[] = []
 let running: Promise<void> | null = null
+
+/**
+ * A line this long means minified, bundled or generated code (prettier-style
+ * source stays far below it). Tree-sitter parses such files fine (742 KB
+ * bundle: ~190 ms), but every declaration in it starts on the same few lines,
+ * so its symbols are minified names with snippets cut from one huge line —
+ * hundreds of meaningless rows, each costing an embedding. Such a file keeps
+ * its content, file embedding and keyword search, but gets no symbols/imports.
+ */
+const MAX_STRUCTURED_LINE_LENGTH = 1000
+
+function looksMinified(content: string): boolean {
+  let lineStart = 0
+  while (lineStart < content.length) {
+    let lineEnd = content.indexOf('\n', lineStart)
+    if (lineEnd === -1) lineEnd = content.length
+    if (lineEnd - lineStart > MAX_STRUCTURED_LINE_LENGTH) return true
+    lineStart = lineEnd + 1
+  }
+  return false
+}
 
 // ponytail: repo path cache to eliminate N*N sibling queries during batch extraction (DB-09).
 const repoSiblingsCache = new Map<string, { pathToId: Map<string, string>; knownPaths: Set<string> }>()
@@ -32,13 +53,36 @@ async function getRepoSiblings(repositoryId: string) {
 /** Enqueue a repository file for extraction + embedding. Never blocks the caller. */
 export function scheduleExtraction(fileId: string): void {
   queue.push(fileId)
-  running ??= drain().finally(() => {
-    running = null
-  })
+  running ??= drain()
 }
 
 export async function flushExtraction(): Promise<void> {
   while (running) await running
+}
+
+/**
+ * Boot catch-up: the queue lives in memory, so files enqueued when the
+ * process stopped are lost — and a re-sync never re-enqueues them, because
+ * their content hash is unchanged. A file gets its embedding as the last step
+ * of extraction, so a null embedding means extraction never completed.
+ */
+export async function scheduleMissingExtractions(): Promise<number> {
+  const missing = await db
+    .select({ id: repositoryFiles.id })
+    .from(repositoryFiles)
+    .where(isNull(repositoryFiles.embedding))
+    .orderBy(repositoryFiles.repositoryId)
+  for (const row of missing) scheduleExtraction(row.id)
+  return missing.length
+}
+
+/** Files of a repository whose extraction has not completed (queued, lost or failed). */
+export async function countPendingExtractions(repositoryId: string): Promise<number> {
+  const [row] = await db
+    .select({ pending: count() })
+    .from(repositoryFiles)
+    .where(and(eq(repositoryFiles.repositoryId, repositoryId), isNull(repositoryFiles.embedding)))
+  return row?.pending ?? 0
 }
 
 async function drain(): Promise<void> {
@@ -60,6 +104,10 @@ async function drain(): Promise<void> {
   } finally {
     queue.length = 0
     repoSiblingsCache.clear()
+    // Cleared here, in the same synchronous step that saw the queue empty: a
+    // `.finally()` on the caller's side would run a microtask later, and a file
+    // enqueued in between would find `running` still set and start no drain.
+    running = null
   }
 }
 
@@ -68,7 +116,10 @@ async function processFile(fileId: string): Promise<void> {
   if (!row) return
 
   if (isSupportedLanguage(row.language)) {
-    const { imports, symbols } = await extractStructure(row.language, row.content)
+    // A minified file still clears the imports/symbols an earlier version left.
+    const { imports, symbols }: ExtractionResult = looksMinified(row.content)
+      ? { imports: [], symbols: [] }
+      : await extractStructure(row.language, row.content)
 
     const { pathToId, knownPaths } = await getRepoSiblings(row.repositoryId)
 
