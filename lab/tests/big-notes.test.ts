@@ -40,8 +40,10 @@ const KiB = 1024
 const SIZES = (process.env.LAB_BIG_SIZES_KIB ?? '100,500,900').split(',').map((s) => Number(s) * KiB)
 const EDITS = 5
 const CHECKPOINTS = (process.env.LAB_BIG_CHECKPOINTS ?? '15,30,45,60,90,120,160,220,300').split(',').map(Number)
-const FANOUT = (process.env.LAB_BIG_FANOUT ?? '2,4,8').split(',').map(Number)
-const COLLAB_MIB = (process.env.LAB_BIG_COLLAB_MIB ?? '1.5,5,20').split(',').map(Number)
+/** After the fan-out: towards V8's max string length (~2^29 chars), where JSON.stringify of the history must fail. */
+const CHECKPOINTS_LATE = (process.env.LAB_BIG_CHECKPOINTS_LATE ?? '400,500,540,570,600').split(',').map(Number)
+const FANOUT = (process.env.LAB_BIG_FANOUT ?? '2,4,8,12,16').split(',').map(Number)
+const COLLAB_MIB = (process.env.LAB_BIG_COLLAB_MIB ?? '1.5,5,20,60').split(',').map(Number)
 const OVER_WS_MIB = Number(process.env.LAB_BIG_OVER_WS_MIB ?? 110)
 const SIZE_LIMIT = 50 * 1000 * 1000
 const TIME_LIMIT_MS = 30_000
@@ -168,58 +170,35 @@ const test: LabTest = {
     let revs = await revCount(bigPath)
     let edits = 0
     const editMs: number[] = []
-    const thresholds: Record<string, { revs: number; bytes: number; ms: number } | null> = { over50MB: null, over30s: null, restartOrFailure: null }
-    for (const cp of CHECKPOINTS) {
-      if (revs < 0) break
-      while (revs < cp) {
-        const r = await call('edit_note', { path: bigPath, body: genBody(bigSize, 10_000 + edits, `grow ${edits}`) })
-        edits++
-        if (!r.ok) {
-          plain('grow', bigKiB, 'edit_note', revs, r)
-          break
+    type Hit = { revs: number; bytes: number; ms: number; detail?: string } | null
+    const thresholds: { over50MB: Hit; over30s: Hit; restart: Hit; failure: Hit } = { over50MB: null, over30s: null, restart: null, failure: null }
+    /** Edits until each checkpoint revision count, then one measured note_history; stops at the first restart/failure. */
+    async function grow(checkpoints: number[]) {
+      for (const cp of checkpoints) {
+        if (revs < 0 || thresholds.restart || thresholds.failure) return
+        while (revs < cp) {
+          const r = await call('edit_note', { path: bigPath, body: genBody(bigSize, 10_000 + edits, `grow ${edits}`) })
+          edits++
+          if (!r.ok) {
+            plain('grow', bigKiB, 'edit_note', revs, r)
+            break
+          }
+          editMs.push(r.ms)
+          revs++
         }
-        editMs.push(r.ms)
-        revs++
-      }
-      revs = await revCount(bigPath)
-      const h = await measured('grow', bigKiB, 'note_history', revs, () => call('note_history', { path: bigPath }, { timeoutMs: 900_000 }))
-      if (!thresholds.over50MB && h.bytes > SIZE_LIMIT) thresholds.over50MB = { revs, bytes: h.bytes, ms: h.ms }
-      if (!thresholds.over30s && h.ms > TIME_LIMIT_MS) thresholds.over30s = { revs, bytes: h.bytes, ms: h.ms }
-      if (h.restarted || !h.ok) {
-        thresholds.restartOrFailure = { revs, bytes: h.bytes, ms: h.ms }
-        break
+        revs = await revCount(bigPath)
+        const h = await measured('grow', bigKiB, 'note_history', revs, () => call('note_history', { path: bigPath }, { timeoutMs: 900_000 }))
+        if (!thresholds.over50MB && h.bytes > SIZE_LIMIT) thresholds.over50MB = { revs, bytes: h.bytes, ms: h.ms }
+        if (!thresholds.over30s && h.ms > TIME_LIMIT_MS) thresholds.over30s = { revs, bytes: h.bytes, ms: h.ms }
+        if (h.restarted) thresholds.restart = { revs, bytes: h.bytes, ms: h.ms, detail: h.error }
+        else if (!h.ok) thresholds.failure = { revs, bytes: h.bytes, ms: h.ms, detail: h.error }
       }
     }
-    const sortedEdit = [...editMs].sort((a, b) => a - b)
-    const histRows = rows.filter((r) => r.op === 'note_history' && r.ok && r.revs)
-    const bytesPerRevKiB = histRows.map((r) => r.bytes / (r.revs! * r.noteKiB * KiB))
-    checks.push({
-      name: 'note_history response stays under 50 MB',
-      expected: 'bounded (paged) history',
-      actual: thresholds.over50MB
-        ? `exceeded at ${thresholds.over50MB.revs} revisions of a ${bigKiB} KiB note: ${fmtMB(thresholds.over50MB.bytes)}`
-        : `not exceeded up to ${revs} revisions`,
-      ok: thresholds.over50MB === null,
-      severity: 'high',
-    })
-    checks.push({
-      name: 'note_history answers within 30 s',
-      expected: '< 30 s',
-      actual: thresholds.over30s ? `took ${thresholds.over30s.ms} ms at ${thresholds.over30s.revs} revisions (${fmtMB(thresholds.over30s.bytes)})` : `under 30 s up to ${revs} revisions`,
-      ok: thresholds.over30s === null,
-      severity: 'medium',
-    })
-    checks.push({
-      name: 'single note_history call never restarts the app',
-      expected: 'no restart / no failure',
-      actual: thresholds.restartOrFailure ? `restart/failure at ${thresholds.restartOrFailure.revs} revisions` : `none up to ${revs} revisions`,
-      ok: thresholds.restartOrFailure === null,
-      severity: 'critical',
-    })
+    await grow(CHECKPOINTS)
 
     // ---------------------------------------------------------------- 3. parallel fan-out on the grown note
     const fanout: FanoutRec[] = []
-    if (!thresholds.restartOrFailure) {
+    if (!thresholds.restart && !thresholds.failure) {
       for (const k of FANOUT) {
         const before = await appState()
         const mem = await startMemSampler()
@@ -232,20 +211,65 @@ const test: LabTest = {
         const restarted = restartedBetween(before, after) || results.some((r) => r.httpStatus === 0)
         if (restarted) await ctx.docker.waitHealthy(ctx.baseUrl)
         const okCount = results.filter((r) => r.ok).length
-        rows.push({ phase: 'fanout', noteKiB: bigKiB, op: 'note_history', revs, parallel: k, httpStatus: results[0]?.httpStatus ?? 0, ok: okCount === k, bytes: results.reduce((n, r) => n + r.bytes, 0), ms: Math.round(wall), ttfbMs: Math.round(Math.max(...results.map((r) => r.ttfbMs))), mem: m, health: h, restarted, error: okCount === k ? undefined : results.find((r) => !r.ok)?.error ?? results.find((r) => !r.ok)?.textHead.slice(0, 200) })
+        const firstErr = results.find((r) => !r.ok)
+        rows.push({ phase: 'fanout', noteKiB: bigKiB, op: 'note_history', revs, parallel: k, httpStatus: results[0]?.httpStatus ?? 0, ok: okCount === k, bytes: results.reduce((n, r) => n + r.bytes, 0), ms: Math.round(wall), ttfbMs: Math.round(Math.max(...results.map((r) => r.ttfbMs))), mem: m, health: h, restarted, error: firstErr ? (firstErr.error ?? firstErr.textHead.slice(0, 200)) : undefined })
         fanout.push({ parallel: k, ok: okCount, wallMs: Math.round(wall), maxMs: Math.round(Math.max(...results.map((r) => r.ms))), totalBytes: results.reduce((n, r) => n + r.bytes, 0), peakCurrent: m.peakCurrent, peakAnon: m.peakAnon, dockerStatsPeak: m.dockerStatsPeak, restarted, oomKilled: after.oomKilled, exitCode: after.exitCode })
         ctx.log(`fanout ${k}: ok ${okCount}/${k} wall ${Math.round(wall)} ms peak ${fmtMB(m.peakCurrent)} restarted ${restarted}`)
         if (restarted || okCount < k) break
       }
       const broke = fanout.find((f) => f.restarted || f.ok < f.parallel)
+      const slow = fanout.find((f) => f.maxMs > TIME_LIMIT_MS)
       checks.push({
-        name: 'parallel note_history on a big note does not restart the app',
+        name: `parallel note_history on a ${bigKiB} KiB x ${revs} note does not restart the app`,
         expected: `no restart for ${FANOUT.join('/')} parallel calls`,
         actual: broke ? `broke at ${broke.parallel} parallel calls (${JSON.stringify(broke)})` : `survived up to ${FANOUT.at(-1)} parallel calls, peak ${fmtMB(Math.max(...fanout.map((f) => f.peakCurrent ?? 0)))}`,
         ok: !broke,
         severity: 'critical',
       })
+      checks.push({
+        name: `parallel note_history on a ${bigKiB} KiB x ${revs} note answers within 30 s`,
+        expected: '< 30 s per call',
+        actual: slow ? `${slow.parallel} parallel: slowest ${slow.maxMs} ms` : `slowest ${Math.max(...fanout.map((f) => f.maxMs))} ms`,
+        ok: !slow,
+        severity: 'medium',
+      })
     }
+
+    // ---------------------------------------------------------------- 2b. keep growing towards V8's max string length
+    await grow(CHECKPOINTS_LATE)
+    const sortedEdit = [...editMs].sort((a, b) => a - b)
+    const histRows = rows.filter((r) => r.op === 'note_history' && r.ok && r.revs && !r.parallel)
+    const bytesPerRevKiB = histRows.map((r) => r.bytes / (r.revs! * r.noteKiB * KiB))
+    checks.push({
+      name: 'note_history response stays under 50 MB',
+      expected: 'bounded (paged) history',
+      actual: thresholds.over50MB
+        ? `exceeded at ${thresholds.over50MB.revs} revisions of a ${bigKiB} KiB note: ${fmtMB(thresholds.over50MB.bytes)}`
+        : `not exceeded up to ${revs} revisions`,
+      ok: thresholds.over50MB === null,
+      severity: 'high',
+    })
+    checks.push({
+      name: 'single note_history call answers within 30 s',
+      expected: '< 30 s',
+      actual: thresholds.over30s ? `took ${thresholds.over30s.ms} ms at ${thresholds.over30s.revs} revisions (${fmtMB(thresholds.over30s.bytes)})` : `under 30 s up to ${revs} revisions`,
+      ok: thresholds.over30s === null,
+      severity: 'medium',
+    })
+    checks.push({
+      name: 'single note_history call never restarts the app',
+      expected: 'no restart',
+      actual: thresholds.restart ? `restart at ${thresholds.restart.revs} revisions` : `none up to ${revs} revisions`,
+      ok: thresholds.restart === null,
+      severity: 'critical',
+    })
+    checks.push({
+      name: 'note_history keeps working as history grows',
+      expected: 'ok at every checkpoint',
+      actual: thresholds.failure ? `fails from ${thresholds.failure.revs} revisions (${fmtMB(thresholds.failure.bytes)} response): ${thresholds.failure.detail ?? ''}` : `ok up to ${revs} revisions`,
+      ok: thresholds.failure === null,
+      severity: 'high',
+    })
 
     // ---------------------------------------------------------------- 4. > 1 MiB: REST/MCP vs collab
     const cPath = 'big/collab'
@@ -378,7 +402,8 @@ const test: LabTest = {
     const p50 = sortedEdit[Math.floor(sortedEdit.length / 2)]
     const summary =
       `note_history: ${histSummary}. ` +
-      `Thresholds on the ${bigKiB} KiB note: >50 MB at ${thresholds.over50MB?.revs ?? `>${revs}`} revisions, >30 s at ${thresholds.over30s?.revs ?? `>${revs}`}, restart at ${thresholds.restartOrFailure?.revs ?? `>${revs} (single call)`}. ` +
+      `Thresholds on the ${bigKiB} KiB note (single call): >50 MB at ${thresholds.over50MB?.revs ?? `>${revs}`} revisions, >30 s at ${thresholds.over30s?.revs ?? `>${revs}`}, restart at ${thresholds.restart?.revs ?? `>${revs}`}, failure at ${thresholds.failure?.revs ?? `>${revs}`}${thresholds.failure?.detail ? ` (${thresholds.failure.detail.slice(0, 120)})` : ''}. ` +
+      `Fan-out: ${fanout.map((f) => `${f.parallel}x ok ${f.ok} slowest ${f.maxMs} ms peak ${fmtMB(f.peakAnon)} anon${f.restarted ? ' RESTART' : ''}`).join('; ')}. ` +
       `${bigKiB} KiB edit_note p50 ${p50 === undefined ? '-' : Math.round(p50)} ms over ${edits} grow edits. ` +
       `Collab >1 MiB: ${collab.map((c) => `${c.mib} MiB stored=${c.storedInDb}`).join(', ')}; REST ${rest.status}, MCP ${mcpOver.httpStatus} for 1.5 MiB.`
     return {

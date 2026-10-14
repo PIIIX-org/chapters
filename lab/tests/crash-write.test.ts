@@ -42,16 +42,17 @@ import {
 const N_EDITS = Number(process.env.LAB_CRASH_EDITS ?? 24)
 const N_CREATES = Number(process.env.LAB_CRASH_CREATES ?? 16)
 const BODY_BYTES = Number(process.env.LAB_CRASH_BODY_BYTES ?? 40_000)
-/** Fixed kill offsets (ms after dispatch); default = quantiles of the control round's completion times. */
+/** Fixed kill offsets (ms after dispatch); default = KILL_FACTORS x the control round's slowest completion. */
 const KILL_AFTER_FIXED = process.env.LAB_CRASH_KILL_AFTER_MS?.split(',').map(Number)
-const KILL_QUANTILES = [0, 0.1, 0.25, 0.4, 0.55, 0.7, 0.85, 1]
+/** Kill offsets as multiples of the control round's slowest completion. */
+const KILL_FACTORS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2]
 const SETTLE_MS = 3500
 
 type OpKind = 'edit' | 'create'
 type Answer = 'acked' | 'app-error' | 'no-answer'
 type Outcome =
   | 'consistent-new'
-  | 'consistent-old'
+  | 'unchanged'
   | 'absent'
   | 'row-new/file-old'
   | 'row-old/file-new'
@@ -64,7 +65,9 @@ interface Op {
   kind: OpKind
   path: string
   newSha: string
+  /** Body sha on disk / in the row before the round (they differ when an earlier crash left the note divergent). */
   oldSha: string | null
+  oldRowSha: string | null
   endMs: number | null
   answer: Answer
   httpStatus: number
@@ -149,9 +152,9 @@ function classify(op: Op, a: Analysis): Outcome {
     return 'other'
   }
   if (fs === op.newSha && rs === op.newSha) return 'consistent-new'
-  if (fs === op.oldSha && rs === op.oldSha) return 'consistent-old'
+  if (fs === op.oldSha && rs === op.oldRowSha) return 'unchanged'
   if (rs === op.newSha && fs === op.oldSha) return 'row-new/file-old'
-  if (rs === op.oldSha && fs === op.newSha) return 'row-old/file-new'
+  if (fs === op.newSha && rs === op.oldRowSha) return 'row-old/file-new'
   if (r && !f) return 'row-only (no file)'
   return 'other'
 }
@@ -174,12 +177,14 @@ const test: LabTest = {
 
     // Base notes the edit ops rewrite every round.
     const current = new Map<string, string>() // path -> sha of the body on disk (what read_note serves)
+    const currentRow = new Map<string, string>() // path -> sha of notes.body
     const basePaths: string[] = []
     for (let i = 0; i < N_EDITS; i++) {
       const path = `cw/base-${String(i).padStart(2, '0')}`
       const body = genBody(BODY_BYTES, 1000 + i, `base ${i}`)
       await editMcp.must('create_note', { vaultId: vault.id, path, body })
       current.set(path, sha(body))
+      currentRow.set(path, sha(body))
       basePaths.push(path)
     }
     // Collab notes: one client stays connected, one types and leaves before each kill.
@@ -189,6 +194,7 @@ const test: LabTest = {
     if (!(await stays.connect())) throw new Error(`collab client could not connect: ${stays.status} ${stays.authFailed}`)
 
     const baseline = analyse(await dumpVault(vault.id), await dbNotes(ctx, vault.id))
+    let prev = { divergent: new Set<string>(), revisionGaps: new Set<string>(), crdtMismatch: new Set<string>() }
     checks.push({
       name: 'baseline: every note consistent before any crash',
       expected: 'file = row = latest revision for all notes',
@@ -233,12 +239,12 @@ const test: LabTest = {
       for (let i = 0; i < N_EDITS; i++) {
         const path = basePaths[i]!
         const body = genBody(BODY_BYTES, round * 1000 + i, `round ${round} edit ${i}`)
-        fire({ kind: 'edit', path, newSha: sha(body), oldSha: current.get(path) ?? null, endMs: null, answer: 'no-answer', httpStatus: 0 }, editMcp, 'edit_note', { vaultId: vault.id, path, body })
+        fire({ kind: 'edit', path, newSha: sha(body), oldSha: current.get(path) ?? null, oldRowSha: currentRow.get(path) ?? null, endMs: null, answer: 'no-answer', httpStatus: 0 }, editMcp, 'edit_note', { vaultId: vault.id, path, body })
       }
       for (let j = 0; j < N_CREATES; j++) {
         const path = `cw/r${round}-new-${String(j).padStart(2, '0')}`
         const body = genBody(BODY_BYTES, round * 1000 + 500 + j, `round ${round} create ${j}`)
-        fire({ kind: 'create', path, newSha: sha(body), oldSha: null, endMs: null, answer: 'no-answer', httpStatus: 0 }, createMcp, 'create_note', { vaultId: vault.id, path, body })
+        fire({ kind: 'create', path, newSha: sha(body), oldSha: null, oldRowSha: null, endMs: null, answer: 'no-answer', httpStatus: 0 }, createMcp, 'create_note', { vaultId: vault.id, path, body })
       }
 
       let crash: Record<string, unknown> | undefined
@@ -267,7 +273,11 @@ const test: LabTest = {
         const c = a.crdtByPath.get(op.path)
         op.crdt = !a.crdtByPath.has(op.path) ? 'none' : c === op.newSha ? 'new' : c === op.oldSha ? 'old' : 'other'
       }
-      const touchedPaths = new Set([...ops.map((o) => o.path), ...livePaths])
+      // An issue counts for this round when it is on a note the round wrote and is not
+      // simply left over from an earlier round (note unchanged and already broken).
+      const outcomeByPath = new Map(ops.map((o) => [o.path, o.outcome]))
+      const introduced = (path: string, before: Set<string>) =>
+        (outcomeByPath.has(path) || livePaths.includes(path)) && (!before.has(path) || outcomeByPath.get(path) !== 'unchanged')
       const ackedLost = ops
         .filter((o) => o.answer === 'acked' && o.outcome !== 'consistent-new')
         .map((o) => ({ path: o.path, kind: o.kind, outcome: o.outcome! }))
@@ -276,11 +286,12 @@ const test: LabTest = {
       const stayBody = dump.notes.find((n) => n.path === livePaths[0])?.body ?? ''
       const leaveBody = dump.notes.find((n) => n.path === livePaths[1])?.body ?? ''
       const touched = {
-        divergent: a.divergent.filter((d) => touchedPaths.has(d.path)),
-        revisionGaps: a.revisionGaps.filter((p) => touchedPaths.has(p)),
-        crdtMismatch: a.crdtMismatch.filter((p) => touchedPaths.has(p)),
-        unparseable: a.unparseable.filter((u) => touchedPaths.has(u.path)),
+        divergent: a.divergent.filter((d) => introduced(d.path, prev.divergent)),
+        revisionGaps: a.revisionGaps.filter((p) => introduced(p, prev.revisionGaps)),
+        crdtMismatch: a.crdtMismatch.filter((p) => introduced(p, prev.crdtMismatch)),
+        unparseable: a.unparseable.filter((u) => introduced(u.path, new Set())),
       }
+      prev = { divergent: new Set(a.divergent.map((d) => d.path)), revisionGaps: new Set(a.revisionGaps), crdtMismatch: new Set(a.crdtMismatch) }
 
       const rep: RoundReport = {
         round,
@@ -318,6 +329,8 @@ const test: LabTest = {
       for (const p of basePaths) {
         const f = a.disk.get(p)
         if (f?.bodySha) current.set(p, f.bodySha)
+        const r = a.rowByPath.get(p)
+        if (r) currentRow.set(p, r.body_sha)
       }
 
       const label = killAfterMs === null ? 'control (no kill)' : `kill +${killAfterMs} ms`
@@ -411,7 +424,7 @@ const test: LabTest = {
         })
         // Place the kills along the control round's completion curve.
         const ends = ops.map((o) => o.endMs ?? 0).sort((x, y) => x - y)
-        const fixed = KILL_AFTER_FIXED ?? KILL_QUANTILES.map((q) => ends[Math.min(ends.length - 1, Math.floor(q * (ends.length - 1)))]!)
+        const fixed = KILL_AFTER_FIXED ?? KILL_FACTORS.map((f) => Math.round(f * (ends.at(-1) ?? 500)))
         plan.push(...fixed)
         ctx.log(`control completion ms: min ${ends[0]} p50 ${ends[Math.floor(ends.length / 2)]} max ${ends.at(-1)} -> kills at ${fixed.join(',')}`)
       }

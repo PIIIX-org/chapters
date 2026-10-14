@@ -405,6 +405,9 @@ export interface RawCall {
   error?: string
 }
 
+/** Responses above this are counted, not kept (see rawMcp). */
+const FULL_BODY_LIMIT = 8 * 1024 * 1024
+
 /** One MCP tools/call with exact response byte size; parses the inner JSON when `parse` is set. */
 export async function rawMcp(
   baseUrl: string,
@@ -432,20 +435,58 @@ export async function rawMcp(
       return { httpStatus: 0, bytes: 0, ms, ttfbMs: ms, ok: false, isError: false, textHead: '', textLen: 0, error: String(err) }
     }
     const ttfbMs = performance.now() - t0
-    let buf: ArrayBuffer
+    // Stream the body: count every byte, keep it whole only up to FULL_BODY_LIMIT
+    // (or when the caller parses it). Bigger bodies keep head + tail only, so
+    // parallel 300 MB note_history answers do not exhaust the runner's memory.
+    const keepAll = opts.parse === true
+    const chunks: Uint8Array[] = []
+    let bytes = 0
+    let head = new Uint8Array(0)
+    let tail = new Uint8Array(0)
+    let truncated = false
     try {
-      buf = await res.arrayBuffer()
+      const reader = res.body?.getReader()
+      for (;;) {
+        if (!reader) break
+        const { done, value } = await reader.read()
+        if (done) break
+        bytes += value.byteLength
+        if (!truncated) {
+          chunks.push(value)
+          if (!keepAll && bytes > FULL_BODY_LIMIT) {
+            const all = Buffer.concat(chunks)
+            head = all.subarray(0, 4096)
+            tail = all.subarray(all.byteLength - 4096)
+            chunks.length = 0
+            truncated = true
+          }
+        } else {
+          const joined = Buffer.concat([tail, value])
+          tail = joined.subarray(Math.max(0, joined.byteLength - 4096))
+        }
+      }
     } catch (err) {
       const ms = performance.now() - t0
-      return { httpStatus: res.status, bytes: 0, ms, ttfbMs, ok: false, isError: false, textHead: '', textLen: 0, error: `body read: ${String(err)}` }
+      return { httpStatus: res.status, bytes, ms, ttfbMs, ok: false, isError: false, textHead: '', textLen: 0, error: `body read after ${bytes} B: ${String(err)}` }
     }
     const ms = performance.now() - t0
     if (res.status === 429 && attempt < 8) {
       await Bun.sleep(Math.min(30_000, 1000 * 2 ** (attempt + 1)))
       continue
     }
-    const raw = new TextDecoder().decode(buf)
-    const out: RawCall = { httpStatus: res.status, bytes: buf.byteLength, ms, ttfbMs, ok: false, isError: false, textHead: '', textLen: 0 }
+    const out: RawCall = { httpStatus: res.status, bytes, ms, ttfbMs, ok: false, isError: false, textHead: '', textLen: 0 }
+    if (truncated) {
+      // Only successful tool results get this big; an error result is a short `Error: ...` text.
+      const h = new TextDecoder().decode(head)
+      const t = new TextDecoder().decode(tail)
+      out.textHead = h.slice(0, 500)
+      out.textLen = -1
+      out.isError = /"isError"\s*:\s*true/.test(t)
+      out.ok = res.status === 200 && h.startsWith('{"result"') && !out.isError
+      if (!out.ok) out.error = `truncated body: head ${h.slice(0, 200)} tail ${t.slice(-200)}`
+      return out
+    }
+    const raw = new TextDecoder().decode(Buffer.concat(chunks))
     if (res.status !== 200) {
       out.textHead = raw.slice(0, 500)
       out.textLen = raw.length
