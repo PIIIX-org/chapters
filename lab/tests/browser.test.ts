@@ -1034,14 +1034,22 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     ok: offline.silentDropDetectedMs !== null,
     severity: 'medium',
   })
-  const s8bFinal = snaps.find((x) => x.step === 'S8b-reconnected')?.editor ?? ''
-  checks.push({
-    name: 'S8b: typing done while disconnected stays where it was typed',
-    expected: '" j01 ... j05" after i05 (where the caret was), not at the top',
-    actual: `j01 at index ${s8bFinal.indexOf(' j01')}, i05 at ${s8bFinal.indexOf('i05')} (while partitioned j01 was at ${String(offline.jIndexWhilePartitioned)})`,
-    ok: s8bFinal.indexOf(' j01') > s8bFinal.indexOf('i05'),
-    severity: 'medium',
-  })
+  // Typing done while disconnected was typed at the end, below the previous
+  // agent line; after the merge it must still be below that line, not at the top.
+  for (const [step, first, anchorStep] of [
+    ['S8a-back-online', ' i01', 'S7'],
+    ['S8b-reconnected', ' j01', 'S8A'],
+  ] as const) {
+    const text = snaps.find((x) => x.step === step)?.editor ?? ''
+    const anchor = agentWrites.find((w) => w.step === anchorStep)?.marker ?? '(missing)'
+    checks.push({
+      name: `${step}: typing done while disconnected stays where it was typed`,
+      expected: `"${first.trim()} ..." after ${anchor} (where the caret was), not at the top`,
+      actual: `${first.trim()} at index ${text.indexOf(first)}, ${anchor} at ${text.indexOf(anchor)} of ${text.length}`,
+      ok: text.indexOf(first) > text.indexOf(anchor) && text.indexOf(anchor) >= 0,
+      severity: 'medium',
+    })
+  }
   const partitionStatus = (offline.statusDuringPartition as string[]).join(' | ')
   checks.push({
     name: 'S8b: status tells the user the socket dropped',
