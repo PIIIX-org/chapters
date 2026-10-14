@@ -8,9 +8,11 @@
 // embedding only), embeddings run in batches of 8, inputs capped at 16k chars.
 //
 // Method: local_path repo = BUNDLE (~700 KB, ~900 function/class
-// declarations on one line) + 2 small files; once the first sync stored them,
-// LATE small TS files are added to the folder, so the watcher queues them
-// BEHIND the bundle. `docker stats`/`docker inspect`/health sampled every 2 s.
+// declarations on one line) + BATCH small TS files in the same first sync
+// (queue order = directory order, so some land behind the bundle); once that
+// sync stored them, LATE more TS files are added to the folder (the watcher
+// queues them behind everything). `docker stats`/`docker inspect`/health
+// sampled every 2 s; docker events and the kernel log say why a process died.
 // Named zz- so it runs last: on dev it may take the instance down.
 import type { Check, LabTest } from '../lib/context.ts'
 import {
@@ -28,11 +30,12 @@ import {
 
 const DECLS = Number(process.env.LAB_BUNDLE_DECLS ?? 900)
 const TARGET_BYTES = Number(process.env.LAB_BUNDLE_BYTES ?? 700_000)
-const LATE = Number(process.env.LAB_BUNDLE_LATE_FILES ?? 30)
+const BATCH = Number(process.env.LAB_BUNDLE_BATCH_FILES ?? 30)
+const LATE = Number(process.env.LAB_BUNDLE_LATE_FILES ?? 10)
 const TIMEOUT_MS = Number(process.env.LAB_BUNDLE_TIMEOUT_MS ?? 25 * 60_000)
 const STALL_MS = Number(process.env.LAB_BUNDLE_STALL_MS ?? 240_000)
 
-/** esbuild-style output: every declaration on one line, padded to TARGET_BYTES. */
+/** esbuild-style output: every declaration on one line, ~TARGET_BYTES in total. */
 function makeBundle(): string {
   const per = Math.floor(TARGET_BYTES / DECLS)
   const parts: string[] = ['"use strict";']
@@ -43,7 +46,8 @@ function makeBundle(): string {
         : `function a${i}(e,t){var n=e+t|0;for(var r=0;r<n;r++)n^=r<<${i % 7};return n+"`
     const tail = i % 10 === 9 ? `"}}` : `"}`
     const padLen = Math.max(8, per - head.length - tail.length)
-    parts.push(head + `k${i}_`.repeat(Math.ceil(padLen / 6)).slice(0, padLen) + tail)
+    const token = `k${i}_`
+    parts.push(head + token.repeat(Math.ceil(padLen / token.length)).slice(0, padLen) + tail)
   }
   return parts.join('') + '\nexport{a0 as run};\n'
 }
@@ -54,42 +58,51 @@ function smallTs(prefix: string, i: number): string {
 
 const test: LabTest = {
   name: 'zz-fix-minified-bundle',
-  description: 'PR #405: a 700 KB / 900-declaration minified bundle neither OOMs/restarts the app nor blocks files queued after it.',
+  description: 'PR #405: a 700 KB / 900-declaration minified bundle neither OOMs/restarts the app nor blocks files queued with or after it.',
   async run(ctx) {
     const checks: Check[] = []
     const bundle = makeBundle()
     const name = ctx.uniq('fix-bundle')
-    const early: Record<string, string> = { 'cli.bundle.mjs': bundle, 'src/early0.ts': smallTs('early', 0), 'src/early1.ts': smallTs('early', 1) }
+    const first: Record<string, string> = { 'cli.bundle.mjs': bundle }
+    for (let i = 0; i < BATCH; i++) first[`src/batch${String(i).padStart(2, '0')}.ts`] = smallTs('batch', i)
     const late: Record<string, string> = {}
     for (let i = 0; i < LATE; i++) late[`src/late${String(i).padStart(2, '0')}.ts`] = smallTs('late', i)
 
     const containerId = (await ctx.docker.compose('ps', '-q', 'app')).stdout.trim()
     const stateBefore = await containerState(ctx, containerId)
+    const since = new Date().toISOString()
     const sampler = startSampler(ctx, containerId)
 
-    await copyIntoLocalRepo(ctx, writeTree(early), name)
+    await copyIntoLocalRepo(ctx, writeTree(first), name)
     const repo = await connectLocalRepo(ctx, name)
-    // Wait until the first sync stored the early files (they are now queued, bundle among them).
+    // Wait until the first sync stored the batch (bundle and batch files are now queued).
     let p = await repoProgress(ctx, repo.id)
     const t0 = Date.now()
-    while (p.files < 3 && Date.now() - t0 < 120_000) {
+    while (p.files < BATCH + 1 && Date.now() - t0 < 120_000) {
       // Real time on purpose: waiting on a live sync.
       await Bun.sleep(500)
       p = await repoProgress(ctx, repo.id).catch(() => p)
     }
     const lateAddedAt = Math.round((Date.now() - ctx.startedAt) / 1000)
     await copyIntoLocalRepo(ctx, writeTree(late), name)
-    ctx.log(`late files added at +${lateAddedAt}s (early files stored: ${p.files})`)
+    ctx.log(`late files added at +${lateAddedAt}s (first sync stored ${p.files})`)
 
     const settle = await settleRepo(ctx, repo.id, 'bundle', {
       stallMs: STALL_MS,
       timeoutMs: TIMEOUT_MS,
-      minFiles: 3 + LATE,
+      minFiles: 1 + BATCH + LATE,
       pollMs: 5_000,
     })
     const samples = await sampler.stop()
     const stats = summarizeSamples(samples)
     const stateAfter = await containerState(ctx, containerId)
+    const events = await ctx.docker.exec([
+      'docker', 'events', '--since', since, '--until', new Date().toISOString(),
+      '--filter', `container=${containerId}`, '--format', '{{.Time}} {{.Action}} exitCode={{index .Actor.Attributes "exitCode"}}',
+    ])
+    const containerEvents = events.stdout.split('\n').filter((l) => /die|oom|kill|start|restart/.test(l)).slice(0, 30)
+    const dmesg = await ctx.docker.exec(['sudo', 'dmesg', '-T'])
+    const kernelOom = dmesg.stdout.split('\n').filter((l) => /out of memory|oom-kill|killed process/i.test(l)).slice(-10)
 
     const perFile = await ctx.docker
       .psqlRows<{ path: string; embedded: boolean; symbols: number; imports: number; bytes: number }>(
@@ -100,8 +113,10 @@ const test: LabTest = {
       )
       .catch(() => [])
     const bundleRow = perFile.find((f) => f.path === 'cli.bundle.mjs')
-    const lateRows = perFile.filter((f) => f.path.startsWith('src/late'))
-    const lateWithSymbols = lateRows.filter((f) => f.embedded && f.symbols === 2).length
+    const smallRows = perFile.filter((f) => f.path.startsWith('src/'))
+    const smallDone = smallRows.filter((f) => f.embedded && f.symbols === 2)
+    const lateDone = smallDone.filter((f) => f.path.startsWith('src/late')).length
+    const batchDone = smallDone.filter((f) => f.path.startsWith('src/batch')).length
     const pending = await filesPendingExtraction(ctx, repo.id)
     const pendingSql = await sqlPending(ctx, repo.id).catch(() => -1)
     const logs = await ctx.docker.app.logs('app', 400).catch(() => '')
@@ -114,7 +129,7 @@ const test: LabTest = {
       {
         name: 'app survives indexing the bundle',
         expected: 'no restart, no OOM kill, /health never down',
-        actual: `restarted ${restarted} (restartCount ${stateBefore?.restartCount}->${stateAfter?.restartCount}, distinct starts ${stats.distinctStarts}), OOMKilled seen ${stats.oomKilledSeen}, unhealthy samples ${stats.unhealthySamples}/${stats.samples}`,
+        actual: `restarted ${restarted} (restartCount ${stateBefore?.restartCount}->${stateAfter?.restartCount}, distinct starts ${stats.distinctStarts}), OOMKilled seen ${stats.oomKilledSeen}, kernel OOM lines ${kernelOom.length}, unhealthy samples ${stats.unhealthySamples}/${stats.samples}`,
         ok: !restarted && !stats.oomKilledSeen && stats.unhealthySamples === 0,
         severity: 'critical',
       },
@@ -126,11 +141,18 @@ const test: LabTest = {
         severity: 'high',
       },
       {
-        name: 'files queued after the bundle still get extracted',
-        expected: `${LATE}/${LATE} late files embedded with 2 symbols each`,
-        actual: `${lateWithSymbols}/${lateRows.length} (settle ${settle.outcome} in ${Math.round(settle.ms / 1000)} s)`,
-        ok: lateRows.length === LATE && lateWithSymbols === LATE,
+        name: 'files synced with the bundle still get extracted',
+        expected: `${BATCH}/${BATCH} batch files embedded with 2 symbols each`,
+        actual: `${batchDone}/${BATCH} (settle ${settle.outcome} in ${Math.round(settle.ms / 1000)} s)`,
+        ok: batchDone === BATCH,
         severity: 'critical',
+      },
+      {
+        name: 'files added after the bundle still get extracted',
+        expected: `${LATE}/${LATE} late files embedded with 2 symbols each`,
+        actual: `${lateDone}/${LATE}`,
+        ok: lateDone === LATE,
+        severity: 'high',
       },
       {
         name: 'bundle itself: file embedding, no junk symbols',
@@ -150,9 +172,10 @@ const test: LabTest = {
 
     return {
       summary:
-        `Bundle ${bundle.length} bytes, ${DECLS} declarations on one line, + ${LATE} TS files added behind it. ` +
-        `Settle ${settle.outcome} after ${Math.round(settle.ms / 1000)} s; peak app memory ${stats.peakMemMiB} MiB; restarted ${restarted}; OOMKilled ${stats.oomKilledSeen}; ` +
-        `late files extracted ${lateWithSymbols}/${LATE}; bundle symbols ${bundleRow?.symbols ?? 'n/a'}; filesPendingExtraction ${pending.value ?? 'absent'} (SQL ${pendingSql}).`,
+        `Bundle ${bundle.length} bytes, ${DECLS} declarations on one line, synced with ${BATCH} TS files, + ${LATE} added after. ` +
+        `Settle ${settle.outcome} after ${Math.round(settle.ms / 1000)} s; peak app memory ${stats.peakMemMiB} MiB; restarted ${restarted}; ` +
+        `/health down in ${stats.unhealthySamples}/${stats.samples} samples; batch files extracted ${batchDone}/${BATCH}, late ${lateDone}/${LATE}; ` +
+        `bundle embedded ${bundleRow?.embedded ?? 'n/a'} with ${bundleRow?.symbols ?? 'n/a'} symbols; filesPendingExtraction ${pending.value ?? 'absent'} (SQL ${pendingSql}).`,
       checks,
       data: {
         repoId: repo.id,
@@ -161,6 +184,8 @@ const test: LabTest = {
         lateAddedAt,
         stateBefore,
         stateAfter,
+        containerEvents,
+        kernelOom,
         stats,
         samples,
         settle: { outcome: settle.outcome, ms: settle.ms },
