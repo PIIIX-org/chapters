@@ -234,7 +234,7 @@ export function serializeNote(note: OkfNote): string {
  * of an indented block scalar, used to end the frontmatter early and spill
  * the rest of the YAML into the body. LF or CRLF line endings.
  */
-const NOTE_FENCE = /^---\n([\s\S]*?)\n?---\n?([\s\S]*)$/
+const NOTE_FENCE = /^---\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)([\s\S]*)$/
 
 export function parseNote(raw: string): OkfNote {
   const match = raw.match(NOTE_FENCE)
