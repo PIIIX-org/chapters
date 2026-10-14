@@ -157,11 +157,12 @@ describe('MCP repository tools', () => {
     expect(parsed.nodes.length).toBeGreaterThan(0)
   })
 
-  it('repository_status reports sync freshness', async () => {
+  it('repository_status reports sync freshness and pending extraction', async () => {
     const scoped = await mcpClient(repoScopedToken)
     const res = await scoped.callTool({ name: 'repository_status', arguments: {} })
-    const parsed = JSON.parse(textOf(res)) as { syncStatus: string }
+    const parsed = JSON.parse(textOf(res)) as { syncStatus: string; filesPendingExtraction: number }
     expect(parsed.syncStatus).toBe('idle')
+    expect(parsed.filesPendingExtraction).toBe(0)
   })
 
   it('a vault-scoped connection is hard-rejected from repository tools', async () => {
