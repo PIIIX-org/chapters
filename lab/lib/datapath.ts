@@ -177,6 +177,8 @@ export interface DbNote {
   revs: number
   last_rev_sha: string | null
   last_rev_action: string | null
+  /** actor_type of the newest revision: 'user' | 'mcp' | 'collab'. */
+  last_rev_actor: string | null
   embedded: boolean
 }
 
@@ -191,6 +193,7 @@ export async function dbNotes(ctx: LabContext, vaultId: string): Promise<DbNote[
       (select encode(sha256(convert_to(r.body, 'UTF8')), 'hex') from note_revisions r
         where r.note_id = n.id order by r.created_at desc limit 1) as last_rev_sha,
       (select r.action from note_revisions r where r.note_id = n.id order by r.created_at desc limit 1) as last_rev_action,
+      (select r.actor_type::text from note_revisions r where r.note_id = n.id order by r.created_at desc limit 1) as last_rev_actor,
       n.embedding is not null as embedded
     from notes n where n.vault_id = '${vaultId}' order by n.path`)
 }
