@@ -1,0 +1,181 @@
+name: Elara lab
+
+# Integration tests where components meet: collab relay, note store, disk,
+# Postgres and MCP over HTTP (#576). A throwaway Elara instance is built from
+# this commit with the repo's own docker-compose.yml, bootstrapped through
+# the real setup/signup/approval flow (lab/bootstrap.ts), then exercised by
+# lab/tests/*.test.ts via lab/run.ts. Never deploys.
+#
+# Tiers (cost: the fast tier takes ~10 min, the full tier over an hour):
+#   fast  PRs to dev that touch server/**, lab/**, docker-compose.yml,
+#         Dockerfile or this lab's own workflow/gate; pushes to lab/**
+#   full  nightly on dev, every PR to prod (promotions), and by hand:
+#         gh workflow run elara-lab.yml --ref <branch> [-f tier=fast] [-f tests=a,b]
+# The gate (.github/scripts/lab-gate.mjs) compares the results with
+# lab/known-defects.json: a failed check outside the baseline, a baseline
+# entry that now passes, or a crashed test fails the job. Not a required
+# check yet (fix-list item 177). Docs: docs/agents/lab.md.
+on:
+  pull_request:
+    branches: [dev, prod]
+  push:
+    branches: ['lab/**']
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'fast = PR tier, full = every test with its long parts'
+        type: choice
+        options: [full, fast]
+        default: full
+      tests:
+        description: 'Comma-separated substrings of lab/tests file names (empty = every test of the tier)'
+        required: false
+        default: ''
+      mcp_rate_limit:
+        description: 'MCP_RATE_LIMIT per connection per minute (production default 120)'
+        required: false
+        default: '600'
+
+concurrency:
+  group: elara-lab-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      tier: ${{ steps.plan.outputs.tier }}
+    steps:
+      - name: Pick the tier
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.base_ref }}
+          PR: ${{ github.event.pull_request.number }}
+          INPUT_TIER: ${{ inputs.tier }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            schedule) tier=full ;;
+            workflow_dispatch) tier="$INPUT_TIER" ;;
+            push) tier=fast ;;
+            pull_request)
+              if [ "$BASE_REF" = prod ]; then
+                tier=full
+              else
+                gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+                if grep -Eq '^(server/|lab/|docker-compose\.yml$|Dockerfile$|\.github/workflows/elara-lab\.yml$|\.github/scripts/lab-gate\.mjs$)' "$RUNNER_TEMP/changed.txt"; then
+                  tier=fast
+                else
+                  tier=none
+                fi
+              fi
+              ;;
+            *) echo "unexpected event $GITHUB_EVENT_NAME"; exit 1 ;;
+          esac
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "Lab tier: **$tier** ($GITHUB_EVENT_NAME)" >> "$GITHUB_STEP_SUMMARY"
+
+  lab:
+    needs: plan
+    if: needs.plan.outputs.tier != 'none'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      issues: read
+    env:
+      COMPOSE: docker compose -f docker-compose.yml -f lab/docker-compose.lab.yml
+      LAB_TIER: ${{ needs.plan.outputs.tier }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # On a PR, HEAD is GitHub's merge into the base; HEAD^1 (the base)
+          # must be in the clone for the gate step.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Generate secrets (.env for compose interpolation)
+        run: |
+          key=$(openssl rand -hex 32)
+          setup=$(openssl rand -hex 24)
+          pg=$(openssl rand -hex 16)
+          echo "::add-mask::$key"
+          echo "::add-mask::$setup"
+          echo "::add-mask::$pg"
+          {
+            echo "CREDENTIALS_ENCRYPTION_KEY=$key"
+            echo "SETUP_TOKEN=$setup"
+            echo "POSTGRES_PASSWORD=$pg"
+            echo "MCP_RATE_LIMIT=${{ inputs.mcp_rate_limit || '600' }}"
+          } > .env
+
+      - name: Build and start (docker compose up -d --build)
+        run: |
+          start=$(date +%s)
+          $COMPOSE up -d --build
+          echo "compose up took $(( $(date +%s) - start )) s"
+
+      - name: Bootstrap users and tokens
+        run: bun lab/bootstrap.ts
+
+      - name: Install lab dependencies (@hocuspocus/provider, yjs, playwright)
+        working-directory: lab
+        run: bun install --frozen-lockfile
+
+      - name: OKF reference parser (pinned) for export conformance
+        run: |
+          mkdir -p /tmp/okf-ref
+          curl -fsSL https://raw.githubusercontent.com/GoogleCloudPlatform/open-knowledge-format/ad30107c31c06aec8a7d5636e0d1058118604e6f/src/reference_agent/bundle/document.py -o /tmp/okf-ref/okf_document.py
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --break-system-packages pyyaml
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
+
+      - name: Run lab tests (${{ needs.plan.outputs.tier }} tier)
+        env:
+          LAB_TESTS: ${{ inputs.tests }}
+        run: bun lab/run.ts
+
+      - name: Collect compose logs
+        if: always()
+        run: |
+          mkdir -p lab-results
+          $COMPOSE ps -a > lab-results/compose-ps.txt 2>&1 || true
+          $COMPOSE logs --no-color --timestamps > lab-results/compose.log 2>&1 || true
+          [ -f lab-results/summary.md ] && cat lab-results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      # On a PR, run the base's copy of the gate so a PR cannot edit the
+      # check it is judged by (the baseline comes from the PR: updating it is
+      # part of fixing a defect). The copy runs alone from $RUNNER_TEMP.
+      - name: Gate against lab/known-defects.json
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gate=.github/scripts/lab-gate.mjs
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && git cat-file -e "HEAD^1:$gate" 2>/dev/null; then
+            git show "HEAD^1:$gate" > "$RUNNER_TEMP/lab-gate.mjs"
+            gate="$RUNNER_TEMP/lab-gate.mjs"
+            echo "gate: base copy"
+          fi
+          node "$gate" --results lab-results --baseline lab/known-defects.json
+
+      - name: Upload lab-results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lab-results
+          path: lab-results/
+          retention-days: 30

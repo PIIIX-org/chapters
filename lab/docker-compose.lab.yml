@@ -1,0 +1,31 @@
+# Lab override for the repo's own docker-compose.yml (used by
+# .github/workflows/elara-lab.yml):
+#   docker compose -f docker-compose.yml -f lab/docker-compose.lab.yml up -d --build
+#
+# Differences from the shipped stack, and why:
+# - mailpit + SMTP_*: signup verification mail must be readable so the lab
+#   can create a second user through the real signup/verify/approve flow.
+#   Without SMTP the code only lands in an in-process array (mailer.ts).
+# - MCP_RATE_LIMIT: per-connection MCP limit (mcp/rate-limit.ts, default
+#   120/min). Set in ./.env by the workflow; tests record any 429s.
+# - BACKUP_LOCAL_PATH / BACKUP_RETENTION_COUNT: scheduled and on-demand
+#   instance backups land in the data volume
+#   (server/src/export/backup-service.ts, config.ts backup.*), so
+#   backup-restore can restore one with `pnpm restore-backup`.
+services:
+  app:
+    environment:
+      - SMTP_HOST=mailpit
+      - SMTP_PORT=1025
+      - SMTP_FROM=elara-lab@example.com
+      - MCP_RATE_LIMIT
+      - BACKUP_LOCAL_PATH=/data/backups
+      - BACKUP_RETENTION_COUNT=3
+    depends_on:
+      mailpit:
+        condition: service_started
+
+  mailpit:
+    image: axllent/mailpit:v1.31
+    ports:
+      - '8025:8025'
