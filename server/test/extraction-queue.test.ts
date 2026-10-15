@@ -5,6 +5,7 @@ import { db } from '../src/db/client.js'
 import { repositories, repositoryFileImports, repositoryFiles, repositoryFileSymbols } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import {
+  backfillUnresolvedImports,
   countPendingExtractions,
   flushExtraction,
   scheduleMissingExtractions,
@@ -83,6 +84,72 @@ describe('extraction queue', () => {
       .from(repositoryFileImports)
       .where(eq(repositoryFileImports.sourceFileId, mainFile.id))
     expect(imports[0]?.resolvedTargetFileId).toBe(helperFile.id)
+  })
+
+  it('resolves TypeScript ESM `.js` specifiers and the client `@/` alias to their .ts/.tsx files', async () => {
+    const repo = await makeRepo()
+    await syncRepositoryFiles(
+      repo.id,
+      [
+        {
+          path: 'client/src/App.tsx',
+          content:
+            "import { Button } from './components/Button.js'\nimport { cn } from '@/lib/utils'\nexport function App() { return cn(Button()) }",
+        },
+        { path: 'client/src/components/Button.tsx', content: 'export function Button() { return 1 }' },
+        { path: 'client/src/lib/utils.ts', content: 'export function cn(x: number) { return x }' },
+      ],
+      ['client/src/App.tsx', 'client/src/components/Button.tsx', 'client/src/lib/utils.ts'],
+    )
+    await flushExtraction()
+
+    const app = await fileByPath(repo.id, 'client/src/App.tsx')
+    const button = await fileByPath(repo.id, 'client/src/components/Button.tsx')
+    const utils = await fileByPath(repo.id, 'client/src/lib/utils.ts')
+    const imports = await db
+      .select()
+      .from(repositoryFileImports)
+      .where(eq(repositoryFileImports.sourceFileId, app.id))
+    const resolvedBySpecifier = Object.fromEntries(imports.map((i) => [i.targetPath, i.resolvedTargetFileId]))
+    expect(resolvedBySpecifier).toEqual({
+      './components/Button.js': button.id,
+      '@/lib/utils': utils.id,
+    })
+  })
+
+  it('backfills imports stored unresolved by an older resolver, from their raw target path', async () => {
+    const repo = await makeRepo()
+    await syncRepositoryFiles(
+      repo.id,
+      [
+        {
+          path: 'server/src/queue.ts',
+          content: "import { resolve } from './resolve.js'\nimport { eq } from 'drizzle-orm'\nexport const q = resolve(eq)",
+        },
+        { path: 'server/src/resolve.ts', content: 'export function resolve(x: unknown) { return x }' },
+      ],
+      ['server/src/queue.ts', 'server/src/resolve.ts'],
+    )
+    await flushExtraction()
+
+    const queueFile = await fileByPath(repo.id, 'server/src/queue.ts')
+    const resolveFile = await fileByPath(repo.id, 'server/src/resolve.ts')
+    // Simulate rows written before `.js` -> `.ts` resolution existed.
+    await db
+      .update(repositoryFileImports)
+      .set({ resolvedTargetFileId: null })
+      .where(eq(repositoryFileImports.sourceFileId, queueFile.id))
+
+    expect(await backfillUnresolvedImports()).toBeGreaterThanOrEqual(1)
+
+    const imports = await db
+      .select()
+      .from(repositoryFileImports)
+      .where(eq(repositoryFileImports.sourceFileId, queueFile.id))
+    expect(Object.fromEntries(imports.map((i) => [i.targetPath, i.resolvedTargetFileId]))).toEqual({
+      './resolve.js': resolveFile.id,
+      'drizzle-orm': null,
+    })
   })
 
   it('embeds an unsupported-language file without producing import/symbol rows', async () => {

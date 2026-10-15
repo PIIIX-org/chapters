@@ -4,7 +4,7 @@ import { runMigrations } from './db/migrate.js'
 import { ensureInstanceState } from './auth/bootstrap.js'
 import { scheduleMissingEmbeddings } from './search/embedding-queue.js'
 import { startLocalWatchers, startPollingScheduler, reconcileOrphanedSyncs } from './repositories/scheduler.js'
-import { scheduleMissingExtractions } from './repositories/extraction-queue.js'
+import { backfillUnresolvedImports, scheduleMissingExtractions } from './repositories/extraction-queue.js'
 import { scrubStoredGitCredentials } from './repositories/git-remote.js'
 import { startBackupScheduler } from './export/backup-service.js'
 import { config } from './config.js'
@@ -26,6 +26,8 @@ try {
   if (missingFiles > 0) console.log(`extraction catch-up scheduled for ${missingFiles} repository files`)
   const reconciled = await reconcileOrphanedSyncs()
   if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)
+  const backfilled = await backfillUnresolvedImports()
+  if (backfilled > 0) console.log(`resolved ${backfilled} previously unresolved code import(s)`)
   const { setupPending, setupToken } = await ensureInstanceState()
   if (setupPending && setupToken) {
     // The only place the setup token ever appears in plaintext.
