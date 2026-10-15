@@ -2,36 +2,32 @@
 
 Resume anchor. Keep under 40 lines. Update + push at every task boundary.
 
-- **Status**: Mobile Responsive Card Redesign for Admin & Oversight Tables; Auth Mobile Adaptation; Spec (#370); Phase 6 (#369); Phase 5 (#368); Phase 4 (#367); Phase 2 (#366); Phase 3 (#365); Phase 1 (#364).
-  - Admin & Oversight Mobile Cards (2026-10-09): Redesigned ApprovalQueue, UserRoster, VaultOversight, AccessOversight, InstanceActivity, VaultMcpPanel, and TeamPage tables into responsive stacked cards on mobile to eliminate horizontal scroll trapping and clipping. 927 client tests + 400 server tests green, bundle < 300KB (157.40 KB gzip).
-  - Docked Panels & Ribbon Rail (#362, 2026-10-08): Transitioned from floating sidebars to sticky in-flow flex columns and contiguous rail.
-  - Chunk Load & Graph Framing Fixes (2026-10-01): Resolved #327 (stale Vite asset 404 guard under `/assets/`, index.html no-cache header, vite:preloadError auto-reload, resilient lazyRoute) and #328 (unobstructed viewport centering, simulation settle auto-fit, resize redraw, panel close button). PR #329 merged to `dev`, PR #330 promoted to `prod`.
-  - Resource & Performance Optimizations (2026-10-01): 48/48 optimizations implemented across 4 subsystems (DB/pgvector, Graph/Collab, Workers/AST, Canvas/UI). HNSW AST index (migration 0018), tuned hnsw.ef_search = 100, connection pool config + graceful drain, Tree-sitter WASM leak fix, O(1) queue dequeue, Canvas 2D edge partition & viewport culling, lazy Mermaid bundle (<300KB). PR #325 merged into `dev`, PR #326 promoted to `prod`.
-  - Defect Remediation Complete (2026-10-01): 100% implemented across all 20 defects. Interactive report at `docs/remediation-plan-report.html`.
-  - Comprehensive Visual & Behavioral Audit (135 screenshots, 2026-09-30): Full-spectrum evaluation across 16 categories via CDP. Cataloged 20 defects (4 Critical: rail layout occlusion, button overlap, mobile header collapse, 405 revision diff; 7 High: raw UUID leak, QR code absence, text clip, touch target deficit [38/39 < 44px], PDF drop syntax bug; 9 Med/Polish). Interactive dashboard at `docs/visual-and-behavioral-audit-report.html` and note `audit/2026-09-30-comprehensive-visual-and-behavioral-audit`.
-  - Deep UI/UX Audit (48 screenshots): Fixed dialog overflow/trapping in DialogContent (max-h + scroll), note title sidebar truncation in FileTree via NoteActions compact icon buttons, mobile 375px graph header collision in ColorModeToggle/GraphCanvas, mobile rail collision via pl-16 across all page wrappers, pointer cursors on Rail/NotificationBell/AccountMenu, and outline button affordances on Delete team and Change email.
-  - UI/UX Polish (#316): Tactile button depress physics (active:scale-[0.96]), cursor-pointer restore, isolated destructive actions with safety borders in VaultActions/NoteActions, VaultCard settings modal trigger, ScopePicker opaque popover at z-30/z-50, unified top controls bar, dynamic context notice positioning.
-  - WebMCP ADR: Documented architectural decision against WebMCP browser standard (in-tree native MCP tools + stdio/SSE are self-contained, auditable, and decoupled from client browser context).
-  - Security Audit & Remediation (2026-09-28): 12/12 vulnerabilities remediated at root cause (3 Critical, 3 High, 4 Medium, 2 Low). SVG CSP sandboxing, Mermaid DOMPurify strict, gitUrl SSRF filter, MFA verification guard, mass assignment schema guards, TOTP secret backup scrubbing, admin hierarchy, email code lockout, git size caps, global perspective role checks, 0 npm audit advisories.
-  - Graph Perspectives (§4.2): Scoped saved graph views & filter presets (Architecture, Security, Recent) with team sharing, REST API, UI & MCP tools.
-  - MCP Prompts Suite: 20 engineering prompts (`prompts/list` & `prompts/get`) for continuous session capture, ADRs, drift audits, blast radius.
-  - #286–#293: Rename sync, CRDT write-through, admin reactivation, wikilink refactoring, mark-all-read notifications, revision diff, incoming backlinks, responsive mobile shell.
-  - Symbol Embeddings (#262): Fine-grained AST symbol vector embeddings (384d), snippets & line ranges in MCP `find_symbols`, `search`, and UI.
-  - Concept Pathfinding: BFS shortest path explorer across notes and code in Graph Canvas and MCP `find_graph_path`, step breakdown & visual path illumination.
-  - Scheduled Offsite Backups (#260): Automated snapshots to S3/GCS or local path with AWS SigV4, retention pruning, status API & admin UI.
-  - Git Drift Detection: Staleness & drift check across frontmatter and wikilinks on git sync/webhook with UI alerts & notifications.
-  - AST Note-to-Code Links: Cross-type [[repo:name/file#symbol]] wikilinks navigating to code files with symbol declaration & line reveal.
-  - Image & Asset Uploads: Clipboard paste & drag-drop asset upload to vault storage with live image preview & export/import packaging.
-  - Mermaid & KaTeX: Live block/inline KaTeX preview, live rendered Mermaid diagrams with click-to-edit cursor focus.
-  - Local Ego Graph: 1–2 hops local network in Note Inspector with SVG layout, depth toggle, relation pills, accessible roster.
-- **Previous Phases**: UI Redesign (#206), OKF v0.2 (#209–#213), Shell (#218–#239), Hardening (#244–#277), Prod Promotions (#303, #307, #309, #316, #318, #322, #326, #330).
+- **Updated**: 2026-10-14 (Elara AI-performance study, rounds 1 and 2). Product is **Elara**; the repo keeps the name `chapters`. Study: Elara vault notes `audit/2026-10-14-ai-performance-study` (round 1) and its round-2 follow-up.
+- **Merged to `dev` (2026-10-15, from the study)**:
+  - #400 frontmatter fence must be a whole `---` line; writes that don't survive serialize→parse are refused (400).
+  - #405 a minified/oversized file can't stall extraction; boot re-enqueues files lost to a restart; `repository_status.filesPendingExtraction` (fixes #404).
+  - #398 import edges resolve `.js/.jsx/.mjs/.cjs` → TS sources and `@/` → package `src`; boot backfills unresolved import rows.
+  - #402 per-note write lock and unique temp files (fixes #401). Lost read-then-append updates remain (writes are ordered, not merged).
+  - #399 (control arm) closed, not merged. Production gets these on the next promotion; the extraction catch-up and import backfill run automatically at server start.
+- **Open issues**: #403 (MCP/REST edits attributed to `collab`/null when the relay runs), #377 (offline-first sync), #261, #263 (deferred), #9 (assigned).
+- **Known open defects** (from the round-2 study; not yet filed as issues unless noted):
+  - `edit_note` replaces the whole body: an agent edit deletes a user's in-flight typing; no `append`/patch or `ifRevision`.
+  - Crash safety: DB row can get ahead of the file; `.crdt` reload can duplicate a document after a crash; collab edits closed within the 2 s save delay are lost.
+  - Backup restore crashes on trashed vaults and repo-scoped tokens; loses attachments, trash, revisions, MFA; backups are mode 644.
+  - Size: collab socket accepts up to 100 MiB; `note_history` returns full content unpaginated and can hang or crash the app.
+  - Logout leaves the collab socket connected.
+  - Ingestion: `export const` arrow functions and `.mts` not extracted; one global extraction queue; a webhook stops polling for that repo (`scheduler.ts`).
+  - MCP: 6 tools ignore the token pin (`find_symbols`, 3 perspective tools, 2 preference tools); no line-range `read_file`, no path filter on `browse_repository`, no `limit` on `graph`; `graph` can't apply perspectives.
+  - Audit checks structure only (scored a vault with wrong facts 100/100). Bare `[[name]]` links break on rename.
+  - Search: English-only embedder; Persian notes get meaningless semantic edges; no Arabic-script normalization.
+  - Benchmarks (TP-01..TP-15, `docs/benchmarks/`) retracted: runners never merged, run against prod, impossible numbers.
+- **Previous work**: UI redesign (#206), OKF v0.2 (#209–#213), shell (#218–#239), hardening (#244–#277), MCP prompts and perspectives, mobile cards (2026-10-09), note repair (#391/#395), git credential scrub (#383/#394).
 - **Architecture Traps**:
   - `prod` == `dev` needs Taha's explicit OK. PRs target `dev` directly, never stacked.
   - 1 container + 1 Postgres per customer. Control plane in separate private repo.
   - Collab is a person, no autosave PUT (CRDT is the note). Viewer read-only forever.
   - Exact seq scan for semantic edge recompute (#123). Mutation-verify every test.
-- **Suite**: 1,327 automated tests (927 client, 400 server across 191 test files), 100% passing. Zero open bugs. Zero vulnerabilities. Bundle budget strictly < 300KB.
+  - MCP is Streamable HTTP only (`/mcp`, `/elara/mcp`); no stdio. Hosted at `chapters.piiix.org`; `elara.piiix.org` is not live.
+- **Suite**: server + client Vitest suites run in CI (`checks`) on every PR.
 - **Deferred**: cli-visualizer (#9, assigned), partial restore (#261), per-type notification prefs (#263).
 - **Decided against (do NOT re-open)**: WebMCP browser standard (adr-001), Leiden (#265), graph DB (#268), GraphRAG (#267), cross-file calls (#266).
-- **Open issues**: #9 (assigned).
-

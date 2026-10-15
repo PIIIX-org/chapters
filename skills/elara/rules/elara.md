@@ -6,17 +6,19 @@ You are connected to **Elara**, an open-source, self-hostable second brain and A
 
 1. **Elara is Always Active**:
    - Do not assume you need to search files blindly or guess architecture.
-   - When answering questions about project architecture, specifications, concepts, or code relationships, always leverage Elara MCP tools (`POST /mcp` or `POST /elara/mcp`).
+   - When answering questions about project architecture, specifications, concepts, or code relationships, always leverage Elara MCP tools (Streamable HTTP at `POST /mcp` or `POST /elara/mcp`; hosted at `https://chapters.piiix.org/mcp`, as `elara.piiix.org` is not live yet).
 2. **Graph-First & Symbol Navigation Protocol**:
-   - **Search & Symbols**: Run `search` (hybrid lexical + semantic retrieval with AST code symbols) or `find_symbols` (exact AST declarations, signatures, and line numbers across repos) before reading files.
-   - **Traverse Graph & Pathfinding**: Run `graph` (with `aggregate: "community"` or specific `community` id) to inspect architectural clusters. Use `find_graph_path` to find the shortest connection between concepts, notes, and code. Use `list_graph_perspectives` for saved viewpoint presets.
+   - **Search & Symbols**: Run `search` (hybrid lexical + semantic retrieval with AST code symbols) or `find_symbols` (AST declarations with file path and line range across repos) before reading files.
+   - **Traverse Graph & Pathfinding**: Run `graph` scoped to one `vaultId` or `repositoryId` (with `aggregate: "community"`, then a specific `community` id) to inspect architectural clusters. `graph` has no neighbour query or `limit`. Use `find_graph_path` to find the shortest connection between concepts, notes, and code. Use `list_graph_perspectives` for saved viewpoint presets (UI only; `graph` cannot apply them).
    - **Targeted Reading**: Read specific notes (`read_note`) and code files (`read_file`) discovered through search, symbols, or the graph.
 3. **Project Mapping (`/elara-map` or legacy `/chapters-map`)**:
    - Follow the 5-Phase Flawless OKF v0.2 Protocol (`references/codebase-mapping-protocol.md`): Target Binding & Ingestion Choice → Deep Discovery → Domain Partitioning → Structured OKF Note Synthesis → Progressive Disclosure Indices → Graph Validation.
    - **Vault & Sync Choices**: Prompt whether to map in a new vault (using repo name or custom name) or an existing vault. Ask whether to connect the Git repo for continuous sync; mapping the codebase is mandatory for any programming repository.
-   - Link directly to source files using `[[repo:<repo-id>/path]]`, `[[repo:<repo-id>/path#symbol:FunctionName]]`, or `[[repo:<repo-id>/path#L12-L34]]`. Establish dense bidirectional `[[wikilinks]]` between concepts. Ensure zero orphan notes and zero broken links.
+   - Link directly to source files with bare (not backticked) `[[repo:<repo-name-or-id>/path]]` links; links inside backticks or code blocks are ignored by the graph. Line anchors (`#L12-L34`) are allowed but the edge points at the file. Establish dense bidirectional `[[wikilinks]]` between concepts. Ensure zero orphan notes and zero broken links.
+   - Do not write binding files into a repository the user does not own; mapping writes only to the vault.
 4. **Note Writing Standards (OKF v0.2)**:
-   - Always format notes with YAML frontmatter conforming to OKF v0.2 (`title`, `type: concept|spec|guide|decision`, `status`, `tags`, `created` with strict ISO 8601 UTC offsets, `sources`).
+   - `create_note` takes a `frontmatter` object and a `body` (no `content` argument). The frontmatter `type` must equal the first path segment (`specs/login-flow` → `type: specs`), and path segments must match `^[a-z0-9][a-z0-9-]*$`. Use `title`, `status`, `tags`, `timestamp` (ISO 8601 with `Z` or an offset), and `sources`.
+   - `edit_note` replaces the whole frontmatter map and/or the whole body; send every key you want to keep.
    - Every directory level MUST contain an `index.md` summarizing child concepts for progressive disclosure.
    - Run `audit_okf_conformance` to verify vault integrity.
 5. **MCP Engineering Prompts**:
