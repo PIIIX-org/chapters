@@ -26,7 +26,7 @@ const test: LabTest = {
     const V = vault.id
     const dataDir = `/data/elara/vaults/${V}/assets`
     const lsAssets = async (dir = dataDir) =>
-      (await ctx.docker.exec([...ctx.docker.COMPOSE, 'exec', '-T', 'app', 'sh', '-c', `ls -1 ${dir} 2>/dev/null; true`])).stdout
+      (await ctx.docker.appExec(['sh', '-c', `ls -1 ${dir} 2>/dev/null; true`])).stdout
         .split('\n')
         .filter(Boolean)
 

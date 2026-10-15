@@ -4,7 +4,7 @@
 // report the exact HTTP response size.
 import { createHash } from 'node:crypto'
 import type { LabContext } from './context.ts'
-import { COMPOSE, exec, waitHealthy } from './docker.ts'
+import { appContainerId, appExec, COMPOSE, exec } from './docker.ts'
 
 export const sha = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex')
 
@@ -133,10 +133,6 @@ export interface VaultDump {
 
 let dumpInstalledFor = ''
 
-async function appExec(args: string[], stdin?: string) {
-  return exec([...COMPOSE, 'exec', '-T', 'app', ...args], stdin)
-}
-
 /** Walks /data/elara/vaults/<vaultId> inside the app container. `bodies` = note paths whose full text to return. */
 export async function dumpVault(vaultId: string, bodies: string[] = []): Promise<VaultDump> {
   const cid = await appContainerId()
@@ -205,40 +201,6 @@ export async function dbBody(ctx: LabContext, noteId: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------- container
-
-export async function appContainerId(): Promise<string> {
-  const r = await exec([...COMPOSE, 'ps', '-q', 'app'])
-  const id = r.stdout.trim()
-  if (!id) throw new Error(`no app container: ${r.stderr}`)
-  return id
-}
-
-export interface AppState {
-  restartCount: number
-  startedAt: string
-  oomKilled: boolean
-  exitCode: number
-  status: string
-}
-
-export async function appState(): Promise<AppState> {
-  const cid = await appContainerId()
-  const r = await exec(['docker', 'inspect', '-f', '{{.RestartCount}}|{{.State.StartedAt}}|{{.State.OOMKilled}}|{{.State.ExitCode}}|{{.State.Status}}', cid])
-  const [rc, startedAt, oom, code, status] = r.stdout.trim().split('|')
-  return { restartCount: Number(rc), startedAt: startedAt ?? '', oomKilled: oom === 'true', exitCode: Number(code), status: status ?? '' }
-}
-
-/** SIGKILL via `docker kill` (lower latency than compose), then start + wait healthy. */
-export async function crashApp(baseUrl: string) {
-  const cid = await appContainerId()
-  const t0 = performance.now()
-  const k = await exec(['docker', 'kill', '-s', 'KILL', cid])
-  const killMs = performance.now() - t0
-  // restart: unless-stopped may already be bringing it back; start is then a no-op or a harmless error.
-  const s = await exec([...COMPOSE, 'start', 'app'])
-  const healthyMs = await waitHealthy(baseUrl)
-  return { killMs, killCode: k.code, killErr: k.stderr.trim().slice(0, 300), startCode: s.code, healthyMs }
-}
 
 /** App log lines since an ISO timestamp (or last n). */
 export async function appLogsSince(sinceIso: string, n = 400): Promise<string> {

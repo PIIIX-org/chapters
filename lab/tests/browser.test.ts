@@ -234,7 +234,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
   ctx.log(`vault ${vault.id}, note ${path}`)
 
   const diskBody = async (): Promise<string | null> => {
-    const r = await ctx.docker.exec([...ctx.docker.COMPOSE, 'exec', '-T', 'app', 'cat', file])
+    const r = await ctx.docker.appExec(['cat', file])
     if (r.code !== 0) return null
     const m = r.stdout.match(/^---\n([\s\S]*?)\n?---\n?([\s\S]*)$/)
     return m ? (m[2] ?? '') : null

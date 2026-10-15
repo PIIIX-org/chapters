@@ -102,7 +102,7 @@ await sleep(500)
 console.log('LABJSON' + JSON.stringify(out))
 process.exit(0)
 `
-  const r = await ctx.docker.exec([...ctx.docker.COMPOSE, 'exec', '-T', 'app', 'node', '--input-type=module'], script)
+  const r = await ctx.docker.appExec(['node', '--input-type=module'], script)
   const line = r.stdout.split('\n').find((l) => l.startsWith('LABJSON'))
   if (!line) return { synced: false, error: `exit ${r.code}: ${(r.stderr || r.stdout).slice(0, 800)}` }
   return JSON.parse(line.slice('LABJSON'.length))
@@ -133,9 +133,7 @@ const test: LabTest = {
         continue
       }
       verdicts.push(compare('create', c, await readBack(ctx, vault.id, path)))
-      const disk = await ctx.docker.exec([
-        ...ctx.docker.COMPOSE, 'exec', '-T', 'app', 'cat', `/data/elara/vaults/${vault.id}/${TYPE}/${name}.md`,
-      ])
+      const disk = await ctx.docker.appExec(['cat', `/data/elara/vaults/${vault.id}/${TYPE}/${name}.md`])
 
       // ---- body-only edit: frontmatter must be kept as is
       const edited: Case = { ...c, body: `${c.body}\nedited ---` }

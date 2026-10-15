@@ -863,7 +863,7 @@ const test: LabTest = {
     ])
     const evilRes = await postFile(base, '/api/import', admin.cookie, 'crafted.zip', evil, 'application/zip')
     const evilJson = evilRes.json as ImportResult | undefined
-    const escaped = await ctx.docker.exec([...ctx.docker.COMPOSE, 'exec', '-T', 'app', 'sh', '-c', 'ls -la /data/elara/escape* /data/elara/vaults/escape* /data/escape* 2>/dev/null; true'])
+    const escaped = await ctx.docker.appExec(['sh', '-c', 'ls -la /data/elara/escape* /data/elara/vaults/escape* /data/escape* 2>/dev/null; true'])
     crafted.evil = { status: evilRes.status, result: evilJson, escapedFiles: escaped.stdout }
     const evilShare = evilJson?.vaultId
       ? await ctx.docker.psqlRows<{ grantee_id: string; permission: string }>(`select grantee_id, permission from vault_shares where vault_id = '${evilJson.vaultId}'`)

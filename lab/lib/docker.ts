@@ -68,6 +68,43 @@ export async function psqlRows<T = Record<string, unknown>>(query: string): Prom
   return JSON.parse(out) as T[]
 }
 
+/** Runs a command in the app container (`docker compose exec -T app ...`); never throws. */
+export async function appExec(args: string[], stdin?: string): Promise<ExecResult> {
+  return exec([...COMPOSE, 'exec', '-T', 'app', ...args], stdin)
+}
+
+export async function appContainerId(): Promise<string> {
+  const r = await exec([...COMPOSE, 'ps', '-q', 'app'])
+  const id = r.stdout.trim()
+  if (!id) throw new Error(`no app container: ${r.stderr}`)
+  return id
+}
+
+export interface ContainerState {
+  restartCount: number
+  oomKilled: boolean
+  startedAt: string
+  status: string
+  exitCode: number
+}
+
+/** `docker inspect` of a container; null when it cannot be read (e.g. mid-restart). */
+export async function containerState(id: string): Promise<ContainerState | null> {
+  const r = await exec([
+    'docker',
+    'inspect',
+    '-f',
+    '{"restartCount":{{.RestartCount}},"oomKilled":{{.State.OOMKilled}},"startedAt":"{{.State.StartedAt}}","status":"{{.State.Status}}","exitCode":{{.State.ExitCode}}}',
+    id,
+  ])
+  if (r.code !== 0) return null
+  try {
+    return JSON.parse(r.stdout.trim()) as ContainerState
+  } catch {
+    return null
+  }
+}
+
 export const app = {
   /** `docker compose restart app`: SIGTERM (graceful: index.ts flush handlers run), then start. */
   async restart(baseUrl: string) {
@@ -75,12 +112,25 @@ export const app = {
     const healthyMs = await waitHealthy(baseUrl)
     return { restartMs: r.ms, healthyMs }
   },
-  /** SIGKILL the app (crash), then start it again and wait for health. */
+  /**
+   * SIGKILL the app (crash) via `docker kill` (lower latency than compose, so
+   * tests can aim the kill), then start it again and wait for health.
+   */
   async crash(baseUrl: string) {
-    const kill = await compose('kill', '-s', 'SIGKILL', 'app')
-    const start = await compose('start', 'app')
+    const cid = await appContainerId()
+    const t0 = performance.now()
+    const k = await exec(['docker', 'kill', '-s', 'KILL', cid])
+    const killMs = performance.now() - t0
+    // restart: unless-stopped may already be bringing it back; start is then a no-op or a harmless error.
+    const s = await exec([...COMPOSE, 'start', 'app'])
     const healthyMs = await waitHealthy(baseUrl)
-    return { killMs: kill.ms, startMs: start.ms, healthyMs }
+    return { killMs, killCode: k.code, killErr: k.stderr.trim().slice(0, 300), startCode: s.code, healthyMs }
+  },
+  /** State of the current app container; throws when it cannot be read. */
+  async state(): Promise<ContainerState> {
+    const s = await containerState(await appContainerId())
+    if (!s) throw new Error('docker inspect of the app container failed')
+    return s
   },
   stop: () => compose('stop', 'app'),
   start: () => compose('start', 'app'),

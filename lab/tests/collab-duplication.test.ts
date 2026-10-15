@@ -21,7 +21,7 @@
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { CollabClient, Y } from '../lib/collab.ts'
 import { RestSession } from '../lib/rest.ts'
-import { appLogsSince, containerCp, count, crashApp, dbBody, dbNotes, dumpVault, genBody, sha } from '../lib/datapath.ts'
+import { appLogsSince, containerCp, count, dbBody, dbNotes, dumpVault, genBody, sha } from '../lib/datapath.ts'
 
 const SETTLE_MS = 3500 // COLLAB_DEBOUNCE_MS default 2000 (collab-server.ts:18) + margin
 
@@ -357,7 +357,7 @@ const test: LabTest = {
     const m15 = await typeMarker(A, 'M15')
     expected += `\n${m15}`
     await A.waitAcked()
-    const crash15 = await crashApp(ctx.baseUrl)
+    const crash15 = await ctx.docker.app.crash(ctx.baseUrl)
     const r15 = await A.waitSynced(60_000)
     await settle(A)
     await snap('S15 SIGKILL, dirty doc, client stays', n1, { A }, { once: [m15, s09], expected }, { crash: crash15, reconnected: r15 })
@@ -366,7 +366,7 @@ const test: LabTest = {
     const m16 = await typeMarker(A, 'M16')
     const acked16 = await A.waitAcked()
     A.destroy()
-    const crash16 = await crashApp(ctx.baseUrl)
+    const crash16 = await ctx.docker.app.crash(ctx.baseUrl)
     const disk16 = (await dumpVault(vault.id, [p1])).notes.find((n) => n.path === p1)?.body ?? ''
     checks.push({
       name: 'S16 server-acknowledged collab edit survives SIGKILL after the tab closed',
@@ -390,7 +390,7 @@ const test: LabTest = {
       // aim the SIGKILL at `d` ms after that, minus the measured `docker kill` latency.
       const wait = d - killLatency
       if (wait > 0) await Bun.sleep(wait)
-      const c = await crashApp(ctx.baseUrl)
+      const c = await ctx.docker.app.crash(ctx.baseUrl)
       killLatency = Math.max(30, Math.min(800, c.killMs))
       const synced = await A.waitSynced(60_000)
       await settle(A)

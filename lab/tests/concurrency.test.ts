@@ -11,6 +11,7 @@
 //   append-different  read + append on N sibling notes, one per writer
 //   replace-different full frontmatter + body on N siblings (frontmatter change
 //                     regenerates the folder's index.md files)
+//   create-same-folder create_note of N new notes in one new folder at once
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { McpClient, stringField, type ToolResult } from '../lib/mcp.ts'
 
@@ -113,7 +114,7 @@ async function dbNote(ctx: LabContext, vaultId: string, path: string) {
 const test: LabTest = {
   name: 'concurrency',
   tier: 'fast',
-  description: 'Parallel edit_note appends/replacements on one note and on sibling notes; lost updates, errors, attribution.',
+  description: 'Parallel edit_note appends/replacements on one note and on sibling notes, parallel create_note in one folder; lost updates, errors, attribution.',
   async run(ctx) {
     const checks: Check[] = []
     const data: Record<string, unknown> = {}
@@ -306,6 +307,45 @@ const test: LabTest = {
           { name: `replace-different N=${N}: wrong final content or file/db divergence`, expected: '0', actual: String(wrong.length), ok: wrong.length === 0, severity: 'high' },
           { name: `replace-different N=${N}: attribution`, expected: '0 missing, 0 misattributed', actual: `missing ${missing.length} (${anonymized.length} recorded as anonymous collab), misattributed ${misattributed.length}`, ok: missing.length === 0 && misattributed.length === 0, severity: 'medium' },
           { name: `replace-different N=${N}: folder still browsable`, expected: 'browse_vault ok', actual: browse.ok ? 'ok' : browse.text.slice(0, 200), ok: browse.ok, severity: 'medium' },
+        )
+      }
+
+      // ---- create-same-folder: N parallel create_note in one new folder.
+      // createNote regenerates the folder's index.md outside any per-note
+      // lock, so every create writes the same index file at once (#490; with
+      // a shared temp name the renames collide and calls fail with ENOENT).
+      {
+        const createFolder = `concepts/create-n${N}`
+        const createPath = (i: number) => `${createFolder}/note-${i}`
+        const outcomes = await Promise.all(
+          ws.map((w) =>
+            timed(
+              () =>
+                w.mcp.call('create_note', {
+                  vaultId: vault.id,
+                  path: createPath(w.i),
+                  frontmatter: { type: 'concepts', title: `create ${w.i}` },
+                  body: `C${N} w${w.i}\n`,
+                }),
+              w.i,
+            ),
+          ),
+        )
+        const failedButCreated: number[] = []
+        const ackedMissing: number[] = []
+        for (const o of outcomes) {
+          const row = await dbNote(ctx, vault.id, createPath(o.writer))
+          if (!o.ok && row) failedButCreated.push(o.writer)
+          if (o.ok && !row) ackedMissing.push(o.writer)
+        }
+        const index = await ctx.docker.appExec(['cat', `/data/elara/vaults/${vault.id}/${createFolder}/index.md`])
+        const listed = ws.filter((w) => index.stdout.includes(`note-${w.i}`)).length
+        const t = tally(outcomes)
+        data[`create-same-folder N=${N}`] = { ...t, failedButCreated, ackedMissing, indexListed: listed, indexExit: index.code }
+        checks.push(
+          { name: `create-same-folder N=${N}: write errors`, expected: '0', actual: `${t.failed} ${JSON.stringify(t.errors)}`, ok: t.failed === 0, severity: 'high' },
+          { name: `create-same-folder N=${N}: failed creates not persisted`, expected: '0 creates that returned an error but exist', actual: `${failedButCreated.length} of ${t.failed} failed creates exist anyway`, ok: failedButCreated.length === 0, severity: 'high' },
+          { name: `create-same-folder N=${N}: acknowledged creates exist`, expected: '0 missing', actual: `${ackedMissing.length} of ${t.ok} missing`, ok: ackedMissing.length === 0, severity: 'high' },
         )
       }
       ctx.log(`N=${N} done`)

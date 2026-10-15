@@ -19,18 +19,17 @@
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { CollabClient, Y, type CollabEvent } from '../lib/collab.ts'
 import { stringField } from '../lib/mcp.ts'
+import type { ContainerState } from '../lib/docker.ts'
 import { RestSession } from '../lib/rest.ts'
 import {
   MB,
   appLogsSince,
-  appState,
   dbNotes,
   fmtMB,
   genBody,
   rawMcp,
   startHealthSampler,
   startMemSampler,
-  type AppState,
   type HealthReport,
   type MemReport,
   type RawCall,
@@ -98,7 +97,7 @@ interface FanoutRec {
   exitCode: number
 }
 
-const restartedBetween = (a: AppState, b: AppState) => a.startedAt !== b.startedAt || a.restartCount !== b.restartCount
+const restartedBetween = (a: ContainerState, b: ContainerState) => a.startedAt !== b.startedAt || a.restartCount !== b.restartCount
 
 const test: LabTest = {
   name: 'big-notes',
@@ -114,7 +113,7 @@ const test: LabTest = {
 
     /** One call with memory + health sampling and restart detection. */
     async function measured(phase: string, noteKiB: number, op: string, revs: number | null, fn: () => Promise<RawCall>): Promise<Row> {
-      const before = await appState()
+      const before = await ctx.docker.app.state()
       const mem = await startMemSampler()
       const health = startHealthSampler(ctx.baseUrl)
       const r = await fn()
@@ -123,7 +122,7 @@ const test: LabTest = {
       // again, so a crash that Docker is still restarting is not missed). HTTP 0 alone is a
       // hang or a client-side timeout (Bun's fetch gives up after 300 s): a failure.
       await ctx.docker.waitHealthy(ctx.baseUrl)
-      const after = await appState()
+      const after = await ctx.docker.app.state()
       const restarted = restartedBetween(before, after)
       const row: Row = { phase, noteKiB, op, revs, httpStatus: r.httpStatus, ok: r.ok, bytes: r.bytes, ms: Math.round(r.ms), ttfbMs: Math.round(r.ttfbMs), mem: m, health: h, restarted, error: r.ok ? undefined : (r.error ?? r.textHead.slice(0, 300)) }
       rows.push(row)
@@ -203,7 +202,7 @@ const test: LabTest = {
     const fanout: FanoutRec[] = []
     if (!thresholds.restart && !thresholds.failure) {
       for (const k of FANOUT) {
-        const before = await appState()
+        const before = await ctx.docker.app.state()
         const mem = await startMemSampler()
         const health = startHealthSampler(ctx.baseUrl)
         const t0 = performance.now()
@@ -211,7 +210,7 @@ const test: LabTest = {
         const wall = performance.now() - t0
         const [m, h] = await Promise.all([mem.stop(), health.stop()])
         await ctx.docker.waitHealthy(ctx.baseUrl)
-        const after = await appState()
+        const after = await ctx.docker.app.state()
         const restarted = restartedBetween(before, after)
         const okCount = results.filter((r) => r.ok).length
         const firstErr = results.find((r) => !r.ok)
@@ -306,7 +305,7 @@ const test: LabTest = {
         const target = Math.round(mib * MB)
         const overLimit = mib >= 100
         const body = genBody(target, 900 + mib)
-        const before = await appState()
+        const before = await ctx.docker.app.state()
         const mem = await startMemSampler()
         const health = startHealthSampler(ctx.baseUrl)
         const t0 = performance.now()
@@ -328,7 +327,7 @@ const test: LabTest = {
         const storedMs = performance.now() - t0
         const [m, h] = await Promise.all([mem.stop(), health.stop()])
         await ctx.docker.waitHealthy(ctx.baseUrl)
-        const after = await appState()
+        const after = await ctx.docker.app.state()
         const restarted = restartedBetween(before, after)
         const read = await call('read_note', { path: cPath }, { parse: true })
         const readLen = stringField(read.json, 'body')?.length ?? -1

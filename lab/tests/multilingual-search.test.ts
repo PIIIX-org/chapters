@@ -223,10 +223,7 @@ const test: LabTest = {
     checks.push({ name: 'all notes embedded', expected: 'embedding not null for every note', actual: embedded ? `yes after ${embedMs} ms` : `timed out after ${embedMs} ms`, ok: Boolean(embedded), severity: 'high' })
 
     // Query vectors from the same model inside the app container.
-    const emb = await ctx.docker.exec(
-      [...ctx.docker.COMPOSE, 'exec', '-T', 'app', 'node', '--input-type=module', '-e', EMBED_JS],
-      JSON.stringify(QUERIES.map((q) => q.q)),
-    )
+    const emb = await ctx.docker.appExec(['node', '--input-type=module', '-e', EMBED_JS], JSON.stringify(QUERIES.map((q) => q.q)))
     let vectors: Array<{ vec: number[]; tokens: number; unk: number; pieces: string[] }> = []
     try {
       vectors = JSON.parse(emb.stdout) as typeof vectors

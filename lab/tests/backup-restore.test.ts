@@ -112,7 +112,7 @@ async function runWithDeadline(ctx: LabContext, container: string, args: string[
   return { ...first, timedOut: false }
 }
 
-const appExec = (ctx: LabContext, cmd: string) => ctx.docker.exec([...ctx.docker.COMPOSE, 'exec', '-T', 'app', 'sh', '-c', cmd])
+const appExec = (ctx: LabContext, cmd: string) => ctx.docker.appExec(['sh', '-c', cmd])
 
 const PATCH_JS = `
 const AdmZip = require('adm-zip')

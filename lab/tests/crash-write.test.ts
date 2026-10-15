@@ -29,7 +29,6 @@ import {
   appLogsSince,
   checkNotes,
   count,
-  crashApp,
   dbNotes,
   dumpVault,
   genBody,
@@ -258,7 +257,7 @@ const test: LabTest = {
         else while (answered < Math.min(n, ops.length)) await Bun.sleep(2)
         killIssuedMs = performance.now() - t0
         const answeredAtKill = answered
-        const c = await crashApp(ctx.baseUrl)
+        const c = await ctx.docker.app.crash(ctx.baseUrl)
         crash = { killIssuedMs: Math.round(killIssuedMs), answeredAtKill, killMs: Math.round(c.killMs), healthyMs: Math.round(c.healthyMs), killCode: c.killCode, startCode: c.startCode }
       }
       await Promise.all(promises)

@@ -19,6 +19,8 @@ check enforces it (rules: `github-workflow.md`, CI, PR evidence).
 `docs/agents/backend-reference.md` documents the server as built.
 Design specs: `docs/superpowers/specs/` (historical intent; where a spec
 and the code disagree, the code and `backend-reference.md` win).
+Integration tests (collab relay, store, disk, MCP against a real
+instance) are the lab: `docs/agents/lab.md`.
 
 Current phase: **reliability fixes from the 2026-10-14 AI-performance
 study** (agent write path, crash safety, backup/restore, ingestion). The

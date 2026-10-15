@@ -20,9 +20,9 @@
 // a process died. Test files are named zz- so they run last: on dev they may
 // take the instance down.
 import type { Check, LabTest } from './context.ts'
+import { appContainerId, containerState } from './docker.ts'
 import {
   connectLocalRepo,
-  containerState,
   copyIntoLocalRepo,
   filesPendingExtraction,
   repoProgress,
@@ -86,10 +86,8 @@ export function bundleTest(pretty: boolean): LabTest {
       for (let i = 0; i < LATE; i++)
         late[`src/late${String(i).padStart(2, '0')}.ts`] = smallTs('late', i)
 
-      const containerId = (
-        await ctx.docker.compose('ps', '-q', 'app')
-      ).stdout.trim()
-      const stateBefore = await containerState(ctx, containerId)
+      const containerId = await appContainerId()
+      const stateBefore = await containerState(containerId)
       const since = new Date().toISOString()
       const sampler = startSampler(ctx, containerId)
 
@@ -117,7 +115,7 @@ export function bundleTest(pretty: boolean): LabTest {
       })
       const samples = await sampler.stop()
       const stats = summarizeSamples(samples)
-      const stateAfter = await containerState(ctx, containerId)
+      const stateAfter = await containerState(containerId)
       const events = await ctx.docker.exec([
         'docker',
         'events',

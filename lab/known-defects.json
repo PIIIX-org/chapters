@@ -1,3 +1,294 @@
 {
-  "defects": []
+  "defects": [
+    {
+      "test": "collab-duplication",
+      "check": "S11 logout ends the live collab session",
+      "issue": 498
+    },
+    {
+      "test": "collab-duplication",
+      "check": "S16 server-acknowledged collab edit survives SIGKILL after the tab closed",
+      "issue": 487
+    },
+    {
+      "test": "collab-duplication",
+      "check": "S18 injected stale .crdt, fresh ydoc (page reload): disk = DB = .crdt = clients",
+      "issue": 488
+    },
+    {
+      "test": "collab-duplication",
+      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): @BASE2@ kept exactly once on disk",
+      "issue": 488
+    },
+    {
+      "test": "collab-duplication",
+      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): @INJSTALE@ kept exactly once on disk",
+      "issue": 488
+    },
+    {
+      "test": "collab-duplication",
+      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): no duplicated text",
+      "issue": 488
+    },
+    {
+      "test": "collab-duplication",
+      "check": "S19b same idle tab reconnects after the doc unloaded: @BASE3@ kept exactly once on disk",
+      "issue": 488
+    },
+    {
+      "test": "collab-duplication",
+      "check": "S19b same idle tab reconnects after the doc unloaded: @IDLE@ kept exactly once on disk",
+      "issue": 488
+    },
+    {
+      "test": "collab-duplication",
+      "check": "S19b same idle tab reconnects after the doc unloaded: no duplicated text",
+      "issue": 488
+    },
+    {
+      "test": "concurrency",
+      "check": "append-same N=10: attribution",
+      "issue": 403
+    },
+    {
+      "test": "concurrency",
+      "check": "append-same N=10: lost updates",
+      "issue": 478
+    },
+    {
+      "test": "concurrency",
+      "check": "append-same N=20: attribution",
+      "issue": 403
+    },
+    {
+      "test": "concurrency",
+      "check": "append-same N=20: lost updates",
+      "issue": 478
+    },
+    {
+      "test": "concurrency",
+      "check": "append-same N=5: attribution",
+      "issue": 403
+    },
+    {
+      "test": "concurrency",
+      "check": "append-same N=5: lost updates",
+      "issue": 478
+    },
+    {
+      "test": "concurrency",
+      "check": "replace-different N=10: attribution",
+      "issue": 403
+    },
+    {
+      "test": "concurrency",
+      "check": "replace-different N=20: attribution",
+      "issue": 403
+    },
+    {
+      "test": "concurrency",
+      "check": "replace-different N=5: attribution",
+      "issue": 403
+    },
+    {
+      "test": "concurrency",
+      "check": "replace-same N=10: attribution",
+      "issue": 403
+    },
+    {
+      "test": "concurrency",
+      "check": "replace-same N=20: attribution",
+      "issue": 403
+    },
+    {
+      "test": "concurrency",
+      "check": "replace-same N=5: attribution",
+      "issue": 403
+    },
+    {
+      "test": "fix-attribution",
+      "check": "sequential edit_note credited to the MCP connection",
+      "issue": 403
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned delete_graph_perspective [account-surface]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned delete_graph_perspective [other-vault]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned delete_repository [pinned]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned get_vault_preferences [account-surface]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned list_graph_perspectives [omitted]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned list_graph_perspectives [other-vault]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned revoke_repository_share [omitted]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned revoke_repository_share [pinned]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned save_graph_perspective [omitted]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned save_graph_perspective [other-vault]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned share_repository [omitted]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned share_repository [pinned]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned update_repository [omitted]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned update_repository [pinned]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned update_vault_preferences [account-surface]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned delete_graph_perspective [account-surface]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned delete_graph_perspective [other-vault]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned delete_vault [omitted]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned delete_vault [pinned]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned find_symbols [omitted]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned get_vault_preferences [account-surface]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned list_graph_perspectives [omitted]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned list_graph_perspectives [other-vault]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned purge_note [omitted]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned purge_note [pinned]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned purge_revision [omitted]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned purge_revision [pinned]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned revoke_vault_share [omitted]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned revoke_vault_share [pinned]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned save_graph_perspective [omitted]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned save_graph_perspective [other-vault]",
+      "issue": 546
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned share_vault [omitted]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned share_vault [pinned]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned update_vault [omitted]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned update_vault [pinned]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "vault-pinned update_vault_preferences [account-surface]",
+      "issue": 546
+    }
+  ]
 }

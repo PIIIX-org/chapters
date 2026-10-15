@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { LabContext } from './context.ts'
+import { containerState } from './docker.ts'
 
 export interface RepoProgress {
   t: number
@@ -97,30 +98,6 @@ export async function connectLocalRepo(ctx: LabContext, name: string): Promise<{
   return ctx.rest('admin').must('POST', '/api/repositories', { name, ingestionMethod: 'local_path', localPath: name })
 }
 
-export interface ContainerState {
-  restartCount: number
-  oomKilled: boolean
-  startedAt: string
-  status: string
-  exitCode: number
-}
-
-export async function containerState(ctx: LabContext, id: string): Promise<ContainerState | null> {
-  const r = await ctx.docker.exec([
-    'docker',
-    'inspect',
-    '-f',
-    '{"restartCount":{{.RestartCount}},"oomKilled":{{.State.OOMKilled}},"startedAt":"{{.State.StartedAt}}","status":"{{.State.Status}}","exitCode":{{.State.ExitCode}}}',
-    id,
-  ])
-  if (r.code !== 0) return null
-  try {
-    return JSON.parse(r.stdout.trim()) as ContainerState
-  } catch {
-    return null
-  }
-}
-
 export interface StatsSample {
   t: number
   memBytes: number | null
@@ -153,7 +130,7 @@ export function startSampler(ctx: LabContext, id: string, everyMs = 2_000) {
       const t = Math.round((Date.now() - ctx.startedAt) / 1000)
       const [stats, state, healthy] = await Promise.all([
         ctx.docker.exec(['docker', 'stats', '--no-stream', '--format', '{{.MemUsage}}|{{.CPUPerc}}', id]),
-        containerState(ctx, id),
+        containerState(id),
         fetch(`${ctx.baseUrl}/health`, { signal: AbortSignal.timeout(3_000) })
           .then((r) => r.ok)
           .catch(() => false),
