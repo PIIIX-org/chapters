@@ -23,6 +23,8 @@ import {
   type ResolvedNotePath,
   splitPath,
 } from './okf/paths.js'
+import { atomicWrite } from './atomic-write.js'
+import { withKeyLock } from './key-lock.js'
 
 export { splitPath, resolveNotePath, type ResolvedNotePath }
 
@@ -87,13 +89,6 @@ function isUniqueViolation(err: unknown): boolean {
     current = current.cause
   }
   return false
-}
-
-async function atomicWrite(file: string, content: string): Promise<void> {
-  await mkdir(dirname(file), { recursive: true })
-  const tmp = `${file}.tmp`
-  await writeFile(tmp, content, 'utf8')
-  await rename(tmp, file)
 }
 
 /**
@@ -310,6 +305,12 @@ export async function readNote(
   return { row, frontmatter: parsed.frontmatter, body: parsed.body }
 }
 
+/**
+ * Read-modify-write of one note's row, file, links and revision. Writes to the
+ * same note are serialized (one at a time, in call order): run concurrently,
+ * the row could end at one write and the file at another, and revisions could
+ * be skipped or out of order.
+ */
 export async function updateNote(
   vaultId: string,
   path: string,
@@ -317,31 +318,33 @@ export async function updateNote(
   actor: Actor = SYSTEM_ACTOR,
 ): Promise<NoteRow | null> {
   const resolved = resolveNotePath(path)
-  const row = await getLiveNote(vaultId, resolved.fullPath)
-  if (!row) return null
-  const frontmatter: Frontmatter = {
-    ...(input.frontmatter ?? (row.frontmatter as Frontmatter)),
-    type: row.type,
-  }
-  const body = input.body ?? row.body
-  validateNote(row.type, row.name, frontmatter, body)
-  const [updated] = await db
-    .update(notes)
-    .set({ frontmatter, body, updatedAt: new Date() })
-    .where(eq(notes.id, row.id))
-    .returning()
-  await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
-  // ponytail: progressive directory index.md files only catalog metadata/types/titles - skip vault-wide scans on body-only edits (GRAPH-05).
-  // Key order is not compared: jsonb returns keys in its own order, while the collab store sends them in document order (#384).
-  const frontmatterChanged =
-    input.frontmatter !== undefined && !isDeepStrictEqual(row.frontmatter, frontmatter)
-  if (frontmatterChanged) {
-    await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
-  }
-  await syncLinks(row.id, body)
-  scheduleEmbedding(row.id)
-  await recordRevision(row.id, 'update', frontmatter, body, actor)
-  return updated!
+  return withKeyLock(`note:${vaultId}/${resolved.fullPath}`, async () => {
+    const row = await getLiveNote(vaultId, resolved.fullPath)
+    if (!row) return null
+    const frontmatter: Frontmatter = {
+      ...(input.frontmatter ?? (row.frontmatter as Frontmatter)),
+      type: row.type,
+    }
+    const body = input.body ?? row.body
+    validateNote(row.type, row.name, frontmatter, body)
+    const [updated] = await db
+      .update(notes)
+      .set({ frontmatter, body, updatedAt: new Date() })
+      .where(eq(notes.id, row.id))
+      .returning()
+    await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
+    // ponytail: progressive directory index.md files only catalog metadata/types/titles - skip vault-wide scans on body-only edits (GRAPH-05).
+    // Key order is not compared: jsonb returns keys in its own order, while the collab store sends them in document order (#384).
+    const frontmatterChanged =
+      input.frontmatter !== undefined && !isDeepStrictEqual(row.frontmatter, frontmatter)
+    if (frontmatterChanged) {
+      await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
+    }
+    await syncLinks(row.id, body)
+    scheduleEmbedding(row.id)
+    await recordRevision(row.id, 'update', frontmatter, body, actor)
+    return updated!
+  })
 }
 
 /**
