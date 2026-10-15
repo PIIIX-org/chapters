@@ -332,8 +332,11 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   mismatched note reads as the file while search, graph and history use
   the row. CI runs it after the test suite against the suite's database
   and `DATA_DIR` (#578), so a test that leaves a note in any of these
-  states fails CI; tests that damage notes on purpose repair them in
-  `afterAll`.
+  states fails CI. Tests that damage a note on purpose restore its file
+  before they end, and tests that insert note rows without files delete
+  their fixture vaults. One exception: the MCP storage-failure test pins
+  the known row-ahead-of-file bug (#486, #489) with an assertion and then
+  soft-deletes that note so the gate skips it.
 - **Damaged files** (`sync/crdt-write.ts`, #391): every write loads the
   collab document from the note's file first, so a file that does not
   parse used to block edit and revert too. When the load fails on a
@@ -803,9 +806,13 @@ under the 120/min per-connection limit. A note it reports as
 `unparseable` is repaired by a full edit (frontmatter and body) or by
 reverting it to a recorded revision (`note_history` → `revert_note`).
 A `frontmatter-mismatch` or `body-mismatch` note (file and row disagree,
-e.g. a crash between the file write and the row update, or files and
-database restored from different points in time) is repaired by a full
-edit with the intended content, which rewrites both.
+e.g. a crash or a failed file write after the row update, #486, or files
+and database restored from different points in time) is repaired by a
+full edit with the intended content, which rewrites both. On a running
+server, an edit in flight between its row update and its file write also
+shows as a mismatch for a moment: re-run the check (or `-- --vault
+<uuid>`) before acting on a single mismatch, or run it while writes are
+stopped.
 
 **Rotate `CREDENTIALS_ENCRYPTION_KEY`**: there is no rotation
 mechanism. Changing it makes every previously stored repository

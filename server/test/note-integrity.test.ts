@@ -81,7 +81,7 @@ describe('checkNoteFiles', () => {
     })
     const problems = await problemsFor('rebodied')
     expect(problems).toEqual([expect.objectContaining({ path: 'guides/rebodied', problem: 'body-mismatch' })])
-    expect(problems[0]!.detail).toMatch(/^first difference at offset 13 \(file 29 chars, row 1[34] chars\)$/)
+    expect(problems[0]!.detail).toBe('first difference at offset 13 (file 29 chars, row 13 chars)')
   })
 
   it('reports a file whose frontmatter differs from the row as a frontmatter mismatch only', async () => {

@@ -1,12 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
+import { eq } from 'drizzle-orm'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
-import { createActiveUser, loginCookie, rewriteNoteFileFromRow } from './helpers.js'
+import { db } from '../src/db/client.js'
+import { notes } from '../src/db/schema.js'
+import { checkNoteFiles } from '../src/notes/integrity.js'
+import { getLiveNote } from '../src/notes/store.js'
+import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
 let baseUrl: string
@@ -184,6 +189,7 @@ describe('MCP integration', () => {
     // A non-empty directory where the note's file belongs: the write's final
     // rename fails, and Node's error names both absolute paths.
     const file = join(config.dataDir, 'vaults', vaultId, 'docs', 'blocked.md')
+    const original = await readFile(file, 'utf8')
     await rm(file)
     await mkdir(file)
     await writeFile(join(file, 'occupant'), '')
@@ -197,10 +203,27 @@ describe('MCP integration', () => {
       expect(textOf(edit)).toMatch(/^Error: internal storage error \(E[A-Z]+\)$/)
       expect(textOf(edit)).not.toContain(config.dataDir)
     } finally {
+      // Put back the file as it was before the damage, not the row.
       await rm(file, { recursive: true, force: true })
-      // Leave the note whole for the CI vault-invariant gate (#578).
-      await rewriteNoteFileFromRow(vaultId, 'docs/blocked')
+      await writeFile(file, original, 'utf8')
     }
+
+    // KNOWN BUG, pinned on purpose (#486, #489): updateNote commits the row
+    // before it writes the file, so the edit reported as failed above still
+    // moved the row to 'Rewritten.' while the file keeps the old note. When
+    // the write path stops leaving the row ahead of the file, these two
+    // assertions fail: expect no problem for docs/blocked instead, and drop
+    // the exclusion below.
+    expect((await getLiveNote(vaultId, 'docs/blocked'))!.body).toBe('Rewritten.')
+    const { problems } = await checkNoteFiles(vaultId)
+    expect(problems.filter((p) => p.path === 'docs/blocked')).toEqual([
+      expect.objectContaining({ problem: 'body-mismatch' }),
+    ])
+    // Excluded from the CI vault-invariant gate (#578) only because of the
+    // bug pinned above: soft-delete the note so the gate skips it, without
+    // making the row and file agree.
+    const row = (await getLiveNote(vaultId, 'docs/blocked'))!
+    await db.update(notes).set({ deletedAt: new Date() }).where(eq(notes.id, row.id))
   })
 
   it('search and graph work through MCP (same functions as the UI)', async () => {

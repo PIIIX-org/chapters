@@ -3,7 +3,9 @@
  * and lists the ones that are missing, cannot be opened, or differ from their
  * database row (frontmatter or body). Run on the server (`pnpm check-notes`,
  * optionally `-- --vault <uuid>`); exits 1 when any note is broken, so it can
- * gate a deploy or run from cron. CI runs it after the server test suite.
+ * gate a deploy or run from cron. CI runs it after the server test suite. On a
+ * running server an edit in flight can show as a mismatch for a moment; re-run
+ * before acting on a single one.
  */
 import { sql } from '../db/client.js'
 import { checkNoteFiles } from '../notes/integrity.js'
