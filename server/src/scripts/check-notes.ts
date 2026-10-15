@@ -16,10 +16,13 @@ if (flag !== -1 && !vaultId) {
 }
 
 const { checked, problems } = await checkNoteFiles(vaultId)
-for (const p of problems) {
-  console.log(`BROKEN  ${p.vaultName} (${p.vaultId})  ${p.path}  ${p.problem}: ${p.detail}`)
-}
 const broken = new Set(problems.map((p) => `${p.vaultId}/${p.path}`)).size
-console.log(`checked ${checked} notes, ${broken} broken`)
+const report = [
+  ...problems.map((p) => `BROKEN  ${p.vaultName} (${p.vaultId})  ${p.path}  ${p.problem}: ${p.detail}`),
+  `checked ${checked} notes, ${broken} broken`,
+].join('\n')
+// process.exit drops stdout still queued on a pipe (a long report under CI
+// lost its tail and summary), so exit only once the report is flushed.
+await new Promise<void>((resolve) => process.stdout.write(`${report}\n`, () => resolve()))
 await sql.end()
 process.exit(problems.length > 0 ? 1 : 0)
