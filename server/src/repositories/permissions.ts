@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositories, repositoryShares, teamMemberships, users } from '../db/schema.js'
-import { splitGitUrlCredential } from './git-remote.js'
+import { redactGitSecrets, splitGitUrlCredential } from './git-remote.js'
 
 export type RepoAccess = 'owner' | 'viewer'
 
@@ -85,6 +85,18 @@ export function publicGitUrl(gitUrl: string | null): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * `lastSyncError` as served. Git's error text can echo the authenticated clone
+ * URL; git-sync redacts it before storing, but a row written before #383 was
+ * fixed and never scrubbed (the boot scrub skips a row it cannot encrypt)
+ * still holds the token there. Redacted on the way out too, like `gitUrl`, so
+ * no stored text reaches a caller with a credential in it (#577).
+ */
+export function publicSyncError(r: { gitUrl: string | null; lastSyncError: string | null }): string | null {
+  if (!r.lastSyncError) return r.lastSyncError
+  return redactGitSecrets(r.lastSyncError, [r.gitUrl && splitGitUrlCredential(r.gitUrl).credential])
 }
 
 const BLOCKED_HOSTNAMES = new Set([
@@ -199,7 +211,7 @@ export function repositoryFields(
     mergeable: r.mergeable,
     syncStatus: r.syncStatus,
     lastSyncedAt: r.lastSyncedAt,
-    lastSyncError: r.lastSyncError,
+    lastSyncError: publicSyncError(r),
     lastWebhookAt: r.lastWebhookAt,
     webhookConfigured: r.webhookSecretEncrypted !== null,
     createdAt: r.createdAt,
