@@ -209,6 +209,7 @@ function startDatabase() {
   const status = run('docker', [
     'run',
     '-d',
+    '-q',
     '--name',
     'fails-before-db',
     '-e',
@@ -397,7 +398,9 @@ function main() {
   finish(
     v.ok,
     v.reason,
-    `Base commit \`${baseSha.slice(0, 12)}\`.\n\n${summaryTable(outcomes)}${restored}`,
+    `Base commit \`${baseSha.slice(0, 12)}\`. Each changed test file was run there; ` +
+      `a test that fails on base is what this check wants.\n\n` +
+      `${summaryTable(outcomes)}${restored}`,
   )
 }
 
