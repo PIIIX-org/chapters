@@ -53,12 +53,33 @@ feature exercised end-to-end per the sandbox/visual protocols — open a PR
 verified work, and merge. If something on `dev` turns out broken, it
 simply doesn't get promoted until fixed — `prod` never waits on a revert.
 
-After the merge, confirm **Publish image** ran on `prod`
-(`gh run list --workflow publish.yml --branch prod`). On 2026-10-12 a
-promotion merge (#392) triggered no workflow runs at all; the image was
-published by dispatching it manually:
-`gh workflow run publish.yml --ref prod`. Until it runs, the hosted
-instance is still on the previous image.
+The image is published only for a `prod` commit whose CI `checks` job
+passed (#573). The push to `prod` starts **CI**, and CI's `publish` job
+(`needs: checks`, calling `publish.yml`) builds and pushes the image in
+the same run, on the same commit. If `checks` fails, `publish` is skipped
+and the hosted instance stays on the previous image — fix on `dev` and
+promote again. (Before this, publish ran on every `prod` push regardless:
+promotion #334 shipped an image while its CI failed on lint.)
+
+After the merge, confirm the CI run on `prod` ended with `publish`
+succeeded (`gh run list --workflow ci.yml --branch prod`, then
+`gh run view <id>`). Until it does, the hosted instance is still on the
+previous image.
+
+If the merge triggered no workflow at all (happened on 2026-10-12 with
+#392), run CI by hand on `prod`: `gh workflow run ci.yml --ref prod`. It
+runs `checks` and then publishes, exactly like a push. If CI already
+passed on the `prod` head but `publish` failed (e.g. registry outage),
+either re-run the failed job in that CI run or dispatch
+`gh workflow run publish.yml --ref prod`.
+
+`publish.yml` dispatches and `v*` tag pushes start with a `ci-gate` job
+that finds the latest CI `checks` job (push or dispatch runs only, so the
+exact commit was tested) for the commit and refuses to publish unless it
+succeeded. Overriding is an owner decision:
+`gh workflow run publish.yml --ref prod -f force=true -f reason="<why>"`;
+the gate then logs a warning and a run-summary entry naming the actor,
+commit, CI result and reason. `-f dry_run=true` builds without pushing.
 
 ## Issues
 

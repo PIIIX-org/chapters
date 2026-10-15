@@ -4,6 +4,10 @@ on:
   pull_request:
   push:
     branches: [dev, prod]
+  # Re-runs checks on a ref by hand; on `prod` that also publishes once they
+  # pass (used when a promotion merge triggered no workflow, see
+  # docs/agents/github-workflow.md).
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -45,4 +49,15 @@ jobs:
           DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           TEST_DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           ADMIN_DATABASE_URL: postgres://elara:elara@localhost:5432/elara
+
+  # The only automatic path to the registry: the image for a `prod` commit is
+  # published by this run, after `checks` passed on that same commit (#573).
+  publish:
+    needs: checks
+    if: github.ref == 'refs/heads/prod' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/publish.yml
+    permissions:
+      actions: read
+      contents: read
+      packages: write
 
