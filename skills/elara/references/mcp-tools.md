@@ -281,7 +281,7 @@ Elara MCP server exposes stateless, permission-scoped tools (`POST /elara/mcp` a
 - **Scope**: Repository or Account.
 - **Parameters**:
   - `repositoryId` (string, optional): Repository ID.
-- **Returns**: Repository sync health, status (`"idle"`, `"syncing"`, `"error"`), latest indexed commit SHA, symbol count, and last sync timestamp.
+- **Returns**: `syncStatus` (`"idle"`, `"syncing"`, `"error"`), `lastSyncedAt`, `lastSyncError`, and `filesPendingExtraction` — files whose symbols/embedding are not extracted yet (queued, or failed; failed files are retried at the next server start).
 
 ### `sync_repository`
 - **Scope**: Repository or Account.

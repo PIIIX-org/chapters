@@ -357,7 +357,9 @@ re-resolved live.
   the suite never downloads a model or touches the network).
   `config.embeddings` picks between them — `'local'` by default when
   `NODE_ENV=production`, `'fake'` otherwise, overridable via
-  `EMBEDDINGS`.
+  `EMBEDDINGS`. `LocalEmbedder` runs the model on at most 8 texts at a
+  time, each cut to 16,000 characters: the pipeline pads a run to its
+  longest text, so one large run costs ~32 MB per text (#404).
 - **`embedding-queue.ts`**: an in-process serial queue —
   `scheduleEmbedding()` never blocks the caller (notes/store.ts calls
   it fire-and-forget on create/update/revert). A boot-time scan
@@ -514,6 +516,16 @@ rows (`repositoryFileSymbols`) are a per-file outline surfaced through
 the MCP `read_file` tool — despite the schema comment calling them
 "contains edges," they are **not** emitted as actual graph edges by
 `buildGraph()`.
+
+**Extraction queue** (`extraction-queue.ts`): in-process and serial, like
+the note embedding queue. A file whose extraction throws is logged and
+skipped; the drain goes on. A file with a line longer than 1,000
+characters (minified, bundled or generated code) gets its file embedding
+but no symbols or imports. The boot-time scan
+(`scheduleMissingExtractions`) re-enqueues every file with a null
+embedding — the queue does not survive a restart, and a re-sync only
+enqueues files whose content changed (#404). `repository_status` reports
+the count as `filesPendingExtraction`.
 
 `docs/superpowers/specs/2026-07-18-repository-ingestion-design.md` and
 `2026-07-18-code-graph-integration-design.md` are the full specs.
@@ -816,6 +828,14 @@ the code looks the way it does, not just *what* it does:
   that would have caught it (TS/Python/Go each had a case,
   JavaScript didn't). Fixed by declaring it explicitly and adding the
   missing test case.
+- **A minified bundle most likely OOM-killed production (#404)**: extraction embedded
+  a file and all of its symbols in one ONNX run. The pipeline pads every
+  text in a run to 512 tokens, so memory grew ~32 MB per text; a 742 KB
+  esbuild bundle yielded 947 symbols and a 948-text run peaking at
+  30.7 GB RSS. The restart that followed dropped the rest of the
+  in-memory queue, and nothing re-enqueued it. `LocalEmbedder` now runs
+  at most 8 texts at a time, minified files get no symbols, and boot
+  re-enqueues files that never got an embedding.
 
 ---
 
