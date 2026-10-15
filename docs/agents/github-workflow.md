@@ -66,20 +66,43 @@ succeeded (`gh run list --workflow ci.yml --branch prod`, then
 `gh run view <id>`). Until it does, the hosted instance is still on the
 previous image.
 
-If the merge triggered no workflow at all (happened on 2026-10-12 with
-#392), run CI by hand on `prod`: `gh workflow run ci.yml --ref prod`. It
-runs `checks` and then publishes, exactly like a push. If CI already
-passed on the `prod` head but `publish` failed (e.g. registry outage),
-either re-run the failed job in that CI run or dispatch
-`gh workflow run publish.yml --ref prod`.
+The push event can be late. On 2026-10-12, promotion #392 (`1c1ea12`,
+merged 08:59:14Z) showed no run at first; `publish.yml` was dispatched by
+hand 88 s later, and at 09:01:08Z the push event fired CI and Publish
+anyway, so the image was published twice. If no CI run shows up for the
+merge commit, **wait a few minutes** and check
+`gh run list --commit <sha>`. Only if there is still no CI run, start it
+by hand: `gh workflow run ci.yml --ref prod`. It runs `checks` and then
+publishes, exactly like a push. This uses `prod`'s copy of `ci.yml`, so
+it only works once the #573 change has been promoted to `prod` (before
+that, `prod`'s `ci.yml` has no `workflow_dispatch`).
 
-`publish.yml` dispatches and `v*` tag pushes start with a `ci-gate` job
-that finds the latest CI `checks` job (push or dispatch runs only, so the
-exact commit was tested) for the commit and refuses to publish unless it
-succeeded. Overriding is an owner decision:
+If CI passed on the `prod` head but `publish` failed (e.g. registry
+outage), re-run the failed jobs in that CI run or dispatch
+`gh workflow run publish.yml --ref prod`. Only the current head of a
+branch is published: the `ci-gate` job refuses a commit that is no
+longer the head of its branch, so re-running an old `prod` CI run fails
+at the gate instead of moving `latest` back. To roll back, promote a
+revert.
+
+`publish.yml` dispatches and `v*` tag pushes start with that `ci-gate`
+job; it also finds the latest completed CI `checks` job for the commit
+(push or dispatch runs only, so the exact commit was tested; cancelled
+runs ignored) and refuses to publish unless it succeeded. When CI calls
+`publish.yml`, the gate reads that CI run's own `checks` job instead. A
+`v*` tag pushed before CI on its commit has finished is refused and not
+retried: wait for CI on the commit, then
+`gh workflow run publish.yml --ref <tag>`. Overriding the CI result is an
+owner decision:
 `gh workflow run publish.yml --ref prod -f force=true -f reason="<why>"`;
-the gate then logs a warning and a run-summary entry naming the actor,
-commit, CI result and reason. `-f dry_run=true` builds without pushing.
+the gate then logs a warning and a run-summary entry naming who started
+the run, the commit, the CI result and the reason. `force` does not
+override the branch-head check. `-f dry_run=true` builds without pushing.
+
+The gate only exists in commits that contain it. Older commits and
+branches without it still carry the old ungated `publish.yml`, so a `v*`
+tag pushed on such a commit, or a `publish.yml` dispatch on such a
+branch, publishes without any check. Don't do either.
 
 ## Issues
 

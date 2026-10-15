@@ -5,7 +5,7 @@ on:
   push:
     branches: [dev, prod]
   # Re-runs checks on a ref by hand; on `prod` that also publishes once they
-  # pass (used when a promotion merge triggered no workflow, see
+  # pass (used when a promotion's push event never starts CI, see
   # docs/agents/github-workflow.md).
   workflow_dispatch:
 
@@ -52,10 +52,14 @@ jobs:
 
   # The only automatic path to the registry: the image for a `prod` commit is
   # published by this run, after `checks` passed on that same commit (#573).
+  # publish.yml's gate refuses if the commit is no longer the `prod` head, so
+  # re-running an old run cannot move `latest` back.
   publish:
     needs: checks
     if: github.ref == 'refs/heads/prod' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     uses: ./.github/workflows/publish.yml
+    with:
+      ci_run_id: ${{ github.run_id }}
     permissions:
       actions: read
       contents: read
