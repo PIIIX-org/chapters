@@ -15,18 +15,18 @@ When this skill is active, **you do not need to ask the user what Elara is or wh
 
 Elara is a team knowledge base and codebase mapping platform built on four foundational pillars:
 
-1. **Notes as Plain Files (OKF v0.2)**: Every note is a markdown file with YAML frontmatter following Google's [Open Knowledge Format (OKF v0.2)](https://github.com/GoogleCloudPlatform/open-knowledge-format). Notes support typed relationships, strict ISO 8601 UTC offsets, 8-level nested slug paths, progressive disclosure indices, and bidirectional wikilinks:
-   - Note-to-note: `[[note-name]]` or `[[path/to/note|display text]]`
-   - Note-to-code: `[[repo:repo-id/path/to/file]]`
-   - Symbol-anchored: `[[repo:repo-id/path/to/file#symbol:FunctionName]]`
-   - Line-anchored: `[[repo:repo-id/path/to/file#L12-L34]]`
-2. **AI-Navigable Knowledge Graph**: The graph links notes and code via three edge types:
-   - `EXTRACTED`: Explicit wikilinks and code imports/calls derived via Tree-sitter AST analysis.
-   - `STRUCTURAL`: Notes sharing metadata properties, tags, or directory hierarchies.
-   - `INFERRED` / `SEMANTIC`: Top-k nearest neighbors computed from local ONNX embeddings in a shared vector space.
-   - Topological features include Louvain community detection, PageRank centrality ranking, shortest path finding (`find_graph_path`), and saved graph perspectives with filter presets.
-3. **Synced Code Repositories**: Read-only ingestion of git repositories (via git clone/poll/webhook, local filesystem watch, or CLI push) indexed with Tree-sitter AST symbol extraction (functions, classes, interfaces, types) and fine-grained semantic vector embeddings (`find_symbols`).
-4. **First-Class MCP Server & Prompts**: A stateless, permission-scoped MCP server (`POST /mcp` or `POST /elara/mcp` via Streamable HTTP transport or stdio) providing **57 tools** with full system parity and **20 first-class engineering prompts** with live context hydration.
+1. **Notes as Plain Files (OKF v0.2)**: Every note is a markdown file with YAML frontmatter following Google's [Open Knowledge Format (OKF v0.2)](https://github.com/GoogleCloudPlatform/open-knowledge-format). Notes live at slug paths up to 8 segments deep (each segment matches `^[a-z0-9][a-z0-9-]*$`), and the frontmatter `type` must equal the first path segment (`concepts/auth/tokens` → `type: concepts`). Datetimes need an explicit UTC or offset. Links:
+   - Note-to-note: `[[path/to/note]]` or `[[path/to/note|display text]]`
+   - Note-to-code: `[[repo:<repo-name-or-id>/path/to/file]]`
+   - Anchored forms such as `[[repo:<repo>/path/to/file#L12-L34]]` are accepted, but the graph edge always points at the file; the anchor is not resolved or checked.
+   - Links inside inline code, fenced code blocks, or HTML comments are ignored. A link wrapped in backticks creates **no** graph edge, so write links bare.
+2. **AI-Navigable Knowledge Graph**: The graph links notes and code files with three edge kinds (the `kind` field):
+   - `extracted`: explicit `[[wikilinks]]`, `[[repo:...]]` note-to-code links, and resolved code imports.
+   - `structural`: notes sharing a type or tag; code files sharing a language or top-level directory.
+   - `semantic`: nearest neighbours by embedding similarity.
+   - Louvain communities are computed on every call. `find_graph_path` finds the shortest path (breadth-first). Saved graph perspectives are stored for the UI; the `graph` tool cannot apply them. There is no PageRank or centrality score.
+3. **Synced Code Repositories**: Read-only ingestion of git repositories (clone with polling or webhook), a local path under the server's repos root, or agent push. Files are indexed with Tree-sitter for TypeScript, JavaScript, Python, and Go (imports and top-level functions, classes, interfaces, types), and embedded for semantic search (`find_symbols`).
+4. **MCP Server & Prompts**: A stateless, permission-scoped MCP server over Streamable HTTP (`POST /mcp` or `POST /elara/mcp`; there is no stdio transport) with **57 tools** and **20 prompts**.
 
 ---
 
@@ -39,7 +39,7 @@ When exploring a project or answering questions about architecture, concepts, or
   - Run `search` (or `/elara-search` / legacy `/chapters-search`) with a query to find relevant notes and code files using hybrid (lexical + vector) retrieval.
   - Run `find_symbols` (or `/elara-symbols` / legacy `/chapters-symbols`) to pinpoint specific functions, classes, interfaces, or types with exact declaration line numbers without reading whole files.
 - **Step 2 — Graph Topology & Pathfinding**:
-  - Use `graph` (or `/elara-graph` / legacy `/chapters-graph`) with `aggregate: "community"` to view high-level community clusters, or inspect immediate neighbors (`neighbors_of`) and backlinks.
+  - Use `graph` (or `/elara-graph` / legacy `/chapters-graph`) scoped to one `vaultId` or `repositoryId` with `aggregate: "community"` to view community clusters, then `community: <n>` to list one cluster's members. `graph` has no neighbour query and no `limit`; an unaggregated call returns the whole resource graph, which is large for a real repository.
   - Use `find_graph_path` (or `/elara-path` / legacy `/chapters-path`) to trace the shortest conceptual path between two components, notes, or code files.
   - Use `list_graph_perspectives` to see curated domain or subsystem perspectives.
 - **Step 3 — Read Context**:
@@ -47,33 +47,31 @@ When exploring a project or answering questions about architecture, concepts, or
 
 ### 2. Note Creation & Editing (OKF Standard)
 When creating or editing notes via `create_note` or `edit_note`:
-- Always include valid YAML frontmatter conforming to OKF v0.2:
-  ```markdown
-  ---
-  title: "Descriptive Title"
-  type: concept # concept, spec, guide, meeting, reference, decision
-  status: stable # draft, active, stable, deprecated, superseded, archived
-  tags: [subsystem, architecture]
-  created: 2026-10-02T22:00:00Z
-  sources:
-    - id: "src-1"
-      resource: "repo:elara/server/src/graph/assemble.ts"
-      title: "Graph Assembly Engine"
-  ---
-
-  # Descriptive Title
-
-  Body content with [[wikilinks]] connecting related concepts.
-  Link to code files using [[repo:repo-id/path/to/file]].
-  Anchor to symbols using [[repo:repo-id/path/to/file#symbol:FunctionName]].
+- `create_note` takes `path` (or `type` + `name`), a `frontmatter` **object**, and a markdown `body` **without** a frontmatter block. There is no `content` argument; unknown arguments are silently dropped.
+- The frontmatter `type` must equal the first path segment, and every path segment must match `^[a-z0-9][a-z0-9-]*$` (so `decisions/adr-001-crdt-relay`, not `decisions/ADR-001`). `timestamp` defaults to now; datetimes need `Z` or an offset. Example `create_note` arguments:
+  ```json
+  {
+    "vaultId": "<vault-uuid>",
+    "path": "concepts/graph-assembly",
+    "frontmatter": {
+      "type": "concepts",
+      "title": "Graph Assembly",
+      "status": "stable",
+      "tags": ["graph", "architecture"],
+      "timestamp": "2026-10-02T22:00:00Z",
+      "sources": [{ "id": "src-1", "resource": "repo:elara/server/src/graph/assemble.ts", "title": "Graph assembly" }]
+    },
+    "body": "# Graph Assembly\n\nRelated: [[concepts/search]].\nCode: [[repo:elara/server/src/graph/assemble.ts]]\n"
+  }
   ```
-- Edits flow through the collaborative CRDT engine, creating attributed audit revisions.
-- Validate vaults periodically using `audit_okf_conformance`.
+- Write `[[...]]` links bare. Links inside backticks or code blocks are ignored by the graph and the audit.
+- `edit_note`: `frontmatter` **replaces the whole map** (send every key you want to keep) and `body` **replaces the whole body**; omit a field to leave it unchanged. The edit streams into the live collaboration document and is recorded as a revision. Text a person is typing in the same note at that moment can be lost.
+- Run `audit_okf_conformance` to check structure (frontmatter, datetimes, link targets, indexes, orphans). It does not check whether the content is correct.
 
 ### 3. Post-Task Note Evaluation Protocol
 At the conclusion of any task that inspects, refactors, or extends the codebase or notes:
 - **Evaluate Existing Notes**: Check if any concept, spec, domain, or data model notes were impacted. Update them via `edit_note`.
-- **Evaluate New Notes**: If a new capability, bounded domain, or architectural decision was made, create a new note via `create_note` (e.g. `spec/...` or `decisions/ADR-...`).
+- **Evaluate New Notes**: If a new capability, bounded domain, or architectural decision was made, create a new note via `create_note` (e.g. `spec/...` or `decisions/adr-...`).
 - **Confirm to User**: Report note updates and additions as part of the task completion summary.
 
 ### 4. Pre-Task Codebase Drift & Note Freshness Protocol
@@ -118,12 +116,12 @@ Executes hybrid lexical + semantic search across notes and codebases.
 - **Example**: `/elara-search "authentication session validation"`
 
 ### `/elara-symbols <query> [--kind function|class|interface|type] [--repo <id>] [--everywhere]` (alias: `/chapters-symbols`)
-Fine-grained search for code declarations, AST symbols, signatures, and line spans across repositories.
+Fine-grained search for code declarations (functions, classes, interfaces, types) with file path and line span across repositories.
 - **Tool called**: `find_symbols`
 - **Example**: `/elara-symbols "buildGraph" --kind function`
 
-### `/elara-graph [query] [--vault <id>] [--repo <id>] [--aggregate] [--community <id>]` (alias: `/chapters-graph`)
-Queries and traverses the knowledge graph.
+### `/elara-graph [--vault <id>] [--repo <id>] [--aggregate] [--community <id>] [--types <t,...>] [--tags <t,...>]` (alias: `/chapters-graph`)
+Queries the knowledge graph of one vault or repository (there is no free-text query; use `/elara-search` for that).
 - **Tool called**: `graph`
 - **Example**: `/elara-graph --aggregate`
 
@@ -142,9 +140,9 @@ Invokes one of the 20 first-class Elara MCP engineering prompts (e.g. `active_pr
 ### `/elara-note <action> [arguments...]` (alias: `/chapters-note`)
 Performs operations on notes:
 - `/elara-note read <vault-id> <path>`: Read note content and frontmatter.
-- `/elara-note create <vault-id> <path> [content]`: Create a new OKF note.
-- `/elara-note edit <vault-id> <path> <content>`: Update existing note content via CRDT.
-- `/elara-note rename <vault-id> <old-path> <new-path>`: Rename a note and refactor incoming wikilinks.
+- `/elara-note create <vault-id> <path> [body]`: Create a new OKF note (`create_note` with `frontmatter` and `body`).
+- `/elara-note edit <vault-id> <path> <body>`: Replace the note body (and/or its whole frontmatter) via `edit_note`.
+- `/elara-note rename <vault-id> <from> <to>`: `rename_note` with `from` and `toName`; `toName` is a slug (rename in place) or a full path (move). Full-path links in other notes are rewritten; bare-name links are not.
 - `/elara-note delete <vault-id> <path>`: Move note to trash.
 - `/elara-note history <vault-id> <path>`: View revision history and attribution.
 - `/elara-note revert <vault-id> <path> <revision-id>`: Revert to a previous revision.
@@ -153,26 +151,26 @@ Performs operations on notes:
 ### `/elara-repo <action> [arguments...]` (alias: `/chapters-repo`)
 Performs operations on connected codebase repositories:
 - `/elara-repo list`: List all connected repositories.
-- `/elara-repo browse <repo-id> [path]`: Browse file and folder hierarchy.
+- `/elara-repo browse <repo-id>`: List every indexed file (flat list with path, language, size).
 - `/elara-repo read <repo-id> <file-path>`: Read file content and AST symbol outline.
-- `/elara-repo status <repo-id>`: View sync freshness, commit SHA, and indexing status.
+- `/elara-repo status <repo-id>`: View sync state, last sync time, and last sync error.
 - `/elara-repo sync <repo-id>`: Trigger an immediate repository sync.
 
 ### `/elara-vault <action> [arguments...]` (alias: `/chapters-vault`)
 Manages vaults and sharing:
 - `/elara-vault list`: List accessible vaults and permissions.
 - `/elara-vault browse <vault-id> [path]`: Browse notes hierarchy in a vault.
-- `/elara-vault create <name> [description]`: Create a new vault.
+- `/elara-vault create <name>`: Create a new vault.
 - `/elara-vault preference <vault-id> [include true|false]`: View or set merged-graph preference.
 
 ### `/elara-map <repo-id-or-path> [--vault <vault-id>] [--name <vault-name>]` (alias: `/chapters-map`)
 Maps an entire project or codebase repository into an interconnected, Open Knowledge Format (OKF v0.2) Knowledge Bundle within Elara following the **5-Phase Flawless OKF Mapping Protocol** ([`references/codebase-mapping-protocol.md`](references/codebase-mapping-protocol.md)).
 
 - **Workflow for Agents (The 5-Phase OKF Protocol)**:
-  1. **Phase 0 — Target Binding & Ingestion Choice**:
+  1. **Phase 0 — Target Binding & Ingestion Choice** (read-only toward the target repository):
      - **Vault Destination**: Ask if the codebase should be mapped in a new vault or an existing vault, and choose whether to name the vault or use the repository's name.
      - **Git Connection**: Ask if they also want to add/connect the repo to Elara (`connect_repository`) for continuous background sync. When mapping a GitHub repository of any programming job, you must always map the codebase.
-     - Bind to the target `vaultId`.
+     - Bind to the target `vaultId`. Do not write binding files (`AGENTS.md`, `GEMINI.md`, `.agents/rules/...`) into a repository the user does not own; mapping someone else's repository writes only to the vault.
   2. **Phase 1 — Discovery & Manifest Analysis**:
      - Parse build manifests (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `Dockerfile`).
      - Detect runtime engines, primary web/API frameworks, database/ORM layers, and all ingress boundaries.
@@ -181,18 +179,17 @@ Maps an entire project or codebase repository into an interconnected, Open Knowl
      - Identify lead implementation files, exported symbol interfaces, and hard architectural invariants.
   4. **Phase 3 — Structured OKF Note Synthesis**:
      - Create notes via Elara MCP `create_note` conforming to OKF v0.2 schemas:
-       - **Root System Index (`index.md`)**: High-level overview, architecture blueprint, domain roster, entrypoints, and technology stack table with `[[repo:...]]` links.
-       - **Domain Concept Notes (`domains/<domain>/index.md`)**: Architectural responsibilities, invariants, and implementation files.
-       - **End-to-End Workflow Specs (`specs/<flow>.md`)**: Sequence steps, trust boundaries, and error recovery contracts.
-       - **Data Model Notes (`models/<entity>.md`)**: Entity schemas, relationships, and code definitions.
-       - **Architecture Decisions (`decisions/ADR-<nnn>-<title>.md`)**: Context, decisions, trade-offs, and alternatives considered.
+       - **Root System Index (`index`, `type: index`)**: High-level overview, architecture blueprint, domain roster, entrypoints, and technology stack table with bare `[[repo:...]]` links.
+       - **Domain Concept Notes (`domains/<domain>/index`, `type: domains`)**: Architectural responsibilities, invariants, and implementation files.
+       - **End-to-End Workflow Specs (`specs/<flow>`, `type: specs`)**: Sequence steps, trust boundaries, and error recovery contracts.
+       - **Data Model Notes (`models/<entity>`, `type: models`)**: Entity schemas, relationships, and code definitions.
+       - **Architecture Decisions (`decisions/adr-<nnn>-<title>`, `type: decisions`)**: Context, decisions, trade-offs, and alternatives considered. Slugs are lowercase.
   5. **Phase 4 — Progressive Disclosure Synthesis**:
-     - Ensure every directory level contains an `index.md` summarizing child concepts, allowing AI agents to navigate progressively without overflowing context windows.
-  6. **Phase 5 — Knowledge Graph Audit & Validation**:
-     - Audit link integrity: zero broken `[[wikilinks]]` and valid `[[repo:...]]` code targets.
-     - Call `audit_okf_conformance` to verify strict ISO 8601 UTC offsets, index presence, and zero orphan notes.
-     - Call `graph` with `aggregate: "community"` to verify cohesive Louvain community clusters.
-     - Call `search` to verify top-k hybrid search retrieval across all mapped domains.
+     - The server writes a generated `index.md` into each directory when notes are created, renamed, or deleted. Write your own `<dir>/index` note where a directory needs a real summary; the server then leaves that directory's index alone.
+  6. **Phase 5 — Audit & Validation**:
+     - Call `audit_okf_conformance` and fix every entry in `violations`, `brokenWikilinks`, `brokenRepoLinks`, `orphanNotes`, and `missingIndices`. The audit checks structure only, so also spot-check claims against the code.
+     - Call `graph` scoped to the vault (`vaultId`) with `aggregate: "community"` to check that the notes form sensible clusters. Do not dump the unaggregated graph of a whole repository.
+     - Call `search` with one query per mapped domain to check that the new notes are found.
 
 ### `/elara-export <vault-id|note-path>` (alias: `/chapters-export`)
 Exports a vault zip archive or single note markdown file.
@@ -208,16 +205,16 @@ Elara exposes 57 tools across 7 functional domains:
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `list_vaults` | Account | List all vaults accessible to the current user. |
-| `create_vault` | Account | Create a new vault with name, description, and settings. |
+| `create_vault` | Account | Create a new vault (`name`, optional `mergeable`). |
 | `browse_vault` | Vault/Account | Browse directory and note structure within a vault, with progressive disclosure (`path` and `recursive`). |
-| `update_vault` | Vault/Account | Update vault name, description, or mergeable settings. |
+| `update_vault` | Vault/Account | Update vault name or mergeable setting (owner only). |
 | `get_vault_graph_preference` | Vault/Account | Get user's personal merged-graph inclusion preference. |
 | `set_vault_graph_preference` | Vault/Account | Set user's personal merged-graph inclusion preference. |
-| `get_vault_preferences` | Account | Get user vault preferences including storage mode (online/local), folders, colors, and favorites. |
-| `update_vault_preferences` | Account | Update user vault preferences including storage mode, folders, colors, and favorites. |
+| `get_vault_preferences` | Any | Get user vault preferences including storage mode (online/local), folders, colors, and favorites. |
+| `update_vault_preferences` | Any | Update user vault preferences including storage mode, folders, colors, and favorites. |
 | `delete_vault` | Vault/Account | Soft-delete a vault into trash (owner only). |
-| `restore_vault` | Vault/Account | Restore a soft-deleted vault from trash. |
-| `purge_vault` | Vault/Account | Permanently purge a trashed vault from disk and DB. |
+| `restore_vault` | Account | Restore a soft-deleted vault from trash (owner only). |
+| `purge_vault` | Account | Permanently purge a trashed vault from disk and DB (owner only). |
 | `list_vault_shares` | Vault/Account | List user and team shares for a vault. |
 | `share_vault` | Vault/Account | Grant read or edit access to a user or team. |
 | `revoke_vault_share` | Vault/Account | Revoke a user or team share from a vault. |
@@ -225,29 +222,29 @@ Elara exposes 57 tools across 7 functional domains:
 ### 2. Note Operations & OKF Conformance (12 tools)
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
-| `read_note` | Vault/Account | Read note markdown content, frontmatter, and metadata. |
-| `create_note` | Vault/Account | Create a new OKF note with unified `path` (or `type` and `name`) and frontmatter. |
-| `edit_note` | Vault/Account | Update note content through CRDT live collaboration. |
-| `rename_note` | Vault/Account | Rename or move a note within the vault with automatic wikilink refactoring. |
+| `read_note` | Vault/Account | Read a note's `path`, `frontmatter`, and `body`. |
+| `create_note` | Vault/Account | Create a note from `path` (or `type` + `name`), a `frontmatter` object, and a `body`. |
+| `edit_note` | Vault/Account | Replace a note's whole `frontmatter` map and/or whole `body`, streamed through live collaboration. |
+| `rename_note` | Vault/Account | Rename (`toName` slug) or move (`toName` full path) a note; full-path links in the vault are rewritten. |
 | `delete_note` | Vault/Account | Soft-delete a note to the vault trash. |
 | `list_trash` | Vault/Account | List soft-deleted notes in the vault trash. |
-| `restore_note` | Vault/Account | Restore a trashed note back to the vault. |
-| `purge_note` | Vault/Account | Permanently delete a note and clean semantic edges. |
-| `note_history` | Vault/Account | View revision history with user/AI attribution. |
+| `restore_note` | Vault/Account | Restore a trashed note by `noteId`. |
+| `purge_note` | Vault/Account | Permanently delete a trashed note by `noteId` (owner only). |
+| `note_history` | Vault/Account | View revision history with the actor type (`user`, `mcp`, `collab`). Full content per revision, unpaginated. |
 | `revert_note` | Vault/Account | Revert a note to a prior revision without losing history. |
 | `purge_revision` | Vault/Account | Permanently erase a recorded revision (owner only). |
-| `audit_okf_conformance` | Vault/Account | Audit an OKF Knowledge Bundle vault for OKF v0.2 conformance (ISO 8601 UTC offsets, wikilinks, repo links, progressive disclosure, orphan notes). |
+| `audit_okf_conformance` | Vault/Account | Structural audit: frontmatter validity, datetime offsets, broken wikilinks and repo links, missing indexes, orphan notes. |
 
 ### 3. Repository & Codebase Mapping (13 tools)
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `list_repositories` | Account | List all connected codebase repositories. |
 | `connect_repository` | Account | Connect a repo (git URL or local filesystem path). |
-| `browse_repository` | Repo/Account | Browse directory structure of a repository. |
-| `read_file` | Repo/Account | Read code file content with AST symbol outline. |
-| `repository_status` | Repo/Account | Check sync freshness, commit SHA, and indexing status. |
+| `browse_repository` | Repo/Account | List every indexed file of a repository (flat list). |
+| `read_file` | Repo/Account | Read a whole code file with its symbol outline. |
+| `repository_status` | Repo/Account | Check sync state, last sync time, and last sync error. |
 | `sync_repository` | Repo/Account | Trigger immediate synchronization of a repository. |
-| `update_repository` | Repo/Account | Update repository settings or default branch. |
+| `update_repository` | Repo/Account | Update repository name or mergeable setting (owner only). |
 | `get_repository_graph_preference` | Repo/Account | Get user's merged-graph inclusion preference. |
 | `set_repository_graph_preference` | Repo/Account | Set user's merged-graph inclusion preference. |
 | `delete_repository` | Repo/Account | Disconnect and remove a repository. |
@@ -259,21 +256,21 @@ Elara exposes 57 tools across 7 functional domains:
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `search` | Any | Hybrid search (lexical + semantic) across notes and code with `symbols` support. |
-| `find_symbols` | Repo/Account | Fine-grained semantic and keyword search for AST code symbols (functions, classes, interfaces, types) with exact signatures and line ranges. |
+| `find_symbols` | Any | Keyword and semantic search for code symbols (functions, classes, interfaces, types) with file path and line range. |
 
 ### 5. Knowledge Graph & Perspectives (5 tools)
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
-| `graph` | Any | Query graph nodes, edges (extracted/structural/semantic), Louvain communities (`aggregate: "community"`). |
+| `graph` | Any (needs `vaultId` or `repositoryId`) | Graph nodes and edges (`extracted`/`structural`/`semantic`) with Louvain communities; filters `types`, `tags`, `aggregate: "community"`, `community`. |
 | `find_graph_path` | Any | Find shortest path connecting two concepts, notes, or code files in the knowledge graph. |
-| `list_graph_perspectives` | Any | List saved graph perspectives and filter presets for a vault or merged graph. |
-| `save_graph_perspective` | Vault/Account | Save a scoped graph perspective with filter presets (types, tags, date range, color mode). |
+| `list_graph_perspectives` | Any | List saved graph perspectives (UI presets) for a vault or global. |
+| `save_graph_perspective` | Any | Save a graph perspective (types, tags, date range, color mode). `graph` cannot apply it. |
 | `delete_graph_perspective` | Any | Delete a saved graph perspective by its ID. |
 
 ### 6. Teams & Users (7 tools)
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
-| `list_teams` | Account | List teams the user belongs to or manages. |
+| `list_teams` | Account | List teams the user belongs to. |
 | `create_team` | Account | Create a new team. |
 | `list_team_members` | Account | List members in a team. |
 | `add_team_member` | Account | Add an active user to a team. |
@@ -293,13 +290,13 @@ Elara exposes 57 tools across 7 functional domains:
 
 ## Elara MCP Engineering Prompts (20 Prompts)
 
-Elara supports the Model Context Protocol Prompts standard with 20 pre-engineered prompts with context hydration:
+Elara serves 20 MCP prompts (`prompts/list`, `prompts/get`). A prompt returns instructions telling the agent which tools to call; it does not run them. Arguments are listed in [`references/mcp-tools.md`](references/mcp-tools.md#8-mcp-prompts-20).
 
 | Prompt | Purpose |
 | :--- | :--- |
 | `active_project_companion` | Continuous session companion: anchors agent to project vault, capturing decisions in real time. |
 | `sync_local_docs_to_vault` | Ingests local markdown notes into the Elara vault. |
-| `plan_feature_implementation` | Formulates grounded, zero-hallucination implementation plans from existing specs. |
+| `plan_feature_implementation` | Formulates an implementation plan grounded in existing specs and code. |
 | `prepare_task_context` | Bundles relevant notes, AST symbols, and graph context for an upcoming task. |
 | `draft_adr` | Synthesizes an Architecture Decision Record (ADR) in strict OKF format. |
 | `draft_rfc` | Generates a comprehensive Request for Comments (RFC) with rollout and risk plans. |
@@ -315,7 +312,7 @@ Elara supports the Model Context Protocol Prompts standard with 20 pre-engineere
 | `generate_release_notes` | Compiles release notes and technical changelog from recent notes, ADRs, and commits. |
 | `audit_security_surface` | Analyzes ingress points, auth routes, and trust boundaries in the knowledge graph. |
 | `database_schema_evolution` | Reviews data model notes and migration files for backward compatibility and index hygiene. |
-| `supernode_bottleneck_audit` | Identifies graph supernodes (PageRank hotspots) indicating architectural tight coupling. |
+| `supernode_bottleneck_audit` | Identifies the most highly connected nodes as coupling risks. |
 | `incident_postmortem` | Structures a blameless post-mortem note referencing affected components and remediation tasks. |
 
 See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter definitions and response structures.
@@ -324,6 +321,8 @@ See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter defi
 
 ## Platform Installation & Configuration Guides
 
+The hosted server is `https://chapters.piiix.org/mcp`. The `elara.piiix.org` domain is not live yet (its TLS handshake fails), so don't use it. For a self-hosted instance use `https://<your-host>/mcp`. The transport is Streamable HTTP.
+
 ### 1. Google Gemini & Antigravity
 - **Antigravity CLI**:
   Configure in `~/.gemini/config/mcp_config.json`:
@@ -331,7 +330,7 @@ See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter defi
   {
     "mcpServers": {
       "elara": {
-        "url": "https://elara.piiix.org/mcp",
+        "url": "https://chapters.piiix.org/mcp",
         "headers": {
           "Authorization": "Bearer YOUR_ELARA_MCP_TOKEN"
         }
@@ -351,7 +350,7 @@ See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter defi
   {
     "mcpServers": {
       "elara": {
-        "url": "https://elara.piiix.org/mcp",
+        "url": "https://chapters.piiix.org/mcp",
         "headers": {
           "Authorization": "Bearer YOUR_ELARA_MCP_TOKEN"
         }
@@ -361,7 +360,7 @@ See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter defi
   ```
 - **Claude Code**:
   ```bash
-  claude mcp add elara https://elara.piiix.org/mcp --header "Authorization: Bearer YOUR_ELARA_MCP_TOKEN"
+  claude mcp add --transport http elara https://chapters.piiix.org/mcp --header "Authorization: Bearer YOUR_ELARA_MCP_TOKEN"
   mkdir -p ~/.claude/skills/elara && cp -r skills/elara/* ~/.claude/skills/elara/
   ```
 
@@ -369,7 +368,7 @@ See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter defi
 - **Cursor**:
   1. Open **Cursor Settings** > **Features** > **MCP**.
   2. Click **+ Add New MCP Server**.
-  3. Set Name: `elara`, Type: `sse` or `http`, URL: `https://elara.piiix.org/mcp`.
+  3. Set Name: `elara`, Type: `http` (Streamable HTTP; the server has no SSE stream), URL: `https://chapters.piiix.org/mcp`.
   4. Add Header: `Authorization: Bearer YOUR_ELARA_MCP_TOKEN`.
   5. Install skill for Cursor rules:
      ```bash
@@ -381,7 +380,7 @@ See [`references/mcp-tools.md`](references/mcp-tools.md) for full parameter defi
   {
     "mcpServers": {
       "elara": {
-        "url": "https://elara.piiix.org/mcp",
+        "url": "https://chapters.piiix.org/mcp",
         "headers": {
           "Authorization": "Bearer YOUR_ELARA_MCP_TOKEN"
         }

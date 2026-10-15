@@ -1,336 +1,297 @@
 # Open Knowledge Format (OKF v0.2) in Elara
 
-This specification defines the implementation and conventions of Google's **Open Knowledge Format (OKF v0.2)** within Elara.
-
-Elara was engineered specifically to store, link, and serve notes in OKF so that both human engineers and autonomous AI agents can navigate, retrieve, and reason over software systems and team knowledge with minimal token waste and maximum topological fidelity.
+How Elara stores, validates, and links notes in Google's **Open Knowledge Format (OKF v0.2)**. The rules marked "enforced" come from the server's validation in `server/src/notes/okf.ts` and `server/src/notes/okf/paths.ts`; a write that breaks them is refused.
 
 Specification references:
 - [GoogleCloudPlatform/open-knowledge-format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
 
 ---
 
-## 1. Core Principles & OKF v0.2 Updates
+## 1. Core Rules
 
-OKF v0.2 introduces four major architectural pillars to standard markdown knowledge bases:
+1. **Paths (enforced)**:
+   - A note path is up to 8 slash-separated segments, for example `domains/storage/crdt/clock`. A trailing `.md` is accepted and stripped.
+   - Every segment must match `^[a-z0-9][a-z0-9-]*$`: lowercase letters, digits, and hyphens, starting with a letter or digit. No uppercase, underscores, dots, or spaces. `decisions/adr-001-crdt-relay` is valid; `decisions/ADR-001` is not.
+   - `.`/`..` segments, hidden segments, and leading, trailing, or double slashes are refused.
 
-1. **Mandatory Strict ISO 8601 UTC / Offset Datetimes**:
-   All datetime fields (`timestamp`, `stale_after`, `generated.at`, `verified.at`, `sources[].last_modified`, `usage_window.from`, `usage_window.to`) MUST be formatted with an explicit UTC or timezone offset:
-   - Pattern: `/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/`
-   - Valid examples: `2026-09-22T12:00:00Z`, `2026-09-22T08:30:00+00:00`, `2026-09-22T17:30:00+03:30`
-   - Bare calendar dates (e.g. `2026-09-22`) and timestamps without explicit timezone offsets are rejected by server validation and flagged in UI inspection.
+2. **`type` equals the first path segment (enforced)**:
+   - `domains/auth/index` must have `type: domains`; `specs/login-flow` must have `type: specs`; a root note such as `index` must have `type: index`.
+   - `create_note` fills `type` in from the path when you omit it, and refuses a different value. `edit_note` always keeps the note's current type. Moving a note with `rename_note` (full path in `toName`) rewrites `type` to the new first segment.
 
-2. **8-Level Arbitrary Directory Hierarchy**:
-   Rather than being constrained to a single flat `type/name` folder structure, OKF v0.2 notes support arbitrary nested directory structures up to 8 levels deep (e.g. `domains/storage/crdt/vectors/clock.md`). Path segments must be valid slugs (`^[a-z0-9][a-z0-9-]*$`), guaranteeing safe filesystem mapping and preventing path traversal.
+3. **Datetimes with an explicit offset (enforced)**:
+   - `timestamp`, `stale_after`, `generated.at`, `verified.at`, `sources[].last_modified`, `usage_window.from`, and `usage_window.to` must be ISO 8601 datetimes with `Z` or an offset: `2026-09-22T12:00:00Z`, `2026-09-22T17:30:00+03:30`.
+   - Bare dates (`2026-09-22`) and datetimes without an offset are refused.
+   - `timestamp` defaults to the creation time when `create_note` doesn't set it.
 
-3. **Progressive Disclosure Index Tables**:
-   Every directory level in an OKF bundle must contain an `index.md` file that summarizes the immediate directory, lists child subdirectories with counts, and provides a markdown summary table of child concepts. AI agents can traverse deep knowledge trees progressively via `browse_vault` (`path` and `recursive: false`) without overflowing LLM context windows.
+4. **Frontmatter values (enforced)**:
+   - `generated`, `sources`, `verified`, `usage_window`, and `properties` may hold objects (shapes in §3). Every other top-level key must be a scalar (string, number, boolean, null) or a list of scalars.
+   - The note must survive being saved and read back. If its serialized file would parse to different frontmatter or body, the write is refused.
+   - The frontmatter block in a file starts with a `---` line and ends at the first line that is exactly `---` (trailing spaces allowed). LF and CRLF files both parse. A `---` inside a value or in the body is content, not a fence.
 
-4. **Structured Provenance, Trust & Lifecycle**:
-   OKF v0.2 establishes first-class frontmatter schemas for tracking provenance, trust, and lifecycles:
-   - **`status`**: Lifecycle state of the note (`draft`, `active`, `stable`, `deprecated`, `superseded`, `archived`).
-   - **`verified`**: Trust tier metadata (`unverified`, `machine-confirmed`, `human-reviewed`), including reviewer identity (`by`) and verification timestamp (`at`).
-   - **`generated`**: Agent or automated pipeline attribution (`by`) and generation timestamp (`at`).
-   - **`sources`**: Dependency list of underlying source artifacts (`id`, `resource`, `title`, `last_modified`, `hash`, `author`) for automated staleness tracking.
-   - **`usage_window`**: Temporal validity interval (`from`, `to`).
+5. **Progressive disclosure indexes**:
+   - When notes are created, renamed, deleted, or restored, the server regenerates an `index.md` in each ancestor directory that lists its children.
+   - If you write your own `<dir>/index` note, the server leaves that directory's index alone.
+   - Agents can walk a vault level by level with `browse_vault` (`path`, without `recursive: true`).
+
+6. **Provenance, trust, and lifecycle fields** (validated when present):
+   - **`status`**: `draft`, `active`, `stable`, `deprecated`, `superseded`, or `archived`.
+   - **`verified`**: object or list of objects with `tier` (`unverified`, `machine-confirmed`, `human-reviewed`), optional `by`, optional `at`.
+   - **`generated`**: `{ by, at }`, both required.
+   - **`sources`**: list of objects, each with a string `resource`; `id`, `title`, `last_modified`, `hash`, `author` are optional.
+   - **`usage_window`**: `{ from, to? }`.
 
 ---
 
-## 2. Knowledge Bundle Structure & Progressive Disclosure
+## 2. Knowledge Bundle Structure
 
-In Elara, a vault represents an **OKF Knowledge Bundle**: a self-contained, version-controlled collection of knowledge documents.
+In Elara a vault is an **OKF Knowledge Bundle**.
 
-### 2.1 Standard Bundle Directory Layout
+### 2.1 Typical Bundle Layout
 
 ```
 vault-root/
-├── index.md                      # Bundle Root Index: High-level system overview & domain catalog
-├── log.md                        # Optional: Chronological changelog of updates and agent sessions
-├── domains/                      # Architectural domains and subsystem concept notes (up to 8 levels)
-│   ├── index.md                  # Domain index (progressive disclosure)
+├── index.md                      # Root index (type: index)
+├── log.md                        # Optional changelog (type: log)
+├── domains/                      # Subsystem notes (type: domains)
+│   ├── index.md                  # Generated, or your own domains/index note
 │   ├── auth-security/
 │   │   ├── index.md              # Domain overview note
-│   │   ├── session-lifecycle.md  # Specific concept note
-│   │   └── permissions-matrix.md # Specific concept note
-│   ├── data-storage/
-│   │   ├── index.md
-│   │   └── schema-design.md
+│   │   ├── session-lifecycle.md
+│   │   └── permissions-matrix.md
 │   └── api-surface/
 │       ├── index.md
 │       └── mcp-server.md
-├── specs/                        # End-to-end workflow specifications and data pipelines
-│   ├── index.md                  # Workflow specs index
-│   ├── crdt-collaboration.md     # Specific workflow spec
+├── specs/                        # End-to-end flows (type: specs)
+│   ├── index.md
+│   ├── crdt-collaboration.md
 │   └── repository-sync.md
-├── models/                       # Data entities, database schemas, and API contracts
-│   ├── index.md                  # Models index
-│   ├── vault.md
-│   └── semantic-edge.md
-└── decisions/                    # Architecture Decision Records (ADRs)
-    ├── index.md                  # ADR index
-    ├── ADR-001-crdt-relay.md
-    └── ADR-002-single-process.md
+├── models/                       # Data entities (type: models)
+│   ├── index.md
+│   └── vault.md
+└── decisions/                    # ADRs (type: decisions)
+    ├── index.md
+    ├── adr-001-crdt-relay.md
+    └── adr-002-single-process.md
 ```
 
 ### 2.2 Reserved Filenames
 
-| Filename | Purpose & Rules |
+| Filename | Purpose |
 | :--- | :--- |
-| `index.md` | **Directory Listing & Progressive Disclosure**: Summarizes the immediate folder, lists child concepts with descriptions in markdown index tables, and provides links to child subdirectories. Never used for leaf concept documentation. |
-| `log.md` | **Update History & Audit Trail**: Chronological record of bundle updates, agent mapping sessions, and milestone revisions. |
+| `index.md` | Directory summary. The server generates it; a note you write at `<dir>/index` replaces the generated table. |
+| `log.md` | Optional chronological record of bundle updates and agent sessions. |
 
-All other `.md` files represent **Concept Documents**.
+All other `.md` files are concept documents.
 
-### 2.3 Progressive Disclosure Index Tables
+### 2.3 Index Tables
 
-Every `index.md` summarizes child concepts using structured markdown tables so AI agents can query high-density summaries before loading individual notes:
+An `index.md` you write yourself can summarize child concepts in a table:
 
 ```markdown
 # Authentication & Security Domain
 
 ## Child Concepts
 
-| Concept | Description | Status | Resource |
+| Concept | Description | Status | Code |
 | :--- | :--- | :--- | :--- |
-| [[session-lifecycle]] | Session validation and cookie encryption lifecycle | active | `repo:elara/server/src/auth/session.ts` |
-| [[permissions-matrix]] | RBAC permission evaluation across vaults and repos | stable | `repo:elara/server/src/auth/permissions.ts` |
-| [[mfa-spec]] | TOTP authentication and backup code management | active | `repo:elara/server/src/auth/mfa.ts` |
+| [[domains/auth-security/session-lifecycle]] | Session validation and cookie lifecycle | active | [[repo:elara/server/src/auth/sessions.ts]] |
+| [[domains/auth-security/permissions-matrix]] | Permission checks across vaults and repos | stable | [[repo:elara/server/src/vaults/permissions.ts]] |
 ```
 
 ---
 
-## 3. Concept Document Frontmatter Schema
+## 3. Frontmatter Schema
 
-Every concept document must contain a YAML frontmatter block at the very top conforming to OKF v0.2:
+Through MCP, frontmatter is passed to `create_note` / `edit_note` as a JSON object (`frontmatter`), separate from the markdown `body`. On disk it is the YAML block at the top of the file:
 
 ```yaml
 ---
-# === Core Identity (Required) ===
-type: Architectural Domain          # REQUIRED. Short string naming the concept category.
-title: "Authentication & Security"  # Recommended display title.
-description: "Handles user sessions, MFA verification, and RBAC token resolution." # Single-sentence summary for indices and agent search.
+# === Identity ===
+type: domains                       # REQUIRED. Must equal the first path segment.
+title: "Authentication & Security"  # Display title.
+description: "Handles user sessions, MFA verification, and permission checks." # One-sentence summary.
 
-# === Resource Binding & Timestamp ===
-resource: "repo:elara/server/src/auth" # Canonical URI or repo deep-link identifying the underlying code asset.
-tags: [auth, security, sessions, rbac]     # Cross-cutting categorization tags.
-timestamp: "2026-09-22T05:00:00Z"          # REQUIRED ISO 8601 UTC timestamp with explicit offset.
-stale_after: "2026-12-31T23:59:59Z"        # Optional ISO 8601 UTC expiration timestamp.
+# === Resource & time ===
+resource: "repo:elara/server/src/auth" # String; the asset this note describes.
+tags: [auth, security, sessions]       # List of strings.
+timestamp: "2026-09-22T05:00:00Z"      # Defaults to creation time. Explicit offset required.
+stale_after: "2026-12-31T23:59:59Z"    # Optional. Explicit offset required.
 
-# === Lifecycle & Trust (Optional) ===
-status: active                      # draft | active | deprecated | superseded | archived | stable
+# === Lifecycle & trust ===
+status: active                      # draft | active | stable | deprecated | superseded | archived
 verified:
   tier: human-reviewed              # unverified | machine-confirmed | human-reviewed
-  by: "human:taha"                  # Actor convention (human:<id>, agent:<name>, process:<id>)
-  at: "2026-09-22T05:00:00Z"        # ISO 8601 UTC timestamp
+  by: "human:taha"
+  at: "2026-09-22T05:00:00Z"
 
-# === Provenance & Attribution (Optional) ===
+# === Provenance ===
 generated:
-  by: "agent:antigravity"           # Agent or process that generated this note
-  at: "2026-09-22T05:00:00Z"        # ISO 8601 UTC timestamp
+  by: "agent:claude"
+  at: "2026-09-22T05:00:00Z"
 sources:
-  - id: auth-session-ts
-    resource: "repo:elara/server/src/auth/session.ts"
-    title: "Session Manager Implementation"
-    last_modified: "2026-09-21T18:00:00Z" # ISO 8601 UTC timestamp
-  - id: mfa-spec
-    resource: "docs/superpowers/specs/2026-07-15-mfa-design.md"
-    title: "MFA Architecture Specification"
+  - id: auth-sessions
+    resource: "repo:elara/server/src/auth/sessions.ts"
+    title: "Session handling"
+    last_modified: "2026-09-21T18:00:00Z"
 
-# === Temporal Window & Custom Properties (Optional) ===
+# === Optional ===
 usage_window:
   from: "2026-09-22T00:00:00Z"
   to: "2027-09-22T00:00:00Z"
 properties:
-  complexity: high
   layer: backend
   owner: "Core Team"
 ---
 ```
 
-### 3.1 Field Specifications
+### 3.1 Field Notes
 
-#### `type` (REQUIRED)
-Identifies the kind of concept for routing, search filtering, and graph community detection. Recommended standard types:
-- `System Architecture`: High-level system overview, root maps, and cross-cutting blueprints.
-- `Architectural Domain`: A cohesive subsystem or functional module (e.g. Auth, Storage, Client).
-- `Workflow Spec`: An end-to-end execution path, lifecycle, or multi-step data flow.
-- `Data Model`: Database table, entity definition, or schema contract.
-- `API Contract`: REST route, MCP tool schema, or WebSocket protocol.
-- `Architecture Decision`: Formal Architecture Decision Record (ADR).
-- `Component Guide`: UI component, editor extension, or frontend layout.
-- `Reference`: Environment configurations, operational runbooks, or cheat sheets.
-
-#### `description` (RECOMMENDED)
-A single, high-density sentence summarizing what the concept is and does. Elara uses this field for search snippet previews, `index.md` progressive disclosure tables, and prompt injection for LLM context windows.
-
-#### `resource` (RECOMMENDED FOR CODE-LINKED CONCEPTS)
-A URI that uniquely identifies the underlying asset the concept describes:
-- Repository file or folder: `repo:<repo-id>/server/src/auth/session.ts`
-- External specification: `https://github.com/GoogleCloudPlatform/open-knowledge-format`
-
-#### `timestamp` (STRICT ISO 8601 WITH OFFSET)
-Records creation or modification datetime. Must match `/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/`.
-
-#### `status` (LIFECYCLE)
-One of `draft`, `active`, `stable`, `deprecated`, `superseded`, `archived`. Rendered in UI as semantic status badge with color-coded dot.
-
-#### `generated` & `sources` (PROVENANCE FAMILY)
-- `generated`: Records who produced the note (`by`) and when (`at: "<ISO-8601 UTC>"`).
-- `sources`: An array of concrete artifacts (code files, specs, configs) that the note was synthesized from, each with `id`, `resource`, `title`, and optional `last_modified` (ISO 8601 UTC).
-
-#### `verified` (TRUST TIER FAMILY)
-Records how much trust an agent or human can place in the note:
-- `unverified`: Machine-extracted without verification.
-- `machine-confirmed`: Validated against test runs, linter, or compiler output.
-- `human-reviewed`: Explicitly reviewed and signed off by a human engineer.
-Can be specified as a single object or an array of verification records.
+- **`type`**: not a free-form category. It is the first path segment, so the folder decides it. Use folders to group notes (`domains/`, `specs/`, `models/`, `decisions/`, `guides/`, ...).
+- **`description`**: one dense sentence; shown in search snippets and index tables.
+- **`resource`**: a string such as `repo:<repo>/server/src/auth/sessions.ts` or an external URL. It is metadata only; it does not create a graph edge. Put a bare `[[repo:...]]` link in the body for that.
+- **`timestamp`**: creation or modification time with an explicit offset. A key named `created` is not treated as a datetime; use `timestamp`.
+- **`generated`** / **`sources`**: who produced the note and from which artifacts.
+- **`verified`**: how much the note can be trusted. A single object or a list.
 
 ---
 
-## 4. Concept Document Body Conventions
+## 4. Body Conventions
 
-To maximize readability for both humans and AI retrieval models, OKF concept documents favor structured markdown over conversational prose.
-
-### Recommended Heading Structure
+Prefer structured markdown over prose:
 
 ```markdown
 # [Concept Display Title]
 
 ## Overview & Scope
-[2-3 paragraphs defining the boundary, primary responsibilities, and architectural rationale.]
+[2-3 paragraphs: boundary, responsibilities, rationale.]
 
 ## Architecture & Components
-[Structured breakdown of subcomponents, responsibilities, and module boundaries.]
+[Subcomponents and module boundaries.]
 
 ## Key Invariants & Contracts
-- Non-negotiable system rules (e.g. concurrency guarantees, security constraints, transaction boundaries).
-- Error conditions and fallback behaviors.
+- Rules that must never break (concurrency, security, transaction boundaries).
+- Error conditions and fallbacks.
 
 ## Data Flow & State Transitions
-[Step-by-step sequential lifecycle, state machine, or data progression.]
+[Step-by-step lifecycle.]
 
 ## Key Implementation Files
-- `[[repo:<repo-id>/path/to/lead-file.ts]]` — Description of lead implementation.
-- `[[repo:<repo-id>/path/to/types.ts]]` — Core interfaces and exported types.
+- [[repo:<repo>/path/to/lead-file.ts]] — Lead implementation.
+- [[repo:<repo>/path/to/types.ts]] — Core interfaces and exported types.
 
 ## Related Concepts & Domains
-- [[domains/other-domain/index|Other Domain Title]] — Relationship explanation.
+- [[domains/other-domain/index|Other Domain Title]] — Relationship.
 - [[specs/workflow-spec|Relevant Workflow Spec]] — End-to-end interaction.
-- [[decisions/ADR-001|Governing Architecture Decision]] — Contextual decision.
+- [[decisions/adr-001-crdt-relay|Governing Architecture Decision]] — Context.
 ```
 
----
-
-## 5. Elara Wikilinks & Graph Edge Resolution
-
-Elara transforms markdown links and wikilinks into explicit graph edges in the knowledge graph:
-
-### 5.1 Note-to-Note Links (`EXTRACTED` Edges)
-- **Standard Link**: `[[concepts/session-lifecycle]]` or `[[session-lifecycle]]`
-  - Creates a directed edge from the current note to the target note.
-- **Aliased Link**: `[[concepts/session-lifecycle|Session Management Engine]]`
-  - Displays as "Session Management Engine" in the text while resolving the target note path.
-- **Heading Anchor**: `[[concepts/session-lifecycle#Revocation Flow]]`
-  - Deep-links to a specific section heading within the target note.
-
-### 5.2 Repository / Codebase Deep-Links (`EXTRACTED` Cross-Domain Edges)
-- **File Link**: `[[repo:<repo-id>/path/to/file.ext]]`
-  - Links the note directly to an ingested repository file in the Elara graph.
-  - Example: `[[repo:elara/server/src/mcp/server.ts]]`
-- **Line Range Link**: `[[repo:<repo-id>/path/to/file.ext#L45-L75]]`
-  - Deep-links to a specific line range within the code viewer.
-  - Example: `[[repo:elara/client/src/components/shell/Rail.tsx#L39-L65]]`
-
-### 5.3 Semantic & Structural Edges
-- **Structural Edges**: Created automatically by Elara between notes sharing the same `type` or overlapping `tags`.
-- **Semantic Edges**: Generated automatically by the Elara vector engine between notes with high cosine similarity in their embedding space.
+Write links bare, as above. A link wrapped in backticks is code, not a link.
 
 ---
 
-## 6. Concrete OKF Note Examples
+## 5. Wikilinks & Graph Edges
 
-### 6.1 Architectural Domain Concept (`domains/auth-security/index.md`)
+Elara turns links in the note body into `extracted` edges in the graph.
+
+### 5.1 Note-to-Note Links
+- `[[domains/auth-security/session-lifecycle]]`: directed edge to the target note. Prefer the full path: `rename_note` rewrites full-path links when the target moves, but not bare-name links like `[[session-lifecycle]]`.
+- `[[domains/auth-security/session-lifecycle|Session Management]]`: same edge, shown with a label.
+- `[[domains/auth-security/session-lifecycle#Revocation Flow]]`: same edge; the heading anchor is for display.
+
+### 5.2 Note-to-Code Links
+- `[[repo:<repo-name-or-id>/path/to/file.ext]]`: edge from the note to that file of a repository you can access, for example `[[repo:elara/server/src/mcp/server.ts]]`.
+- `[[repo:<repo>/path/to/file.ext#L45-L75]]`: accepted; the edge still points at the file. The audit checks that the file exists, not the line range.
+
+### 5.3 What Is Ignored
+Links inside inline code (`` `...` ``), fenced code blocks, and HTML comments are stripped before extraction. They create no edge, and the audit does not see them.
+
+### 5.4 Structural & Semantic Edges
+- **`structural`**: created automatically between notes sharing a `type` or a tag (and between code files sharing a language or top-level directory). Groups larger than 50 are skipped.
+- **`semantic`**: created automatically between nodes with high embedding similarity.
+
+---
+
+## 6. Examples
+
+### 6.1 Domain Note (`domains/auth-security/index`)
+
+`create_note` arguments: `path: "domains/auth-security/index"`, plus this frontmatter and body. As a file:
 
 ```markdown
 ---
-type: Architectural Domain
+type: domains
 title: "Authentication, Authorization & Session Security"
-description: "Provides multi-factor authentication, secure session tokens, and instant permission revocation across REST and WebSocket streams."
+description: "Sessions, multi-factor authentication, and live permission checks across REST, MCP, and collaboration sockets."
 resource: "repo:elara/server/src/auth"
 tags: [architecture, auth, security, mfa, permissions]
 status: active
+timestamp: "2026-09-22T05:00:00Z"
 generated:
-  by: "agent:antigravity"
-  at: "2026-09-22T05:00:00Z"
-verified:
-  tier: human-reviewed
-  by: "human:taha"
+  by: "agent:claude"
   at: "2026-09-22T05:00:00Z"
 sources:
-  - id: auth-store
-    resource: "repo:elara/server/src/auth/store.ts"
-    title: "Auth Database Store"
-  - id: session-middleware
-    resource: "repo:elara/server/src/auth/session.ts"
-    title: "Fastify Session Middleware"
+  - id: auth-sessions
+    resource: "repo:elara/server/src/auth/sessions.ts"
+    title: "Session handling"
+  - id: vault-permissions
+    resource: "repo:elara/server/src/vaults/permissions.ts"
+    title: "Vault access resolution"
 properties:
   layer: backend
-  owner: "Security Guild"
 ---
 
 # Authentication, Authorization & Session Security
 
 ## Overview & Scope
-The Authentication & Security domain governs identity verification, token lifecycle, and cryptographic trust boundaries for Elara. It guarantees that unauthenticated requests cannot access note contents, and ensures that privilege revocation terminates active sessions immediately.
+Governs identity, sessions, and access checks. Access is re-resolved from the database on every request, so revoking a share takes effect on the next call.
 
 ## Key Invariants
-- **Zero Content Leakage on Auth Failure**: Authentication errors return generic "invalid credentials" to prevent account enumeration.
-- **Immediate Revocation Kick**: Revoking access to a vault or repository publishes a real-time event that terminates active CRDT WebSocket connections within 50ms.
-- **Single-Process Counter Guarantees**: Brute-force lockout counters are maintained in-memory per instance.
+- MCP bearer tokens are stored only as hashes; a lost token cannot be recovered, only revoked and reissued.
+- Revoking access to a vault or repository disconnects live collaboration sockets.
+- Lockout counters are kept in memory per instance.
 
 ## Key Implementation Files
-- `[[repo:elara/server/src/auth/session.ts]]` — Session extraction and cookie verification.
-- `[[repo:elara/server/src/auth/store.ts]]` — Argon2id password hashing and user row persistence.
-- `[[repo:elara/server/src/auth/mfa.ts]]` — TOTP generation, verification, and backup code hashing.
+- [[repo:elara/server/src/auth/sessions.ts]] — Session handling.
+- [[repo:elara/server/src/auth/passwords.ts]] — Password hashing.
+- [[repo:elara/server/src/auth/mfa.ts]] — TOTP verification and backup codes.
+- [[repo:elara/server/src/vaults/permissions.ts]] — Vault access resolution.
 
-## Related Concepts & Workflows
-- [[specs/collaboration-relay|Real-time Collaboration & Permission Enforcement]]
-- [[domains/admin-oversight/index|Admin Oversight & Security Audit Trail]]
-- [[decisions/ADR-004-oidc-sso|ADR 004: Generic OIDC Single Sign-On Integration]]
+## Related
+- [[specs/crdt-collaboration|Real-time collaboration and permission enforcement]]
+- [[decisions/adr-004-oidc-sso|ADR 004: OIDC single sign-on]]
 ```
 
-### 6.2 Workflow Specification (`specs/crdt-collaboration.md`)
+### 6.2 Workflow Spec (`specs/crdt-collaboration`)
 
 ```markdown
 ---
-type: Workflow Spec
-title: "Real-Time Collaborative Editing via CRDT Relay"
-description: "Specifies the WebSocket connection handshake, Yjs document synchronization, and mid-session revocation enforcement."
-resource: "repo:elara/server/src/collab/relay.ts"
+type: specs
+title: "Real-Time Collaborative Editing"
+description: "Ticket issue, WebSocket handshake, Yjs sync, and permission enforcement for live note editing."
+resource: "repo:elara/server/src/sync/collab-server.ts"
 tags: [spec, collab, crdt, yjs, websockets]
 status: active
-generated:
-  by: "agent:antigravity"
-  at: "2026-09-22T05:00:00Z"
+timestamp: "2026-09-22T05:00:00Z"
 sources:
-  - id: collab-relay
-    resource: "repo:elara/server/src/collab/relay.ts"
-    title: "Hocuspocus Server Relay"
+  - id: collab-server
+    resource: "repo:elara/server/src/sync/collab-server.ts"
+    title: "Hocuspocus collaboration server"
 ---
 
-# Real-Time Collaborative Editing via CRDT Relay
+# Real-Time Collaborative Editing
 
 ## Overview
-Elara implements collaborative note editing using Yjs CRDTs synchronized over a Hocuspocus WebSocket relay. The server acts as a state authority, validating permissions on every transaction and persisting updates to the disk storage layer.
+Notes are edited together as Yjs documents synced over a Hocuspocus WebSocket relay. The server checks permissions on the socket and writes the document back to the note file.
 
-## Step-by-Step Sequence
-1. **Ticket Acquisition**: Client calls `POST /api/vaults/:id/notes/:path/collab/ticket`.
-2. **Permission Check**: Server confirms caller holds `edit` permission on the vault.
-3. **WebSocket Handshake**: Client upgrades connection to `ws://host/collab` presenting the single-use ticket.
-4. **CRDT Sync**: Client and server exchange Yjs state vectors and sync missing updates.
-5. **Presence Broadcast**: Client cursor position and user ink color are broadcast to active peers.
-6. **Persistence**: Server debounces document flush and commits markdown + frontmatter to the filesystem.
+## Sequence
+1. **Ticket**: the client calls `POST /api/collab/ticket` and receives a single-use token and the socket path `/collab`.
+2. **Handshake**: the client opens the socket with the ticket; the server checks that the user has edit access to the note's vault, and re-checks access on every inbound message.
+3. **Sync**: client and server exchange Yjs state and missing updates.
+4. **Presence**: cursor positions are broadcast to other editors.
+5. **Persistence**: the server debounces changes and writes frontmatter and body to the note file.
 
 ## Key Files
-- `[[repo:elara/server/src/collab/relay.ts]]` — Hocuspocus server setup and ticket validation.
-- `[[repo:elara/client/src/hooks/useCodeMirrorEditor.ts]]` — Client-side Yjs and CodeMirror 6 binding.
+- [[repo:elara/server/src/sync/collab-server.ts]] — Collaboration server and access checks.
+- [[repo:elara/server/src/sync/tickets.ts]] — Single-use tickets.
+- [[repo:elara/client/src/hooks/useCodeMirrorEditor.ts]] — Client-side Yjs and CodeMirror binding.
 ```
