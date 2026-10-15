@@ -6,22 +6,128 @@
 # Fastify process on :3000, which is the single-container shape renderCompose
 # and caddy.ts assume. Dockerfile.client and the two-container
 # compose.deploy.yml split are the legacy single-tenant deployment.
+#
+# An image is only pushed for a commit whose CI `checks` job passed (#573):
+# - `prod` pushes: ci.yml calls this workflow from its `publish` job, which
+#   `needs: checks`, so publishing happens in the same CI run, same commit;
+#   `ci-gate` re-reads that run's own `checks` result.
+# - `v*` tags and manual dispatch: `ci-gate` looks up CI on the exact commit
+#   and refuses unless its latest `checks` job succeeded. A dispatch can
+#   override that with `force` + `reason`; the override is logged.
+# - On a branch ref, `ci-gate` also refuses any commit that is no longer the
+#   branch head (force does not override this), so re-running an old `prod`
+#   CI run cannot move `latest` back to an older commit.
 name: Publish image
 
 on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: Build the image but do not push it.
+        type: boolean
+        default: false
+      ci_run_id:
+        description: Id of the calling CI run; the gate checks that run's own `checks` job.
+        type: string
+        default: ''
   push:
-    # `prod` is the production branch in this repo, not `main`.
-    branches: [prod]
     tags: ['v*']
   workflow_dispatch:
-
-concurrency:
-  group: publish-${{ github.ref }}
-  cancel-in-progress: false
+    inputs:
+      dry_run:
+        description: Build the image but do not push it.
+        type: boolean
+        default: false
+      force:
+        description: Publish even though CI did not pass on this commit (requires reason; logged).
+        type: boolean
+        default: false
+      reason:
+        description: Why the CI gate is being overridden (required with force).
+        type: string
+        default: ''
 
 jobs:
-  publish:
+  ci-gate:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Require a passing CI run on this commit, and that it is the branch head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          FORCE: ${{ inputs.force == true }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          # Only the current head of a branch is published. A re-run of an
+          # older CI run (or a dispatch re-run) must not move `latest` back.
+          if [[ "$GITHUB_REF" == refs/heads/* ]]; then
+            branch=${GITHUB_REF#refs/heads/}
+            head=$(gh api "repos/$REPO/git/ref/heads/$branch" --jq .object.sha)
+            if [ "$head" != "$SHA" ]; then
+              echo "::error::$SHA is no longer the head of $branch (head is $head). Refusing to publish an older commit."
+              exit 1
+            fi
+            echo "$SHA is the head of $branch"
+          fi
+          verdict=none
+          if [ -n "$CI_RUN_ID" ]; then
+            # Called from CI: use this run's own `checks` job.
+            latest=$(gh api "repos/$REPO/actions/runs/$CI_RUN_ID/jobs?filter=latest&per_page=100" \
+              --jq '.jobs[] | select(.name == "checks" and .status == "completed") | "\(.completed_at) \(.conclusion) \(.html_url)"')
+          else
+            # CI runs from push/workflow_dispatch test this exact commit;
+            # pull_request runs test a merge ref, so they do not count.
+            run_ids=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=100" \
+              --jq '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | .id')
+            latest=""
+            for id in $run_ids; do
+              # filter=latest: only the latest attempt of each run counts.
+              # Cancelled/skipped checks prove nothing either way.
+              job=$(gh api "repos/$REPO/actions/runs/$id/jobs?filter=latest&per_page=100" \
+                --jq '.jobs[] | select(.name == "checks" and .status == "completed" and .conclusion != "cancelled" and .conclusion != "skipped") | "\(.completed_at) \(.conclusion) \(.html_url)"')
+              if [ -n "$job" ] && { [ -z "$latest" ] || [[ "$job" > "$latest" ]]; }; then
+                latest=$job
+              fi
+            done
+          fi
+          if [ -n "$latest" ]; then
+            read -r _ verdict url <<<"$latest"
+            echo "Latest CI checks on $SHA: $verdict ($url)"
+          else
+            echo "No completed CI checks job found for $SHA"
+          fi
+          if [ "$verdict" = "success" ]; then
+            exit 0
+          fi
+          if [ "$FORCE" = "true" ]; then
+            # One line only, so the reason cannot inject workflow commands.
+            REASON=${REASON//[$'\r\n']/ }
+            if [ -z "${REASON// /}" ]; then
+              echo "::error::force=true requires a non-empty reason"
+              exit 1
+            fi
+            # GITHUB_TRIGGERING_ACTOR is whoever started this attempt (differs from GITHUB_ACTOR on a re-run).
+            msg="CI gate overridden by $GITHUB_TRIGGERING_ACTOR for $SHA (CI: $verdict). Reason: $REASON"
+            echo "::warning::$msg"
+            echo "### CI gate overridden" >>"$GITHUB_STEP_SUMMARY"
+            echo "$msg" >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::error::CI has not passed on $SHA (latest checks: $verdict). Refusing to publish. Wait for CI on this commit to finish (or run it: gh workflow run ci.yml --ref <branch>), then dispatch publish.yml on this ref again; or dispatch with force=true and a reason."
+          exit 1
+
+  publish:
+    needs: ci-gate
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -31,6 +137,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
 
       - uses: docker/login-action@v4
+        if: ${{ !inputs.dry_run }}
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -51,7 +158,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          push: true
+          push: ${{ !inputs.dry_run }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # The runtime stage installs onnxruntime-node and sharp. Uncached,
