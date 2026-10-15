@@ -1,7 +1,10 @@
+import { writeFile } from 'node:fs/promises'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../src/db/client.js'
 import { users } from '../src/db/schema.js'
 import { hashPassword } from '../src/auth/passwords.js'
+import { serializeNote, type Frontmatter } from '../src/notes/okf.js'
+import { getLiveNote, noteFile } from '../src/notes/store.js'
 
 let counter = 0
 export function uniqueEmail(prefix = 'user'): string {
@@ -56,4 +59,15 @@ export async function loginCookie(
   const raw = Array.isArray(setCookie) ? setCookie[0] : setCookie
   if (!raw) throw new Error('no session cookie returned')
   return raw.split(';')[0]!
+}
+
+/**
+ * Rewrites a live note's file from its row. For tests that break a note's
+ * file on purpose: CI checks every note the suite leaves behind (#578).
+ */
+export async function rewriteNoteFileFromRow(vaultId: string, path: string): Promise<void> {
+  const row = await getLiveNote(vaultId, path)
+  if (!row) throw new Error(`no live note at ${path}`)
+  const note = { frontmatter: row.frontmatter as Frontmatter, body: row.body }
+  await writeFile(noteFile(vaultId, row.path), serializeNote(note), 'utf8')
 }

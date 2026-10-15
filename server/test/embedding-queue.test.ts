@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { notes, vaults } from '../src/db/schema.js'
@@ -10,12 +10,20 @@ import {
 } from '../src/search/embedding-queue.js'
 import { createActiveUser } from './helpers.js'
 
+// Row-only fixtures (no note files): delete each vault after its test so the
+// CI vault-invariant gate (#578) never sees notes the store did not write.
+const createdVaultIds: string[] = []
+afterEach(async () => {
+  for (const id of createdVaultIds.splice(0)) await db.delete(vaults).where(eq(vaults.id, id))
+})
+
 async function makeVaultAndNote(body = 'Testing embeddings') {
   const user = await createActiveUser()
   const [vault] = await db
     .insert(vaults)
     .values({ name: 'embed-test-vault', ownerId: user.id })
     .returning()
+  createdVaultIds.push(vault!.id)
   const [note] = await db
     .insert(notes)
     .values({

@@ -83,10 +83,12 @@ docker compose exec app pnpm restore-backup /path/to/backup.zip
 
 ## 4. Verify After Restoring
 
-After either restore path, check that every note file on disk can be opened:
+After either restore path, check that every note file on disk can be opened and matches the database:
 
 ```bash
 docker compose exec app pnpm check-notes
 ```
 
-It prints one `BROKEN` line per note whose file is missing or has damaged frontmatter, and exits with code 1 if there are any. A clean restore ends with `checked N notes, 0 broken`.
+It prints one `BROKEN` line per problem: a missing file (`missing-file`), damaged frontmatter (`unparseable`), or a file whose frontmatter or body differs from the database row (`frontmatter-mismatch`, `body-mismatch`, e.g. when the database and the files were restored from different points in time). It exits with code 1 if there are any. A clean restore ends with `checked N notes, 0 broken`.
+
+If someone is editing while it runs, a note being saved at that moment can show up as a mismatch once. Run the check again before acting on a single mismatch.

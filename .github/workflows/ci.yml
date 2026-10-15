@@ -49,6 +49,16 @@ jobs:
           DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           TEST_DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           ADMIN_DATABASE_URL: postgres://elara:elara@localhost:5432/elara
+          DATA_DIR: ${{ runner.temp }}/elara-test-data
+      # Vault invariant gate (#578): every live note the server suite left
+      # behind must have a file that parses and equals its row. Same database
+      # and DATA_DIR as the Test step. A test that damages notes on purpose
+      # must repair them or delete its vault before it ends.
+      - name: Check note files left by the tests
+        run: pnpm -C server check-notes
+        env:
+          DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
+          DATA_DIR: ${{ runner.temp }}/elara-test-data
 
   # The only automatic path to the registry: the image for a `prod` commit is
   # published by this run, after `checks` passed on that same commit (#573).

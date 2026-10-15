@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { db } from '../src/db/client.js'
 import { notes, semanticEdges, vaults } from '../src/db/schema.js'
 import { recomputeSemanticEdges } from '../src/search/semantic-edges.js'
@@ -36,6 +36,7 @@ function edgesOwnedBy(nodeId: string) {
     .where(and(eq(semanticEdges.sourceType, 'note'), eq(semanticEdges.sourceId, nodeId)))
 }
 
+let vaultId: string
 let noteA: string
 let noteB: string
 const embeddingA = denseVector(1)
@@ -46,9 +47,16 @@ beforeAll(async () => {
     .insert(vaults)
     .values({ name: 'Semantic edges vault', ownerId: owner.id })
     .returning({ id: vaults.id })
+  vaultId = vault!.id
   // Same dense vector => cosine similarity 1, so each is comfortably in the other's top-k.
-  noteA = await createNote(vault!.id, `sem-a-${randomUUID()}`, embeddingA)
-  noteB = await createNote(vault!.id, `sem-b-${randomUUID()}`, denseVector(1))
+  noteA = await createNote(vaultId, `sem-a-${randomUUID()}`, embeddingA)
+  noteB = await createNote(vaultId, `sem-b-${randomUUID()}`, denseVector(1))
+})
+
+// Row-only fixtures (no note files): delete the vault so the CI
+// vault-invariant gate (#578) never sees notes the store did not write.
+afterAll(async () => {
+  await db.delete(vaults).where(eq(vaults.id, vaultId))
 })
 
 describe('recomputeSemanticEdges', () => {
