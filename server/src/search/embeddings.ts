@@ -3,6 +3,22 @@ import { config } from '../config.js'
 
 export const EMBEDDING_DIM = 384
 
+/**
+ * Texts per ONNX run. The pipeline pads every text in a run to the longest
+ * one — 512 tokens for nearly any source file — and activation memory grows
+ * with the run: measured ~32 MB per text, so the 948 texts one minified
+ * bundle produced (file + 947 symbols) peaked at 30.7 GB RSS in one run.
+ * Eight texts peak near 360 MB above the loaded model.
+ */
+const EMBED_BATCH_SIZE = 8
+
+/**
+ * bge-small reads at most 512 tokens and the pipeline truncates, but only
+ * after tokenizing the whole string (381k tokens for a 742 KB bundle).
+ * 512 tokens of source code fit well inside this many characters.
+ */
+const MAX_EMBED_CHARS = 16_000
+
 export interface Embedder {
   embed(texts: string[]): Promise<number[][]>
 }
@@ -47,8 +63,13 @@ class LocalEmbedder implements Embedder {
 
   async embed(texts: string[]): Promise<number[][]> {
     const pipe = await this.pipeline()
-    const output = await pipe(texts, { pooling: 'mean', normalize: true })
-    return output.tolist()
+    const vectors: number[][] = []
+    for (let i = 0; i < texts.length; i += EMBED_BATCH_SIZE) {
+      const batch = texts.slice(i, i + EMBED_BATCH_SIZE).map((t) => t.slice(0, MAX_EMBED_CHARS))
+      const output = await pipe(batch, { pooling: 'mean', normalize: true })
+      vectors.push(...output.tolist())
+    }
+    return vectors
   }
 }
 
