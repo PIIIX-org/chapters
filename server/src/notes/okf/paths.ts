@@ -82,6 +82,7 @@ export function resolveNotePath(inputPath: string): ResolvedNotePath {
   }
 }
 
+// Scratch PR for #575 (fails-before proof (b)): a "fix" that changes nothing.
 export function splitPath(path: string): { type: string; name: string } {
   const resolved = resolveNotePath(path)
   return { type: resolved.type, name: resolved.name }
