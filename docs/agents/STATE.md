@@ -28,6 +28,6 @@ Resume anchor. Keep under 40 lines. Update + push at every task boundary.
   - Collab is a person, no autosave PUT (CRDT is the note). Viewer read-only forever.
   - Exact seq scan for semantic edge recompute (#123). Mutation-verify every test.
   - MCP is Streamable HTTP only (`/mcp`, `/elara/mcp`); no stdio. Hosted at `chapters.piiix.org`; `elara.piiix.org` is not live.
-- **Suite**: server + client Vitest suites run in CI (`checks`) on every PR. `server/test/mcp-secret-scan.test.ts` (#577) calls every MCP tool and prompt against seeded secrets: a new tool fails CI until it has a fixture step there.
+- **Suite**: server + client Vitest suites run in CI (`checks`) on every PR. `server/test/mcp-secret-scan.test.ts` (#577) calls every MCP tool and prompt against seeded secrets: a new tool fails CI until it has a fixture step there. A `fix:` PR to `dev` also runs `fails-before` (#575): its changed tests must fail on the base commit, or the PR carries label `no-fails-before` + a `Fails-before: n/a because ...` line (not a required check yet; item 177).
 - **Deferred**: cli-visualizer (#9, assigned), partial restore (#261), per-type notification prefs (#263).
 - **Decided against (do NOT re-open)**: WebMCP browser standard (adr-001), Leiden (#265), graph DB (#268), GraphRAG (#267), cross-file calls (#266).
