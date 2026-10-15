@@ -43,6 +43,8 @@ jobs:
         run: pnpm typecheck
       - name: Lint
         run: pnpm lint
+      - name: Test CI scripts
+        run: node --test '.github/scripts/*.test.mjs'
       - name: Test
         run: pnpm test
         env:
@@ -74,4 +76,3 @@ jobs:
       actions: read
       contents: read
       packages: write
-

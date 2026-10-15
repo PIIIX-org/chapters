@@ -19,10 +19,16 @@ Every change — code, spec, doc — follows the same loop:
 2. **Commit + push** (early and often, per the resume protocol in
    `handling-protocols.md`).
 3. **Open a PR** targeting `dev`. The PR body says what changed and why,
-   and references any spec/plan/issue it implements.
+   and references any spec/plan/issue it implements. A fix PR (title
+   `fix: ...` / `fix(scope): ...`) carries a regression test that fails
+   without the fix; the `fails-before` check (see CI below) proves it on
+   every push. If no such test can exist (docs- or CI-only fix), add the
+   label `no-fails-before` and a line
+   `Fails-before: n/a because <reason>` to the PR body.
 4. **Review it on GitHub** — actually read the diff (`gh pr diff` /
    files view), don't rubber-stamp. Check: matches the spec, tests
-   included and green, README/STATE.md updated if the change is
+   included and green, on a fix PR `fails-before` green (or its
+   exemption justified), README/STATE.md updated if the change is
    meaningful (standing rule), no performance-rule violations.
 5. **If review finds a problem**: open an **issue** describing it, push
    fix commits to the same PR referencing the issue (`refs #N`), and
@@ -122,6 +128,41 @@ equals its row). The server tests include the MCP secret scan
 is called against seeded secrets and must return none, and a newly
 registered tool fails CI until it has a fixture step there. Green CI is a
 merge precondition on `dev` and a promotion precondition on `prod`.
+
+**Fails-before** (`.github/workflows/fails-before.yml`, job
+`fails-before`, #575) runs on every PR to `dev` whose title starts with
+`fix:` / `fix(scope):` (case-insensitive; other PRs pass as "skipped").
+It also re-runs when the title, body or labels change. The job
+(`.github/scripts/fails-before.mjs`):
+
+1. diffs the PR against its base (`base...head`). Test side:
+   `server/test/**` and `client/src/test/**` (tests, helpers, fixtures,
+   global setup) and `client/src/**/*.test.ts(x)`. Everything else is
+   source.
+2. checks out the base commit (the first parent of GitHub's PR merge
+   commit) in a separate worktree, copies the PR's test-side files over
+   it, runs `pnpm install --frozen-lockfile`, and runs only the
+   `*.test.ts(x)` files the PR adds or changes (server ones against a
+   pgvector container, like `checks`).
+3. passes if at least one of those tests **fails on an assertion or
+   error inside a test**. A file that fails to load (missing module, syntax
+   error, top-level throw, or a suite-level error before any test fails)
+   is reported separately as "suite failed to load" and does not count:
+   it shows the import broke, not that the test catches the bug. Vitest
+   does not typecheck, so a type error alone does not count either. The
+   job fails if every changed test passes on base, if only load failures
+   remain, or if the fix PR changes no test file.
+
+The job summary lists every changed test file with its result on base
+(the failing test names and first error line, or the load error). Escape
+hatch: label `no-fails-before` plus a `Fails-before: n/a because ...` line
+(at least 10 characters of reason) in the PR body; the job then runs no
+test, passes, and prints the justification. The label without the line
+fails. The pure logic has unit tests in
+`.github/scripts/fails-before.test.mjs`, run by `checks` (`node --test`).
+`fails-before` is not a required status check yet; branch protection is
+fix-list item 177. Until then, treat a red `fails-before` on a fix PR as
+blocking review.
 
 Both `dev` and `prod` enforce strict GitHub branch protection with
 `required_status_checks` on `checks` and `enforce_admins: true`. No PR
