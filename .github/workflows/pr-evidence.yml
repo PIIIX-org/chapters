@@ -1,12 +1,11 @@
 name: PR evidence
 
-# Every PR body needs an Evidence section, and a claim word (`100%`,
-# `verified`, `fully tested`, `all tests pass`, `production-ready`,
-# `stable`, `zero bugs`, `remediated`) only counts with a link to the run
-# or artifact behind it in the same sentence or bullet (#579). Covers PRs
-# to `dev` and promotions to `prod`. Template:
-# .github/pull_request_template.md. Logic and messages:
-# .github/scripts/pr-evidence.mjs; rules: docs/agents/github-workflow.md.
+# Every PR body needs an Evidence section that links a run or artifact of
+# this repo, and a claim (test counts, "verified", "100%", ...) needs a
+# link next to it (#579). Covers PRs to `dev` and promotions to `prod`.
+# Template: .github/pull_request_template.md. Logic, the claim list and
+# messages: .github/scripts/pr-evidence.mjs; rules:
+# docs/agents/github-workflow.md.
 #
 # Separate from ci.yml so a body edit re-evaluates this check without
 # re-running the whole suite.
@@ -38,7 +37,8 @@ jobs:
           node-version: 24
       # Run the base's copy of the checker so a PR cannot edit the check it
       # is judged by; until the base has one, run the PR's copy (the summary
-      # says which).
+      # says which). The copy runs alone from $RUNNER_TEMP, so the script
+      # must stay a single file with no sibling imports.
       - name: Check the PR body for evidence
         run: |
           checker=.github/scripts/pr-evidence.mjs

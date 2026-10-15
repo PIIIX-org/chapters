@@ -23,11 +23,13 @@ Every change — code, spec, doc — follows the same loop:
    Not covered, `Closes #N`. Evidence is links, not adjectives: the CI
    run, the fails-before run (or its justification), the lab run for
    integration changes, the benchmark delta for retrieval or token
-   changes. The `pr-evidence` check (see CI below) fails a body without
-   an Evidence section, and fails a claim word (`100%`, `verified`,
-   `fully tested`, `all tests pass`, `production-ready`, `stable`,
-   `zero bugs`, `remediated`) in a sentence or bullet that does not link
-   the run, PR, issue, commit or file behind it. A fix PR (title
+   changes. `gh pr create --body`, `--body-file` and `--fill` never load
+   the template: copy it to a file under the workspace, fill it in, and
+   pass that file with `--body-file`. The `pr-evidence` check (see
+   **PR evidence** under CI below, which lists the rules) fails a body
+   whose Evidence section is missing, links nothing or keeps template
+   placeholders, and a claim (test counts, "verified", "100%", ...) with
+   no link next to it. A fix PR (title
    `fix: ...` / `fix(scope): ...`, or with `!` before the colon) carries
    a regression test that fails without the fix; the `fails-before` check
    (see CI below) proves it on every push. Coverage depends on that title:
@@ -70,10 +72,11 @@ verified work, and merge. If something on `dev` turns out broken, it
 simply doesn't get promoted until fixed — `prod` never waits on a revert.
 
 The promotion PR uses the same template, and `pr-evidence` checks it like
-any other PR. Its Evidence section links the green CI run on the `dev`
-head being promoted and the PRs it carries; "100% green" or "verified"
-without those links fails (promotion #334 claimed "100% green" while its
-CI failed on lint).
+any other PR. Its Evidence section links (full URL) the green CI run on
+the `dev` head being promoted; the carried PRs can be listed as `#N`,
+which counts as a link for a claim on the same bullet. "100% green" or
+"verified" without those links fails (promotion #334 claimed "100% green"
+while its CI failed on lint).
 
 The image is published only for a `prod` commit whose CI `checks` job
 passed (#573). The push to `prod` starts **CI**, and CI's `publish` job
@@ -205,31 +208,51 @@ still counts, so reviewers read the failing test names in the summary.
 #579) runs on every PR to `dev` or `prod` (promotions included) when it
 is opened, pushed, reopened, edited or marked ready, so a body edit
 re-runs it. Like fails-before, it runs the base commit's copy of
-`.github/scripts/pr-evidence.mjs` when the base has one. It fails when:
+`.github/scripts/pr-evidence.mjs` when the base has one. Here, a **link**
+is a full URL to a GitHub Actions run, PR, issue, commit or file
+(`blob/`, `tree/`) of this repository; links to other repositories never
+count. It fails when:
 
-1. the body has no Evidence section: a heading `## Evidence` (any level,
-   any suffix) or a `**Evidence**` / `**Evidence:**` line, with content
-   other than HTML comments. The unfilled template fails.
-2. a claim word (`100%`, `verified`, `fully tested`, `all tests pass` and
-   its `passed`/`passing` forms, `production-ready`, `stable`,
-   `zero bugs`, `remediated`; case-insensitive, whole words, so
-   `unstable` and `unverified` do not count) appears in a sentence,
-   bullet (with its continuation lines), table row or heading with no
-   link to a GitHub Actions run, PR, issue, commit or file (`blob/`,
-   `tree/`) of this repository. `#123` shorthand and links to other
-   repositories do not count.
+1. the Evidence section is missing: no heading containing the word
+   Evidence (`## Evidence`, `### Tests / Evidence`, any level) and no
+   `**Evidence**` / `**Evidence:**` line, or only HTML comments under it.
+   The unfilled template fails.
+2. the Evidence section has no link (`TBD`, `n/a`, "Tested locally.", a
+   lone sub-heading, `#123` alone all fail). Before CI has run, link the
+   issue or the head commit; editing the body re-runs the check once the
+   run link is added.
+3. the Evidence section keeps a template placeholder such as `<id>` or
+   `<reason>` (HTML tags and `<https://...>` autolinks are not
+   placeholders).
+4. a claim matching one of the `CLAIMS` patterns in the script (the only
+   list; for example `100%` / `100 percent`, `verified`, "all 49 tests
+   pass", "922 tests passing", `476/476`, "0 errors", "no regressions",
+   "CI is green", "tested end-to-end", `fully tested` / `fully covered`,
+   `production-ready`, `stable`, `remediated`) appears in a sentence, list
+   item or table row with no link and no `#123` / `owner/repo#123`
+   reference. A list item is judged together with its parent items and
+   its nested items, so `- All tests pass:` followed by a sub-bullet with
+   the run URL passes; sibling items and the next sentence do not count.
+   Reference-style links (`[run][1]` plus `[1]: <url>`) count.
 
-HTML comments, fenced code and inline code are not checked, so quoting a
-word in backticks (`` `stable` ``) mentions it without claiming it. There
-is no exemption label: a true claim can link its run, and a word that is
-not a claim can be quoted or reworded, so a label would only let through
-the unlinked claims this check exists to stop. Dependabot PRs
-(`dependabot[bot]`) are skipped: their bodies are upstream release notes,
-not claims by the author. The job summary lists each failing sentence or
-bullet with its claim words. Unit tests:
-`.github/scripts/pr-evidence.test.mjs`, run by `checks`. Like
-fails-before, it is not a required status check yet (item 177): treat a
-red `pr-evidence` as blocking review.
+Matching is case-insensitive on whole words (`unstable`, `unverified` do
+not count), after Unicode normalisation (`１００％` is `100%`) and with
+zero-width characters removed. Headings, table header rows, HTML
+comments, fenced code and inline code (backticks, `<code>`) are not
+checked for claims, so quoting a word in backticks (`` `stable` ``)
+mentions it without claiming it. There is no exemption label: a true
+claim can link its run, and a word that is not a claim can be quoted or
+reworded, so a label would only let through the unlinked claims this
+check exists to stop. Dependabot PRs (`dependabot[bot]`) are skipped:
+their bodies are upstream release notes, not claims by the author. A PR
+from GitHub's Revert button (title `Revert "..."`, body
+`Reverts owner/repo#N`) needs no Evidence section, but its claims are
+still checked. The job summary lists each failing sentence or item with
+its claims. Unit tests: `.github/scripts/pr-evidence.test.mjs`, run by
+`checks`. Like fails-before, it is not a required status check yet (item
+177): treat a red `pr-evidence` as blocking review. It checks that a
+claim has a link, not that the link shows the claim: reviewers open the
+links (step 4 above).
 
 Both `dev` and `prod` enforce strict GitHub branch protection with
 `required_status_checks` on `checks` and `enforce_admins: true`. No PR
