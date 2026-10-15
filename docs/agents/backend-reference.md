@@ -323,9 +323,17 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   user's note, and the generated table must never overwrite or unlink
   it (#384, fixed 2026-10-12).
 - **`integrity.ts`** / `pnpm check-notes`: parses every live note's file
-  from disk the way `readNote` does and lists unparseable or missing
-  files (exit 1 if any). A note in that state cannot be opened until
-  its file is rewritten.
+  from disk the way `readNote` does and compares it with the note's row.
+  Each problem has a kind: `missing-file`, `unparseable`,
+  `frontmatter-mismatch` (deep equality, key order ignored; the detail
+  lists the differing keys) or `body-mismatch` (exact string; the detail
+  gives the first differing offset and both lengths). Exit 1 if any. An
+  unparseable note cannot be opened until its file is rewritten; a
+  mismatched note reads as the file while search, graph and history use
+  the row. CI runs it after the test suite against the suite's database
+  and `DATA_DIR` (#578), so a test that leaves a note in any of these
+  states fails CI; tests that damage notes on purpose repair them in
+  `afterAll`.
 - **Damaged files** (`sync/crdt-write.ts`, #391): every write loads the
   collab document from the note's file first, so a file that does not
   parse used to block edit and revert too. When the load fails on a
@@ -794,6 +802,10 @@ way to audit every vault; doing the same over MCP is ~one call per note
 under the 120/min per-connection limit. A note it reports as
 `unparseable` is repaired by a full edit (frontmatter and body) or by
 reverting it to a recorded revision (`note_history` → `revert_note`).
+A `frontmatter-mismatch` or `body-mismatch` note (file and row disagree,
+e.g. a crash between the file write and the row update, or files and
+database restored from different points in time) is repaired by a full
+edit with the intended content, which rewrites both.
 
 **Rotate `CREDENTIALS_ENCRYPTION_KEY`**: there is no rotation
 mechanism. Changing it makes every previously stored repository

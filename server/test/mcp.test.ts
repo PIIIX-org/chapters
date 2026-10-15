@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, rewriteNoteFileFromRow } from './helpers.js'
 
 let app: FastifyInstance
 let baseUrl: string
@@ -198,6 +198,8 @@ describe('MCP integration', () => {
       expect(textOf(edit)).not.toContain(config.dataDir)
     } finally {
       await rm(file, { recursive: true, force: true })
+      // Leave the note whole for the CI vault-invariant gate (#578).
+      await rewriteNoteFileFromRow(vaultId, 'docs/blocked')
     }
   })
 

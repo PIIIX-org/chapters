@@ -5,7 +5,7 @@ import AdmZip from 'adm-zip'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, rewriteNoteFileFromRow } from './helpers.js'
 
 let app: FastifyInstance
 let ownerCookie: string
@@ -260,5 +260,7 @@ describe('export', () => {
     )
     expect(entry).not.toBeNull()
     expect(entry!.getData().toString('utf8')).toContain('Row outlived the file.')
+    // Give the note its file back for the CI vault-invariant gate (#578).
+    await rewriteNoteFileFromRow(orphanVault, 'people/orphan')
   }, BACKUP_TIMEOUT_MS)
 })

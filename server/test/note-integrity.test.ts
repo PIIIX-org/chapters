@@ -4,8 +4,8 @@ import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { checkNoteFiles } from '../src/notes/integrity.js'
 import { parseNote, serializeNote, type Frontmatter, type OkfNote } from '../src/notes/okf.js'
-import { getLiveNote, noteFile } from '../src/notes/store.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { noteFile } from '../src/notes/store.js'
+import { createActiveUser, loginCookie, rewriteNoteFileFromRow } from './helpers.js'
 
 let app: FastifyInstance
 let cookie: string
@@ -35,14 +35,7 @@ beforeAll(async () => {
 // These tests damage files on purpose. Rewrite every file from its row so the
 // suite leaves the vault intact for the CI vault-invariant gate (#578).
 afterAll(async () => {
-  for (const name of NAMES) {
-    const row = (await getLiveNote(vaultId, `guides/${name}`))!
-    await writeFile(
-      noteFile(vaultId, row.path),
-      serializeNote({ frontmatter: row.frontmatter as Frontmatter, body: row.body }),
-      'utf8',
-    )
-  }
+  for (const name of NAMES) await rewriteNoteFileFromRow(vaultId, `guides/${name}`)
   expect(await checkNoteFiles(vaultId)).toEqual({ checked: NAMES.length, problems: [] })
   await app.close()
 })
@@ -93,7 +86,7 @@ describe('checkNoteFiles', () => {
 
   it('reports a file whose frontmatter differs from the row as a frontmatter mismatch only', async () => {
     await rewrite('retagged', (note) => {
-      note.frontmatter.status = 'done'
+      note.frontmatter.status = 'active'
       note.frontmatter.tags = ['a']
     })
     const problems = await problemsFor('retagged')

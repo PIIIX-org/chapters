@@ -115,7 +115,9 @@ branch, publishes without any check. Don't do either.
 ## CI
 
 GitHub Actions runs typecheck + lint + tests on every PR (added with the
-first code scaffold). Green CI is a merge precondition on `dev` and a
+first code scaffold), then `pnpm -C server check-notes` over the notes the
+server tests left behind (#578: every live note's file exists, parses, and
+equals its row). Green CI is a merge precondition on `dev` and a
 promotion precondition on `prod`.
 
 Both `dev` and `prod` enforce strict GitHub branch protection with

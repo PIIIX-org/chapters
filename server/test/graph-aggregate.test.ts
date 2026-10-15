@@ -209,6 +209,14 @@ describe('community drill-down', () => {
 })
 
 describe('community member cap', () => {
+  // Row-only fixtures (no note files): delete each vault once its test is
+  // done, as for the louvain fixtures below, so the CI vault-invariant gate
+  // (#578) never sees notes the store did not write.
+  const createdVaultIds: string[] = []
+  afterEach(async () => {
+    for (const id of createdVaultIds.splice(0)) await db.delete(vaults).where(eq(vaults.id, id))
+  })
+
   /**
    * Seeds `count` notes sharing one type with no wikilinks between them.
    * A shared type puts them all in one structural group, but the group
@@ -225,6 +233,7 @@ describe('community member cap', () => {
       .values({ name: `Cap vault ${count}`, ownerId: owner.id })
       .returning({ id: vaults.id })
     const vaultId = vault!.id
+    createdVaultIds.push(vaultId)
     await db.insert(notes).values(
       Array.from({ length: count }, (_, i) => ({
         vaultId,
