@@ -1,12 +1,13 @@
 name: Fails before
 
 # Every fix PR must carry a test that fails without the fix (#575). For a PR
-# to `dev` titled `fix: ...` / `fix(scope): ...`, the `fails-before` job
-# restores the base commit's source, keeps the PR's test files and helpers,
-# runs only the test files the PR adds or changes, and passes only if at
-# least one test fails there. Escape hatch: label `no-fails-before` plus a
-# `Fails-before: n/a because ...` line in the PR body. Logic and messages:
-# .github/scripts/fails-before.mjs; rules: docs/agents/github-workflow.md.
+# to `dev` titled `fix: ...` / `fix(scope): ...` (or `fix!:` /
+# `fix(scope)!:`), the `fails-before` job restores the base commit's source,
+# keeps the PR's test files and helpers, runs only the test files the PR adds
+# or changes, and passes only if at least one test fails there. Escape hatch:
+# label `no-fails-before` plus a `Fails-before: n/a because ...` line in the
+# PR body. Logic and messages: .github/scripts/fails-before.mjs; rules:
+# docs/agents/github-workflow.md.
 #
 # Separate from ci.yml so a title, body or label edit re-evaluates this
 # check without re-running the whole suite.
@@ -40,10 +41,23 @@ jobs:
         with:
           # The base commit and the merge-base must be in the clone.
           fetch-depth: 0
+          # PR test code runs in this job; keep the token out of .git/config.
+          persist-credentials: false
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
+      # HEAD is GitHub's merge of the PR into its base, so HEAD^1 is the base.
+      # Run the base's copy of the checker so a PR cannot edit the check it is
+      # judged by; until the base has one, run the PR's copy (the summary says
+      # which).
       - name: Run the PR's changed tests against the base commit
-        run: node .github/scripts/fails-before.mjs
+        run: |
+          checker=.github/scripts/fails-before.mjs
+          if git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
+            git show "HEAD^1:$checker" > "$RUNNER_TEMP/fails-before.mjs"
+            FAILS_BEFORE_CHECKER=base node "$RUNNER_TEMP/fails-before.mjs"
+          else
+            FAILS_BEFORE_CHECKER=pr node "$checker"
+          fi

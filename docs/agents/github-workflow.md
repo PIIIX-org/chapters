@@ -20,10 +20,11 @@ Every change — code, spec, doc — follows the same loop:
    `handling-protocols.md`).
 3. **Open a PR** targeting `dev`. The PR body says what changed and why,
    and references any spec/plan/issue it implements. A fix PR (title
-   `fix: ...` / `fix(scope): ...`) carries a regression test that fails
-   without the fix; the `fails-before` check (see CI below) proves it on
-   every push. If no such test can exist (docs- or CI-only fix), add the
-   label `no-fails-before` and a line
+   `fix: ...` / `fix(scope): ...`, or with `!` before the colon) carries
+   a regression test that fails without the fix; the `fails-before` check
+   (see CI below) proves it on every push. Coverage depends on that title:
+   a fix PR titled otherwise is skipped. If no such test can exist (docs-
+   or CI-only fix), add the label `no-fails-before` and a line
    `Fails-before: n/a because <reason>` to the PR body.
 4. **Review it on GitHub** — actually read the diff (`gh pr diff` /
    files view), don't rubber-stamp. Check: matches the spec, tests
@@ -131,38 +132,59 @@ merge precondition on `dev` and a promotion precondition on `prod`.
 
 **Fails-before** (`.github/workflows/fails-before.yml`, job
 `fails-before`, #575) runs on every PR to `dev` whose title starts with
-`fix:` / `fix(scope):` (case-insensitive; other PRs pass as "skipped").
-It also re-runs when the title, body or labels change. The job
-(`.github/scripts/fails-before.mjs`):
+`fix:` / `fix(scope):` / `fix!:` / `fix(scope)!:` (case-insensitive;
+other PRs pass as "skipped", so the author's choice of title decides
+coverage). It also re-runs when the title, body or labels change. The
+workflow runs the base commit's copy of `.github/scripts/fails-before.mjs`,
+so a PR cannot edit the check it is judged by; when the base has no copy
+it runs the PR's, and the summary says which. The job:
 
 1. diffs the PR against its base (`base...head`). Test side:
    `server/test/**` and `client/src/test/**` (tests, helpers, fixtures,
-   global setup) and `client/src/**/*.test.ts(x)`. Everything else is
-   source.
+   global setup), `client/src/**/*.test.ts(x)` and
+   `client/src/**/__snapshots__/**`. Everything else is source.
 2. checks out the base commit (the first parent of GitHub's PR merge
    commit) in a separate worktree, copies the PR's test-side files over
    it, runs `pnpm install --frozen-lockfile`, and runs only the
    `*.test.ts(x)` files the PR adds or changes (server ones against a
    pgvector container, like `checks`).
 3. passes if at least one of those tests **fails on an assertion or
-   error inside a test**. A file that fails to load (missing module, syntax
-   error, top-level throw, or a suite-level error before any test fails)
-   is reported separately as "suite failed to load" and does not count:
-   it shows the import broke, not that the test catches the bug. Vitest
-   does not typecheck, so a type error alone does not count either. The
-   job fails if every changed test passes on base, if only load failures
-   remain, or if the fix PR changes no test file.
+   error of its own**. These do not count, and are reported separately:
+   - "suite failed to load": the file fails to load (missing module,
+     syntax error, top-level throw, or a suite-level error before any test
+     fails). It shows the import broke, not that the test catches the bug.
+   - "failed on a missing export": a test imports a name the base
+     module does not export yet. Vitest still loads the file and the
+     name is `undefined`, so the test fails with
+     `(0 , __vite_ssr_import_0__.newFn) is not a function`,
+     `... is not a constructor`, `Cannot read properties of undefined` or
+     `expected undefined to ...`. A failure whose message names a
+     `__vite_ssr_import_N__` / `__vi_import_N__` binding never counts.
+     The job also imports each module a changed test file imports (from
+     `./`, `../` or `@/`) on base and, if a name is missing, on the PR
+     head: names present only on the head are exports the PR adds, and
+     **no failure in a file that imports one counts**. Put the
+     fails-before test in a file that reaches the fixed code through
+     exports the base already has.
+
+   Vitest does not typecheck, so a test that only stops type-checking on
+   base is not a failure. The job fails if every changed test passes on
+   base, if only failures that do not count remain, or if the fix PR
+   changes no test file.
 
 The job summary lists every changed test file with its result on base
-(the failing test names and first error line, or the load error). Escape
-hatch: label `no-fails-before` plus a `Fails-before: n/a because ...` line
-(at least 10 characters of reason) in the PR body; the job then runs no
-test, passes, and prints the justification. The label without the line
-fails. The pure logic has unit tests in
+(the failing test names and first error line, the load error, or the
+missing exports). Escape hatch: label `no-fails-before` plus a
+`Fails-before: n/a because <reason>` line in the PR body, with at least
+10 characters of reason after `because` (a `<...>` placeholder does not
+count); the job then runs no test, passes, and prints the justification.
+The label without a valid line fails. The pure logic has unit tests in
 `.github/scripts/fails-before.test.mjs`, run by `checks` (`node --test`).
 `fails-before` is not a required status check yet; branch protection is
 fix-list item 177. Until then, treat a red `fails-before` on a fix PR as
-blocking review.
+blocking review. It is a guard, not a proof: a test that fails on base
+only because the diff is missing (for example asserting on source text)
+still counts, so reviewers read the failing test names in the summary.
 
 Both `dev` and `prod` enforce strict GitHub branch protection with
 `required_status_checks` on `checks` and `enforce_admins: true`. No PR
