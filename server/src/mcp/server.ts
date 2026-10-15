@@ -46,6 +46,7 @@ import { serializeNote } from '../notes/okf.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
 import { getRepositoryFile, listFileSymbols, listRepositoryFiles } from '../repositories/store.js'
+import { countPendingExtractions } from '../repositories/extraction-queue.js'
 import { prepareGitRemote } from '../repositories/git-remote.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
@@ -61,6 +62,21 @@ import { writeThroughCollab } from './crdt-write.js'
 import { registerMcpPrompts } from './prompts.js'
 
 class McpToolError extends Error {}
+
+/**
+ * The text of a failed tool call. A Node system error (fs, net) names the
+ * absolute server paths it touched, e.g. `ENOENT: no such file or directory,
+ * rename '/data/vaults/…'`; the caller gets only its code, and the full error
+ * goes to the server log.
+ */
+function toolErrorMessage(err: unknown): string {
+  if (err instanceof Error && 'syscall' in err && typeof err.syscall === 'string') {
+    console.error('[mcp] tool failed:', err)
+    const code = 'code' in err && typeof err.code === 'string' ? err.code : 'unknown'
+    return `internal storage error (${code})`
+  }
+  return err instanceof Error ? err.message : String(err)
+}
 
 /**
  * Note content returned by these tools is DATA, never instructions —
@@ -138,8 +154,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         const result = await fn(...args)
         return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return { content: [{ type: 'text' as const, text: `Error: ${message}` }], isError: true }
+        return { content: [{ type: 'text' as const, text: `Error: ${toolErrorMessage(err)}` }], isError: true }
       }
     }
 
@@ -963,7 +978,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
     'repository_status',
     {
       description:
-        'Sync freshness for a repository (last synced time, sync state) — check before trusting results if freshness matters.',
+        'Sync freshness for a repository (last synced time, sync state, files whose symbol/embedding extraction has not completed) — check before trusting results if freshness matters.',
       inputSchema: { repositoryId: z.string().uuid().optional() },
     },
     wrap(async ({ repositoryId }: { repositoryId?: string }) => {
@@ -978,7 +993,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         .from(repositories)
         .where(eq(repositories.id, target))
       if (!rows[0]) throw new McpToolError('not found')
-      return rows[0]
+      return { ...rows[0], filesPendingExtraction: await countPendingExtractions(target) }
     }),
   )
 

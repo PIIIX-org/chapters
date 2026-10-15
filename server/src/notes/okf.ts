@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type {
   VerificationTier,
@@ -68,7 +69,9 @@ export class OkfValidationError extends Error {}
 /**
  * The shared OKF validation (Editor spec hardening): every write path —
  * REST, CRDT persistence, MCP — validates through here. Slug-only path
- * segments make traversal impossible by construction.
+ * segments make traversal impossible by construction. It runs before the
+ * row or the file is written, so it is also where a note that its own file
+ * could not reproduce is refused (see `assertRoundTrips`).
  */
 export function validateNote(
   type: string,
@@ -206,6 +209,30 @@ export function validateNote(
     }
   }
   if (typeof body !== 'string') throw new OkfValidationError('body must be a string')
+  assertRoundTrips(frontmatter, body)
+}
+
+/**
+ * The file is the canonical copy of a note (readNote, the collab load), so a
+ * note whose serialized file does not parse back to the same frontmatter and
+ * body must never be written: it would be stored as something else and every
+ * later read, edit or collab session would carry the corruption forward.
+ */
+function assertRoundTrips(frontmatter: Frontmatter, body: string): void {
+  let parsed: OkfNote
+  try {
+    parsed = parseNote(serializeNote({ frontmatter, body }))
+  } catch (err) {
+    throw new OkfValidationError(
+      `note cannot be stored: its file would not parse (${err instanceof Error ? err.message : String(err)})`,
+    )
+  }
+  if (!isDeepStrictEqual(parsed.frontmatter, frontmatter)) {
+    throw new OkfValidationError('note cannot be stored: its frontmatter does not survive serialization')
+  }
+  if (parsed.body !== body) {
+    throw new OkfValidationError('note cannot be stored: its body does not survive serialization')
+  }
 }
 
 export function isValidOkfValue(valueOrKey: unknown, keyOrValue?: unknown): boolean {
@@ -227,10 +254,20 @@ export function serializeNote(note: OkfNote): string {
   return `---\n${stringifyYaml(note.frontmatter)}---\n${note.body}`
 }
 
+/**
+ * Frontmatter is everything between an opening `---` line and the first line
+ * that is exactly `---` (trailing spaces/tabs allowed). Both fences must be
+ * whole lines: a `---` inside a value (`title: alpha---beta`, a block scalar
+ * line, a list item) or in the body is content, not a fence. LF and CRLF
+ * files both parse; the body is returned verbatim after the closing fence's
+ * line break.
+ */
+const NOTE_FENCES = /^---\r?\n(?:|([\s\S]*?)\r?\n)---[ \t]*(?:\r?\n|$)([\s\S]*)$/
+
 export function parseNote(raw: string): OkfNote {
-  const match = raw.match(/^---\n([\s\S]*?)\n?---\n?([\s\S]*)$/)
+  const match = raw.match(NOTE_FENCES)
   if (!match) throw new OkfValidationError('missing frontmatter fence')
-  const frontmatter = parseYaml(match[1]!) as Frontmatter
+  const frontmatter = parseYaml(match[1] ?? '') as Frontmatter
   if (typeof frontmatter !== 'object' || frontmatter === null || Array.isArray(frontmatter)) {
     throw new OkfValidationError('frontmatter must be a YAML mapping')
   }

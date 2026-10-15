@@ -1,6 +1,8 @@
 # Empirical Benchmark Telemetry & Executive Reports
 
-[← Back to Main Repository](../../README.md) • [View Master Test Plans (TP-01 to TP-15)](../../benchmarks/README.md)
+[← Back to Main Repository](../../README.md) • [Benchmarks: retracted](../../benchmarks/README.md)
+
+> **Retracted.** The numbers in this page and in the reports in this folder are retracted pending a reproducible benchmark. They were produced by runners that were never merged into this repository (they live only on the unmerged `dev-chroma` branch), measured against production, and cannot be reproduced. The ChromaDB comparison describes that unmerged branch, not a shipped edition: Elara uses PostgreSQL + pgvector only. Evidence: Elara vault note `audit/2026-10-14-ai-performance-study`. The text below is kept for the record only.
 
 ---
 

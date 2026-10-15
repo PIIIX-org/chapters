@@ -1,6 +1,8 @@
-# Chapters — Project Brief
+# Elara (formerly Chapters) — Project Brief
 
-One page. Read this first, every session.
+One page. Read this first, every session. The product was renamed from
+Chapters to Elara; the repository is still `chapters`, and "Chapters" below
+means Elara.
 
 ## What
 

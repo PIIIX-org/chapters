@@ -6,13 +6,7 @@
 
 <p align="center">
   <a href="#overview"><img src="assets/badges/badge-okf.svg" alt="Format: OKF v0.2 ISO 8601"/></a>
-  <a href="#system-architecture"><img src="assets/badges/badge-crdt.svg" alt="Collab: Yjs CRDT 0.09ms p95"/></a>
-  <a href="docs/benchmarks/README.md"><img src="assets/badges/badge-vector.svg" alt="Vector Engine: pgvector 17 10.87 QPS"/></a>
   <a href="#model-context-protocol-mcp-interface"><img src="assets/badges/badge-mcp.svg" alt="AI MCP: 57 Tools and 20 Prompts"/></a>
-  <br/>
-  <a href="#codebase-architecture"><img src="assets/badges/badge-ast.svg" alt="AST Engine: Tree-sitter 92k LOC/s"/></a>
-  <a href="docs/benchmarks/03-enterprise-security-penetration-matrix.md"><img src="assets/badges/badge-security.svg" alt="Security: 21 of 21 Vectors Blocked"/></a>
-  <a href="benchmarks/README.md"><img src="assets/badges/badge-tests.svg" alt="Test Suite: 15 of 15 Plans Verified"/></a>
   <a href="LICENSE"><img src="assets/badges/badge-license.svg" alt="License: MIT Open Source"/></a>
 </p>
 
@@ -20,7 +14,7 @@
 
 **Status: in testing.** The repository keeps its original name, `chapters`; the product is Elara. Bugs found in testing are tracked in [Issues](https://github.com/PIIIX-org/chapters/issues).
 
-[Quickstart](#quickstart) • [Architectural Comparison](#architectural-comparison) • [Benchmarks & Telemetry](docs/benchmarks/README.md) • [Master Test Plans](benchmarks/README.md) • [MCP Server](#model-context-protocol-mcp-interface)
+[Quickstart](#quickstart) • [Architectural Comparison](#architectural-comparison) • [Benchmarks (retracted)](#benchmarks-retracted) • [MCP Server](#model-context-protocol-mcp-interface)
 
 </div>
 
@@ -30,9 +24,9 @@
 
 Software knowledge splits across two silos: human team wikis stored in closed cloud databases (Notion, Outline) and local code repositories indexed by headless command-line tools. Human engineers lose context as architecture documentation drifts away from source code, while autonomous AI coding agents struggle with hallucinated symbol paths and truncated context windows.
 
-**Elara** joins the two. It stores all documentation as plain, human-readable Markdown files directly on disk using the **Google Open Knowledge Format (OKF v0.2)** with strict ISO 8601 UTC timestamps. Simultaneously, it connects to your Git repositories, parsing TypeScript, Go, Python, Rust, and C++ source files into a real-time **Tree-sitter AST symbol index**.
+**Elara** joins the two. It stores all documentation as plain, human-readable Markdown files directly on disk using the **Google Open Knowledge Format (OKF v0.2)** with strict ISO 8601 timestamps (explicit UTC or offset). It also connects to your Git repositories and indexes TypeScript, JavaScript, Python, and Go source files into a **Tree-sitter symbol and import index**.
 
-When you write notes, you link directly to live codebase declarations using `[[repo:#symbol]]` syntax. When code changes, Elara reconciles the AST graph automatically, pruning ghost symbols and keeping architecture documentation in lockstep with the codebase. For AI agents, Elara exposes a native **Model Context Protocol (MCP)** server equipped with 57 specialized tools and 20 engineering prompts.
+When you write notes, you link directly to code files using `[[repo:<repo>/<path>]]` syntax. When code changes, Elara re-syncs and re-indexes the repository, so links and symbols follow the codebase. For AI agents, Elara exposes a native **Model Context Protocol (MCP)** server with 57 tools and 20 engineering prompts.
 
 ---
 
@@ -48,11 +42,11 @@ How Elara compares against existing tools across core architectural dimensions:
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **License & Hosting** | **MIT Open-Source · Self-Host** | Proprietary Local App | Closed Commercial SaaS | Open-Source CLI | AGPLv3 Self-Host | Closed Commercial Cloud |
 | **Storage Architecture** | **Plain OKF v0.2 MD on Disk** | Unstructured Local MD | Cloud Markdown Sync | InMemory AST Cache | PostgreSQL Database | Proprietary Block DB |
-| **Multiplayer Engine** | **Yjs CRDT Relay (<0.1ms)** | Manual Git Merge Conflicts | Git Pull-Request Flow | Single User CLI | Operational Transform | Proprietary Cloud OT |
+| **Multiplayer Engine** | **Yjs CRDT Relay (Hocuspocus)** | Manual Git Merge Conflicts | Git Pull-Request Flow | Single User CLI | Operational Transform | Proprietary Cloud OT |
 | **Code AST Ingestion** | **Tree-sitter WASM Engine** | None | IDE Extension Snippets | Headless AST Graph | None | Static Code Blocks |
-| **Unified Graph** | **Notes + Code (Louvain/Dijkstra)**| Notes Only Graph | Code Documentation Only| Code Syntax Only | Document Tree Only | Relational Tables Only |
+| **Unified Graph** | **Notes + Code (Louvain communities, shortest path)**| Notes Only Graph | Code Documentation Only| Code Syntax Only | Document Tree Only | Relational Tables Only |
 | **AI Interface** | **Native 57-Tool MCP Server** | Community REST Hacks | Webhook Ingestion | Stdout CLI Piping | REST API | Proprietary Cloud Copilot |
-| **Vector Indexing** | **pgvector 17 + ChromaDB** | Third-party Plugins | Cloud Embedding API | Local Vector Store | None | Closed Embedding Service |
+| **Vector Indexing** | **PostgreSQL + pgvector** | Third-party Plugins | Cloud Embedding API | Local Vector Store | None | Closed Embedding Service |
 
 ---
 
@@ -64,17 +58,17 @@ Elara uses a dual-index architecture that links plain Markdown notes and polyglo
 flowchart TD
   subgraph Ingestion ["Source Ingestion Layer"]
     MD["Plain Markdown Files\n(OKF v0.2 on Disk)"]
-    GIT["Git Repositories\n(TS, Go, Python, Rust, C++)"]
+    GIT["Git Repositories\n(TS, JS, Python, Go)"]
   end
 
   subgraph Processing ["Parsing & Analysis Engines"]
-    OKF_P["OKF Validator\nStrict ISO 8601 UTC"]
-    TS_P["Tree-sitter WASM Engine\n92,245 LOC / sec"]
-    EMB["Local ONNX Embeddings\nall-MiniLM-L6-v2 (384d)"]
+    OKF_P["OKF Validator\nISO 8601 with offset"]
+    TS_P["Tree-sitter WASM Engine\nSymbols + imports"]
+    EMB["Local ONNX Embeddings\nbge-small-en-v1.5 (384d)"]
   end
 
   subgraph Storage ["Unified Storage & State Layer"]
-    PG[("PostgreSQL 17 + pgvector\nHybrid Search (BM25 + Cosine)")]
+    PG[("PostgreSQL 17 + pgvector\nHybrid Search (full-text + cosine, RRF)")]
     YJS["Yjs CRDT Relay\n(Hocuspocus WebSocket)"]
     LOUVAIN["Louvain Community Engine\nCross-Vault & Code Bridges"]
   end
@@ -103,21 +97,11 @@ flowchart TD
 
 ---
 
-### Benchmarks & Telemetry
+## Benchmarks (retracted)
 
-Production concurrency benchmarks, query throughput scaling curves, tail latency diagnostics, and 7 executive architectural reports are documented in the benchmark suite:
+The benchmark numbers this README used to show (the TP-01 to TP-15 "Master Test Plans", the throughput, latency, and security badges, and the reports under `docs/benchmarks/`) are **retracted pending a reproducible benchmark**. They cannot be reproduced: the runners were never merged (they exist only on the unmerged `dev-chroma` branch), they ran against production, and some results are impossible (an NDCG@10 of 1.37, where NDCG cannot exceed 1). The 2026-10-14 study that found this is the Elara vault note `audit/2026-10-14-ai-performance-study`.
 
-👉 **[Empirical Benchmark Telemetry & Executive Reports →](docs/benchmarks/README.md)**  
-*Hardware capacity models, multi-tenant QoS isolation, V8 soak forensics, and pgvector vs ChromaDB empirical comparison.*
-
----
-
-## Testing & Quality Assurance
-
-Elara is verified through 15 automated Master Test Plans covering retrieval accuracy, CRDT stress, chaos recovery, and security penetration:
-
-👉 **[The 15 Master Test Plans (TP-01 to TP-15) →](benchmarks/README.md)**  
-*Complete verification matrix, empirical SLO compliance targets, and 15 interactive HTML run dashboards.*
+Correctness is covered by the server and client test suites that CI runs on every pull request.
 
 ---
 
@@ -127,36 +111,36 @@ Elara exposes a complete, permission-scoped Model Context Protocol (MCP) server 
 
 ### MCP Configuration
 
-Add Elara to your `claude_desktop_config.json`, Cursor MCP settings, or Antigravity configuration:
+Elara serves MCP over Streamable HTTP at `POST /mcp` (also `POST /elara/mcp`) on your instance; there is no stdio server. Create a token in Settings > MCP Connections, then add the server to your client, for example:
 
 ```json
 {
   "mcpServers": {
     "elara": {
-      "command": "node",
-      "args": ["/path/to/chapters/server/dist/mcp/index.js"],
-      "env": {
-        "ELARA_API_URL": "http://localhost:3000",
-        "ELARA_API_TOKEN": "your-api-token"
+      "url": "https://<your-elara-host>/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-mcp-token>"
       }
     }
   }
 }
 ```
 
+Claude Code: `claude mcp add --transport http elara https://<your-elara-host>/mcp --header "Authorization: Bearer <your-mcp-token>"`.
+
 ### Key MCP Capabilities
 
-- **57 First-Class Tools**:
+- **57 tools**, documented with their exact parameters in [`skills/elara/references/mcp-tools.md`](skills/elara/references/mcp-tools.md):
   - `list_vaults`, `browse_vault`, `read_note`, `create_note`, `edit_note`, `delete_note`
   - `list_repositories`, `browse_repository`, `read_file`, `find_symbols`, `repository_status`
-  - `search` (hybrid BM25 + 384d semantic vector search with permission scoping)
-  - `graph` (subgraph extraction, Louvain community detection, shortest path via Dijkstra)
-  - `audit_okf_conformance` (automated schema validation against OKF v0.2)
-- **20 Pre-Configured Engineering Prompts**:
-  - `draft_adr` — Contextual Architectural Decision Record drafting linking relevant notes and code AST symbols.
-  - `audit_architecture_drift` — Scans AST graph against design notes to identify stale references.
-  - `shortest_path_navigation` — Guides agents through unfamiliar codebases via knowledge graph traversal.
-  - `session_capture` — Distills ongoing debugging sessions into structured OKF notes.
+  - `search` (hybrid full-text + 384d semantic search with permission scoping)
+  - `graph` (nodes and edges with Louvain communities) and `find_graph_path` (shortest path, breadth-first)
+  - `audit_okf_conformance` (structural validation against OKF v0.2)
+- **20 engineering prompts**, for example:
+  - `draft_adr` — drafts an Architecture Decision Record linking relevant notes and code.
+  - `audit_architecture_drift` — compares recent code changes with linked notes.
+  - `summarize_concept_chain` — explains how two notes or code files connect, via `find_graph_path`.
+  - `active_project_companion` — records decisions and notes in the project vault during a work session.
 
 ---
 
@@ -168,34 +152,32 @@ Add Elara to your `claude_desktop_config.json`, Cursor MCP settings, or Antigrav
 
 ```
 chapters/
-├── client/                     # Web Frontend Application (React + Vite + Tailwind)
-│   ├── src/components/         # UI Components (Dark Observatory command console)
-│   ├── src/editor/             # Live-preview Markdown editor (Milkdown + Yjs)
-│   ├── src/graph/              # Canvas 2D Louvain knowledge graph renderer
-│   └── src/stores/             # Client state management (Zustand + WebSockets)
+├── client/                     # Web frontend (React + Vite + Tailwind)
+│   ├── src/components/         # UI components
+│   ├── src/hooks/              # Data hooks, CodeMirror + Yjs editor binding
+│   ├── src/pages/              # Routed pages
+│   └── src/api/, src/lib/      # API client and shared helpers
 │
-├── server/                     # Backend API & Engine (Fastify + TypeScript)
-│   ├── src/auth/               # OIDC, session handling, and MFA verification
-│   ├── src/crdt/               # Hocuspocus WebSocket relay for live Yjs sync
-│   ├── src/graph/              # Louvain community clustering & Dijkstra routing
+├── server/                     # Backend API & engine (Fastify + TypeScript)
+│   ├── src/auth/               # Sessions, OIDC, MFA, lockout
+│   ├── src/sync/               # Hocuspocus WebSocket relay for live Yjs sync
+│   ├── src/graph/              # Graph assembly, Louvain communities, shortest path
 │   ├── src/mcp/                # Model Context Protocol server (57 tools, 20 prompts)
-│   ├── src/notes/              # OKF v0.2 Markdown parser and disk storage engine
-│   ├── src/repositories/       # Git shallow-clone manager & filesystem watchers
-│   ├── src/search/             # Hybrid search (PostgreSQL pgvector + BM25)
-│   └── src/treesitter/         # WebAssembly Tree-sitter polyglot symbol extractor
+│   ├── src/notes/              # OKF v0.2 parser, validation, and disk storage
+│   ├── src/repositories/       # Git/local ingestion, Tree-sitter extraction, import resolution
+│   ├── src/search/             # Hybrid search (Postgres full-text + pgvector) and embeddings
+│   └── src/export/             # Vault export/import, instance backup and restore
 │
-├── docs/                       # Specifications & Benchmark Documentation
-│   ├── benchmarks/             # 7 Executive Benchmark Reports (.md & .html)
-│   └── superpowers/specs/      # Architectural Decision Records & Specs
+├── docs/                       # Specifications and agent docs
+│   ├── agents/                 # Operating docs for AI agents working on this repo
+│   ├── benchmarks/             # Retracted benchmark reports (see "Benchmarks (retracted)")
+│   └── superpowers/specs/      # Design specs
 │
-├── benchmarks/                 # Automated Performance & Chaos Test Harness
-│   ├── runs/                   # 15 Master Test Run Artifacts (TP-01 to TP-15)
-│   └── suites/                 # K6, Autocannon, and Chaos injection scripts
+├── benchmarks/runs/            # Artifacts of the retracted TP-01..TP-15 runs
 │
-└── assets/                     # Observatory Asset Kit (Committed SVGs)
-    ├── hero.svg                # Signature animated flight deck banner
-    ├── badges/                 # Monolithic telemetry status badges
-    └── charts/                 # Animated performance & competitive matrix charts
+├── skills/elara/               # Agent skill: MCP reference, OKF rules, mapping protocol
+│
+└── assets/                     # Committed SVGs (hero, badges, charts)
 ```
 
 </details>

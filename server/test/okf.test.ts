@@ -287,3 +287,63 @@ describe('OKF validation', () => {
     expect(extractWikilinks(body)).toEqual(['real/target'])
   })
 })
+
+// A `---` that is not a whole line is content, not a fence. The old parser
+// closed the frontmatter at the first `---` anywhere, so each of these notes
+// was written fine and read back as something else (a truncated title, a
+// value spilled into the body, or a YAML error that made the note unreadable).
+describe('frontmatter fences', () => {
+  const dashed: Array<[string, Frontmatter]> = [
+    ['inside a value', { type: 'docs', title: 'alpha---beta' }],
+    ['as a whole value', { type: 'docs', title: '---' }],
+    ['on a line of a multi-line value', { type: 'docs', description: 'before\n---\nafter' }],
+    ['in list items', { type: 'docs', tags: ['---', 'a---b'] }],
+    ['as a key', { type: 'docs', '---': 'x' }],
+    ['in a value long enough to be folded', { type: 'docs', title: `${'word '.repeat(30)}--- tail` }],
+  ]
+
+  for (const [where, frontmatter] of dashed) {
+    it(`roundtrips "---" ${where}`, () => {
+      const body = 'Body.\n'
+      const parsed = parseNote(serializeNote({ frontmatter, body }))
+      expect(parsed.frontmatter).toEqual(frontmatter)
+      expect(parsed.body).toBe(body)
+    })
+  }
+
+  it('keeps "---" lines in the body as body', () => {
+    const note = {
+      frontmatter: { type: 'docs', title: 'alpha---beta' },
+      body: 'intro\n---\nmiddle\n\n---\n\nend---\n',
+    }
+    const parsed = parseNote(serializeNote(note))
+    expect(parsed.frontmatter).toEqual(note.frontmatter)
+    expect(parsed.body).toBe(note.body)
+  })
+
+  it('parses CRLF files and keeps the body verbatim', () => {
+    const raw = '---\r\ntype: docs\r\ntitle: alpha---beta\r\n---\r\nline one\r\n---\r\nline two\r\n'
+    expect(parseNote(raw)).toEqual({
+      frontmatter: { type: 'docs', title: 'alpha---beta' },
+      body: 'line one\r\n---\r\nline two\r\n',
+    })
+  })
+
+  it('accepts a closing fence at end of file or with trailing spaces', () => {
+    expect(parseNote('---\ntype: docs\n---')).toEqual({ frontmatter: { type: 'docs' }, body: '' })
+    expect(parseNote('---\ntype: docs\n--- \t\nBody')).toEqual({ frontmatter: { type: 'docs' }, body: 'Body' })
+  })
+
+  it('rejects a file whose closing fence is not a line of its own', () => {
+    expect(() => parseNote('---\ntype: docs---\nBody')).toThrow(OkfValidationError)
+    expect(() => parseNote('type: docs\n---\nBody')).toThrow(OkfValidationError)
+  })
+
+  it('validateNote accepts dashed values and refuses a note its file could not reproduce', () => {
+    expect(() => validateNote('docs', 'n', { type: 'docs', title: 'alpha---beta' }, 'a\n---\nb')).not.toThrow()
+    // A Date passes the structured-key checks but is written as a string, so
+    // the stored file would not read back as the note that was validated.
+    const frontmatter: Frontmatter = { type: 'docs', properties: { at: new Date(0) } }
+    expect(() => validateNote('docs', 'n', frontmatter, '')).toThrow(/does not survive serialization/)
+  })
+})
