@@ -55,7 +55,7 @@ Phase 0 only reads from the target repository and asks the user questions. It wr
    - If not, **ask the user whether to connect it** (`connect_repository`) for continuous git sync and code symbol indexing.
    - **Mandatory Invariant**: whether or not it is connected for sync, when mapping a GitHub repository of any programming job, **you must always map the codebase** into structured OKF notes.
    - Note the repository name or id used in links (`[[repo:<name>/...]]` or `[[repo:<uuid>/...]]`).
-   - Before relying on symbols, check `repository_status`. It can report `idle` while extraction is still queued, so confirm with `find_symbols` on a known function.
+   - Before relying on symbols, check `repository_status`: wait until `filesPendingExtraction` is 0, then confirm with `find_symbols` on a known function.
 3. **Post-Task Note Evaluation Protocol**:
    - At the end of any task involving codebase mapping, refactoring, or architectural change:
      - **Evaluate existing notes**: decide whether any domain, spec, or model note needs updating.

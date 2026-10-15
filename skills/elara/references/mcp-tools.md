@@ -10,7 +10,7 @@ Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prom
   - Vault tools on a vault-scoped token use the pinned vault; passing a different `vaultId` is an error. Account-scoped tokens must pass `vaultId`. Repository-scoped tokens cannot use vault tools.
   - Repository tools work the same way with `repositoryId`.
   - Tools marked **account only** refuse vault- and repository-scoped tokens.
-- **Response**: the result is returned as JSON text (`content[0].text`). Errors come back as `Error: <message>` with `isError: true`.
+- **Response**: the result is returned as JSON text (`content[0].text`). Errors come back as `Error: <message>` with `isError: true`. A filesystem or network error is reported only by its code (`internal storage error (ENOENT)`); the full error goes to the server log.
 - **Unknown arguments are silently dropped.** The schemas strip keys they don't declare, so a misspelled or outdated argument (for example `content` instead of `body` on `create_note`) is ignored without an error.
 - IDs (`vaultId`, `repositoryId`, `noteId`, `revisionId`, `shareId`, `teamId`, `userId`, `notificationId`, perspective `id`) must be UUIDs.
 - Note paths are slug paths such as `domains/auth/tokens`. A trailing `.md` is accepted and stripped.
@@ -152,7 +152,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `body` (string, optional): **replaces the whole body**.
   - Omit a field to keep it as it is.
 - **Returns**: the updated note row.
-- The edit goes through the live collaboration document, so people with the note open see it change. Because the body is replaced, not merged, text a person is typing in the same note at that moment can be lost. To append, read the note, then send the full new body.
+- The edit goes through the live collaboration document, so people with the note open see it change. Because the body is replaced, not merged, text a person is typing in the same note at that moment can be lost. To append, read the note, then send the full new body. Concurrent writes to one note run one at a time, but they are not merged: if two agents each read the note and write it back with a line appended, only the later write survives.
 
 ### `rename_note`
 - **Scope**: vault. Edit access.
@@ -271,7 +271,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 ### `repository_status`
 - **Scope**: repository. Repository access.
 - **Parameters**: `repositoryId` (uuid, optional).
-- **Returns**: `{ syncStatus, lastSyncedAt, lastSyncError }`. It does not report the indexed commit, and `idle` can appear while symbol extraction is still queued.
+- **Returns**: `{ syncStatus, lastSyncedAt, lastSyncError, filesPendingExtraction }`. `syncStatus` is `idle`, `syncing`, or `error`. `filesPendingExtraction` counts files with no embedding yet (queued, or failed; the server re-queues them at its next start), so `idle` with a non-zero count means symbols are still arriving. The indexed commit is not reported.
 
 ### `sync_repository`
 - **Scope**: repository. Repository access.
@@ -348,7 +348,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `everywhere` (boolean, optional).
   - `limit` (integer, optional, 1-50, default 20).
 - **Returns**: array of `{ id, fileId, repositoryId, path, name, kind, startLine, endLine, snippet, score }`. There is no `signature` field; read the lines with `read_file`.
-- Only top-level declarations the extractor recognizes are indexed. For example, TypeScript `export const f = () => ...` arrow functions are not found.
+- Only top-level declarations the extractor recognizes are indexed. For example, TypeScript `export const f = () => ...` arrow functions are not found. A file with any line longer than 1,000 characters (minified or generated code) gets no symbols at all.
 
 ---
 

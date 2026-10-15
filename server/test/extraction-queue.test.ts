@@ -1,9 +1,16 @@
-import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
+import { describe, expect, it, vi } from 'vitest'
 import { and, eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { repositories, repositoryFileImports, repositoryFiles, repositoryFileSymbols } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
-import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import {
+  backfillUnresolvedImports,
+  countPendingExtractions,
+  flushExtraction,
+  scheduleMissingExtractions,
+} from '../src/repositories/extraction-queue.js'
+import { embedder } from '../src/search/embeddings.js'
 import { createActiveUser } from './helpers.js'
 
 async function makeRepo() {
@@ -79,6 +86,72 @@ describe('extraction queue', () => {
     expect(imports[0]?.resolvedTargetFileId).toBe(helperFile.id)
   })
 
+  it('resolves TypeScript ESM `.js` specifiers and the client `@/` alias to their .ts/.tsx files', async () => {
+    const repo = await makeRepo()
+    await syncRepositoryFiles(
+      repo.id,
+      [
+        {
+          path: 'client/src/App.tsx',
+          content:
+            "import { Button } from './components/Button.js'\nimport { cn } from '@/lib/utils'\nexport function App() { return cn(Button()) }",
+        },
+        { path: 'client/src/components/Button.tsx', content: 'export function Button() { return 1 }' },
+        { path: 'client/src/lib/utils.ts', content: 'export function cn(x: number) { return x }' },
+      ],
+      ['client/src/App.tsx', 'client/src/components/Button.tsx', 'client/src/lib/utils.ts'],
+    )
+    await flushExtraction()
+
+    const app = await fileByPath(repo.id, 'client/src/App.tsx')
+    const button = await fileByPath(repo.id, 'client/src/components/Button.tsx')
+    const utils = await fileByPath(repo.id, 'client/src/lib/utils.ts')
+    const imports = await db
+      .select()
+      .from(repositoryFileImports)
+      .where(eq(repositoryFileImports.sourceFileId, app.id))
+    const resolvedBySpecifier = Object.fromEntries(imports.map((i) => [i.targetPath, i.resolvedTargetFileId]))
+    expect(resolvedBySpecifier).toEqual({
+      './components/Button.js': button.id,
+      '@/lib/utils': utils.id,
+    })
+  })
+
+  it('backfills imports stored unresolved by an older resolver, from their raw target path', async () => {
+    const repo = await makeRepo()
+    await syncRepositoryFiles(
+      repo.id,
+      [
+        {
+          path: 'server/src/queue.ts',
+          content: "import { resolve } from './resolve.js'\nimport { eq } from 'drizzle-orm'\nexport const q = resolve(eq)",
+        },
+        { path: 'server/src/resolve.ts', content: 'export function resolve(x: unknown) { return x }' },
+      ],
+      ['server/src/queue.ts', 'server/src/resolve.ts'],
+    )
+    await flushExtraction()
+
+    const queueFile = await fileByPath(repo.id, 'server/src/queue.ts')
+    const resolveFile = await fileByPath(repo.id, 'server/src/resolve.ts')
+    // Simulate rows written before `.js` -> `.ts` resolution existed.
+    await db
+      .update(repositoryFileImports)
+      .set({ resolvedTargetFileId: null })
+      .where(eq(repositoryFileImports.sourceFileId, queueFile.id))
+
+    expect(await backfillUnresolvedImports()).toBeGreaterThanOrEqual(1)
+
+    const imports = await db
+      .select()
+      .from(repositoryFileImports)
+      .where(eq(repositoryFileImports.sourceFileId, queueFile.id))
+    expect(Object.fromEntries(imports.map((i) => [i.targetPath, i.resolvedTargetFileId]))).toEqual({
+      './resolve.js': resolveFile.id,
+      'drizzle-orm': null,
+    })
+  })
+
   it('embeds an unsupported-language file without producing import/symbol rows', async () => {
     const repo = await makeRepo()
     await syncRepositoryFiles(repo.id, [{ path: 'README.rs', content: 'fn main() {}' }], ['README.rs'])
@@ -104,5 +177,88 @@ describe('extraction queue', () => {
     expect(result.unchanged).toBe(1)
     const after = await fileByPath(repo.id, 'x.ts')
     expect(after.updatedAt).toEqual(before.updatedAt)
+  })
+
+  it('gives a minified bundle a file embedding but no symbols, imports or per-symbol embeddings', async () => {
+    const repo = await makeRepo()
+    // A readable first version: its symbols must not survive the minified one.
+    await syncRepositoryFiles(repo.id, [{ path: 'dist/cli.bundle.mjs', content: 'export function run() {}' }], [
+      'dist/cli.bundle.mjs',
+    ])
+    await flushExtraction()
+    const readable = await fileByPath(repo.id, 'dist/cli.bundle.mjs')
+    expect(await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, readable.id))).toHaveLength(1)
+
+    // Shaped like the production bundle that took the server down: hundreds of
+    // declarations on a handful of very long lines.
+    const line = Array.from({ length: 300 }, (_, i) => `function f${i}(t){return t+${i}}`).join('')
+    const bundle = `#!/usr/bin/env node\nimport{a}from"./a.js";${line}\n${line.replaceAll('function f', 'function g')}\n`
+    const embedSpy = vi.spyOn(embedder, 'embed')
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'dist/cli.bundle.mjs', content: bundle }], ['dist/cli.bundle.mjs'])
+      await flushExtraction()
+      expect(embedSpy.mock.calls.map(([texts]) => texts.length)).toEqual([1])
+    } finally {
+      embedSpy.mockRestore()
+    }
+
+    const file = await fileByPath(repo.id, 'dist/cli.bundle.mjs')
+    expect(file.embedding).not.toBeNull()
+    expect(await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file.id))).toHaveLength(0)
+    expect(await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, file.id))).toHaveLength(0)
+  })
+
+  it('one failing file does not stop the files queued after it, and stays counted as pending', async () => {
+    const repo = await makeRepo()
+    const embedSpy = vi.spyOn(embedder, 'embed').mockRejectedValueOnce(new Error('model crashed'))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await syncRepositoryFiles(
+        repo.id,
+        [
+          { path: 'notes/first.txt', content: 'first' },
+          { path: 'notes/second.txt', content: 'second' },
+        ],
+        ['notes/first.txt', 'notes/second.txt'],
+      )
+      await flushExtraction()
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('extraction failed'), expect.any(Error))
+    } finally {
+      embedSpy.mockRestore()
+      errorSpy.mockRestore()
+    }
+
+    expect((await fileByPath(repo.id, 'notes/first.txt')).embedding).toBeNull()
+    expect((await fileByPath(repo.id, 'notes/second.txt')).embedding).not.toBeNull()
+    expect(await countPendingExtractions(repo.id)).toBe(1)
+  })
+
+  it('boot catch-up extracts files whose queued extraction was lost, which an unchanged re-sync never re-enqueues', async () => {
+    const repo = await makeRepo()
+    // Persisted by a sync, but the process stopped before the in-memory queue reached it.
+    const content = 'export function lost() { return 1 }'
+    await db.insert(repositoryFiles).values({
+      repositoryId: repo.id,
+      path: 'src/lost.ts',
+      language: 'typescript',
+      content,
+      contentHash: createHash('sha256').update(content).digest('hex'),
+      size: content.length,
+    })
+
+    const resync = await syncRepositoryFiles(repo.id, [{ path: 'src/lost.ts', content }], ['src/lost.ts'])
+    await flushExtraction()
+    expect(resync.unchanged).toBe(1)
+    expect((await fileByPath(repo.id, 'src/lost.ts')).embedding).toBeNull()
+    expect(await countPendingExtractions(repo.id)).toBe(1)
+
+    expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
+    await flushExtraction()
+
+    const file = await fileByPath(repo.id, 'src/lost.ts')
+    expect(file.embedding).not.toBeNull()
+    const symbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file.id))
+    expect(symbols.map((s) => s.name)).toEqual(['lost'])
+    expect(await countPendingExtractions(repo.id)).toBe(0)
   })
 })
