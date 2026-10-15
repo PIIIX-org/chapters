@@ -86,3 +86,10 @@ export function splitPath(path: string): { type: string; name: string } {
   const resolved = resolveNotePath(path)
   return { type: resolved.type, name: resolved.name }
 }
+
+// Scratch PR for #575 (fails-before proof (d)): new exports on an existing module.
+export const MAX_NOTE_DEPTH = 8
+
+export function noteDepth(path: string): number {
+  return resolveNotePath(path).segments.length
+}
