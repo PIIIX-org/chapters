@@ -272,6 +272,23 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   restricted to a slug regex (`^[a-z0-9][a-z0-9-]*$`), which makes path
   traversal impossible by construction — this is the one validation
   function shared by every write path (REST, CRDT persistence, MCP).
+  `validateNote` also requires frontmatter `type` to equal the path's
+  first segment.
+- **Frontmatter fence** (#400, `parseNote`): the frontmatter runs from an
+  opening `---` line to the first line that is exactly `---` (trailing
+  spaces/tabs allowed); LF and CRLF files both parse, and the body is
+  returned verbatim after the closing fence's line break. A `---` inside
+  a value (`title: alpha---beta`, a block-scalar line, a list item) or in
+  the body is content, not a fence. The old regex ended the frontmatter
+  at the first `---` anywhere, so such a value corrupted the note on its
+  next read.
+- **Round-trip check** (#400, `assertRoundTrips`, run by `validateNote`
+  before the row or file is written): the note is serialized and parsed
+  back; if that fails, or the frontmatter (deep-equal) or body (exact)
+  differs, the write is refused with an `OkfValidationError`
+  (`note cannot be stored: ...`) — HTTP 400 over REST, an `isError`
+  result over MCP. The file is the canonical copy, so a note its own file
+  could not reproduce must never be stored.
 - **`store.ts`**: the note write path. `createNote` → validate → insert
   row (unique-violation on live path collision) → atomic disk write
   (`atomic-write.ts`: write to a temp file named per call —
@@ -415,7 +432,7 @@ re-resolved live.
 
 ### 5.8 MCP (`server/src/mcp/`)
 
-- **Transport**: `POST /mcp` (note: unprefixed, not under `/api`),
+- **Transport**: `POST /mcp` and `POST /elara/mcp` (same handler; unprefixed, not under `/api`). There is no stdio transport. The
   official SDK's `StreamableHTTPServerTransport`, **stateless** —
   `sessionIdGenerator: undefined`, a fresh `McpServer` + transport
   built per HTTP request. No cross-connection caching is possible by
@@ -427,26 +444,37 @@ re-resolved live.
   any resource the user can reach; a `vault`- or `repository`-scoped
   connection is **hard-pinned** — passing a different id throws, it's
   never silently narrowed or widened. Account-only tools
-  (`list_vaults`, `list_repositories`, unscoped `search`) hard-reject
-  non-account tokens.
-- **Tools**:
-  - *Vaults*: `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.
-  - *Notes*: `read_note`, `create_note`, `edit_note`, `rename_note`, `delete_note`, `list_trash`, `restore_note`, `purge_note`, `note_history`, `revert_note`, `purge_revision`.
-  - *Repositories*: `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
-  - *Teams & Users*: `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
-  - *Export & Notifications*: `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`.
-  - *Search & Graph*: `search` (with `everywhere` mode), `graph` (nodes, extracted/structural/semantic edges, Louvain communities).
+  (`list_vaults`, `create_vault`, `restore_vault`, `purge_vault`,
+  `list_repositories`, `connect_repository`, the team tools,
+  `lookup_user`, the notification tools, and `everywhere` search) hard-reject
+  non-account tokens. Not every tool checks the pin: the two
+  vault-preference tools, the three perspective tools, and `find_symbols`
+  without a `repositoryId` ignore the connection's scope (found in the
+  2026-10-14 study's pinned-token tests).
+- **Tools** (57, all registered in `server.ts`; parameters and return
+  shapes are documented in `skills/elara/references/mcp-tools.md`):
+  - *Vaults* (14): `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `get_vault_graph_preference`, `set_vault_graph_preference`, `get_vault_preferences`, `update_vault_preferences`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.
+  - *Notes* (12): `read_note`, `create_note`, `edit_note`, `rename_note`, `delete_note`, `list_trash`, `restore_note`, `purge_note`, `note_history`, `revert_note`, `purge_revision`, `audit_okf_conformance`.
+  - *Repositories* (13): `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `get_repository_graph_preference`, `set_repository_graph_preference`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
+  - *Teams & Users* (7): `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
+  - *Export & Notifications* (4): `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`.
+  - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols`, `graph` (nodes, extracted/structural/semantic edges, Louvain communities; filters `types`, `tags`, `aggregate`, `community`), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
+  - *Prompts*: 20, registered in `prompts.ts`.
   *(Security invariant: MCP connections cannot create new MCP connections or mint tokens).*
   Every handler is wrapped so thrown errors become a structured `isError`
-  result instead of an uncaught exception. `search` and `graph` call
+  result instead of an uncaught exception. Input schemas are zod object
+  shapes, which strip undeclared keys: an unknown or misspelled argument
+  (e.g. `content` on `create_note`) is dropped silently, not rejected.
+  `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
-- **Chapters Agent Skill (`skills/chapters/SKILL.md`)**: Equips AI assistants
-  with graph-first navigation, the full 49-tool MCP catalog, slash commands
-  (`/chapters-status`, `/chapters-search`, `/chapters-graph`, `/chapters-map`,
-  `/chapters-note`, `/chapters-repo`, `/chapters-vault`, `/chapters-export`),
-  and an always-active mode (`skills/chapters/rules/chapters.md`).
-- **Architecture decision — rejected client-side WebMCP**: Evaluated the W3C Web Machine Learning Community Group's `navigator.modelContext` proposal (`webmachinelearning/webmcp`) and decided against implementing client-side WebMCP. Chapters is deliberately headless and backend-first (`POST /mcp` via Fastify); AI coding agents interact with full system parity without requiring active browser tabs, DOM rendering, or frontend runtime dependencies (ADR-001).
+- **Agent skills**: `skills/elara/` (current) and `skills/chapters/`
+  (legacy copy, kept consistent) give AI assistants graph-first
+  navigation, the 57-tool catalog (`references/mcp-tools.md`), slash
+  commands (`/elara-*`, with `/chapters-*` aliases), the OKF rules
+  (`references/okf-format.md`), the `/elara-map` protocol, and an
+  always-active rule file (`rules/elara.md`).
+- **Architecture decision — rejected client-side WebMCP**: Evaluated the W3C Web Machine Learning Community Group's `navigator.modelContext` proposal (`webmachinelearning/webmcp`) and decided against implementing client-side WebMCP. The server is deliberately headless and backend-first (`POST /mcp` via Fastify); AI coding agents use the MCP tools without needing a browser tab, DOM rendering, or frontend runtime (ADR-001).
 
 ### 5.9 Export & backup (`server/src/export/`)
 
@@ -526,13 +554,27 @@ query extracts import statements and top-level symbol declarations
 (function/class/interface/type, per language's actual grammar).
 Extraction is deferred until the *entire* sync batch has been
 persisted (see §11 for why — this fixed a real ordering bug found via
-live e2e testing, not unit tests). Imports resolve only against
-sibling files already known within the same repository; unresolved
-(non-relative) imports are stored but produce no graph edge. Symbol
+live e2e testing, not unit tests). Symbol
 rows (`repositoryFileSymbols`) are a per-file outline surfaced through
 the MCP `read_file` tool — despite the schema comment calling them
 "contains edges," they are **not** emitted as actual graph edges by
 `buildGraph()`.
+
+**Import resolution** (`import-resolution.ts`, #398): `resolveImportPath`
+resolves a specifier only against files already known in the same
+repository. Relative specifiers (`./x`, `../x`) and the `@/` alias
+resolve; `@/` maps by convention to the importing file's package `src`
+directory (the path up to its first `src` segment; no `src`, no
+resolution — `tsconfig` paths are not read). TypeScript ESM specifiers
+name the compiled output, so `.js` tries `.ts` then `.tsx`, `.jsx` tries
+`.tsx`, `.mjs` tries `.mts`, `.cjs` tries `.cts`, before the literal
+path, then the path plus `.ts/.tsx/.js/.jsx/.py/.go`, then
+`<path>/index.<ext>`. Every other specifier (npm packages, stdlib) is
+stored with no resolved target and produces no graph edge.
+`backfillUnresolvedImports()` runs at boot and re-resolves every stored
+import row whose target is still null with the current rules, so
+repositories indexed before #398 gain their import edges without a
+re-sync (unchanged files are never re-extracted).
 
 **Extraction queue** (`extraction-queue.ts`): in-process and serial, like
 the note embedding queue. A file whose extraction throws is logged and
