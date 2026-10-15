@@ -1,0 +1,50 @@
+name: PR evidence
+
+# Every PR body needs an Evidence section, and a claim word (`100%`,
+# `verified`, `fully tested`, `all tests pass`, `production-ready`,
+# `stable`, `zero bugs`, `remediated`) only counts with a link to the run
+# or artifact behind it in the same sentence or bullet (#579). Covers PRs
+# to `dev` and promotions to `prod`. Template:
+# .github/pull_request_template.md. Logic and messages:
+# .github/scripts/pr-evidence.mjs; rules: docs/agents/github-workflow.md.
+#
+# Separate from ci.yml so a body edit re-evaluates this check without
+# re-running the whole suite.
+
+on:
+  pull_request:
+    branches: [dev, prod]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # HEAD is GitHub's merge of the PR into its base; HEAD^1 (the base)
+          # must be in the clone.
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # Run the base's copy of the checker so a PR cannot edit the check it
+      # is judged by; until the base has one, run the PR's copy (the summary
+      # says which).
+      - name: Check the PR body for evidence
+        run: |
+          checker=.github/scripts/pr-evidence.mjs
+          if git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
+            git show "HEAD^1:$checker" > "$RUNNER_TEMP/pr-evidence.mjs"
+            PR_EVIDENCE_CHECKER=base node "$RUNNER_TEMP/pr-evidence.mjs"
+          else
+            PR_EVIDENCE_CHECKER=pr node "$checker"
+          fi

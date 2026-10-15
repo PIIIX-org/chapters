@@ -18,8 +18,16 @@ Every change — code, spec, doc — follows the same loop:
 1. **Branch** off `dev`.
 2. **Commit + push** (early and often, per the resume protocol in
    `handling-protocols.md`).
-3. **Open a PR** targeting `dev`. The PR body says what changed and why,
-   and references any spec/plan/issue it implements. A fix PR (title
+3. **Open a PR** targeting `dev`. Fill in the template
+   (`.github/pull_request_template.md`): Problem, Change, **Evidence**,
+   Not covered, `Closes #N`. Evidence is links, not adjectives: the CI
+   run, the fails-before run (or its justification), the lab run for
+   integration changes, the benchmark delta for retrieval or token
+   changes. The `pr-evidence` check (see CI below) fails a body without
+   an Evidence section, and fails a claim word (`100%`, `verified`,
+   `fully tested`, `all tests pass`, `production-ready`, `stable`,
+   `zero bugs`, `remediated`) in a sentence or bullet that does not link
+   the run, PR, issue, commit or file behind it. A fix PR (title
    `fix: ...` / `fix(scope): ...`, or with `!` before the colon) carries
    a regression test that fails without the fix; the `fails-before` check
    (see CI below) proves it on every push. Coverage depends on that title:
@@ -29,7 +37,8 @@ Every change — code, spec, doc — follows the same loop:
 4. **Review it on GitHub** — actually read the diff (`gh pr diff` /
    files view), don't rubber-stamp. Check: matches the spec, tests
    included and green, on a fix PR `fails-before` green (or its
-   exemption justified), README/STATE.md updated if the change is
+   exemption justified), `pr-evidence` green and its links actually
+   showing what the body claims, README/STATE.md updated if the change is
    meaningful (standing rule), no performance-rule violations.
 5. **If review finds a problem**: open an **issue** describing it, push
    fix commits to the same PR referencing the issue (`refs #N`), and
@@ -59,6 +68,12 @@ feature exercised end-to-end per the sandbox/visual protocols — open a PR
 `dev → prod` titled `Promote: <what>`, confirm the diff is exactly the
 verified work, and merge. If something on `dev` turns out broken, it
 simply doesn't get promoted until fixed — `prod` never waits on a revert.
+
+The promotion PR uses the same template, and `pr-evidence` checks it like
+any other PR. Its Evidence section links the green CI run on the `dev`
+head being promoted and the PRs it carries; "100% green" or "verified"
+without those links fails (promotion #334 claimed "100% green" while its
+CI failed on lint).
 
 The image is published only for a `prod` commit whose CI `checks` job
 passed (#573). The push to `prod` starts **CI**, and CI's `publish` job
@@ -185,6 +200,36 @@ fix-list item 177. Until then, treat a red `fails-before` on a fix PR as
 blocking review. It is a guard, not a proof: a test that fails on base
 only because the diff is missing (for example asserting on source text)
 still counts, so reviewers read the failing test names in the summary.
+
+**PR evidence** (`.github/workflows/pr-evidence.yml`, job `pr-evidence`,
+#579) runs on every PR to `dev` or `prod` (promotions included) when it
+is opened, pushed, reopened, edited or marked ready, so a body edit
+re-runs it. Like fails-before, it runs the base commit's copy of
+`.github/scripts/pr-evidence.mjs` when the base has one. It fails when:
+
+1. the body has no Evidence section: a heading `## Evidence` (any level,
+   any suffix) or a `**Evidence**` / `**Evidence:**` line, with content
+   other than HTML comments. The unfilled template fails.
+2. a claim word (`100%`, `verified`, `fully tested`, `all tests pass` and
+   its `passed`/`passing` forms, `production-ready`, `stable`,
+   `zero bugs`, `remediated`; case-insensitive, whole words, so
+   `unstable` and `unverified` do not count) appears in a sentence,
+   bullet (with its continuation lines), table row or heading with no
+   link to a GitHub Actions run, PR, issue, commit or file (`blob/`,
+   `tree/`) of this repository. `#123` shorthand and links to other
+   repositories do not count.
+
+HTML comments, fenced code and inline code are not checked, so quoting a
+word in backticks (`` `stable` ``) mentions it without claiming it. There
+is no exemption label: a true claim can link its run, and a word that is
+not a claim can be quoted or reworded, so a label would only let through
+the unlinked claims this check exists to stop. Dependabot PRs
+(`dependabot[bot]`) are skipped: their bodies are upstream release notes,
+not claims by the author. The job summary lists each failing sentence or
+bullet with its claim words. Unit tests:
+`.github/scripts/pr-evidence.test.mjs`, run by `checks`. Like
+fails-before, it is not a required status check yet (item 177): treat a
+red `pr-evidence` as blocking review.
 
 Both `dev` and `prod` enforce strict GitHub branch protection with
 `required_status_checks` on `checks` and `enforce_admins: true`. No PR
