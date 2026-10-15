@@ -1,6 +1,6 @@
 # Chapters — GitHub Workflow
 
-Two long-lived branches, everything else is short-lived.
+Two long-lived branches; everything else is short-lived.
 
 ## Branches
 
