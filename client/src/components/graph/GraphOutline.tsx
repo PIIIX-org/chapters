@@ -32,7 +32,7 @@ export function formatLastActive(iso: string | null): string {
 }
 
 export function countWithNoun(n: number, noun: string): string {
-  return `${n.toLocaleString()} ${noun}${n === 1 ? '' : 's'}`
+  return `${n.toLocaleString()} ${noun}${Math.abs(n) === 1 ? '' : 's'}`
 }
 
 function communityLabel(c: CommunityNode): string {

@@ -83,6 +83,6 @@ export function resolveNotePath(inputPath: string): ResolvedNotePath {
 }
 
 export function splitPath(path: string): { type: string; name: string } {
-  const resolved = resolveNotePath(path)
+  const resolved = resolveNotePath(path.toLowerCase())
   return { type: resolved.type, name: resolved.name }
 }
