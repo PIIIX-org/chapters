@@ -479,6 +479,21 @@ re-resolved live.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
+- **Secret-scan guard** (`test/mcp-secret-scan.test.ts`, #577): CI calls
+  every tool from `tools/list` and every prompt from `prompts/list`
+  against a fixture world seeded with real secrets (git URLs with
+  userinfo, an explicit git credential, a webhook secret, a sync token,
+  MCP and session tokens and their hashes, password hashes, a TOTP
+  secret, credential ciphertexts, a legacy unscrubbed repository row
+  whose `lastSyncError` holds an authenticated URL). Reads run first as
+  the owner, a viewer, a vault-scoped and a repository-scoped
+  connection; writes and destructive calls follow as the owner, on
+  throwaway fixtures. Every response (JSON parsed recursively, base64
+  zips unpacked) fails on URL userinfo, `gh[opsu]_` tokens,
+  `x-access-token`, `-----BEGIN`, `sk-`/`AKIA` keys, `$argon2`/`$2b$`
+  hashes and the exact fixture values; a pattern match inside text a
+  user wrote (note bodies, file contents) is allowed. A tool with no
+  fixture step fails the test: **a new tool needs a step there**.
 - **Agent skills**: `skills/elara/` (current) and `skills/chapters/`
   (legacy copy, kept consistent) give AI assistants graph-first
   navigation, the 57-tool catalog (`references/mcp-tools.md`), slash
@@ -555,7 +570,10 @@ redacted before they reach `lastSyncError` (served to viewers) or the
 log. `scrubStoredGitCredentials()` runs at boot and moves credentials
 out of remotes stored before the fix (idempotent; a row it cannot
 encrypt is left as is and warned about). `repositoryFields` strips
-userinfo for owners too.
+userinfo for owners too, and serves `lastSyncError` through
+`publicSyncError` (also used by the MCP `repository_status`), so a row
+the scrub left alone does not serve its token through the error text
+either (#577).
 
 **Code extraction** (`extraction.ts`): `web-tree-sitter` (WASM), four
 supported languages — TypeScript, JavaScript, Python, Go. Each
@@ -836,7 +854,8 @@ red CI.
 `server.registerTool()` with a `zod` input schema, wrap the handler
 logic so it reuses an existing live-permission-checked function
 (`resolveAccess`/`resolveRepositoryAccess`) rather than inventing a new
-check — every existing tool follows this pattern.
+check — every existing tool follows this pattern. Then add a fixture
+step for it in `test/mcp-secret-scan.test.ts`; CI fails until you do.
 
 **Common failure modes seen in this project**:
 - **Docker build OOM / exit 137** → colima needs ≥6GB memory (§8).

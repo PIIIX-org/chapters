@@ -117,8 +117,11 @@ branch, publishes without any check. Don't do either.
 GitHub Actions runs typecheck + lint + tests on every PR (added with the
 first code scaffold), then `pnpm -C server check-notes` over the notes the
 server tests left behind (#578: every live note's file exists, parses, and
-equals its row). Green CI is a merge precondition on `dev` and a
-promotion precondition on `prod`.
+equals its row). The server tests include the MCP secret scan
+(`server/test/mcp-secret-scan.test.ts`, #577): every MCP tool and prompt
+is called against seeded secrets and must return none, and a newly
+registered tool fails CI until it has a fixture step there. Green CI is a
+merge precondition on `dev` and a promotion precondition on `prod`.
 
 Both `dev` and `prod` enforce strict GitHub branch protection with
 `required_status_checks` on `checks` and `enforce_admins: true`. No PR

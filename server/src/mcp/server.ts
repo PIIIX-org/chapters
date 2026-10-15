@@ -23,6 +23,7 @@ import { atLeast, listAccessibleVaults, resolveAccess } from '../vaults/permissi
 import {
   isSafeGitUrl,
   listAccessibleRepositories,
+  publicSyncError,
   repositoryFields as repositoryView,
   resolveRepositoryAccess,
 } from '../repositories/permissions.js'
@@ -989,11 +990,18 @@ export function buildMcpServer(auth: McpAuth): McpServer {
           syncStatus: repositories.syncStatus,
           lastSyncedAt: repositories.lastSyncedAt,
           lastSyncError: repositories.lastSyncError,
+          gitUrl: repositories.gitUrl,
         })
         .from(repositories)
         .where(eq(repositories.id, target))
-      if (!rows[0]) throw new McpToolError('not found')
-      return { ...rows[0], filesPendingExtraction: await countPendingExtractions(target) }
+      const row = rows[0]
+      if (!row) throw new McpToolError('not found')
+      return {
+        syncStatus: row.syncStatus,
+        lastSyncedAt: row.lastSyncedAt,
+        lastSyncError: publicSyncError(row),
+        filesPendingExtraction: await countPendingExtractions(target),
+      }
     }),
   )
 
