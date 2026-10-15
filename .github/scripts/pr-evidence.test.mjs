@@ -4,7 +4,10 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
-import {
+// Scratch proof (i) only: a namespace import, so names the round-1 module
+// lacks are undefined instead of aborting the whole file.
+import * as m from './pr-evidence.mjs'
+const {
   check,
   claimsIn,
   evidenceSection,
@@ -16,7 +19,7 @@ import {
   placeholders,
   proseUnits,
   unlinkedClaims,
-} from './pr-evidence.mjs'
+} = m
 
 const REPO = 'PIIIX-org/chapters'
 const RUN = 'https://github.com/PIIIX-org/chapters/actions/runs/38816673512'
