@@ -39,6 +39,12 @@ const EXPIRY_PRESETS = [
   { days: 90, label: '90 days' },
   { days: 0, label: 'Never' },
 ] as const
+
+/** The expiry instant for a preset, read from the clock when the form is submitted. */
+function expiresAtAfter(days: number): string {
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()
+}
+
 // Tools a vault-pinned token can reach at all; account-only tools would always be refused.
 const VAULT_TOOL_SCOPES: Partial<Record<McpToolInfo['scope'], true>> = { vault: true, 'vault-or-account': true, 'vault-or-repo': true }
 
@@ -181,7 +187,7 @@ function CreateMcpConnectionForm({ target, onCreated }: { target: McpTarget; onC
         name: trimmed,
         access,
         ...(limitTools ? { allowedTools: tools } : {}),
-        ...(expiryDays ? { expiresAt: new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString() } : {}),
+        ...(expiryDays ? { expiresAt: expiresAtAfter(expiryDays) } : {}),
       },
       {
         onSuccess: (connection) => {
