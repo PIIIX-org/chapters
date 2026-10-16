@@ -95,9 +95,11 @@ export async function restoreBackup(zipBuffer: Buffer): Promise<RestoreResult> {
     }
     if (dump.mcpConnections.length > 0) {
       await tx.insert(mcpConnections).values(
-        dump.mcpConnections.map((c) =>
-          withDates(c, ['expiresAt', 'revokedAt', 'lastUsedAt', 'createdAt']),
-        ),
+        dump.mcpConnections.map((c) => ({
+          ...withDates(c, ['expiresAt', 'revokedAt', 'lastUsedAt', 'createdAt']),
+          // A dump from before migration 0019 has no access level: apply the migration's rule.
+          access: c.access ?? (c.scope === 'account' ? 'admin' : 'write'),
+        })),
       )
     }
     if (dump.securityEvents.length > 0) {

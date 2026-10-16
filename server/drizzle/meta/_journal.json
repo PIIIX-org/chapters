@@ -134,6 +134,13 @@
       "when": 1790800000000,
       "tag": "0018_ast_symbol_hnsw_and_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790900000000,
+      "tag": "0019_mcp_token_capabilities",
+      "breakpoints": true
     }
   ]
 }

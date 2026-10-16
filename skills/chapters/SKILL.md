@@ -200,92 +200,92 @@ Exports a vault zip archive or single note markdown file.
 
 ## Elara MCP Tool Reference (57 Tools)
 
-Elara exposes 57 tools across 7 functional domains:
+Elara exposes 57 tools across 7 functional domains. **Capability** is the token access level a tool needs: a token is `read`, `write` or `admin` (ordered), chosen when it is minted, and may also carry a tool allow-list and an expiry. Account tokens default to `admin`; vault- and repository-pinned tokens default to `write`, so they cannot share, update, trash or purge their pin or erase history unless the owner minted them with `admin`. A refusal names the missing capability (`<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`); ask the user for a token with that capability instead of retrying.
 
 ### 1. Vault Management (14 tools)
-| Tool | Scope | Description |
-| :--- | :--- | :--- |
-| `list_vaults` | Account | List all vaults accessible to the current user. |
-| `create_vault` | Account | Create a new vault (`name`, optional `mergeable`). |
-| `browse_vault` | Vault/Account | Browse directory and note structure within a vault, with progressive disclosure (`path` and `recursive`). |
-| `update_vault` | Vault/Account | Update vault name or mergeable setting (owner only). |
-| `get_vault_graph_preference` | Vault/Account | Get user's personal merged-graph inclusion preference. |
-| `set_vault_graph_preference` | Vault/Account | Set user's personal merged-graph inclusion preference. |
-| `get_vault_preferences` | Account | Get user vault preferences including storage mode (online/local), folders, colors, and favorites. |
-| `update_vault_preferences` | Account | Update user vault preferences including storage mode, folders, colors, and favorites. |
-| `delete_vault` | Vault/Account | Soft-delete a vault into trash (owner only). |
-| `restore_vault` | Account | Restore a soft-deleted vault from trash (owner only). |
-| `purge_vault` | Account | Permanently purge a trashed vault from disk and DB (owner only). |
-| `list_vault_shares` | Vault/Account | List user and team shares for a vault. |
-| `share_vault` | Vault/Account | Grant read or edit access to a user or team. |
-| `revoke_vault_share` | Vault/Account | Revoke a user or team share from a vault. |
+| Tool | Scope | Capability | Description |
+| :--- | :--- | :--- | :--- |
+| `list_vaults` | Account | `read` | List all vaults accessible to the current user. |
+| `create_vault` | Account | `write` | Create a new vault (`name`, optional `mergeable`). |
+| `browse_vault` | Vault/Account | `read` | Browse directory and note structure within a vault, with progressive disclosure (`path` and `recursive`). |
+| `update_vault` | Vault/Account | `admin` | Update vault name or mergeable setting (owner only). |
+| `get_vault_graph_preference` | Vault/Account | `read` | Get user's personal merged-graph inclusion preference. |
+| `set_vault_graph_preference` | Vault/Account | `write` | Set user's personal merged-graph inclusion preference. |
+| `get_vault_preferences` | Account | `read` | Get user vault preferences including storage mode (online/local), folders, colors, and favorites. |
+| `update_vault_preferences` | Account | `write` | Update user vault preferences including storage mode, folders, colors, and favorites. |
+| `delete_vault` | Vault/Account | `admin` | Soft-delete a vault into trash (owner only). |
+| `restore_vault` | Account | `write` | Restore a soft-deleted vault from trash (owner only). |
+| `purge_vault` | Account | `admin` | Permanently purge a trashed vault from disk and DB (owner only). |
+| `list_vault_shares` | Vault/Account | `read` | List user and team shares for a vault. |
+| `share_vault` | Vault/Account | `admin` | Grant read or edit access to a user or team. |
+| `revoke_vault_share` | Vault/Account | `admin` | Revoke a user or team share from a vault. |
 
 ### 2. Note Operations & OKF Conformance (12 tools)
-| Tool | Scope | Description |
-| :--- | :--- | :--- |
-| `read_note` | Vault/Account | Read a note's `path`, `frontmatter`, and `body`. |
-| `create_note` | Vault/Account | Create a note from `path` (or `type` + `name`), a `frontmatter` object, and a `body`. |
-| `edit_note` | Vault/Account | Replace a note's whole `frontmatter` map and/or whole `body`, streamed through live collaboration. |
-| `rename_note` | Vault/Account | Rename (`toName` slug) or move (`toName` full path) a note; full-path links in the vault are rewritten. |
-| `delete_note` | Vault/Account | Soft-delete a note to the vault trash. |
-| `list_trash` | Vault/Account | List soft-deleted notes in the vault trash. |
-| `restore_note` | Vault/Account | Restore a trashed note by `noteId`. |
-| `purge_note` | Vault/Account | Permanently delete a trashed note by `noteId` (owner only). |
-| `note_history` | Vault/Account | View revision history with the actor type (`user`, `mcp`, `collab`). Full content per revision, unpaginated. |
-| `revert_note` | Vault/Account | Revert a note to a prior revision without losing history. |
-| `purge_revision` | Vault/Account | Permanently erase a recorded revision (owner only). |
-| `audit_okf_conformance` | Vault/Account | Structural audit: frontmatter validity, datetime offsets, broken wikilinks and repo links, missing indexes, orphan notes. On a vault-scoped token every repo link is reported as broken (repositories are outside the pin). |
+| Tool | Scope | Capability | Description |
+| :--- | :--- | :--- | :--- |
+| `read_note` | Vault/Account | `read` | Read a note's `path`, `frontmatter`, and `body`. |
+| `create_note` | Vault/Account | `write` | Create a note from `path` (or `type` + `name`), a `frontmatter` object, and a `body`. |
+| `edit_note` | Vault/Account | `write` | Replace a note's whole `frontmatter` map and/or whole `body`, streamed through live collaboration. |
+| `rename_note` | Vault/Account | `write` | Rename (`toName` slug) or move (`toName` full path) a note; full-path links in the vault are rewritten. |
+| `delete_note` | Vault/Account | `write` | Soft-delete a note to the vault trash. |
+| `list_trash` | Vault/Account | `read` | List soft-deleted notes in the vault trash. |
+| `restore_note` | Vault/Account | `write` | Restore a trashed note by `noteId`. |
+| `purge_note` | Vault/Account | `admin` | Permanently delete a trashed note by `noteId` (owner only). |
+| `note_history` | Vault/Account | `read` | View revision history with the actor type (`user`, `mcp`, `collab`). Full content per revision, unpaginated. |
+| `revert_note` | Vault/Account | `write` | Revert a note to a prior revision without losing history. |
+| `purge_revision` | Vault/Account | `admin` | Permanently erase a recorded revision (owner only). |
+| `audit_okf_conformance` | Vault/Account | `read` | Structural audit: frontmatter validity, datetime offsets, broken wikilinks and repo links, missing indexes, orphan notes. On a vault-scoped token every repo link is reported as broken (repositories are outside the pin). |
 
 ### 3. Repository & Codebase Mapping (13 tools)
-| Tool | Scope | Description |
-| :--- | :--- | :--- |
-| `list_repositories` | Account | List all connected codebase repositories. |
-| `connect_repository` | Account | Connect a repo (git URL or local filesystem path). |
-| `browse_repository` | Repo/Account | List every indexed file of a repository (flat list). |
-| `read_file` | Repo/Account | Read a whole code file with its symbol outline. |
-| `repository_status` | Repo/Account | Check sync state, last sync time, last sync error, and `filesPendingExtraction`. |
-| `sync_repository` | Repo/Account | Trigger immediate synchronization of a repository. |
-| `update_repository` | Repo/Account | Update repository name or mergeable setting (owner only). |
-| `get_repository_graph_preference` | Repo/Account | Get user's merged-graph inclusion preference. |
-| `set_repository_graph_preference` | Repo/Account | Set user's merged-graph inclusion preference. |
-| `delete_repository` | Repo/Account | Disconnect and remove a repository. |
-| `list_repository_shares` | Repo/Account | List user and team read shares for a repository. |
-| `share_repository` | Repo/Account | Share read access with a user or team. |
-| `revoke_repository_share` | Repo/Account | Revoke repository read access. |
+| Tool | Scope | Capability | Description |
+| :--- | :--- | :--- | :--- |
+| `list_repositories` | Account | `read` | List all connected codebase repositories. |
+| `connect_repository` | Account | `admin` | Connect a repo (git URL or local filesystem path). |
+| `browse_repository` | Repo/Account | `read` | List every indexed file of a repository (flat list). |
+| `read_file` | Repo/Account | `read` | Read a whole code file with its symbol outline. |
+| `repository_status` | Repo/Account | `read` | Check sync state, last sync time, last sync error, and `filesPendingExtraction`. |
+| `sync_repository` | Repo/Account | `write` | Trigger immediate synchronization of a repository. |
+| `update_repository` | Repo/Account | `admin` | Update repository name or mergeable setting (owner only). |
+| `get_repository_graph_preference` | Repo/Account | `read` | Get user's merged-graph inclusion preference. |
+| `set_repository_graph_preference` | Repo/Account | `write` | Set user's merged-graph inclusion preference. |
+| `delete_repository` | Repo/Account | `admin` | Disconnect and remove a repository. |
+| `list_repository_shares` | Repo/Account | `read` | List user and team read shares for a repository. |
+| `share_repository` | Repo/Account | `admin` | Share read access with a user or team. |
+| `revoke_repository_share` | Repo/Account | `admin` | Revoke repository read access. |
 
 ### 4. Search & AST Code Symbols (2 tools)
-| Tool | Scope | Description |
-| :--- | :--- | :--- |
-| `search` | Any | Hybrid search (lexical + semantic) across notes and code with `symbols` support. |
-| `find_symbols` | Repository/Account | Keyword and semantic search for code symbols (functions, classes, interfaces, types) with file path and line range. Vault-scoped tokens are refused. |
+| Tool | Scope | Capability | Description |
+| :--- | :--- | :--- | :--- |
+| `search` | Any | `read` | Hybrid search (lexical + semantic) across notes and code with `symbols` support. |
+| `find_symbols` | Repository/Account | `read` | Keyword and semantic search for code symbols (functions, classes, interfaces, types) with file path and line range. Vault-scoped tokens are refused. |
 
 ### 5. Knowledge Graph & Perspectives (5 tools)
-| Tool | Scope | Description |
-| :--- | :--- | :--- |
-| `graph` | Any (needs `vaultId` or `repositoryId`) | Graph nodes and edges (`extracted`/`structural`/`semantic`) with Louvain communities; filters `types`, `tags`, `aggregate: "community"`, `community`. |
-| `find_graph_path` | Any | Find shortest path connecting two concepts, notes, or code files in the knowledge graph. |
-| `list_graph_perspectives` | Vault/Account | List saved graph perspectives (UI presets) for a vault, or global ones (account tokens only). |
-| `save_graph_perspective` | Vault/Account | Save a graph perspective (types, tags, date range, color mode). `graph` cannot apply it. Global perspectives need an account token. |
-| `delete_graph_perspective` | Vault/Account | Delete a saved graph perspective by its ID. A vault-scoped token reaches only its vault's perspectives (others answer "not found"). |
+| Tool | Scope | Capability | Description |
+| :--- | :--- | :--- | :--- |
+| `graph` | Any (needs `vaultId` or `repositoryId`) | `read` | Graph nodes and edges (`extracted`/`structural`/`semantic`) with Louvain communities; filters `types`, `tags`, `aggregate: "community"`, `community`. |
+| `find_graph_path` | Any | `read` | Find shortest path connecting two concepts, notes, or code files in the knowledge graph. |
+| `list_graph_perspectives` | Vault/Account | `read` | List saved graph perspectives (UI presets) for a vault, or global ones (account tokens only). |
+| `save_graph_perspective` | Vault/Account | `write` | Save a graph perspective (types, tags, date range, color mode). `graph` cannot apply it. Global perspectives need an account token. |
+| `delete_graph_perspective` | Vault/Account | `write` | Delete a saved graph perspective by its ID. A vault-scoped token reaches only its vault's perspectives (others answer "not found"). |
 
 ### 6. Teams & Users (7 tools)
-| Tool | Scope | Description |
-| :--- | :--- | :--- |
-| `list_teams` | Account | List teams the user belongs to. |
-| `create_team` | Account | Create a new team. |
-| `list_team_members` | Account | List members in a team. |
-| `add_team_member` | Account | Add an active user to a team. |
-| `remove_team_member` | Account | Remove a member from a team. |
-| `delete_team` | Account | Delete a team. |
-| `lookup_user` | Account | Look up an active user by exact email address. |
+| Tool | Scope | Capability | Description |
+| :--- | :--- | :--- | :--- |
+| `list_teams` | Account | `read` | List teams the user belongs to. |
+| `create_team` | Account | `write` | Create a new team. |
+| `list_team_members` | Account | `read` | List members in a team. |
+| `add_team_member` | Account | `admin` | Add an active user to a team. |
+| `remove_team_member` | Account | `admin` | Remove a member from a team. |
+| `delete_team` | Account | `admin` | Delete a team. |
+| `lookup_user` | Account | `read` | Look up an active user by exact email address. |
 
 ### 7. Export & Notifications (4 tools)
-| Tool | Scope | Description |
-| :--- | :--- | :--- |
-| `export_vault` | Vault/Account | Export an entire vault as a zip archive. |
-| `export_note` | Vault/Account | Export a single note as raw serialized markdown. |
-| `list_notifications` | Account | List in-app notifications and activity feed. |
-| `mark_notification_read` | Account | Mark a notification as read. |
+| Tool | Scope | Capability | Description |
+| :--- | :--- | :--- | :--- |
+| `export_vault` | Vault/Account | `read` | Export an entire vault as a zip archive. |
+| `export_note` | Vault/Account | `read` | Export a single note as raw serialized markdown. |
+| `list_notifications` | Account | `read` | List in-app notifications and activity feed. |
+| `mark_notification_read` | Account | `write` | Mark a notification as read. |
 
 ---
 
@@ -412,4 +412,4 @@ Run the included installer script from the repository root:
 - **Windsurf**:
   Append the contents of `rules/elara.md` to `.windsurfrules`.
 
-*Note: Generate an MCP bearer token in the Elara UI at `/settings` (Settings > MCP Connections) or through the Admin panel.*
+*Note: Generate an MCP bearer token in the Elara UI at `/settings` (Settings > MCP Connections) or in a vault's settings, or through the Admin panel. Pick the access level (read, read and write, or admin), an optional expiry (7, 30 or 90 days, or never) and optionally limit the token to specific tools.*

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mockJsonResponse } from '../lib/api'
-import { createVaultMcpConnection, listMcpConnections, revokeMcpConnection } from './mcp'
+import { createMcpConnection, listMcpConnections, listMcpTools, revokeMcpConnection } from './mcp'
 
 describe('mcp api', () => {
   afterEach(() => {
@@ -16,15 +16,44 @@ describe('mcp api', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/mcp-connections', expect.objectContaining({ credentials: 'include' }))
   })
 
-  it('createVaultMcpConnection POSTs /api/mcp-connections with scope vault and the vaultId', async () => {
+  it('createMcpConnection POSTs /api/mcp-connections with the target and the capabilities chosen', async () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, { id: 'c1', token: 'raw-token' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await createVaultMcpConnection('Claude', 'v1')
+    await createMcpConnection(
+      { scope: 'vault', vaultId: 'v1' },
+      { name: 'Claude', access: 'read', allowedTools: ['read_note'], expiresAt: '2026-11-15T00:00:00.000Z' },
+    )
 
     expect(fetchMock).toHaveBeenCalledWith('/api/mcp-connections', expect.objectContaining({ method: 'POST' }))
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(JSON.parse(init.body as string)).toEqual({ name: 'Claude', scope: 'vault', vaultId: 'v1' })
+    expect(JSON.parse(init.body as string)).toEqual({
+      name: 'Claude',
+      scope: 'vault',
+      vaultId: 'v1',
+      access: 'read',
+      allowedTools: ['read_note'],
+      expiresAt: '2026-11-15T00:00:00.000Z',
+    })
+  })
+
+  it('createMcpConnection for the account sends no vaultId, allow-list or expiry when none is chosen', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, { id: 'c1', token: 'raw-token' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createMcpConnection({ scope: 'account' }, { name: 'Laptop', access: 'admin' })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'Laptop', scope: 'account', access: 'admin' })
+  })
+
+  it('listMcpTools calls GET /api/mcp-connections/tools', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, []))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listMcpTools()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/mcp-connections/tools', expect.objectContaining({ credentials: 'include' }))
   })
 
   it('revokeMcpConnection POSTs /api/mcp-connections/:id/revoke, never DELETE', async () => {

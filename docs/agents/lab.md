@@ -114,8 +114,7 @@ timed-out test may still be driving the instance) and count as crashed.
   "defects": [
     { "test": "fix-attribution", "check": "sequential edit_note credited to the MCP connection", "issue": 403 },
     { "test": "crash-write", "match": "^kill \\S+: check-notes clean$", "issue": 486,
-      "intermittent": "depends on where the SIGKILL lands relative to the writes" },
-    { "test": "scoped-tokens", "check": "repo-pinned delete_vault [omitted]", "state": "inconclusive", "issue": 549 }
+      "intermittent": "depends on where the SIGKILL lands relative to the writes" }
   ]
 }
 ```
@@ -255,7 +254,7 @@ in `pnpm lint`; for types run `tsc --noEmit` with `types: ["bun"]`,
 | `ctx.tier` | `'fast'` or `'full'` |
 | `ctx.mcp(key \| rawToken, label?)` | `McpClient`: `call(tool, args)` → `{ok, isError, httpStatus, text, json, ms, retries429}` (never throws; HTTP 0 = server down), `must(tool, args)` (throws), `listTools()`, `rpc(method, params)`. Retries 429 with backoff; `run.ts` writes per-test call stats |
 | `ctx.rest('admin' \| 'member')` | `RestSession` with the bootstrap cookie: `get`, `post`, `request`, `must`; `RestSession.login(baseUrl, email, password)` for a fresh session (login is limited to 10/min per IP) |
-| `ctx.mintToken(user, name, scope?, ids?)` | new MCP connection via `POST /api/mcp-connections` → `{id, token}` |
+| `ctx.mintToken(user, name, scope?, options?)` | new MCP connection via `POST /api/mcp-connections` → `{id, token}`; `options`: `vaultId`/`repositoryId` for the pin, `access` (`read`/`write`/`admin`), `allowedTools`, `expiresAt` |
 | `ctx.createVault(user, name)` / `ctx.connectRepo(user, name, gitUrl)` | REST create; repo sync starts immediately (public https URLs only) |
 | `ctx.docker.app.restart(baseUrl)` / `.crash(baseUrl)` | graceful restart / `docker kill -s KILL` + start, both wait for `/health` |
 | `ctx.docker.app.state()` / `.logs(service, n)` / `.stop()` / `.start()` | `docker inspect` (restart count, OOM, start time), log tail, raw control |

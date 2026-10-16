@@ -4,6 +4,7 @@ import { db } from '../db/client.js'
 import { mcpConnections, users } from '../db/schema.js'
 import { generateToken, hashToken } from '../auth/tokens.js'
 import { logSecurityEvent } from '../auth/security-events.js'
+import { listMcpTools, type ToolCapability } from '../mcp/server.js'
 import { resolveAccess } from './permissions.js'
 import { resolveRepositoryAccess } from '../repositories/permissions.js'
 
@@ -11,7 +12,15 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAuth)
 
   app.post<{
-    Body: { name: string; scope: 'account' | 'vault' | 'repository'; vaultId?: string; repositoryId?: string }
+    Body: {
+      name: string
+      scope: 'account' | 'vault' | 'repository'
+      vaultId?: string
+      repositoryId?: string
+      access?: ToolCapability
+      allowedTools?: string[]
+      expiresAt?: string
+    }
   }>(
     '/mcp-connections',
     {
@@ -24,21 +33,48 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
             scope: { enum: ['account', 'vault', 'repository'] },
             vaultId: { type: 'string', format: 'uuid' },
             repositoryId: { type: 'string', format: 'uuid' },
+            access: { enum: ['read', 'write', 'admin'] },
+            allowedTools: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 200,
+              uniqueItems: true,
+              items: { type: 'string', minLength: 1, maxLength: 100 },
+            },
+            expiresAt: { type: 'string', format: 'date-time' },
           },
         },
       },
     },
     async (req, reply) => {
-      const { name, scope, vaultId, repositoryId } = req.body
+      const { name, scope, vaultId, repositoryId, allowedTools } = req.body
+      // Capabilities are set here and never raised later (#548). Without an
+      // explicit level an account token keeps every tool, as before; a pinned
+      // token gets `write`: no share, update, delete or purge on its pin (#549).
+      const access = req.body.access ?? (scope === 'account' ? 'admin' : 'write')
+      let pinAccess: string | null = null
       if (scope === 'vault') {
         if (!vaultId) return reply.code(400).send({ error: 'vaultId required for vault scope' })
-        const access = await resolveAccess(req.user!.id, vaultId)
-        if (!access) return reply.code(404).send({ error: 'vault not found' })
+        pinAccess = await resolveAccess(req.user!.id, vaultId)
+        if (!pinAccess) return reply.code(404).send({ error: 'vault not found' })
       }
       if (scope === 'repository') {
         if (!repositoryId) return reply.code(400).send({ error: 'repositoryId required for repository scope' })
-        const access = await resolveRepositoryAccess(req.user!.id, repositoryId)
-        if (!access) return reply.code(404).send({ error: 'repository not found' })
+        pinAccess = await resolveRepositoryAccess(req.user!.id, repositoryId)
+        if (!pinAccess) return reply.code(404).send({ error: 'repository not found' })
+      }
+      // Admin on a pinned token can share, delete or purge its pin: only its owner grants that.
+      if (access === 'admin' && pinAccess !== null && pinAccess !== 'owner') {
+        return reply.code(403).send({ error: `admin access on a ${scope}-pinned connection requires owning the ${scope}` })
+      }
+      if (allowedTools) {
+        const known = new Set(listMcpTools().map((t) => t.name))
+        const unknown = allowedTools.filter((t) => !known.has(t))
+        if (unknown.length) return reply.code(400).send({ error: `unknown MCP tools: ${unknown.join(', ')}` })
+      }
+      const expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt) : null
+      if (expiresAt && expiresAt <= new Date()) {
+        return reply.code(400).send({ error: 'expiresAt must be in the future' })
       }
       const token = generateToken()
       const [connection] = await db
@@ -50,13 +86,16 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
           vaultId: scope === 'vault' ? vaultId : null,
           repositoryId: scope === 'repository' ? repositoryId : null,
           tokenHash: hashToken(token),
+          access,
+          allowedTools: allowedTools ?? null,
+          expiresAt,
         })
         .returning()
       await logSecurityEvent({
         type: 'mcp_connection_created',
         actorUserId: req.user!.id,
         mcpConnectionId: connection!.id,
-        detail: { scope, vaultId, repositoryId },
+        detail: { scope, vaultId, repositoryId, access, allowedTools: allowedTools ?? null, expiresAt },
       })
       // The raw token is returned exactly once and stored only as a hash.
       return { ...connectionView(connection!), token }
@@ -70,6 +109,9 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
       .where(eq(mcpConnections.userId, req.user!.id))
     return rows.map(connectionView)
   })
+
+  // The tools a connection can be limited to, with the access level each needs.
+  app.get('/mcp-connections/tools', async () => listMcpTools())
 
   app.post<{ Params: { id: string } }>('/mcp-connections/:id/revoke', async (req, reply) => {
     const [connection] = await db
@@ -100,6 +142,8 @@ function connectionView(c: typeof mcpConnections.$inferSelect) {
     scope: c.scope,
     vaultId: c.vaultId,
     repositoryId: c.repositoryId,
+    access: c.access,
+    allowedTools: c.allowedTools,
     createdAt: c.createdAt,
     lastUsedAt: c.lastUsedAt,
     expiresAt: c.expiresAt,
