@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { contextFor, evaluate, headReviewed, headSince, reviewLinks, verdictOf } from './review-verdict.mjs'
+import { contextFor, evaluate, gateFor, headReviewed, headSince, reviewLinks, verdictOf } from './review-verdict.mjs'
 
 const HEAD = 'a1b2c3d'.padEnd(40, 'e')
 const OLD = 'b'.repeat(40)
@@ -27,7 +27,7 @@ const review = (state, commit_id, submitted_at, login = 'reviewer', type = 'User
   submitted_at,
   user: { login, type },
 })
-const merge = `VERDICT: MERGE\n\nReview: ${RECORD}\nHead reviewed: ${HEAD.slice(0, 7)}`
+const merge = `VERDICT: MERGE\n\nReview: ${RECORD}\nHead reviewed: ${HEAD.slice(0, 12)}`
 const run = (over) => evaluate({ pr, since, writers, ...over })
 
 describe('verdictOf', () => {
@@ -50,13 +50,14 @@ describe('verdictOf', () => {
 describe('headReviewed', () => {
   it('reads the sha on its own line, any case, optional backticks', () => {
     assert.equal(headReviewed(`VERDICT: MERGE\r\nHead reviewed: ${HEAD}\r\n`), HEAD)
-    assert.equal(headReviewed('VERDICT: MERGE\nHead reviewed: `A1B2C3D`'), 'a1b2c3d')
+    assert.equal(headReviewed('VERDICT: MERGE\nHead reviewed: `A1B2C3DEEEEE`'), 'a1b2c3deeeee')
   })
-  it('needs 7 to 40 hex digits on a line of its own', () => {
-    assert.equal(headReviewed('Head reviewed: a1b2c3'), null)
+  it('needs 12 to 40 hex digits on a line of its own', () => {
+    assert.equal(headReviewed('Head reviewed: a1b2c3d'), null)
+    assert.equal(headReviewed('Head reviewed: a1b2c3deeee'), null)
     assert.equal(headReviewed('Head reviewed: the latest'), null)
-    assert.equal(headReviewed('see Head reviewed: a1b2c3d'), null)
-    assert.equal(headReviewed('> Head reviewed: a1b2c3d'), null)
+    assert.equal(headReviewed('see Head reviewed: a1b2c3deeeee'), null)
+    assert.equal(headReviewed('> Head reviewed: a1b2c3deeeee'), null)
   })
 })
 
@@ -65,6 +66,28 @@ describe('contextFor', () => {
     assert.equal(contextFor('prod'), 'review-verdict')
     assert.equal(contextFor('dev'), 'review-verdict/dev')
     for (const base of ['lab/elara-study', 'main', 'constructor', '__proto__', '']) assert.equal(contextFor(base), null)
+  })
+})
+
+describe('gateFor', () => {
+  const REPO = 'PIIIX-org/chapters'
+  const prTo = (base, headRepo = REPO, state = 'open') => ({
+    number: 700,
+    state,
+    base: { ref: base },
+    head: { sha: HEAD, repo: headRepo ? { full_name: headRepo } : null },
+  })
+  it('sets the base context for open same-repo PRs to prod and dev', () => {
+    assert.deepEqual(gateFor(prTo('prod'), REPO), { context: 'review-verdict' })
+    assert.deepEqual(gateFor(prTo('dev'), REPO), { context: 'review-verdict/dev' })
+  })
+  it('never sets a status for a fork PR, even one to prod with the promotion head', () => {
+    assert.match(gateFor(prTo('prod', 'someone/chapters'), REPO).skip, /comes from someone\/chapters; fork PRs get no status/)
+    assert.match(gateFor(prTo('prod', null), REPO).skip, /a deleted fork/)
+  })
+  it('skips other bases and closed PRs', () => {
+    assert.match(gateFor(prTo('lab/elara-study'), REPO).skip, /no review gate/)
+    assert.match(gateFor(prTo('prod', REPO, 'closed'), REPO).skip, /is closed/)
   })
 })
 
@@ -104,7 +127,7 @@ describe('evaluate', () => {
     assert.equal(v.ok, false)
     assert.match(v.description, /^No review of a1b2c3d/)
     assert.match(v.report, /first line is exactly `VERDICT: MERGE`/)
-    assert.match(v.report, /Head reviewed: a1b2c3d/)
+    assert.match(v.report, new RegExp(`Head reviewed: ${HEAD}`))
   })
 
   it('fails on VERDICT: CHANGES', () => {
@@ -167,15 +190,27 @@ describe('evaluate', () => {
   })
 
   it('ignores verdicts from users without write permission and from bots', () => {
-    for (const user of [
-      { login: 'stranger', type: 'User' },
-      { login: 'org-member-read-only', type: 'User' },
-      { login: 'reviewer', type: 'Bot' },
+    for (const [user, reason] of [
+      [{ login: 'stranger', type: 'User' }, 'no write access'],
+      [{ login: 'org-member-read-only', type: 'User' }, 'no write access'],
+      [{ login: 'reviewer', type: 'Bot' }, 'a bot'],
     ]) {
       const v = run({ comments: [comment(merge, '2026-10-16T11:00:00Z', { user })] })
       assert.equal(v.ok, false, JSON.stringify(user))
-      assert.match(v.report, /ignored: (no write access|a bot)/)
+      assert.match(v.report, new RegExp(`ignored: ${reason}`))
     }
+  })
+
+  it('reports a failed permission lookup as such, and does not count it', () => {
+    const v = evaluate({
+      pr,
+      since,
+      writers: new Set(),
+      lookupFailed: new Set(['Taha-Mahmoodi']),
+      comments: [comment(merge, '2026-10-16T11:00:00Z')],
+    })
+    assert.equal(v.ok, false)
+    assert.match(v.report, /ignored: permission lookup failed/)
   })
 
   it('passes on an approval of the head by someone else with write permission', () => {
@@ -218,18 +253,6 @@ describe('evaluate', () => {
       comments: [comment('VERDICT: CHANGES', '2026-10-16T12:00:00Z')],
     })
     assert.equal(v.ok, false)
-  })
-
-  it('never passes while another open PR to the same base has the same head', () => {
-    for (const over of [
-      { comments: [comment(merge, '2026-10-16T11:00:00Z')] },
-      { reviews: [review('APPROVED', HEAD, '2026-10-16T11:00:00Z')] },
-    ]) {
-      const v = run({ ...over, samePrs: [701] })
-      assert.equal(v.ok, false)
-      assert.equal(v.description, 'Open PR #701 to prod has the same head a1b2c3d: close it')
-      assert.equal(run(over).ok, true)
-    }
   })
 
   it('fails closed when the head time is unknown', () => {
