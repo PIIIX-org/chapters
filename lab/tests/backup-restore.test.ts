@@ -68,29 +68,6 @@ function totp(secret: string, at = Date.now()): string {
   return String((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000).padStart(6, '0')
 }
 
-/** Signup -> mailpit code -> verify -> admin approve -> login (lab/bootstrap.ts flow). */
-async function newUser(ctx: LabContext, email: string, password: string): Promise<{ id: string; session: RestSession }> {
-  const signup = await new RestSession(ctx.baseUrl).post('/api/signup', { email, password })
-  if (signup.status !== 200) throw new Error(`signup ${email}: ${signup.status} ${signup.text}`)
-  const code = await poll(async () => {
-    const list = (await (await fetch(`${ctx.env.mailpitUrl}/api/v1/messages`)).json()) as {
-      messages: Array<{ ID: string; To: Array<{ Address: string }>; Subject: string }>
-    }
-    const msg = list.messages.find((m) => m.To.some((t) => t.Address === email) && /verify/i.test(m.Subject))
-    if (!msg) return undefined
-    const full = (await (await fetch(`${ctx.env.mailpitUrl}/api/v1/message/${msg.ID}`)).json()) as { Text: string }
-    return /verification code is (\S+)/.exec(full.Text)?.[1]
-  }, 60_000, 1_000)
-  if (!code) throw new Error(`no verification mail for ${email}`)
-  const verify = await new RestSession(ctx.baseUrl).post('/api/verify-email', { email, code })
-  if (verify.status !== 200) throw new Error(`verify ${email}: ${verify.status} ${verify.text}`)
-  const pending = await ctx.rest('admin').must<Array<{ id: string; email: string }>>('GET', '/api/admin/users?status=pending_approval')
-  const row = pending.find((u) => u.email === email)
-  if (!row) throw new Error(`${email} not pending approval`)
-  await ctx.rest('admin').must('POST', `/api/admin/users/${row.id}/approve`, {})
-  return { id: row.id, session: await RestSession.login(ctx.baseUrl, email, password) }
-}
-
 interface Timed extends ExecResult {
   timedOut: boolean
 }
@@ -217,7 +194,7 @@ const test: LabTest = {
     const mfaEmail = `${ctx.uniq('mfa')}@example.com`
     const mfaPassword = `Lab-${crypto.randomUUID()}`
     if (process.env.GITHUB_ACTIONS) console.log(`::add-mask::${mfaPassword}`)
-    const mfaUser = await newUser(ctx, mfaEmail, mfaPassword)
+    const mfaUser = await ctx.signupUser(mfaEmail, mfaPassword)
     const setup = await mfaUser.session.post<{ secret: string }>('/api/mfa/setup', {})
     const secret = setup.json?.secret ?? ''
     if (process.env.GITHUB_ACTIONS && secret) console.log(`::add-mask::${secret}`)
