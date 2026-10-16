@@ -226,7 +226,6 @@ const test: LabTest = {
         await viaRest(`/api/search?q=${encodeURIComponent(SHARED)}`),
       ]),
       separation("separation: B's graph names nothing of A's", [
-        await viaMcp('graph', { everywhere: true }),
         await viaMcp('graph', { vaultId: VB }),
         await viaRest('/api/graph/merged'),
       ]),

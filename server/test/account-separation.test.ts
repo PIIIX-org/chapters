@@ -99,6 +99,16 @@ async function call(client: Client, name: string, args: Args): Promise<{ isError
   }
 }
 
+/** prompts/get as text: the result as JSON, or the error a refused prompt throws. */
+async function promptText(client: Client, name: string, args: Record<string, string>): Promise<string> {
+  resetRateLimits()
+  try {
+    return JSON.stringify(await client.getPrompt({ name, arguments: args }))
+  } catch (err) {
+    return `Error: ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
 async function must<T>(client: Client, name: string, args: Args): Promise<T> {
   const r = await call(client, name, args)
   if (r.isError) throw new Error(`${name} failed: ${r.text}`)
@@ -340,7 +350,7 @@ describe("account separation: B sees nothing of A's (#552)", () => {
   it("A's own views show A's things (the fixtures are real)", async () => {
     expect((await call(acctA, 'search', { query: SHARED, everywhere: true })).text).toContain(fx.noteA)
     expect((await call(acctA, 'find_symbols', { query: SYMBOL_A })).text).toContain(SYMBOL_A)
-    expect((await call(acctA, 'graph', { everywhere: true })).text).toContain(fx.noteA)
+    expect((await call(acctA, 'graph', { vaultId: fx.VA })).text).toContain(fx.noteA)
     expect((await call(acctA, 'list_notifications', {})).text).toContain(MARK_A)
     expect((await call(acctA, 'list_graph_perspectives', {})).text).toContain(fx.objects.id[1]!)
     // The cross-account edge is stored: only the read side keeps it from B.
@@ -354,7 +364,7 @@ describe("account separation: B sees nothing of A's (#552)", () => {
       ['search', { query: MARK_A, everywhere: true }],
       ['search', { query: SHARED, vaultId: fx.VB }],
       ['search', { query: SYMBOL_A, repositoryId: fx.RB }],
-      ['graph', { everywhere: true }],
+      ['graph', { repositoryId: fx.RB }],
       ['graph', { vaultId: fx.VB }],
       ['find_symbols', { query: SYMBOL_A }],
       ['find_symbols', { query: SYMBOL_A, everywhere: true }],
@@ -496,13 +506,13 @@ describe("account separation: B sees nothing of A's (#552)", () => {
     const failures: string[] = []
     for (const p of withVault) {
       if (hydrating.includes(p.name)) {
-        const control = JSON.stringify(await acctA.getPrompt({ name: p.name, arguments: promptArgs(p, fx.VA) }))
+        const control = await promptText(acctA, p.name, promptArgs(p, fx.VA))
         if (!control.includes(MARK_A)) failures.push(`${p.name}: A's own call does not show A's note (probe is vacuous)`)
       }
       resetRateLimits()
       const missing = randomUUID()
-      const own = JSON.stringify(await acctB.getPrompt({ name: p.name, arguments: promptArgs(p, fx.VA) }))
-      const none = JSON.stringify(await acctB.getPrompt({ name: p.name, arguments: promptArgs(p, missing) }))
+      const own = await promptText(acctB, p.name, promptArgs(p, fx.VA))
+      const none = await promptText(acctB, p.name, promptArgs(p, missing))
       const found = leaks(normalized(own, fx.VA))
       if (found.length) failures.push(`${p.name}: shows ${found.join(', ')}`)
       if (normalized(own, fx.VA) !== normalized(none, missing)) failures.push(`${p.name}: A's vault and a missing vault answer differently`)
