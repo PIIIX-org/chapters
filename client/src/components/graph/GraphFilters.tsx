@@ -17,6 +17,10 @@ import {
   type GraphFilters as GraphFiltersValue,
   type GraphPerspective,
 } from '../../api/graph.js'
+import { isAdminRole } from '../../api/admin.js'
+import { canEdit } from '../../api/vaults.js'
+import { useSession } from '../../hooks/useSession.js'
+import { useVaults } from '../../hooks/useVaults.js'
 import { cn } from '../../lib/utils.js'
 
 const FILTER_KEYS = ['types', 'tags', 'since', 'until'] as const
@@ -84,6 +88,21 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
   const [isSaving, setIsSaving] = useState(false)
   const [newPerspectiveName, setNewPerspectiveName] = useState('')
   const [newPerspectiveShared, setNewPerspectiveShared] = useState(true)
+
+  // Same rules as the server (#550, server/src/graph/perspective-access.ts):
+  // saving into a vault needs edit access, a global perspective an instance
+  // admin; deleting needs edit access and being the creator or vault owner,
+  // and a global perspective only its creator. Unknown access hides both.
+  const session = useSession()
+  const vaults = useVaults()
+  const vaultAccess = effectiveVaultId ? vaults.data?.find((v) => v.id === effectiveVaultId)?.access : undefined
+  const canSave = effectiveVaultId ? canEdit(vaultAccess) : isAdminRole(session.data?.role)
+  const isCustomSelection = selectedPerspectiveId !== 'all' && !selectedPerspectiveId.startsWith('preset:')
+  const selectedPerspective = isCustomSelection ? perspectives.find((p) => p.id === selectedPerspectiveId) : undefined
+  const isCreator = selectedPerspective !== undefined && selectedPerspective.userId === session.data?.id
+  const canDelete =
+    selectedPerspective !== undefined &&
+    (selectedPerspective.vaultId ? canEdit(vaultAccess) && (isCreator || vaultAccess === 'owner') : isCreator)
 
   useEffect(() => {
     if (paramPrefix !== '') return
@@ -253,7 +272,7 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
               Perspective
             </label>
             <div className="flex items-center gap-1.5">
-              {selectedPerspectiveId !== 'all' && !selectedPerspectiveId.startsWith('preset:') && (
+              {canDelete && (
                 <button
                   type="button"
                   onClick={handleDeletePerspective}
@@ -262,13 +281,15 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
                   Delete
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => setIsSaving((v) => !v)}
-                className="text-[11px] font-medium text-primary hover:underline py-1 sm:py-0 touch-manipulation"
-              >
-                {isSaving ? 'Cancel' : '+ Save view'}
-              </button>
+              {canSave && (
+                <button
+                  type="button"
+                  onClick={() => setIsSaving((v) => !v)}
+                  className="text-[11px] font-medium text-primary hover:underline py-1 sm:py-0 touch-manipulation"
+                >
+                  {isSaving ? 'Cancel' : '+ Save view'}
+                </button>
+              )}
             </div>
           </div>
 
@@ -296,7 +317,7 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
             )}
           </select>
 
-          {isSaving && (
+          {isSaving && canSave && (
             <form onSubmit={handleSavePerspective} className="mt-1 flex flex-col gap-1.5 pt-1.5 border-t border-border/40">
               <input
                 type="text"
@@ -308,19 +329,22 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
                 autoFocus
               />
               <div className="flex items-center justify-between">
-                <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer touch-manipulation">
-                  <input
-                    type="checkbox"
-                    checked={newPerspectiveShared}
-                    onChange={(e) => setNewPerspectiveShared(e.target.checked)}
-                    className="rounded border-border text-xs"
-                  />
-                  Share with team
-                </label>
+                {/* A global perspective is personal (#550): there is no team to share it with. */}
+                {effectiveVaultId && (
+                  <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer touch-manipulation">
+                    <input
+                      type="checkbox"
+                      checked={newPerspectiveShared}
+                      onChange={(e) => setNewPerspectiveShared(e.target.checked)}
+                      className="rounded border-border text-xs"
+                    />
+                    Share with team
+                  </label>
+                )}
                 <button
                   type="submit"
                   disabled={!newPerspectiveName.trim()}
-                  className="rounded bg-primary px-2.5 py-1 sm:px-2 sm:py-0.5 text-xs sm:text-[11px] min-h-[32px] sm:min-h-0 font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 touch-manipulation"
+                  className="ml-auto rounded bg-primary px-2.5 py-1 sm:px-2 sm:py-0.5 text-xs sm:text-[11px] min-h-[32px] sm:min-h-0 font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 touch-manipulation"
                 >
                   Save
                 </button>

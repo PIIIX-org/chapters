@@ -55,6 +55,7 @@ import { purgeVaultRecord } from '../vaults/routes.js'
 import { isTeamOwner, notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
 import { buildGraph, findShortestPath } from '../graph/assemble.js'
+import { isInstanceAdmin, visibleGlobalPerspectives } from '../graph/perspective-access.js'
 import { buildVaultZip } from '../export/archive.js'
 import { notify } from '../notifications/notify.js'
 import { logSecurityEvent } from '../auth/security-events.js'
@@ -1828,7 +1829,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault-or-account',
       capability: 'read',
       description:
-        'List saved graph perspectives and filter presets for a vault or merged graph. A vault-scoped connection sees only the perspectives of its vault.',
+        'List saved graph perspectives and filter presets for a vault (yours plus shared ones) or merged graph (global perspectives: your own; an instance admin sees all). A vault-scoped connection sees only the perspectives of its vault.',
       inputSchema: {
         vaultId: z
           .string()
@@ -1858,15 +1859,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       return db
         .select()
         .from(graphPerspectives)
-        .where(
-          and(
-            isNull(graphPerspectives.vaultId),
-            or(
-              eq(graphPerspectives.userId, auth.user.id),
-              eq(graphPerspectives.isShared, true),
-            ),
-          ),
-        )
+        .where(visibleGlobalPerspectives(auth.user))
         .orderBy(asc(graphPerspectives.createdAt))
     },
   )
@@ -1877,7 +1870,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault-or-account',
       capability: 'write',
       description:
-        'Save a scoped graph perspective with filter presets (types, tags, date range, color mode) for a vault or merged graph.',
+        'Save a scoped graph perspective with filter presets (types, tags, date range, color mode) for a vault (needs edit access) or merged graph (instance admins only; a global perspective is visible only to you and admins).',
       inputSchema: {
         name: z.string().min(1).describe('Perspective name'),
         vaultId: z.string().uuid().optional().describe('Optional vault ID constraint'),
@@ -1894,7 +1887,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         isShared: z
           .boolean()
           .optional()
-          .describe('Whether this perspective is shared with other vault members (default true)'),
+          .describe('Whether this perspective is shared with other vault members (default true). No effect on a global perspective.'),
       },
     },
     async (
@@ -1912,12 +1905,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       { vaultId },
     ) => {
       if (vaultId) {
-        await requireAccess(vaultId, 'read')
-      } else {
-        const isAdmin = ['admin', 'superadmin', 'owner'].includes(auth.user.role)
-        if (!isAdmin) {
-          throw new McpToolError('forbidden: only admins can create global perspectives')
-        }
+        await requireAccess(vaultId, 'edit')
+      } else if (!isInstanceAdmin(auth.user.role)) {
+        throw new McpToolError('forbidden: only admins can create global perspectives')
       }
       const [created] = await db
         .insert(graphPerspectives)
@@ -1951,7 +1941,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         if (!visible) throw new McpToolError('not found')
         return { vaultId: row.vaultId }
       },
-      description: 'Delete a saved graph perspective by its ID.',
+      description:
+        'Delete a saved graph perspective by its ID. Needs edit access to its vault; you can delete your own, the vault owner any. A global perspective only by its creator.',
       inputSchema: {
         id: z.string().uuid().describe('Perspective ID to delete'),
       },
@@ -1968,13 +1959,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         )
       if (!perspective) throw new McpToolError('not found')
 
-      if (perspective.userId !== auth.user.id) {
-        if (perspective.vaultId) {
-          await requireVaultOwner(perspective.vaultId)
-        } else {
-          const isAdmin = ['admin', 'superadmin', 'owner'].includes(auth.user.role)
-          if (!isAdmin) throw new McpToolError('forbidden')
-        }
+      if (perspective.vaultId) {
+        await requireAccess(perspective.vaultId, 'edit')
+        if (perspective.userId !== auth.user.id) await requireVaultOwner(perspective.vaultId)
+      } else if (perspective.userId !== auth.user.id) {
+        // Admins see every global perspective, so they get the honest answer.
+        throw new McpToolError(isInstanceAdmin(auth.user.role) ? 'forbidden' : 'not found')
       }
 
       await db.delete(graphPerspectives).where(eq(graphPerspectives.id, args.id))

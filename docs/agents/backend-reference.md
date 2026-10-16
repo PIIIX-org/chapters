@@ -398,6 +398,20 @@ additionally requires the resource owner's `mergeable` flag and the
 viewing user's own per-resource opt-in — three independent gates, all
 re-resolved live.
 
+**Saved perspectives** (`graph_perspectives`; REST `GET/POST
+/graph/perspectives`, `DELETE /graph/perspectives/:id`, and the three MCP
+perspective tools) follow one rule set, shared through
+`perspective-access.ts` (#550). A vault perspective is listed to the
+vault's readers when `isShared` (always to its creator); saving or deleting
+one needs **edit** access to the vault (below that: 404 / MCP `not found`);
+among editors the creator deletes their own and the vault owner any (else
+403 / `owner permission required`). A global perspective (no vault) is
+personal: only an instance admin (admin, superadmin, owner role) creates
+one, it is listed to its creator and to instance admins, and only its
+creator deletes it (another admin gets 403 / `forbidden`, anyone else 404
+/ `not found`); `isShared` has no effect on it. The graph UI hides
+`+ Save view` and `Delete` from users these rules refuse.
+
 ### 5.6 Search & embeddings (`server/src/search/`)
 
 - **`search.ts`**: `searchNotes()` — the single hybrid search function
@@ -708,7 +722,7 @@ the count as `filesPendingExtraction`.
 - **OIDC host-header sanitization**: Validated against `APP_URL` and injection characters to protect authorization code callbacks.
 - **Admin role hierarchy**: Strict `ROLE_RANK` enforcement preventing self-promotion or subordinate demotion of superadmins and instance owners.
 - **Ingestion bounds**: Git clone ingestion capped to 1MB per file and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`).
-- **Global perspective guards**: Unvaulted shared graph perspectives restricted to instance admins and owners.
+- **Global perspective guards**: Unvaulted graph perspectives are created only by instance admins and listed only to their creator and instance admins (#550; §5.5).
 - Full findings and the design changes they drove:
   `docs/superpowers/specs/2026-07-12-security-audit-findings.md` and
   `docs/superpowers/specs/2026-09-28-security-audit-and-remediation.md`.
