@@ -1,0 +1,72 @@
+name: Review verdict
+
+# Review gate for promotions (#574). Sets the commit status `review-verdict`
+# on the PR's current head: success only with an approving review of the
+# head by someone other than the author, or a PR comment whose first line is
+# `VERDICT: MERGE`, posted after the latest push, that links the review
+# record. Required on `prod`; informational on every other base. Logic and
+# messages: .github/scripts/review-verdict.mjs; rules and the single-account
+# caveat: docs/agents/github-workflow.md (Review gate).
+#
+# A commit status, not this job's own check run: an `issue_comment` run
+# belongs to the default branch, so its check run would never reach the PR.
+# The job itself only fails when it could not evaluate (then no status is
+# set and the required check stays pending).
+#
+# `issue_comment` runs this file and the script from the default branch
+# (`dev`), so posting a verdict only re-evaluates once this is on `dev`.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  issue_comment:
+    types: [created, edited, deleted]
+
+# Every run reads the PR's current state, so the newest run is the one that
+# counts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  checks: read
+  statuses: write
+
+jobs:
+  evaluate:
+    # Comments on plain issues are not reviews.
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # On PR events HEAD is GitHub's merge of the PR into its base, and
+          # HEAD^1 (the base) must be in the clone.
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # On PR events run the base's copy of the checker so a PR cannot edit
+      # the check it is judged by; until the base has one, run the PR's copy.
+      # Comment events check out the default branch and run its copy. The
+      # copy runs alone from $RUNNER_TEMP, so the script must stay a single
+      # file with no sibling imports.
+      - name: Evaluate the review verdict and set the status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          checker=.github/scripts/review-verdict.mjs
+          if [ "$GITHUB_EVENT_NAME" = issue_comment ]; then
+            REVIEW_VERDICT_CHECKER=default node "$checker"
+          elif git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
+            git show "HEAD^1:$checker" > "$RUNNER_TEMP/review-verdict.mjs"
+            REVIEW_VERDICT_CHECKER=base node "$RUNNER_TEMP/review-verdict.mjs"
+          else
+            REVIEW_VERDICT_CHECKER=pr node "$checker"
+          fi
