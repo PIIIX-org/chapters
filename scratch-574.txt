@@ -1,1 +1,2 @@
 scratch for #574 review-verdict proof; do not merge
+commit 3: pushed after the VERDICT: MERGE comment
