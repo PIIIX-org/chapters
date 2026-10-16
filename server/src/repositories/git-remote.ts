@@ -5,10 +5,11 @@ import { EncryptionKeyMissingError, encryptCredential } from './credentials.js'
 
 /**
  * Splits `https://user:token@host/owner/repo.git` into the remote without its
- * userinfo and the userinfo itself (`user:token`, or just `token`). Anything
- * else (no userinfo, scp-style `git@host:path`, `ssh://`, `file://`, or a
- * string that does not parse) comes back unchanged with no credential: only
- * http(s) userinfo is ever a secret (#383).
+ * userinfo and the userinfo itself (`user:token`, or just `token`). An
+ * `ssh://user:password@` remote is split the same way (#593); a bare ssh user
+ * (`ssh://git@host`) is not a secret and stays. Anything else (no userinfo,
+ * scp-style `git@host:path`, `file://`, or a string that does not parse) comes
+ * back unchanged with no credential (#383).
  */
 export function splitGitUrlCredential(gitUrl: string): { url: string; credential: string | null } {
   let parsed: URL
@@ -17,7 +18,9 @@ export function splitGitUrlCredential(gitUrl: string): { url: string; credential
   } catch {
     return { url: gitUrl, credential: null }
   }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return { url: gitUrl, credential: null }
+  const http = parsed.protocol === 'https:' || parsed.protocol === 'http:'
+  const sshWithPassword = parsed.protocol === 'ssh:' && parsed.password !== ''
+  if (!http && !sshWithPassword) return { url: gitUrl, credential: null }
   if (!parsed.username && !parsed.password) return { url: gitUrl, credential: null }
   const user = decodeURIComponent(parsed.username)
   const password = decodeURIComponent(parsed.password)
@@ -68,26 +71,60 @@ export function prepareGitRemote(
   }
 }
 
+/** How a URL serializes `value` as its password (`@` and `:` escaped, `$` not). */
+function userinfoEncoded(value: string): string {
+  const url = new URL('http://h')
+  url.password = value
+  return url.password
+}
+
+/**
+ * Every query value in every URL in `text` replaced: `?private_token=X`
+ * becomes `?private_token=***` (#593). A query can carry a token and is not
+ * userinfo, so nothing moves it into encrypted storage.
+ */
+export function redactUrlQuery(text: string): string {
+  return text.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"]+/gi, (url) => {
+    const query = url.search(/[?#]/)
+    if (query === -1) return url
+    return url.slice(0, query) + url.slice(query).replace(/([?&][^=&#\s]*=)[^&#]+/g, '$1***')
+  })
+}
+
 /**
  * Removes secrets from text bound for storage or logs (git error messages can
- * echo the authenticated clone URL): every given secret, plus any userinfo in
- * a `scheme://userinfo@` URL.
+ * echo the authenticated clone URL): every given credential in each form a
+ * URL or an echo may carry it, and on its own the password of a
+ * `user:password` one; then any userinfo in a `scheme://userinfo@` URL, up to
+ * the last `@` of the authority so a raw `@` in a password leaves no tail; and
+ * every URL query value.
  */
 export function redactGitSecrets(text: string, secrets: Array<string | null | undefined>): string {
-  let out = text
+  const forms = new Set<string>()
   for (const secret of secrets) {
     if (!secret) continue
-    for (const form of new Set([secret, encodeURIComponent(secret)])) out = out.split(form).join('***')
+    const colon = secret.indexOf(':')
+    const parts = colon === -1 ? [secret] : [secret, secret.slice(colon + 1)]
+    for (const part of parts) {
+      if (!part) continue
+      forms.add(part)
+      forms.add(encodeURIComponent(part))
+      forms.add(userinfoEncoded(part))
+    }
   }
-  return out.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, '$1***@')
+  let out = text
+  // Longest first, so a password never leaves the rest of its credential behind.
+  for (const form of [...forms].sort((a, b) => b.length - a.length)) out = out.split(form).join('***')
+  return redactUrlQuery(out.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s]*@/gi, '$1***@'))
 }
 
 /**
  * Boot-time cleanup for remotes stored before #383 was fixed: moves URL
  * credentials into encrypted storage (keeping an existing explicit credential),
  * strips them from `gitUrl`, and redacts them from `lastSyncError`. Idempotent.
- * A row whose credential cannot be encrypted (no key configured) is left as is
- * and counted in `skipped`, because stripping it would break the next sync.
+ * A row whose credential cannot be encrypted (no key configured) keeps its
+ * `gitUrl` and is counted in `skipped`, because stripping it would break the
+ * next sync; its `lastSyncError` is still redacted, which needs no key (#593).
  */
 export async function scrubStoredGitCredentials(): Promise<{ scrubbed: number; skipped: number }> {
   const rows = await db.select().from(repositories).where(eq(repositories.ingestionMethod, 'git'))
@@ -96,6 +133,7 @@ export async function scrubStoredGitCredentials(): Promise<{ scrubbed: number; s
   for (const row of rows) {
     if (!row.gitUrl) continue
     const split = splitGitUrlCredential(row.gitUrl)
+    const lastSyncError = row.lastSyncError ? redactGitSecrets(row.lastSyncError, [split.credential]) : null
     let gitCredentialEncrypted = row.gitCredentialEncrypted
     if (split.credential && !gitCredentialEncrypted) {
       try {
@@ -103,13 +141,15 @@ export async function scrubStoredGitCredentials(): Promise<{ scrubbed: number; s
       } catch (err) {
         if (!(err instanceof EncryptionKeyMissingError)) throw err
         console.warn(
-          `[repositories] repository ${row.id} has a credential in its git URL and CREDENTIALS_ENCRYPTION_KEY is not set; left unchanged`,
+          `[repositories] repository ${row.id} has a credential in its git URL and CREDENTIALS_ENCRYPTION_KEY is not set; URL left unchanged`,
         )
         skipped += 1
+        if (lastSyncError !== row.lastSyncError) {
+          await db.update(repositories).set({ lastSyncError }).where(eq(repositories.id, row.id))
+        }
         continue
       }
     }
-    const lastSyncError = row.lastSyncError ? redactGitSecrets(row.lastSyncError, [split.credential]) : null
     if (split.url === row.gitUrl && lastSyncError === row.lastSyncError) continue
     await db
       .update(repositories)

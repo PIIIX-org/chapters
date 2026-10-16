@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositories, repositoryShares, teamMemberships, users } from '../db/schema.js'
-import { redactGitSecrets, splitGitUrlCredential } from './git-remote.js'
+import { redactGitSecrets, redactUrlQuery, splitGitUrlCredential } from './git-remote.js'
 
 export type RepoAccess = 'owner' | 'viewer'
 
@@ -64,8 +64,9 @@ export async function resolveRepositoryAccess(
  * The remote with anything that could be a credential taken off it:
  * `https://elara:ghp_token@github.com/o/r.git` and `git@github.com:o/r.git`
  * both become `https://github.com/o/r.git`. Host, owner and name are what a
- * deep link is built from and are not secret — the userinfo is the only part
- * of a remote that ever is.
+ * deep link is built from and are not secret — the userinfo and the query
+ * (`?private_token=…`, #593) are the parts of a remote that can be, and a
+ * link needs neither, nor the fragment.
  *
  * Returns null for anything that does not parse, because a half-understood
  * remote handed to a link builder is a guess, and a viewer simply gets no
@@ -75,12 +76,13 @@ export function publicGitUrl(gitUrl: string | null): string | null {
   if (!gitUrl) return null
   // scp-style (`user@host:owner/repo.git`), which is not a URL at all.
   const scp = /^[^@/\s]+@([^:/\s]+):(.+)$/.exec(gitUrl)
-  if (scp) return `https://${scp[1]}/${scp[2]}`
   try {
-    const url = new URL(gitUrl)
+    const url = new URL(scp ? `https://${scp[1]}/${scp[2]}` : gitUrl)
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return null
     url.password = ''
     url.username = ''
+    url.search = ''
+    url.hash = ''
     return url.toString()
   } catch {
     return null
@@ -90,9 +92,10 @@ export function publicGitUrl(gitUrl: string | null): string | null {
 /**
  * `lastSyncError` as served. Git's error text can echo the authenticated clone
  * URL; git-sync redacts it before storing, but a row written before #383 was
- * fixed and never scrubbed (the boot scrub skips a row it cannot encrypt)
- * still holds the token there. Redacted on the way out too, like `gitUrl`, so
- * no stored text reaches a caller with a credential in it (#577).
+ * fixed and never scrubbed still holds the token there. Redacted on the way
+ * out too, like `gitUrl` (#577): the remote's own credential and its password
+ * part, any URL userinfo and every URL query value (`redactGitSecrets`). A
+ * token echoed in some other form than these is not recognised.
  */
 export function publicSyncError(r: { gitUrl: string | null; lastSyncError: string | null }): string | null {
   if (!r.lastSyncError) return r.lastSyncError
@@ -178,7 +181,9 @@ export interface RepositoryFields {
  * stored without it (`prepareGitRemote`) and old ones are scrubbed at boot
  * (`scrubStoredGitCredentials`); stripping here too keeps a row that could
  * not be scrubbed (no encryption key) from leaking through the API. Owners
- * get the remote in its own form minus the userinfo.
+ * get the remote in its own form minus the userinfo, with every query value
+ * replaced by `***` (a query can hold a token, #593). `gitUrl` is set once,
+ * at connect, so nothing sends the served form back.
  *
  * A viewer gets `localPath: null` and the *sanitized* remote rather than
  * nothing at all. Redacting `gitUrl` outright closed the credential leak and
@@ -205,7 +210,7 @@ export function repositoryFields(
     name: r.name,
     ownerId: r.ownerId,
     ingestionMethod: r.ingestionMethod,
-    gitUrl: isOwner ? r.gitUrl && splitGitUrlCredential(r.gitUrl).url : publicGitUrl(r.gitUrl),
+    gitUrl: isOwner ? r.gitUrl && redactUrlQuery(splitGitUrlCredential(r.gitUrl).url) : publicGitUrl(r.gitUrl),
     localPath: isOwner ? r.localPath : null,
     defaultBranch: r.defaultBranch,
     mergeable: r.mergeable,
