@@ -13,8 +13,10 @@ It is the release gate for retrieval and token changes (#570, #572).
 A number is publishable when a run of `benchmarks/run.ts` in the `bench`
 job of `.github/workflows/elara-lab.yml` produced it, its run is linked, and
 it is recorded in [`baseline.json`](baseline.json) (or shown as a delta by
-the gate). Nothing measured against production, by an unmerged runner, or
-by hand. The TP-01 to TP-15 results that used to be listed here, the reports
+the gate). Numbers of real AI agents doing tasks come only from the
+scheduled [agent trial](#agent-trial) (#571). Nothing measured against
+production, by an unmerged runner, or by hand. The TP-01 to TP-15 results
+that used to be listed here, the reports
 under [`docs/benchmarks/`](../docs/benchmarks/README.md) and the artifacts
 in `runs/` are **retracted**: their runners were never merged, they ran
 against production, and some results are impossible (TP-01 reported
@@ -269,18 +271,165 @@ as material, because reaching the evidence or not is the premise.
 (Indexing took about half as long in run 38856349787 as in the earlier
 runs, on the same code; index time is reported, not gated.)
 
-## Future: LLM-agent A/B trials
+## Agent trial
 
-Fix-list item 174 covers scheduled trials with a real agent; this harness
-does not run a language model. The study's 8 blind A/B tasks (Elara-only
-vs local-only, graded on correctness, completeness and false claims) are the
-starting set: T1 how an MCP `edit_note` reaches disk; T2 the blast radius of
-a rename; T3 onboarding to the search subsystem; T4 checking a vault note
-(`specs/repository-sync-flow`) against the code; T5 how `[[repo:...]]` links
-become graph edges; T6 the five most recent significant bugs; T7 MCP bearer
-token scoping; T8 where a 1 MB note-body cap must be enforced. The tasks,
-the answers of both arms and the grading are in the Elara vault note
-`audit/2026-10-14-ai-performance-study-round-2`. That round ran against
-production, so its timings and token counts are not benchmark numbers and
-are not quoted here; a trial built under item 174 will measure them against
-the lab like this benchmark does.
+The benchmark above runs no language model. The agent trial (#571) runs
+real AI agents on the study's 8 blind A/B tasks, weekly, against a lab
+instance built from the commit under test (the staging server; production
+is never measured). **Agent numbers may only be published from this
+workflow**: a run of `benchmarks/agent-trial/run.ts` in the `trial` job of
+[`.github/workflows/agent-trial.yml`](../.github/workflows/agent-trial.yml),
+with its run linked. Not from a dry run, not from production, not by hand.
+The round-2 study's timings and token counts (vault note
+`audit/2026-10-14-ai-performance-study-round-2`) ran against production and
+are not quoted.
+
+| part | file |
+|---|---|
+| tasks, pinned commit, key facts with file:line evidence, false claims | [`agent-trial/tasks.json`](agent-trial/tasks.json) |
+| deterministic grading | [`agent-trial/lib/grade.ts`](agent-trial/lib/grade.ts) |
+| the agent loop and its caps | [`agent-trial/lib/loop.ts`](agent-trial/lib/loop.ts) |
+| model adapters (OpenAI-compatible, Anthropic) and the scripted dry-run model | [`agent-trial/lib/model.ts`](agent-trial/lib/model.ts) |
+| the two arms' tools | [`agent-trial/lib/tools.ts`](agent-trial/lib/tools.ts), [`agent-trial/lib/grep-worker.mjs`](agent-trial/lib/grep-worker.mjs) |
+| what each arm is told; dry-run plans | [`agent-trial/lib/arms.ts`](agent-trial/lib/arms.ts) |
+| credential gate | [`agent-trial/lib/config.ts`](agent-trial/lib/config.ts), [`agent-trial/gate.ts`](agent-trial/gate.ts) |
+| optional LLM judge | [`agent-trial/lib/judge.ts`](agent-trial/lib/judge.ts) |
+| runner (lab instance, checkout, indexing, both arms, results) | [`agent-trial/run.ts`](agent-trial/run.ts) |
+
+**Tasks.** T1 how an MCP `edit_note` call reaches disk; T2 the blast radius
+of renaming `regenProgressiveIndices` and changing the slug rule; T3
+onboarding to the search subsystem; T4 checking a design description of
+repository sync against the code; T5 how `[[repo:...]]` links become graph
+edges; T6 recent significant bug fixes; T7 MCP bearer-token scoping; T8
+where a 1 MB note-body cap must be enforced. All on PIIIX-org/chapters @
+`345f1db`, the commit the round-2 grades used. Two prompts differ from round
+2, each with an `adaptation` note in the file: T4 restates the claims of
+the vault note it checked (the note is not public and a fresh instance does
+not have it), and T6 asks for the fixes the code, tests and docs document
+(the arms get the tree, without git history or vault notes).
+
+**Two arms, one loop.** Both arms get the same system rules (file:line
+evidence, `[INFERENCE]` for anything unverified, no answers from memory) and
+the same caps, and run through the same loop:
+
+| | Elara arm | local arm |
+|---|---|---|
+| source | the lab instance's MCP server, the pinned tree indexed as a `local_path` repository | a checkout of the same tree on the runner (no `.git`) |
+| tools | `search`, `find_symbols`, `read_file`, `browse_repository`, `repository_status`, `graph`, `find_graph_path`, with the server's own schemas; each call is one MCP `tools/call` | `list_files` (glob), `grep` (JavaScript regex, `path:line:text`; `path` `.` or empty = the whole checkout), `read_file` (offset/limit, numbered lines; refuses a path that resolves outside the checkout, symlinks included) |
+| access | a token pinned to the repository, read access, allow-listed to those tools | the checkout only |
+
+Caps per task: 30 tool calls (the round-2 cap), 600,000 tokens in + out
+summed over turns (every turn resends the context, so this bounds the
+cost), 8,192 output tokens per turn, 100,000 characters per tool result,
+15 minutes. They hold before every model call, not between turns
+(`lib/loop.ts`):
+
+- **Tokens.** A tool turn is sent only when it and a final answer after it
+  both fit in what is left; otherwise the model gets one last turn without
+  tools, whose output limit is cut to what is left, and which drops the
+  newest tool results (replaced by a `[dropped: ...]` stub, counted in
+  `droppedResults`) if they would not fit. If even the conversation without
+  them does not fit, the episode ends with no answer. The running total is
+  what the provider reports per turn. Before sending, input is estimated as
+  characters / 4 × 1.5, then × the largest provider tokens-per-estimate
+  ratio seen in the episode plus 5 %. A turn whose provider reports no usage
+  (some OpenAI-compatible servers omit it) is counted at that estimate plus
+  characters / 4 of its reply, and the episode is marked `tokensEstimated`.
+  So the cap holds as far as the provider's usage reports, or else that
+  estimate, are right; hidden output a provider bills but does not return
+  (reasoning tokens) is only counted when it is reported. The unit tests
+  drive a model that spends its whole output allowance against
+  100,000-character tool results (1 and 10 calls per turn) and one that
+  reports no usage; the old checks let them reach 901,625, 1,501,568 and
+  975,342 tokens (#651 reviews).
+- **Time.** Tools stop at 15 minutes minus a reserve for the final answer
+  (a fifth of the cap, at most 3 minutes); every model request carries an
+  abort signal for the time left, retries included; a tool turn cut off at
+  the tool deadline is followed by the final turn (`abortedTurns`). Each
+  tool call gets the time left before the tool deadline, at most 2 minutes:
+  the MCP request is aborted then, and the local `grep` runs in a worker
+  thread that is terminated after at most 30 seconds, so a catastrophic
+  regular expression cannot hang the run.
+- **Judge.** The optional judge spends from the same 600,000 tokens (it is
+  not run when it would not fit) and is cut off after 3 minutes.
+- **Run.** An episode starts only while it and its judge call fit in the
+  run budget (`AGENT_TRIAL_RUN_BUDGET_MIN`, 300 in the workflow, under the
+  job's 350-minute timeout and GitHub's 360-minute limit); the rest are
+  listed as not run. Results are written after every episode; `complete` is
+  true only when every selected episode ran, so a cut-off run keeps what it
+  measured and says it is partial.
+
+Recorded per task and arm: tokens in and out (as the provider reports them),
+tool calls, turns, wall time, stop reason, the answer and a trace of every
+call (tool, arguments, size, time, the first 300 characters).
+
+**Grading.** No language model. Each task has 7 to 17 key facts from the
+round-2 ground truth, each with file:line evidence that the runner checks
+at the pinned commit before any model call (the range must exist and
+contain an anchor string). A fact counts as found when every one of its
+case-insensitive regexes matches the answer. False claims (claims the
+round-2 graders refuted, 9 over 5 tasks) are flagged per sentence or table
+row when the sentence matches every pattern and carries no negation or
+refutation word ("no", "not", "says", "wrong", "instead of", ...), so an
+answer that repeats a claim to reject it is not flagged. Unit tests check
+every fact against a sample phrasing, every false claim against a sample
+and a refutation, and that a task's prompt alone scores no fact. Checked
+once by hand on the 16 round-2 answers (not a CI run): each of the 9 facts
+the patterns did not find is absent from that answer, and the false-claim
+check flagged 5 of the graders' 11 false claims, with no flag on a true
+sentence. Regexes still miss paraphrases and most false claims, so `facts`
+is a floor and the false-claim count a lower bound. With
+`AGENT_TRIAL_JUDGE=1` and a credential, the same model also judges each
+fact; that verdict is recorded next to the deterministic one (`judge`),
+never instead of it.
+
+**Enabling it.** The owner provides no model API key for CI (#571), so
+without a credential the weekly run ends green at the gate with the notice
+`skipped: no agent credential (#571)` and builds nothing. The key belongs in
+the `agent-trial` environment (Settings → Environments; deployment
+branches: `dev` only), **not** in the repository secrets, which every
+branch's workflow could read. Only a run on `dev` binds that environment;
+the gate job gets only whether the key exists, and the trial job gets the
+key only in a live run. To enable:
+
+| setting | kind | value |
+|---|---|---|
+| `AGENT_TRIAL_API_KEY` | secret of the `agent-trial` environment | the provider key |
+| `AGENT_TRIAL_MODEL` | variable (repository or environment) | the model name |
+| `AGENT_TRIAL_PROVIDER` | variable, optional | `openai` (any OpenAI-compatible `chat/completions` API) or `anthropic` (messages API); default `anthropic` for `claude-*` models, else `openai` |
+| `AGENT_TRIAL_BASE_URL` | variable, optional | API base (OpenAI: up to `/v1`; Anthropic: the host) |
+| `AGENT_TRIAL_JUDGE` | variable, optional | `1` for the LLM judge |
+
+```sh
+gh secret set AGENT_TRIAL_API_KEY -R PIIIX-org/chapters --env agent-trial
+gh variable set AGENT_TRIAL_MODEL -R PIIIX-org/chapters --body <model>
+```
+
+The OpenAI adapter sends `max_completion_tokens`; a compatible server that
+only knows `max_tokens` needs a proxy.
+
+```sh
+gh workflow run agent-trial.yml -R PIIIX-org/chapters --ref dev                       # live (skips without a credential)
+gh workflow run agent-trial.yml -R PIIIX-org/chapters --ref dev -f model=scripted     # dry run
+gh workflow run agent-trial.yml -R PIIIX-org/chapters --ref dev -f tasks=T1,T7 -f arms=local
+gh run download <run-id> -R PIIIX-org/chapters -n agent-trial-results -D runs
+```
+
+A dry run (`model: scripted`) replaces the model with a fixed script (per
+arm: status or listing, a search, a read of the first fact's evidence file)
+to test the plumbing end to end: lab build, checkout, evidence check,
+indexing, the pinned token, MCP and local tool calls, grading, artifact. Its
+numbers are marked `dryRun` and are not agent numbers. Locally (Linux,
+Docker, bun): bring the lab up as in `docs/agents/lab.md`, then
+`AGENT_TRIAL_MODE=scripted bun benchmarks/agent-trial/run.ts`. Unit tests:
+`node --test 'benchmarks/agent-trial/lib/*.test.ts'` (CI `checks` job).
+
+**How to read a run.** `agent-trial-results/summary.md` (also the job
+summary) has one row per task and arm: facts found / total, the false
+claims flagged, tokens in and out, tool calls, wall time, stop reason; then
+totals per arm, and any episode not run. `results.json` adds the model, caps, harness hash, index
+outcome, which facts were found and missed, the sentence of each flagged
+false claim, the full answer and the trace. Compare arms on the same run
+only: models, prices and Elara change between runs. Read the answers before
+quoting a number: a missed fact can be a paraphrase the regex does not
+know, and the `judge` column (when present) shows where that happened.
