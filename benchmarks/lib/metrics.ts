@@ -170,6 +170,8 @@ export interface Aggregate {
   tokensToGold: number
   /** Median of the same per-question values. */
   tokensToGoldMedian: number
+  /** Mean tokens to the first gold range over the questions that reached it (misses left out; 0 when none). */
+  tokensToGoldReached: number
   /** Mean calls to the first gold range; a miss counts as `missCalls`. */
   callsToGold: number
   linePrecision: number
@@ -213,6 +215,7 @@ export function aggregate(outcomes: readonly QuestionOutcome[], missTokens: numb
     goldReached: outcomes.filter((o) => o.tokensToGold !== null).length,
     tokensToGold: Math.round(mean(toGold)),
     tokensToGoldMedian: Math.round(median(toGold)),
+    tokensToGoldReached: Math.round(mean(outcomes.flatMap((o) => (o.tokensToGold === null ? [] : [o.tokensToGold])))),
     callsToGold: round4(mean(outcomes.map((o) => o.callsToGold ?? missCalls))),
     linePrecision: round4(mean(outcomes.map((o) => o.precision))),
     lineRecall: round4(mean(outcomes.map((o) => o.recall))),
@@ -220,4 +223,13 @@ export function aggregate(outcomes: readonly QuestionOutcome[], missTokens: numb
     calls: round4(mean(outcomes.map((o) => o.calls))),
     msMedian: Math.round(median(outcomes.map((o) => o.ms))),
   }
+}
+
+/**
+ * Tokens to gold on the questions both policies reached, the like-for-like
+ * cost comparison (the miss price does not enter it).
+ */
+export function pairedTokensToGold(a: readonly QuestionOutcome[], b: readonly QuestionOutcome[]): { questions: number; elara: number; grep: number } {
+  const both = a.flatMap((o, i) => (o.tokensToGold !== null && b[i]?.tokensToGold != null ? [[o.tokensToGold, b[i]!.tokensToGold!] as const] : []))
+  return { questions: both.length, elara: Math.round(mean(both.map(([x]) => x))), grep: Math.round(mean(both.map(([, y]) => y))) }
 }

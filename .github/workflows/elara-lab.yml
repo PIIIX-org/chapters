@@ -21,11 +21,12 @@ name: Elara lab
 # the job. Not a required check yet (fix-list item 177). Docs:
 # docs/agents/lab.md.
 #
-# The bench job (#570) runs the premise benchmark (benchmarks/run.ts) on its
-# own lab instance, in parallel with the lab job, and gates it against
+# The bench jobs (#570) run the premise benchmark (benchmarks/run.ts) on three
+# lab instances of their own, in parallel with the lab job; bench-gate takes
+# the per-metric median of the three and gates it against
 # benchmarks/baseline.json (.github/scripts/bench-gate.mjs):
-#   chapters  PRs to dev that change search, extraction, MCP, schema, the
-#             image's dependencies or the benchmark itself (~15 min)
+#   chapters  PRs to dev that change search, extraction, MCP, schema, server
+#             start-up/config, the image's dependencies or the benchmark (~9 min)
 #   all       nightly on dev, every PR to prod, and by hand (-f bench=...)
 # Docs: benchmarks/README.md.
 on:
@@ -108,7 +109,7 @@ jobs:
                 # What decides what an agent gets back: search, extraction and
                 # ingestion, MCP responses, the schema, the image's dependencies,
                 # and the benchmark with its lab plumbing.
-                if grep -Eq '^(server/src/(search|mcp|repositories|db)/|server/drizzle/|server/package\.json$|pnpm-lock\.yaml$|Dockerfile$|docker-compose\.yml$|benchmarks/|lab/bootstrap\.ts$|lab/lib/|lab/docker-compose\.lab\.yml$|\.github/workflows/elara-lab\.yml$|\.github/actions/lab-instance/|\.github/scripts/bench-gate\.mjs$)' "$RUNNER_TEMP/changed.txt"; then
+                if grep -Eq '^(server/src/(search|mcp|repositories|db)/|server/src/(config|index|app)\.ts$|server/drizzle/|server/package\.json$|pnpm-lock\.yaml$|Dockerfile$|docker-compose\.yml$|benchmarks/|lab/bootstrap\.ts$|lab/lib/|lab/docker-compose\.lab\.yml$|\.github/workflows/elara-lab\.yml$|\.github/actions/lab-instance/|\.github/scripts/bench-gate\.mjs$)' "$RUNNER_TEMP/changed.txt"; then
                   bench=chapters
                 else
                   bench=none
@@ -206,11 +207,18 @@ jobs:
           path: lab-results/
           retention-days: 30
 
+  # Three instances of the same build: Elara's search has no tie-breaker for
+  # equal scores (#623), so ranks move between instances; the gate uses the
+  # median of the three.
   bench:
     needs: plan
     if: needs.plan.outputs.bench != 'none'
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: [1, 2, 3]
     permissions:
       contents: read
     env:
@@ -218,15 +226,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # HEAD^1 (the base, on a PR) holds the gate and baseline the run is judged by.
-          fetch-depth: 2
           persist-credentials: false
 
       - uses: oven-sh/setup-bun@v2
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
 
       - name: ripgrep (the baseline policy)
         run: |
@@ -238,9 +240,10 @@ jobs:
         with:
           mcp_rate_limit: ${{ inputs.mcp_rate_limit || '600' }}
 
-      - name: Premise benchmark (${{ needs.plan.outputs.bench }})
+      - name: Premise benchmark (${{ needs.plan.outputs.bench }}, instance ${{ matrix.instance }})
         env:
           BENCH_SUITES: ${{ needs.plan.outputs.bench }}
+          BENCH_INSTANCE: ${{ matrix.instance }}
         run: bun benchmarks/run.ts
 
       - name: Collect compose logs
@@ -254,14 +257,49 @@ jobs:
         if: always()
         run: bun lab/redact.ts bench-results
 
-      # On a PR, the base's copy of the gate decides, and the base's baseline
-      # is the reference for regressions: a PR can record an improvement in
-      # benchmarks/baseline.json but cannot lower the bar it is judged by.
-      - name: Gate against benchmarks/baseline.json
+      - name: Upload bench-results
         if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-results-${{ matrix.instance }}
+          path: bench-results/
+          retention-days: 90
+
+  bench-gate:
+    needs: [plan, bench]
+    if: always() && needs.plan.outputs.bench != 'none'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # HEAD^1 (the base, on a PR) holds the gate and baseline the run is judged by.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: bench-results-*
+          path: bench-runs
+
+      # On a PR: the base's copy of the gate decides, the base's baseline is
+      # the reference for regressions, and the PR's labels and body are read
+      # now (not from the event), so re-running this job after adding an
+      # override label picks it up. Overrides: bench-suite-change,
+      # bench-baseline-lowered (see the gate's header).
+      - name: Gate against benchmarks/baseline.json (median of 3 instances)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
           gate=.github/scripts/bench-gate.mjs
-          set -- --results bench-results/results.json --baseline benchmarks/baseline.json
+          set -- --results bench-runs/bench-results-1/results.json,bench-runs/bench-results-2/results.json,bench-runs/bench-results-3/results.json --baseline benchmarks/baseline.json --out bench-gate
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             if git cat-file -e "HEAD^1:$gate" 2>/dev/null; then
               git show "HEAD^1:$gate" > "$RUNNER_TEMP/bench-gate.mjs"
@@ -272,13 +310,15 @@ jobs:
               git show HEAD^1:benchmarks/baseline.json > "$RUNNER_TEMP/base-baseline.json"
               set -- "$@" --base-baseline "$RUNNER_TEMP/base-baseline.json"
             fi
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" > "$RUNNER_TEMP/pr.json"
+            set -- "$@" --pr "$RUNNER_TEMP/pr.json"
           fi
           node "$gate" "$@"
 
-      - name: Upload bench-results
+      - name: Upload gate verdict
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: bench-results
-          path: bench-results/
+          name: bench-gate
+          path: bench-gate/
           retention-days: 90

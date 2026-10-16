@@ -13,6 +13,7 @@
 // policies (benchmarks/lib/policies.ts) on every question. Writes
 // bench-results/results.json and summary.md; the verdict against
 // benchmarks/baseline.json is .github/scripts/bench-gate.mjs.
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,14 +21,28 @@ import { LabContext, loadEnv } from '../lab/lib/context.ts'
 import { exec } from '../lab/lib/docker.ts'
 import { connectLocalRepo, copyIntoLocalRepo, repoProgress, settleRepo } from '../lab/lib/fixlab.ts'
 import { assertLabBaseUrl } from './lib/guard.ts'
-import { aggregate, linePrecisionRecall, type Aggregate, type QuestionOutcome } from './lib/metrics.ts'
+import { aggregate, linePrecisionRecall, pairedTokensToGold, type Aggregate, type QuestionOutcome } from './lib/metrics.ts'
 import { CAPS, GREP, missCost, runElara, runGrep, type ElaraTools, type PolicyRun } from './lib/policies.ts'
 import { fingerprint, judgments, parseGold, validateSuite, type Question, type Suite } from './lib/questions.ts'
 import { fileReader, grepTools } from './lib/ripgrep.ts'
 
 const SEARCH_LIMIT = 10
+/**
+ * The harness source that turns tool output into numbers (this runner and
+ * benchmarks/lib, tests excluded), hashed with line endings normalised. Part
+ * of every suite's fingerprint, so a PR that changes how anything is
+ * measured cannot be judged by a baseline measured the old way.
+ */
+const HARNESS = createHash('sha256')
+  .update(
+    ['benchmarks/run.ts', ...readdirSync('benchmarks/lib').filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts')).sort().map((f) => `benchmarks/lib/${f}`)]
+      .map((f) => `${f}\n${readFileSync(f, 'utf8').replaceAll('\r\n', '\n')}`)
+      .join('\n'),
+  )
+  .digest('hex')
+  .slice(0, 16)
 /** Everything that changes what a number means; part of each suite's fingerprint. */
-const CONFIG = { version: 1, caps: CAPS, grep: GREP, searchLimit: SEARCH_LIMIT }
+const CONFIG = { version: 1, caps: CAPS, grep: GREP, searchLimit: SEARCH_LIMIT, harness: HARNESS }
 
 const outDir = 'bench-results'
 const workDir = process.env.BENCH_WORKDIR ?? join(process.env.RUNNER_TEMP ?? tmpdir(), 'elara-bench')
@@ -209,6 +224,7 @@ for (const p of prepared) {
     questions: s.questions.length,
     index,
     aggregate: agg,
+    paired: pairedTokensToGold(outcomes.elara, outcomes.grep),
     perQuestion,
   }
   md.push(
@@ -226,6 +242,7 @@ for (const p of prepared) {
 const out = {
   version: 1,
   commit: process.env.GITHUB_SHA ?? null,
+  instance: process.env.BENCH_INSTANCE ?? null,
   runId: process.env.GITHUB_RUN_ID ?? null,
   runUrl: process.env.GITHUB_RUN_ID
     ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`

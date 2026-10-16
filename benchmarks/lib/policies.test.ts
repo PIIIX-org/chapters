@@ -1,6 +1,19 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { CAPS, Episode, GREP, missCost, runElara, runGrep, visibleContentLines, type ElaraTools, type GrepTools } from './policies.ts'
+import { CAPS, Episode, GREP, missCost, readingOrder, runElara, runGrep, visibleContentLines, type ElaraTools, type GrepTools } from './policies.ts'
+
+test('readingOrder keeps the server order and breaks exact score ties by path', () => {
+  const hits = [
+    { path: 'b.ts', score: 0.03 },
+    { path: 'z.ts', score: 0.02 },
+    { path: 'a.ts', score: 0.02 },
+    { path: 'c.ts', score: 0.01 },
+    { path: 'y.ts' },
+    { path: 'x.ts' },
+  ]
+  // Hits without a score are not ties: they keep their place.
+  assert.deepEqual(readingOrder(hits).map((h) => h.path), ['b.ts', 'a.ts', 'z.ts', 'c.ts', 'y.ts', 'x.ts'])
+})
 
 /** A fake repository: path -> content. */
 const FILES: Record<string, string> = {

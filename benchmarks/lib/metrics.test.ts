@@ -12,6 +12,7 @@ import {
   linePrecisionRecall,
   median,
   ndcgAtK,
+  pairedTokensToGold,
   reciprocalRank,
   type QuestionOutcome,
 } from './metrics.ts'
@@ -70,10 +71,18 @@ test('NDCG: no relevant document returned scores 0', () => {
   assert.equal(ndcgAtK([], rel(['a', 1]), 10), 0)
 })
 
-test('NDCG: a relevant document returned many times still scores at most 1 (the TP-01 bug)', () => {
+test('NDCG: a relevant document returned many times still scores at most 1', () => {
   // Crediting every repeat gives DCG 1 + 1/log2(3) + 1/2 = 2.13 against an
-  // IDCG of 1: the kind of value (TP-01 reported 1.37) NDCG cannot take.
+  // IDCG of 1: a value NDCG cannot take.
   assert.equal(ndcgAtK(['a', 'a', 'a'], rel(['a', 1]), 10), 1)
+})
+
+test('NDCG: every judged relevance enters the ideal (the TP-01 bug)', () => {
+  // TP-01 hardcoded its ideal DCG for a single exact match while it credited
+  // relevance to every file in the same folder, so a list of three relevant
+  // files scored 2.13 against an ideal of 1 (it reported 1.37). Here the
+  // ideal is built from all three judgments: the same list scores exactly 1.
+  assert.equal(ndcgAtK(['a', 'b', 'c'], rel(['a', 1], ['b', 1], ['c', 1]), 10), 1)
 })
 
 test('NDCG: the ideal comes from the judgments, not from what was returned', () => {
@@ -183,6 +192,8 @@ test('aggregate: means over questions, misses cost the miss price', () => {
   assert.equal(a.goldReached, 2)
   assert.equal(a.tokensToGold, Math.round((100 + 300 + 1000) / 3))
   assert.equal(a.tokensToGoldMedian, 300)
+  assert.equal(a.tokensToGoldReached, 200) // (100 + 300) / 2, the miss left out
+  assert.deepEqual(pairedTokensToGold(outcomes, [outcomes[1]!, outcomes[0]!, outcomes[2]!]), { questions: 2, elara: 200, grep: 200 })
   assert.equal(a.callsToGold, Math.round(((2 + 2 + 15) / 3) * 10_000) / 10_000)
   assert.equal(a.linePrecision, 0.3333)
   assert.equal(a.lineRecall, 0.6667)

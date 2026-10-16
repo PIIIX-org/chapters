@@ -75,7 +75,7 @@
       "category": "where",
       "question": "how are keyword and vector search results fused",
       "keywords": [
-        "fusion|rrf"
+        "\\bfus(e|ed|es|ion)\\b"
       ],
       "relevant": [
         "server/src/search/search.ts"
@@ -206,7 +206,7 @@
       "category": "where",
       "question": "where is drift between notes and repository code detected",
       "keywords": [
-        "drift|stale"
+        "drift"
       ],
       "relevant": [
         "server/src/notes/staleness.ts"
