@@ -30,6 +30,7 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #403 MCP/REST edits are attributed to collab/null in the audit trail when the collab relay is… (P0)
   - #408 edit_note replaces the whole body and deletes text a user is typing at the same moment (P0)
   - #409 Backup restore crashes and loses attachments, trash, revisions and MFA secrets (P0)
+  - #410 A repository is never polled again after one successful webhook (P0)
   - #411 note_history returns full bodies of every revision with no limit (hang and OOM) (P0)
   - #621 Import applies shares from the archive manifest without asking (P1)
   - #617 Web client logs a 401 console error after logout (P2)
