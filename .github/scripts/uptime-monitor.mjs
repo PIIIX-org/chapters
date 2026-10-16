@@ -73,19 +73,26 @@ const plain = (v) => String(v).replace(/[^\w .:/()-]/g, '?').slice(0, 160)
 /**
  * A saved state (`readStates`, the state file) with the same format checks as
  * `/health` values: the issue body can be edited by hand, and these values go
- * into comments. Anything else is reset to its empty value.
+ * into comments. Anything else is reset to its empty value. The monitor's own
+ * timestamps (`firstFailureAt`, `heartbeatAt`) were written by an earlier run,
+ * so one later than `now` is reset too: a future `heartbeatAt` would otherwise
+ * stop the weekly check-in for good.
  */
-function checkedState(saved) {
+function checkedState(saved, now) {
   const s = saved && typeof saved === 'object' ? saved : {}
+  const past = (v) => {
+    const t = isoTime(v)
+    return t && Date.parse(t) <= Date.parse(now) ? t : null
+  }
   return {
     bootId: valid(s.bootId, UUID),
     startedAt: isoTime(s.startedAt),
     version: valid(s.version, SHA),
     lastShutdown: SHUTDOWN_KINDS.has(s.lastShutdown) ? s.lastShutdown : null,
     failures: Number.isInteger(s.failures) && s.failures >= 0 ? Math.min(s.failures, DOWN_AFTER) : 0,
-    firstFailureAt: isoTime(s.firstFailureAt),
+    firstFailureAt: past(s.firstFailureAt),
     down: s.down === true,
-    heartbeatAt: isoTime(s.heartbeatAt),
+    heartbeatAt: past(s.heartbeatAt),
   }
 }
 
@@ -120,7 +127,7 @@ export function observe({ at, status = null, body = null, error = null }) {
  * HEARTBEAT_MS.
  */
 export function step(prev, obs) {
-  const p = checkedState(prev)
+  const p = checkedState(prev, obs.at)
   const alerts = []
   let state
   if (!obs.ok) {
@@ -170,7 +177,12 @@ export function step(prev, obs) {
   return { state, alerts }
 }
 
-/** Labels the alerts add to the issue. */
+/**
+ * Labels the alerts add to the issue. An `unclean` restart is labelled also
+ * when it is `unseen` (about a process between two checks): that is what a
+ * crash loop looks like, and an `unclean` left by a data volume that went
+ * read-only under the app is an incident worth a look too.
+ */
 export function labelsFor(alerts) {
   return alerts.some((a) => a.kind === 'restart' && a.lastShutdown === 'unclean') ? [UNCLEAN_LABEL] : []
 }
@@ -179,7 +191,7 @@ export function labelsFor(alerts) {
 const SHUTDOWN_MEANING = {
   graceful: 'finished a clean SIGTERM/SIGINT shutdown (redeploy, `docker compose restart`, host reboot that stopped the container first)',
   unclean:
-    'never finished a clean shutdown: crash, OOM kill, SIGKILL, uncaught exception, a SIGTERM during boot, or a shutdown Docker cut short. Note edits inside the collab debounce may be lost; queued embedding and extraction work is re-queued by the boot catch-up',
+    'left no record of a clean shutdown: crash, OOM kill, SIGKILL, uncaught exception, a SIGTERM during boot, a shutdown Docker cut short, or a data directory that went read-only under it. Note edits inside the collab debounce may be lost; queued embedding and extraction work is re-queued by the boot catch-up',
   unknown:
     'left no trustworthy lifecycle marker (first boot on this data directory, a data directory the app could not write, or the previous image predates #583)',
 }
@@ -202,7 +214,11 @@ export function formatComment(alerts, url) {
         `\`/health\` failed ${DOWN_AFTER} checks in a row, the first at ${a.since}. Last error: ${code(a.error)}. One more comment follows when it answers again.`,
       )
     } else if (a.kind === 'recovered') {
-      parts.push(`### Recovered: ${url}`, '', `\`/health\` answers again at ${a.at}; down since ${a.since} (about ${minutes(a.since, a.at)}).`)
+      parts.push(
+        `### Recovered: ${url}`,
+        '',
+        `\`/health\` answers again at ${a.at}; down since ${a.since ? `${a.since} (about ${minutes(a.since, a.at)})` : 'an unknown time'}.`,
+      )
     } else if (a.kind === 'restart') {
       parts.push(
         `### Restart: ${url}`,

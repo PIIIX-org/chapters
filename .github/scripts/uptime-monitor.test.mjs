@@ -170,6 +170,18 @@ describe('step: restarts', () => {
     const down = step({ ...emptyState(), bootId: A, failures: 1, firstFailureAt: '`@owner`', heartbeatAt: t }, fail())
     assert.doesNotMatch(formatComment(down.alerts, URL), /@owner/)
   })
+  it('resets saved monitor timestamps later than now, so a hand-edited heartbeatAt cannot stop the check-in', () => {
+    const future = '2099-01-01T00:00:00.000Z'
+    const now = up(A)
+    const r = step({ ...emptyState(), bootId: A, heartbeatAt: future }, now)
+    assert.equal(r.state.heartbeatAt, now.at, 'the clock restarts from this check')
+    const week = step(r.state, { ...up(A), at: new Date(Date.parse(r.state.heartbeatAt) + HEARTBEAT_MS).toISOString() })
+    assert.deepEqual(week.alerts.map((a) => a.kind), ['heartbeat'])
+    const down = step({ ...emptyState(), bootId: A, failures: 1, firstFailureAt: future, heartbeatAt: future }, fail())
+    assert.equal(down.alerts[0].kind, 'down')
+    assert.notEqual(down.alerts[0].since, future)
+    assert.equal(down.alerts[0].since, down.alerts[0].at)
+  })
 })
 
 describe('step: down and recovery', () => {
@@ -253,6 +265,12 @@ describe('formatComment', () => {
     assert.match(formatComment(rs[2].alerts, URL), /### Down: .*\n\n`\/health` failed 2 checks in a row.*`ETIMEDOUT`/)
     assert.match(formatComment(rs[3].alerts, URL), /### Recovered: .*\n\n`\/health` answers again .*\(about 2 min\)/)
   })
+  it('says "an unknown time" when a recovery has no valid start of the outage, never "null"', () => {
+    const r = step({ ...emptyState(), bootId: A, failures: 2, down: true, firstFailureAt: 'not-a-time' }, up(A))
+    const md = formatComment(r.alerts, URL)
+    assert.match(md, /answers again at \S+; down since an unknown time\./)
+    assert.doesNotMatch(md, /null|about unknown/)
+  })
   it('shows a missing value as none, not "null"', () => {
     const [, r] = run([up(A, { version: undefined }), up(B, { version: undefined })])
     assert.match(formatComment(r.alerts, URL), /\| version \| _none_ \| _none_ \|/)
@@ -261,8 +279,14 @@ describe('formatComment', () => {
     const comment = (lastShutdown, previousBootId) => formatComment(run([up(A), up(B, { lastShutdown, previousBootId })])[1].alerts, URL)
     assert.match(comment('unknown', null), /lastShutdown: \*\*unknown\*\*: the previous process left no trustworthy lifecycle marker \(/)
     assert.match(comment('graceful', A), /lastShutdown: \*\*graceful\*\*: the previous process finished a clean SIGTERM\/SIGINT shutdown \(/)
-    assert.match(comment('unclean', A), /lastShutdown: \*\*unclean\*\*: the previous process never finished a clean shutdown: crash/)
+    assert.match(comment('unclean', A), /lastShutdown: \*\*unclean\*\*: the previous process left no record of a clean shutdown: crash.*or a data directory that went read-only under it/)
     assert.match(comment('graceful', C), new RegExp(`is about \`${C}\`, which finished a clean SIGTERM/SIGINT shutdown`))
+  })
+  it('labels an unclean restart also when it is about a process between two checks (crash loop, read-only volume)', () => {
+    const [, r] = run([up(A), up(B, { lastShutdown: 'unclean', previousBootId: C })])
+    assert.equal(r.alerts[0].unseen, true)
+    assert.deepEqual(labelsFor(r.alerts), [UNCLEAN_LABEL])
+    assert.match(formatComment(r.alerts, URL), new RegExp(`Label \`${UNCLEAN_LABEL}\` added`))
   })
 })
 

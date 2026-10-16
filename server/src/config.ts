@@ -2,6 +2,19 @@ import { fileURLToPath } from 'node:url'
 
 const env = process.env
 
+/**
+ * `ELARA_HEALTH_HIDE_VERSION` -> whether `/health` leaves out `version`
+ * (#638). Only `true` hides it. Any value other than unset, empty, `true` or
+ * `false` (`1`, `yes`, `TRUE`, ...) keeps it shown and warns once, when the
+ * config loads at boot, so a typo does not silently keep the commit public.
+ */
+export function readHealthHidesVersion(raw: string | undefined): boolean {
+  if (raw === undefined || raw === '' || raw === 'false') return false
+  if (raw === 'true') return true
+  console.warn(`ELARA_HEALTH_HIDE_VERSION=${JSON.stringify(raw)} is not 'true' or 'false': /health keeps reporting version`)
+  return false
+}
+
 export const config = {
   nodeEnv: env.NODE_ENV ?? 'development',
   isProd: env.NODE_ENV === 'production',
@@ -17,7 +30,7 @@ export const config = {
    * for an operator who does not want to publish the build commit. Default:
    * shown. The boot log line keeps it either way.
    */
-  healthHidesVersion: env.ELARA_HEALTH_HIDE_VERSION === 'true',
+  healthHidesVersion: readHealthHidesVersion(env.ELARA_HEALTH_HIDE_VERSION),
   port: Number(env.ELARA_PORT ?? env.CHAPTERS_PORT ?? env.PORT ?? 3000),
   /** Base public application URL for external callbacks (OIDC, emails, etc.). */
   appUrl: env.ELARA_APP_URL ?? env.CHAPTERS_APP_URL ?? env.APP_URL ?? env.BASE_URL ?? null,
