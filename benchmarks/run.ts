@@ -149,7 +149,19 @@ function outcome(q: Question, run: PolicyRun): { outcome: QuestionOutcome; row: 
 }
 
 const t0 = Date.now()
-const prepared: Array<{ s: Suite; root: string; lines: (path: string) => string[]; repoId: string }> = []
+interface Index {
+  outcome: 'complete' | 'stalled' | 'timeout'
+  ms: number
+  files: number
+  embedded: number
+  symbols: number
+  lastSyncError: string | null
+}
+const prepared: Array<{ s: Suite; root: string; lines: (path: string) => string[]; repoId: string; index: Index }> = []
+// One suite at a time: extraction is one global FIFO queue, so a repository
+// connected while another is indexing shows no progress until the first is
+// done, and would look stalled. The questions only start once every suite is
+// indexed, so indexing never competes with the measured calls.
 for (const s of suites) {
   ctx.log(`${s.suite}: fetching ${s.repo.url} @ ${s.repo.commit}`)
   const root = await checkout(s)
@@ -159,18 +171,11 @@ for (const s of suites) {
   await copyIntoLocalRepo(ctx, root, name)
   const repo = await connectLocalRepo(ctx, name)
   ctx.log(`${s.suite}: connected as local_path ${name} (${repo.id})`)
-  prepared.push({ s, root, lines, repoId: repo.id })
+  const settled = await settleRepo(ctx, repo.id, s.suite, { stallMs: 300_000, timeoutMs: 120 * 60_000, pollMs: 5_000 })
+  const last = await repoProgress(ctx, repo.id)
+  const index: Index = { outcome: settled.outcome, ms: settled.ms, files: last.files, embedded: last.embedded, symbols: last.symbols, lastSyncError: last.lastSyncError }
+  prepared.push({ s, root, lines, repoId: repo.id, index })
 }
-
-// Index every suite concurrently; the questions only start once all are settled,
-// so indexing work never competes with the measured calls.
-const settled = await Promise.all(
-  prepared.map(async (p) => {
-    const r = await settleRepo(ctx, p.repoId, p.s.suite, { stallMs: 300_000, timeoutMs: 150 * 60_000, pollMs: 5_000 })
-    const last = await repoProgress(ctx, p.repoId)
-    return { outcome: r.outcome, ms: r.ms, files: last.files, embedded: last.embedded, symbols: last.symbols, lastSyncError: last.lastSyncError }
-  }),
-)
 
 const miss = missCost(CAPS)
 const results: Record<string, unknown> = {}
@@ -180,9 +185,8 @@ const md: string[] = [
   `Commit ${process.env.GITHUB_SHA ?? '(local)'}; run ${process.env.GITHUB_RUN_ID ?? '-'}; suites ${suites.map((s) => s.suite).join(', ')}; ${new Date().toISOString()}`,
   '',
 ]
-for (const [i, p] of prepared.entries()) {
-  const { s } = p
-  const index = settled[i]!
+for (const p of prepared) {
+  const { s, index } = p
   const tools = { elara: elaraTools(p.repoId), grep: grepTools(p.root, p.lines) }
   const perQuestion = []
   const outcomes: { elara: QuestionOutcome[]; grep: QuestionOutcome[] } = { elara: [], grep: [] }

@@ -44,13 +44,21 @@ export function grepTools(root: string, lines: (path: string) => string[]): Grep
         .map((l) => ({ path: l.slice(0, l.lastIndexOf(':')).replaceAll('\\', '/'), count: Number(l.slice(l.lastIndexOf(':') + 1)) }))
       return { files, ms: r.ms }
     },
-    async matches(keywords, path) {
-      const r = await rg(root, ['--line-number', '--no-filename', ...patterns(keywords), '--', path])
-      const found = r.stdout
-        .split('\n')
-        .filter(Boolean)
-        .map((l) => ({ line: Number(l.slice(0, l.indexOf(':'))), text: l.slice(l.indexOf(':') + 1) }))
-      return { lines: found, ms: r.ms }
+    async matches(keywords, paths, perFile) {
+      const r = await rg(root, ['--line-number', '--with-filename', '--max-count', String(perFile), ...patterns(keywords), '--', ...paths])
+      // ripgrep prints each path as it was given; match the longest given path so `a.ts` never claims `a.ts.bak:` lines.
+      const byLength = [...paths].sort((a, b) => b.length - a.length)
+      const byPath = new Map<string, Array<{ line: number; text: string }>>()
+      for (const l of r.stdout.split('\n')) {
+        const path = byLength.find((p) => l.startsWith(`${p}:`) && /^\d+:/.test(l.slice(p.length + 1)))
+        if (!path) continue
+        const rest = l.slice(path.length + 1)
+        const colon = rest.indexOf(':')
+        const list = byPath.get(path) ?? []
+        list.push({ line: Number(rest.slice(0, colon)), text: rest.slice(colon + 1) })
+        byPath.set(path, list)
+      }
+      return { byPath, ms: r.ms }
     },
     async read(path, start, end) {
       const t0 = performance.now()

@@ -124,10 +124,12 @@ function fakeGrep(calls: string[]): GrepTools {
         ms: 2,
       }
     },
-    async matches(_patterns, path) {
-      calls.push(`matches ${path}`)
-      const lines = path === 'src/b.ts' ? [5, 12, 70] : [2]
-      return { lines: lines.map((line) => ({ line, text: 'x'.repeat(300) })), ms: 1 }
+    async matches(_patterns, paths, perFile) {
+      calls.push(`matches ${paths.join(',')} -m ${perFile}`)
+      const byPath = new Map(
+        paths.map((path) => [path, (path === 'src/b.ts' ? [5, 12, 70] : [2]).map((line) => ({ line, text: 'x'.repeat(300) }))]),
+      )
+      return { byPath, ms: 1 }
     },
     async read(path, start, end) {
       calls.push(`read ${path}:${start}-${end}`)
@@ -137,24 +139,57 @@ function fakeGrep(calls: string[]): GrepTools {
   }
 }
 
-test('grep: ranks files by matching lines (ties by path) and reads windows around matches', async () => {
+test('grep: ranks files by matching lines (ties by path), previews matches, reads windows around them', async () => {
   const calls: string[] = []
   const run = await runGrep(['target'], [{ path: 'src/b.ts', start: 40, end: 40 }], fakeGrep(calls))
   assert.deepEqual(run.ranking, ['src/b.ts', 'src/a.ts', 'src/c.ts'])
-  // Match at 5 reads 1-35; 12 is inside that window; 70 reads 60-100 (clamped to 60 lines by the file).
-  assert.deepEqual(calls, ['count target', 'matches src/b.ts', 'read src/b.ts:1-35', 'read src/b.ts:60-100', 'matches src/a.ts', 'read src/a.ts:1-32', 'matches src/c.ts', 'read src/c.ts:1-32'])
+  // Match at 5 reads 1-35; 12 is inside that window; 70 reads 60-100 (the file has 60 lines);
+  // two reads per file, then the next file.
+  assert.deepEqual(calls, [
+    'count target',
+    `matches src/b.ts,src/a.ts,src/c.ts -m ${GREP.matchesPerFile}`,
+    'read src/b.ts:1-35',
+    'read src/b.ts:60-100',
+    'read src/a.ts:1-32',
+    'read src/c.ts:1-32',
+  ])
   assert.equal(run.episode.tokensToGold, null)
-  // rg -n lines are cut at GREP.lineChars characters.
-  const shown = [5, 12, 70].map((l) => `${l}:${'x'.repeat(GREP.lineChars)} [...]`).join('\n')
+  // The preview shows path:line:text, lines cut at GREP.lineChars characters, in ranking order.
+  const cut = `${'x'.repeat(GREP.lineChars)} [...]`
+  const shown = ['src/b.ts:5', 'src/b.ts:12', 'src/b.ts:70', 'src/a.ts:2', 'src/c.ts:2'].map((p) => `${p}:${cut}`).join('\n')
   assert.equal(run.episode.trace[1]!.tokens, Math.ceil(shown.length / 4))
 })
 
 test('grep: stops as soon as a ranged read covers the gold', async () => {
   const calls: string[] = []
   const run = await runGrep(['target'], [{ path: 'src/b.ts', start: 30, end: 31 }], fakeGrep(calls))
-  assert.deepEqual(calls, ['count target', 'matches src/b.ts', 'read src/b.ts:1-35'])
+  assert.deepEqual(calls, ['count target', `matches src/b.ts,src/a.ts,src/c.ts -m ${GREP.matchesPerFile}`, 'read src/b.ts:1-35'])
   assert.equal(run.episode.callsToGold, 3)
   assert.equal(run.episode.tokensToGold, run.episode.tokens)
+})
+
+test('grep: a gold line shown by the rg -n preview needs no read', async () => {
+  const calls: string[] = []
+  const run = await runGrep(['target'], [{ path: 'src/a.ts', start: 2, end: 2 }], fakeGrep(calls))
+  assert.equal(calls.length, 2)
+  assert.equal(run.episode.callsToGold, 2)
+})
+
+test('grep: no match ends after the count call', async () => {
+  const tools: GrepTools = {
+    async count() {
+      return { files: [], ms: 1 }
+    },
+    async matches() {
+      throw new Error('must not run')
+    },
+    async read() {
+      throw new Error('must not run')
+    },
+  }
+  const run = await runGrep(['nothing'], [{ path: 'a', start: 1, end: 1 }], tools)
+  assert.deepEqual(run.ranking, [])
+  assert.equal(run.episode.trace.length, 1)
 })
 
 test('episode: stops at the call cap and the token budget', () => {

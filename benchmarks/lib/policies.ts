@@ -4,8 +4,8 @@
 // their context (an oracle stop, the same for both), or when a cap is hit.
 //
 //   elara  search(question) -> read_file of each hit, best first
-//   grep   rg --count (files ranked by matching lines) -> per file:
-//          rg -n in the file, then ranged reads around the matches
+//   grep   rg --count (files ranked by matching lines) -> rg -n over the
+//          top files (first matches of each) -> ranged reads around them
 //
 // Tools are injected, so the policies are unit-tested with fakes; the
 // runner (benchmarks/run.ts) passes MCP calls and real ripgrep.
@@ -29,8 +29,12 @@ export function missCost(caps: Caps): { tokens: number; calls: number } {
   return { tokens: caps.tokenBudget + Math.ceil(caps.perCallChars / 4), calls: caps.maxCalls }
 }
 
-/** Grep policy: lines shown per `rg` call, characters per shown line, ranged-read window. */
-export const GREP = { listLines: 50, matchLines: 50, lineChars: 200, readBefore: 10, readAfter: 30, readsPerFile: 3 }
+/**
+ * Grep policy: files listed by `rg --count`; files and matching lines per
+ * file shown by the `rg -n` call; characters per shown line; ranged-read
+ * window around a match; ranged reads per file.
+ */
+export const GREP = { listLines: 50, previewFiles: 10, matchesPerFile: 5, lineChars: 200, readBefore: 10, readAfter: 30, readsPerFile: 2 }
 
 export interface CallTrace {
   tool: string
@@ -186,8 +190,12 @@ export async function runElara(question: string, gold: readonly LineRange[], too
 export interface GrepTools {
   /** Files with matching lines and their counts (`rg --count`), any order. */
   count(patterns: readonly string[]): Promise<{ files: Array<{ path: string; count: number }>; ms: number }>
-  /** Matching lines of one file (`rg -n`), ascending: number and text. */
-  matches(patterns: readonly string[], path: string): Promise<{ lines: Array<{ line: number; text: string }>; ms: number }>
+  /** The first `perFile` matching lines of each file (`rg -n -m <perFile> ... -- <paths>`), ascending per file. */
+  matches(
+    patterns: readonly string[],
+    paths: readonly string[],
+    perFile: number,
+  ): Promise<{ byPath: Map<string, Array<{ line: number; text: string }>>; ms: number }>
   /** Lines start..end of a file (clamped to its length), like an agent's ranged read. */
   read(path: string, start: number, end: number): Promise<{ lines: string[]; start: number; ms: number }>
 }
@@ -200,33 +208,34 @@ export async function runGrep(keywords: readonly string[], gold: readonly LineRa
   const counted = await tools.count(keywords)
   const listed = [...counted.files].sort((a, b) => b.count - a.count || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
   const shown = listed.slice(0, GREP.listLines)
-  const listText = shown.map((f) => `${f.path}:${f.count}`).join('\n')
-  const list = ep.clip(listText)
+  const list = ep.clip(shown.map((f) => `${f.path}:${f.count}`).join('\n'))
   ep.record('rg --count', flags, list.visible, list.truncated, counted.ms, true, [])
   const ranking = shown.map((f) => f.path)
+  if (ranking.length === 0 || ep.done) return { ranking, episode: ep }
 
-  for (const path of ranking.slice(0, caps.maxFiles)) {
-    if (ep.done) break
-    // 2. rg -n -i <patterns> <file> | head -50: where in the file.
-    const found = await tools.matches(keywords, path)
-    const shownMatches = found.lines.slice(0, GREP.matchLines)
-    const matchText = shownMatches
-      .map((m) => `${m.line}:${m.text.length > GREP.lineChars ? `${m.text.slice(0, GREP.lineChars)} [...]` : m.text}`)
-      .join('\n')
-    const cut = ep.clip(matchText)
-    ep.record('rg -n', `${flags} ${path}`, cut.visible, cut.truncated, found.ms, true, shownMatches.map((m) => ({ path, start: m.line, end: m.line })))
+  // 2. rg -n -i -m 5 <patterns> -- <top files>: where in each file, shown in ranking order.
+  const top = ranking.slice(0, Math.min(GREP.previewFiles, caps.maxFiles))
+  const found = await tools.matches(keywords, top, GREP.matchesPerFile)
+  const preview = top.flatMap((path) => (found.byPath.get(path) ?? []).slice(0, GREP.matchesPerFile).map((m) => ({ path, ...m })))
+  const previewText = preview
+    .map((m) => `${m.path}:${m.line}:${m.text.length > GREP.lineChars ? `${m.text.slice(0, GREP.lineChars)} [...]` : m.text}`)
+    .join('\n')
+  const cut = ep.clip(previewText)
+  ep.record('rg -n', `-m ${GREP.matchesPerFile} ${flags} -- ${top.length} files`, cut.visible, cut.truncated, found.ms, true, preview.map((m) => ({ path: m.path, start: m.line, end: m.line })))
 
-    // 3. Ranged reads around the first matches that no earlier read showed.
+  // 3. Ranged reads around those matches, best file first, skipping matches an earlier read showed.
+  for (const path of top) {
     const windows: LineRange[] = []
-    for (const m of shownMatches) {
+    for (const m of preview) {
       if (ep.done || windows.length >= GREP.readsPerFile) break
-      if (windows.some((w) => m.line >= w.start && m.line <= w.end)) continue
+      if (m.path !== path || windows.some((w) => m.line >= w.start && m.line <= w.end)) continue
       const r = await tools.read(path, Math.max(1, m.line - GREP.readBefore), m.line + GREP.readAfter)
       const window = { path, start: r.start, end: r.start + r.lines.length - 1 }
       const rc = ep.clip(r.lines.map((l, i) => `${r.start + i}\t${l}`).join('\n'))
       ep.record('read', `${path}:${window.start}-${window.end}`, rc.visible, rc.truncated, r.ms, true, r.lines.length > 0 ? [window] : [])
       windows.push(window)
     }
+    if (ep.done) break
   }
   return { ranking, episode: ep }
 }
