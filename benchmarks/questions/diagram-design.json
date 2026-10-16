@@ -1,0 +1,349 @@
+{
+  "suite": "diagram-design",
+  "description": "A Claude Code skill (Markdown, HTML, Python scripts): where/how/name/why/install questions.",
+  "repo": {
+    "url": "https://github.com/cathrynlavery/diagram-design",
+    "commit": "11b08eade8049c441ed3df1895e3b527c26c0fbe"
+  },
+  "source": "Elara AI-performance study round 2, /elara-map trial (vault note audit/2026-10-14-ai-performance-study-round-2): 20 held-out questions, evidence file:line checked against the pinned commit.",
+  "questions": [
+    {
+      "id": "Q01",
+      "category": "where",
+      "question": "Where are the shipped default color tokens (paper, ink, accent) of the diagram-design skin defined, and what are their light-mode hex values?",
+      "keywords": [
+        "\\bpaper\\b",
+        "\\bink\\b",
+        "\\baccent\\b"
+      ],
+      "relevant": [
+        "skills/diagram-design/references/style-guide.md",
+        "skills/diagram-design/SKILL.md"
+      ],
+      "gold": [
+        "skills/diagram-design/references/style-guide.md:19",
+        "skills/diagram-design/references/style-guide.md:21",
+        "skills/diagram-design/references/style-guide.md:27",
+        "skills/diagram-design/SKILL.md:25"
+      ]
+    },
+    {
+      "id": "Q02",
+      "category": "where",
+      "question": "Where does the draw.io importer pull an embedded diagram out of a draw.io-exported PNG file?",
+      "keywords": [
+        "png"
+      ],
+      "relevant": [
+        "skills/diagram-design/scripts/drawio_extract.py"
+      ],
+      "gold": [
+        "skills/diagram-design/scripts/drawio_extract.py:116-152",
+        "skills/diagram-design/scripts/drawio_extract.py:174-178",
+        "skills/diagram-design/scripts/drawio_extract.py:42"
+      ]
+    },
+    {
+      "id": "Q03",
+      "category": "where",
+      "question": "Where is the SKILL.md size cap enforced, and what is the limit?",
+      "keywords": [
+        "size.?cap",
+        "SKILL\\.md"
+      ],
+      "relevant": [
+        "scripts/verify-semantic-motion.py",
+        "docs/adr/0004-skill-md-byte-cap-and-trigger-rich-description.md"
+      ],
+      "gold": [
+        "scripts/verify-semantic-motion.py:30",
+        "scripts/verify-semantic-motion.py:306-316",
+        "docs/adr/0004-skill-md-byte-cap-and-trigger-rich-description.md:14"
+      ]
+    },
+    {
+      "id": "Q04",
+      "category": "where",
+      "question": "Where is the list of Mermaid diagram kinds that the Mermaid importer refuses defined?",
+      "keywords": [
+        "refuse",
+        "mermaid.*kinds?"
+      ],
+      "relevant": [
+        "skills/diagram-design/scripts/mermaid_extract.py"
+      ],
+      "gold": [
+        "skills/diagram-design/scripts/mermaid_extract.py:40-53"
+      ]
+    },
+    {
+      "id": "Q05",
+      "category": "where",
+      "question": "Where are the WCAG contrast thresholds that CI enforces on the default skin defined, and what are they?",
+      "keywords": [
+        "wcag",
+        "contrast"
+      ],
+      "relevant": [
+        "scripts/verify-contrast.py"
+      ],
+      "gold": [
+        "scripts/verify-contrast.py:11-14",
+        "scripts/verify-contrast.py:39-47"
+      ]
+    },
+    {
+      "id": "Q06",
+      "category": "where",
+      "question": "Where are saved client profiles stored on disk, and where does the per-project marker that selects one live?",
+      "keywords": [
+        "client.?profile",
+        "marker"
+      ],
+      "relevant": [
+        "skills/diagram-design/references/profiles.md",
+        "README.md"
+      ],
+      "gold": [
+        "skills/diagram-design/references/profiles.md:9-15",
+        "skills/diagram-design/references/profiles.md:71-74",
+        "README.md:377"
+      ]
+    },
+    {
+      "id": "Q07",
+      "category": "how",
+      "question": "How does the draw.io extractor protect itself against oversized inputs and decompression bombs?",
+      "keywords": [
+        "decompress",
+        "oversized"
+      ],
+      "relevant": [
+        "skills/diagram-design/scripts/drawio_extract.py"
+      ],
+      "gold": [
+        "skills/diagram-design/scripts/drawio_extract.py:43-46",
+        "skills/diagram-design/scripts/drawio_extract.py:65-69",
+        "skills/diagram-design/scripts/drawio_extract.py:72-93",
+        "skills/diagram-design/scripts/drawio_extract.py:96-113",
+        "skills/diagram-design/scripts/drawio_extract.py:165-172"
+      ]
+    },
+    {
+      "id": "Q08",
+      "category": "how",
+      "question": "How does export_svg.py turn a diagram HTML file into a standalone SVG? List the pipeline steps in order.",
+      "keywords": [
+        "export_svg"
+      ],
+      "relevant": [
+        "skills/diagram-design/scripts/export_svg.py"
+      ],
+      "gold": [
+        "skills/diagram-design/scripts/export_svg.py:1065-1093",
+        "skills/diagram-design/scripts/export_svg.py:1096-1140"
+      ]
+    },
+    {
+      "id": "Q09",
+      "category": "how",
+      "question": "How does the packaged self-check validate a motion (animated) diagram? Name the main rules it enforces.",
+      "keywords": [
+        "self.?check"
+      ],
+      "relevant": [
+        "skills/diagram-design/scripts/self_check.py"
+      ],
+      "gold": [
+        "skills/diagram-design/scripts/self_check.py:28-30",
+        "skills/diagram-design/scripts/self_check.py:570-589",
+        "skills/diagram-design/scripts/self_check.py:592-673"
+      ]
+    },
+    {
+      "id": "Q10",
+      "category": "how",
+      "question": "How does marker-first profile resolution work when a project contains a .diagram-design file?",
+      "keywords": [
+        "marker.?first",
+        "\\.diagram-design"
+      ],
+      "relevant": [
+        "skills/diagram-design/references/profiles.md",
+        "skills/diagram-design/SKILL.md",
+        "docs/adr/0006-client-profiles-and-marker-first-resolution.md"
+      ],
+      "gold": [
+        "skills/diagram-design/references/profiles.md:69-86",
+        "skills/diagram-design/SKILL.md:23"
+      ]
+    },
+    {
+      "id": "Q11",
+      "category": "how",
+      "question": "How is the CI validation matrix organised (operating systems, Python versions), and which checks run on only one leg?",
+      "keywords": [
+        "matrix"
+      ],
+      "relevant": [
+        ".github/workflows/ci.yml"
+      ],
+      "gold": [
+        ".github/workflows/ci.yml:18-19",
+        ".github/workflows/ci.yml:80-81",
+        ".github/workflows/ci.yml:100-107",
+        ".github/workflows/ci.yml:269",
+        ".github/workflows/ci.yml:488-526"
+      ]
+    },
+    {
+      "id": "Q12",
+      "category": "name",
+      "question": "What is the exact name of the function in export_svg.py that derives the stable ID prefix from the source file name, and what root id does the export give the SVG?",
+      "keywords": [
+        "id.?prefix"
+      ],
+      "relevant": [
+        "skills/diagram-design/scripts/export_svg.py"
+      ],
+      "gold": [
+        "skills/diagram-design/scripts/export_svg.py:123-131",
+        "skills/diagram-design/scripts/export_svg.py:1067-1068",
+        "skills/diagram-design/scripts/export_svg.py:1083"
+      ]
+    },
+    {
+      "id": "Q13",
+      "category": "name",
+      "question": "What is the exact name and value of the constant in mermaid_extract.py that lists the supported Mermaid diagram kinds?",
+      "keywords": [
+        "supported"
+      ],
+      "relevant": [
+        "skills/diagram-design/scripts/mermaid_extract.py"
+      ],
+      "gold": [
+        "skills/diagram-design/scripts/mermaid_extract.py:39"
+      ]
+    },
+    {
+      "id": "Q14",
+      "category": "name",
+      "question": "Which semantic pattern routes to the State Machine visual type, and what is the name of the constant in the repository scripts that lists all semantic pattern names?",
+      "keywords": [
+        "state.?machine"
+      ],
+      "relevant": [
+        "skills/diagram-design/SKILL.md",
+        "scripts/verify-semantic-motion.py",
+        "docs/adr/0002-semantic-patterns-do-not-expand-the-taxonomy.md"
+      ],
+      "gold": [
+        "skills/diagram-design/SKILL.md:79",
+        "scripts/verify-semantic-motion.py:33-43",
+        "docs/adr/0002-semantic-patterns-do-not-expand-the-taxonomy.md:31"
+      ]
+    },
+    {
+      "id": "Q15",
+      "category": "name",
+      "question": "What are the exact motion mode names and controller action names that self_check.py accepts (constant names and values)?",
+      "keywords": [
+        "motion.?mode",
+        "controller.?action"
+      ],
+      "relevant": [
+        "skills/diagram-design/scripts/self_check.py"
+      ],
+      "gold": [
+        "skills/diagram-design/scripts/self_check.py:29-30"
+      ]
+    },
+    {
+      "id": "Q16",
+      "category": "why",
+      "question": "Why is 'reveal' allowed to autoplay on load when autoplay is otherwise listed as an anti-pattern?",
+      "keywords": [
+        "autoplay"
+      ],
+      "relevant": [
+        "docs/adr/0003-reveal-is-the-only-sanctioned-autoplay.md"
+      ],
+      "gold": [
+        "docs/adr/0003-reveal-is-the-only-sanctioned-autoplay.md:7",
+        "docs/adr/0003-reveal-is-the-only-sanctioned-autoplay.md:11",
+        "docs/adr/0003-reveal-is-the-only-sanctioned-autoplay.md:15-16"
+      ]
+    },
+    {
+      "id": "Q17",
+      "category": "why",
+      "question": "Why does the project keep a long, type-name-rich frontmatter description in SKILL.md even though the file has a byte cap?",
+      "keywords": [
+        "byte.?cap"
+      ],
+      "relevant": [
+        "docs/adr/0004-skill-md-byte-cap-and-trigger-rich-description.md"
+      ],
+      "gold": [
+        "docs/adr/0004-skill-md-byte-cap-and-trigger-rich-description.md:7",
+        "docs/adr/0004-skill-md-byte-cap-and-trigger-rich-description.md:11-14",
+        "docs/adr/0004-skill-md-byte-cap-and-trigger-rich-description.md:23-26"
+      ]
+    },
+    {
+      "id": "Q18",
+      "category": "why",
+      "question": "Why must pull requests not bump the plugin manifest versions, and what bumps them instead?",
+      "keywords": [
+        "bump"
+      ],
+      "relevant": [
+        "docs/adr/0009-versions-are-bumped-on-main-after-merge.md",
+        ".github/workflows/auto-bump.yml",
+        "scripts/bump-plugin-version.py"
+      ],
+      "gold": [
+        "docs/adr/0009-versions-are-bumped-on-main-after-merge.md:7",
+        "docs/adr/0009-versions-are-bumped-on-main-after-merge.md:11",
+        "docs/adr/0009-versions-are-bumped-on-main-after-merge.md:13"
+      ]
+    },
+    {
+      "id": "Q19",
+      "category": "install",
+      "question": "How do I install diagram-design in Claude Code so that I get updates and the slash commands?",
+      "keywords": [
+        "install"
+      ],
+      "relevant": [
+        "README.md"
+      ],
+      "gold": [
+        "README.md:57-62",
+        "README.md:69",
+        "README.md:54",
+        "README.md:84"
+      ]
+    },
+    {
+      "id": "Q20",
+      "category": "install",
+      "question": "How do I export a generated diagram to SVG and PNG, and what is the one-time setup needed for PNG?",
+      "keywords": [
+        "svg.*png|png.*svg"
+      ],
+      "relevant": [
+        "README.md",
+        "skills/diagram-design/scripts/export_svg.py",
+        "skills/diagram-design/SKILL.md"
+      ],
+      "gold": [
+        "README.md:471-478",
+        "README.md:487-490",
+        "skills/diagram-design/scripts/export_svg.py:1096-1111",
+        "skills/diagram-design/SKILL.md:392"
+      ]
+    }
+  ]
+}

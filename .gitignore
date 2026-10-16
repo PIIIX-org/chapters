@@ -13,3 +13,6 @@ docs/chapters-audit-media
 # Lab runs (lab/run.ts, lab/bootstrap.ts; lab-env.json holds tokens)
 lab-results/
 lab-env.json
+
+# Premise benchmark runs (benchmarks/run.ts)
+bench-results/

@@ -1,0 +1,452 @@
+{
+  "suite": "rea",
+  "description": "A reverse-engineering MCP server and CLI in TypeScript (Hopper, Ghidra, IDA bridges): where/flow/identifier/architecture/config questions. Frozen snapshot of upstream ca7450b.",
+  "repo": {
+    "url": "https://github.com/PIIIX-org/rea-snapshot",
+    "commit": "c52777281336b913fd9c7b11d01b180c3993b2f7"
+  },
+  "source": "Elara AI-performance study round 2, /elara-map trial (vault note audit/2026-10-14-ai-performance-study-round-2): 20 held-out questions, evidence file:line checked against the pinned commit.",
+  "questions": [
+    {
+      "id": "Q01",
+      "category": "where",
+      "question": "Which file decides whether the `rea` executable starts the MCP stdio server or the one-shot CLI, and exactly which command-line arguments select MCP mode?",
+      "keywords": [
+        "stdio"
+      ],
+      "relevant": [
+        "package.json",
+        "scripts/rea.mjs"
+      ],
+      "gold": [
+        "package.json:40-43",
+        "scripts/rea.mjs:14-16",
+        "scripts/rea.mjs:39-47",
+        "scripts/rea.mjs:49-56",
+        "scripts/rea.mjs:57-65",
+        "scripts/rea.mjs:66-87"
+      ]
+    },
+    {
+      "id": "Q02",
+      "category": "where",
+      "question": "Where is the REA_MCP_MAX_RESPONSE_BYTES setting validated, what is the smallest value it accepts, and what budget is used when it is unset?",
+      "keywords": [
+        "REA_MCP_MAX_RESPONSE_BYTES"
+      ],
+      "relevant": [
+        "src/config/mcpResponseBudget.ts",
+        "src/config/environment.ts",
+        "src/config/parseConfig.ts",
+        "src/server/toolResult.ts"
+      ],
+      "gold": [
+        "src/config/mcpResponseBudget.ts:9",
+        "src/config/mcpResponseBudget.ts:12-16",
+        "src/config/mcpResponseBudget.ts:18",
+        "src/config/environment.ts:25",
+        "src/config/parseConfig.ts:44-46",
+        "src/server/toolResult.ts:23-26",
+        "src/server/toolResult.ts:50"
+      ]
+    },
+    {
+      "id": "Q03",
+      "category": "where",
+      "question": "Which file and function build the Ghidra `analyzeHeadless` command line, and which flags make the Ghidra import non-persistent / read-only?",
+      "keywords": [
+        "analyzeHeadless"
+      ],
+      "relevant": [
+        "src/ghidra/GhidraLauncher.ts",
+        "AGENTS.md"
+      ],
+      "gold": [
+        "src/ghidra/GhidraLauncher.ts:555-557",
+        "src/ghidra/GhidraLauncher.ts:606-610",
+        "src/ghidra/GhidraLauncher.ts:660-667",
+        "src/ghidra/GhidraLauncher.ts:700-718",
+        "src/ghidra/GhidraLauncher.ts:721-732",
+        "AGENTS.md:9"
+      ]
+    },
+    {
+      "id": "Q04",
+      "category": "where",
+      "question": "Where is the Electron fuse sentinel string defined, which module scans a binary for it, and what size limits does that scanner enforce?",
+      "keywords": [
+        "sentinel"
+      ],
+      "relevant": [
+        "src/domain/electron/electronFuses.ts",
+        "src/electron/ElectronFuseReader.ts"
+      ],
+      "gold": [
+        "src/domain/electron/electronFuses.ts:7",
+        "src/electron/ElectronFuseReader.ts:25-28",
+        "src/electron/ElectronFuseReader.ts:31-32",
+        "src/electron/ElectronFuseReader.ts:74-77",
+        "src/electron/ElectronFuseReader.ts:351-358"
+      ]
+    },
+    {
+      "id": "Q05",
+      "category": "where",
+      "question": "Which class redacts caller-declared secrets from browser scenario captures, where do the secret values come from, and what marker replaces a secret?",
+      "keywords": [
+        "redact"
+      ],
+      "relevant": [
+        "src/browser/BrowserScenarioSecrets.ts"
+      ],
+      "gold": [
+        "src/browser/BrowserScenarioSecrets.ts:14",
+        "src/browser/BrowserScenarioSecrets.ts:16-20",
+        "src/browser/BrowserScenarioSecrets.ts:158-162",
+        "src/browser/BrowserScenarioSecrets.ts:227",
+        "src/browser/BrowserScenarioSecrets.ts:256-271",
+        "src/browser/BrowserScenarioSecrets.ts:313-369"
+      ]
+    },
+    {
+      "id": "Q06",
+      "category": "where",
+      "question": "Where are the MCP tools registered on the server (the function that wires every tool family), and where are the CLI commands registered?",
+      "keywords": [
+        "register"
+      ],
+      "relevant": [
+        "src/server/createServer.ts",
+        "src/server/registerSessionTools.ts",
+        "src/cli.ts"
+      ],
+      "gold": [
+        "src/server/createServer.ts:285-288",
+        "src/server/createServer.ts:439-572",
+        "src/server/createServer.ts:618",
+        "src/server/createServer.ts:805",
+        "src/server/createServer.ts:860",
+        "src/server/registerSessionTools.ts:287",
+        "src/cli.ts:14",
+        "src/cli.ts:70",
+        "src/cli.ts:88",
+        "src/cli.ts:99-136"
+      ]
+    },
+    {
+      "id": "Q07",
+      "category": "flow",
+      "question": "Walk through MCP server startup end to end: from `rea mcp` on the command line to a running stdio server with shutdown handlers installed. Name each step and the function that performs it.",
+      "keywords": [
+        "shutdown"
+      ],
+      "relevant": [
+        "scripts/rea.mjs",
+        "src/main.ts",
+        "src/main/startup.ts",
+        "src/main/transport.ts",
+        "src/main/shutdown.ts"
+      ],
+      "gold": [
+        "scripts/rea.mjs:54-56",
+        "src/main.ts:33-36",
+        "src/main.ts:54-62",
+        "src/main.ts:63-69",
+        "src/main.ts:70-82",
+        "src/main.ts:83-90",
+        "src/main.ts:104-108",
+        "src/main/startup.ts:14-16",
+        "src/main/transport.ts:83-109",
+        "src/main/shutdown.ts:29-45",
+        "src/main/shutdown.ts:90"
+      ]
+    },
+    {
+      "id": "Q08",
+      "category": "flow",
+      "question": "How does REA start and talk to Hopper end to end? Describe how the bridge is launched, how the in-Hopper Python side listens, how requests are authenticated, and how requests are serialized on the TypeScript side.",
+      "keywords": [
+        "hopper"
+      ],
+      "relevant": [
+        "src/hopper/HopperClient.ts",
+        "src/hopper/BridgeLauncher.ts",
+        "bridge/hopper_bridge.py",
+        "src/hopper/HopperSocketConnection.ts",
+        "src/hopper/HopperRequestQueue.ts",
+        "src/hopper/protocol.ts"
+      ],
+      "gold": [
+        "src/hopper/HopperClient.ts:356-386",
+        "src/hopper/HopperClient.ts:415-423",
+        "src/hopper/BridgeLauncher.ts:204-215",
+        "src/hopper/BridgeLauncher.ts:289-293",
+        "src/hopper/BridgeLauncher.ts:343-356",
+        "src/hopper/BridgeLauncher.ts:396-411",
+        "bridge/hopper_bridge.py:3-5",
+        "bridge/hopper_bridge.py:1027-1059",
+        "bridge/hopper_bridge.py:1143-1166",
+        "src/hopper/HopperSocketConnection.ts:10-15",
+        "src/hopper/HopperRequestQueue.ts:65-66",
+        "src/hopper/protocol.ts:86"
+      ]
+    },
+    {
+      "id": "Q09",
+      "category": "flow",
+      "question": "When a binary is opened, how is the deep-analysis provider (Hopper, Ghidra, or IDA) chosen? Describe the path from the session open call to the selection result, including what happens when zero, one, or several providers can handle the target.",
+      "keywords": [
+        "deep.?analysis",
+        "deep.?provider"
+      ],
+      "relevant": [
+        "src/composition/binary.ts",
+        "src/config/environment.ts",
+        "src/application/binary/BinarySession.ts",
+        "src/application/binary/BinarySessionOpen.ts",
+        "src/application/binary/SessionProviderRouter.ts",
+        "src/application/binary/AnalysisProviderRegistry.ts"
+      ],
+      "gold": [
+        "src/composition/binary.ts:19-36",
+        "src/config/environment.ts:24",
+        "src/application/binary/BinarySession.ts:214-230",
+        "src/application/binary/BinarySessionOpen.ts:99",
+        "src/application/binary/SessionProviderRouter.ts:75-88",
+        "src/application/binary/AnalysisProviderRegistry.ts:151-201",
+        "src/application/binary/AnalysisProviderRegistry.ts:321-334",
+        "src/application/binary/SessionProviderRouter.ts:112-143",
+        "src/application/binary/BinarySession.ts:319-321"
+      ]
+    },
+    {
+      "id": "Q10",
+      "category": "flow",
+      "question": "What happens when an MCP tool's result is too large for the stdio response budget? Trace how the result is encoded, how the budget is computed, and what the caller receives instead.",
+      "keywords": [
+        "budget"
+      ],
+      "relevant": [
+        "src/server/toolResult.ts"
+      ],
+      "gold": [
+        "src/server/toolResult.ts:23-26",
+        "src/server/toolResult.ts:29-44",
+        "src/server/toolResult.ts:50",
+        "src/server/toolResult.ts:157-160",
+        "src/server/toolResult.ts:172-179",
+        "src/server/toolResult.ts:180-200"
+      ]
+    },
+    {
+      "id": "Q11",
+      "category": "flow",
+      "question": "How does `rea setup` go from planning to applying changes? Which options control approval and dry-run, and what status is returned when changes are planned but not approved?",
+      "keywords": [
+        "dry.?run"
+      ],
+      "relevant": [
+        "src/cli/setupCommands.ts",
+        "src/application/Setup.ts",
+        "AGENTS.md"
+      ],
+      "gold": [
+        "src/cli/setupCommands.ts:50-89",
+        "src/cli/setupCommands.ts:204-237",
+        "src/cli/setupCommands.ts:257-263",
+        "src/application/Setup.ts:250-261",
+        "src/application/Setup.ts:263-291",
+        "src/application/Setup.ts:361",
+        "AGENTS.md:11"
+      ]
+    },
+    {
+      "id": "Q12",
+      "category": "identifier",
+      "question": "What does `computeEvidenceId` hash, which hash algorithm and prefix does it use, and in which file is it defined?",
+      "keywords": [
+        "computeEvidenceId"
+      ],
+      "relevant": [
+        "src/domain/evidence.ts",
+        "src/domain/canonicalDigest.ts"
+      ],
+      "gold": [
+        "src/domain/evidence.ts:247-272",
+        "src/domain/evidence.ts:274-276",
+        "src/domain/evidence.ts:171-181",
+        "src/domain/evidence.ts:340-352",
+        "src/domain/canonicalDigest.ts:1-13"
+      ]
+    },
+    {
+      "id": "Q13",
+      "category": "identifier",
+      "question": "What is the value of `SUPPORTED_GHIDRA_VERSION`, where is it defined, and which Java major version is declared next to it?",
+      "keywords": [
+        "SUPPORTED_GHIDRA_VERSION"
+      ],
+      "relevant": [
+        "src/ghidra/GhidraInstallationPolicy.ts"
+      ],
+      "gold": [
+        "src/ghidra/GhidraInstallationPolicy.ts:3-6"
+      ]
+    },
+    {
+      "id": "Q14",
+      "category": "identifier",
+      "question": "What is `HopperRequestQueue`, where is it defined, and how does it treat timeouts and caller cancellation?",
+      "keywords": [
+        "HopperRequestQueue"
+      ],
+      "relevant": [
+        "src/hopper/HopperRequestQueue.ts"
+      ],
+      "gold": [
+        "src/hopper/HopperRequestQueue.ts:20-28",
+        "src/hopper/HopperRequestQueue.ts:65-78",
+        "src/hopper/HopperRequestQueue.ts:79-106",
+        "src/hopper/HopperRequestQueue.ts:125-133"
+      ]
+    },
+    {
+      "id": "Q15",
+      "category": "identifier",
+      "question": "What does the package import alias `#javascript-analysis-worker` resolve to, where is that worker spawned, and with which Node/V8 runtime flags?",
+      "keywords": [
+        "javascript-analysis-worker"
+      ],
+      "relevant": [
+        "package.json",
+        "src/composition/javascriptAnalysisWorkerProcess.ts",
+        "src/javascript/analysis/JavaScriptAnalysisWorker.ts"
+      ],
+      "gold": [
+        "package.json:37-39",
+        "src/composition/javascriptAnalysisWorkerProcess.ts:22-91",
+        "src/composition/javascriptAnalysisWorkerProcess.ts:93-94",
+        "src/javascript/analysis/JavaScriptAnalysisWorker.ts:451-491"
+      ]
+    },
+    {
+      "id": "Q16",
+      "category": "architecture",
+      "question": "Which import/layering rules between `src/` layers are enforced automatically, by which script, and what are the named violation kinds?",
+      "keywords": [
+        "layer"
+      ],
+      "relevant": [
+        "scripts/verify-module-boundaries.mjs",
+        "scripts/lib/module-boundaries.mjs",
+        "package.json",
+        "AGENTS.md"
+      ],
+      "gold": [
+        "scripts/verify-module-boundaries.mjs:6",
+        "scripts/verify-module-boundaries.mjs:51-78",
+        "scripts/lib/module-boundaries.mjs:6-22",
+        "scripts/lib/module-boundaries.mjs:58-108",
+        "package.json:129",
+        "package.json:279",
+        "AGENTS.md:17"
+      ]
+    },
+    {
+      "id": "Q17",
+      "category": "architecture",
+      "question": "Why can the order in which deep providers are registered never change which provider is selected, and why does REA refuse to pick a provider instead of falling back when several are usable?",
+      "keywords": [
+        "deep.?provider"
+      ],
+      "relevant": [
+        "src/application/binary/AnalysisProviderRegistry.ts",
+        "src/application/binary/SessionProviderRouter.ts",
+        "docs/architecture.mermaid"
+      ],
+      "gold": [
+        "src/application/binary/AnalysisProviderRegistry.ts:70-74",
+        "src/application/binary/AnalysisProviderRegistry.ts:113-117",
+        "src/application/binary/AnalysisProviderRegistry.ts:126-129",
+        "src/application/binary/AnalysisProviderRegistry.ts:327-334",
+        "src/application/binary/SessionProviderRouter.ts:54-59",
+        "src/application/binary/SessionProviderRouter.ts:181-192",
+        "docs/architecture.mermaid:21-22"
+      ]
+    },
+    {
+      "id": "Q18",
+      "category": "architecture",
+      "question": "Why does the MCP transport create a new server object and a new Android analysis provider inside the `serve()` factory callback, and why are optional providers (such as browser scenario capture) only closed at process shutdown?",
+      "keywords": [
+        "serve\\("
+      ],
+      "relevant": [
+        "src/main/transport.ts",
+        "src/main.ts",
+        "src/main/shutdown.ts"
+      ],
+      "gold": [
+        "src/main/transport.ts:39-57",
+        "src/main/transport.ts:58-76",
+        "src/main/transport.ts:77-81",
+        "src/main/transport.ts:83-109",
+        "src/main.ts:83-90",
+        "src/main/shutdown.ts:29-45",
+        "src/main/transport.ts:117-127"
+      ]
+    },
+    {
+      "id": "Q19",
+      "category": "config",
+      "question": "Which environment variables choose the deep-analysis provider and set Hopper/Ghidra startup timeouts and the log level, and what are their defaults? Name one cross-variable constraint that is enforced.",
+      "keywords": [
+        "log.?level"
+      ],
+      "relevant": [
+        "src/config/environment.ts",
+        "src/config/providerStartupTimeout.ts",
+        "src/contracts/providerSelection.ts",
+        "src/ghidra/GhidraProviderCapabilities.ts",
+        "src/hopper/HopperProviderCapabilities.ts"
+      ],
+      "gold": [
+        "src/config/environment.ts:23-75",
+        "src/config/environment.ts:87-101",
+        "src/config/environment.ts:124-149",
+        "src/config/providerStartupTimeout.ts:3-11",
+        "src/contracts/providerSelection.ts:4-16",
+        "src/ghidra/GhidraProviderCapabilities.ts:14-18",
+        "src/hopper/HopperProviderCapabilities.ts:8-12"
+      ]
+    },
+    {
+      "id": "Q20",
+      "category": "config",
+      "question": "How is REA compiled into its runnable form: which commands/scripts run, what does the TypeScript build exclude, which bundle files are produced under dist/, and which Node version is pinned for development?",
+      "keywords": [
+        "\\bbuild\\b"
+      ],
+      "relevant": [
+        "package.json",
+        "tsconfig.build.json",
+        "scripts/bundle-runtime.mjs",
+        "turbo.json",
+        ".nvmrc",
+        "scripts/rea.mjs"
+      ],
+      "gold": [
+        "package.json:44-47",
+        "package.json:109",
+        "package.json:124",
+        "package.json:293",
+        "tsconfig.build.json:1-15",
+        "scripts/bundle-runtime.mjs:10-43",
+        "turbo.json:8-9",
+        "turbo.json:188-189",
+        ".nvmrc:1",
+        "scripts/rea.mjs:39-47"
+      ]
+    }
+  ]
+}
