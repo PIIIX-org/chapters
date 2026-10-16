@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { and, asc, eq, inArray, isNull, or } from 'drizzle-orm'
+import { and, asc, eq, inArray, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import {
   graphPerspectives,
@@ -12,6 +12,7 @@ import { atLeast, listAccessibleVaults, resolveAccess, UUID_REGEX } from '../vau
 import { listAccessibleRepositories } from '../repositories/permissions.js'
 import { buildGraph, findShortestPath } from './assemble.js'
 import { graphQuerySchema, parseGraphFilters, type GraphQuery } from './filters.js'
+import { isInstanceAdmin, visibleGlobalPerspectives } from './perspective-access.js'
 
 async function resolveMergedResources(userId: string): Promise<{ vaultIds: string[]; repositoryIds: string[] }> {
   const accessibleVaults = await listAccessibleVaults(userId)
@@ -140,6 +141,11 @@ export function graphRoutes(app: FastifyInstance) {
     },
   )
 
+  // Who may do what with a perspective (#550; rules in perspective-access.ts):
+  // saving or deleting a vault perspective needs edit access (below that the
+  // answer is 404, as on the other edit-only routes), and among editors the
+  // creator deletes their own, the vault owner any. A global perspective is
+  // personal: listed to and deleted by its creator only.
   app.get<{
     Querystring: { vaultId?: string }
   }>(
@@ -167,15 +173,7 @@ export function graphRoutes(app: FastifyInstance) {
       return db
         .select()
         .from(graphPerspectives)
-        .where(
-          and(
-            isNull(graphPerspectives.vaultId),
-            or(
-              eq(graphPerspectives.userId, req.user!.id),
-              eq(graphPerspectives.isShared, true),
-            ),
-          ),
-        )
+        .where(visibleGlobalPerspectives(req.user!.id))
         .orderBy(asc(graphPerspectives.createdAt))
     },
   )
@@ -202,12 +200,9 @@ export function graphRoutes(app: FastifyInstance) {
       }
       if (vaultId) {
         const access = await resolveAccess(req.user!.id, vaultId)
-        if (!atLeast(access, 'read')) return reply.code(404).send({ error: 'not found' })
-      } else {
-        const isAdmin = ['admin', 'superadmin', 'owner'].includes(req.user!.role)
-        if (!isAdmin) {
-          return reply.code(403).send({ error: 'only admins can create global perspectives' })
-        }
+        if (!atLeast(access, 'edit')) return reply.code(404).send({ error: 'not found' })
+      } else if (!isInstanceAdmin(req.user!.role)) {
+        return reply.code(403).send({ error: 'only admins can create global perspectives' })
       }
 
       const [created] = await db
@@ -237,14 +232,15 @@ export function graphRoutes(app: FastifyInstance) {
         .where(eq(graphPerspectives.id, req.params.id))
       if (!perspective) return reply.code(404).send({ error: 'not found' })
 
-      if (perspective.userId !== req.user!.id) {
-        if (perspective.vaultId) {
-          const access = await resolveAccess(req.user!.id, perspective.vaultId)
-          if (access !== 'owner') return reply.code(403).send({ error: 'forbidden' })
-        } else {
-          const isAdmin = ['admin', 'superadmin', 'owner'].includes(req.user!.role)
-          if (!isAdmin) return reply.code(403).send({ error: 'forbidden' })
+      if (perspective.vaultId) {
+        const access = await resolveAccess(req.user!.id, perspective.vaultId)
+        if (!atLeast(access, 'edit')) return reply.code(404).send({ error: 'not found' })
+        if (perspective.userId !== req.user!.id && access !== 'owner') {
+          return reply.code(403).send({ error: 'forbidden' })
         }
+      } else if (perspective.userId !== req.user!.id) {
+        // Listed only to its creator, so anyone else gets the answer for a missing id.
+        return reply.code(404).send({ error: 'not found' })
       }
 
       await db.delete(graphPerspectives).where(eq(graphPerspectives.id, req.params.id))

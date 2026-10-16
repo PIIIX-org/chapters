@@ -18,10 +18,29 @@ const NODES: FilterableNode[] = [
 const AGGREGATED_GRAPH = { aggregated: true, nodes: [], edges: [], cappedGroups: [] }
 const MEMBER_GRAPH = { nodes: [], edges: [], cappedGroups: [], memberTotal: 0 }
 
+interface StubPerspective {
+  id: string
+  name: string
+  vaultId: string | null
+  userId?: string
+  filters: Record<string, unknown>
+  isShared: boolean
+}
+
+/** `access` is the signed-in user's access to vault v1, `role` their instance role; their id is 'me'. */
 function stubFetch(
-  perspectives: Array<{ id: string; name: string; vaultId: string | null; filters: Record<string, unknown>; isShared: boolean }> = [],
+  perspectives: StubPerspective[] = [],
+  { access = 'owner', role = 'member' }: { access?: 'read' | 'edit' | 'owner'; role?: string } = {},
 ) {
   const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    if (url === '/api/me') {
+      return Promise.resolve(
+        mockJsonResponse(200, { id: 'me', email: 'me@example.com', status: 'active', role, createdAt: '2026-01-01', mfaEnabledAt: null, mfaRequired: false }),
+      )
+    }
+    if (url === '/api/vaults') {
+      return Promise.resolve(mockJsonResponse(200, [{ id: 'v1', name: 'V1', ownerId: 'owner', mergeable: true, access }]))
+    }
     if (url.includes('/graph/perspectives')) {
       if (init?.method === 'POST') {
         const body = JSON.parse(init.body as string)
@@ -30,6 +49,7 @@ function stubFetch(
             id: 'p-new',
             name: body.name,
             vaultId: body.vaultId ?? null,
+            userId: 'me',
             filters: body.filters ?? {},
             isShared: body.isShared ?? true,
             createdAt: new Date().toISOString(),
@@ -292,7 +312,7 @@ describe('GraphFilters', () => {
     renderFilters()
 
     // Click + Save view
-    await user.click(screen.getByRole('button', { name: '+ Save view' }))
+    await user.click(await screen.findByRole('button', { name: '+ Save view' }))
 
     // Fill perspective name
     const input = screen.getByPlaceholderText('Perspective name...')
@@ -333,8 +353,8 @@ describe('GraphFilters', () => {
       expect(screen.getByTestId('params').textContent).toContain('types=okf%2Fperson')
     })
 
-    // Delete button should now be visible
-    const deleteBtn = screen.getByRole('button', { name: 'Delete' })
+    // Delete button should now be visible (vault owner)
+    const deleteBtn = await screen.findByRole('button', { name: 'Delete' })
     await user.click(deleteBtn)
 
     await waitFor(() => {
@@ -352,10 +372,108 @@ describe('GraphFilters', () => {
     const user = userEvent.setup()
     const { container } = renderFilters()
 
-    await user.click(screen.getByRole('button', { name: '+ Save view' }))
+    await user.click(await screen.findByRole('button', { name: '+ Save view' }))
     expect(screen.getByPlaceholderText('Perspective name...')).toBeInTheDocument()
 
     await expectNoA11yViolations(container)
+  })
+
+  // #550: the server refuses these, so the controls are not offered.
+  it('offers a read-only member neither save nor delete, not even for their own perspective', async () => {
+    stubFetch([{ id: 'mine', name: 'My Old View', vaultId: 'v1', userId: 'me', filters: { types: ['okf/person'] }, isShared: true }], {
+      access: 'read',
+    })
+    const user = userEvent.setup()
+    renderFilters()
+
+    const select = await screen.findByRole('combobox', { name: 'Graph perspective' })
+    await waitFor(() => expect(screen.getByText('My Old View')).toBeInTheDocument())
+    await user.selectOptions(select, 'mine')
+    await waitFor(() => expect(screen.getByTestId('params').textContent).toContain('types=okf%2Fperson'))
+
+    expect(screen.queryByRole('button', { name: '+ Save view' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
+  })
+
+  it('lets an editor save and delete their own perspective, but not delete another member perspective', async () => {
+    stubFetch(
+      [
+        { id: 'theirs', name: 'Their View', vaultId: 'v1', userId: 'u2', filters: { tags: ['travel'] }, isShared: true },
+        { id: 'mine', name: 'My View', vaultId: 'v1', userId: 'me', filters: { tags: ['friends'] }, isShared: true },
+      ],
+      { access: 'edit' },
+    )
+    const user = userEvent.setup()
+    renderFilters()
+
+    expect(await screen.findByRole('button', { name: '+ Save view' })).toBeInTheDocument()
+    const select = screen.getByRole('combobox', { name: 'Graph perspective' })
+    await waitFor(() => expect(screen.getByText('Their View')).toBeInTheDocument())
+
+    await user.selectOptions(select, 'theirs')
+    await waitFor(() => expect(screen.getByTestId('params').textContent).toContain('tags=travel'))
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
+
+    await user.selectOptions(select, 'mine')
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument()
+  })
+
+  it('in the merged graph offers save only to an instance admin, without a share option', async () => {
+    stubFetch([{ id: 'global-mine', name: 'My Global', vaultId: null, userId: 'me', filters: { tags: ['friends'] }, isShared: true }])
+    const user = userEvent.setup()
+    const { unmount } = renderFilters({ initialEntry: '/' })
+
+    const select = await screen.findByRole('combobox', { name: 'Graph perspective' })
+    await waitFor(() => expect(screen.getByText('My Global')).toBeInTheDocument())
+    await user.selectOptions(select, 'global-mine')
+    // A member keeps their own global perspective (from before #550) and may delete it, but cannot save one.
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '+ Save view' })).toBeNull()
+    unmount()
+    vi.unstubAllGlobals()
+
+    const fetchMock = stubFetch([], { role: 'admin' })
+    renderFilters({ initialEntry: '/' })
+    await user.click(await screen.findByRole('button', { name: '+ Save view' }))
+    expect(screen.queryByRole('checkbox', { name: 'Share with team' })).toBeNull()
+    await user.type(screen.getByPlaceholderText('Perspective name...'), 'Admin Global')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    // A global perspective is personal, so the request does not claim to share it.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/graph/perspectives', expect.objectContaining({ method: 'POST' })))
+    const post = fetchMock.mock.calls.find(([url, init]) => url === '/api/graph/perspectives' && init?.method === 'POST')
+    const sent: unknown = JSON.parse(String(post?.[1]?.body))
+    expect(sent).toEqual(expect.objectContaining({ name: 'Admin Global', vaultId: null }))
+    expect(sent).not.toHaveProperty('isShared')
+  })
+
+  it('shows the vault owner Delete on another member perspective', async () => {
+    stubFetch([{ id: 'members', name: 'Member View', vaultId: 'v1', userId: 'u2', filters: { tags: ['travel'] }, isShared: true }], {
+      access: 'owner',
+    })
+    const user = userEvent.setup()
+    renderFilters()
+
+    const select = await screen.findByRole('combobox', { name: 'Graph perspective' })
+    await waitFor(() => expect(screen.getByText('Member View')).toBeInTheDocument())
+    await user.selectOptions(select, 'members')
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument()
+  })
+
+  it('shows an instance admin no Delete on another admin global perspective', async () => {
+    stubFetch([{ id: 'other-global', name: 'Other Admin Global', vaultId: null, userId: 'u2', filters: { tags: ['travel'] }, isShared: true }], {
+      role: 'admin',
+    })
+    const user = userEvent.setup()
+    renderFilters({ initialEntry: '/' })
+
+    // The admin can save (so the session has loaded) but not delete what someone else created.
+    expect(await screen.findByRole('button', { name: '+ Save view' })).toBeInTheDocument()
+    const select = screen.getByRole('combobox', { name: 'Graph perspective' })
+    await waitFor(() => expect(screen.getByText('Other Admin Global')).toBeInTheDocument())
+    await user.selectOptions(select, 'other-global')
+    await waitFor(() => expect(screen.getByTestId('params').textContent).toContain('tags=travel'))
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
   })
 
   it('cleans up stale color param when applying a perspective without colorMode', async () => {

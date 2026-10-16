@@ -141,13 +141,13 @@ describe('Graph Perspectives API', () => {
     })
     const created = createRes.json() as { id: string }
 
-    // Stranger tries to delete
+    // A stranger without access to the vault gets the same answer as for a missing id
     const deleteStranger = await app.inject({
       method: 'DELETE',
       url: `/api/graph/perspectives/${created.id}`,
       headers: { cookie: strangerCookie },
     })
-    expect(deleteStranger.statusCode).toBe(403)
+    expect(deleteStranger.statusCode).toBe(404)
 
     // Owner deletes
     const deleteOwner = await app.inject({

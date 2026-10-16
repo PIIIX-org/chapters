@@ -53,6 +53,13 @@ const GRAPH = {
   cappedGroups: [],
 }
 
+// The vaults list and the saved perspectives are arrays (GraphFilters looks
+// up the user's vault access and the selected perspective in them); every
+// other request here is a graph.
+function respond(url: string, graph: unknown): Response {
+  return mockJsonResponse(200, url === '/api/vaults' || url.startsWith('/api/graph/perspectives') ? [] : graph)
+}
+
 function stubFetch() {
   // A fresh Response per call, not one shared instance: a `Response` body
   // can only be read once, and this component alone issues 2+ concurrent
@@ -61,7 +68,7 @@ function stubFetch() {
   // to `undefined` (caught by apiFetch, then rejected by react-query's own
   // "data cannot be undefined" guard), which earlier single-fetch tests
   // never noticed only because nothing here asserted on the vaults query.
-  vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(mockJsonResponse(200, GRAPH))))
+  vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => Promise.resolve(respond(url, GRAPH))))
 }
 
 function stubMatchMedia(reducedMotion: boolean) {
@@ -304,10 +311,9 @@ describe('GraphCanvas', () => {
     }
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockImplementation((url: string) => {
-        if (url.includes('community=0')) return Promise.resolve(mockJsonResponse(200, memberGraph))
-        return Promise.resolve(mockJsonResponse(200, GRAPH))
-      }),
+      vi.fn().mockImplementation((url: string) =>
+        Promise.resolve(respond(url, url.includes('community=0') ? memberGraph : GRAPH)),
+      ),
     )
     stubMatchMedia(false)
     stubCanvasContext()
@@ -406,7 +412,7 @@ describe('GraphCanvas', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockImplementation((url: string) =>
-        Promise.resolve(mockJsonResponse(200, url.includes('community=0') ? memberGraph : GRAPH)),
+        Promise.resolve(respond(url, url.includes('community=0') ? memberGraph : GRAPH)),
       ),
     )
     stubMatchMedia(false)
@@ -447,7 +453,7 @@ describe('GraphCanvas', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockImplementation((url: string) =>
-        Promise.resolve(mockJsonResponse(200, url.includes('community=0') ? memberGraph : GRAPH)),
+        Promise.resolve(respond(url, url.includes('community=0') ? memberGraph : GRAPH)),
       ),
     )
     stubMatchMedia(false)
