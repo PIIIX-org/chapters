@@ -38,7 +38,7 @@ const SECRET_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
   ['userinfo in a URL', /:\/\/[^/@\s]+:[^/@\s]+@/g],
   // A bare token as the URL username (`https://glpat-…@host`); `ssh://git@` is too short to match.
   ['token as URL username', /:\/\/[^/@\s:]{20,}@/g],
-  ['token in a URL query', /[?&][\w-]*(?:token|key|secret|password)[\w-]*=[^&\s'"*]/gi],
+  ['token in a URL query or fragment', /[?&#][\w-]*(?:token|key|secret|password)[\w-]*=[^&#\s'"*]/gi],
   ['GitHub token', /gh[opsu]_[A-Za-z0-9]{20,}/g],
   ['x-access-token', /x-access-token/g],
   ['PEM block', /-----BEGIN/g],
@@ -152,6 +152,7 @@ const LEGACY_URL = `https://x-access-token:${LEGACY_TOKEN}@github.com/acme/legac
 // #593: tokens that are neither `gh*_` nor in a `user:password` userinfo.
 const TOKEN_ONLY_TOKEN = ['glpat', 'tokenOnlyUrlFixture0'].join('-')
 const QUERY_TOKEN = ['glpat', 'queryStringFixture00'].join('-')
+const FRAGMENT_TOKEN = ['frag', 'accessTokenFixture00'].join('-')
 const SSH_PASSWORD = 'ssh-password-fixture-7c1d'
 const SSH_URL = `ssh://git:${SSH_PASSWORD}@127.0.0.1:1/acme/ssh.git`
 
@@ -208,6 +209,7 @@ const secrets: string[] = [
   LEGACY_WEBHOOK_SECRET,
   TOKEN_ONLY_TOKEN,
   QUERY_TOKEN,
+  FRAGMENT_TOKEN,
   SSH_PASSWORD,
   TEST_PASSWORD,
 ]
@@ -334,7 +336,7 @@ beforeAll(async () => {
   fx.queryRepoId = await createRepository(ownerCookie, {
     name: 'query-token-remote',
     ingestionMethod: 'git',
-    gitUrl: `https://127.0.0.1:1/acme/query.git?private_token=${QUERY_TOKEN}`,
+    gitUrl: `https://127.0.0.1:1/acme/query.git?private_token=${QUERY_TOKEN}#access_token=${FRAGMENT_TOKEN}`,
   })
   // Creation starts a sync in the background without exposing it; one more,
   // awaited, guarantees git's error text is on the row before anything reads it.
@@ -518,8 +520,8 @@ const readSteps: Step[] = [
   { tool: 'repository_status', args: () => ({ repositoryId: fx.cloneRepoId }) },
   { tool: 'repository_status', args: () => ({ repositoryId: fx.explicitRepoId }) },
   { tool: 'repository_status', args: () => ({ repositoryId: fx.legacyRepoId }), contains: 'revoked' },
-  { tool: 'repository_status', args: () => ({ repositoryId: fx.tokenOnlyRepoId }) },
-  { tool: 'repository_status', args: () => ({ repositoryId: fx.queryRepoId }) },
+  { tool: 'repository_status', args: () => ({ repositoryId: fx.tokenOnlyRepoId }), contains: 'unable to access' },
+  { tool: 'repository_status', args: () => ({ repositoryId: fx.queryRepoId }), contains: 'unable to access' },
   { tool: 'repository_status', args: () => ({ repositoryId: fx.sshRepoId }), contains: 'Could not read' },
   { tool: 'repository_status', args: () => ({ repositoryId: fx.pushRepoId }) },
   { tool: 'get_repository_graph_preference', args: () => ({ repositoryId: fx.pushRepoId }) },
@@ -688,6 +690,7 @@ describe('MCP secret scan (#577)', () => {
       'https://user:pass@github.com/o/r.git',
       `https://${['glpat', 'x'.repeat(20)].join('-')}@gitlab.com/o/r.git`,
       'https://gitlab.com/o/r.git?private_token=abc',
+      'https://gitlab.com/o/r.git#access_token=abc',
       ghToken('o', 'sample'),
       `ghs_${'s'.repeat(30)}`,
       'x-access-token',

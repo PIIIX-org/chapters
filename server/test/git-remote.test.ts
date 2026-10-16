@@ -11,6 +11,11 @@ describe('git remote credentials (#383)', () => {
     'https://us%40er:p%3Ass@git.example.com/r.git',
     // #593: an ssh:// password is a secret too (a bare ssh user is not, below).
     'ssh://git:ssh-pass@git.example.com/o/r.git',
+    // An invalid percent sequence must not throw (stored rows hold them):
+    // the raw form is the credential and goes back in unchanged.
+    'ssh://git:%zz@git.example.com/o/r.git',
+    'https://user:50%off@git.example.com/r.git',
+    'https://%zz:pw@git.example.com/r.git',
   ])('round-trips %s through split + authenticatedUrl', (original) => {
     const { url, credential } = splitGitUrlCredential(original)
     expect(url).not.toContain('@')
@@ -51,5 +56,29 @@ describe('git remote credentials (#383)', () => {
     expect(redactGitSecrets(text, [])).toBe(
       "fatal: unable to access 'https://git.example.com/r.git?private_token=***&x=***': 403",
     )
+  })
+
+  it('redacts fragment values and a bare query value, both of which git echoes verbatim', () => {
+    expect(redactGitSecrets("unable to access 'https://127.0.0.1:1/o/r.git#access_token=FRAG/'", [])).toBe(
+      "unable to access 'https://127.0.0.1:1/o/r.git#access_token=***'",
+    )
+    expect(redactGitSecrets('at https://h/r.git?a=1#access_token=X now', [])).toBe('at https://h/r.git?a=***#access_token=*** now')
+    expect(redactGitSecrets('at https://h/r.git?glpat-bare-token now', [])).toBe('at https://h/r.git?*** now')
+  })
+
+  it('redacts the token of the legacy TOKEN:x-oauth-basic form on its own, but not a token-type username', () => {
+    expect(redactGitSecrets('remote: token ghp_LEGACYUSER is revoked', ['ghp_LEGACYUSER:x-oauth-basic'])).toBe(
+      'remote: token *** is revoked',
+    )
+    expect(redactGitSecrets('fatal: git could not read from git.example.com', ['git:pw1'])).toBe(
+      'fatal: git could not read from git.example.com',
+    )
+  })
+
+  it('is idempotent, also for a password made of `*` alone', () => {
+    const text = "fatal: unable to access 'https://star-user:*@h/r.git?t=1#f=2': * rejected"
+    const once = redactGitSecrets(text, ['star-user:*'])
+    expect(once).toBe("fatal: unable to access 'https://***@h/r.git?t=***#f=***': * rejected")
+    expect(redactGitSecrets(once, ['star-user:*'])).toBe(once)
   })
 })

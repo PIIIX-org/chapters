@@ -245,7 +245,7 @@ describe('listAccessibleRepositories field visibility', () => {
   it('serves no query-string token and no ssh password, to the owner or a viewer', async () => {
     const owner = await createActiveUser()
     const viewer = await createActiveUser()
-    const queryUrl = 'https://gitlab.example.com/acme/r.git?private_token=glpat-query-token-593'
+    const queryUrl = 'https://gitlab.example.com/acme/r.git?private_token=glpat-query-token-593#access_token=frag-token-593'
     const [query] = await db
       .insert(repositories)
       .values({
@@ -280,14 +280,56 @@ describe('listAccessibleRepositories field visibility', () => {
       expect(served).toContain('query-token')
       expect(served).not.toContain('glpat-query-token-593')
       expect(served).not.toContain('ssh-password-593')
+      expect(served).not.toContain('frag-token-593')
     }
     // The deep link needs host and path only; the owner keeps the parameter
     // names of the remote they configured.
     expect(asViewer.find((r) => r.id === query!.id)!.gitUrl).toBe('https://gitlab.example.com/acme/r.git')
     expect(asOwner.find((r) => r.id === query!.id)!.gitUrl).toBe(
-      'https://gitlab.example.com/acme/r.git?private_token=***',
+      'https://gitlab.example.com/acme/r.git?private_token=***#access_token=***',
     )
     expect(asOwner.find((r) => r.id === ssh!.id)!.gitUrl).toBe('ssh://git.example.com/acme/r.git')
+  })
+
+  // Review of #643: rows with an invalid percent sequence in the password were
+  // accepted and stored; decoding it threw, so listing them failed for the
+  // owner and every viewer.
+  it('lists remotes whose password holds an invalid percent sequence, ssh and https, without the password', async () => {
+    const owner = await createActiveUser()
+    const viewer = await createActiveUser()
+    const remotes = [
+      ['ssh://git:%zz-ssh-pw@git.example.com/acme/r.git', '%zz-ssh-pw'],
+      ['https://user:50%off-https-pw@git.example.com/acme/r.git', '50%off-https-pw'],
+    ] as const
+    const ids: string[] = []
+    for (const [url, password] of remotes) {
+      const [row] = await db
+        .insert(repositories)
+        .values({
+          name: 'bad-percent',
+          ownerId: owner.id,
+          ingestionMethod: 'git',
+          gitUrl: url,
+          lastSyncError: `fatal: unable to access '${url}/': ${password} rejected`,
+        })
+        .returning()
+      ids.push(row!.id)
+      await db.insert(repositoryShares).values({ repositoryId: row!.id, granteeType: 'user', granteeId: viewer.id })
+    }
+
+    for (const user of [owner, viewer]) {
+      const listed = (await listAccessibleRepositories(user.id)).filter((r) => ids.includes(r.id))
+      expect(listed).toHaveLength(2)
+      const served = JSON.stringify(listed)
+      expect(served).toContain('unable to access')
+      expect(served).not.toContain('ssh-pw')
+      expect(served).not.toContain('https-pw')
+    }
+    const asOwner = await listAccessibleRepositories(owner.id)
+    expect(ids.map((id) => asOwner.find((r) => r.id === id)!.gitUrl)).toEqual([
+      'ssh://git.example.com/acme/r.git',
+      'https://git.example.com/acme/r.git',
+    ])
   })
 
   it('keeps the owner an owner when the repository is also shared back to them', async () => {
