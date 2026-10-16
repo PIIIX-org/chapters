@@ -516,11 +516,12 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   than arguments stay inside the pin too: `audit_okf_conformance` on a
   vault token reports every `[[repo:...]]` link as broken without
   looking the repository up (a vault pin reaches no repository).
-  `test/mcp-scope.test.ts` calls every tool from `tools/list` with a
-  vault-pinned and a repository-pinned token (another vault/repository
-  id, no id, `everywhere`), checks that confined calls still return
-  their own data, and fails on a tool with no case there: **a new tool
-  needs a case there**.
+  `test/mcp-scope.test.ts` takes its tool list from an admin account
+  token's `tools/list` (a pinned token's list is filtered, #641), calls
+  every tool with a vault-pinned and a repository-pinned token (another
+  vault/repository id, no id, `everywhere`), checks that confined calls
+  still return their own data, and fails on a tool with no case there:
+  **a new tool needs a case there**.
 - **Capabilities** (`server.ts`, #548, #549): every `tool()` also
   declares `capability: 'read' | 'write' | 'admin'`, and the wrapper
   checks the connection before the scope: the tool must be in
@@ -534,13 +535,23 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `remove_team_member`, `delete_team`. `write` tools create, edit,
   trash, restore or revert; the rest are `read`. A pinned token is
   `write` unless its owner minted it `admin`, so by default it cannot
-  share, update, trash or purge its pin or erase history. Prompts are
+  share, update, trash or purge its pin or erase history. A pinned
+  token never gets more than its minter's permission on the pin (#649):
+  `admin` only for the owner, `write` for an edit share on a vault or
+  any access to a repository, `read` for a read-only vault share. An
+  explicit `access` above that is refused (403, the message names the
+  permission needed); an omitted one takes the pin default (`write`)
+  lowered to it. Prompts are
   not registered for a connection with an allow-list (they read notes
   outside `tool()`). `tools/list` advertises only the tools the
   connection can call (#641): in its allow-list, within its access level
   and of a scope class its scope reaches (`account` tools for account
   tokens only, `vault`/`vault-or-account` not for repository tokens,
-  `repository`/`repository-or-account` not for vault tokens). Every tool
+  `repository`/`repository-or-account` not for vault tokens). Tools
+  declared `ownerOnly` (they need owner permission on their target: the
+  share listing, sharing, update, delete and purge tools) are also
+  left out for a pinned token whose user does not own the pin, checked
+  when `tools/list` is answered (#649). Every tool
   stays registered, so calling a hidden one still returns the refusal
   above. `listMcpTools()` builds the catalog once from the
   registrations; `test/mcp-tool-capabilities.test.ts` pins the admin

@@ -6,6 +6,7 @@ import { mockJsonResponse } from '../../lib/api'
 import { expectNoA11yViolations } from '../../test/axe'
 import { McpPanel, VaultMcpPanel } from './VaultMcpPanel'
 import type { McpConnection, McpToolInfo } from '../../api/mcp'
+import type { VaultAccess } from '../../api/vaults'
 
 const ACCOUNT_SCOPED: McpConnection = {
   id: 'c-account',
@@ -118,11 +119,11 @@ function stubFetch(opts: {
   return fetchMock
 }
 
-function renderPanel(vaultId = 'v1', isOwner = true) {
+function renderPanel(vaultId = 'v1', access: VaultAccess = 'owner') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
-      <VaultMcpPanel vaultId={vaultId} isOwner={isOwner} />
+      <VaultMcpPanel vaultId={vaultId} access={access} />
     </QueryClientProvider>,
   )
 }
@@ -212,7 +213,7 @@ describe('VaultMcpPanel', () => {
   it('a vault member who is not its owner is not offered admin (the API would refuse it)', async () => {
     const fetchMock = stubFetch({ connections: [] })
     const user = userEvent.setup()
-    renderPanel('v1', false)
+    renderPanel('v1', 'edit')
 
     await screen.findByText('No MCP connections for this vault yet.')
     const options = within(screen.getByLabelText('Access')).getAllByRole('option')
@@ -221,6 +222,21 @@ describe('VaultMcpPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
     expect(postBody(fetchMock)).toEqual({ name: 'Member agent', scope: 'vault', vaultId: 'v1', access: 'write' })
+  })
+
+  it('a member with a read-only share is offered read only, the default (#649)', async () => {
+    const fetchMock = stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderPanel('v1', 'read')
+
+    await screen.findByText('No MCP connections for this vault yet.')
+    expect(screen.getByLabelText('Access')).toHaveValue('read')
+    const options = within(screen.getByLabelText('Access')).getAllByRole('option')
+    expect(options.map((o) => o.getAttribute('value'))).toEqual(['read'])
+    await user.type(screen.getByLabelText('New connection'), 'Reader agent')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
+    expect(postBody(fetchMock)).toEqual({ name: 'Reader agent', scope: 'vault', vaultId: 'v1', access: 'read' })
   })
 
   it('an account token defaults to read and write, admin stays available, without the pinned-token warning', async () => {

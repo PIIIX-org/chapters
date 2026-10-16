@@ -4,9 +4,21 @@ import { db } from '../db/client.js'
 import { mcpConnections, users } from '../db/schema.js'
 import { generateToken, hashToken } from '../auth/tokens.js'
 import { logSecurityEvent } from '../auth/security-events.js'
-import { listMcpTools, type ToolCapability } from '../mcp/server.js'
-import { resolveAccess } from './permissions.js'
-import { resolveRepositoryAccess } from '../repositories/permissions.js'
+import { ACCESS_RANK, listMcpTools, type ToolCapability } from '../mcp/server.js'
+import { resolveAccess, type Access } from './permissions.js'
+import { resolveRepositoryAccess, type RepoAccess } from '../repositories/permissions.js'
+
+/**
+ * The most a pinned token may do, by its minter's permission on the pin
+ * (#649): only the owner grants admin, a read-only vault share caps it at
+ * read. Repository shares have no read-only tier.
+ */
+const PIN_ACCESS_CEILING: Record<Access | RepoAccess, ToolCapability> = {
+  owner: 'admin',
+  edit: 'write',
+  read: 'read',
+  viewer: 'write',
+}
 
 export function mcpConnectionRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAuth)
@@ -51,8 +63,8 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
       // Capabilities are set here and never raised later (#548). Without an
       // explicit level an account token keeps every tool, as before; a pinned
       // token gets `write`: no share, update, delete or purge on its pin (#549).
-      const access = req.body.access ?? (scope === 'account' ? 'admin' : 'write')
-      let pinAccess: string | null = null
+      let access: ToolCapability = req.body.access ?? (scope === 'account' ? 'admin' : 'write')
+      let pinAccess: Access | RepoAccess | null = null
       if (scope === 'vault') {
         if (!vaultId) return reply.code(400).send({ error: 'vaultId required for vault scope' })
         pinAccess = await resolveAccess(req.user!.id, vaultId)
@@ -63,9 +75,21 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
         pinAccess = await resolveRepositoryAccess(req.user!.id, repositoryId)
         if (!pinAccess) return reply.code(404).send({ error: 'repository not found' })
       }
-      // Admin on a pinned token can share, delete or purge its pin: only its owner grants that.
-      if (access === 'admin' && pinAccess !== null && pinAccess !== 'owner') {
-        return reply.code(403).send({ error: `admin access on a ${scope}-pinned connection requires owning the ${scope}` })
+      // A pinned token never does more than its minter may on the pin (#649).
+      // A level asked for above that is refused; the default is lowered to it.
+      if (pinAccess !== null) {
+        const ceiling = PIN_ACCESS_CEILING[pinAccess]
+        if (ACCESS_RANK[access] > ACCESS_RANK[ceiling]) {
+          if (req.body.access === undefined) {
+            access = ceiling
+          } else if (access === 'admin') {
+            return reply.code(403).send({ error: `admin access on a ${scope}-pinned connection requires owning the ${scope}` })
+          } else {
+            return reply.code(403).send({
+              error: `${access} access on a ${scope}-pinned connection requires edit permission on the ${scope}; you have ${pinAccess} permission, so mint a ${ceiling} token`,
+            })
+          }
+        }
       }
       if (allowedTools) {
         const known = new Set(listMcpTools().map((t) => t.name))

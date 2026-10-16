@@ -138,7 +138,7 @@ export function VaultSettingsModal({ vault, open, onOpenChange }: VaultSettingsM
 
         <SharingPanel vaultId={vault.id} />
 
-        <VaultMcpPanel vaultId={vault.id} isOwner={vault.access === 'owner'} />
+        <VaultMcpPanel vaultId={vault.id} access={vault.access} />
 
         <NoteTrashPanel vaultId={vault.id} />
 

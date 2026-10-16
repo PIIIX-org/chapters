@@ -178,7 +178,8 @@ describe('restoreBackup', () => {
       teamMemberships: [],
       vaults: [{ id: vaultId, name: 'Capabilities Vault', ownerId: userId, mergeable: false, createdAt: now }],
       vaultShares: [],
-      // The first two rows predate migration 0019: no access, allowedTools or expiry columns.
+      // The first two rows predate migration 0019: no access or allowedTools field
+      // (expires_at is older than 0019; these rows have none).
       mcpConnections: [
         connection(accountId, 'account'),
         connection(pinnedId, 'vault'),

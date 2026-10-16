@@ -281,3 +281,61 @@ describe('Pinned tokens and admin tools (#549)', () => {
     expect((await must<Array<{ id: string }>>(acct, 'list_repositories', {})).map((r) => r.id)).not.toContain(repositoryId)
   })
 })
+
+describe("A pinned token is capped at its minter's permission on the pin (#649)", () => {
+  async function listedNames(client: Client): Promise<string[]> {
+    resetRateLimits()
+    return (await client.listTools()).tools.map((t) => t.name)
+  }
+
+  it('a member with a read-only share cannot mint a write or admin token, and the default is read', async () => {
+    const vault = await must<{ id: string }>(acct, 'create_vault', { name: 'cap-read-share' })
+    await must(acct, 'share_vault', { vaultId: vault.id, granteeType: 'user', granteeId: memberId, permission: 'read' })
+
+    const write = await mintAs(memberCookie, { name: 'reader-write', scope: 'vault', vaultId: vault.id, access: 'write' })
+    expect(write.statusCode).toBe(403)
+    expect(write.json()).toEqual({
+      error: 'write access on a vault-pinned connection requires edit permission on the vault; you have read permission, so mint a read token',
+    })
+    const admin = await mintAs(memberCookie, { name: 'reader-admin', scope: 'vault', vaultId: vault.id, access: 'admin' })
+    expect(admin.statusCode).toBe(403)
+    expect(admin.json()).toEqual({ error: 'admin access on a vault-pinned connection requires owning the vault' })
+
+    // No level asked for: the pin default (write) is lowered to read, not refused.
+    const byDefault = await mintAs(memberCookie, { name: 'reader-default', scope: 'vault', vaultId: vault.id })
+    expect(byDefault.statusCode).toBe(200)
+    const minted: { id: string; token: string; access: string } = byDefault.json()
+    expect(minted.access).toBe('read')
+    const names = await listedNames(await mcpClient(minted.token))
+    expect(names).toContain('read_note')
+    expect(names).not.toContain('create_note')
+
+    const read = await mintAs(memberCookie, { name: 'reader-read', scope: 'vault', vaultId: vault.id, access: 'read' })
+    expect(read.statusCode).toBe(200)
+  })
+
+  it("share-listing and other owner-only tools are not listed for a non-owner's pinned token", async () => {
+    const v = await vaultFixture('cap-owner-only-listing')
+    // The member has edit through the share: a write token, which lists write tools.
+    const memberToken: { token: string } = (await mintAs(memberCookie, { name: 'member-pinned', scope: 'vault', vaultId: v.id })).json()
+    const memberClient = await mcpClient(memberToken.token)
+    const memberNames = await listedNames(memberClient)
+    expect(memberNames).toContain('create_note')
+    expect(memberNames).not.toContain('list_vault_shares')
+    // Still registered: the call answers why.
+    const refused = await call(memberClient, 'list_vault_shares', {})
+    expect(refused).toEqual({ isError: true, text: 'Error: owner permission required' })
+
+    // The owner's token with the same access lists it, and the call works.
+    const ownerClient = await mcpClient((await mint({ name: 'owner-pinned', scope: 'vault', vaultId: v.id })).token)
+    expect(await listedNames(ownerClient)).toContain('list_vault_shares')
+    expect((await call(ownerClient, 'list_vault_shares', {})).isError).toBe(false)
+
+    const repositoryId = await repoFixture('cap-owner-only-repo')
+    await must(acct, 'share_repository', { repositoryId, granteeType: 'user', granteeId: memberId })
+    const viewerToken: { token: string } = (await mintAs(memberCookie, { name: 'viewer-pinned', scope: 'repository', repositoryId })).json()
+    expect(await listedNames(await mcpClient(viewerToken.token))).not.toContain('list_repository_shares')
+    const repoOwner = await mcpClient((await mint({ name: 'owner-repo-pinned', scope: 'repository', repositoryId })).token)
+    expect(await listedNames(repoOwner)).toContain('list_repository_shares')
+  })
+})
