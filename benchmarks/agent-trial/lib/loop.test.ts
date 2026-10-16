@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DEFAULT_CAPS, runEpisode, type Caps } from './loop.ts'
-import { scriptedModel, type CompletionRequest, type Model, type ModelTurn } from './model.ts'
+import { estimateRequestTokens, scriptedModel, type CompletionRequest, type Model, type ModelTurn } from './model.ts'
 import type { Toolset } from './tools.ts'
 
 function fakeTools(results: Record<string, string> = {}): Toolset & { calls: Array<[string, Record<string, unknown>]> } {
@@ -25,7 +25,8 @@ function replay(turns: ModelTurn[]): Model & { requests: CompletionRequest[] } {
     name: 'replay',
     requests,
     async complete(req) {
-      requests.push(structuredClone(req))
+      // An AbortSignal cannot be cloned; the tests read the rest.
+      requests.push(structuredClone({ ...req, signal: undefined }))
       const next = turns.shift()
       if (!next) throw new Error('no more turns')
       return next
@@ -94,21 +95,96 @@ test('the tool-call cap refuses extra calls in a turn, then forces an answer wit
   assert.match(JSON.stringify(final.messages.at(-1)), /give your final answer now/)
 })
 
-test('the token cap stops tool use once the summed usage reaches it', async () => {
-  const model = replay([turn([call('a')], '', { input: 900, output: 100 }), turn([call('b')], 'partial', { input: 10, output: 5 })])
-  const tools = fakeTools()
-  const r = await runEpisode({ model, tools, system: 's', prompt: 'p', caps: caps({ maxTokens: 1000 }) })
-  assert.equal(r.stop, 'cap:tokens')
-  assert.equal(r.answer, 'partial')
-  assert.equal(tools.calls.length, 1, 'no tool runs after the cap')
+/**
+ * A model that reports `ratio` x characters/4 of each request as its input,
+ * spends its whole output allowance, and calls `parallel` tools per turn
+ * until it must answer: the #651 review's probe (901,625 and 1,501,568
+ * tokens against a 600,000 cap before the fix).
+ */
+function greedy(ratio: number, parallel: number): Model & { requests: CompletionRequest[] } {
+  const requests: CompletionRequest[] = []
+  return {
+    provider: 'openai',
+    name: 'greedy',
+    requests,
+    async complete(req) {
+      requests.push({ ...req, messages: [...req.messages] })
+      const usage = { input: Math.ceil(estimateRequestTokens(req) * ratio), output: req.maxOutputTokens }
+      if (req.toolChoice === 'none') return { text: 'final', toolCalls: [], usage, stop: 'stop' }
+      return { text: '', toolCalls: Array.from({ length: parallel }, (_, i) => call(`${requests.length}-${i}`)), usage, stop: 'tool_calls' }
+    },
+  }
+}
+
+test('the token cap holds before every model call, including the forced final answer (#651 review)', async () => {
+  for (const [ratio, parallel] of [
+    [1, 1],
+    [1, 10],
+    [1.3, 1],
+    [1.3, 10],
+  ] as const) {
+    const model = greedy(ratio, parallel)
+    const r = await runEpisode({ model, tools: fakeTools({ grep: 'x'.repeat(100_000) }), system: 's', prompt: 'p', caps: caps() })
+    const label = `ratio ${ratio}, ${parallel} per turn`
+    assert.equal(r.stop, 'cap:tokens', label)
+    assert.equal(r.answer, 'final', label)
+    assert.ok(r.tokensIn + r.tokensOut <= DEFAULT_CAPS.maxTokens, `${label}: ${r.tokensIn + r.tokensOut} tokens`)
+    assert.equal(model.requests.at(-1)!.toolChoice, 'none', label)
+    assert.ok(r.toolCalls > 0, label)
+  }
 })
 
-test('the wall-time cap uses the injected clock', async () => {
+test('the final turn drops the newest tool results when the answer would not fit otherwise', async () => {
+  const model = greedy(1, 3)
+  const r = await runEpisode({ model, tools: fakeTools({ grep: 'x'.repeat(100_000) }), system: 's', prompt: 'p', caps: caps({ maxTokens: 60_000, maxOutputTokens: 1_000 }) })
+  assert.equal(r.stop, 'cap:tokens')
+  assert.equal(r.answer, 'final')
+  assert.equal(r.toolCalls, 3)
+  assert.equal(r.droppedResults, 3)
+  assert.ok(r.tokensIn + r.tokensOut <= 60_000, `${r.tokensIn + r.tokensOut} tokens`)
+  assert.match(JSON.stringify(model.requests.at(-1)!.messages), /\[dropped: 100000 characters, to keep the final answer within the token budget\]/)
+})
+
+test('a budget too small for even the prompt ends without a model call', async () => {
+  const model = greedy(1, 1)
+  const r = await runEpisode({ model, tools: fakeTools(), system: 's', prompt: 'p'.repeat(4_000), caps: caps({ maxTokens: 900 }) })
+  assert.equal(r.stop, 'cap:tokens')
+  assert.equal(r.turns, 0)
+  assert.match(r.error!, /exceeds the token budget/)
+})
+
+test('wall time: tools stop before the final-answer reserve, and the final turn still runs', async () => {
   let t = 0
-  const model = replay([turn([call('a')]), turn([], 'late')])
-  const r = await runEpisode({ model, tools: fakeTools(), system: 's', prompt: 'p', caps: caps({ maxWallMs: 50 }), now: () => (t += 30) })
+  const model = replay([turn([call('a')]), turn([call('b')]), turn([], 'late')])
+  const slow: Model = { ...model, complete: async (req) => ((t += 4_000), model.complete(req)) }
+  const tools = fakeTools()
+  // 10 s cap, 2 s reserve: tools until 8 s.
+  const r = await runEpisode({ model: slow, tools, system: 's', prompt: 'p', caps: caps({ maxWallMs: 10_000 }), now: () => t })
   assert.equal(r.stop, 'cap:wall-time')
   assert.equal(r.answer, 'late')
+  assert.deepEqual(tools.calls, [['grep', { pattern: 'a' }]])
+  assert.match(JSON.stringify(model.requests[2]!.messages), /not run, the time budget is spent/)
+  assert.equal(model.requests[2]!.toolChoice, 'none')
+})
+
+test('wall time: a request still running at the tool deadline is aborted and the model is asked to answer', async () => {
+  const requests: CompletionRequest[] = []
+  const hanging: Model = {
+    provider: 'openai',
+    name: 'hanging',
+    async complete(req) {
+      requests.push(req)
+      if (req.toolChoice === 'none') return turn([], 'answer after abort')
+      const { promise, reject } = Promise.withResolvers<ModelTurn>()
+      req.signal!.addEventListener('abort', () => reject(req.signal!.reason))
+      return promise
+    },
+  }
+  const r = await runEpisode({ model: hanging, tools: fakeTools(), system: 's', prompt: 'p', caps: caps({ maxWallMs: 500 }) })
+  assert.equal(r.stop, 'cap:wall-time')
+  assert.equal(r.answer, 'answer after abort')
+  assert.equal(r.abortedTurns, 1)
+  assert.ok(r.wallMs < 500, `${r.wallMs} ms`)
 })
 
 test('long tool results are cut and marked; bad arguments and tool crashes become error results', async () => {

@@ -5,7 +5,7 @@
 //   local: read_file / grep / list_files over a checkout of the same commit,
 //          in plain node:fs (no ripgrep, no network), so the mapping is
 //          unit-testable under `node --test`.
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import type { JsonObjectSchema, ToolSpec } from './model.ts'
 
@@ -145,12 +145,15 @@ function intArg(args: Record<string, unknown>, key: string, fallback: number, ma
   return Math.min(Math.floor(v), max)
 }
 
-/** The checkout-relative path, or null when it escapes the checkout. */
+/**
+ * The checkout-relative path ('' for the root: `.`, `./`, `/`), or null when
+ * it escapes the checkout. Empty and `.` segments are dropped, `..` refused.
+ */
 function safePath(raw: unknown): string | null {
   if (typeof raw !== 'string') return null
-  const p = raw.replaceAll('\\', '/').replace(/^\.\//, '').replace(/^\/+/, '').replace(/\/+$/, '')
-  if (p.split('/').includes('..')) return null
-  return p
+  const segments = raw.replaceAll('\\', '/').split('/').filter((s) => s !== '' && s !== '.')
+  if (segments.includes('..')) return null
+  return segments.join('/')
 }
 
 /** Every file of the checkout, '/'-separated, sorted. */
@@ -168,6 +171,7 @@ function listAll(root: string): string[] {
 }
 
 export function localToolset(root: string): Toolset {
+  const realRoot = realpathSync(root)
   let files: string[] | undefined
   const text = new Map<string, string | null>()
   /** File content for grep; null for binary or oversized files. */
@@ -224,7 +228,10 @@ export function localToolset(root: string): Toolset {
         if (name === 'read_file') {
           const path = safePath(args.path)
           if (!path) return error('path is required and must stay inside the repository')
-          const all = readFileSync(join(root, path), 'utf8').split('\n')
+          // A symlink (or junction) inside the checkout must not lead out of it.
+          const real = realpathSync(join(root, path))
+          if (real !== realRoot && !real.startsWith(realRoot + sep)) return error('path must stay inside the repository')
+          const all = readFileSync(real, 'utf8').split('\n')
           const offset = intArg(args, 'offset', 1, Number.MAX_SAFE_INTEGER)
           const limit = intArg(args, 'limit', 400, 2000)
           if (offset > all.length) return error(`offset ${offset} is past the end of ${path} (${all.length} lines)`)

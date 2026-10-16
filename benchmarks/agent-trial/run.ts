@@ -118,31 +118,27 @@ const toolsets: Record<Arm, Toolset> = {
 const secrets = [minted.token, ...(mode.mode === 'live' ? [mode.apiKey] : [])]
 const redact = (text: string) => secrets.reduce((t, s) => t.split(s).join('***'), text)
 const live = mode.mode === 'live' ? httpModel({ provider: mode.provider, model: mode.model, apiKey: mode.apiKey, ...(mode.baseUrl ? { baseUrl: mode.baseUrl } : {}) }) : null
+const judging = live !== null && mode.mode === 'live' && mode.judge
+
+/**
+ * Episodes start only while one more (and its judge call) fits in the run's
+ * budget, so the job never hits its timeout mid-episode. The workflow's
+ * 350-minute job timeout leaves room for the lab build before this script
+ * and the log collection after it.
+ */
+const RUN_BUDGET_MS = Number(process.env.AGENT_TRIAL_RUN_BUDGET_MIN ?? 300) * 60_000
+const JUDGE_TIMEOUT_MS = 3 * 60_000
+if (!Number.isFinite(RUN_BUDGET_MS) || RUN_BUDGET_MS <= 0) throw new Error(`invalid AGENT_TRIAL_RUN_BUDGET_MIN ${process.env.AGENT_TRIAL_RUN_BUDGET_MIN}`)
 
 interface Row {
   task: string
   arm: Arm
   episode: EpisodeResult
   grade: Grade
-  judge?: JudgeResult | { error: string }
+  judge?: JudgeResult
 }
 const rows: Row[] = []
-for (const task of tasks) {
-  for (const arm of arms) {
-    const model: Model = live ?? scriptedModel(dryRunPlan(task, arm), dryRunAnswer)
-    const episode = await runEpisode({ model, tools: toolsets[arm], system: systemPrompt(arm, { maxToolCalls: caps.maxToolCalls, repositoryId: repo.id }), prompt: task.prompt, caps })
-    const grade = gradeAnswer(task, episode.answer)
-    const row: Row = { task: task.id, arm, episode, grade }
-    if (live && mode.mode === 'live' && mode.judge && episode.answer) {
-      row.judge = await judgeAnswer(live, task, episode.answer).catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }))
-    }
-    rows.push(row)
-    ctx.log(
-      `${task.id}/${arm}: ${episode.stop}, facts ${grade.found}/${grade.total}, false ${grade.falseClaims.length}, ` +
-        `${episode.tokensIn} in / ${episode.tokensOut} out tokens, ${episode.toolCalls} calls, ${Math.round(episode.wallMs / 1000)} s`,
-    )
-  }
-}
+const notRun: Array<{ task: string; arm: Arm; reason: string }> = []
 
 function totals(arm: Arm) {
   const mine = rows.filter((r) => r.arm === arm)
@@ -159,6 +155,8 @@ function totals(arm: Arm) {
     falseClaims: sum((r) => r.grade.falseClaims.length),
     tokensIn: sum((r) => r.episode.tokensIn),
     tokensOut: sum((r) => r.episode.tokensOut),
+    judgeTokensIn: sum((r) => r.judge?.usage.input ?? 0),
+    judgeTokensOut: sum((r) => r.judge?.usage.output ?? 0),
     toolCalls: sum((r) => r.episode.toolCalls),
     wallMs: sum((r) => r.episode.wallMs),
     stops,
@@ -167,70 +165,113 @@ function totals(arm: Arm) {
 
 const runUrl = process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}` : null
 const dryRun = mode.mode === 'scripted'
-const modelInfo = live ? { provider: live.provider, name: live.name, judge: mode.mode === 'live' && mode.judge } : { provider: 'scripted', name: 'scripted', judge: false }
-const out = {
-  version: 1,
-  dryRun,
-  model: modelInfo,
-  commit: process.env.GITHUB_SHA ?? null,
-  runId: process.env.GITHUB_RUN_ID ?? null,
-  runUrl,
-  finishedAt: new Date().toISOString(),
-  ms: Date.now() - t0,
-  harness: HARNESS,
-  repo: file.repo,
-  caps,
-  index,
-  elaraTools: ELARA_TOOLS,
-  totals: Object.fromEntries(arms.map((a) => [a, totals(a)])),
-  tasks: rows.map((r) => ({
-    task: r.task,
-    arm: r.arm,
-    ...r.episode,
-    grade: {
-      found: r.grade.found,
-      total: r.grade.total,
-      recall: r.grade.recall,
-      foundFacts: r.grade.facts.filter((f) => f.found).map((f) => f.id),
-      missingFacts: r.grade.facts.filter((f) => !f.found).map((f) => f.id),
-      falseClaims: r.grade.falseClaims,
-    },
-    ...(r.judge ? { judge: r.judge } : {}),
-  })),
+const modelInfo = live ? { provider: live.provider, name: live.name, judge: judging } : { provider: 'scripted', name: 'scripted', judge: false }
+
+/** Writes results.json and summary.md as they stand; called after every episode, so a cut-off run keeps what it measured. */
+function flush(complete: boolean): string {
+  const at = new Date().toISOString()
+  const totalsByArm = Object.fromEntries(arms.map((a) => [a, totals(a)]))
+  const out = {
+    version: 1,
+    complete,
+    dryRun,
+    model: modelInfo,
+    commit: process.env.GITHUB_SHA ?? null,
+    runId: process.env.GITHUB_RUN_ID ?? null,
+    runUrl,
+    updatedAt: at,
+    ms: Date.now() - t0,
+    harness: HARNESS,
+    repo: file.repo,
+    caps,
+    runBudgetMs: RUN_BUDGET_MS,
+    index,
+    elaraTools: ELARA_TOOLS,
+    totals: totalsByArm,
+    notRun,
+    tasks: rows.map((r) => ({
+      task: r.task,
+      arm: r.arm,
+      ...r.episode,
+      grade: {
+        found: r.grade.found,
+        total: r.grade.total,
+        recall: r.grade.recall,
+        foundFacts: r.grade.facts.filter((f) => f.found).map((f) => f.id),
+        missingFacts: r.grade.facts.filter((f) => !f.found).map((f) => f.id),
+        falseClaims: r.grade.falseClaims,
+      },
+      ...(r.judge ? { judge: r.judge } : {}),
+    })),
+  }
+  const judged = rows.some((r) => r.judge)
+  const md: string[] = [
+    '# Agent trial',
+    '',
+    ...(dryRun ? ['**DRY RUN**: scripted model (a fixed tool-call script, no language model). These numbers test the plumbing; they are not agent numbers.', ''] : []),
+    ...(complete ? [] : [`**INCOMPLETE**: ${rows.length} of ${tasks.length * arms.length} episodes so far.`, '']),
+    `Model ${modelInfo.provider}/${modelInfo.name}; Elara at ${process.env.GITHUB_SHA ?? '(local)'}; run ${runUrl ?? '-'}; tasks on ${file.repo.url} @ ${file.repo.commit.slice(0, 7)}; harness ${HARNESS}; ${at}`,
+    '',
+    `Index: ${index.outcome}, ${index.files} files, ${index.symbols} symbols, ${Math.round(index.ms / 1000)} s. Caps per task: ${caps.maxToolCalls} tool calls, ${caps.maxTokens} tokens (judge included), ${Math.round(caps.maxWallMs / 60_000)} min.`,
+    '',
+    `| task | arm | facts | false claims | tokens in | tokens out | tool calls | wall s | stop |${judged ? ' judge facts |' : ''}`,
+    `|---|---|---|---|---|---|---|---|---|${judged ? '---|' : ''}`,
+    ...rows.map((r) => {
+      const j = r.judge ? (r.judge.error ? ' error |' : ` ${r.judge.found}/${r.grade.total} |`) : judged ? ' - |' : ''
+      return `| ${r.task} | ${r.arm} | ${r.grade.found}/${r.grade.total} | ${r.grade.falseClaims.map((c) => c.id).join(', ') || 0} | ${r.episode.tokensIn} | ${r.episode.tokensOut} | ${r.episode.toolCalls} | ${Math.round(r.episode.wallMs / 1000)} | ${r.episode.stop} |${j}`
+    }),
+    ...notRun.map((n) => `| ${n.task} | ${n.arm} | not run: ${n.reason} | | | | | | |${judged ? ' |' : ''}`),
+    '',
+    '| arm | facts found | recall | false claims | tokens in | tokens out | tool calls | wall s |',
+    '|---|---|---|---|---|---|---|---|',
+    ...arms.map((a) => {
+      const t = totalsByArm[a]!
+      return `| ${a} | ${t.factsFound}/${t.factsTotal} | ${t.recall} | ${t.falseClaims} | ${t.tokensIn} | ${t.tokensOut} | ${t.toolCalls} | ${Math.round(t.wallMs / 1000)} |`
+    }),
+    '',
+    rows.some((r) => r.episode.tokensEstimated) ? 'Token counts are characters / 4 estimates (scripted model).' : 'Token counts are as reported by the provider; judge tokens are in results.json (`judgeTokensIn/Out`).',
+    '',
+    'Only numbers from this workflow may be published (benchmarks/README.md, "Agent trial").',
+  ]
+  const summary = redact(md.join('\n'))
+  writeFileSync(join(outDir, 'results.json'), redact(JSON.stringify(out, null, 2)))
+  writeFileSync(join(outDir, 'summary.md'), summary)
+  return summary
 }
 
-const judged = rows.some((r) => r.judge)
-const md: string[] = [
-  '# Agent trial',
-  '',
-  ...(dryRun ? ['**DRY RUN**: scripted model (a fixed tool-call script, no language model). These numbers test the plumbing; they are not agent numbers.', ''] : []),
-  `Model ${modelInfo.provider}/${modelInfo.name}; Elara at ${process.env.GITHUB_SHA ?? '(local)'}; run ${runUrl ?? '-'}; tasks on ${file.repo.url} @ ${file.repo.commit.slice(0, 7)}; harness ${HARNESS}; ${out.finishedAt}`,
-  '',
-  `Index: ${index.outcome}, ${index.files} files, ${index.symbols} symbols, ${Math.round(index.ms / 1000)} s. Caps per task: ${caps.maxToolCalls} tool calls, ${caps.maxTokens} tokens, ${Math.round(caps.maxWallMs / 60_000)} min.`,
-  '',
-  `| task | arm | facts | false claims | tokens in | tokens out | tool calls | wall s | stop |${judged ? ' judge facts |' : ''}`,
-  `|---|---|---|---|---|---|---|---|---|${judged ? '---|' : ''}`,
-  ...rows.map((r) => {
-    const j = r.judge ? ('found' in r.judge ? ` ${r.judge.found}/${r.grade.total} |` : ' error |') : judged ? ' - |' : ''
-    return `| ${r.task} | ${r.arm} | ${r.grade.found}/${r.grade.total} | ${r.grade.falseClaims.map((c) => c.id).join(', ') || 0} | ${r.episode.tokensIn} | ${r.episode.tokensOut} | ${r.episode.toolCalls} | ${Math.round(r.episode.wallMs / 1000)} | ${r.episode.stop} |${j}`
-  }),
-  '',
-  '| arm | facts found | recall | false claims | tokens in | tokens out | tool calls | wall s |',
-  '|---|---|---|---|---|---|---|---|',
-  ...arms.map((a) => {
-    const t = out.totals[a]!
-    return `| ${a} | ${t.factsFound}/${t.factsTotal} | ${t.recall} | ${t.falseClaims} | ${t.tokensIn} | ${t.tokensOut} | ${t.toolCalls} | ${Math.round(t.wallMs / 1000)} |`
-  }),
-  '',
-  rows.some((r) => r.episode.tokensEstimated) ? 'Token counts are characters / 4 estimates (scripted model).' : 'Token counts are as reported by the provider.',
-  '',
-  'Only numbers from this workflow may be published (benchmarks/README.md, "Agent trial").',
-]
+for (const task of tasks) {
+  for (const arm of arms) {
+    const needMs = caps.maxWallMs + (judging ? JUDGE_TIMEOUT_MS : 0)
+    if (Date.now() - t0 + needMs > RUN_BUDGET_MS) {
+      notRun.push({ task: task.id, arm, reason: `run budget (${Math.round(RUN_BUDGET_MS / 60_000)} min) would be exceeded` })
+      flush(false)
+      continue
+    }
+    const model: Model = live ?? scriptedModel(dryRunPlan(task, arm), dryRunAnswer)
+    const episode = await runEpisode({ model, tools: toolsets[arm], system: systemPrompt(arm, { maxToolCalls: caps.maxToolCalls, repositoryId: repo.id }), prompt: task.prompt, caps })
+    const grade = gradeAnswer(task, episode.answer)
+    const row: Row = { task: task.id, arm, episode, grade }
+    if (live && judging && episode.answer) {
+      const tokensLeft = caps.maxTokens - episode.tokensIn - episode.tokensOut
+      row.judge = await judgeAnswer(live, task, episode.answer, { tokensLeft, timeoutMs: JUDGE_TIMEOUT_MS }).catch((err: unknown) => ({
+        facts: {},
+        found: 0,
+        usage: { input: 0, output: 0 },
+        error: err instanceof Error ? err.message : String(err),
+      }))
+    }
+    rows.push(row)
+    flush(false)
+    ctx.log(
+      `${task.id}/${arm}: ${episode.stop}, facts ${grade.found}/${grade.total}, false ${grade.falseClaims.length}, ` +
+        `${episode.tokensIn} in / ${episode.tokensOut} out tokens, ${episode.toolCalls} calls, ${Math.round(episode.wallMs / 1000)} s`,
+    )
+  }
+}
 
-writeFileSync(join(outDir, 'results.json'), redact(JSON.stringify(out, null, 2)))
-writeFileSync(join(outDir, 'summary.md'), redact(md.join('\n')))
-console.log(redact(md.join('\n')))
-if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${redact(md.join('\n'))}\n`)
+const summary = flush(true)
+console.log(summary)
+if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`)
 rmSync(workDir, { recursive: true, force: true })
 const failed = rows.filter((r) => r.episode.stop === 'error')
 if (failed.length > 0) {

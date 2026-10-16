@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { ARMS, dryRunAnswer, dryRunPlan, parseArms, systemPrompt } from './arms.ts'
-import { SKIP_NOTICE, resolveMode } from './config.ts'
+import { SKIP_NOTICE, gateMode, resolveMode } from './config.ts'
 import { judgeAnswer, judgePrompt, parseVerdict } from './judge.ts'
 import type { Model } from './model.ts'
 import type { TaskFile } from './tasks.ts'
@@ -39,6 +39,17 @@ test('live mode: provider from AGENT_TRIAL_PROVIDER, else anthropic for claude-*
   assert.ok(explicit.mode === 'live' && explicit.provider === 'openai')
   assert.throws(() => resolveMode({ AGENT_TRIAL_API_KEY: 'k', AGENT_TRIAL_MODEL: 'm', AGENT_TRIAL_PROVIDER: 'gemini' }), /openai or anthropic/)
   assert.throws(() => resolveMode({ AGENT_TRIAL_MODE: 'live' }), /auto or scripted/)
+})
+
+test('the gate decides from AGENT_TRIAL_HAS_KEY and never needs the key; the runner needs the key itself', () => {
+  assert.deepEqual(gateMode({ AGENT_TRIAL_HAS_KEY: 'true', AGENT_TRIAL_MODEL: 'claude-sonnet' }), { mode: 'live', provider: 'anthropic', model: 'claude-sonnet', judge: false })
+  for (const env of [{ AGENT_TRIAL_HAS_KEY: 'false', AGENT_TRIAL_MODEL: 'm' }, { AGENT_TRIAL_MODEL: 'm' }, { AGENT_TRIAL_HAS_KEY: 'true' }]) {
+    const m = gateMode(env)
+    assert.ok(m.mode === 'skip' && m.reason.startsWith(SKIP_NOTICE), JSON.stringify(env))
+  }
+  assert.deepEqual(gateMode({ AGENT_TRIAL_MODE: 'scripted' }), { mode: 'scripted' })
+  // A forged boolean cannot make the runner go live without the key.
+  assert.equal(resolveMode({ AGENT_TRIAL_HAS_KEY: 'true', AGENT_TRIAL_MODEL: 'm' }).mode, 'skip')
 })
 
 test('arms: both by default, unknown refused', () => {
@@ -92,17 +103,22 @@ test('judge: runs one tool-less turn and counts the facts judged stated', async 
     provider: 'anthropic',
     name: 'judge',
     async complete(req) {
-      seen.push([req.tools.length, req.toolChoice])
+      seen.push([req.tools.length, req.toolChoice, req.signal instanceof AbortSignal])
       return { text, toolCalls: [], usage: { input: 10, output: 3 }, stop: 'end_turn' }
     },
   })
-  const r = await judgeAnswer(model('{"T1.1": true, "T1.4": true, "T1.5": false}'), t, 'answer')
+  const budget = { tokensLeft: 100_000, timeoutMs: 60_000 }
+  const r = await judgeAnswer(model('{"T1.1": true, "T1.4": true, "T1.5": false}'), t, 'answer', budget)
   assert.deepEqual(r, { facts: { 'T1.1': true, 'T1.4': true, 'T1.5': false }, found: 2, usage: { input: 10, output: 3 } })
-  const bad = await judgeAnswer(model('I cannot'), t, 'answer')
+  const bad = await judgeAnswer(model('I cannot'), t, 'answer', budget)
   assert.equal(bad.found, 0)
   assert.match(bad.error!, /no JSON verdict/)
+  // Not run when it does not fit in what is left of the task's token budget.
+  const skipped = await judgeAnswer(model('{"T1.1": true}'), t, 'answer', { tokensLeft: 2_500, timeoutMs: 60_000 })
+  assert.deepEqual(skipped.usage, { input: 0, output: 0 })
+  assert.match(skipped.error!, /^not run: needs about \d+ tokens, 2500 left in the task budget$/)
   assert.deepEqual(seen, [
-    [0, 'none'],
-    [0, 'none'],
+    [0, 'none', true],
+    [0, 'none', true],
   ])
 })

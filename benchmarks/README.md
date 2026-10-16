@@ -315,13 +315,39 @@ the same caps, and run through the same loop:
 | | Elara arm | local arm |
 |---|---|---|
 | source | the lab instance's MCP server, the pinned tree indexed as a `local_path` repository | a checkout of the same tree on the runner (no `.git`) |
-| tools | `search`, `find_symbols`, `read_file`, `browse_repository`, `repository_status`, `graph`, `find_graph_path`, with the server's own schemas; each call is one MCP `tools/call` | `list_files` (glob), `grep` (JavaScript regex, `path:line:text`), `read_file` (offset/limit, numbered lines) |
+| tools | `search`, `find_symbols`, `read_file`, `browse_repository`, `repository_status`, `graph`, `find_graph_path`, with the server's own schemas; each call is one MCP `tools/call` | `list_files` (glob), `grep` (JavaScript regex, `path:line:text`; `path` `.` or empty = the whole checkout), `read_file` (offset/limit, numbered lines; refuses a path that resolves outside the checkout, symlinks included) |
 | access | a token pinned to the repository, read access, allow-listed to those tools | the checkout only |
 
 Caps per task: 30 tool calls (the round-2 cap), 600,000 tokens in + out
 summed over turns (every turn resends the context, so this bounds the
 cost), 8,192 output tokens per turn, 100,000 characters per tool result,
-20 minutes. At a cap the model gets one more turn, without tools, to answer.
+15 minutes. They hold before every model call, not between turns
+(`lib/loop.ts`):
+
+- **Tokens.** A tool turn is sent only when it and a final answer after it
+  both fit in what is left; otherwise the model gets one last turn without
+  tools, whose output limit is cut to what is left, and which drops the
+  newest tool results (replaced by a `[dropped: ...]` stub, counted in
+  `droppedResults`) if they would not fit. If even the conversation without
+  them does not fit, the episode ends with no answer. Input is estimated
+  before sending as characters / 4 × 1.5, then × the largest provider
+  tokens-per-estimate ratio seen in the episode plus 5 %, so the cap is hard
+  to the accuracy of that estimate. The unit tests drive a model that spends
+  its whole output allowance against 100,000-character tool results (1 and
+  10 calls per turn); the old between-turns check let that reach 901,625 and
+  1,501,568 tokens (#651 review).
+- **Time.** Tools stop at 15 minutes minus a reserve for the final answer
+  (a fifth of the cap, at most 3 minutes); every model request carries an
+  abort signal for the time left, retries included; a tool turn cut off at
+  the tool deadline is followed by the final turn (`abortedTurns`).
+- **Judge.** The optional judge spends from the same 600,000 tokens (it is
+  not run when it would not fit) and is cut off after 3 minutes.
+- **Run.** An episode starts only while it and its judge call fit in the
+  run budget (`AGENT_TRIAL_RUN_BUDGET_MIN`, 300 in the workflow, under the
+  job's 350-minute timeout and GitHub's 360-minute limit); the rest are
+  listed as not run. Results are written after every episode
+  (`complete: false` until the end), so a cut-off run keeps what it measured.
+
 Recorded per task and arm: tokens in and out (as the provider reports them),
 tool calls, turns, wall time, stop reason, the answer and a trace of every
 call (tool, arguments, size, time, the first 300 characters).
@@ -336,27 +362,37 @@ row when the sentence matches every pattern and carries no negation or
 refutation word ("no", "not", "says", "wrong", "instead of", ...), so an
 answer that repeats a claim to reject it is not flagged. Unit tests check
 every fact against a sample phrasing, every false claim against a sample
-and a refutation, and that a task's prompt alone finds at most a quarter of
-its facts. Checked once by hand on the 16 round-2 answers (not a CI run):
-each of the 9 facts the patterns did not find is absent from that answer,
-and the false-claim check flagged 5 of the graders' 11 false claims, with
-no flag on a true sentence. Regexes still miss paraphrases and most false
-claims, so `facts` is a floor and the false-claim count a lower bound. With
+and a refutation, and that a task's prompt alone scores no fact. Checked
+once by hand on the 16 round-2 answers (not a CI run): each of the 9 facts
+the patterns did not find is absent from that answer, and the false-claim
+check flagged 5 of the graders' 11 false claims, with no flag on a true
+sentence. Regexes still miss paraphrases and most false claims, so `facts`
+is a floor and the false-claim count a lower bound. With
 `AGENT_TRIAL_JUDGE=1` and a credential, the same model also judges each
 fact; that verdict is recorded next to the deterministic one (`judge`),
 never instead of it.
 
 **Enabling it.** The owner provides no model API key for CI (#571), so
 without a credential the weekly run ends green at the gate with the notice
-`skipped: no agent credential (#571)` and builds nothing. To enable:
+`skipped: no agent credential (#571)` and builds nothing. The key belongs in
+the `agent-trial` environment (Settings → Environments; deployment
+branches: `dev` only), **not** in the repository secrets, which every
+branch's workflow could read. Only a run on `dev` binds that environment;
+the gate job gets only whether the key exists, and the trial job gets the
+key only in a live run. To enable:
 
 | setting | kind | value |
 |---|---|---|
-| `AGENT_TRIAL_API_KEY` | repository secret | the provider key |
-| `AGENT_TRIAL_MODEL` | repository variable (or secret) | the model name |
+| `AGENT_TRIAL_API_KEY` | secret of the `agent-trial` environment | the provider key |
+| `AGENT_TRIAL_MODEL` | variable (repository or environment) | the model name |
 | `AGENT_TRIAL_PROVIDER` | variable, optional | `openai` (any OpenAI-compatible `chat/completions` API) or `anthropic` (messages API); default `anthropic` for `claude-*` models, else `openai` |
 | `AGENT_TRIAL_BASE_URL` | variable, optional | API base (OpenAI: up to `/v1`; Anthropic: the host) |
 | `AGENT_TRIAL_JUDGE` | variable, optional | `1` for the LLM judge |
+
+```sh
+gh secret set AGENT_TRIAL_API_KEY -R PIIIX-org/chapters --env agent-trial
+gh variable set AGENT_TRIAL_MODEL -R PIIIX-org/chapters --body <model>
+```
 
 The OpenAI adapter sends `max_completion_tokens`; a compatible server that
 only knows `max_tokens` needs a proxy.
@@ -380,7 +416,7 @@ Docker, bun): bring the lab up as in `docs/agents/lab.md`, then
 **How to read a run.** `agent-trial-results/summary.md` (also the job
 summary) has one row per task and arm: facts found / total, the false
 claims flagged, tokens in and out, tool calls, wall time, stop reason; then
-totals per arm. `results.json` adds the model, caps, harness hash, index
+totals per arm, and any episode not run. `results.json` adds the model, caps, harness hash, index
 outcome, which facts were found and missed, the sentence of each flagged
 false claim, the full answer and the trace. Compare arms on the same run
 only: models, prices and Elara change between runs. Read the answers before

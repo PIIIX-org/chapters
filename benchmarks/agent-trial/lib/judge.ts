@@ -2,7 +2,7 @@
 // and is recorded next to the deterministic grade, never instead of it. The
 // judge reads the task's key facts and the answer and says, per fact,
 // whether the answer states it (paraphrases count). Node-compatible.
-import type { Model, Usage } from './model.ts'
+import { estimateRequestTokens, type CompletionRequest, type Model, type Usage } from './model.ts'
 import type { Task } from './tasks.ts'
 
 export interface JudgeResult {
@@ -10,7 +10,7 @@ export interface JudgeResult {
   facts: Record<string, boolean>
   found: number
   usage: Usage
-  /** Set when the reply held no usable verdict. */
+  /** Set when the reply held no usable verdict, or the judge was not run (budget). */
   error?: string
 }
 
@@ -52,14 +52,25 @@ export function parseVerdict(task: Task, reply: string): Record<string, boolean>
   return out
 }
 
-export async function judgeAnswer(model: Model, task: Task, answer: string): Promise<JudgeResult> {
-  const turn = await model.complete({
+const JUDGE_OUTPUT_TOKENS = 2_048
+
+/**
+ * Judges an answer inside what is left of the task's budget: it is not run
+ * when its estimated input (characters/4, plus half again for safety) and
+ * output do not fit in `tokensLeft`, and the request is aborted after
+ * `timeoutMs`.
+ */
+export async function judgeAnswer(model: Model, task: Task, answer: string, budget: { tokensLeft: number; timeoutMs: number }): Promise<JudgeResult> {
+  const req: CompletionRequest = {
     system: 'You are a strict, literal grader. Reply with JSON only.',
     messages: [{ role: 'user', text: judgePrompt(task, answer) }],
     tools: [],
     toolChoice: 'none',
-    maxOutputTokens: 2_048,
-  })
+    maxOutputTokens: JUDGE_OUTPUT_TOKENS,
+  }
+  const need = Math.ceil(estimateRequestTokens(req) * 1.5) + JUDGE_OUTPUT_TOKENS
+  if (need > budget.tokensLeft) return { facts: {}, found: 0, usage: { input: 0, output: 0 }, error: `not run: needs about ${need} tokens, ${budget.tokensLeft} left in the task budget` }
+  const turn = await model.complete({ ...req, signal: AbortSignal.timeout(budget.timeoutMs) })
   const facts = parseVerdict(task, turn.text)
   if (!facts) return { facts: {}, found: 0, usage: turn.usage, error: `no JSON verdict in: ${turn.text.slice(0, 200)}` }
   return { facts, found: Object.values(facts).filter(Boolean).length, usage: turn.usage }

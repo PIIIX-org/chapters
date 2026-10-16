@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
@@ -63,6 +63,14 @@ test('local grep returns path:line:text, honours path, glob, ignore_case and max
   assert.equal((await local.run('grep', { pattern: 'x', path: '../etc' })).isError, true)
 })
 
+test('local grep: ".", "./", "/" and "" all mean the repository root (#651 review)', async () => {
+  const all = await local.run('grep', { pattern: 'regenProgressiveIndices\\(' })
+  assert.match(all.text, /^3 matching line\(s\)/)
+  for (const path of ['.', './', '/', '', '.\\']) assert.equal((await local.run('grep', { pattern: 'regenProgressiveIndices\\(', path })).text, all.text, JSON.stringify(path))
+  assert.match((await local.run('grep', { pattern: 'regenProgressiveIndices\\(', path: './server/./test/' })).text, /^1 matching line\(s\)\nserver\/test\/notes\.test\.ts:1:/)
+  assert.equal((await local.run('read_file', { path: '.' })).isError, true)
+})
+
 test('local read_file numbers lines from offset, caps the slice, refuses escapes', async () => {
   const r = await local.run('read_file', { path: 'README.md', offset: 28, limit: 2 })
   assert.equal(r.text, 'README.md lines 28-29 of 31\n28\tline 28\n29\tline 29')
@@ -71,6 +79,25 @@ test('local read_file numbers lines from offset, caps the slice, refuses escapes
   assert.deepEqual(await local.run('read_file', { path: 'missing.ts' }), { text: 'Error: no such file', isError: true })
   assert.equal((await local.run('read_file', { path: 'server/../../secret' })).isError, true)
   assert.match((await local.run('read_file', { path: 'server' })).text, /is a directory/)
+})
+
+test('local read_file refuses a symlink or junction that leads out of the checkout; list_files and grep skip it', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'agent-trial-link-'))
+  after(() => rmSync(base, { recursive: true, force: true }))
+  const inside = join(base, 'checkout')
+  const outside = join(base, 'outside')
+  mkdirSync(join(inside, 'src'), { recursive: true })
+  mkdirSync(outside)
+  writeFileSync(join(inside, 'src', 'a.ts'), 'inside\n')
+  writeFileSync(join(outside, 'secret.txt'), 'TOPSECRET\n')
+  // 'junction' needs no privilege on Windows; elsewhere the type is ignored (a directory symlink).
+  symlinkSync(outside, join(inside, 'linked'), 'junction')
+  symlinkSync(join(inside, 'src'), join(inside, 'alias'), 'junction')
+  const tools = localToolset(inside)
+  assert.deepEqual(await tools.run('read_file', { path: 'linked/secret.txt' }), { text: 'Error: path must stay inside the repository', isError: true })
+  assert.match((await tools.run('read_file', { path: 'alias/a.ts' })).text, /^alias\/a\.ts lines 1-2 of 2\n1\tinside/)
+  assert.equal((await tools.run('list_files', { pattern: '**' })).text, '1 file(s)\nsrc/a.ts')
+  assert.equal((await tools.run('grep', { pattern: 'TOPSECRET' })).text, 'no matches')
 })
 
 test('local tools: specs name the three tools; an unknown tool is an error result, not a throw', async () => {

@@ -109,13 +109,18 @@ hand.
 
 | job | what |
 |---|---|
-| `gate` | `node benchmarks/agent-trial/gate.ts`: with no agent credential (`AGENT_TRIAL_API_KEY` secret + `AGENT_TRIAL_MODEL`) it prints `skipped: no agent credential (#571)` and the run ends green; nothing is built |
-| `trial` | lab instance, then `bun benchmarks/agent-trial/run.ts`: refuses a non-lab base URL, fetches PIIIX-org/chapters at the pinned commit, checks every evidence range of `tasks.json`, indexes the tree as a `local_path` repository, mints a repository-pinned read token allow-listed to the Elara arm's tools, runs each task in both arms, grades, writes `agent-trial-results/` (artifact, 90 days) |
+| `gate` | `node benchmarks/agent-trial/gate.ts`, given only whether the key exists (`AGENT_TRIAL_HAS_KEY`) and `AGENT_TRIAL_MODEL`: with no agent credential it prints `skipped: no agent credential (#571)` and the run ends green; nothing is built |
+| `trial` | lab instance, then `bun benchmarks/agent-trial/run.ts`: refuses a non-lab base URL, fetches PIIIX-org/chapters at the pinned commit, checks every evidence range of `tasks.json`, indexes the tree as a `local_path` repository, mints a repository-pinned read token allow-listed to the Elara arm's tools, runs each task in both arms, grades, writes `agent-trial-results/` after every episode (artifact, 90 days) |
+
+The key is a secret of the `agent-trial` environment, whose deployment
+branches are `dev` only; it must not be a repository secret. Only a run on
+`dev` (the schedule, or a dispatch on dev) binds the environment, so a
+dispatch on any other branch sees no key: there, only `model=scripted` runs.
 
 ```sh
-gh workflow run agent-trial.yml -R PIIIX-org/chapters --ref <branch>                  # live; skips without a credential
+gh workflow run agent-trial.yml -R PIIIX-org/chapters --ref dev                       # live; skips without a credential
 gh workflow run agent-trial.yml -R PIIIX-org/chapters --ref <branch> -f model=scripted  # dry run, fake model
-gh workflow run agent-trial.yml -R PIIIX-org/chapters --ref <branch> -f tasks=T1 -f arms=elara
+gh workflow run agent-trial.yml -R PIIIX-org/chapters --ref dev -f tasks=T1 -f arms=elara
 ```
 
 The owner provides no model API key, so the scheduled run skips until one

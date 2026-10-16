@@ -2,12 +2,13 @@
 // whether the trial job runs, before any runner builds the lab instance.
 // Without an agent credential it reports the skip notice and succeeds.
 //   node benchmarks/agent-trial/gate.ts
+// Reads AGENT_TRIAL_HAS_KEY ('true' when the key exists), never the key.
 // Writes run=true|false and mode=live|scripted|skip to $GITHUB_OUTPUT and a
-// line to $GITHUB_STEP_SUMMARY. Never prints the key.
+// line to $GITHUB_STEP_SUMMARY.
 import { appendFileSync } from 'node:fs'
-import { resolveMode } from './lib/config.ts'
+import { gateMode } from './lib/config.ts'
 
-const mode = resolveMode(process.env)
+const mode = gateMode(process.env)
 const line =
   mode.mode === 'skip'
     ? mode.reason

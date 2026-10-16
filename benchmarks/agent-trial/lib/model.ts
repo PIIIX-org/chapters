@@ -45,6 +45,8 @@ export interface CompletionRequest {
   /** 'none' asks for a final answer without tool calls. */
   toolChoice: 'auto' | 'none'
   maxOutputTokens: number
+  /** Aborts the request (and its retries) when the episode's time is up. */
+  signal?: AbortSignal
 }
 
 export interface Usage {
@@ -239,7 +241,8 @@ export function httpModel(cfg: HttpModelConfig): Model {
     async complete(req) {
       const body = JSON.stringify(openai ? openAiRequest(cfg.model, req) : anthropicRequest(cfg.model, req))
       for (let attempt = 0; ; attempt++) {
-        const res = await doFetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(cfg.timeoutMs ?? 300_000) })
+        const timeout = AbortSignal.timeout(cfg.timeoutMs ?? 300_000)
+        const res = await doFetch(url, { method: 'POST', headers, body, signal: req.signal ? AbortSignal.any([req.signal, timeout]) : timeout })
         const text = await res.text()
         if (res.ok) {
           const parsed: unknown = JSON.parse(text)
@@ -248,7 +251,8 @@ export function httpModel(cfg: HttpModelConfig): Model {
         if (!RETRIABLE.has(res.status) || attempt >= 4) {
           throw new Error(`${cfg.provider} ${res.status}: ${text.split(cfg.apiKey).join('***').slice(0, 500)}`)
         }
-        await sleep(Math.min(60_000, (cfg.retryDelayMs ?? 2_000) * 2 ** attempt))
+        // Rejects with the abort reason when the episode's time runs out mid-backoff.
+        await sleep(Math.min(60_000, (cfg.retryDelayMs ?? 2_000) * 2 ** attempt), undefined, { signal: req.signal })
       }
     },
   }
@@ -261,6 +265,11 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4)
 }
 
+/** Characters / 4 of everything a request sends as input (system, tool schemas, messages). */
+export function estimateRequestTokens(req: Pick<CompletionRequest, 'system' | 'tools' | 'messages'>): number {
+  return Math.ceil((req.system.length + JSON.stringify(req.tools).length + JSON.stringify(req.messages).length) / 4)
+}
+
 /**
  * A deterministic fake model for dry runs and tests: turn i issues the i-th
  * planned tool call, then answers with `answer(results)`. Usage is a
@@ -271,8 +280,9 @@ export function scriptedModel(plan: Array<{ name: string; args: Record<string, u
     provider: 'scripted',
     name: 'scripted',
     async complete(req) {
+      req.signal?.throwIfAborted()
       const results = req.messages.flatMap((m) => (m.role === 'tool' ? m.results : []))
-      const input = estimateTokens(req.system + JSON.stringify(req.tools) + JSON.stringify(req.messages))
+      const input = estimateRequestTokens(req)
       const step = req.messages.filter((m) => m.role === 'assistant').length
       if (req.toolChoice === 'auto' && step < plan.length) {
         const call = plan[step]!

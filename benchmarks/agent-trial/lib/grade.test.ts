@@ -100,9 +100,13 @@ test('every false claim of the task file is flagged in its sample and not in its
   }
 })
 
-test("a task's prompt alone does not satisfy its facts (the grade is not handed out by repeating the question)", () => {
+test("a task's prompt alone scores no fact (the grade is not handed out by repeating the question)", () => {
   for (const t of file.tasks) {
     const g = gradeAnswer(t, t.prompt)
-    assert.ok(g.found <= Math.floor(g.total / 4), `${t.id}: the prompt alone finds ${g.found}/${g.total} facts`)
+    assert.deepEqual(
+      g.facts.filter((f) => f.found).map((f) => f.id),
+      [],
+      `${t.id}: the prompt alone finds facts`,
+    )
   }
 })
