@@ -143,9 +143,11 @@ summary. Gated: the Elara agent's `hit5` and `tokensToGold`, per suite.
 Labels and the PR body are read when the gate runs: after adding an
 override, re-run the `bench-gate` job. The gate and its tolerances come
 from the base commit, but the workflow file comes from the PR, so a PR
-could still edit the job itself; that closes when the check is required and
-`benchmarks/`, the gate and the workflow have code owners (fix-list item
-177).
+could still edit the job itself. `bench-gate` is a required check (#574),
+so the job cannot simply be dropped, but an edited job can still pass:
+reviewers read every change to `benchmarks/`, the gate and the workflow.
+There are no code owners: with one account, a code-owner review could
+never be given.
 
 Thresholds: hit@5 two questions = the measured noise of one instance (one
 question, see [Noise](#noise)) plus one question of margin; tokens-to-gold
@@ -156,8 +158,8 @@ question, see [Noise](#noise)) plus one question of margin; tokens-to-gold
 | chapters | PRs to `dev` that touch `server/src/{search,mcp,repositories,db}/`, `server/src/{config,index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, `benchmarks/`, the lab plumbing it uses, the workflow or the gate | `chapters` |
 | all | nightly on `dev`, every PR to `prod` (promotion), by hand | all five |
 
-The jobs are not required status checks yet (fix-list item 177); treat a
-red `bench-gate` job as blocking review.
+`bench-gate` is a required status check on `dev` and `prod` (#574); it is
+skipped, which passes, when no suite applies.
 
 ## Run it
 

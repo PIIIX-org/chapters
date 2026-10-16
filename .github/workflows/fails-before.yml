@@ -11,10 +11,15 @@ name: Fails before
 #
 # Separate from ci.yml so a title, body or label edit re-evaluates this
 # check without re-running the whole suite.
+#
+# Also triggered on PRs to `prod`, where the job is skipped: the check is
+# required on both branches (#574) and a required check whose workflow never
+# starts would wait forever. A skipped job counts as passing. Every fix that
+# a promotion carries already passed this check on its PR to `dev`.
 
 on:
   pull_request:
-    branches: [dev]
+    branches: [dev, prod]
     types:
       [
         opened,
@@ -35,6 +40,7 @@ permissions:
 
 jobs:
   fails-before:
+    if: github.base_ref == 'dev'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

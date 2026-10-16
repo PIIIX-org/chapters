@@ -18,8 +18,9 @@ name: Elara lab
 # The gate (.github/scripts/lab-gate.mjs) compares the results with
 # lab/known-defects.json: a failed or inconclusive check outside the
 # baseline, a baseline entry that no longer shows, or a crashed test fails
-# the job. Not a required check yet (fix-list item 177). Docs:
-# docs/agents/lab.md.
+# the job. `plan`, `lab` and `bench-gate` are required checks on dev and
+# prod (#574): keep them reporting on every PR (no path filter on the
+# trigger; a skipped job passes). Docs: docs/agents/lab.md.
 #
 # The bench jobs (#570) run the premise benchmark (benchmarks/run.ts) on three
 # lab instances of their own, in parallel with the lab job; bench-gate takes

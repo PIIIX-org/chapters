@@ -61,8 +61,8 @@ gh run download <id> -R PIIIX-org/chapters -n lab-results -D <dir>
 overrides the tier's selection (the tier still decides whether a test runs
 its long parts). A newer run on the same ref cancels the older one; the
 nightly has its own concurrency group, so a dispatch or PR on `dev` never
-cancels it. The lab job is **not a required check** yet (branch protection
-is item 177); treat a red lab run on a PR as blocking review.
+cancels it. `plan` and `lab` are **required status checks** on `dev` and
+`prod` (#574; `lab` is skipped, which passes, when `plan` picks no tier).
 
 ## The premise benchmark (`bench` and `bench-gate` jobs)
 
