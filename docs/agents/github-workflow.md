@@ -257,9 +257,9 @@ links (step 4 above).
 **Elara lab** (`.github/workflows/elara-lab.yml`, job `lab`, #576) runs
 the integration tests where the collab relay, the note store, the disk,
 Postgres and MCP meet, against an instance built from the commit with the
-repo's `docker-compose.yml`. Fast tier (~10 min) on PRs to `dev` that
+repo's `docker-compose.yml`. Fast tier (~7 min) on PRs to `dev` that
 change `server/**`, `lab/**`, `docker-compose.yml` or `Dockerfile`; full
-tier (over an hour) nightly on `dev`, on every PR to `prod`, and by
+tier (about an hour) nightly on `dev`, on every PR to `prod`, and by
 `gh workflow run elara-lab.yml --ref <branch>`. A gate compares the
 results with `lab/known-defects.json` (every check that fails today, each
 with its open issue): a new failure, a known defect that now passes, or a

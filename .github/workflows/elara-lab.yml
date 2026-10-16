@@ -6,7 +6,7 @@ name: Elara lab
 # the real setup/signup/approval flow (lab/bootstrap.ts), then exercised by
 # lab/tests/*.test.ts via lab/run.ts. Never deploys.
 #
-# Tiers (cost: the fast tier takes ~10 min, the full tier over an hour):
+# Tiers (cost: the fast tier takes ~7 min, the full tier about an hour):
 #   fast  PRs to dev that touch server/**, lab/**, docker-compose.yml,
 #         Dockerfile or this lab's own workflow/gate; pushes to lab/**
 #   full  nightly on dev, every PR to prod (promotions), and by hand:

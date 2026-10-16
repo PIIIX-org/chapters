@@ -1,6 +1,203 @@
 {
   "defects": [
     {
+      "test": "attachments",
+      "check": "a query matching nothing returns no results",
+      "issue": 533
+    },
+    {
+      "test": "attachments",
+      "check": "an attachment can be deleted at all (REST)",
+      "issue": 561
+    },
+    {
+      "test": "attachments",
+      "check": "an MCP agent can read or list attachments",
+      "issue": 618
+    },
+    {
+      "test": "attachments",
+      "check": "private attachment not marked publicly cacheable",
+      "issue": 562
+    },
+    {
+      "test": "attachments",
+      "check": "purged note: its now-unreferenced attachments are cleaned up",
+      "issue": 561
+    },
+    {
+      "test": "attachments",
+      "check": "text inside an uploaded PDF is searchable",
+      "issue": 560
+    },
+    {
+      "test": "backup-restore",
+      "check": "backup file (holds password + token hashes) is not world-readable",
+      "issue": 493
+    },
+    {
+      "test": "backup-restore",
+      "check": "restore blocker needed patch \"drop-repo-mcp\"",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restore blocker needed patch \"vault-deletedAt-null\"",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restore CLI finishes without errors after \"Restore complete\"",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restored attachments",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restored instance: attachment linked from a note downloads",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restored instance: MFA user can log in with password + TOTP",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restored mcp_connections identical (ids, hashes, flags)",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restored MFA state usable (secret + backup codes)",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restored repositories (repo: links, pinned tokens)",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restored revision history",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restored trash",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restored users identical (ids, hashes, flags)",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "restored vaults identical (ids, hashes, flags)",
+      "issue": 409
+    },
+    {
+      "test": "backup-restore",
+      "check": "unmodified backup restores into a fresh database (pnpm restore-backup)",
+      "issue": 409
+    },
+    {
+      "test": "big-notes",
+      "check": "an agent can append to a note that collab grew past 1 MiB",
+      "issue": 491
+    },
+    {
+      "test": "big-notes",
+      "check": "note_history keeps working as history grows",
+      "issue": 411
+    },
+    {
+      "test": "big-notes",
+      "check": "note_history response stays under 50 MB",
+      "issue": 411
+    },
+    {
+      "test": "big-notes",
+      "check": "one size limit on every write path",
+      "issue": 491
+    },
+    {
+      "test": "big-notes",
+      "check": "parallel note_history on a 900 KiB x 300 note answers within 30 s",
+      "issue": 411
+    },
+    {
+      "test": "big-notes",
+      "check": "parallel note_history on a 900 KiB x 300 note does not restart the app",
+      "issue": 411
+    },
+    {
+      "test": "big-notes",
+      "check": "single note_history call answers within 30 s",
+      "issue": 411
+    },
+    {
+      "test": "browser",
+      "match": "^S8[ab]-(back-online|reconnected): typing done while disconnected stays where it was typed$",
+      "issue": 485,
+      "intermittent": "offline text lands at position 0 in about half the merges, depending on where the agent's insert falls among deleted characters"
+    },
+    {
+      "test": "browser",
+      "check": "agent visible in presence while it writes (edit_note says \"attributed to this connection\")",
+      "issue": 481
+    },
+    {
+      "test": "browser",
+      "check": "lost typing is recoverable from note history (note_revisions)",
+      "issue": 408
+    },
+    {
+      "test": "browser",
+      "check": "no page errors in the browser console",
+      "issue": 617
+    },
+    {
+      "test": "browser",
+      "check": "note_revisions credits edit_note to the agent (actor mcp)",
+      "issue": 403
+    },
+    {
+      "test": "browser",
+      "check": "read_note returns what the live editor shows",
+      "issue": 474
+    },
+    {
+      "test": "browser",
+      "check": "S1-type-while-agent-appends: no lost user typing",
+      "issue": 408
+    },
+    {
+      "test": "browser",
+      "check": "S1: caret stays where the user types when the agent writes",
+      "issue": 483
+    },
+    {
+      "test": "browser",
+      "check": "S1: user typing stays contiguous while the agent writes",
+      "issue": 408
+    },
+    {
+      "test": "browser",
+      "check": "undo (Ctrl+Z) removes the user's own last typing after an agent append",
+      "issue": 483
+    },
+    {
+      "test": "collab-duplication",
+      "match": "^S17 SIGKILL \\d+ ms after ack: ",
+      "issue": 488,
+      "intermittent": "which kill delays duplicate text depends on where the SIGKILL lands between the relay's note write and its .crdt write (2-4 of 8 delays per run)"
+    },
+    {
       "test": "collab-duplication",
       "check": "S11 logout ends the live collab session",
       "issue": 498
@@ -106,9 +303,150 @@
       "issue": 403
     },
     {
+      "test": "crash-write",
+      "match": "^kill \\S+: \\.crdt bin = file for every note written in the round$",
+      "issue": 486,
+      "intermittent": "a round only leaves a stale .crdt bin when the SIGKILL lands between the relay's note write and its .crdt write"
+    },
+    {
+      "test": "crash-write",
+      "match": "^kill \\S+: acked collab edit of a closed tab survives SIGKILL$",
+      "issue": 487
+    },
+    {
+      "test": "crash-write",
+      "match": "^kill \\S+: check-notes clean$",
+      "issue": 486,
+      "intermittent": "a row without its file appears only when a SIGKILL lands between a create's insert and its file write; it then stays for later rounds"
+    },
+    {
+      "test": "crash-write",
+      "match": "^kill \\S+: file = row for every note written in the round$",
+      "issue": 486,
+      "intermittent": "a round only diverges when the SIGKILL lands between a note's row update and its file write"
+    },
+    {
+      "test": "crash-write",
+      "match": "^kill \\S+: latest revision = current body for every note written in the round$",
+      "issue": 486,
+      "intermittent": "a round only loses revisions when the SIGKILL lands between a write and its revision insert"
+    },
+    {
+      "test": "crash-write",
+      "match": "^kill \\S+: no orphan \\.tmp files in the vault$",
+      "issue": 489,
+      "intermittent": "a temp file is orphaned only when a SIGKILL lands between its write and its rename"
+    },
+    {
+      "test": "crash-write",
+      "check": "control: edit_note revisions are attributed to the MCP connection",
+      "issue": 403
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "attachment links in the exported bundle resolve inside the bundle (OKF §6.1 bundle-relative)",
+      "issue": 565
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "bundle declares okf_version (root index.md, OKF §12)",
+      "issue": 620
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "crafted archive manifest silently grants another user edit access to the imported vault",
+      "issue": 621
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "import a real OKF v0.2 bundle (open-knowledge-format bundles/acme_retail)",
+      "issue": 444
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "import: attachment links in notes resolve within the imported vault",
+      "issue": 499
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "import: attachments keep their file names (so links keep working)",
+      "issue": 499
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "import: revision history preserved",
+      "issue": 499
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "import: trash preserved",
+      "issue": 499
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "non-ASCII attachment name kept",
+      "issue": 619
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "OKF §4.1 free-text `type` (\"BigQuery Table\") is accepted",
+      "issue": 444
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "OKF §5.2 `verified` exactly as the spec writes it ({by, at}, tier derived) is accepted",
+      "issue": 563
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "OKF markdown links (§6.1) become graph edges on import",
+      "issue": 620
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "OKF reference parser (open-knowledge-format document.py) reads every exported note as written",
+      "issue": 564
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "revision history travels with the export",
+      "issue": 499
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "trash travels with the export",
+      "issue": 499
+    },
+    {
       "test": "fix-attribution",
       "check": "sequential edit_note credited to the MCP connection",
       "issue": 403
+    },
+    {
+      "test": "multilingual-search",
+      "match": "^normalization: ",
+      "issue": 528,
+      "intermittent": "the keyword channel misses every variant spelling; whether the hybrid rank still drops depends on vector ranks, which shift with timestamp noise (#459)"
+    },
+    {
+      "test": "multilingual-search",
+      "check": "Persian embeddings stay distinguishable (no collapse)",
+      "issue": 530
+    },
+    {
+      "test": "multilingual-search",
+      "check": "Persian retrieval on par with English (hybrid hit@1)",
+      "issue": 530
+    },
+    {
+      "test": "multilingual-search",
+      "check": "ranking is stable across identical copies of the corpus",
+      "issue": 459
+    },
+    {
+      "test": "multilingual-search",
+      "check": "vector retriever ranks Persian answers first as often as English (bge-small-en)",
+      "issue": 530
     },
     {
       "test": "scoped-tokens",
@@ -289,6 +627,11 @@
       "test": "scoped-tokens",
       "check": "vault-pinned update_vault_preferences [account-surface]",
       "issue": 546
+    },
+    {
+      "test": "zz-fix-pretty-bundle",
+      "check": "app survives indexing the bundle",
+      "issue": 496
     }
   ]
 }

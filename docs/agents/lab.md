@@ -24,8 +24,8 @@ committed baseline of known defects.
 
 | tier | when | tests | time |
 |---|---|---|---|
-| fast | PRs to `dev` that change `server/**`, `lab/**`, `docker-compose.yml`, `Dockerfile`, the lab workflow or the gate; pushes to `lab/**` | tests with `tier: 'fast'`, with their long parts skipped | ~10 min |
-| full | nightly 02:30 UTC on `dev`, every PR to `prod` (promotion), and by hand | every test, every part | over an hour |
+| fast | PRs to `dev` that change `server/**`, `lab/**`, `docker-compose.yml`, `Dockerfile`, the lab workflow or the gate; pushes to `lab/**` | tests with `tier: 'fast'`, with their long parts skipped | ~7 min (run 38825028453) |
+| full | nightly 02:30 UTC on `dev`, every PR to `prod` (promotion), and by hand | every test, every part | ~61 min (run 38824113737; `restart-extraction` 20 min, `big-notes` 18 min) |
 
 The `plan` job reads the PR's changed files (GitHub API); a PR to `dev`
 that touches none of those paths skips the `lab` job. Fast-tier tests
