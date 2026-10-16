@@ -168,9 +168,62 @@ than grep is the premise; the baseline below says where Elara stands.
 
 ## Current numbers
 
-See [`baseline.json`](baseline.json) and the runs it links.
+Elara at `dev` 751982d (the code of commit a941c16), run
+[38848135892](https://github.com/PIIIX-org/chapters/actions/runs/38848135892),
+recorded in [`baseline.json`](baseline.json). Means per question; tokens are
+characters / 4; a miss costs 65,000 tokens and 15 calls.
+
+| suite | hit@5 Elara / grep | NDCG@10 Elara / grep | gold reached Elara / grep | tokens-to-gold mean Elara / grep | tokens-to-gold median Elara / grep | tokens per question Elara / grep | line precision Elara / grep |
+|---|---|---|---|---|---|---|---|
+| chapters (29) | 0.97 / 0.69 | 0.79 / 0.60 | 29 / 23 | 3,812 / 14,442 | 1,662 / 759 | 6,589 / 3,393 | 0.025 / 0.094 |
+| diagram-design (20) | 0.90 / 0.75 | 0.66 / 0.49 | 19 / 16 | 13,944 / 15,373 | 8,212 / 2,457 | 24,647 / 9,198 | 0.024 / 0.038 |
+| vectorcraft (20) | 0.70 / 0.60 | 0.35 / 0.32 | 13 / 10 | 30,776 / 33,986 | 21,410 / 35,896 | 33,952 / 6,805 | 0.017 / 0.114 |
+| context-mode (20) | 0.75 / 0.85 | 0.52 / 0.57 | 11 / 8 | 40,423 / 40,247 | 53,041 / 65,000 | 48,321 / 14,101 | 0.035 / 0.038 |
+| rea (20) | 0.60 / 0.65 | 0.28 / 0.34 | 13 / 11 | 30,872 / 30,602 | 16,779 / 5,745 | 28,637 / 6,865 | 0.019 / 0.044 |
+
+How to read it, honestly:
+
+- **Finding the right file**: Elara's search ranks a relevant file in the
+  top 5 more often than keyword grep on three repositories (chapters,
+  diagram-design, vectorcraft) and less often on two (context-mode, rea).
+- **Cost to the evidence**: Elara reaches gold on more questions in every
+  suite, so its mean tokens-to-gold (where a miss costs 65,000) is lower on
+  chapters, diagram-design and vectorcraft and within 1 % of grep's on
+  context-mode and rea. When both find it, grep is usually cheaper: grep's
+  median tokens-to-gold is lower on chapters, diagram-design and rea.
+- **Cost per question**: Elara spends 1.9 to 5 times more tokens per
+  question than grep on every repository. The cause is `read_file`: it
+  returns whole files (no line ranges), so Elara's line precision is the
+  lowest in every suite.
+- On chapters most Elara answers come from the search response itself: a
+  symbol hit shows the definition lines (22 of 29 questions, 13 of the 15
+  identifier questions, reach gold in 1 call). Repositories whose code
+  Elara does not extract (vectorcraft: Rust, 6 symbols for 1,609 files) or
+  whose answers live in Markdown and config get no such shortcut.
+- Latency (`msMedian`) is measured on the lab runner with no other load and
+  says nothing about production.
 
 ## Noise
+
+Two `bench=all` runs of the same commit
+([38848135892](https://github.com/PIIIX-org/chapters/actions/runs/38848135892),
+[38848138390](https://github.com/PIIIX-org/chapters/actions/runs/38848138390);
+compare with `--compare`). The grep agent is deterministic: identical in
+every metric. Elara:
+
+| suite | hit@5 | tokens-to-gold mean | questions that changed |
+|---|---|---|---|
+| chapters | 0.9655 / 0.9655 | 3,812 / 3,799 (-0.3 %) | 6: ranks of tied hits (S1 1 to 3, A4 and S12 3 to 2) and response sizes |
+| context-mode | 0.75 / 0.75 | 40,423 / 39,868 (-1.4 %) | 1: W4 reached gold at 53,898 tokens in one run and missed in the other |
+| diagram-design | 0.9 / 0.9 | 13,944 / 13,944 | 0 |
+| rea | 0.6 / 0.6 | 30,872 / 30,876 | 2 (tokens only) |
+| vectorcraft | 0.7 / 0.7 | 30,776 / 30,776 | 0 |
+
+So hit@5 did not move and tokens-to-gold moved by at most 1.4 %. The gate's
+tolerances (hit@5: one question per suite; tokens-to-gold: 10 %) are above
+that noise; one question that flips between hit and miss can still move a
+suite with a low mean (chapters) by more than 10 %, and the gate treats that
+as material, because reaching the evidence or not is the premise.
 
 ## Future: LLM-agent A/B trials
 

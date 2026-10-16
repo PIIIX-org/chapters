@@ -239,7 +239,12 @@ function main() {
   if (args.includes('--write-baseline')) {
     const results = readJson(opt('--write-baseline'))
     if (!results) throw new Error('--write-baseline needs a results.json')
-    writeFileSync(baselineFile, `${JSON.stringify(toBaseline(results, readJson(baselineFile) ?? { suites: {} }), null, 2)}\n`)
+    const json = JSON.stringify(toBaseline(results, readJson(baselineFile) ?? { suites: {} }), null, 2)
+    // One line per question ({ elara: [rank, tokens], grep: [...] }) keeps the table reviewable in a diff.
+    const compact = json
+      .replace(/\[\s*([^[\]{}]*?)\s*\]/g, (_, inner) => `[${inner.split(/,\s*/).join(', ')}]`)
+      .replace(/\{\s*"elara": (\[[^\]]*\]),\s*"grep": (\[[^\]]*\])\s*\}/g, '{ "elara": $1, "grep": $2 }')
+    writeFileSync(baselineFile, `${compact}\n`)
     console.log(`wrote ${baselineFile} (${Object.keys(results.suites).join(', ')})`)
     return
   }
