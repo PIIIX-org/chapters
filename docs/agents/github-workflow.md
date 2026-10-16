@@ -85,19 +85,23 @@ blind spots the model shares with the author are not covered.
 
 The procedure, in order:
 
-1. **`prod` must be an ancestor of `dev`.** `strict: true` needs a PR to be
-   up to date with its base. A promotion merged with the merge button adds a
-   merge commit that only `prod` has, so the next promotion is `BEHIND`, and
-   "Update branch" cannot fix it (that would push to protected `dev`). Check
-   with `gh api repos/PIIIX-org/chapters/compare/dev...prod --jq .ahead_by`:
-   it must be `0`. If it is not, sync first: branch off `dev`,
-   `git merge --no-ff origin/prod` (the prod-only commits are merge commits
-   with no file changes, so the diff is empty), open a PR to `dev` titled
-   `chore: merge prod back into dev (zero file changes)`, and merge it with
-   **Create a merge commit** (a squash or rebase merge drops `prod`'s
-   parents and fixes nothing). Do this before opening the promotion: it
-   moves `dev`'s head. The first sync, for the 12 promotion merge commits
-   up to #407, is #627.
+1. **Keep `prod` an ancestor of `dev`.** A promotion merged with the merge
+   button adds a merge commit that only `prod` has. With `strict: true` a
+   later promotion can then show as `BEHIND`, and "Update branch" cannot
+   fix that, because it would push to protected `dev`. GitHub has not
+   enforced this every time: #407 merged while `prod` had commits its head
+   lacked. Check with
+   `gh api repos/PIIIX-org/chapters/compare/dev...prod --jq .ahead_by`;
+   it should be `0`. If it is not, sync first:
+   - branch off `dev` and run `git merge --no-ff origin/prod`. The prod-only
+     commits are merge commits with no file changes, so the diff is empty;
+   - open a PR to `dev` titled
+     `chore: merge prod back into dev (zero file changes)`;
+   - merge it with **Create a merge commit**. A squash or rebase merge drops
+     `prod`'s parents and fixes nothing.
+
+   Do this before opening the promotion, because it moves `dev`'s head. The
+   first sync, for the 12 promotion merge commits up to #407, is #627.
 2. **Open the promotion PR** `dev → prod` and wait for every required
    check. On `prod` the lab runs its full tier and the benchmark all five
    suites. Don't merge anything into `dev` until the promotion is done: a new
@@ -107,15 +111,23 @@ The procedure, in order:
    (format below), or approve on GitHub from another account with write
    permission. `review-verdict` turns green.
 4. **Promote by fast-forward, not the merge button**:
-   `git push origin <reviewed head sha>:prod`. GitHub accepts the push only
-   if that commit has every required check of `prod` green, including
-   `review-verdict` (`enforce_admins` applies this to admins too). Otherwise
-   it refuses with `GH006: Protected branch update failed … Required status
-   check "review-verdict" is failing`. On success it marks the PR as merged,
-   with the head as its merge commit. This was shown on a protected scratch
-   copy in #626. `prod` is then exactly the reviewed commit and stays an
-   ancestor of `dev`. The push starts CI on `prod` and the publish job, like
-   a merge does. If the merge button was used anyway, do the step 1 sync
+   `git push origin <reviewed head sha>:prod`. Both rule layers (see
+   **Branch protection and the review gate**) accept this push of an open
+   PR's head once every required check on that commit is green, and the PR
+   is then marked merged with the head as its merge commit. Otherwise the
+   push is refused:
+   - classic protection, while a required check is red:
+     `GH006: Protected branch update failed … Required status check
+     "review-verdict" is failing`;
+   - ruleset 24421063, for a commit that is not a PR's mergeable head:
+     `GH013: Repository rule violations … Changes must be made through a
+     pull request`.
+
+   All three outcomes were shown on a scratch branch with classic
+   protection and a copy of ruleset 24421063 in #630, with the classic-only
+   cases in #626. `prod` is then exactly the reviewed commit and stays an
+   ancestor of `dev`. The push starts CI on `prod` and the publish job, as a
+   merge does. If the merge button was used anyway, do the step 1 sync
    before the next promotion.
 
 The verdict comment:
@@ -124,7 +136,7 @@ The verdict comment:
 VERDICT: MERGE
 
 Review: <https:// link to the review record, or [[reviews/<pr>]] in Elara>
-Head reviewed: <head sha, 7 to 40 hex digits>
+Head reviewed: <full head sha, at least 12 hex digits>
 Reviewer: <owner, or: separate Opus session, adversarial brief>
 ```
 
@@ -141,8 +153,10 @@ call in **Branch protection and the review gate**), promotes the fix, and
 re-applies the full list right away. Record it in an issue: what was
 skipped, why, the commit, and both protection calls. Then run the skipped
 gates on that commit after the fact (`gh workflow run elara-lab.yml --ref
-prod -f tier=full -f bench=all`). A fix committed straight to a branch off
-`prod` also needs to reach `dev` (step 1).
+prod -f tier=full -f bench=all`). Ruleset 24421063 stays in force, so the
+hotfix still needs a PR with `checks` green; it is not relaxed. A fix
+committed straight to a branch off `prod` also needs to reach `dev`
+(step 1).
 
 The promotion PR uses the same template, and `pr-evidence` checks it like
 any other PR. Its Evidence section links (full URL) the green CI run on
@@ -159,7 +173,7 @@ and the hosted instance stays on the previous image — fix on `dev` and
 promote again. (Before this, publish ran on every `prod` push regardless:
 promotion #334 shipped an image while its CI failed on lint.)
 
-After the merge, confirm the CI run on `prod` ended with `publish`
+After the promotion, confirm the CI run on `prod` ended with `publish`
 succeeded (`gh run list --workflow ci.yml --branch prod`, then
 `gh run view <id>`). Until it does, the hosted instance is still on the
 previous image.
@@ -168,7 +182,7 @@ The push event can be late. On 2026-10-12, promotion #392 (`1c1ea12`,
 merged 08:59:14Z) showed no run at first; `publish.yml` was dispatched by
 hand 88 s later, and at 09:01:08Z the push event fired CI and Publish
 anyway, so the image was published twice. If no CI run shows up for the
-merge commit, **wait a few minutes** and check
+promoted commit (the new `prod` head), **wait a few minutes** and check
 `gh run list --commit <sha>`. Only if there is still no CI run, start it
 by hand: `gh workflow run ci.yml --ref prod`. It runs `checks` and then
 publishes, exactly like a push. This uses `prod`'s copy of `ci.yml`, so
@@ -377,9 +391,23 @@ Method, thresholds and the only publishable numbers:
 
 ## Branch protection and the review gate
 
-`dev` and `prod` have branch protection with `enforce_admins: true`
-(admins cannot bypass it) and `strict: true` (the PR must be up to date
-with its base). Required status checks (#574):
+Two layers of rules apply to `dev` and `prod`, and both must pass:
+
+- **Classic branch protection** on each branch: `enforce_admins: true`
+  (admins cannot bypass it), `strict: true` (the PR must be up to date with
+  its base), and the required status checks in the table below (#574).
+- **Repository ruleset 24421063, "Require CI green before merge"**
+  (`gh api repos/PIIIX-org/chapters/rulesets/24421063`). It targets `dev`,
+  `prod` and `main` and has no bypass actors
+  (`current_user_can_bypass: never`). Rules:
+  - `pull_request`: changes go through a PR, 0 approvals,
+    `dismiss_stale_reviews_on_push`, all three merge methods allowed.
+  - `required_status_checks`: `checks` (integration 15368), strict.
+
+  `gh api repos/PIIIX-org/chapters/rules/branches/<branch>` lists the
+  ruleset rules in force on a branch. #574 does not change the ruleset.
+
+Required status checks (classic protection, #574):
 
 | check | workflow | `dev` | `prod` | why it always reports |
 |---|---|---|---|---|
@@ -432,12 +460,15 @@ tip of `dev`) can also be the head of other PRs. So:
   `review-verdict/dev` for PRs to `dev`, and no status at all for any other
   base. A verdict on a `dev → lab/*` PR never marks the commit as reviewed
   for a promotion.
-- PRs from forks get no status. The job does not run for their PR and
-  review events, and on comment events the script refuses them. A fork PR
-  to `prod` therefore stays blocked; promotions always come from `dev`.
-- while another open PR to the same base has the same head, the status is
-  failure ("Open PR #N … has the same head: close it"). Close the duplicate,
-  then re-run the newest **Review verdict** run of the promotion.
+- fork PRs never *set* the status: the job does not run for their PR and
+  review events, and on comment events the script refuses them. Since a
+  status belongs to a commit, a fork PR whose head is the promotion's head
+  still *shows* the promotion's status; that is harmless because
+  promotions always come from `dev`.
+- two PRs with the same base and the same head have the same diff, so a
+  verdict on one is a review of the other. No extra check exists for that
+  case. An earlier version refused it, but that let any fork PR with the
+  promotion's head turn the required status red.
 
 The rules:
 
@@ -456,7 +487,8 @@ The rules:
   for that commit (its push, which a backdated commit cannot hide) and the
   last force-push of the PR branch. The latest such comment decides.
 - `VERDICT: MERGE` must have a `Head reviewed: <sha>` line on its own
-  whose 7 to 40 hex digits match the start of the current head, and a link
+  whose 12 to 40 hex digits match the start of the current head (post the
+  full SHA), and a link
   to the review record: an `https://` URL (not this PR's own page) or an
   Elara `[[...]]` link. A bare path or `#123` is not a record. Prefer a link
   that stays valid (an Elara note, an issue comment), not a file on a branch
@@ -487,7 +519,18 @@ wrote it or whether the review was any good. Further limits:
 - Required checks are matched by name on the commit, not per workflow
   event, and the newest run of a name is the one that counts. On #626 a
   second PR with the same head started another `checks` run, and #626 went
-  back to `BLOCKED` until that run finished. A `workflow_dispatch` or a
-  `lab/**` push of a promotion's head commit therefore replaces its `plan`,
-  `lab` and `bench-gate` results with a smaller tier's. Don't dispatch the
-  lab on `dev`, or open other PRs from `dev`, while a promotion is open.
+  back to `BLOCKED` until that run finished. These all add newer runs on
+  the promotion's head commit (dev's tip):
+  - the nightly lab (`30 2 * * *`, full tier and all suites): a flaky night
+    turns an open promotion red, and while it runs the promotion is pending;
+  - a `workflow_dispatch` or a `lab/**` push of that commit, which replaces
+    `plan`, `lab` and `bench-gate` with a smaller tier's results;
+  - another PR with the same head, including a **fork PR** to `prod`. It
+    starts `pr-evidence` with its own body (which can be red) and a full lab
+    run. First-time contributors need approval before their workflows run
+    (`approval_policy: first_time_contributors`); other accounts do not.
+
+  Keep promotions short. Don't dispatch the lab on `dev` or open other PRs
+  from `dev` while one is open. If a newer run turns a check red, re-run
+  that check on the promotion PR. Not enforced: a prod-only job name would
+  close this.
