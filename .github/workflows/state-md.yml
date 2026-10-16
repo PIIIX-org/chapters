@@ -35,7 +35,7 @@ on:
   schedule:
     - cron: '17 5 * * *'
   push:
-    branches: [dev]
+    branches: [dev, fix-580-scratch]
   workflow_dispatch:
   pull_request:
     paths:
@@ -74,7 +74,7 @@ jobs:
         run: node .github/scripts/state-md.mjs
 
   refresh:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/fix-580-scratch')
     runs-on: ubuntu-latest
     permissions:
       contents: write # push bot/state-md without STATE_MD_TOKEN
@@ -82,7 +82,7 @@ jobs:
       issues: read
       actions: read
     env:
-      BRANCH: bot/state-md
+      BRANCH: bot/state-md-scratch
       TITLE: 'docs(state): refresh generated STATE.md block (bot)'
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       HAS_TOKEN: ${{ secrets.STATE_MD_TOKEN != '' }}
