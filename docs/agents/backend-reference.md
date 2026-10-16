@@ -755,6 +755,30 @@ the count as `filesPendingExtraction`.
   `docs/superpowers/specs/2026-07-12-security-audit-findings.md` and
   `docs/superpowers/specs/2026-09-28-security-audit-and-remediation.md`.
 
+### 6.1 Token and account guarantees, and the tests that hold them (#552)
+
+Each guarantee below is checked by a server test (`server/test/`) and,
+where the parts must meet on a real instance, by the lab
+(`lab/tests/access-behaviour.test.ts`, fast tier). Where Elara falls
+short today, the server test pins today's behaviour and names the issue,
+and the lab check is in `lab/known-defects.json` with that issue: the fix
+flips both.
+
+| guarantee | today | server test | lab check |
+|---|---|---|---|
+| A revoked MCP token is refused on the very next request (HTTP 401, every method) | holds | `mcp-token-lifecycle` | `revoked token: refused on the next request (HTTP 401)` |
+| An expired token (`expires_at`, #640) is refused; a token cannot be minted already expired (400) | holds | `mcp-token-lifecycle` | `scoped-tokens`: `expired token rejected (HTTP 401)` |
+| Deactivating a user stops all of that user's tokens on the next request | holds; the connections are not revoked, so a reactivated user's unexpired tokens work again | `mcp-token-lifecycle` | `deactivated user: their token is refused on the next request (HTTP 401)` |
+| Tokens are stored only as a SHA-256 hash; the raw token is in no row, audit event or listing | holds | `mcp-token-lifecycle` | `token stored only as its SHA-256 hash` |
+| The MCP limit (`MCP_RATE_LIMIT`, default 120/min) refuses request N+1 with HTTP 429 | holds | `mcp-rate-limit` | `rate limit: request MCP_RATE_LIMIT+1 on one connection within a minute gets HTTP 429` |
+| The limit is per connection, not per user: a user with N tokens gets N x the limit | holds (by design today) | `mcp-rate-limit` | `rate limit: counted per connection (another token of the same user is not limited)` |
+| The 429 carries `Retry-After` and a JSON-RPC error body | **defect #440**: no header, body `{"error":"rate limit exceeded for this connection"}` | `mcp-rate-limit` (pins today's 429) | the two `rate limit: the 429 ...` checks (known defects) |
+| B's search, graph, `find_symbols`, related-note edges (local graph, backlinks), notifications, perspective listings, vaults, repositories and teams name nothing of A's | holds | `account-separation` | `separation: B's ... names nothing of A's` (six checks) |
+| `lookup_user` returns only `{id, email}` of an active account; deactivated and unknown emails answer alike | holds; any active account is found by exact email (sharing needs the id) | `account-separation` | `separation: B's lookup_user returns A's id and email only` |
+| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, the REST routes, every prompt that takes a vault) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
+| Semantic neighbours are chosen within the owner's reach | **defect #461**: the neighbour lookup spans every account; every read filters the stored edges | `account-separation` (inserts such an edge and checks B's reads) | `semantic edges are stored only between notes of the same account` (known defect) |
+| Note text in a prompt sits in a separate, delimited data block, apart from the instructions | **defect #556**: `active_project_companion`, `prepare_task_context`, `test_gap_analysis` (bodies) and `plan_feature_implementation`, `explain_code_architecture` (snippets) put it inside their one user-role instruction message, after a heading, with no end marker | `mcp-prompt-note-content` (pins today's placement) | `prompt note text: placed in a separate data block, not inside the instructions` (known defect) |
+
 ---
 
 ## 7. Testing

@@ -32,8 +32,10 @@ committed baseline of known defects.
 The `plan` job reads the PR's changed files (GitHub API); a PR to `dev`
 that touches none of those paths skips the `lab` job. Lockfile-only
 changes (Dependabot bumps of `yjs` or `@hocuspocus/*`, for example) run the
-fast tier. Fast-tier tests today: `smoke`, `concurrency`, `scoped-tokens`,
-`collab-duplication` (without the eight-kill S17 sweep),
+fast tier. Fast-tier tests today: `access-behaviour` (token revocation,
+deactivation and hashing, the MCP rate limit and its 429, two-account
+separation, note text in prompts; #552), `smoke`, `concurrency`,
+`scoped-tokens`, `collab-duplication` (without the eight-kill S17 sweep),
 `fix-attribution`, `fix-crash-catchup`, `fix-frontmatter`,
 `fix-import-edges` (without the chapters repo), `uptime-monitor`
 (`.github/scripts/uptime-monitor.mjs` against the instance through a
@@ -256,6 +258,7 @@ in `pnpm lint`; for types run `tsc --noEmit` with `types: ["bun"]`,
 | `ctx.rest('admin' \| 'member')` | `RestSession` with the bootstrap cookie: `get`, `post`, `request`, `must`; `RestSession.login(baseUrl, email, password)` for a fresh session (login is limited to 10/min per IP) |
 | `ctx.mintToken(user, name, scope?, options?)` | new MCP connection via `POST /api/mcp-connections` → `{id, token}`; `options`: `vaultId`/`repositoryId` for the pin, `access` (`read`/`write`/`admin`), `allowedTools`, `expiresAt` |
 | `ctx.createVault(user, name)` / `ctx.connectRepo(user, name, gitUrl)` | REST create; repo sync starts immediately (public https URLs only) |
+| `ctx.signupUser(email, password)` | a new active user through signup, the mailpit code, verification, admin approval and login → `{id, session}`; for tests that must deactivate or otherwise spend a user (never the bootstrap ones) |
 | `ctx.docker.app.restart(baseUrl)` / `.crash(baseUrl)` | graceful restart / `docker kill -s KILL` + start, both wait for `/health` |
 | `ctx.docker.app.state()` / `.logs(service, n)` / `.stop()` / `.start()` | `docker inspect` (restart count, OOM, start time), log tail, raw control |
 | `ctx.docker.appExec(args, stdin?)` | a command inside the app container |
