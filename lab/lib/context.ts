@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs'
 import * as docker from './docker.ts'
 import { McpClient } from './mcp.ts'
+import { poll } from './portability.ts'
 import { RestSession } from './rest.ts'
 
 export type UserKey = 'admin' | 'member'
@@ -111,6 +112,29 @@ export class LabContext {
   /** Connects a public git repository through REST; the first sync starts immediately. */
   async connectRepo(user: UserKey, name: string, gitUrl: string): Promise<{ id: string; name: string }> {
     return this.rest(user).must('POST', '/api/repositories', { name, ingestionMethod: 'git', gitUrl })
+  }
+
+  /** A new active user through the real flow: signup -> mailpit code -> verify -> admin approval -> login. */
+  async signupUser(email: string, password: string): Promise<{ id: string; session: RestSession }> {
+    const signup = await new RestSession(this.baseUrl).post('/api/signup', { email, password })
+    if (signup.status !== 200) throw new Error(`signup ${email}: ${signup.status} ${signup.text}`)
+    const code = await poll(async () => {
+      const list = (await (await fetch(`${this.env.mailpitUrl}/api/v1/messages`)).json()) as {
+        messages: Array<{ ID: string; To: Array<{ Address: string }>; Subject: string }>
+      }
+      const msg = list.messages.find((m) => m.To.some((t) => t.Address === email) && /verify/i.test(m.Subject))
+      if (!msg) return undefined
+      const full = (await (await fetch(`${this.env.mailpitUrl}/api/v1/message/${msg.ID}`)).json()) as { Text: string }
+      return /verification code is (\S+)/.exec(full.Text)?.[1]
+    }, 60_000, 1_000)
+    if (!code) throw new Error(`no verification mail for ${email}`)
+    const verify = await new RestSession(this.baseUrl).post('/api/verify-email', { email, code })
+    if (verify.status !== 200) throw new Error(`verify ${email}: ${verify.status} ${verify.text}`)
+    const pending = await this.rest('admin').must<Array<{ id: string; email: string }>>('GET', '/api/admin/users?status=pending_approval')
+    const row = pending.find((u) => u.email === email)
+    if (!row) throw new Error(`${email} not pending approval`)
+    await this.rest('admin').must('POST', `/api/admin/users/${row.id}/approve`, {})
+    return { id: row.id, session: await RestSession.login(this.baseUrl, email, password) }
   }
 
   log(...args: unknown[]) {
