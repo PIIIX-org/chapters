@@ -865,6 +865,9 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
   - `version`: the commit the image was built from (`ELARA_VERSION`;
     `publish.yml` passes `github.sha` as a build arg, the Dockerfile bakes
     it into the env), or `null` for an image built without it.
+    `ELARA_HEALTH_HIDE_VERSION=true` (`config.healthHidesVersion`, #638)
+    leaves the key out of `/health` for an operator who does not want to
+    publish the build commit; default shown. The boot log line keeps it.
   - `lastShutdown`: how the *previous* process on this `DATA_DIR` ended,
     read once at boot from `DATA_DIR/lifecycle.json`. `index.ts` writes it
     `running` first thing at boot (before migrations), and `stopped` (with
@@ -886,7 +889,14 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
       process that failed the same way) and deletes the marker (unlink
       works on a full disk), so the next boot reports `unknown` rather than
       reading an older process's `stopped` as `graceful`. On a read-only
-      volume the delete fails too, and every boot keeps reporting `unknown`.
+      volume the delete fails too, and every boot keeps reporting `unknown`
+      while it stays read-only. The first boot after the volume is writable
+      again reads the old `stopped` marker (left by the last process before
+      it went read-only) as `graceful`, with that old process's bootId as
+      `previousBootId`. A monitor saw the read-only boots in between, so
+      that `previousBootId` is not the bootId it last saw: the uptime
+      monitor flags the restart `unseen` and says how the process it saw
+      ended is not known.
       The boot log line carries the error as `markerError`.
     - It assumes **one process per `DATA_DIR`**, which the deployment is
       (single container; the collab relay and the queues are in-process,

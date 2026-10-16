@@ -146,6 +146,30 @@ describe('step: restarts', () => {
     const r = step({ bootId: A }, up(B))
     assert.equal(r.alerts[0].kind, 'restart')
   })
+  it('re-checks the saved state before it reaches a comment (the issue body can be edited by hand)', () => {
+    const saved = { ...emptyState(), bootId: A, startedAt: '2026-10-16T09:00:00Z <img>', version: '`@owner` [x](https://evil)' }
+    const r = step(saved, up(B, { previousBootId: A }))
+    assert.deepEqual(r.alerts[0].previous, { bootId: A, startedAt: null, version: null })
+    const md = formatComment(r.alerts, URL)
+    assert.doesNotMatch(md, /@owner|evil|<img>/)
+    assert.match(md, /\| version \| _none_ \| `abc1234` \|/)
+  })
+  it('takes a hand-edited saved bootId as no baseline: no alert, the observed identity is saved', () => {
+    const r = step({ ...emptyState(), bootId: '` | @owner [x](https://evil) |' }, up(B))
+    assert.deepEqual(r.alerts, [])
+    assert.equal(r.state.bootId, B)
+  })
+  it('resets hand-edited outage and heartbeat fields instead of printing them', () => {
+    const t = '2026-10-16T08:00:00.000Z'
+    const saved = { ...emptyState(), bootId: A, failures: '1', firstFailureAt: '@owner', down: 'yes', heartbeatAt: '[x](https://evil)' }
+    const r = step(saved, fail())
+    assert.deepEqual(r.alerts, [], 'failures reset to 0: one failure is not an outage')
+    assert.equal(r.state.failures, 1)
+    assert.equal(r.state.down, false)
+    assert.equal(r.state.firstFailureAt, r.state.heartbeatAt, 'both restart from this check')
+    const down = step({ ...emptyState(), bootId: A, failures: 1, firstFailureAt: '`@owner`', heartbeatAt: t }, fail())
+    assert.doesNotMatch(formatComment(down.alerts, URL), /@owner/)
+  })
 })
 
 describe('step: down and recovery', () => {
@@ -232,6 +256,13 @@ describe('formatComment', () => {
   it('shows a missing value as none, not "null"', () => {
     const [, r] = run([up(A, { version: undefined }), up(B, { version: undefined })])
     assert.match(formatComment(r.alerts, URL), /\| version \| _none_ \| _none_ \|/)
+  })
+  it('words lastShutdown as a sentence about the previous process', () => {
+    const comment = (lastShutdown, previousBootId) => formatComment(run([up(A), up(B, { lastShutdown, previousBootId })])[1].alerts, URL)
+    assert.match(comment('unknown', null), /lastShutdown: \*\*unknown\*\*: the previous process left no trustworthy lifecycle marker \(/)
+    assert.match(comment('graceful', A), /lastShutdown: \*\*graceful\*\*: the previous process finished a clean SIGTERM\/SIGINT shutdown \(/)
+    assert.match(comment('unclean', A), /lastShutdown: \*\*unclean\*\*: the previous process never finished a clean shutdown: crash/)
+    assert.match(comment('graceful', C), new RegExp(`is about \`${C}\`, which finished a clean SIGTERM/SIGINT shutdown`))
   })
 })
 

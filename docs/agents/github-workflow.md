@@ -571,10 +571,14 @@ not testing) and compares the process identity it reports (`bootId`,
 - **What reaches a comment**: values from `/health` are format-checked
   first (`bootId`/`previousBootId` UUIDs, `startedAt` ISO 8601 UTC,
   `version` 7-40 lower-case hex); anything else is dropped as unknown.
+  The saved state read back from the issue body goes through the same
+  checks (the body can be edited by hand): a value in the wrong format is
+  reset, and a reset `bootId` counts as no baseline (no restart alert).
   Error text keeps plain characters only, and `url` must be a plain
-  `http(s)://host[:port][/path]`, so a wrong `url` input or a hostile
-  endpoint cannot put Markdown, links or mentions into a comment that
-  notifies the owner.
+  `http(s)://host[:port][/path]`, so a wrong `url` input, a hostile
+  endpoint or a hand edit cannot put Markdown, links or mentions into a
+  comment that notifies the owner. An instance with
+  `ELARA_HEALTH_HIDE_VERSION=true` has no `version`; comments show _none_.
 - **Dedupe**: a restart is reported once per new `bootId`; a single failed
   check alerts nothing. A crash loop gives at most one comment per run.
   The comment is posted before the state is saved, so a failed post is

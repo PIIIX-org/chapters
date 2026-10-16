@@ -12,6 +12,12 @@ export const config = {
    * `/health` (#583); null for builds that did not set it.
    */
   version: env.ELARA_VERSION || null,
+  /**
+   * `ELARA_HEALTH_HIDE_VERSION=true` leaves `version` out of `/health` (#638),
+   * for an operator who does not want to publish the build commit. Default:
+   * shown. The boot log line keeps it either way.
+   */
+  healthHidesVersion: env.ELARA_HEALTH_HIDE_VERSION === 'true',
   port: Number(env.ELARA_PORT ?? env.CHAPTERS_PORT ?? env.PORT ?? 3000),
   /** Base public application URL for external callbacks (OIDC, emails, etc.). */
   appUrl: env.ELARA_APP_URL ?? env.CHAPTERS_APP_URL ?? env.APP_URL ?? env.BASE_URL ?? null,

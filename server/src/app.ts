@@ -108,10 +108,12 @@ export async function buildApp(
 
   // Unauthenticated, so it carries nothing sensitive: the process identity
   // (lifecycle.ts) lets an outside monitor see a restart (#583).
+  // ELARA_HEALTH_HIDE_VERSION=true leaves out the build commit (#638).
   app.get('/health', async (_req, reply) => {
     try {
       await sql`SELECT 1`
-      return { status: 'ok', ...bootInfo() }
+      const { version, ...identity } = bootInfo()
+      return config.healthHidesVersion ? { status: 'ok', ...identity } : { status: 'ok', ...identity, version }
     } catch (err) {
       app.log.error(err, 'Health check database failure')
       return reply.code(503).send({ status: 'error', error: 'Database unreachable' })

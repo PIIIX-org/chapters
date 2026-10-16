@@ -91,6 +91,8 @@ services:
       # Unset = same-origin only, which is correct here: this one
       # process serves the UI and the API on the single port above.
       - CORS_ORIGIN
+      # 'true' leaves the build commit (`version`) out of /health.
+      - ELARA_HEALTH_HIDE_VERSION
     volumes:
       # THE NOTES LIVE HERE. Vault content is markdown FILES ON DISK
       # (plus local-path repository clones), not rows in Postgres — a
