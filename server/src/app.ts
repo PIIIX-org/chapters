@@ -7,6 +7,7 @@ import rateLimit from '@fastify/rate-limit'
 import { config } from './config.js'
 import { registerStatic } from './static.js'
 import { sql } from './db/client.js'
+import { bootInfo } from './lifecycle.js'
 import { authPlugin } from './auth/plugin.js'
 import { authRoutes } from './auth/routes.js'
 import { oidcRoutes } from './auth/oidc-routes.js'
@@ -105,10 +106,12 @@ export async function buildApp(
   })
   await app.register(authPlugin)
 
+  // Unauthenticated, so it carries nothing sensitive: the process identity
+  // (lifecycle.ts) lets an outside monitor see a restart (#583).
   app.get('/health', async (_req, reply) => {
     try {
       await sql`SELECT 1`
-      return { status: 'ok' }
+      return { status: 'ok', ...bootInfo() }
     } catch (err) {
       app.log.error(err, 'Health check database failure')
       return reply.code(503).send({ status: 'error', error: 'Database unreachable' })

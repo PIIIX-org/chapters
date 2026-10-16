@@ -15,8 +15,8 @@ const secrets: string[] = []
 if (existsSync('.env')) {
   for (const line of readFileSync('.env', 'utf8').split('\n')) {
     const i = line.indexOf('=')
-    // MCP_RATE_LIMIT is a number, not a secret.
-    if (i > 0 && !line.startsWith('MCP_RATE_LIMIT=')) secrets.push(line.slice(i + 1).trim())
+    // MCP_RATE_LIMIT is a number and ELARA_VERSION a commit SHA: not secrets.
+    if (i > 0 && !line.startsWith('MCP_RATE_LIMIT=') && !line.startsWith('ELARA_VERSION=')) secrets.push(line.slice(i + 1).trim())
   }
 }
 if (existsSync('lab-env.json')) {

@@ -16,6 +16,8 @@ runs:
       shell: bash
       env:
         RATE_LIMIT: ${{ inputs.mcp_rate_limit }}
+        # Baked into the image as `/health`'s `version` (#583).
+        ELARA_VERSION: ${{ github.sha }}
       run: |
         case "$RATE_LIMIT" in ''|*[!0-9]*) echo "mcp_rate_limit must be a number"; exit 1 ;; esac
         key=$(openssl rand -hex 32)
@@ -29,6 +31,7 @@ runs:
           echo "SETUP_TOKEN=$setup"
           echo "POSTGRES_PASSWORD=$pg"
           echo "MCP_RATE_LIMIT=$RATE_LIMIT"
+          echo "ELARA_VERSION=$ELARA_VERSION"
         } > .env
 
     - name: Build and start (docker compose up -d --build)

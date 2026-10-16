@@ -118,6 +118,7 @@ chapters/
 │   │   ├── app.ts                  # Fastify assembly: plugin/route registration order
 │   │   ├── index.ts                # entry point — boots HTTP API + collab relay
 │   │   ├── config.ts               # single source for all env-derived config
+│   │   ├── lifecycle.ts            # process identity for /health; DATA_DIR/lifecycle.json shutdown marker
 │   │   ├── db/                     # Drizzle schema + migrations + client
 │   │   ├── auth/                   # sessions, passwords, lockout, MFA, admin, bootstrap
 │   │   ├── vaults/                 # vaults, sharing, teams, MCP connection management
@@ -732,6 +733,55 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     `node:*-slim`, and an apt layer for it is not worth it).
   - Exposes **`3000` only**. The Yjs relay rides Fastify's own HTTP
     server at `/collab`; there is no second port.
+- **`GET /health`** (root, not under `/api`, no login needed): runs
+  `SELECT 1`, then answers `200`
+  `{ status: 'ok', startedAt, bootId, version, lastShutdown, previousBootId }`, or `503`
+  `{ status: 'error', error: 'Database unreachable' }`. The extra fields
+  (#583, `server/src/lifecycle.ts`) let an outside monitor see a restart
+  without host access, and hold nothing sensitive:
+  - `startedAt`: process start (`performance.timeOrigin`), ISO 8601.
+  - `bootId`: a UUIDv7 made once per process: random, and ordered by start
+    time, so a later boot's id sorts after an earlier one (host clock
+    permitting). A new value = a new process.
+  - `version`: the commit the image was built from (`ELARA_VERSION`;
+    `publish.yml` passes `github.sha` as a build arg, the Dockerfile bakes
+    it into the env), or `null` for an image built without it.
+  - `lastShutdown`: how the *previous* process on this `DATA_DIR` ended,
+    read once at boot from `DATA_DIR/lifecycle.json`. `index.ts` writes it
+    `running` first thing at boot (before migrations), and `stopped` (with
+    the signal) only after the SIGTERM/SIGINT handler finished every flush
+    (collab relay, Fastify, Postgres pool). Next boot: `stopped` →
+    `graceful`; `running` → `unclean` (SIGKILL, OOM kill, crash, uncaught
+    exception, a boot that died in migrations, or a shutdown Docker cut
+    short after its stop timeout); missing or unreadable → `unknown`
+    (first boot on this data directory).
+    - A SIGTERM that arrives before `index.ts` installs its handlers
+      (during migrations and the boot catch-ups, before `listen`) ends the
+      process with Node's default action, so it reads as `unclean`: a
+      redeploy of a container that is still booting shows as unclean.
+    - The marker is written to a per-process temp file
+      (`lifecycle.json.<pid>.tmp`) and renamed, so a kill mid-write leaves
+      the previous marker.
+    - If the `running` write fails (full or read-only volume), this boot
+      reports `unknown` (the marker it read may be stale, left by an older
+      process that failed the same way) and deletes the marker (unlink
+      works on a full disk), so the next boot reports `unknown` rather than
+      reading an older process's `stopped` as `graceful`. On a read-only
+      volume the delete fails too, and every boot keeps reporting `unknown`.
+      The boot log line carries the error as `markerError`.
+    - It assumes **one process per `DATA_DIR`**, which the deployment is
+      (single container; the collab relay and the queues are in-process,
+      §9). A second process would overwrite the marker, and the verdict
+      would be about whichever wrote last.
+  - `previousBootId`: the `bootId` of the process `lastShutdown` is about
+    (from the marker), or `null` when that is `unknown`. A monitor that
+    last saw a different `bootId` missed a restart in between, and knows
+    `lastShutdown` is not about the process it saw.
+  - At boot `index.ts` also prints one JSON line,
+    `{"event":"boot","bootId",...,"lastShutdown","previousBootId","previous":{bootId,startedAt,version,stoppedAt,signal},"markerError"}`.
+  - The production monitor that reads these fields is
+    `.github/workflows/uptime.yml` (`github-workflow.md`, Production uptime
+    monitor).
 - **`server/.env.example`**: every environment variable, documented, in
   one place. For compose, copy it to `.env` at the **repo root** (that is
   the file compose interpolates); for a direct run, `server/.env` with

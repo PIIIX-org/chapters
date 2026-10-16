@@ -2,11 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app.js'
 
 describe('app', () => {
-  it('responds ok on /health', async () => {
+  it('responds ok on /health with the process identity (#583)', async () => {
     const app = await buildApp()
     const res = await app.inject({ method: 'GET', url: '/health' })
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ status: 'ok' })
+    const body = res.json()
+    expect(Object.keys(body).sort()).toEqual(['bootId', 'lastShutdown', 'previousBootId', 'startedAt', 'status', 'version'])
+    expect(body.status).toBe('ok')
+    expect(body.bootId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(new Date(body.startedAt).toISOString()).toBe(body.startedAt)
+    expect(Date.parse(body.startedAt)).toBeLessThanOrEqual(Date.now())
+    // No ELARA_VERSION in the test env; boot was never recorded in this process.
+    expect(body.version).toBeNull()
+    expect(body.lastShutdown).toBe('unknown')
+    expect(body.previousBootId).toBeNull()
+    const again = (await app.inject({ method: 'GET', url: '/health' })).json()
+    expect(again.bootId).toBe(body.bootId)
     await app.close()
   })
 

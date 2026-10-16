@@ -12,8 +12,16 @@
 #   instance backups land in the data volume
 #   (server/src/export/backup-service.ts, config.ts backup.*), so
 #   backup-restore can restore one with `pnpm restore-backup`.
+# - ELARA_VERSION build arg: the commit under test, baked into the image the
+#   way publish.yml does it, so `/health` reports `version` (#583). Written
+#   to ./.env by the lab-instance action. `context: .` is the repo root:
+#   compose resolves paths against the first -f file.
 services:
   app:
+    build:
+      context: .
+      args:
+        ELARA_VERSION: ${ELARA_VERSION:-}
     environment:
       - SMTP_HOST=mailpit
       - SMTP_PORT=1025
