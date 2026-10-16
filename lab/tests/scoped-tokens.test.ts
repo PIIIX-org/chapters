@@ -192,9 +192,12 @@ function sample(s: JsonSchema, fx: Fixtures): unknown {
   return 'lab'
 }
 
-function classify(r: ToolResult): { actual: Outcome['actual']; message: string } {
+function classify(c: Case, r: ToolResult): { actual: Outcome['actual']; message: string } {
   if (r.ok) return { actual: 'allowed', message: r.text.slice(0, 160) }
-  return { actual: SCOPE_DENIAL.test(r.text) ? 'denied-scope' : 'error', message: r.text.slice(0, 240) }
+  // A perspective outside the pin answers "not found", like a missing id (no existence oracle).
+  // prepare() makes a fresh perspective right before such a case, so here it is a denial.
+  const hidden = c.tool === 'delete_graph_perspective' && c.expect === 'deny' && /^Error: not found$/.test(r.text)
+  return { actual: hidden || SCOPE_DENIAL.test(r.text) ? 'denied-scope' : 'error', message: r.text.slice(0, 240) }
 }
 
 function buildCases(tools: ToolInfo[], fx: Fixtures): Case[] {
@@ -424,7 +427,7 @@ const test: LabTest = {
     for (const c of cases) {
       const args = await prepare(c, acct, fx, env.users.member.id)
       const r = await clients[c.token].call(c.tool, args)
-      const { actual, message } = classify(r)
+      const { actual, message } = classify(c, r)
       const scan = c.token === 'account-control' ? {} : markers[c.token]
       const leaks = r.ok ? Object.entries(scan).filter(([needle]) => r.text.includes(needle)).map(([, what]) => what) : []
       // An omitted vaultId that creates/lists GLOBAL perspectives has escaped the pin even without a marker.

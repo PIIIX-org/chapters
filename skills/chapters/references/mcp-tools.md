@@ -6,10 +6,12 @@ Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prom
 
 - **Transport**: Streamable HTTP only, `POST /mcp` or `POST /elara/mcp` (same handler, `server/src/mcp/routes.ts`). There is no stdio transport. The server is stateless: each request gets a fresh server and transport, and responses are JSON.
 - **Auth**: `Authorization: Bearer <token>`. A token is scoped to the whole **account**, one **vault**, or one **repository**.
-- **Scope rules**:
+- **Scope rules** (every tool declares its scope, and the server checks it before the tool runs):
   - Vault tools on a vault-scoped token use the pinned vault; passing a different `vaultId` is an error. Account-scoped tokens must pass `vaultId`. Repository-scoped tokens cannot use vault tools.
   - Repository tools work the same way with `repositoryId`.
   - Tools marked **account only** refuse vault- and repository-scoped tokens.
+  - `everywhere: true` (on `search` and `find_symbols`) is account only.
+  - A refusal says why: `this connection is pinned to a different vault`, `this connection is scoped to a repository, not a vault`, or `<tool> requires an account-scoped connection`.
 - **Response**: the result is returned as JSON text (`content[0].text`). Errors come back as `Error: <message>` with `isError: true`. A filesystem or network error is reported only by its code (`internal storage error (ENOENT)`); the full error goes to the server log.
 - **Unknown arguments are silently dropped.** The schemas strip keys they don't declare, so a misspelled or outdated argument (for example `content` instead of `body` on `create_note`) is ignored without an error.
 - IDs (`vaultId`, `repositoryId`, `noteId`, `revisionId`, `shareId`, `teamId`, `userId`, `notificationId`, perspective `id`) must be UUIDs.
@@ -62,12 +64,12 @@ Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prom
 - **Returns**: `{ include }`.
 
 ### `get_vault_preferences`
-- **Scope**: any token. The handler does not check the token scope; it reads the token owner's preferences.
+- **Scope**: account only. These are the token owner's account-wide preferences (keyed by vault id), so pinned tokens cannot read them.
 - **Parameters**: none.
 - **Returns**: `{ storageMode: "online" | "local", folders, folderColors, vaultColors, favorites }`.
 
 ### `update_vault_preferences`
-- **Scope**: any token (no scope check, as above).
+- **Scope**: account only.
 - **Parameters** (all optional; each one you pass replaces that whole field, and fields you omit keep their stored value):
   - `storageMode` (enum `"online"` | `"local"`).
   - `folders` (record<string, string>).
@@ -216,7 +218,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Returns**: `{ status: "purged", revisionId }`. Permanent; meant for removing a leaked secret.
 
 ### `audit_okf_conformance`
-- **Scope**: vault. Read access.
+- **Scope**: vault. Read access. On a vault-scoped token, repositories are outside the pin: every `[[repo:...]]` link is listed in `brokenRepoLinks` with the repository name or id as written in the note, without looking it up, so the result says nothing about which repositories or files exist.
 - **Parameters**: `vaultId` (uuid, optional).
 - **Returns**:
   ```json
@@ -340,7 +342,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Returns**: array ranked by Reciprocal Rank Fusion of keyword and semantic hits: `{ resourceType: "note" | "code" | "symbol", id, containerId, path, snippet, score, ... }`. Notes add `type` and `frontmatter`; code adds `language`; symbols add `symbolName`, `symbolKind`, `startLine`, `endLine`.
 
 ### `find_symbols`
-- **Scope**: any token. With `repositoryId` it searches that repository; with `everywhere` (account only) or with no repository argument on a vault- or account-scoped token it searches every repository you can access.
+- **Scope**: repository, or account. A repository-scoped token searches its pinned repository; another `repositoryId` is an error. A vault-scoped token cannot use it. An account-scoped token searches `repositoryId` if given, otherwise (or with `everywhere`) every repository you can access.
 - **Parameters**:
   - `query` (string, required).
   - `kind` (enum `"function"` | `"class"` | `"interface"` | `"type"`, optional).
@@ -382,12 +384,12 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Returns**: `{ found, nodes, edges, distance }`. Breadth-first search over all edge kinds, ignoring direction; `distance` is the number of edges, or `-1` when there is no path.
 
 ### `list_graph_perspectives`
-- **Scope**: any token (no scope check). Read access to `vaultId` if given.
-- **Parameters**: `vaultId` (uuid, optional). Omit it to list global perspectives.
+- **Scope**: vault, or account. A vault-scoped token lists the perspectives of its pinned vault (an omitted `vaultId` means the pinned vault; global perspectives are not shown to it). A repository-scoped token cannot use it. Read access to the vault.
+- **Parameters**: `vaultId` (uuid, optional). An account-scoped token that omits it lists global perspectives.
 - **Returns**: array of perspective rows (`id`, `name`, `vaultId`, `userId`, `filters`, `isShared`, `createdAt`, ...): yours plus shared ones.
 
 ### `save_graph_perspective`
-- **Scope**: any token (no scope check). With `vaultId`, read access to that vault is enough. Without it (a global perspective) you need an instance admin role.
+- **Scope**: vault, or account, as for `list_graph_perspectives`: a vault-scoped token saves into its pinned vault. With a vault, read access to it is enough. A global perspective (account-scoped token, no `vaultId`) needs an instance admin role.
 - **Parameters**:
   - `name` (string, required).
   - `vaultId` (uuid, optional).
@@ -396,7 +398,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Returns**: the created perspective row. Perspectives are for the UI; the `graph` tool does not read them.
 
 ### `delete_graph_perspective`
-- **Scope**: any token. Allowed for the creator, the vault owner (vault perspectives), or an instance admin (global perspectives).
+- **Scope**: vault, or account, applied to the perspective's own vault. A vault-scoped token can delete perspectives of its pinned vault only; any other id (another vault's perspective, a global one, or no such perspective) answers `not found`, so a pinned token cannot tell which perspectives exist. A global perspective needs an account-scoped token; a repository-scoped token always gets `not found`. Allowed for the creator, the vault owner (vault perspectives), or an instance admin (global perspectives).
 - **Parameters**: `id` (uuid, required).
 - **Returns**: `{ ok: true }`.
 

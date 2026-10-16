@@ -477,16 +477,6 @@
     },
     {
       "test": "scoped-tokens",
-      "check": "repo-pinned delete_graph_perspective [account-surface]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "repo-pinned delete_graph_perspective [other-vault]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
       "check": "repo-pinned delete_repository [omitted]",
       "state": "inconclusive",
       "issue": 549
@@ -504,21 +494,6 @@
     },
     {
       "test": "scoped-tokens",
-      "check": "repo-pinned get_vault_preferences [account-surface]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "repo-pinned list_graph_perspectives [omitted]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "repo-pinned list_graph_perspectives [other-vault]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
       "check": "repo-pinned revoke_repository_share [omitted]",
       "issue": 549
     },
@@ -526,16 +501,6 @@
       "test": "scoped-tokens",
       "check": "repo-pinned revoke_repository_share [pinned]",
       "issue": 549
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "repo-pinned save_graph_perspective [omitted]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "repo-pinned save_graph_perspective [other-vault]",
-      "issue": 546
     },
     {
       "test": "scoped-tokens",
@@ -559,21 +524,6 @@
     },
     {
       "test": "scoped-tokens",
-      "check": "repo-pinned update_vault_preferences [account-surface]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "vault-pinned delete_graph_perspective [account-surface]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "vault-pinned delete_graph_perspective [other-vault]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
       "check": "vault-pinned delete_vault [omitted]",
       "issue": 549
     },
@@ -581,26 +531,6 @@
       "test": "scoped-tokens",
       "check": "vault-pinned delete_vault [pinned]",
       "issue": 549
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "vault-pinned find_symbols [omitted]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "vault-pinned get_vault_preferences [account-surface]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "vault-pinned list_graph_perspectives [omitted]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "vault-pinned list_graph_perspectives [other-vault]",
-      "issue": 546
     },
     {
       "test": "scoped-tokens",
@@ -634,16 +564,6 @@
     },
     {
       "test": "scoped-tokens",
-      "check": "vault-pinned save_graph_perspective [omitted]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "vault-pinned save_graph_perspective [other-vault]",
-      "issue": 546
-    },
-    {
-      "test": "scoped-tokens",
       "check": "vault-pinned share_vault [omitted]",
       "issue": 549
     },
@@ -661,11 +581,6 @@
       "test": "scoped-tokens",
       "check": "vault-pinned update_vault [pinned]",
       "issue": 549
-    },
-    {
-      "test": "scoped-tokens",
-      "check": "vault-pinned update_vault_preferences [account-surface]",
-      "issue": 546
     },
     {
       "test": "zz-fix-pretty-bundle",
