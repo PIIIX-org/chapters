@@ -254,6 +254,24 @@ its claims. Unit tests: `.github/scripts/pr-evidence.test.mjs`, run by
 claim has a link, not that the link shows the claim: reviewers open the
 links (step 4 above).
 
+**Elara lab** (`.github/workflows/elara-lab.yml`, job `lab`, #576) runs
+the integration tests where the collab relay, the note store, the disk,
+Postgres and MCP meet, against an instance built from the commit with the
+repo's `docker-compose.yml`. Fast tier (~6 min) on PRs to `dev` that
+change anything the image is built from (`server/**`, `client/**`, the
+root `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`,
+`tsconfig.base.json`, `Dockerfile`, `.dockerignore`,
+`docker-compose.yml`) or the lab (`lab/**`); client collab code also adds
+the browser test. Full tier (about an hour) nightly on `dev`, on every PR
+to `prod`, and by `gh workflow run elara-lab.yml --ref <branch>`. A gate
+compares the results with `lab/known-defects.json` (every check that fails
+or is inconclusive today, each with its open issue): a new failure, a new
+inconclusive check, a known defect that no longer shows, a regex entry
+that covers more than one kind of check, or a crashed test turns it red.
+A fix that makes a known defect pass removes its entry in the same PR. Not
+a required status check yet (item 177): treat a red lab run as blocking
+review. Tiers, the baseline, how to add a test: `docs/agents/lab.md`.
+
 Both `dev` and `prod` enforce strict GitHub branch protection with
 `required_status_checks` on `checks` and `enforce_admins: true`. No PR
 can be merged unless all CI checks are green; bypassing is blocked at the
