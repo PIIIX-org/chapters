@@ -64,17 +64,22 @@ query), `relevant` files (graded 1; the ranking metrics use these),
 `gold` evidence as `path:line` / `path:start-end` (verified at the pinned
 commit; the runner fails if a range is past the end of its file), and
 `keywords` for the grep agent: ripgrep regexes taken from the question's own
-words or identifiers, never from the answer. Evidence that names a whole
-file without lines counts as relevant but not as gold.
+words or identifiers (or a word form of them: `fused` → `fus(e|ed|es|ion)`),
+never from the answer. Evidence that names a whole file without lines counts
+as relevant but not as gold.
 
 **The two agents.** No language model is involved; each agent is a fixed
 procedure, so a run is deterministic up to the index Elara builds.
 
 | | Elara agent | grep agent |
 |---|---|---|
-| ranking call | MCP `search {query: question, repositoryId, limit: 10}` | `rg --count -i -e <keywords>` over the checkout, files sorted by matching lines (ties by path), first 50 shown |
-| then, per ranked file, best first | MCP `read_file` (the whole file; Elara has no line ranges) | `rg -n` in that file (first 50 lines, each cut at 200 characters), then up to 3 ranged reads of 41 lines (10 before, 30 after a match not yet shown) |
+| ranking call | MCP `search {query: question, repositoryId, limit: 10}`; hits of exactly equal score are read in path order (the server leaves such ties to row order, #623) | `rg --count -i -e <keywords>` over the checkout, files sorted by matching lines (ties by path), first 50 shown |
+| where in the files | (the `search` response itself) | one `rg -n -i -m 5 -e <keywords> -- <top 10 files>`: the first 5 matching lines of each, each line cut at 200 characters |
+| reads, best file first | MCP `read_file` of each hit (the whole file; Elara has no line ranges) | up to 2 ranged reads per file of 41 lines (10 before, 30 after a match the earlier read did not show) |
 | lines put in context | whole files read; for `search` symbol hits, the snippet's lines (file hits carry a keyword headline without line numbers, so they show none) | the `rg -n` lines and the ranged reads |
+
+Note that the grep ranking lists up to 50 files and Elara's at most 10
+hits; hit@k, MRR and NDCG are cut at 10, so this does not favour either.
 
 Both stop as soon as every gold range has been in their context (an oracle
 stop, identical for both, so the benchmark measures retrieval and not answer
@@ -93,6 +98,8 @@ runner; the same estimate applies to both agents).
 | `ndcg10` | DCG@10 of the distinct ranked files over the ideal DCG@10 of the judged relevances (gain / log2(rank + 1)); a file counts once; always in [0, 1] |
 | `goldReached` | questions where the first gold range was fully seen |
 | `tokensToGold`, `tokensToGoldMedian` | tokens received until the first gold range was fully seen; a miss counts as 65,000 (the most an episode can spend: budget + one capped response) |
+| `tokensToGoldReached` | the same, mean over the questions this agent reached (misses left out) |
+| paired (job summary, `paired` in results) | mean tokens-to-gold of both agents on the questions **both** reached: the like-for-like cost |
 | `callsToGold` | calls until then; a miss counts as 15 |
 | `linePrecision`, `lineRecall` | gold lines seen / lines seen, gold lines seen / gold lines, at the end of the episode |
 | `tokens`, `calls` | spent per question (whole episode) |
@@ -101,58 +108,80 @@ runner; the same estimate applies to both agents).
 Unit tests: `node --test 'benchmarks/lib/*.test.ts'` (CI `checks` job),
 including the NDCG properties (in [0, 1] over 2,000 random graded rankings,
 perfect ranking = 1, a document returned several times counts once, the
-ideal comes from the judgments) and the production guard.
+ideal comes from all the judgments: the TP-01 runner hardcoded an ideal DCG
+for one exact match while it credited relevance to every file in the same
+folder, which is how it reported 1.37) and the production guard.
 
 ## Gate
 
-The `bench` job compares the run with [`baseline.json`](baseline.json)
-(`.github/scripts/bench-gate.mjs`) and prints the delta table in the job
+Every bench run is **three instances** (three `bench` jobs, three lab
+instances of the same build); `bench-gate` takes the per-metric median of
+the three and compares it with [`baseline.json`](baseline.json)
+(`.github/scripts/bench-gate.mjs`), and prints the delta table in the job
 summary. Gated: the Elara agent's `hit5` and `tokensToGold`, per suite.
 
-- **Regression** (red): `hit5` drops by more than 1 question of the suite,
+- **Regression** (red): `hit5` drops by more than 2 questions of the suite,
   or `tokensToGold` rises by more than 10 %. On a pull request the reference
-  is the **base commit's** baseline and the base commit's copy of the gate,
-  so a PR cannot lower the bar it is judged by.
+  is the **base commit's** baseline, judged by the base commit's copy of the
+  gate.
+- **Suite changed** (red on a PR): the suite's `fingerprint` covers the
+  questions, keywords, policy configuration **and the harness source**
+  (`benchmarks/run.ts`, `benchmarks/lib/*.ts`). When it differs from the base
+  baseline's, the base cannot judge the run, so the gate fails unless the PR
+  carries the label `bench-suite-change` and a line
+  `Bench-suite-change: <why>` in its body. The summary then shows the base
+  baseline, the PR's baseline and the run side by side for the reviewer.
+- **Baseline lowered** (red on a PR): the PR's `baseline.json` records a
+  worse `hit5` or `tokensToGold` than the base's. Needs the label
+  `bench-baseline-lowered` and a line `Bench-baseline-lowered: <why>`. So
+  the bar only goes down by an owner decision, never one tolerance per PR.
+  The same holds for a promotion to `prod`, whose base is `prod`'s baseline.
 - **Stale baseline** (red): the run differs from the PR's `baseline.json`
-  by more than the same tolerance in either direction. An improvement must
-  be recorded in the same PR; so must any change of questions, keywords or
-  policy configuration (the suite's `fingerprint` changes), or of the index
-  outcome.
+  by more than the tolerance in either direction (an improvement must be
+  recorded in the same PR), or its fingerprint or index outcome differs.
 
-Thresholds: see [Noise](#noise) for the two runs of the same commit they are
-set against.
+Labels and the PR body are read when the gate runs: after adding an
+override, re-run the `bench-gate` job. The gate and its tolerances come
+from the base commit, but the workflow file comes from the PR, so a PR
+could still edit the job itself; that closes when the check is required and
+`benchmarks/`, the gate and the workflow have code owners (fix-list item
+177).
+
+Thresholds: hit@5 two questions = the measured noise of one instance (one
+question, see [Noise](#noise)) plus one question of margin; tokens-to-gold
+10 % against at most 5.6 % measured.
 
 | tier | when | suites |
 |---|---|---|
-| chapters | PRs to `dev` that touch `server/src/{search,mcp,repositories,db}/`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, `benchmarks/`, the lab plumbing it uses, the workflow or the gate | `chapters` |
+| chapters | PRs to `dev` that touch `server/src/{search,mcp,repositories,db}/`, `server/src/{config,index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, `benchmarks/`, the lab plumbing it uses, the workflow or the gate | `chapters` |
 | all | nightly on `dev`, every PR to `prod` (promotion), by hand | all five |
 
-The job is not a required status check yet (fix-list item 177); treat a red
-`bench` job as blocking review. A deliberate trade-off (worse on one gated
-metric for a reason) is an owner decision recorded in the PR.
+The jobs are not required status checks yet (fix-list item 177); treat a
+red `bench-gate` job as blocking review.
 
 ## Run it
 
 ```sh
 gh workflow run elara-lab.yml -R PIIIX-org/chapters --ref <branch> -f tier=none -f bench=chapters   # or bench=all
-gh run download <run-id> -R PIIIX-org/chapters -n bench-results -D bench-results
+gh run download <run-id> -R PIIIX-org/chapters -p 'bench-results-*' -D runs
 ```
 
-`tier=none` skips the lab tests; the bench job builds its own instance.
+`tier=none` skips the lab tests; each bench job builds its own instance.
 Locally (Linux, Docker, bun, ripgrep): bring the lab up as in
 `docs/agents/lab.md` (`docker compose -f docker-compose.yml -f
 lab/docker-compose.lab.yml up -d --build`, `bun lab/bootstrap.ts`), then
 `BENCH_SUITES=chapters bun benchmarks/run.ts`.
 
-Record a run as the baseline (only from a CI run of the PR's head, linked in
-the PR):
+Record a run as the baseline (only from a CI run of the PR's head, all
+three instances, linked in the PR):
 
 ```sh
-node .github/scripts/bench-gate.mjs --write-baseline bench-results/results.json
-node .github/scripts/bench-gate.mjs --compare run-a/results.json run-b/results.json   # noise between two runs
+node .github/scripts/bench-gate.mjs --write-baseline runs/bench-results-1/results.json,runs/bench-results-2/results.json,runs/bench-results-3/results.json
+node .github/scripts/bench-gate.mjs --compare run-a/results.json run-b/results.json   # noise between two instances
 ```
 
-`--write-baseline` replaces the entries of the suites in that run and keeps
+`--write-baseline` records the per-metric median of the instances (a miss
+counts as worst), replaces the entries of the suites in that run and keeps
 the others.
 
 ## How to read a run
@@ -168,68 +197,75 @@ than grep is the premise; the baseline below says where Elara stands.
 
 ## Current numbers
 
-Elara at `dev` 751982d (the code of commit a941c16), run
-[38848135892](https://github.com/PIIIX-org/chapters/actions/runs/38848135892),
-recorded in [`baseline.json`](baseline.json). Means per question; tokens are
+Elara at `dev` 751982d, run
+[38856349787](https://github.com/PIIIX-org/chapters/actions/runs/38856349787)
+(harness 9f658fa), per-metric median of its three instances, recorded in
+[`baseline.json`](baseline.json). Means per question; tokens are
 characters / 4; a miss costs 65,000 tokens and 15 calls.
 
 | suite | hit@5 Elara / grep | NDCG@10 Elara / grep | gold reached Elara / grep | tokens-to-gold mean Elara / grep | tokens-to-gold median Elara / grep | tokens per question Elara / grep | line precision Elara / grep |
 |---|---|---|---|---|---|---|---|
-| chapters (29) | 0.97 / 0.69 | 0.79 / 0.60 | 29 / 23 | 3,812 / 14,442 | 1,662 / 759 | 6,589 / 3,393 | 0.025 / 0.094 |
-| diagram-design (20) | 0.90 / 0.75 | 0.66 / 0.49 | 19 / 16 | 13,944 / 15,373 | 8,212 / 2,457 | 24,647 / 9,198 | 0.024 / 0.038 |
-| vectorcraft (20) | 0.70 / 0.60 | 0.35 / 0.32 | 13 / 10 | 30,776 / 33,986 | 21,410 / 35,896 | 33,952 / 6,805 | 0.017 / 0.114 |
-| context-mode (20) | 0.75 / 0.85 | 0.52 / 0.57 | 11 / 8 | 40,423 / 40,247 | 53,041 / 65,000 | 48,321 / 14,101 | 0.035 / 0.038 |
-| rea (20) | 0.60 / 0.65 | 0.28 / 0.34 | 13 / 11 | 30,872 / 30,602 | 16,779 / 5,745 | 28,637 / 6,865 | 0.019 / 0.044 |
+| chapters (29) | 0.97 / 0.69 | 0.78 / 0.58 | 29 / 22 | 4,198 / 16,655 | 1,669 / 759 | 6,946 / 3,375 | 0.025 / 0.094 |
+| diagram-design (20) | 0.90 / 0.75 | 0.64 / 0.49 | 19 / 16 | 14,762 / 15,373 | 11,533 / 2,457 | 25,008 / 9,198 | 0.021 / 0.038 |
+| vectorcraft (20) | 0.70 / 0.60 | 0.36 / 0.32 | 13 / 10 | 30,670 / 33,986 | 20,351 / 35,896 | 34,105 / 6,805 | 0.017 / 0.114 |
+| context-mode (20) | 0.75 / 0.85 | 0.56 / 0.57 | 12 / 8 | 37,927 / 40,247 | 42,028 / 65,000 | 48,904 / 14,101 | 0.036 / 0.038 |
+| rea (20) | 0.60 / 0.65 | 0.30 / 0.34 | 13 / 11 | 31,282 / 30,602 | 16,779 / 5,745 | 28,310 / 6,865 | 0.022 / 0.044 |
+
+Like for like, on the questions **both** agents reach (`paired`):
+
+| suite | questions both reach | tokens-to-gold Elara | tokens-to-gold grep | Elara / grep |
+|---|---|---|---|---|
+| chapters | 22 | 3,857 | 1,273 | 3.0× |
+| diagram-design | 15 | 11,122 | 2,937 | 3.8× |
+| vectorcraft | 5 | 9,248 | 4,545 | 2.0× |
+| context-mode | 6 | 15,398 | 3,077 | 5.0× |
+| rea | 8 | 7,536 | 2,308 | 3.3× |
 
 How to read it, honestly:
 
 - **Finding the right file**: Elara's search ranks a relevant file in the
   top 5 more often than keyword grep on three repositories (chapters,
   diagram-design, vectorcraft) and less often on two (context-mode, rea).
-- **Cost to the evidence**: Elara reaches gold on more questions in every
-  suite, so its mean tokens-to-gold (where a miss costs 65,000) is lower on
-  chapters, diagram-design and vectorcraft and within 1 % of grep's on
-  context-mode and rea. When both find it, grep is usually cheaper: grep's
-  median tokens-to-gold is lower on chapters, diagram-design and rea.
-- **Cost per question**: Elara spends 1.9 to 5 times more tokens per
-  question than grep on every repository. The cause is `read_file`: it
-  returns whole files (no line ranges), so Elara's line precision is the
-  lowest in every suite.
-- On chapters most Elara answers come from the search response itself: a
-  symbol hit shows the definition lines (22 of 29 questions, 13 of the 15
-  identifier questions, reach gold in 1 call). Repositories whose code
-  Elara does not extract (vectorcraft: Rust, 6 symbols for 1,609 files) or
-  whose answers live in Markdown and config get no such shortcut.
+- **Reaching the evidence**: Elara reaches gold on more questions in every
+  suite. That is what its lower mean tokens-to-gold mostly measures: a
+  miss costs 65,000, and grep misses more.
+- **Cost when both reach it**: on questions both agents reach, grep is 2 to
+  5 times cheaper on all five suites, and Elara spends 2 to 5 times more
+  tokens per question overall. The cause is `read_file`: it returns whole
+  files (no line ranges), so Elara's line precision is the lowest in every
+  suite.
+- On chapters many Elara answers come from the search response itself: a
+  symbol hit shows the definition lines, so most identifier questions reach
+  gold in one call. Repositories whose code Elara does not extract
+  (vectorcraft: Rust, 6 symbols for 1,609 files) or whose answers live in
+  Markdown and config get no such shortcut.
 - Latency (`msMedian`) is measured on the lab runner with no other load and
   says nothing about production.
 
 ## Noise
 
-Two `bench=all` runs of the same commit
-([38848135892](https://github.com/PIIIX-org/chapters/actions/runs/38848135892),
-[38848138390](https://github.com/PIIIX-org/chapters/actions/runs/38848138390);
-compare with `--compare`). The grep agent is deterministic: identical in
-every metric. Elara:
+The grep agent is deterministic: identical in every run. Elara's ranks move
+between instances of identical code because the server breaks score ties by
+database row order (#623); the agent breaks exact score ties by path, which
+does not cover ties that change the candidate set. Measured, per suite,
+Elara hit@5 / tokens-to-gold:
 
-| suite | hit@5 | tokens-to-gold mean | questions that changed |
-|---|---|---|---|
-| chapters | 0.9655 / 0.9655 | 3,812 / 3,799 (-0.3 %) | 6: ranks of tied hits (S1 1 to 3, A4 and S12 3 to 2) and response sizes |
-| context-mode | 0.75 / 0.75 | 40,423 / 39,868 (-1.4 %) | 1: W4 reached gold at 53,898 tokens in one run and missed in the other |
-| diagram-design | 0.9 / 0.9 | 13,944 / 13,944 | 0 |
-| rea | 0.6 / 0.6 | 30,872 / 30,876 | 2 (tokens only) |
-| vectorcraft | 0.7 / 0.7 | 30,776 / 30,776 | 0 |
+| suite | 3 instances of run 38856349787 | earlier single instances (harness a941c16): runs 38848135892, 38848138390, PR runs 38852760271, 38853656282 (chapters only) |
+|---|---|---|
+| chapters | 0.9655 / 4,198; 0.9655 / 4,199; 0.9655 / 4,184 | hit@5 0.9655, 0.9655, 0.931, 0.931 (A1 rank 3 or 6); tokens-to-gold 3,812 to 4,026 (+5.6 %) |
+| diagram-design | 0.95 / 14,666; 0.9 / 15,030; 0.9 / 14,762 | 0.9, 0.9; 13,944 both |
+| vectorcraft | 0.7 / 30,670 in all three | 0.7, 0.7; 30,776 both |
+| context-mode | 0.75 / 37,927; 0.75 / 37,927; 0.75 / 38,304 | 0.75, 0.75; 40,423 / 39,868 (W4 reached gold in one run only) |
+| rea | 0.6 / 31,282; 0.6 / 31,282; 0.6 / 31,285 | 0.6, 0.6; 30,872 / 30,876 |
 
-A third instance (the first `chapters` run of PR #622,
-[38852760271](https://github.com/PIIIX-org/chapters/actions/runs/38852760271))
-moved one question across the top-5 line (A1, rank 3 to 6): hit@5 0.9655
-to 0.931, exactly the one-question tolerance, with tokens-to-gold within
-10 %.
-
-Between the two runs hit@5 did not move and tokens-to-gold moved by at most 1.4 %. The gate's
-tolerances (hit@5: one question per suite; tokens-to-gold: 10 %) are above
-that noise; one question that flips between hit and miss can still move a
-suite with a low mean (chapters) by more than 10 %, and the gate treats that
+So one instance moves hit@5 by at most one question and tokens-to-gold by
+at most 5.6 %. The gate compares medians of three instances and allows two
+questions on hit@5 (noise + one question of margin) and 10 % on
+tokens-to-gold. One question flipping between hit and miss can still move
+a suite with a low mean (chapters) by more than 10 %; the gate treats that
 as material, because reaching the evidence or not is the premise.
+(Indexing took about half as long in run 38856349787 as in the earlier
+runs, on the same code; index time is reported, not gated.)
 
 ## Future: LLM-agent A/B trials
 
