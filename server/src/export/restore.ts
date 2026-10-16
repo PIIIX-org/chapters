@@ -44,7 +44,8 @@ interface AccountDump {
   teamMemberships: Array<typeof teamMemberships.$inferInsert>
   vaults: Array<typeof vaults.$inferInsert>
   vaultShares: Array<typeof vaultShares.$inferInsert>
-  mcpConnections: Array<typeof mcpConnections.$inferInsert>
+  // A dump from before migration 0019 has no `access`.
+  mcpConnections: Array<Omit<typeof mcpConnections.$inferInsert, 'access'> & Partial<Pick<typeof mcpConnections.$inferInsert, 'access'>>>
   securityEvents: Array<typeof securityEvents.$inferInsert>
   notifications: Array<typeof notifications.$inferInsert>
 }

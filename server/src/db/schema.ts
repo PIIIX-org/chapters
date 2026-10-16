@@ -234,8 +234,9 @@ export const mcpConnections = pgTable(
       onDelete: 'cascade',
     }),
     tokenHash: text('token_hash').notNull().unique(),
-    // Set at mint time only. Each MCP tool declares the level it needs.
-    access: mcpAccess('access').notNull().default('write'),
+    // Set at mint time only. Each MCP tool declares the level it needs. No
+    // database default: the mint route and the restore name the level (#641).
+    access: mcpAccess('access').notNull(),
     // null = every tool `access` permits; otherwise only these tool names.
     allowedTools: text('allowed_tools').array(),
     expiresAt: timestamp('expires_at', { withTimezone: true }),

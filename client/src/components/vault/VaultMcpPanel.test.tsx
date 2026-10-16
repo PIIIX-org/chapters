@@ -118,11 +118,11 @@ function stubFetch(opts: {
   return fetchMock
 }
 
-function renderPanel(vaultId = 'v1') {
+function renderPanel(vaultId = 'v1', isOwner = true) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
-      <VaultMcpPanel vaultId={vaultId} />
+      <VaultMcpPanel vaultId={vaultId} isOwner={isOwner} />
     </QueryClientProvider>,
   )
 }
@@ -209,18 +209,36 @@ describe('VaultMcpPanel', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/share this vault.*move it to the trash, purge notes and erase history/)
   })
 
-  it('an account token defaults to admin, without the pinned-token warning', async () => {
+  it('a vault member who is not its owner is not offered admin (the API would refuse it)', async () => {
+    const fetchMock = stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderPanel('v1', false)
+
+    await screen.findByText('No MCP connections for this vault yet.')
+    const options = within(screen.getByLabelText('Access')).getAllByRole('option')
+    expect(options.map((o) => o.getAttribute('value'))).toEqual(['read', 'write'])
+    await user.type(screen.getByLabelText('New connection'), 'Member agent')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
+    expect(postBody(fetchMock)).toEqual({ name: 'Member agent', scope: 'vault', vaultId: 'v1', access: 'write' })
+  })
+
+  it('an account token defaults to read and write, admin stays available, without the pinned-token warning', async () => {
     const fetchMock = stubFetch({ connections: [] })
     const user = userEvent.setup()
     renderAccountPanel()
 
     await screen.findByText('No account-wide MCP connections yet.')
-    expect(screen.getByLabelText('Access')).toHaveValue('admin')
+    expect(screen.getByLabelText('Access')).toHaveValue('write')
+    const options = within(screen.getByLabelText('Access')).getAllByRole('option')
+    expect(options.map((o) => o.getAttribute('value'))).toEqual(['read', 'write', 'admin'])
+    await user.selectOptions(screen.getByLabelText('Access'), 'admin')
     expect(screen.queryByRole('alert')).toBeNull()
+    await user.selectOptions(screen.getByLabelText('Access'), 'write')
     await user.type(screen.getByLabelText('New connection'), 'Laptop')
     await user.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
-    expect(postBody(fetchMock)).toEqual({ name: 'Laptop', scope: 'account', access: 'admin' })
+    expect(postBody(fetchMock)).toEqual({ name: 'Laptop', scope: 'account', access: 'write' })
   })
 
   it('the allow-list offers only tools the access level and the vault pin can use, and sends the picked ones', async () => {

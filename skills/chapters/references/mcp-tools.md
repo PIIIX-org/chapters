@@ -14,10 +14,10 @@ Parameters, scopes, capabilities, and return shapes for the 57 Elara MCP tools a
   - A refusal says why: `this connection is pinned to a different vault`, `this connection is scoped to a repository, not a vault`, or `<tool> requires an account-scoped connection`.
 - **Capabilities** (set when the token is minted, never raised later; every tool declares one, and the server checks them before the scope):
   - Each token has an access level, ordered `read` < `write` < `admin`. A tool runs only if the level is at or above the tool's **Capability** below. `read` tools only read; `write` tools create, edit, trash, restore or revert; `admin` tools widen access to or destroy a resource or change its settings (share, revoke, `update_vault`/`update_repository`, `delete_vault`, `purge_*`, `purge_revision`, `connect_repository`, team membership, `delete_team`).
-  - Defaults: an account token gets `admin` (every tool); a vault- or repository-pinned token gets `write`, so it cannot share, update, trash or purge its pin or erase history. Only the owner of the pinned vault or repository can mint a pinned token with `admin`.
+  - Defaults: an account token minted through the API without a level gets `admin` (every tool); a vault- or repository-pinned token gets `write`, so it cannot share, update, trash or purge its pin or erase history. The Settings and vault forms start at `write`. Only the owner of the pinned vault or repository can mint a pinned token with `admin`.
   - An optional tool allow-list limits the token to the named tools. A token with an allow-list gets no MCP prompts (prompts read notes on the server side).
   - An optional expiry: after it, every request is refused with HTTP 401 (`invalid, revoked or expired MCP token`).
-  - A refusal names what is missing: `<tool> needs the admin capability; this connection has write access ...` or `<tool> is not in this connection's tool allow-list`.
+  - `tools/list` shows only the tools the token can call: those in its allow-list, within its access level, and of a scope its own scope reaches (no account-only tools on a pinned token, no vault tools on a repository token, no repository tools on a vault token). A tool missing from the list can still be called by name; the call is refused with a message naming what is missing: `<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`, or a scope refusal such as `<tool> requires an account-scoped connection`.
 - **Response**: the result is returned as JSON text (`content[0].text`). Errors come back as `Error: <message>` with `isError: true`. A filesystem or network error is reported only by its code (`internal storage error (ENOENT)`); the full error goes to the server log.
 - **Unknown arguments are silently dropped.** The schemas strip keys they don't declare, so a misspelled or outdated argument (for example `content` instead of `body` on `create_note`) is ignored without an error.
 - IDs (`vaultId`, `repositoryId`, `noteId`, `revisionId`, `shareId`, `teamId`, `userId`, `notificationId`, perspective `id`) must be UUIDs.
@@ -453,7 +453,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Who**: a vault perspective needs edit access to its vault (else `not found`), then the creator or the vault owner (another editor gets `owner permission required`). A global perspective only its creator (anyone else, an instance admin included, gets `not found`).
 - **Capability**: `write`.
 - **Parameters**: `id` (uuid, required).
-- **Returns**: `{ ok: true }`.
+- **Returns**: `{ ok: true }`. Permanent: there is no perspective trash. A vault owner can delete any member's perspective in that vault, not only their own.
 
 ---
 
@@ -492,7 +492,7 @@ All team and user tools are **account only**.
 - **Returns**: `{ status: "deleted" }`.
 
 ### `lookup_user`
-- **Capability**: `read`.
+- **Capability**: `read`. It changes nothing and returns only the id of an email you already know, the same answer any signed-in user gets from `GET /api/users/lookup`; the tools that act on that id (`share_*`, `add_team_member`) need `admin` themselves.
 - **Parameters**: `email` (string, required, email format).
 - **Returns**: `{ id, email }` of the active user with that email.
 

@@ -74,7 +74,8 @@ const COPY = {
     createError: 'Could not create an account-wide connection.',
     reach: 'loses access to every vault and repository this account can reach, on its next request',
     adminWarning: null,
-    defaultAccess: 'admin' as McpAccess,
+    // The form always sends a level; the API's admin default for an omitted one is not used here.
+    defaultAccess: 'write' as McpAccess,
   },
 } as const
 
@@ -156,10 +157,20 @@ function McpConnectionRow({ connection, reach }: { connection: McpConnection; re
   )
 }
 
-function CreateMcpConnectionForm({ target, onCreated }: { target: McpTarget; onCreated: (token: string, name: string) => void }) {
+function CreateMcpConnectionForm({
+  target,
+  canGrantAdmin,
+  onCreated,
+}: {
+  target: McpTarget
+  canGrantAdmin: boolean
+  onCreated: (token: string, name: string) => void
+}) {
   const copy = COPY[target.scope]
   const [name, setName] = useState('')
   const [access, setAccess] = useState<McpAccess>(copy.defaultAccess)
+  // The API refuses admin on a vault token to anyone but the vault's owner, so it is not offered.
+  const levels: McpAccess[] = canGrantAdmin ? ['read', 'write', 'admin'] : ['read', 'write']
   const [expiryDays, setExpiryDays] = useState(0)
   const [limitTools, setLimitTools] = useState(false)
   const [allowedTools, setAllowedTools] = useState<string[]>([])
@@ -223,7 +234,7 @@ function CreateMcpConnectionForm({ target, onCreated }: { target: McpTarget; onC
             value={access}
             onChange={(e) => setAccess(e.target.value as McpAccess)}
           >
-            {(['read', 'write', 'admin'] as const).map((level) => (
+            {levels.map((level) => (
               <option key={level} value={level}>
                 {ACCESS_LABEL[level]}
               </option>
@@ -303,8 +314,11 @@ function CreateMcpConnectionForm({ target, onCreated }: { target: McpTarget; onC
 /**
  * One list, two scopes. The account-wide settings list and the vault settings
  * list are literally this component — only the target and the copy differ.
+ * `canGrantAdmin` defaults to true for the account scope only.
  */
-export function McpPanel(target: McpTarget) {
+export function McpPanel(props: McpTarget & { canGrantAdmin?: boolean }) {
+  // Only the target goes into the create request, never the panel's own props.
+  const target: McpTarget = props.scope === 'vault' ? { scope: 'vault', vaultId: props.vaultId } : { scope: 'account' }
   const connectionsQuery = useMcpConnections()
   const [revealed, setRevealed] = useState<{ token: string; name: string } | null>(null)
   const copy = COPY[target.scope]
@@ -360,13 +374,17 @@ export function McpPanel(target: McpTarget) {
           </Table>
         )}
 
-        <CreateMcpConnectionForm target={target} onCreated={(token, name) => setRevealed({ token, name })} />
+        <CreateMcpConnectionForm
+          target={target}
+          canGrantAdmin={props.canGrantAdmin ?? target.scope === 'account'}
+          onCreated={(token, name) => setRevealed({ token, name })}
+        />
       </PanelBody>
     </Panel>
   )
 }
 
-/** The vault settings modal's existing call site, unchanged. */
-export function VaultMcpPanel({ vaultId }: { vaultId: string }) {
-  return <McpPanel scope="vault" vaultId={vaultId} />
+/** The vault settings modal's call site; only the vault's owner can grant a token admin. */
+export function VaultMcpPanel({ vaultId, isOwner }: { vaultId: string; isOwner: boolean }) {
+  return <McpPanel scope="vault" vaultId={vaultId} canGrantAdmin={isOwner} />
 }

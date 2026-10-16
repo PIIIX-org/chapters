@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { ListToolsRequestSchema, type ListToolsResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { and, asc, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
@@ -110,6 +111,20 @@ type ScopeResolvers = {
 export type ToolCapability = McpAuth['connection']['access']
 const ACCESS_RANK: Record<ToolCapability, number> = { read: 0, write: 1, admin: 2 }
 
+/** The tool scopes a connection of each scope can call at all; the scope resolvers refuse the others. */
+const REACHABLE_SCOPES: Record<McpAuth['connection']['scope'], Partial<Record<ToolScope, true>>> = {
+  account: {
+    account: true,
+    vault: true,
+    'vault-or-account': true,
+    repository: true,
+    'repository-or-account': true,
+    'vault-or-repo': true,
+  },
+  vault: { vault: true, 'vault-or-account': true, 'vault-or-repo': true },
+  repository: { repository: true, 'repository-or-account': true, 'vault-or-repo': true },
+}
+
 export interface McpToolInfo {
   name: string
   scope: ToolScope
@@ -163,7 +178,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   // is built. Resources would serve data the same way, so they are closed
   // too. This is a guard against forgetting a declaration, not a security
   // boundary: the low-level `server.server.setRequestHandler` bypasses it
-  // (unused here).
+  // (here it is only wrapped, to filter tools/list below).
   const registerTool = server.registerTool.bind(server)
   const unscoped = (): never => {
     throw new Error('register MCP tools with tool() and a scope declaration')
@@ -172,6 +187,25 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   server.tool = unscoped
   server.registerResource = unscoped
   server.resource = unscoped
+
+  // tools/list advertises only the tools this connection can call (#641):
+  // its allow-list, access level and scope. Every tool stays registered, so
+  // calling a hidden one still answers with the refusal that says why. The
+  // SDK sets its tools/list handler on the first registration, through here.
+  const hiddenTools = new Set<string>()
+  const setRequestHandler = server.server.setRequestHandler.bind(server.server) as (
+    schema: unknown,
+    handler: unknown,
+  ) => void
+  server.server.setRequestHandler = (schema: unknown, handler: (...args: never[]) => unknown): void => {
+    if (schema !== ListToolsRequestSchema) return setRequestHandler(schema, handler)
+    // This is the SDK's own tools/list handler: it lists every registered, enabled tool.
+    const listAll = handler as (...args: unknown[]) => ListToolsResult | Promise<ListToolsResult>
+    setRequestHandler(schema, async (...args: unknown[]) => {
+      const listed = await listAll(...args)
+      return { ...listed, tools: listed.tools.filter((t) => !hiddenTools.has(t.name)) }
+    })
+  }
 
   /** Resolves the target vault under the connection's scope (hard, never narrowed). */
   function vaultFor(requested?: string): string {
@@ -312,13 +346,23 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     }
   }
 
+  /** Whether this connection can call the tool at all: what `requireCapability` and the scope resolvers allow. */
+  function callable(name: string, scope: ToolScope, capability: ToolCapability): boolean {
+    const { allowedTools, access } = auth.connection
+    return (
+      (!allowedTools || allowedTools.includes(name)) &&
+      ACCESS_RANK[access] >= ACCESS_RANK[capability] &&
+      REACHABLE_SCOPES[auth.connection.scope][scope] === true
+    )
+  }
+
   /**
    * Registers a tool. `scope` and `capability` are required. The call must
    * pass the connection's capabilities (`requireCapability`); then its ids
    * (the `vaultId` / `repositoryId` arguments, or what `ids` derives from the
    * arguments) are resolved under the connection's scope before `handler`
    * runs, and the handler gets the result. Thrown errors become an `isError`
-   * result.
+   * result. A tool the connection can never call is left out of tools/list.
    */
   function tool<S extends ToolScope, A extends Record<string, unknown> = Record<string, unknown>>(
     name: string,
@@ -340,6 +384,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     const resolve: ScopeResolvers[S] = scopeResolvers[def.scope]
     const inputSchema: z.ZodRawShape = def.inputSchema ?? {}
     tools.push({ name, scope: def.scope, capability: def.capability })
+    if (!callable(name, def.scope, def.capability)) hiddenTools.add(name)
     registerTool(name, { description: def.description, inputSchema }, async (raw: unknown) => {
       try {
         requireCapability(name, def.capability)
