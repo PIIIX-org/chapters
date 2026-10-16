@@ -6,27 +6,16 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
 - **Last promotion to `prod`**: #407 Promote: Elara study fixes (#400, #405, #398, #402) and docs (#406) (merged 2026-10-15, `111e3f1`).
 - **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) **failure**; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
-- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 0/5, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 9/21, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 0/35, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/60, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/29, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/34.
-- **Open issues**: [185](https://github.com/PIIIX-org/chapters/issues): P0 65, P1 92, P2 22, no priority 6; `bug` 8, `security` 2, `decision` 4, `deferred` 2.
+- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 3/5, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 22/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 0/35, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/60, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/29, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/34.
+- **Open issues**: [176](https://github.com/PIIIX-org/chapters/issues): P0 60, P1 83, P2 26, no priority 7; `bug` 9, `security` 2, `decision` 2, `deferred` 2.
 - **Owner actions** (label `owner`):
-  - #586 [fix 189] Redeploy production (docker compose pull && docker compose up -d) so… (P0)
-  - #587 [fix 190] Rotate the webhook secret pasted in chat; decide on the inactive GitHub hook… (P0)
-  - #588 [fix 191] Decide whether to keep the upstream rea connection (re-clones every 5 min) and… (P0)
   - #589 [fix 192] Revoke the 5 GitHub tokens exposed before #383 (P0)
   - #635 Add STATE_MD_TOKEN so the STATE.md bot can open its PR
-- **In progress: [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2)** (12 open, owner actions excluded):
-  - #546 [fix 149] Route every handler through vaultFor/repositoryFor: find_symbols (P0)
-  - #547 [fix 150] Scoped-token tests for every tool (P0)
-  - #548 [fix 151] Read-only tokens, tool allow-lists, and expiry set at mint time (P1)
-  - #549 [fix 152] Pinned tokens can't share, delete or purge their vault or erase history… (P1)
-  - #550 [fix 153] Saving or publishing shared graph perspectives requires edit access; global… (P1)
-  - #552 [fix 155] Token revocation timing, rate-limit headers, tenant isolation, how note text… (P1)
+  - #636 Production uptime
+- **In progress: [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2)** (3 open, owner actions excluded):
   - #571 [fix 174] Scheduled agent trial against a staging server; the only published numbers come… (P1)
-  - #580 [fix 183] Co-Authored-By on every agent commit; labels like… (P1)
-  - #581 [fix 184] Real bugs go into GitHub issues with repro steps, not only into a vault note;… (P1)
-  - #582 [fix 185] STATE.md generated from GitHub data so it can't go stale (P1)
-  - #583 [fix 186] Alert when the production app restarts (P1)
-  - #593 Close remaining git-credential redaction gaps (follow-up to #577/#592) (P1)
+  - #646 Deactivating a user does not revoke their MCP connections; reactivation revives them (P2)
+  - #649 Token capability follow-ups from the #647 review (P2)
 - **Open bugs** (label `bug`):
   - #403 MCP/REST edits are attributed to collab/null in the audit trail when the collab relay is… (P0)
   - #408 edit_note replaces the whole body and deletes text a user is typing at the same moment (P0)
@@ -36,6 +25,7 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #621 Import applies shares from the archive manifest without asking (P1)
   - #617 Web client logs a 401 console error after logout (P2)
   - #619 Attachment upload drops non-ASCII file names (P2)
+  - #646 Deactivating a user does not revoke their MCP connections; reactivation revives them (P2)
 <!-- state:generated:end -->
 
 - **Product**: **Elara**; the repo keeps the name `chapters`. Current work: the fixes from the Elara AI-performance study (Elara vault notes `audit/2026-10-14-ai-performance-study` and its round-2 follow-up), one GitHub issue per fix-list item, grouped by the `Phase N` milestones above. Production (`chapters.piiix.org`) runs a promotion only after a redeploy (`docker compose pull && docker compose up -d`).
