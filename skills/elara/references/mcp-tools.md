@@ -218,7 +218,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Returns**: `{ status: "purged", revisionId }`. Permanent; meant for removing a leaked secret.
 
 ### `audit_okf_conformance`
-- **Scope**: vault. Read access.
+- **Scope**: vault. Read access. On a vault-scoped token, repositories are outside the pin: every `[[repo:...]]` link is listed in `brokenRepoLinks` with the repository name or id as written in the note, without looking it up, so the result says nothing about which repositories or files exist.
 - **Parameters**: `vaultId` (uuid, optional).
 - **Returns**:
   ```json
@@ -398,7 +398,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Returns**: the created perspective row. Perspectives are for the UI; the `graph` tool does not read them.
 
 ### `delete_graph_perspective`
-- **Scope**: vault, or account, applied to the perspective's own vault. A vault-scoped token can delete perspectives of its pinned vault only; a global perspective needs an account-scoped token; a repository-scoped token cannot use it. Allowed for the creator, the vault owner (vault perspectives), or an instance admin (global perspectives).
+- **Scope**: vault, or account, applied to the perspective's own vault. A vault-scoped token can delete perspectives of its pinned vault only; any other id (another vault's perspective, a global one, or no such perspective) answers `not found`, so a pinned token cannot tell which perspectives exist. A global perspective needs an account-scoped token; a repository-scoped token always gets `not found`. Allowed for the creator, the vault owner (vault perspectives), or an instance admin (global perspectives).
 - **Parameters**: `id` (uuid, required).
 - **Returns**: `{ ok: true }`.
 

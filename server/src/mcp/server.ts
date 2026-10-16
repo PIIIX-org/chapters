@@ -125,12 +125,17 @@ export function buildMcpServer(auth: McpAuth): McpServer {
 
   // Tools are registered only through tool(), which enforces the scope
   // declaration; registering one directly fails when the server is built.
+  // Resources would serve data the same way, so they are closed too. This is
+  // a guard against forgetting the declaration, not a security boundary: the
+  // low-level `server.server.setRequestHandler` bypasses it (unused here).
   const registerTool = server.registerTool.bind(server)
   const unscoped = (): never => {
     throw new Error('register MCP tools with tool() and a scope declaration')
   }
   server.registerTool = unscoped
   server.tool = unscoped
+  server.registerResource = unscoped
+  server.resource = unscoped
 
   /** Resolves the target vault under the connection's scope (hard, never narrowed). */
   function vaultFor(requested?: string): string {
@@ -1626,7 +1631,7 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         query: z.string().describe('Search query for symbol semantics, signature, or name'),
         kind: z.enum(['function', 'class', 'interface', 'type']).optional().describe('Filter by symbol kind'),
         repositoryId: z.string().uuid().optional().describe('Optional repository ID filter'),
-        everywhere: z.boolean().optional().describe('Search across all accessible repositories'),
+        everywhere: z.boolean().optional().describe('Search across all accessible repositories (account-scoped connections only)'),
         limit: z.number().int().min(1).max(50).optional(),
       },
     },
@@ -1816,12 +1821,16 @@ export function buildMcpServer(auth: McpAuth): McpServer {
     {
       scope: 'vault-or-account',
       // The pin applies to the perspective's own vault; a global perspective is account-wide.
+      // A pinned connection gets "not found" for anything outside its vault, as for an id that
+      // does not exist, so it cannot tell which perspectives exist elsewhere.
       ids: async ({ id }: { id: string }) => {
         const [row] = await db
           .select({ vaultId: graphPerspectives.vaultId })
           .from(graphPerspectives)
           .where(eq(graphPerspectives.id, id))
-        if (!row) throw new McpToolError('not found')
+        const visible =
+          row && (auth.connection.scope === 'account' || (row.vaultId !== null && row.vaultId === auth.connection.vaultId))
+        if (!visible) throw new McpToolError('not found')
         return { vaultId: row.vaultId }
       },
       description: 'Delete a saved graph perspective by its ID.',
@@ -1867,7 +1876,13 @@ export function buildMcpServer(auth: McpAuth): McpServer {
     },
     async (_args, { vaultId: target }) => {
       await requireAccess(target, 'read')
-      return auditVaultConformance(target, auth.user.id)
+      // A vault-pinned connection reaches no repository: its notes' repo links are reported as
+      // unresolved without a lookup, so the result reveals no repository id and no file's existence.
+      const hooks =
+        auth.connection.scope === 'account'
+          ? undefined
+          : { checkRepoFile: async () => ({ accessible: false, exists: false }) }
+      return auditVaultConformance(target, auth.user.id, hooks)
     },
   )
 

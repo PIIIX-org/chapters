@@ -210,8 +210,8 @@ Elara exposes 57 tools across 7 functional domains:
 | `update_vault` | Vault/Account | Update vault name or mergeable setting (owner only). |
 | `get_vault_graph_preference` | Vault/Account | Get user's personal merged-graph inclusion preference. |
 | `set_vault_graph_preference` | Vault/Account | Set user's personal merged-graph inclusion preference. |
-| `get_vault_preferences` | Any | Get user vault preferences including storage mode (online/local), folders, colors, and favorites. |
-| `update_vault_preferences` | Any | Update user vault preferences including storage mode, folders, colors, and favorites. |
+| `get_vault_preferences` | Account | Get user vault preferences including storage mode (online/local), folders, colors, and favorites. |
+| `update_vault_preferences` | Account | Update user vault preferences including storage mode, folders, colors, and favorites. |
 | `delete_vault` | Vault/Account | Soft-delete a vault into trash (owner only). |
 | `restore_vault` | Account | Restore a soft-deleted vault from trash (owner only). |
 | `purge_vault` | Account | Permanently purge a trashed vault from disk and DB (owner only). |
@@ -233,7 +233,7 @@ Elara exposes 57 tools across 7 functional domains:
 | `note_history` | Vault/Account | View revision history with the actor type (`user`, `mcp`, `collab`). Full content per revision, unpaginated. |
 | `revert_note` | Vault/Account | Revert a note to a prior revision without losing history. |
 | `purge_revision` | Vault/Account | Permanently erase a recorded revision (owner only). |
-| `audit_okf_conformance` | Vault/Account | Structural audit: frontmatter validity, datetime offsets, broken wikilinks and repo links, missing indexes, orphan notes. |
+| `audit_okf_conformance` | Vault/Account | Structural audit: frontmatter validity, datetime offsets, broken wikilinks and repo links, missing indexes, orphan notes. On a vault-scoped token every repo link is reported as broken (repositories are outside the pin). |
 
 ### 3. Repository & Codebase Mapping (13 tools)
 | Tool | Scope | Description |
@@ -256,16 +256,16 @@ Elara exposes 57 tools across 7 functional domains:
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `search` | Any | Hybrid search (lexical + semantic) across notes and code with `symbols` support. |
-| `find_symbols` | Any | Keyword and semantic search for code symbols (functions, classes, interfaces, types) with file path and line range. |
+| `find_symbols` | Repository/Account | Keyword and semantic search for code symbols (functions, classes, interfaces, types) with file path and line range. Vault-scoped tokens are refused. |
 
 ### 5. Knowledge Graph & Perspectives (5 tools)
 | Tool | Scope | Description |
 | :--- | :--- | :--- |
 | `graph` | Any (needs `vaultId` or `repositoryId`) | Graph nodes and edges (`extracted`/`structural`/`semantic`) with Louvain communities; filters `types`, `tags`, `aggregate: "community"`, `community`. |
 | `find_graph_path` | Any | Find shortest path connecting two concepts, notes, or code files in the knowledge graph. |
-| `list_graph_perspectives` | Any | List saved graph perspectives (UI presets) for a vault or global. |
-| `save_graph_perspective` | Any | Save a graph perspective (types, tags, date range, color mode). `graph` cannot apply it. |
-| `delete_graph_perspective` | Any | Delete a saved graph perspective by its ID. |
+| `list_graph_perspectives` | Vault/Account | List saved graph perspectives (UI presets) for a vault, or global ones (account tokens only). |
+| `save_graph_perspective` | Vault/Account | Save a graph perspective (types, tags, date range, color mode). `graph` cannot apply it. Global perspectives need an account token. |
+| `delete_graph_perspective` | Vault/Account | Delete a saved graph perspective by its ID. A vault-scoped token reaches only its vault's perspectives (others answer "not found"). |
 
 ### 6. Teams & Users (7 tools)
 | Tool | Scope | Description |

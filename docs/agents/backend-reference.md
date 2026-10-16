@@ -460,9 +460,12 @@ re-resolved live.
   handler)`, the wrapper resolves the scope before the handler runs and
   hands it the result (`{ vaultId }`, `{ repositoryId }`, `{ resources }`),
   and handlers never call `vaultFor`/`repositoryFor` themselves.
-  `server.registerTool` and `server.tool` are replaced on the instance by
-  a function that throws, so a tool registered without a declaration
-  fails when the server is built. Scopes: `account` (account tokens only:
+  `server.registerTool`, `server.tool`, `server.registerResource` and
+  `server.resource` are replaced on the instance by a function that
+  throws, so a tool registered without a declaration fails when the
+  server is built. That is a guard against forgetting the declaration,
+  not a security boundary: the low-level `server.server.setRequestHandler`
+  would bypass it (unused). Scopes: `account` (account tokens only:
   `list_vaults`, `create_vault`, `restore_vault`, `purge_vault`, the two
   vault-preference tools, `list_repositories`, `connect_repository`, the
   team tools, `lookup_user`, the notification tools); `vault` (the note
@@ -470,13 +473,19 @@ re-resolved live.
   `vault-or-account` (the three perspective tools: a vault token is
   confined to its vault and never sees or creates global perspectives;
   `delete_graph_perspective` applies the pin to the perspective's own
-  vault via `ids`); `repository-or-account` (`find_symbols`: a vault token
-  is refused, a repository token searches only its pin); `vault-or-repo`
-  (`search`, `graph`, `find_graph_path`, via `resolveResourceSet`).
-  `everywhere: true` needs an account token. `test/mcp-scope.test.ts`
-  calls every tool from `tools/list` with a vault-pinned and a
-  repository-pinned token (another vault/repository id, no id,
-  `everywhere`) and fails on a tool with no case there: **a new tool
+  vault via `ids`, and a pinned token gets `not found` for any perspective
+  outside its vault, the same answer as for a missing id);
+  `repository-or-account` (`find_symbols`: a vault token is refused, a
+  repository token searches only its pin); `vault-or-repo` (`search`,
+  `graph`, `find_graph_path`, via `resolveResourceSet`). `everywhere:
+  true` needs an account token. Ids that come from stored data rather
+  than arguments stay inside the pin too: `audit_okf_conformance` on a
+  vault token reports every `[[repo:...]]` link as broken without
+  looking the repository up (a vault pin reaches no repository).
+  `test/mcp-scope.test.ts` calls every tool from `tools/list` with a
+  vault-pinned and a repository-pinned token (another vault/repository
+  id, no id, `everywhere`), checks that confined calls still return
+  their own data, and fails on a tool with no case there: **a new tool
   needs a case there**.
 - **Tools** (57, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):
