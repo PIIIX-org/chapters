@@ -7,7 +7,7 @@ import type { FastifyInstance } from 'fastify'
 import { eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { mcpConnections, securityEvents } from '../src/db/schema.js'
+import { mcpConnections, securityEvents, users } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -157,6 +157,31 @@ describe('MCP token lifecycle over HTTP (#552)', () => {
     }
     const fresh = (await mint(await loginCookie(app, user.email))).json
     expect((await mcp(fresh.token)).status).toBe(200)
+  })
+
+  it('reactivation revokes a token that a deactivation from before #646 left live', async () => {
+    const admin = await createActiveUser({ role: 'admin' })
+    const adminCookie = await loginCookie(app, admin.email)
+    const user = await createActiveUser()
+    const { json: conn } = await mint(await loginCookie(app, user.email))
+    // Deactivated the old way: status only, the connection left unrevoked.
+    await db.update(users).set({ status: 'deactivated' }).where(eq(users.id, user.id))
+
+    const reactivate = await app.inject({
+      method: 'POST',
+      url: `/api/admin/users/${user.id}/reactivate`,
+      headers: { cookie: adminCookie },
+    })
+    expect(reactivate.statusCode).toBe(200)
+    const after = await mcp(conn.token)
+    expect(after.status).toBe(401)
+    expect(after.body).toEqual(REFUSED)
+    const [row] = await db.select().from(mcpConnections).where(eq(mcpConnections.id, conn.id))
+    expect(row!.revokedAt).toBeInstanceOf(Date)
+    const events = await db.select().from(securityEvents).where(eq(securityEvents.mcpConnectionId, conn.id))
+    expect(events.filter((e) => e.type === 'mcp_connection_revoked')).toEqual([
+      expect.objectContaining({ actorUserId: admin.id, subjectUserId: user.id, detail: { reason: 'user_reactivated' } }),
+    ])
   })
 
   it('stores only a SHA-256 hash of the token, never the token itself', async () => {

@@ -242,7 +242,8 @@ storage, resolved on every request via a Fastify `onRequest` hook.
   vault shares, revokes every MCP connection of the user (one
   `mcp_connection_revoked` audit event each, #646) — then fires a live
   permission-change event and notifies the user. Reactivation restores
-  the account only: revoked tokens stay revoked, the user mints new ones.
+  the account only: revoked tokens stay revoked (a connection a pre-#646
+  deactivation left live is revoked then), and the user mints new ones.
 - **Admin dashboard** (`admin-dashboard-routes.ts`): metadata-only by
   explicit design — stats, audit trail, force-revoke a share or MCP
   connection. No endpoint here can return note content.

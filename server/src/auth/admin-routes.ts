@@ -211,23 +211,7 @@ export function adminRoutes(app: FastifyInstance) {
       await tx
         .delete(vaultShares)
         .where(and(eq(vaultShares.granteeType, 'user'), eq(vaultShares.granteeId, deactivated.id)))
-      // Revoked, not suspended: reactivation restores the account but no token,
-      // so a token that leaked before the deactivation stays dead (#646).
-      const revoked = await tx
-        .update(mcpConnections)
-        .set({ revokedAt: new Date() })
-        .where(and(eq(mcpConnections.userId, deactivated.id), isNull(mcpConnections.revokedAt)))
-        .returning({ id: mcpConnections.id })
-      await tx.insert(securityEvents).values([
-        { type: 'user_deactivated', actorUserId, subjectUserId: deactivated.id },
-        ...revoked.map((c) => ({
-          type: 'mcp_connection_revoked',
-          actorUserId,
-          subjectUserId: deactivated.id,
-          mcpConnectionId: c.id,
-          detail: { reason: 'user_deactivated' },
-        })),
-      ])
+      await revokeConnectionsAndLog(tx, deactivated.id, actorUserId, 'user_deactivated')
       return deactivated
     })
     if (!user) return reply.code(404).send({ error: 'user not found' })
@@ -241,17 +225,20 @@ export function adminRoutes(app: FastifyInstance) {
   })
 
   app.post<{ Params: { id: string } }>('/users/:id/reactivate', async (req, reply) => {
-    const [user] = await db
-      .update(users)
-      .set({ status: 'active' })
-      .where(and(eq(users.id, req.params.id), eq(users.status, 'deactivated')))
-      .returning()
-    if (!user) return reply.code(404).send({ error: 'deactivated user not found' })
-    await logSecurityEvent({
-      type: 'user_reactivated',
-      actorUserId: req.user!.id,
-      subjectUserId: user.id,
+    const actorUserId = req.user!.id
+    const user = await db.transaction(async (tx) => {
+      const [reactivated] = await tx
+        .update(users)
+        .set({ status: 'active' })
+        .where(and(eq(users.id, req.params.id), eq(users.status, 'deactivated')))
+        .returning()
+      if (!reactivated) return null
+      // A deactivated user cannot mint, so any live connection left here dates
+      // from before #646 (deactivation did not revoke then): revoke it too.
+      await revokeConnectionsAndLog(tx, reactivated.id, actorUserId, 'user_reactivated')
+      return reactivated
     })
+    if (!user) return reply.code(404).send({ error: 'deactivated user not found' })
     emitPermissionChange({ userIds: [user.id] })
     await notify({
       recipientId: user.id,
@@ -301,4 +288,36 @@ export function adminRoutes(app: FastifyInstance) {
       return { ownerId: newOwner.id }
     },
   )
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+/**
+ * Inside the caller's transaction: revokes every unrevoked MCP connection of
+ * the user and writes the status event plus one `mcp_connection_revoked`
+ * event per connection. Revoked, not suspended: reactivation restores the
+ * account but no token, so a token that leaked before the deactivation stays
+ * dead (#646); the user mints new ones.
+ */
+async function revokeConnectionsAndLog(
+  tx: Tx,
+  userId: string,
+  actorUserId: string,
+  reason: 'user_deactivated' | 'user_reactivated',
+): Promise<void> {
+  const revoked = await tx
+    .update(mcpConnections)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(mcpConnections.userId, userId), isNull(mcpConnections.revokedAt)))
+    .returning({ id: mcpConnections.id })
+  await tx.insert(securityEvents).values([
+    { type: reason, actorUserId, subjectUserId: userId },
+    ...revoked.map((c) => ({
+      type: 'mcp_connection_revoked',
+      actorUserId,
+      subjectUserId: userId,
+      mcpConnectionId: c.id,
+      detail: { reason },
+    })),
+  ])
 }
