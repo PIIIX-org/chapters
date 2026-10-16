@@ -1,0 +1,54 @@
+name: Commit attribution
+
+# Agents commit from the owner's account, so a `Co-Authored-By: Name
+# <email>` trailer is the only record that an agent wrote a commit (#580).
+# On a PR from this repository whose head branch starts with `fix/`, `ci/`,
+# `docs/`, `feat/`, `chore/` or `test/`, the `attribution` job fails if a
+# commit lacks that trailer, unless the PR has the label `human-only`.
+# Commits made in GitHub's web UI (merge button, "Update branch") are
+# exempt. Logic and messages: .github/scripts/attribution.mjs; rules:
+# docs/agents/github-workflow.md (CI, Commit attribution).
+#
+# Not a required check (yet): it reports on every PR to `dev` or `prod`.
+
+on:
+  pull_request:
+    branches: [dev, prod]
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  attribution:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # HEAD is GitHub's merge of the PR into its base; HEAD^1 (the base)
+          # must be in the clone.
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # Run the base's copy of the checker so a PR cannot edit the check it
+      # is judged by; until the base has one, run the PR's copy (the summary
+      # says which). The copy runs alone from $RUNNER_TEMP, so the script
+      # must stay a single file with no sibling imports.
+      - name: Check every commit for a Co-Authored-By trailer
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          checker=.github/scripts/attribution.mjs
+          if git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
+            git show "HEAD^1:$checker" > "$RUNNER_TEMP/attribution.mjs"
+            ATTRIBUTION_CHECKER=base node "$RUNNER_TEMP/attribution.mjs"
+          else
+            ATTRIBUTION_CHECKER=pr node "$checker"
+          fi

@@ -8,7 +8,9 @@ Two long-lived branches, everything else is short-lived.
 - **`prod`** — stable branch. Only ever receives promotions from `dev`.
   What's on `prod` is verified, working software.
 - Feature branches: `<type>/<short-topic>` off `dev` — types: `feat`,
-  `fix`, `docs`, `chore`, `test`. Deleted after merge.
+  `fix`, `ci`, `docs`, `chore`, `test`. Deleted after merge. `bot/` is
+  for branches a workflow writes (`bot/state-md`, see **STATE.md** under
+  CI); nobody else pushes there.
 - Never commit directly to `dev` or `prod`. No exceptions, including docs.
 
 ## The change cycle
@@ -17,7 +19,11 @@ Every change — code, spec, doc — follows the same loop:
 
 1. **Branch** off `dev`.
 2. **Commit + push** (early and often, per the resume protocol in
-   `handling-protocols.md`).
+   `handling-protocols.md`). An agent ends every commit message with a
+   `Co-Authored-By: <model> <email>` trailer (for example
+   `Co-Authored-By: Claude Opus <noreply@anthropic.com>`), the only record
+   that an agent wrote it (step 7); the `attribution` check (see CI) flags
+   commits without one.
 3. **Open a PR** targeting `dev`. Fill in the template
    (`.github/pull_request_template.md`): Problem, Change, **Evidence**,
    Not covered, `Closes #N`. Evidence is links, not adjectives: the CI
@@ -41,8 +47,9 @@ Every change — code, spec, doc — follows the same loop:
    files view), don't rubber-stamp. Check: matches the spec, tests
    included and green, on a fix PR `fails-before` green (or its
    exemption justified), `pr-evidence` green and its links actually
-   showing what the body claims, README/STATE.md updated if the change is
-   meaningful (standing rule), no performance-rule violations.
+   showing what the body claims, README and the hand-written part of
+   STATE.md updated if the change is meaningful (standing rule), no
+   performance-rule violations.
 5. **If review finds a problem**: open an **issue** describing it, push
    fix commits to the same PR referencing the issue (`refs #N`), and
    when fixed, close the issue as solved (`closes #N` in the fixing
@@ -55,7 +62,10 @@ Every change — code, spec, doc — follows the same loop:
    and re-authorized 2026-08-27.) Promotion `dev → prod` still needs
    the owner's explicit OK each time — that has never changed.
 7. **Everything is done from the `Taha-Mahmoodi` account** — branches,
-   commits, PRs and merges. Set by Taha, 2026-08-28.
+   commits, PRs and merges. Set by Taha, 2026-08-28. Because agents and the
+   owner share the account, agent commits carry the `Co-Authored-By`
+   trailer (step 2) and a PR the owner writes himself gets the label
+   `human-only`.
 
    Previously PRs were opened from the `sadeqisaidmohaddes-star` collaborator
    account. That account belongs to a different person, and merging from it
@@ -221,6 +231,28 @@ branch, publishes without any check. Don't do either.
 - Bugs, review findings, and deferred work all become issues — labeled
   (`bug`, `enhancement`, `deferred`), referenced from the PRs that fix
   them, closed with the fix, never closed silently.
+- **A real bug is an issue with repro steps** (#581). A bug written down
+  only in a vault note, a handoff or a PR comment is lost to everyone who
+  doesn't read that note. Whoever finds one while dogfooding, testing,
+  reviewing or auditing files it before moving on (the vault note can
+  link the issue). On github.com the **Bug** form
+  (`.github/ISSUE_TEMPLATE/bug.yml`) requires: what happened, steps to
+  reproduce, expected, evidence links, found by. Agents filing with
+  `gh issue create` (which skips forms) write the same five sections in a
+  `--body-file` and add `--label bug --label found-by:<gate>`. Requests
+  use the **Feature** form (`feature.yml`). Blank issues are off.
+- **`found-by:*` labels** record which gate found a bug, so we can see
+  which gates work: `found-by:dogfooding` (using Elara for real work),
+  `found-by:test` (unit or CI tests), `found-by:lab` (integration lab or
+  benchmark), `found-by:review` (PR or promotion review),
+  `found-by:audit` (a study or audit), `found-by:user` (a user report).
+  One per bug, set when it is filed; count them with
+  `gh issue list --state all --label found-by:<gate>`.
+- **No shadow issues.** Don't open an issue only to give a PR a number to
+  close: a PR describes its own change. Issues are for bugs, requests and
+  deferred work that exist independently of a PR. A review finding on an
+  open PR is still an issue (step 5 of the change cycle) because it is a
+  bug found by review.
 - External contributions: triage the same way (see issue #9 for the
   pattern — premature ideas get recorded and deferred, not dropped).
 
@@ -341,6 +373,80 @@ its claims. Unit tests: `.github/scripts/pr-evidence.test.mjs`, run by
 `prod` (#574). It checks that a claim has a link, not that the link shows
 the claim: reviewers open the links (step 4 above).
 
+**Commit attribution** (`.github/workflows/attribution.yml`, job
+`attribution`, #580) runs on every PR to `dev` or `prod` when it is
+opened, pushed, reopened, labeled, unlabeled or marked ready. Like
+pr-evidence it runs the base commit's copy of
+`.github/scripts/attribution.mjs` when the base has one. It applies to PRs
+from this repository whose head branch starts with `fix/`, `ci/`,
+`docs/`, `feat/`, `chore/` or `test/` (the agent branch types), and
+fails if any commit lacks a `Co-Authored-By: Name <email>` trailer in the
+last paragraph of its message (the key in any case, a name and an email
+in `<>`; a mention in the body does not count). Exempt: PRs with the
+label `human-only` (the owner's own work), commits GitHub made in its web
+UI (committer `GitHub <noreply@github.com>`: the merge button, "Update
+branch", web edits), and every other branch (`dev` for promotions, `bot/`,
+`dependabot/`, `lab/`) and fork PRs. Fix a red check with
+`git commit --amend` or `git rebase -i` and a force-push. The summary lists
+each commit without the trailer. A PR with more than 250 commits fails
+(the API lists no more). Unit tests:
+`.github/scripts/attribution.test.mjs`, run by `checks`. It is **not** a
+required check: it reports on every PR, and making it required is an
+owner decision (add `attribution` to both branches' required checks).
+
+**STATE.md** (`.github/workflows/state-md.yml`, #582). The block of
+`docs/agents/STATE.md` between `<!-- state:generated:start -->` and
+`<!-- state:generated:end -->` is built from GitHub data by
+`.github/scripts/state-md.mjs`: the last promotion to `prod`, the latest
+CI push run, nightly lab and `bench-gate` on `dev` (a run is linked only
+when it did not pass), the `Phase N` milestones (closed of total), open
+issues by priority and label, `owner` issues, the open issues of the first
+phase with work an agent can do, and open `bug` issues (at most 12 per
+list, then a count and a link). The rest of the file is hand-written and
+never touched. The block holds no time and no run id of a passing run,
+so the same GitHub state always gives the same text. Run it locally with
+`node .github/scripts/state-md.mjs --repo PIIIX-org/chapters` (token from
+`GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`; writes the file only when
+the block changed). The workflow:
+
+- **refresh**: daily (05:17 UTC), on every push to `dev` and by
+  `gh workflow run state-md.yml --ref dev`. When the block changed, it
+  force-pushes `bot/state-md` (one commit on top of `dev`, changing only
+  STATE.md) and opens or updates the PR
+  `docs(state): refresh generated STATE.md block (bot)` with a fixed body
+  whose Evidence links the source run, the commit and the generator.
+  When `dev` already matches, it closes that PR. Merging the bot PR is
+  itself a push to `dev`, which regenerates the same block and opens
+  nothing. Review it like any PR: the diff must touch only the block; then
+  merge it.
+- GitHub starts no `pull_request` workflow for a PR opened or pushed with
+  `GITHUB_TOKEN`, so the bot PR's required checks would never report.
+  The refresh job dispatches them on `bot/state-md` instead: `ci.yml`
+  (`checks`), `elara-lab.yml` with `tier=none bench=none` (`plan` runs,
+  `lab` and `bench-gate` are skipped, as on any PR that changes neither
+  the image nor search), and `pr-evidence.yml` / `fails-before.yml` with
+  `-f pr=<N>`. Those two have a `workflow_dispatch` path for this: they
+  check out `refs/pull/<N>/merge` and the `dispatched-pr` action
+  (`.github/actions/dispatched-pr`) loads the PR from the API as the event,
+  after refusing it unless it is open, from this repository, headed at the
+  dispatched commit, with an allowed base and an up-to-date merge ref. A
+  required check counts by name on the head commit, whatever started it.
+  If a dispatched check fails for a transient reason, re-run it.
+- GitHub lets `GITHUB_TOKEN` open a PR only when "Allow GitHub Actions to
+  create and approve pull requests" is on in both the organization and the
+  repository Actions settings (repository:
+  `gh api repos/PIIIX-org/chapters/actions/permissions/workflow`, field
+  `can_approve_pull_request_reviews`). Until then the job pushes the
+  branch and fails with that message. Approvals by Actions count for
+  nothing here: `dev` needs none and `review-verdict` ignores bots.
+- **preview**: on PRs that change the generator, this workflow or
+  STATE.md, the job summary shows the block the PR's generator builds;
+  nothing is written.
+
+Unit tests: `.github/scripts/state-md.test.mjs`, run by `checks`; one of
+them fails if STATE.md loses its markers or its hand-written Architecture
+Traps and Decided against sections.
+
 **Elara lab** (`.github/workflows/elara-lab.yml`, job `lab`, #576) runs
 the integration tests where the collab relay, the note store, the disk,
 Postgres and MCP meet, against an instance built from the commit with the
@@ -419,6 +525,7 @@ Required status checks (classic protection, #574):
 | `bench-gate` | `elara-lab.yml` | required | required | skipped (passes) when no benchmark suite applies |
 | `review-verdict` | `review-verdict.yml` | — | required | a commit status set on every PR event, review and comment of a same-repo PR to `prod` |
 | `review-verdict/dev` | `review-verdict.yml` | informational | — | the same rules on PRs to `dev`; never required |
+| `attribution` | `attribution.yml` | informational | informational | runs on every PR to `dev` or `prod`; not required (owner decision) |
 
 A skipped job counts as passing; a check that never reports keeps the PR
 at "Expected — Waiting for status to be reported" forever. So a required

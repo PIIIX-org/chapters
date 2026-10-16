@@ -30,25 +30,42 @@ on:
         unlabeled,
         ready_for_review,
       ]
+  # GitHub starts no pull_request workflow for a PR opened or pushed with
+  # GITHUB_TOKEN, so state-md.yml dispatches this on its PR's branch with
+  # the PR number (#582). The run judges that PR (title, labels, body) as
+  # above, and its check run lands on the PR's head commit.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number of a PR to dev (dispatch with --ref <its head branch>)'
+        required: true
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   fails-before:
-    if: github.base_ref == 'dev'
+    if: github.base_ref == 'dev' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
+          # A dispatch checks out GitHub's merge of the PR, like a PR event.
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr) || '' }}
           # The base commit and the merge-base must be in the clone.
           fetch-depth: 0
           # PR test code runs in this job; keep the token out of .git/config.
           persist-credentials: false
+      - if: github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/dispatched-pr
+        with:
+          pr: ${{ inputs.pr }}
+          bases: dev
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -60,6 +77,7 @@ jobs:
       # which).
       - name: Run the PR's changed tests against the base commit
         run: |
+          export GITHUB_EVENT_PATH="${PR_EVENT_PATH:-$GITHUB_EVENT_PATH}"
           checker=.github/scripts/fails-before.mjs
           if git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
             git show "HEAD^1:$checker" > "$RUNNER_TEMP/fails-before.mjs"
