@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
@@ -114,6 +114,96 @@ describe('repository CRUD + shares', () => {
     const [again] = await db.select().from(repositories).where(eq(repositories.id, legacy!.id))
     expect(again).toEqual(scrubbed)
   })
+
+  // #593: with no key the URL must keep its credential (stripping it would
+  // break the next sync), but redacting the error text needs no key.
+  it('boot scrub with no encryption key still redacts lastSyncError and leaves the remote alone', async () => {
+    const owner = await createActiveUser()
+    const url = 'https://x-access-token:gho_NOKEYLEGACY@github.com/o/nokey.git'
+    // A password of `*` alone: redacting it would grow `***` on every boot.
+    const starUrl = 'https://star-user:*@github.com/o/star.git'
+    const [legacy, star] = await db
+      .insert(repositories)
+      .values([
+        {
+          name: 'legacy-no-key',
+          ownerId: owner.id,
+          ingestionMethod: 'git',
+          gitUrl: url,
+          lastSyncError: `fatal: unable to access '${url}/': token gho_NOKEYLEGACY rejected`,
+        },
+        {
+          name: 'legacy-star',
+          ownerId: owner.id,
+          ingestionMethod: 'git',
+          gitUrl: starUrl,
+          lastSyncError: `fatal: unable to access '${starUrl}/': password * rejected`,
+        },
+      ])
+      .returning()
+
+    const original = config.credentialsEncryptionKey
+    config.credentialsEncryptionKey = undefined
+    try {
+      const result = await scrubStoredGitCredentials()
+      expect(result.skipped).toBeGreaterThan(0)
+      const rows = await db.select().from(repositories).where(inArray(repositories.id, [legacy!.id, star!.id]))
+      // A second boot finds nothing left to change, on the skipped path too.
+      await scrubStoredGitCredentials()
+      expect(await db.select().from(repositories).where(inArray(repositories.id, [legacy!.id, star!.id]))).toEqual(rows)
+    } finally {
+      config.credentialsEncryptionKey = original
+    }
+    const [row] = await db.select().from(repositories).where(eq(repositories.id, legacy!.id))
+    expect(row!.gitUrl).toBe(url)
+    expect(row!.gitCredentialEncrypted).toBeNull()
+    expect(row!.lastSyncError).toBe("fatal: unable to access 'https://***@github.com/o/nokey.git/': token *** rejected")
+    const [starRow] = await db.select().from(repositories).where(eq(repositories.id, star!.id))
+    expect(starRow!.lastSyncError).toBe("fatal: unable to access 'https://***@github.com/o/star.git/': password * rejected")
+  })
+
+  // Review of #643: a password with an invalid percent sequence (`%zz`, a raw
+  // `50%off`) was accepted and stored, ssh:// as given. Decoding it threw: the
+  // boot scrub took the server down and a sync stuck the row in `syncing`.
+  it('syncs and scrubs remotes whose password holds an invalid percent sequence, ssh and https', async () => {
+    const owner = await createActiveUser()
+    const remotes = [
+      ['ssh://git:%zz-ssh-pw@127.0.0.1:1/o/bad.git', 'ssh://127.0.0.1:1/o/bad.git', 'git:%zz-ssh-pw'],
+      ['http://user:50%off-http-pw@127.0.0.1:1/o/bad.git', 'http://127.0.0.1:1/o/bad.git', 'user:50%off-http-pw'],
+    ] as const
+    const ids: string[] = []
+    for (const [url] of remotes) {
+      const [row] = await db
+        .insert(repositories)
+        .values({ name: 'bad-percent', ownerId: owner.id, ingestionMethod: 'git', gitUrl: url })
+        .returning()
+      ids.push(row!.id)
+    }
+
+    // Unscrubbed: the sync clones with the URL's own credential, fails on the
+    // refused port and records a redacted error instead of throwing first.
+    for (const id of ids) {
+      const err: unknown = await syncGitRepository(id).then(
+        () => null,
+        (e: unknown) => e,
+      )
+      expect(err).toBeInstanceOf(Error)
+      expect(err).not.toBeInstanceOf(URIError)
+      const [failed] = await db.select().from(repositories).where(eq(repositories.id, id))
+      expect(failed!.syncStatus).toBe('error')
+      expect(failed!.lastSyncError).not.toMatch(/ssh-pw|http-pw/)
+    }
+
+    await scrubStoredGitCredentials()
+    const scrubbed = await db.select().from(repositories).where(inArray(repositories.id, ids))
+    for (const [i, [, cleanUrl, credential]] of remotes.entries()) {
+      const row = scrubbed.find((r) => r.id === ids[i])!
+      expect(row.gitUrl).toBe(cleanUrl)
+      expect(decryptCredential(row.gitCredentialEncrypted!)).toBe(credential)
+    }
+    await scrubStoredGitCredentials()
+    expect(await db.select().from(repositories).where(inArray(repositories.id, ids))).toEqual(scrubbed)
+  }, 30000)
 
   it('rejects a local path outside the configured root', async () => {
     const owner = await createActiveUser()

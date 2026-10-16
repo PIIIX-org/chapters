@@ -105,6 +105,15 @@ describe('remoteFileInfo and remoteFileUrl', () => {
     )
   })
 
+  // #593: the owner's remote keeps its query and fragment, with values as `***`.
+  it('builds the link from host and path only when the remote has a query or fragment', () => {
+    const owned = { ...gitRepo, gitUrl: 'https://gitlab.com/group/project.git?private_token=***#access_token=***' }
+    expect(remoteFileUrl(owned, 'src/main.rs')).toBe('https://gitlab.com/group/project/-/blob/dev/src/main.rs')
+    expect(remoteFileUrl({ ...gitRepo, gitUrl: 'https://github.com/o/r.git?x=***' }, 'a.ts')).toBe(
+      'https://github.com/o/r/blob/dev/a.ts',
+    )
+  })
+
   it('builds a Bitbucket source link for https and ssh remotes', () => {
     const bbRepo = { ...gitRepo, gitUrl: 'https://bitbucket.org/team/repo.git' }
     expect(remoteFileInfo(bbRepo, 'README.md')).toEqual({

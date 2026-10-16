@@ -551,17 +551,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 - **Secret-scan guard** (`test/mcp-secret-scan.test.ts`, #577): CI calls
   every tool from `tools/list` and every prompt from `prompts/list`
   against a fixture world seeded with real secrets (git URLs with
-  userinfo, an explicit git credential, a webhook secret, a sync token,
-  MCP and session tokens and their hashes, password hashes, a TOTP
-  secret, credential ciphertexts, a legacy unscrubbed repository row
-  whose `lastSyncError` holds an authenticated URL). Reads run first as
+  userinfo, a token-only non-GitHub URL, a query-string token, an
+  `ssh://user:password@` remote, an explicit git credential, a webhook
+  secret, a sync token, MCP and session tokens and their hashes, password
+  hashes, a TOTP secret, credential ciphertexts, a legacy unscrubbed
+  repository row whose `lastSyncError` holds an authenticated URL and the
+  bare token). Reads run first as
   the owner, a viewer, a vault-scoped and a repository-scoped
   connection; writes and destructive calls follow as the owner, on
   throwaway fixtures. Every response (JSON parsed recursively, base64
-  zips unpacked) fails on URL userinfo, `gh[opsu]_` tokens,
+  zips unpacked) fails on URL userinfo (also a long bare username),
+  token-like query parameters, `gh[opsu]_` tokens,
   `x-access-token`, `-----BEGIN`, `sk-`/`AKIA` keys, `$argon2`/`$2b$`
-  hashes and the exact fixture values; a pattern match inside text a
-  user wrote (note bodies, file contents) is allowed. A tool with no
+  hashes and the exact fixture values; a pattern match is allowed only
+  where the response carries it with at least 8 characters of context
+  exactly as a user wrote it (note bodies, file contents), so a note
+  mentioning a pattern does not exempt it in other fields (#593). Owner
+  read steps name text their response must contain, so an empty result
+  does not pass. A tool with no
   fixture step fails the test: **a new tool needs a step there**.
 - **Agent skills**: `skills/elara/` (current) and `skills/chapters/`
   (legacy copy, kept consistent) give AI assistants graph-first
@@ -632,17 +639,37 @@ rotation mechanism**; rotating it invalidates every stored credential.
 `gitUrl` like `https://x-access-token:TOKEN@host/o/r.git` is split on
 connect (REST and MCP): the URL is stored without userinfo and the
 userinfo goes into `gitCredentialEncrypted` (an explicit
-`gitCredential` wins). With no encryption key the connect is refused
+`gitCredential` wins). `ssh://user:password@` remotes are split the same
+way; a bare ssh user (`ssh://git@host`) stays in the URL (#593). Userinfo
+with an invalid percent sequence (`%zz`, a raw `50%off`) is kept in its
+raw form rather than throwing, and goes back into the clone URL unchanged.
+With no encryption key the connect is refused
 rather than store the token in plaintext. `authenticatedUrl` puts
 `user:password` or a bare token back for the clone. Sync errors are
 redacted before they reach `lastSyncError` (served to viewers) or the
-log. `scrubStoredGitCredentials()` runs at boot and moves credentials
+log: `redactGitSecrets` first removes any URL userinfo up to the last `@`
+of the authority and every URL query and fragment value
+(`?private_token=***`, `#access_token=***`, a bare `?***`), then the
+credential (stored or still in the URL) in raw and URL-encoded forms; on
+its own, the password of a `user:password` credential, and its user too
+when that looks like a token (8+ characters and not a token-type name such
+as `git` or `x-access-token`, compared lower-cased), since the legacy
+GitHub `TOKEN:x-oauth-basic` form puts the token there. URL passes run
+first so a short credential (user `s`, password `?`) cannot break the
+URLs they match. A form made of `*` alone is not replaced, so redaction
+is idempotent. The cost is quadratic on long error text (#644).
+`scrubStoredGitCredentials()` runs at boot and moves credentials
 out of remotes stored before the fix (idempotent; a row it cannot
-encrypt is left as is and warned about). `repositoryFields` strips
-userinfo for owners too, and serves `lastSyncError` through
+encrypt keeps its URL and is warned about, but its `lastSyncError` is
+still redacted). `repositoryFields` strips
+userinfo for owners too and replaces query and fragment values with
+`***`; viewers get the remote without userinfo, query or fragment
+(`publicGitUrl`), and the client builds deep links from host and path
+only. It serves `lastSyncError` through
 `publicSyncError` (also used by the MCP `repository_status`), so a row
 the scrub left alone does not serve its token through the error text
-either (#577).
+either (#577). A query-string token stays at rest in `gitUrl`: it is
+not userinfo, so nothing moves it.
 
 **Code extraction** (`extraction.ts`): `web-tree-sitter` (WASM), four
 supported languages — TypeScript, JavaScript, Python, Go. Each

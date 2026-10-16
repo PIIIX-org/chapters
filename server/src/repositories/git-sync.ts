@@ -8,7 +8,7 @@ import { db } from '../db/client.js'
 import { repositories } from '../db/schema.js'
 import { decryptCredential } from './credentials.js'
 import { listFilesRecursive } from './fs-scan.js'
-import { authenticatedUrl, redactGitSecrets } from './git-remote.js'
+import { authenticatedUrl, redactGitSecrets, splitGitUrlCredential } from './git-remote.js'
 import { isSafeGitUrl } from './permissions.js'
 import { syncRepositoryFiles, type FileUpdate } from './store.js'
 
@@ -41,6 +41,9 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     .where(eq(repositories.id, repositoryId))
 
   const workDir = join(tmpdir(), 'elara-repo-clones', randomBytes(8).toString('hex'))
+  // A row the boot scrub could not encrypt still holds its credential in the
+  // URL, and clones with it: redact that one too (#593).
+  const urlCredential = splitGitUrlCredential(repo.gitUrl).credential
   let credential: string | null = null
   try {
     credential = repo.gitCredentialEncrypted
@@ -66,7 +69,9 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     } catch (lsErr) {
       // git errors can echo the authenticated clone URL (#383).
       const detail = lsErr instanceof Error ? lsErr.message : String(lsErr)
-      console.warn(`[git-sync] listRemote check failed, falling back to clone: ${redactGitSecrets(detail, [credential])}`)
+      console.warn(
+        `[git-sync] listRemote check failed, falling back to clone: ${redactGitSecrets(detail, [credential, urlCredential])}`,
+      )
     }
 
     await simpleGit({ timeout: { block: 300_000 } }).clone(cloneUrl, workDir, ['--depth', '1'])
@@ -111,7 +116,7 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     // The raw message can carry the authenticated clone URL, and lastSyncError
     // is served to every viewer: store and rethrow only the redacted text (#383).
     const raw = err instanceof Error ? err.message : String(err)
-    const errorMsg = redactGitSecrets(raw, [credential]).replace(/\0/g, '')
+    const errorMsg = redactGitSecrets(raw, [credential, urlCredential]).replace(/\0/g, '')
     await db
       .update(repositories)
       .set({ syncStatus: 'error', lastSyncError: errorMsg })

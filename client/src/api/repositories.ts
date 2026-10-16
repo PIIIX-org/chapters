@@ -217,9 +217,12 @@ export function remoteFileInfo(
   if (repo.ingestionMethod !== 'git' || !repo.gitUrl) return null
   const ref = repo.defaultBranch ?? 'HEAD'
   const encodedPath = path.split('/').map(encodeURIComponent).join('/')
+  // An owner's remote keeps its query and fragment (values shown as `***`,
+  // #593); a deep link is built from host and path only.
+  const remote = repo.gitUrl.replace(/[?#].*$/, '')
 
   // GitHub: https://github.com/o/r(.git) or git@github.com:o/r.git
-  const gh = /^(?:https?:\/\/(?:[^@/]*@)?github\.com\/|git@github\.com:)(.+?)(?:\.git)?\/?$/.exec(repo.gitUrl)
+  const gh = /^(?:https?:\/\/(?:[^@/]*@)?github\.com\/|git@github\.com:)(.+?)(?:\.git)?\/?$/.exec(remote)
   if (gh) {
     return {
       url: `https://github.com/${gh[1]}/blob/${ref}/${encodedPath}`,
@@ -229,7 +232,7 @@ export function remoteFileInfo(
   }
 
   // GitLab: https://gitlab.com/o/r(.git) or git@gitlab.com:o/r.git
-  const gl = /^(?:https?:\/\/(?:[^@/]*@)?gitlab\.com\/|git@gitlab\.com:)(.+?)(?:\.git)?\/?$/.exec(repo.gitUrl)
+  const gl = /^(?:https?:\/\/(?:[^@/]*@)?gitlab\.com\/|git@gitlab\.com:)(.+?)(?:\.git)?\/?$/.exec(remote)
   if (gl) {
     return {
       url: `https://gitlab.com/${gl[1]}/-/blob/${ref}/${encodedPath}`,
@@ -239,7 +242,7 @@ export function remoteFileInfo(
   }
 
   // Bitbucket: https://bitbucket.org/o/r(.git) or git@bitbucket.org:o/r.git
-  const bb = /^(?:https?:\/\/(?:[^@/]*@)?bitbucket\.org\/|git@bitbucket\.org:)(.+?)(?:\.git)?\/?$/.exec(repo.gitUrl)
+  const bb = /^(?:https?:\/\/(?:[^@/]*@)?bitbucket\.org\/|git@bitbucket\.org:)(.+?)(?:\.git)?\/?$/.exec(remote)
   if (bb) {
     return {
       url: `https://bitbucket.org/${bb[1]}/src/${ref}/${encodedPath}`,
@@ -249,7 +252,7 @@ export function remoteFileInfo(
   }
 
   // Codeberg: https://codeberg.org/o/r(.git) or git@codeberg.org:o/r.git
-  const cb = /^(?:https?:\/\/(?:[^@/]*@)?codeberg\.org\/|git@codeberg\.org:)(.+?)(?:\.git)?\/?$/.exec(repo.gitUrl)
+  const cb = /^(?:https?:\/\/(?:[^@/]*@)?codeberg\.org\/|git@codeberg\.org:)(.+?)(?:\.git)?\/?$/.exec(remote)
   if (cb) {
     return {
       url: `https://codeberg.org/${cb[1]}/src/branch/${ref}/${encodedPath}`,
