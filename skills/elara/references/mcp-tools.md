@@ -287,7 +287,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Parameters**:
   - `name` (string, required, 1-200 chars).
   - `ingestionMethod` (enum `"git"` | `"local_path"`, required).
-  - `gitUrl` (string, required for `git`): a clone URL. Private, loopback, and metadata addresses are refused. Credentials in the URL's userinfo (`https://token@…`, `https://user:token@…`, `ssh://user:password@…`) are moved to encrypted storage. Query parameter values are served back as `***`; pass a token as `gitCredential`, not in the query.
+  - `gitUrl` (string, required for `git`): a clone URL. Private, loopback, and metadata addresses are refused. Credentials in the URL's userinfo (`https://token@…`, `https://user:token@…`, `ssh://user:password@…`) are moved to encrypted storage. Query and fragment values are served back as `***`; pass a token as `gitCredential`, not in the query or fragment.
   - `gitCredential` (string, optional): a token for private repositories, stored encrypted.
   - `localPath` (string, required for `local_path`): must resolve under the server's configured local repos root.
 - **Returns**: the repository record (as in `list_repositories`, without `access`). The first sync starts right away.

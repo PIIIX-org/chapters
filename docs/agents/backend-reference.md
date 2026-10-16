@@ -640,22 +640,30 @@ rotation mechanism**; rotating it invalidates every stored credential.
 connect (REST and MCP): the URL is stored without userinfo and the
 userinfo goes into `gitCredentialEncrypted` (an explicit
 `gitCredential` wins). `ssh://user:password@` remotes are split the same
-way; a bare ssh user (`ssh://git@host`) stays in the URL (#593). With no
-encryption key the connect is refused
+way; a bare ssh user (`ssh://git@host`) stays in the URL (#593). Userinfo
+with an invalid percent sequence (`%zz`, a raw `50%off`) is kept in its
+raw form rather than throwing, and goes back into the clone URL unchanged.
+With no encryption key the connect is refused
 rather than store the token in plaintext. `authenticatedUrl` puts
 `user:password` or a bare token back for the clone. Sync errors are
 redacted before they reach `lastSyncError` (served to viewers) or the
 log: `redactGitSecrets` removes the credential (stored or still in the
-URL) in raw and URL-encoded forms, the password of a `user:password`
-credential on its own, any URL userinfo up to the last `@` of the
-authority, and every URL query value (`?private_token=***`).
+URL) in raw and URL-encoded forms; on its own, the password of a
+`user:password` credential and its user too, unless that names a token
+type (`git`, `x-access-token`, `oauth2`, …), since the legacy GitHub
+`TOKEN:x-oauth-basic` form puts the token there; any URL userinfo up to
+the last `@` of the authority; and every URL query and fragment value
+(`?private_token=***`, `#access_token=***`, a bare `?***`). A form made
+of `*` alone is not replaced, so redaction is idempotent. The cost is
+quadratic on long error text (#644).
 `scrubStoredGitCredentials()` runs at boot and moves credentials
 out of remotes stored before the fix (idempotent; a row it cannot
 encrypt keeps its URL and is warned about, but its `lastSyncError` is
 still redacted). `repositoryFields` strips
-userinfo for owners too and replaces query values with `***`; viewers
-get the remote without userinfo, query or fragment (`publicGitUrl`). It
-serves `lastSyncError` through
+userinfo for owners too and replaces query and fragment values with
+`***`; viewers get the remote without userinfo, query or fragment
+(`publicGitUrl`), and the client builds deep links from host and path
+only. It serves `lastSyncError` through
 `publicSyncError` (also used by the MCP `repository_status`), so a row
 the scrub left alone does not serve its token through the error text
 either (#577). A query-string token stays at rest in `gitUrl`: it is

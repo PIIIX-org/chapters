@@ -4,6 +4,20 @@ import { repositories } from '../db/schema.js'
 import { EncryptionKeyMissingError, encryptCredential } from './credentials.js'
 
 /**
+ * `decodeURIComponent`, or the text as it is when it holds an invalid percent
+ * sequence (`ssh://git:%zz@…`, a raw `50%off`). Such remotes were accepted and
+ * stored before #593; a throw here would stop the boot scrub, every listing of
+ * the row and its sync. `authenticatedUrl` puts the raw form back unchanged.
+ */
+function decodeUserinfo(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+/**
  * Splits `https://user:token@host/owner/repo.git` into the remote without its
  * userinfo and the userinfo itself (`user:token`, or just `token`). An
  * `ssh://user:password@` remote is split the same way (#593); a bare ssh user
@@ -22,8 +36,8 @@ export function splitGitUrlCredential(gitUrl: string): { url: string; credential
   const sshWithPassword = parsed.protocol === 'ssh:' && parsed.password !== ''
   if (!http && !sshWithPassword) return { url: gitUrl, credential: null }
   if (!parsed.username && !parsed.password) return { url: gitUrl, credential: null }
-  const user = decodeURIComponent(parsed.username)
-  const password = decodeURIComponent(parsed.password)
+  const user = decodeUserinfo(parsed.username)
+  const password = decodeUserinfo(parsed.password)
   parsed.username = ''
   parsed.password = ''
   return { url: parsed.toString(), credential: password ? `${user}:${password}` : user }
@@ -79,42 +93,74 @@ function userinfoEncoded(value: string): string {
 }
 
 /**
- * Every query value in every URL in `text` replaced: `?private_token=X`
- * becomes `?private_token=***` (#593). A query can carry a token and is not
- * userinfo, so nothing moves it into encrypted storage.
+ * Every query and fragment value in every URL in `text` replaced:
+ * `?private_token=X` becomes `?private_token=***`, `#access_token=X` becomes
+ * `#access_token=***` and a bare `?X` becomes `?***` (#593). Neither part is
+ * userinfo, so nothing moves a token there into encrypted storage, and git
+ * echoes both verbatim in its errors.
  */
 export function redactUrlQuery(text: string): string {
   return text.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"]+/gi, (url) => {
-    const query = url.search(/[?#]/)
-    if (query === -1) return url
-    return url.slice(0, query) + url.slice(query).replace(/([?&][^=&#\s]*=)[^&#]+/g, '$1***')
+    const start = url.search(/[?#]/)
+    if (start === -1) return url
+    const tail = url
+      .slice(start)
+      .replace(/([?&#])([^=?&#]*=)?[^?&#]+/g, (_match, sep: string, key: string | undefined) => `${sep}${key ?? ''}***`)
+    return url.slice(0, start) + tail
   })
+}
+
+/**
+ * Usernames that name a kind of token rather than being one. Redacting them
+ * would mangle every error that mentions `git`, and they are not secret.
+ */
+const NON_SECRET_USERNAMES: Record<string, true> = {
+  git: true,
+  'x-access-token': true,
+  oauth2: true,
+  'x-token-auth': true,
+  'gitlab-ci-token': true,
 }
 
 /**
  * Removes secrets from text bound for storage or logs (git error messages can
  * echo the authenticated clone URL): every given credential in each form a
- * URL or an echo may carry it, and on its own the password of a
- * `user:password` one; then any userinfo in a `scheme://userinfo@` URL, up to
- * the last `@` of the authority so a raw `@` in a password leaves no tail; and
- * every URL query value.
+ * URL or an echo may carry it; on its own, the password of a `user:password`
+ * one and its user too unless that names a token type (the legacy GitHub
+ * `TOKEN:x-oauth-basic` form puts the token there); then any userinfo in a
+ * `scheme://userinfo@` URL, up to the last `@` of the authority so a raw `@`
+ * in a password leaves no tail; and every URL query and fragment value.
  */
 export function redactGitSecrets(text: string, secrets: Array<string | null | undefined>): string {
   const forms = new Set<string>()
   for (const secret of secrets) {
     if (!secret) continue
+    const parts = [secret]
     const colon = secret.indexOf(':')
-    const parts = colon === -1 ? [secret] : [secret, secret.slice(colon + 1)]
+    if (colon !== -1) {
+      const user = secret.slice(0, colon)
+      parts.push(secret.slice(colon + 1))
+      if (!Object.hasOwn(NON_SECRET_USERNAMES, user)) parts.push(user)
+    }
     for (const part of parts) {
       if (!part) continue
       forms.add(part)
-      forms.add(encodeURIComponent(part))
       forms.add(userinfoEncoded(part))
+      try {
+        forms.add(encodeURIComponent(part))
+      } catch {
+        // A lone surrogate has no URI-encoded form; the raw form is enough.
+      }
     }
   }
   let out = text
-  // Longest first, so a password never leaves the rest of its credential behind.
-  for (const form of [...forms].sort((a, b) => b.length - a.length)) out = out.split(form).join('***')
+  // Longest first, so a password never leaves the rest of its credential
+  // behind. A form made of `*` alone is skipped: replacing it would only grow
+  // the marker on every pass, and `***` already shows nothing.
+  for (const form of [...forms].sort((a, b) => b.length - a.length)) {
+    if (/^\*+$/.test(form)) continue
+    out = out.split(form).join('***')
+  }
   return redactUrlQuery(out.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s]*@/gi, '$1***@'))
 }
 
