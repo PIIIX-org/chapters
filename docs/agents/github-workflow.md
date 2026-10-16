@@ -23,7 +23,8 @@ Every change — code, spec, doc — follows the same loop:
    Not covered, `Closes #N`. Evidence is links, not adjectives: the CI
    run, the fails-before run (or its justification), the lab run for
    integration changes, the benchmark delta for retrieval or token
-   changes. `gh pr create --body`, `--body-file` and `--fill` never load
+   changes (the `bench-gate` job's summary; see **Premise benchmark** under
+   CI). `gh pr create --body`, `--body-file` and `--fill` never load
    the template: copy it to a file under the workspace, fill it in, and
    pass that file with `--body-file`. The `pr-evidence` check (see
    **PR evidence** under CI below, which lists the rules) fails a body
@@ -271,6 +272,33 @@ that covers more than one kind of check, or a crashed test turns it red.
 A fix that makes a known defect pass removes its entry in the same PR. Not
 a required status check yet (item 177): treat a red lab run as blocking
 review. Tiers, the baseline, how to add a test: `docs/agents/lab.md`.
+
+**Premise benchmark** (same workflow, jobs `bench` ×3 and `bench-gate`,
+#570/#572) measures the tokens and calls a scripted agent needs to reach
+the evidence for a question with Elara's MCP tools, against ripgrep +
+ranged reads on a checkout of the same pinned commit, plus hit@k, MRR,
+NDCG@10 and line-level precision/recall. It runs on three lab instances of
+its own, never against production (the runner refuses any other base
+URL), and gates their median. The `chapters` suite runs on PRs to `dev`
+that touch search, extraction or ingestion, MCP, the schema, server
+start-up/config, the image's dependencies or the benchmark; all five
+suites run nightly, on every PR to `prod` and by hand
+(`-f tier=none -f bench=all`). The gate
+(`.github/scripts/bench-gate.mjs`, base copy on PRs) fails when Elara's
+hit@5 drops by more than two questions of a suite or its mean
+tokens-to-gold rises by more than 10 % against the **base** commit's
+`benchmarks/baseline.json`; when the suite changed (questions, keywords,
+policy config or harness source) unless the PR has the label
+`bench-suite-change` and a `Bench-suite-change: <why>` line; when the PR's
+baseline is worse than the base's unless it has `bench-baseline-lowered`
+and a `Bench-baseline-lowered: <why>` line; and when the run no longer
+matches the PR's baseline (an improvement is recorded in the same PR with
+`--write-baseline` from the PR's own three instances). Labels are read when
+the gate runs: re-run `bench-gate` after adding one. The delta table is in
+the job summary. Not a required check yet (item 177): treat a red
+`bench-gate` as blocking review.
+Method, thresholds and the only publishable numbers:
+`benchmarks/README.md`.
 
 Both `dev` and `prod` enforce strict GitHub branch protection with
 `required_status_checks` on `checks` and `enforce_admins: true`. No PR

@@ -99,7 +99,9 @@ flowchart TD
 
 ## Benchmarks (retracted)
 
-The benchmark numbers this README used to show (the TP-01 to TP-15 "Master Test Plans", the throughput, latency, and security badges, and the reports under `docs/benchmarks/`) are **retracted pending a reproducible benchmark**. They cannot be reproduced: the runners were never merged (they exist only on the unmerged `dev-chroma` branch), they ran against production, and some results are impossible (an NDCG@10 of 1.37, where NDCG cannot exceed 1). The 2026-10-14 study that found this is the Elara vault note `audit/2026-10-14-ai-performance-study`.
+The benchmark numbers this README used to show (the TP-01 to TP-15 "Master Test Plans", the throughput, latency, and security badges, and the reports under `docs/benchmarks/`) are **retracted**. They cannot be reproduced: the runners were never merged (they exist only on the unmerged `dev-chroma` branch), they ran against production, and some results are impossible (an NDCG@10 of 1.37, where NDCG cannot exceed 1). The 2026-10-14 study that found this is the Elara vault note `audit/2026-10-14-ai-performance-study`.
+
+Their replacement is the [premise benchmark](benchmarks/README.md): a scripted agent's tokens and tool calls to reach the evidence for 109 questions on five repositories pinned to fixed commits, with Elara's MCP tools against ripgrep and ranged reads, plus hit@k, MRR, NDCG@10 and line-level precision/recall. It runs in CI against a lab instance built from the commit under test, never against production, and gates retrieval and token changes. Its committed baseline ([`benchmarks/baseline.json`](benchmarks/baseline.json)) and the runs it links are the only benchmark numbers Elara publishes.
 
 Correctness is covered by the server and client test suites that CI runs on every pull request.
 

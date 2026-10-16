@@ -45,6 +45,9 @@ jobs:
         run: pnpm lint
       - name: Test CI scripts
         run: node --test '.github/scripts/*.test.mjs'
+      # Premise benchmark metrics, policies, question files, production guard (#570).
+      - name: Test benchmark harness
+        run: node --test 'benchmarks/lib/*.test.ts'
       - name: Test
         run: pnpm test
         env:

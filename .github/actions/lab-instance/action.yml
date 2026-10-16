@@ -1,0 +1,43 @@
+name: Lab instance
+description: >-
+  Builds Elara from the checked-out commit with docker-compose.yml +
+  lab/docker-compose.lab.yml, with per-run secrets, and bootstraps it
+  (lab/bootstrap.ts writes lab-env.json). Used by the lab and bench jobs of
+  elara-lab.yml; needs bun on the PATH. Docs: docs/agents/lab.md.
+inputs:
+  mcp_rate_limit:
+    description: MCP_RATE_LIMIT per connection per minute
+    required: false
+    default: '600'
+runs:
+  using: composite
+  steps:
+    - name: Generate secrets (.env for compose interpolation)
+      shell: bash
+      env:
+        RATE_LIMIT: ${{ inputs.mcp_rate_limit }}
+      run: |
+        case "$RATE_LIMIT" in ''|*[!0-9]*) echo "mcp_rate_limit must be a number"; exit 1 ;; esac
+        key=$(openssl rand -hex 32)
+        setup=$(openssl rand -hex 24)
+        pg=$(openssl rand -hex 16)
+        echo "::add-mask::$key"
+        echo "::add-mask::$setup"
+        echo "::add-mask::$pg"
+        {
+          echo "CREDENTIALS_ENCRYPTION_KEY=$key"
+          echo "SETUP_TOKEN=$setup"
+          echo "POSTGRES_PASSWORD=$pg"
+          echo "MCP_RATE_LIMIT=$RATE_LIMIT"
+        } > .env
+
+    - name: Build and start (docker compose up -d --build)
+      shell: bash
+      run: |
+        start=$(date +%s)
+        docker compose -f docker-compose.yml -f lab/docker-compose.lab.yml up -d --build
+        echo "compose up took $(( $(date +%s) - start )) s"
+
+    - name: Bootstrap users and tokens
+      shell: bash
+      run: bun lab/bootstrap.ts

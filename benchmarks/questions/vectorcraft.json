@@ -1,0 +1,471 @@
+{
+  "suite": "vectorcraft",
+  "description": "A Rust vector editor (engine, egui UI, MCP server, WebAssembly): where/how/identifier/architecture/build questions.",
+  "repo": {
+    "url": "https://github.com/storytold/vectorcraft",
+    "commit": "a06717777828867557d759c674283304f63c04ae"
+  },
+  "source": "Elara AI-performance study round 2, /elara-map trial (vault note audit/2026-10-14-ai-performance-study-round-2): 20 held-out questions, evidence file:line checked against the pinned commit.",
+  "questions": [
+    {
+      "id": "Q01",
+      "category": "where",
+      "question": "Where is the code that catches a panic raised inside a command, a tool event or an MCP request and rolls the document back instead of crashing the app? Name the function and its main call sites.",
+      "keywords": [
+        "panic"
+      ],
+      "relevant": [
+        "crates/engine/src/guard.rs",
+        "crates/engine/src/lib.rs",
+        "crates/engine/src/tooling.rs",
+        "crates/mcp/src/server.rs",
+        "crates/mcp/src/tools.rs",
+        "crates/ui-egui/src/lib.rs"
+      ],
+      "gold": [
+        "crates/engine/src/guard.rs:1-9",
+        "crates/engine/src/guard.rs:17-23",
+        "crates/engine/src/lib.rs:1355",
+        "crates/engine/src/lib.rs:1432-1456",
+        "crates/engine/src/tooling.rs:244-256",
+        "crates/mcp/src/server.rs:215-217",
+        "crates/mcp/src/tools.rs:912-916",
+        "crates/ui-egui/src/lib.rs:784"
+      ]
+    },
+    {
+      "id": "Q02",
+      "category": "where",
+      "question": "Where is the PostScript interpreter used to import EPS files implemented, where does the engine call it, and how does it stop a looping or recursing program from hanging the app?",
+      "keywords": [
+        "postscript"
+      ],
+      "relevant": [
+        "crates/eps/src/import/mod.rs",
+        "crates/eps/src/import/interp.rs",
+        "crates/engine/src/cmd/fileio/load.rs"
+      ],
+      "gold": [
+        "crates/eps/src/import/mod.rs:1-13",
+        "crates/eps/src/import/mod.rs:176-185",
+        "crates/eps/src/import/interp.rs:1-5",
+        "crates/eps/src/import/interp.rs:15-29",
+        "crates/eps/src/import/interp.rs:340-341",
+        "crates/eps/src/import/interp.rs:399-400",
+        "crates/engine/src/cmd/fileio/load.rs:202"
+      ]
+    },
+    {
+      "id": "Q03",
+      "category": "where",
+      "question": "Where are the Pathfinder boolean operations (Unite, Minus Front, Intersect, Exclude...) implemented, from the menu command down to the geometry code, and what library does the curve geometry rely on?",
+      "keywords": [
+        "pathfinder"
+      ],
+      "relevant": [
+        "crates/engine/src/cmd/pathops.rs",
+        "crates/pathops/src/lib.rs",
+        "crates/pathops/src/pathfinder.rs",
+        "crates/pathops/src/boolean.rs",
+        "Cargo.toml"
+      ],
+      "gold": [
+        "crates/engine/src/cmd/pathops.rs:27",
+        "crates/engine/src/cmd/pathops.rs:392-461",
+        "crates/pathops/src/lib.rs:1-6",
+        "crates/pathops/src/lib.rs:16-23",
+        "crates/pathops/src/pathfinder.rs:29",
+        "crates/pathops/src/pathfinder.rs:89",
+        "crates/pathops/src/boolean.rs:1-6",
+        "crates/pathops/src/boolean.rs:23",
+        "crates/pathops/src/boolean.rs:648-656",
+        "Cargo.toml:69"
+      ]
+    },
+    {
+      "id": "Q04",
+      "category": "where",
+      "question": "Where is raster-to-vector Image Trace implemented, what is its library entry point, and which engine command module calls it?",
+      "keywords": [
+        "image.?trace"
+      ],
+      "relevant": [
+        "crates/trace/src/lib.rs",
+        "crates/engine/src/cmd/buildcmds.rs"
+      ],
+      "gold": [
+        "crates/trace/src/lib.rs:1-42",
+        "crates/trace/src/lib.rs:45-55",
+        "crates/trace/src/lib.rs:494-497",
+        "crates/trace/src/lib.rs:502",
+        "crates/engine/src/cmd/buildcmds.rs:819"
+      ]
+    },
+    {
+      "id": "Q05",
+      "category": "where",
+      "question": "Where is the sandbox for third-party WebAssembly plug-ins implemented, and what resource limits and isolation rules does it enforce?",
+      "keywords": [
+        "sandbox"
+      ],
+      "relevant": [
+        "crates/plugins/src/lib.rs",
+        "crates/plugins/src/runtime.rs"
+      ],
+      "gold": [
+        "crates/plugins/src/lib.rs:1-20",
+        "crates/plugins/src/runtime.rs:12",
+        "crates/plugins/src/runtime.rs:15",
+        "crates/plugins/src/runtime.rs:19-49",
+        "crates/plugins/src/runtime.rs:134-141",
+        "crates/plugins/src/runtime.rs:210-228",
+        "crates/plugins/src/runtime.rs:242-245",
+        "crates/plugins/src/runtime.rs:250-251"
+      ]
+    },
+    {
+      "id": "Q06",
+      "category": "where",
+      "question": "Where is the native .vectorcraft document format read and written, and where is backward compatibility with the project's former name kept?",
+      "keywords": [
+        "\\.vectorcraft"
+      ],
+      "relevant": [
+        "crates/format/src/lib.rs",
+        "crates/engine/src/cmd/fileio/native.rs",
+        "CLAUDE.md"
+      ],
+      "gold": [
+        "crates/format/src/lib.rs:1-31",
+        "crates/format/src/lib.rs:52-65",
+        "crates/format/src/lib.rs:80-82",
+        "crates/format/src/lib.rs:274-307",
+        "crates/format/src/lib.rs:477-515",
+        "crates/engine/src/cmd/fileio/native.rs:233",
+        "CLAUDE.md:5"
+      ]
+    },
+    {
+      "id": "Q07",
+      "category": "how",
+      "question": "How does an MCP tools/call request from an agent (for example run_command) end up executing an engine command, both when a desktop app is running and when no app is running? Trace it end to end.",
+      "keywords": [
+        "tools/call",
+        "run_command"
+      ],
+      "relevant": [
+        "apps/vectorcraft-cli/src/main.rs",
+        "crates/mcp/src/lib.rs",
+        "crates/mcp/src/server.rs",
+        "crates/mcp/src/tools.rs",
+        "crates/mcp/src/backend.rs",
+        "crates/mcp/src/headless.rs",
+        "apps/vectorcraft/src/main.rs",
+        "apps/vectorcraft/src/control_server.rs",
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/engine/src/lib.rs"
+      ],
+      "gold": [
+        "apps/vectorcraft-cli/src/main.rs:71-73",
+        "apps/vectorcraft-cli/src/main.rs:156-211",
+        "crates/mcp/src/lib.rs:1-14",
+        "crates/mcp/src/server.rs:133-164",
+        "crates/mcp/src/server.rs:167-188",
+        "crates/mcp/src/server.rs:191-241",
+        "crates/mcp/src/server.rs:272-283",
+        "crates/mcp/src/tools.rs:765-773",
+        "crates/mcp/src/tools.rs:905-917",
+        "crates/mcp/src/backend.rs:11-13",
+        "crates/mcp/src/backend.rs:21-36",
+        "crates/mcp/src/headless.rs:304-313",
+        "apps/vectorcraft/src/main.rs:849-851",
+        "apps/vectorcraft/src/control_server.rs:24-33",
+        "apps/vectorcraft/src/control_server.rs:60-72",
+        "apps/vectorcraft/src/control_server.rs:113-130",
+        "crates/ui-egui/src/control.rs:41",
+        "crates/ui-egui/src/control.rs:194-201",
+        "crates/ui-egui/src/lib.rs:769-784",
+        "crates/engine/src/lib.rs:1328-1368"
+      ]
+    },
+    {
+      "id": "Q08",
+      "category": "how",
+      "question": "How does a mouse drag with a drawing tool (for example the Rectangle tool) become exactly one undoable document change? Trace it from the pointer event to the undo history.",
+      "keywords": [
+        "drag"
+      ],
+      "relevant": [
+        "crates/engine/src/tooling.rs",
+        "crates/tools/src/lib.rs",
+        "crates/tools/src/shape.rs",
+        "crates/engine/src/lib.rs"
+      ],
+      "gold": [
+        "crates/engine/src/tooling.rs:263-283",
+        "crates/engine/src/tooling.rs:480-516",
+        "crates/tools/src/lib.rs:133-152",
+        "crates/tools/src/lib.rs:522-524",
+        "crates/tools/src/shape.rs:189-202",
+        "crates/tools/src/shape.rs:297-300",
+        "crates/engine/src/lib.rs:1556-1574",
+        "crates/engine/src/lib.rs:1577-1605",
+        "crates/engine/src/lib.rs:1607-1641",
+        "crates/engine/src/lib.rs:432-441",
+        "crates/engine/src/lib.rs:445-462",
+        "crates/engine/src/lib.rs:1505-1511"
+      ]
+    },
+    {
+      "id": "Q09",
+      "category": "how",
+      "question": "How do undo and redo work end to end, why are undo snapshots cheap, and what bounds the memory the undo history uses?",
+      "keywords": [
+        "undo"
+      ],
+      "relevant": [
+        "crates/doc/src/lib.rs",
+        "crates/engine/src/lib.rs",
+        "crates/engine/src/cmd/edit.rs"
+      ],
+      "gold": [
+        "crates/doc/src/lib.rs:1-5",
+        "crates/doc/src/lib.rs:977-983",
+        "crates/engine/src/lib.rs:66-83",
+        "crates/engine/src/lib.rs:121-182",
+        "crates/engine/src/lib.rs:184-193",
+        "crates/engine/src/lib.rs:418-421",
+        "crates/engine/src/lib.rs:445-462",
+        "crates/engine/src/lib.rs:1460-1520",
+        "crates/engine/src/cmd/edit.rs:277-311"
+      ]
+    },
+    {
+      "id": "Q10",
+      "category": "how",
+      "question": "How does saving a native document to disk work end to end, and how does it avoid leaving a damaged file behind if the write fails or is interrupted?",
+      "keywords": [
+        "\\bsave\\b"
+      ],
+      "relevant": [
+        "crates/engine/src/cmd/fileio/save.rs",
+        "crates/engine/src/cmd/fileio/mod.rs",
+        "crates/format/src/atomic.rs"
+      ],
+      "gold": [
+        "crates/engine/src/cmd/fileio/save.rs:1-7",
+        "crates/engine/src/cmd/fileio/save.rs:37-64",
+        "crates/engine/src/cmd/fileio/save.rs:556-595",
+        "crates/engine/src/cmd/fileio/save.rs:600-638",
+        "crates/engine/src/cmd/fileio/save.rs:652-659",
+        "crates/engine/src/cmd/fileio/mod.rs:787-797",
+        "crates/format/src/atomic.rs:1-13",
+        "crates/format/src/atomic.rs:29-35",
+        "crates/format/src/atomic.rs:43-80",
+        "crates/format/src/atomic.rs:88-122",
+        "crates/format/src/atomic.rs:261"
+      ]
+    },
+    {
+      "id": "Q11",
+      "category": "how",
+      "question": "How does the desktop canvas go from the document model to pixels on screen? Cover which thread renders, which library rasterizes, how many rasterizer threads are used, and how the result reaches the screen.",
+      "keywords": [
+        "rasteri[sz]"
+      ],
+      "relevant": [
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/render_worker.rs",
+        "crates/render/src/lib.rs",
+        "docs/architecture.md"
+      ],
+      "gold": [
+        "crates/ui-egui/src/canvas.rs:287-346",
+        "crates/ui-egui/src/canvas.rs:347-370",
+        "crates/ui-egui/src/canvas.rs:2096-2104",
+        "crates/ui-egui/src/render_worker.rs:1-3",
+        "crates/ui-egui/src/render_worker.rs:37-64",
+        "crates/render/src/lib.rs:1-6",
+        "crates/render/src/lib.rs:2124-2143",
+        "docs/architecture.md:41-46"
+      ]
+    },
+    {
+      "id": "Q12",
+      "category": "identifier",
+      "question": "Where is the struct `CommandSpec` defined and what are its fields?",
+      "keywords": [
+        "struct CommandSpec"
+      ],
+      "relevant": [
+        "crates/engine/src/cmd/mod.rs"
+      ],
+      "gold": [
+        "crates/engine/src/cmd/mod.rs:99-100",
+        "crates/engine/src/cmd/mod.rs:102-116",
+        "crates/engine/src/cmd/mod.rs:186-194"
+      ]
+    },
+    {
+      "id": "Q13",
+      "category": "identifier",
+      "question": "Where is the trait `Tool` defined, which of its methods must every implementor provide (no default), and what does the tool factory return for an unknown tool id?",
+      "keywords": [
+        "trait Tool\\b"
+      ],
+      "relevant": [
+        "crates/tools/src/lib.rs"
+      ],
+      "gold": [
+        "crates/tools/src/lib.rs:521-595",
+        "crates/tools/src/lib.rs:597-621",
+        "crates/tools/src/lib.rs:619",
+        "crates/tools/src/lib.rs:623-633"
+      ]
+    },
+    {
+      "id": "Q14",
+      "category": "identifier",
+      "question": "Where is the enum `EngineError` defined and what variants does it have?",
+      "keywords": [
+        "enum EngineError"
+      ],
+      "relevant": [
+        "crates/engine/src/lib.rs"
+      ],
+      "gold": [
+        "crates/engine/src/lib.rs:39-56",
+        "crates/engine/src/lib.rs:58-62",
+        "crates/engine/src/lib.rs:64"
+      ]
+    },
+    {
+      "id": "Q15",
+      "category": "identifier",
+      "question": "Where is the function `find_command` defined, how does it look a command up, and where does the list it searches come from?",
+      "keywords": [
+        "fn find_command"
+      ],
+      "relevant": [
+        "crates/engine/src/cmd/mod.rs",
+        "crates/engine/src/lib.rs"
+      ],
+      "gold": [
+        "crates/engine/src/cmd/mod.rs:196-292",
+        "crates/engine/src/cmd/mod.rs:294-296",
+        "crates/engine/src/lib.rs:1329"
+      ]
+    },
+    {
+      "id": "Q16",
+      "category": "architecture",
+      "question": "Why does the codebase forbid unwrap()/expect()/panic! in shipped code, how is that rule enforced at build time, and what is the last-resort fallback if a panic happens anyway (and on which target does that fallback not help)?",
+      "keywords": [
+        "unwrap\\(\\)",
+        "expect\\(\\)",
+        "panic!"
+      ],
+      "relevant": [
+        "CLAUDE.md",
+        "Cargo.toml",
+        "clippy.toml",
+        "xtask/src/main.rs",
+        "crates/engine/src/guard.rs",
+        "docs/development.md"
+      ],
+      "gold": [
+        "CLAUDE.md:35-42",
+        "Cargo.toml:91-103",
+        "clippy.toml:1-5",
+        "xtask/src/main.rs:187-194",
+        "crates/engine/src/guard.rs:1-9",
+        "docs/development.md:228-240"
+      ]
+    },
+    {
+      "id": "Q17",
+      "category": "architecture",
+      "question": "Why does the plug-in system run WebAssembly with the wasmi interpreter and the specific feature set chosen, rather than a native-code WebAssembly runtime?",
+      "keywords": [
+        "wasmi"
+      ],
+      "relevant": [
+        "Cargo.toml",
+        "crates/plugins/src/lib.rs",
+        "crates/plugins/src/runtime.rs",
+        "CLAUDE.md"
+      ],
+      "gold": [
+        "Cargo.toml:53-58",
+        "crates/plugins/src/lib.rs:1-14",
+        "crates/plugins/src/runtime.rs:134",
+        "CLAUDE.md:46"
+      ]
+    },
+    {
+      "id": "Q18",
+      "category": "architecture",
+      "question": "How is the Cargo workspace layered, what rule keeps UI toolkits out of the core crates, and why does that matter for the different products built from the same engine?",
+      "keywords": [
+        "workspace"
+      ],
+      "relevant": [
+        "xtask/src/layers.rs",
+        "xtask/src/main.rs",
+        "docs/architecture.md",
+        "CLAUDE.md"
+      ],
+      "gold": [
+        "xtask/src/layers.rs:35-66",
+        "xtask/src/layers.rs:73-86",
+        "xtask/src/layers.rs:98-101",
+        "xtask/src/layers.rs:172-222",
+        "xtask/src/main.rs:146-157",
+        "docs/architecture.md:11-31",
+        "CLAUDE.md:44"
+      ]
+    },
+    {
+      "id": "Q19",
+      "category": "build",
+      "question": "What single command runs the full pre-commit quality gate, and which steps does it run, in which order?",
+      "keywords": [
+        "pre.?commit",
+        "quality.?gate"
+      ],
+      "relevant": [
+        ".cargo/config.toml",
+        "xtask/src/main.rs",
+        "CLAUDE.md",
+        "docs/development.md"
+      ],
+      "gold": [
+        ".cargo/config.toml:1-2",
+        "xtask/src/main.rs:44-56",
+        "xtask/src/main.rs:176-226",
+        "CLAUDE.md:48",
+        "docs/development.md:125"
+      ]
+    },
+    {
+      "id": "Q20",
+      "category": "build",
+      "question": "How do you build and locally serve the browser (WebAssembly) version of VectorCraft, and where does the build output go?",
+      "keywords": [
+        "\\bwasm\\b",
+        "webassembly"
+      ],
+      "relevant": [
+        "docs/development.md",
+        "apps/vectorcraft-web/Trunk.toml",
+        "packaging/web/package.sh"
+      ],
+      "gold": [
+        "docs/development.md:9-20",
+        "apps/vectorcraft-web/Trunk.toml:1-18",
+        "packaging/web/package.sh:1-39"
+      ]
+    }
+  ]
+}

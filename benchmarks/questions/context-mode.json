@@ -1,0 +1,388 @@
+{
+  "suite": "context-mode",
+  "description": "An MCP server in TypeScript (sandboxed execution, FTS5 knowledge base, hooks): where/flow/identifier/architecture/config questions.",
+  "repo": {
+    "url": "https://github.com/mksglu/context-mode",
+    "commit": "dbec9809d83172a2fa3edd69cc9b95000c3b9859"
+  },
+  "source": "Elara AI-performance study round 2, /elara-map trial (vault note audit/2026-10-14-ai-performance-study-round-2): 20 held-out questions, evidence file:line checked against the pinned commit.",
+  "questions": [
+    {
+      "id": "W1",
+      "category": "where",
+      "question": "Where is the SSRF protection for ctx_fetch_and_index implemented, and which address ranges does it block by default versus only in strict mode?",
+      "keywords": [
+        "ssrf"
+      ],
+      "relevant": [
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/server.ts:3142-3167",
+        "src/server.ts:3168-3234",
+        "src/server.ts:3186",
+        "src/server.ts:3244-3286",
+        "src/server.ts:3288-3293"
+      ]
+    },
+    {
+      "id": "W2",
+      "category": "where",
+      "question": "Where is the progressive throttling of ctx_search implemented, how is it keyed, and what are its default thresholds?",
+      "keywords": [
+        "throttl"
+      ],
+      "relevant": [
+        "src/search/flood-guard.ts",
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/search/flood-guard.ts:1-22",
+        "src/search/flood-guard.ts:55-111",
+        "src/server.ts:2450-2470",
+        "src/server.ts:2479-2485",
+        "src/server.ts:2649-2664"
+      ]
+    },
+    {
+      "id": "W3",
+      "category": "where",
+      "question": "Where is sandboxed code execution implemented (writing the script, choosing the runtime command, spawning the process), and where is the child environment sanitized?",
+      "keywords": [
+        "sandbox"
+      ],
+      "relevant": [
+        "src/executor.ts",
+        "src/runtime.ts"
+      ],
+      "gold": [
+        "src/executor.ts:231-261",
+        "src/executor.ts:282-319",
+        "src/executor.ts:332-375",
+        "src/executor.ts:409-423",
+        "src/executor.ts:510-546",
+        "src/executor.ts:573-686",
+        "src/runtime.ts:334-392",
+        "src/runtime.ts:644-700"
+      ]
+    },
+    {
+      "id": "W4",
+      "category": "where",
+      "question": "Where is the FTS5 knowledge base implemented, and what virtual tables and tokenizers does it create?",
+      "keywords": [
+        "fts5"
+      ],
+      "relevant": [
+        "src/store.ts",
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/store.ts:1-9",
+        "src/store.ts:351",
+        "src/store.ts:463-500",
+        "src/store.ts:838-893",
+        "src/store.ts:1122",
+        "src/store.ts:1158",
+        "src/store.ts:1340",
+        "src/server.ts:681-741"
+      ]
+    },
+    {
+      "id": "W5",
+      "category": "where",
+      "question": "Where does context-mode detect which AI host/platform it is running under, and in what priority order are the detection signals checked?",
+      "keywords": [
+        "detect"
+      ],
+      "relevant": [
+        "src/adapters/detect.ts",
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/adapters/detect.ts:1-22",
+        "src/adapters/detect.ts:367-431",
+        "src/adapters/detect.ts:433-463",
+        "src/adapters/detect.ts:600-631",
+        "src/adapters/detect.ts:637",
+        "src/server.ts:4918-4927"
+      ]
+    },
+    {
+      "id": "W6",
+      "category": "where",
+      "question": "Where are Bash curl/wget invocations intercepted for Claude Code, and under what conditions is a curl/wget command allowed through unchanged?",
+      "keywords": [
+        "curl|wget"
+      ],
+      "relevant": [
+        "hooks/hooks.json",
+        "hooks/pretooluse.mjs",
+        "hooks/core/routing.mjs"
+      ],
+      "gold": [
+        "hooks/hooks.json:26-62",
+        "hooks/pretooluse.mjs:157-173",
+        "hooks/core/routing.mjs:237",
+        "hooks/core/routing.mjs:670",
+        "hooks/core/routing.mjs:727-786"
+      ]
+    },
+    {
+      "id": "F1",
+      "category": "flow",
+      "question": "How does a ctx_batch_execute call work end to end, from receiving commands and queries to the text returned to the agent?",
+      "keywords": [
+        "ctx_batch_execute"
+      ],
+      "relevant": [
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/server.ts:3678",
+        "src/server.ts:3778-3892",
+        "src/server.ts:1560-1641",
+        "src/server.ts:1371-1418",
+        "src/server.ts:1111-1132"
+      ]
+    },
+    {
+      "id": "F2",
+      "category": "flow",
+      "question": "How does ctx_fetch_and_index work end to end for a URL, including caching, the fetch itself, conversion, and indexing?",
+      "keywords": [
+        "ctx_fetch_and_index"
+      ],
+      "relevant": [
+        "src/server.ts",
+        "src/fetch-cache.ts"
+      ],
+      "gold": [
+        "src/server.ts:2835-2838",
+        "src/server.ts:3118-3119",
+        "src/server.ts:3288-3370",
+        "src/server.ts:3384-3410",
+        "src/server.ts:3495-3671",
+        "src/fetch-cache.ts:13-15"
+      ]
+    },
+    {
+      "id": "F3",
+      "category": "flow",
+      "question": "How does a search query against the knowledge base get turned into ranked results (the full fallback and ranking pipeline)?",
+      "keywords": [
+        "fallback",
+        "\\brank"
+      ],
+      "relevant": [
+        "src/store.ts",
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/store.ts:1244-1284",
+        "src/store.ts:1288-1336",
+        "src/store.ts:1340-1389",
+        "src/store.ts:1195",
+        "src/store.ts:1415",
+        "src/server.ts:1300-1367"
+      ]
+    },
+    {
+      "id": "F4",
+      "category": "flow",
+      "question": "How does session continuity across a Claude Code context compaction work end to end, from capturing tool events to restoring context after compact?",
+      "keywords": [
+        "compact"
+      ],
+      "relevant": [
+        "hooks/hooks.json",
+        "hooks/posttooluse.mjs",
+        "src/session/extract.ts",
+        "hooks/precompact.mjs",
+        "src/session/snapshot.ts",
+        "hooks/sessionstart.mjs",
+        "src/server.ts"
+      ],
+      "gold": [
+        "hooks/hooks.json:4-25",
+        "hooks/posttooluse.mjs:1-60",
+        "src/session/extract.ts:2710",
+        "hooks/precompact.mjs:1-87",
+        "src/session/snapshot.ts:1-14",
+        "src/session/snapshot.ts:472",
+        "hooks/sessionstart.mjs:9-15",
+        "hooks/sessionstart.mjs:189-212",
+        "hooks/sessionstart.mjs:260-306",
+        "src/server.ts:500-521",
+        "src/server.ts:739"
+      ]
+    },
+    {
+      "id": "F5",
+      "category": "flow",
+      "question": "How does ctx_execute decide what to return to the agent after running code (security checks, instrumentation, timeouts, and handling of large output)?",
+      "keywords": [
+        "ctx_execute\\b"
+      ],
+      "relevant": [
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/server.ts:1647",
+        "src/server.ts:1743-1951",
+        "src/server.ts:1958-1973",
+        "src/server.ts:1979-2036",
+        "src/server.ts:1494-1502"
+      ]
+    },
+    {
+      "id": "I1",
+      "category": "identifier",
+      "question": "Where is classifyIp defined and what values can it return for which kinds of addresses?",
+      "keywords": [
+        "classifyIp"
+      ],
+      "relevant": [
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/server.ts:3236-3286",
+        "src/server.ts:3193"
+      ]
+    },
+    {
+      "id": "I2",
+      "category": "identifier",
+      "question": "Where is composeFetchCacheKey defined, what does it return, and where is it used?",
+      "keywords": [
+        "composeFetchCacheKey"
+      ],
+      "relevant": [
+        "src/fetch-cache.ts",
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/fetch-cache.ts:13-15",
+        "src/server.ts:3296-3301",
+        "src/server.ts:3386-3389"
+      ]
+    },
+    {
+      "id": "I3",
+      "category": "identifier",
+      "question": "What is AGY_DEFAULT_EXEC_TIMEOUT_MS, where is it defined, and when is it applied?",
+      "keywords": [
+        "AGY_DEFAULT_EXEC_TIMEOUT_MS"
+      ],
+      "relevant": [
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/server.ts:1485-1502",
+        "src/server.ts:1821",
+        "src/server.ts:3793"
+      ]
+    },
+    {
+      "id": "I4",
+      "category": "identifier",
+      "question": "What is MAX_CHUNK_BYTES, where is it defined, and how is it used when chunking markdown?",
+      "keywords": [
+        "MAX_CHUNK_BYTES"
+      ],
+      "relevant": [
+        "src/store.ts"
+      ],
+      "gold": [
+        "src/store.ts:150-162",
+        "src/store.ts:998-1001",
+        "src/store.ts:1646-1698"
+      ]
+    },
+    {
+      "id": "A1",
+      "category": "architecture",
+      "question": "Why does ctx_fetch_and_index fetch URLs in parallel but index the results serially?",
+      "keywords": [
+        "serial"
+      ],
+      "relevant": [
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/server.ts:3114-3141",
+        "src/server.ts:3379-3384",
+        "src/server.ts:3517-3569"
+      ]
+    },
+    {
+      "id": "A2",
+      "category": "architecture",
+      "question": "Why does the MCP server rewrite the input schemas it returns from tools/list, and what exactly does the rewrite change?",
+      "keywords": [
+        "tools/list",
+        "input.?schema"
+      ],
+      "relevant": [
+        "src/server.ts"
+      ],
+      "gold": [
+        "src/server.ts:353-366",
+        "src/server.ts:367-380",
+        "src/server.ts:382-413",
+        "src/server.ts:4981-4984"
+      ]
+    },
+    {
+      "id": "A3",
+      "category": "architecture",
+      "question": "Why do SessionDB and ContentStore allow multiple writer processes on the same database file instead of using a lock file?",
+      "keywords": [
+        "lock.?file",
+        "multiple writer"
+      ],
+      "relevant": [
+        "docs/adr/0001-sessiondb-multi-writer.md"
+      ],
+      "gold": [
+        "docs/adr/0001-sessiondb-multi-writer.md:9-37",
+        "docs/adr/0001-sessiondb-multi-writer.md:39-59",
+        "docs/adr/0001-sessiondb-multi-writer.md:61-93",
+        "docs/adr/0001-sessiondb-multi-writer.md:176-188"
+      ]
+    },
+    {
+      "id": "C1",
+      "category": "config-build",
+      "question": "How is context-mode built and bundled for distribution: which npm scripts run, what artifacts are produced, and what Node version is required?",
+      "keywords": [
+        "bundle"
+      ],
+      "relevant": [
+        "package.json"
+      ],
+      "gold": [
+        "package.json:58-60",
+        "package.json:81-102",
+        "package.json:103-121",
+        "package.json:122-125"
+      ]
+    },
+    {
+      "id": "C2",
+      "category": "config-build",
+      "question": "How does CI run the test suite: which platforms and toolchains, which steps, and which vitest settings stabilize it?",
+      "keywords": [
+        "vitest"
+      ],
+      "relevant": [
+        ".github/workflows/ci.yml",
+        "vitest.config.ts"
+      ],
+      "gold": [
+        ".github/workflows/ci.yml:1-100",
+        "vitest.config.ts:1-34"
+      ]
+    }
+  ]
+}

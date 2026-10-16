@@ -10,7 +10,8 @@ committed baseline of known defects.
 
 | file | what |
 |---|---|
-| `.github/workflows/elara-lab.yml` | the workflow: `plan` picks the tier, `lab` builds, bootstraps, runs, gates, uploads |
+| `.github/workflows/elara-lab.yml` | the workflow: `plan` picks the lab tier and the benchmark tier, `lab` builds, bootstraps, runs, gates, uploads; `bench` runs the premise benchmark on its own instance |
+| `.github/actions/lab-instance/action.yml` | shared by `lab` and `bench`: per-run secrets in `.env`, `docker compose up -d --build`, `bun lab/bootstrap.ts` |
 | `lab/docker-compose.lab.yml` | compose override: mailpit for signup mail, `MCP_RATE_LIMIT`, local backups |
 | `lab/bootstrap.ts` | setup → signup → verify → approve → login, pinned vault + repo, 4 MCP tokens; writes `lab-env.json` (runner only, holds tokens) |
 | `lab/run.ts` | selects tests by tier or filter, waits for `/health` before each, runs them in file-name order, writes `lab-results/` |
@@ -25,7 +26,7 @@ committed baseline of known defects.
 
 | tier | when | tests | time |
 |---|---|---|---|
-| fast | PRs to `dev` that change anything the image is built from (`server/**`, `client/**`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`) or the lab (`lab/**`, the lab workflow, the gate); pushes to `lab/**` | tests with `tier: 'fast'`, with their long parts skipped | lab job 5 min 37 s (run 38830575391) |
+| fast | PRs to `dev` that change anything the image is built from (`server/**`, `client/**`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`) or the lab (`lab/**`, the lab workflow, the `lab-instance` action, the gate); pushes to `lab/**` | tests with `tier: 'fast'`, with their long parts skipped | lab job 5 min 37 s (run 38830575391) |
 | full | nightly 02:30 UTC on `dev`, every PR to `prod` (promotion), and by hand | every test, every part | lab job 61 min (run 38830570057; `restart-extraction` 19 min, `big-notes` 18 min) |
 
 The `plan` job reads the PR's changed files (GitHub API); a PR to `dev`
@@ -52,6 +53,7 @@ gh workflow run elara-lab.yml -R PIIIX-org/chapters --ref <branch>              
 gh workflow run elara-lab.yml -R PIIIX-org/chapters --ref <branch> -f tier=fast
 gh workflow run elara-lab.yml -R PIIIX-org/chapters --ref <branch> -f tests=crash-write,smoke
 gh workflow run elara-lab.yml -R PIIIX-org/chapters --ref <branch> -f mcp_rate_limit=120  # production limit
+gh workflow run elara-lab.yml -R PIIIX-org/chapters --ref <branch> -f tier=none -f bench=chapters  # benchmark only
 gh run download <id> -R PIIIX-org/chapters -n lab-results -D <dir>
 ```
 
@@ -60,7 +62,36 @@ overrides the tier's selection (the tier still decides whether a test runs
 its long parts). A newer run on the same ref cancels the older one; the
 nightly has its own concurrency group, so a dispatch or PR on `dev` never
 cancels it. The lab job is **not a required check** yet (branch protection
-is fix-list item 177); treat a red lab run on a PR as blocking review.
+is item 177); treat a red lab run on a PR as blocking review.
+
+## The premise benchmark (`bench` and `bench-gate` jobs)
+
+The `bench` jobs (#570) measure what Elara exists for: tokens and calls an
+agent needs to reach the evidence for a question, Elara's MCP `search` +
+`read_file` against ripgrep + ranged reads on a checkout of the same
+commit. Three `bench` jobs (matrix `instance: [1, 2, 3]`) run next to the
+`lab` job, each on its own runner and instance (same `lab-instance`
+action); `bench-gate` then gates the per-metric median of the three,
+because Elara's ranks move between identical instances (#623).
+
+| tier | when | suites | time |
+|---|---|---|---|
+| chapters | PRs to `dev` touching `server/src/{search,mcp,repositories,db}/`, `server/src/{config,index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, `benchmarks/`, `lab/bootstrap.ts`, `lab/lib/`, `lab/docker-compose.lab.yml`, the workflow, the action or `bench-gate.mjs` | `chapters` (29 questions) | about 9 min (instances in parallel) |
+| all | nightly, every PR to `prod`, by hand (`-f bench=all`) | all five suites (109 questions) | about 50 min (instances in parallel) |
+
+Dispatches default to `bench=none`, so a hand-started lab run costs no
+extra runner. `benchmarks/run.ts` reads `lab-env.json`, refuses any base
+URL that is not the lab instance on the runner (never production), fetches
+each suite's repository at its pinned commit, copies it into the app
+container as a `local_path` repository (`lab/lib/fixlab.ts`), waits until
+every file is embedded (one suite at a time: extraction is one global
+queue), then runs both scripted agents on every question and writes
+`bench-results/` (artifacts `bench-results-<n>`, 90 days). The gate
+`.github/scripts/bench-gate.mjs` compares the median with
+`benchmarks/baseline.json`; on a PR it runs the base commit's copy, judges
+regressions against the base commit's baseline, and needs an owner label
+for a changed suite or a lowered baseline. Method, metrics, thresholds,
+overrides and how to regenerate the baseline: `benchmarks/README.md`.
 
 ## The gate and the baseline
 

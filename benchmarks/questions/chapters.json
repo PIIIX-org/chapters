@@ -1,0 +1,429 @@
+{
+  "suite": "chapters",
+  "description": "Where-is and exact-identifier questions about Elara itself (14 natural-language, 15 identifier). Gold = the definition or call lines named by the verified evidence.",
+  "repo": {
+    "url": "https://github.com/PIIIX-org/chapters",
+    "commit": "345f1dbe948e6bde67944b8967b468be0e6426f0"
+  },
+  "source": "Elara AI-performance study round 1 (vault note audit/2026-10-14-ai-performance-study), retrieval questions A1-A14 and S1-S15, answers verified at 345f1db. The 10 note questions (N1-N10) are not included: their corpus is the production Chapters and ELara vaults.",
+  "questions": [
+    {
+      "id": "A1",
+      "category": "where",
+      "question": "where are MCP rate limits enforced",
+      "keywords": [
+        "rate.?limit"
+      ],
+      "relevant": [
+        "server/src/mcp/rate-limit.ts",
+        "server/src/mcp/routes.ts"
+      ],
+      "gold": [
+        "server/src/mcp/rate-limit.ts:8",
+        "server/src/mcp/routes.ts:24"
+      ]
+    },
+    {
+      "id": "A2",
+      "category": "where",
+      "question": "how are progressive index notes regenerated",
+      "keywords": [
+        "progressive"
+      ],
+      "relevant": [
+        "server/src/notes/store.ts"
+      ],
+      "gold": [
+        "server/src/notes/store.ts:106"
+      ]
+    },
+    {
+      "id": "A3",
+      "category": "where",
+      "question": "where are git credentials stripped from repository URLs",
+      "keywords": [
+        "credential"
+      ],
+      "relevant": [
+        "server/src/repositories/permissions.ts",
+        "server/src/repositories/git-remote.ts"
+      ],
+      "gold": [
+        "server/src/repositories/permissions.ts:74",
+        "server/src/repositories/git-remote.ts:76"
+      ]
+    },
+    {
+      "id": "A4",
+      "category": "where",
+      "question": "what persists Yjs CRDT state to disk",
+      "keywords": [
+        "crdt"
+      ],
+      "relevant": [
+        "server/src/sync/crdt-store.ts",
+        "server/src/sync/collab-server.ts"
+      ],
+      "gold": [
+        "server/src/sync/crdt-store.ts:19",
+        "server/src/sync/collab-server.ts:152",
+        "server/src/sync/collab-server.ts:186"
+      ]
+    },
+    {
+      "id": "A5",
+      "category": "where",
+      "question": "how are keyword and vector search results fused",
+      "keywords": [
+        "\\bfus(e|ed|es|ion)\\b"
+      ],
+      "relevant": [
+        "server/src/search/search.ts"
+      ],
+      "gold": [
+        "server/src/search/search.ts:66",
+        "server/src/search/search.ts:292-297"
+      ]
+    },
+    {
+      "id": "A6",
+      "category": "where",
+      "question": "where are semantic similarity edges between notes computed",
+      "keywords": [
+        "semantic.?edge"
+      ],
+      "relevant": [
+        "server/src/search/semantic-edges.ts"
+      ],
+      "gold": [
+        "server/src/search/semantic-edges.ts:64"
+      ]
+    },
+    {
+      "id": "A7",
+      "category": "where",
+      "question": "where does tree-sitter extract imports and symbols from source files",
+      "keywords": [
+        "tree.?sitter"
+      ],
+      "relevant": [
+        "server/src/repositories/extraction.ts"
+      ],
+      "gold": [
+        "server/src/repositories/extraction.ts:124"
+      ]
+    },
+    {
+      "id": "A8",
+      "category": "where",
+      "question": "where is the GitHub webhook signature verified",
+      "keywords": [
+        "signature"
+      ],
+      "relevant": [
+        "server/src/repositories/git-webhook-routes.ts"
+      ],
+      "gold": [
+        "server/src/repositories/git-webhook-routes.ts:16"
+      ]
+    },
+    {
+      "id": "A9",
+      "category": "where",
+      "question": "how are stored git credentials encrypted at rest",
+      "keywords": [
+        "encrypt"
+      ],
+      "relevant": [
+        "server/src/repositories/credentials.ts"
+      ],
+      "gold": [
+        "server/src/repositories/credentials.ts:22"
+      ]
+    },
+    {
+      "id": "A10",
+      "category": "where",
+      "question": "where are Louvain graph communities computed",
+      "keywords": [
+        "louvain"
+      ],
+      "relevant": [
+        "server/src/graph/assemble.ts"
+      ],
+      "gold": [
+        "server/src/graph/assemble.ts:433"
+      ]
+    },
+    {
+      "id": "A11",
+      "category": "where",
+      "question": "where is a vault exported as a zip archive",
+      "keywords": [
+        "zip"
+      ],
+      "relevant": [
+        "server/src/export/archive.ts",
+        "server/src/export/routes.ts"
+      ],
+      "gold": [
+        "server/src/export/archive.ts:83",
+        "server/src/export/routes.ts:77"
+      ]
+    },
+    {
+      "id": "A12",
+      "category": "where",
+      "question": "where is login brute-force lockout implemented",
+      "keywords": [
+        "lockout"
+      ],
+      "relevant": [
+        "server/src/auth/lockout.ts"
+      ],
+      "gold": [
+        "server/src/auth/lockout.ts:7-41"
+      ]
+    },
+    {
+      "id": "A13",
+      "category": "where",
+      "question": "how do agent MCP writes get applied to a live collaborative document",
+      "keywords": [
+        "collab"
+      ],
+      "relevant": [
+        "server/src/sync/crdt-write.ts",
+        "server/src/mcp/crdt-write.ts"
+      ],
+      "gold": [
+        "server/src/sync/crdt-write.ts:35",
+        "server/src/mcp/crdt-write.ts:1"
+      ]
+    },
+    {
+      "id": "A14",
+      "category": "where",
+      "question": "where is drift between notes and repository code detected",
+      "keywords": [
+        "drift"
+      ],
+      "relevant": [
+        "server/src/notes/staleness.ts"
+      ],
+      "gold": [
+        "server/src/notes/staleness.ts:31"
+      ]
+    },
+    {
+      "id": "S1",
+      "category": "identifier",
+      "question": "regenProgressiveIndices",
+      "keywords": [
+        "regenProgressiveIndices"
+      ],
+      "relevant": [
+        "server/src/notes/store.ts"
+      ],
+      "gold": [
+        "server/src/notes/store.ts:106"
+      ]
+    },
+    {
+      "id": "S2",
+      "category": "identifier",
+      "question": "writeThroughCollab",
+      "keywords": [
+        "writeThroughCollab"
+      ],
+      "relevant": [
+        "server/src/sync/crdt-write.ts"
+      ],
+      "gold": [
+        "server/src/sync/crdt-write.ts:35"
+      ]
+    },
+    {
+      "id": "S3",
+      "category": "identifier",
+      "question": "publicGitUrl",
+      "keywords": [
+        "publicGitUrl"
+      ],
+      "relevant": [
+        "server/src/repositories/permissions.ts"
+      ],
+      "gold": [
+        "server/src/repositories/permissions.ts:74"
+      ]
+    },
+    {
+      "id": "S4",
+      "category": "identifier",
+      "question": "parseNote",
+      "keywords": [
+        "parseNote"
+      ],
+      "relevant": [
+        "server/src/notes/okf.ts"
+      ],
+      "gold": [
+        "server/src/notes/okf.ts:230"
+      ]
+    },
+    {
+      "id": "S5",
+      "category": "identifier",
+      "question": "checkRateLimit",
+      "keywords": [
+        "checkRateLimit"
+      ],
+      "relevant": [
+        "server/src/mcp/rate-limit.ts"
+      ],
+      "gold": [
+        "server/src/mcp/rate-limit.ts:8"
+      ]
+    },
+    {
+      "id": "S6",
+      "category": "identifier",
+      "question": "redactGitSecrets",
+      "keywords": [
+        "redactGitSecrets"
+      ],
+      "relevant": [
+        "server/src/repositories/git-remote.ts"
+      ],
+      "gold": [
+        "server/src/repositories/git-remote.ts:76"
+      ]
+    },
+    {
+      "id": "S7",
+      "category": "identifier",
+      "question": "recomputeSemanticEdges",
+      "keywords": [
+        "recomputeSemanticEdges"
+      ],
+      "relevant": [
+        "server/src/search/semantic-edges.ts"
+      ],
+      "gold": [
+        "server/src/search/semantic-edges.ts:64"
+      ]
+    },
+    {
+      "id": "S8",
+      "category": "identifier",
+      "question": "saveCrdtState",
+      "keywords": [
+        "saveCrdtState"
+      ],
+      "relevant": [
+        "server/src/sync/crdt-store.ts"
+      ],
+      "gold": [
+        "server/src/sync/crdt-store.ts:19"
+      ]
+    },
+    {
+      "id": "S9",
+      "category": "identifier",
+      "question": "verifySignature",
+      "keywords": [
+        "verifySignature"
+      ],
+      "relevant": [
+        "server/src/repositories/git-webhook-routes.ts"
+      ],
+      "gold": [
+        "server/src/repositories/git-webhook-routes.ts:16"
+      ]
+    },
+    {
+      "id": "S10",
+      "category": "identifier",
+      "question": "findShortestPath",
+      "keywords": [
+        "findShortestPath"
+      ],
+      "relevant": [
+        "server/src/graph/assemble.ts"
+      ],
+      "gold": [
+        "server/src/graph/assemble.ts:473"
+      ]
+    },
+    {
+      "id": "S11",
+      "category": "identifier",
+      "question": "mulberry32",
+      "keywords": [
+        "mulberry32"
+      ],
+      "relevant": [
+        "server/src/graph/assemble.ts"
+      ],
+      "gold": [
+        "server/src/graph/assemble.ts:36"
+      ]
+    },
+    {
+      "id": "S12",
+      "category": "identifier",
+      "question": "SearchResult",
+      "keywords": [
+        "SearchResult"
+      ],
+      "relevant": [
+        "server/src/search/search.ts"
+      ],
+      "gold": [
+        "server/src/search/search.ts:32"
+      ]
+    },
+    {
+      "id": "S13",
+      "category": "identifier",
+      "question": "AccessOversight",
+      "keywords": [
+        "AccessOversight"
+      ],
+      "relevant": [
+        "client/src/components/admin/AccessOversight.tsx"
+      ],
+      "gold": [
+        "client/src/components/admin/AccessOversight.tsx:45"
+      ]
+    },
+    {
+      "id": "S14",
+      "category": "identifier",
+      "question": "LocalEmbedder",
+      "keywords": [
+        "LocalEmbedder"
+      ],
+      "relevant": [
+        "server/src/search/embeddings.ts"
+      ],
+      "gold": [
+        "server/src/search/embeddings.ts:35"
+      ]
+    },
+    {
+      "id": "S15",
+      "category": "identifier",
+      "question": "repositoryFilesKey",
+      "keywords": [
+        "repositoryFilesKey"
+      ],
+      "relevant": [
+        "client/src/hooks/useRepositories.ts"
+      ],
+      "gold": [
+        "client/src/hooks/useRepositories.ts:34"
+      ]
+    }
+  ]
+}
