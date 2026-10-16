@@ -53,6 +53,9 @@ describe('movement', () => {
     assert.equal(movement('hit5', 0.6, 0.6 - one, 20), 'same')
     assert.equal(movement('hit5', 0.6, 0.6 - one - 0.05, 20), 'worse')
     assert.equal(movement('hit5', 0.6, 0.6 + one + 0.05, 20), 'better')
+    // 28/29 and 27/29 as written by round4 (0.9655 -> 0.931 is one question, PR #622's first run).
+    assert.equal(movement('hit5', 0.9655, 0.931, 29), 'same')
+    assert.equal(movement('hit5', 0.9655, 0.8966, 29), 'worse')
   })
 
   it('tokens-to-gold is relative, and lower is better', () => {

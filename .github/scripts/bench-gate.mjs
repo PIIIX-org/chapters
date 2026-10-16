@@ -87,7 +87,8 @@ export function toBaseline(results, previous = { suites: {} }) {
  */
 export function movement(metric, ref, cur, questions) {
   if (metric === 'hit5') {
-    const tol = TOLERANCE.hit5Questions / questions + 1e-9
+    // Aggregates are rounded to 4 decimals (round4 in benchmarks/lib/metrics.ts): allow that rounding.
+    const tol = TOLERANCE.hit5Questions / questions + 1e-4
     return cur < ref - tol ? 'worse' : cur > ref + tol ? 'better' : 'same'
   }
   if (metric === 'tokensToGold') {
