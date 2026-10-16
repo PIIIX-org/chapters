@@ -1,0 +1,39 @@
+name: Feature
+description: Something Elara should do that it does not do today.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What an agent or a user cannot do today, and what it costs (tokens, calls, wrong answers, lost work).
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The behaviour you want. Describe behaviour, not code.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence links
+      description: Runs, benchmark results, notes or issues that show the need.
+    validations:
+      required: false
+  - type: dropdown
+    id: found-by
+    attributes:
+      label: Found by
+      description: Where the need showed up. Add the matching `found-by:*` label.
+      options:
+        - dogfooding (using Elara for real work)
+        - test (unit or CI test suite)
+        - lab (integration lab or benchmark)
+        - review (PR or promotion review)
+        - audit (study or audit)
+        - user (reported by a user)
+    validations:
+      required: false

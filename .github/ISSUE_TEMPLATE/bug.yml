@@ -1,0 +1,68 @@
+name: Bug
+description: Something Elara does wrong. One bug per issue, with steps that reproduce it.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        A bug found anywhere (dogfooding, a vault note, a test, the lab, a
+        review, an audit, a user) is filed here, not only written down in a
+        note. Rules: docs/agents/github-workflow.md (Issues). After filing,
+        add the `found-by:*` label that matches the answer below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The wrong behaviour, as observed. Quote the exact error or output.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        Numbered steps from a known state (instance version or commit, vault,
+        tool call with its arguments) that make it happen again. Say how often
+        it happens if it is not every time.
+      placeholder: |
+        1. On commit ... call `edit_note` with ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What should have happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence links
+      description: >-
+        Links to what shows it: a CI or lab run, a log excerpt, a commit, a
+        file and line, the vault note where it was first written down.
+    validations:
+      required: true
+  - type: dropdown
+    id: found-by
+    attributes:
+      label: Found by
+      description: Which gate found it. Add the matching `found-by:*` label.
+      options:
+        - dogfooding (using Elara for real work)
+        - test (unit or CI test suite)
+        - lab (integration lab or benchmark)
+        - review (PR or promotion review)
+        - audit (study or audit)
+        - user (reported by a user)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Commit, image tag or instance where it happened, if known.
+    validations:
+      required: false

@@ -1,0 +1,4 @@
+# Issues on github.com use a form (bug.yml, feature.yml). Agents filing with
+# `gh issue create --body-file` follow the same sections; rules in
+# docs/agents/github-workflow.md (Issues).
+blank_issues_enabled: false

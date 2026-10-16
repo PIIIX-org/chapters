@@ -36,9 +36,14 @@ These are standing rules for every session and every agent.
 - **Push early, push often.** Commit + push after every green test cycle;
   never leave more than ~15 minutes of work unpushed. `wip:` commits on a
   feature branch are fine — the PR title carries the real message.
-- `STATE.md` is the resume anchor. Update it (and push) at every task
-  boundary and before starting any long operation. It always answers:
-  current phase, current task, next single step, open PR/issue numbers.
+- `STATE.md` is the resume anchor. Its generated block (phase progress,
+  open issues, owner actions, bugs, the last promotion, checks on `dev`)
+  is rebuilt from GitHub by the `state-md.yml` workflow; don't edit it by
+  hand, and run `node .github/scripts/state-md.mjs --write` only in the PR
+  that lands the bot's block or one that edits the hand-written part
+  (`github-workflow.md`, STATE.md). Update the hand-written part (and push) at every
+  task boundary and before starting any long operation when what it says
+  (traps, decisions, gates) changed.
 - **Resume protocol** after an interruption:
   1. `git fetch --all`, `git status` — find the branch and any dirty state.
   2. Read `STATE.md`, then the active plan's current task.
@@ -101,8 +106,9 @@ Goal: best output per million tokens. Standing rules:
 - **Write short-lived output nowhere, durable output in files.** Don't
   paste large code/diffs into PR bodies or chat; link or reference paths.
 - **Batch independent tool calls** in one round-trip.
-- **Keep STATE.md under ~40 lines** — it's read every session; its size
-  is a recurring tax.
+- **Keep STATE.md's hand-written part short** — the file is read every
+  session; its size is a recurring tax. The generated block caps each
+  list at 12 issues.
 - **Small files, stable interfaces** (see §1) keep every future read
   cheap. Token efficiency is mostly an architecture property.
 - Don't restate specs in plans or code comments — reference them.
