@@ -876,14 +876,20 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
   - `version`: the commit the image was built from (`ELARA_VERSION`;
     `publish.yml` passes `github.sha` as a build arg, the Dockerfile bakes
     it into the env), or `null` for an image built without it.
+    `ELARA_HEALTH_HIDE_VERSION=true` (`config.healthHidesVersion`, #638)
+    leaves the key out of `/health` for an operator who does not want to
+    publish the build commit; default shown. The boot log line keeps it.
+    Any value other than unset, empty, `true` or `false` keeps it shown and
+    warns once at boot (`readHealthHidesVersion` in `config.ts`).
   - `lastShutdown`: how the *previous* process on this `DATA_DIR` ended,
     read once at boot from `DATA_DIR/lifecycle.json`. `index.ts` writes it
     `running` first thing at boot (before migrations), and `stopped` (with
     the signal) only after the SIGTERM/SIGINT handler finished every flush
     (collab relay, Fastify, Postgres pool). Next boot: `stopped` →
     `graceful`; `running` → `unclean` (SIGKILL, OOM kill, crash, uncaught
-    exception, a boot that died in migrations, or a shutdown Docker cut
-    short after its stop timeout); missing or unreadable → `unknown`
+    exception, a boot that died in migrations, a shutdown Docker cut
+    short after its stop timeout, or a volume that went read-only under it,
+    see below); missing or unreadable → `unknown`
     (first boot on this data directory).
     - A SIGTERM that arrives before `index.ts` installs its handlers
       (during migrations and the boot catch-ups, before `listen`) ends the
@@ -897,7 +903,19 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
       process that failed the same way) and deletes the marker (unlink
       works on a full disk), so the next boot reports `unknown` rather than
       reading an older process's `stopped` as `graceful`. On a read-only
-      volume the delete fails too, and every boot keeps reporting `unknown`.
+      volume the delete fails too, and every boot keeps reporting `unknown`
+      while it stays read-only. The first boot after the volume is writable
+      again reads whatever marker the last process before the read-only
+      period left, with that process's bootId as `previousBootId`:
+      `graceful` if it shut down cleanly before the volume went read-only
+      (`stopped`), `unclean` if the volume went read-only under it (its
+      `stopped` write failed, so `running` stayed; it may well have shut
+      down cleanly). If a monitor checked during the read-only period, that
+      `previousBootId` is not the bootId it last saw: the uptime monitor
+      flags the restart `unseen` and says how the process it saw ended is
+      not known, and an `unclean` also adds the `unclean-restart` label. If
+      no check fell in that window, `previousBootId` is the bootId last
+      seen, nothing is flagged, and the read-only boots go unreported.
       The boot log line carries the error as `markerError`.
     - It assumes **one process per `DATA_DIR`**, which the deployment is
       (single container; the collab relay and the queues are in-process,

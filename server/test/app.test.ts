@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app.js'
+import { config } from '../src/config.js'
 
 describe('app', () => {
   it('responds ok on /health with the process identity (#583)', async () => {
@@ -19,6 +20,20 @@ describe('app', () => {
     const again = (await app.inject({ method: 'GET', url: '/health' })).json()
     expect(again.bootId).toBe(body.bootId)
     await app.close()
+  })
+
+  it('leaves version out of /health when ELARA_HEALTH_HIDE_VERSION is set (#638)', async () => {
+    const original = config.healthHidesVersion
+    config.healthHidesVersion = true
+    const app = await buildApp()
+    try {
+      const body = (await app.inject({ method: 'GET', url: '/health' })).json()
+      expect(Object.keys(body).sort()).toEqual(['bootId', 'lastShutdown', 'previousBootId', 'startedAt', 'status'])
+      expect(body.status).toBe('ok')
+    } finally {
+      config.healthHidesVersion = original
+      await app.close()
+    }
   })
 
   it('sends security headers on every response', async () => {
