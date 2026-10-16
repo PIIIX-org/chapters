@@ -171,7 +171,7 @@ export function UserRoster() {
                           label="Deactivate"
                           destructive
                           ariaLabel={`Deactivate ${user.email}`}
-                          consequence={`${user.email} is signed out everywhere, dropped from every team, and every vault shared directly with them is unshared. Vaults they own stay put — reassign those first if someone else needs them.`}
+                          consequence={`${user.email} is signed out everywhere, every MCP token they hold is revoked, they are dropped from every team, and every vault shared directly with them is unshared. Vaults they own stay put — reassign those first if someone else needs them.`}
                           pending={deactivate.isPending}
                           error={deactivate.error?.message ?? null}
                           onConfirm={() => deactivate.mutate(user.id)}
@@ -181,7 +181,7 @@ export function UserRoster() {
                         <ConfirmAction
                           label="Reactivate"
                           ariaLabel={`Reactivate ${user.email}`}
-                          consequence={`${user.email} will have their account restored to active status and will be able to log in again.`}
+                          consequence={`${user.email} will have their account restored to active status and will be able to log in again. MCP tokens revoked at deactivation stay revoked; they mint new ones.`}
                           pending={reactivate.isPending}
                           error={reactivate.error?.message ?? null}
                           onConfirm={() => reactivate.mutate(user.id)}

@@ -133,11 +133,11 @@ Claude Code: `claude mcp add --transport http elara https://<your-elara-host>/mc
 When you create a token you choose what it may do; none of this can be changed later (revoke it and create a new one):
 
 - **Reach**: the whole account (Settings > MCP Connections) or one vault (the vault's settings). The API also mints repository tokens.
-- **Access**: *Read only* (search, read, browse), *Read and write* (also create, edit, rename, trash, restore and revert notes, sync repositories) or *Admin* (also share and revoke, change vault or repository settings, trash or delete a vault or repository, purge notes and history, connect repositories, manage team members). Account tokens default to Admin, vault tokens to Read and write. Admin on a vault token lets the agent share, trash or purge that vault, so only the vault's owner can grant it, and the form warns before you do.
+- **Access**: *Read only* (search, read, browse), *Read and write* (also create, edit, rename, trash, restore and revert notes, sync repositories) or *Admin* (also share and revoke, change vault or repository settings, trash or delete a vault or repository, purge notes and history, connect repositories, manage team members). The forms start at Read and write. Through the API, a token minted without a level gets Admin on the account and Read and write on a vault or repository. Admin on a vault token lets the agent share, trash or purge that vault, so only the vault's owner can grant it: the form offers it only to the owner, and warns first.
 - **Expiry**: 7, 30 or 90 days, or never. An expired token is refused like a revoked one.
 - **Allowed tools** (optional): limit the token to the tools you tick. A token with an allow-list gets no MCP prompts.
 
-A call the token may not make fails with a message naming what is missing, for example `share_vault needs the admin capability; this connection has write access`. Tokens created before this existed keep working: account tokens have Admin; vault and repository tokens have Read and write, so they can no longer share, change the settings of, trash or purge their vault or repository.
+A token's `tools/list` shows only the tools it can call: its allow-list, its access level and its reach. A call the token may not make fails with a message naming what is missing, for example `share_vault needs the admin capability; this connection has write access`. Tokens created before this existed keep working: account tokens have Admin; vault and repository tokens have Read and write, so they can no longer share, change the settings of, trash or purge their vault or repository.
 
 ### Key MCP Capabilities
 

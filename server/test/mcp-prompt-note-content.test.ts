@@ -6,9 +6,9 @@
 // instructions.
 //
 // Known defect #556 (fix list item 159): today every one of these prompts
-// returns ONE user-role text message in which the note text sits between the
-// prompt's instructions, under a heading but with no closing delimiter, so
-// the note's sentence reads like part of the instructions. The expected
+// returns ONE user-role text message in which the note text sits after a
+// heading and before the prompt's own instructions, in the same text, so the
+// note's sentence reads like part of the instructions. The expected
 // behaviour is note text in a separate data block (an embedded resource)
 // marked untrusted. These tests pin today's placement; the fix for #556
 // changes them.
@@ -129,7 +129,7 @@ describe('note text inside MCP prompts (#552; known defect #556)', () => {
     const text = content.text.replaceAll('<b>', '').replaceAll('</b>', '')
 
     // The sentence arrives verbatim, after a heading and before the prompt's
-    // own instructions, in the same text: nothing marks where it ends.
+    // own instructions, in the same text.
     const heading = text.indexOf(c.heading)
     const sentence = text.indexOf(SENTENCE)
     const instructions = text.indexOf(c.instructions)

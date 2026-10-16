@@ -237,9 +237,13 @@ storage, resolved on every request via a Fastify `onRequest` hook.
 - **Password reset**: anti-enumeration response, kills all sessions on
   successful reset.
 - **Admin routes** (`admin-routes.ts`): approve/promote/deactivate
-  users, transfer vault ownership. Deactivation cascades — kills
-  sessions, removes team memberships and direct vault shares, fires a
-  live permission-change event, notifies the user.
+  users, transfer vault ownership. Deactivation cascades in one
+  transaction — kills sessions, removes team memberships and direct
+  vault shares, revokes every MCP connection of the user (one
+  `mcp_connection_revoked` audit event each, #646) — then fires a live
+  permission-change event and notifies the user. Reactivation restores
+  the account only: revoked tokens stay revoked (a connection a pre-#646
+  deactivation left live is revoked then), and the user mints new ones.
 - **Admin dashboard** (`admin-dashboard-routes.ts`): metadata-only by
   explicit design — stats, audit trail, force-revoke a share or MCP
   connection. No endpoint here can return note content.
@@ -267,10 +271,13 @@ storage, resolved on every request via a Fastify `onRequest` hook.
   user to own the pinned vault or repository, else 403),
   `allowedTools` (names checked against `listMcpTools()`, 400 for an
   unknown one) and `expiresAt` (ISO time, must be in the future).
+  The Settings and vault forms always send a level, starting at `write`,
+  and the vault form offers `admin` only to the vault's owner (#641).
   `GET /mcp-connections/tools` returns `listMcpTools()` (name, scope,
   capability) for the Settings allow-list picker. Migration 0019 set
   existing account tokens to `admin` and left existing pinned tokens at
-  `write`; a restore of an older dump applies the same rule.
+  `write`; a restore of an older dump applies the same rule. Migration
+  0020 dropped the column default, so every insert names its level.
   Resolution (`resolveMcpToken`) is fully live — a revoked, expired, or
   now-inactive-owner token never resolves regardless of when it was
   issued (HTTP 401 `invalid, revoked or expired MCP token`).
@@ -491,7 +498,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   throws, so a tool registered without a declaration fails when the
   server is built. That is a guard against forgetting the declaration,
   not a security boundary: the low-level `server.server.setRequestHandler`
-  would bypass it (unused). Scopes: `account` (account tokens only:
+  would bypass it (here it is only wrapped, to filter `tools/list`).
+  Scopes: `account` (account tokens only:
   `list_vaults`, `create_vault`, `restore_vault`, `purge_vault`, the two
   vault-preference tools, `list_repositories`, `connect_repository`, the
   team tools, `lookup_user`, the notification tools); `vault` (the note
@@ -528,9 +536,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `write` unless its owner minted it `admin`, so by default it cannot
   share, update, trash or purge its pin or erase history. Prompts are
   not registered for a connection with an allow-list (they read notes
-  outside `tool()`). `listMcpTools()` builds the catalog once from the
+  outside `tool()`). `tools/list` advertises only the tools the
+  connection can call (#641): in its allow-list, within its access level
+  and of a scope class its scope reaches (`account` tools for account
+  tokens only, `vault`/`vault-or-account` not for repository tokens,
+  `repository`/`repository-or-account` not for vault tokens). Every tool
+  stays registered, so calling a hidden one still returns the refusal
+  above. `listMcpTools()` builds the catalog once from the
   registrations; `test/mcp-tool-capabilities.test.ts` pins the admin
-  set and `test/mcp-capabilities.test.ts` covers each rule.
+  set, `test/mcp-capabilities.test.ts` covers each rule and
+  `test/mcp-tool-visibility.test.ts` the filtered `tools/list`.
 - **Tools** (57, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):
   - *Vaults* (14): `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `get_vault_graph_preference`, `set_vault_graph_preference`, `get_vault_preferences`, `update_vault_preferences`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.
@@ -768,16 +783,16 @@ flips both.
 |---|---|---|---|
 | A revoked MCP token is refused on the very next request (HTTP 401, every method) | holds | `mcp-token-lifecycle` | `revoked token: refused on the next request (HTTP 401)` |
 | An expired token (`expires_at`, #640) is refused; a token cannot be minted already expired (400) | holds | `mcp-token-lifecycle` | `scoped-tokens`: `expired token rejected (HTTP 401)` |
-| Deactivating a user stops all of that user's tokens on the next request | holds; the connections are not revoked, so a reactivated user's unexpired tokens work again | `mcp-token-lifecycle` | `deactivated user: their token is refused on the next request (HTTP 401)` |
-| Tokens are stored only as a SHA-256 hash; the raw token is in no row, audit event or listing | holds | `mcp-token-lifecycle` | `token stored only as its SHA-256 hash` |
+| Deactivating a user stops all of that user's tokens on the next request | holds; deactivation revokes every connection (account, vault- and repository-pinned) and reactivation does not restore them (#646) | `mcp-token-lifecycle` | `deactivated user: their token is refused on the next request (HTTP 401)`, `reactivated user: the token revoked at deactivation stays refused (HTTP 401)` |
+| Tokens are stored only as a SHA-256 hash; the raw token is in neither the token's `mcp_connections` row, the audit events naming that connection nor the connection listing | holds | `mcp-token-lifecycle` | `token stored only as its SHA-256 hash` |
 | The MCP limit (`MCP_RATE_LIMIT`, default 120/min) refuses request N+1 with HTTP 429 | holds | `mcp-rate-limit` | `rate limit: request MCP_RATE_LIMIT+1 on one connection within a minute gets HTTP 429` |
 | The limit is per connection, not per user: a user with N tokens gets N x the limit | holds (by design today) | `mcp-rate-limit` | `rate limit: counted per connection (another token of the same user is not limited)` |
 | The 429 carries `Retry-After` and a JSON-RPC error body | **defect #440**: no header, body `{"error":"rate limit exceeded for this connection"}` | `mcp-rate-limit` (pins today's 429) | the two `rate limit: the 429 ...` checks (known defects) |
 | B's search, graph, `find_symbols`, related-note edges (local graph, backlinks), notifications, perspective listings, vaults, repositories and teams name nothing of A's | holds | `account-separation` | `separation: B's ... names nothing of A's` (six checks) |
 | `lookup_user` returns only `{id, email}` of an active account; deactivated and unknown emails answer alike | holds; any active account is found by exact email (sharing needs the id) | `account-separation` | `separation: B's lookup_user returns A's id and email only` |
-| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, the REST routes, every prompt that takes a vault) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
+| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
 | Semantic neighbours are chosen within the owner's reach | **defect #461**: the neighbour lookup spans every account; every read filters the stored edges | `account-separation` (inserts such an edge and checks B's reads) | `semantic edges are stored only between notes of the same account` (known defect) |
-| Note text in a prompt sits in a separate, delimited data block, apart from the instructions | **defect #556**: `active_project_companion`, `prepare_task_context`, `test_gap_analysis` (bodies) and `plan_feature_implementation`, `explain_code_architecture` (snippets) put it inside their one user-role instruction message, after a heading, with no end marker | `mcp-prompt-note-content` (pins today's placement) | `prompt note text: placed in a separate data block, not inside the instructions` (known defect) |
+| Note text in a prompt sits in a separate, delimited data block, apart from the instructions | **defect #556**: `active_project_companion`, `prepare_task_context`, `test_gap_analysis` (bodies) and `plan_feature_implementation`, `explain_code_architecture` (snippets) put it inside their one user-role instruction message, after a heading and before the prompt's own instructions | `mcp-prompt-note-content` (pins today's placement) | `prompt note text: placed in a separate data block, not inside the instructions` (known defect) |
 
 ---
 
@@ -865,14 +880,20 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
   - `version`: the commit the image was built from (`ELARA_VERSION`;
     `publish.yml` passes `github.sha` as a build arg, the Dockerfile bakes
     it into the env), or `null` for an image built without it.
+    `ELARA_HEALTH_HIDE_VERSION=true` (`config.healthHidesVersion`, #638)
+    leaves the key out of `/health` for an operator who does not want to
+    publish the build commit; default shown. The boot log line keeps it.
+    Any value other than unset, empty, `true` or `false` keeps it shown and
+    warns once at boot (`readHealthHidesVersion` in `config.ts`).
   - `lastShutdown`: how the *previous* process on this `DATA_DIR` ended,
     read once at boot from `DATA_DIR/lifecycle.json`. `index.ts` writes it
     `running` first thing at boot (before migrations), and `stopped` (with
     the signal) only after the SIGTERM/SIGINT handler finished every flush
     (collab relay, Fastify, Postgres pool). Next boot: `stopped` →
     `graceful`; `running` → `unclean` (SIGKILL, OOM kill, crash, uncaught
-    exception, a boot that died in migrations, or a shutdown Docker cut
-    short after its stop timeout); missing or unreadable → `unknown`
+    exception, a boot that died in migrations, a shutdown Docker cut
+    short after its stop timeout, or a volume that went read-only under it,
+    see below); missing or unreadable → `unknown`
     (first boot on this data directory).
     - A SIGTERM that arrives before `index.ts` installs its handlers
       (during migrations and the boot catch-ups, before `listen`) ends the
@@ -886,7 +907,19 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
       process that failed the same way) and deletes the marker (unlink
       works on a full disk), so the next boot reports `unknown` rather than
       reading an older process's `stopped` as `graceful`. On a read-only
-      volume the delete fails too, and every boot keeps reporting `unknown`.
+      volume the delete fails too, and every boot keeps reporting `unknown`
+      while it stays read-only. The first boot after the volume is writable
+      again reads whatever marker the last process before the read-only
+      period left, with that process's bootId as `previousBootId`:
+      `graceful` if it shut down cleanly before the volume went read-only
+      (`stopped`), `unclean` if the volume went read-only under it (its
+      `stopped` write failed, so `running` stayed; it may well have shut
+      down cleanly). If a monitor checked during the read-only period, that
+      `previousBootId` is not the bootId it last saw: the uptime monitor
+      flags the restart `unseen` and says how the process it saw ended is
+      not known, and an `unclean` also adds the `unclean-restart` label. If
+      no check fell in that window, `previousBootId` is the bootId last
+      seen, nothing is flagged, and the read-only boots go unreported.
       The boot log line carries the error as `markerError`.
     - It assumes **one process per `DATA_DIR`**, which the deployment is
       (single container; the collab relay and the queues are in-process,

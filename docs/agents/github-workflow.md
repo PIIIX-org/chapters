@@ -547,13 +547,17 @@ not testing) and compares the process identity it reports (`bootId`,
 - **Alerts** are comments on that issue, so they notify its subscribers
   (the owner created #636):
   - **restart**: `bootId` changed; old and new `startedAt` and `version`,
-    and `lastShutdown`. `unclean` (the previous process was killed or
-    crashed before finishing a clean shutdown) also adds the label
-    `unclean-restart`; remove it once the restart is explained. When
-    `previousBootId` is not the `bootId` the monitor last saw, the app
-    restarted more than once between two checks: `lastShutdown` is about a
-    process the monitor never saw, and the comment says that how the one
-    it saw ended is not known (it may have crashed).
+    and `lastShutdown`. `unclean` (the previous process left no record of
+    a clean shutdown: killed, crashed, or its data volume went read-only
+    under it) also adds the label `unclean-restart`; remove it once the
+    restart is explained. When `previousBootId` is not the `bootId` the
+    monitor last saw, the app restarted more than once between two checks:
+    `lastShutdown` is about a process the monitor never saw, and the
+    comment says that how the one it saw ended is not known (it may have
+    crashed). An `unclean` about such a process still adds the label: that
+    is what a crash loop looks like, and the other source, a volume that
+    went read-only under the app (`backend-reference.md`, Deployment), is
+    an incident too.
   - **down**: `/health` failed (network error, timeout, non-2xx such as
     the `503` for an unreachable database) 2 checks in a row; once per
     outage, however long it lasts.
@@ -571,10 +575,18 @@ not testing) and compares the process identity it reports (`bootId`,
 - **What reaches a comment**: values from `/health` are format-checked
   first (`bootId`/`previousBootId` UUIDs, `startedAt` ISO 8601 UTC,
   `version` 7-40 lower-case hex); anything else is dropped as unknown.
+  The saved state read back from the issue body goes through the same
+  checks (the body can be edited by hand): a value in the wrong format is
+  reset, and a reset `bootId` counts as no baseline (no restart alert).
+  A saved `firstFailureAt` or `heartbeatAt` later than the current check
+  is reset as well, so a hand edit cannot stop the weekly check-in; an
+  outage whose start is unknown is reported as "down since an unknown
+  time".
   Error text keeps plain characters only, and `url` must be a plain
-  `http(s)://host[:port][/path]`, so a wrong `url` input or a hostile
-  endpoint cannot put Markdown, links or mentions into a comment that
-  notifies the owner.
+  `http(s)://host[:port][/path]`, so a wrong `url` input, a hostile
+  endpoint or a hand edit cannot put Markdown, links or mentions into a
+  comment that notifies the owner. An instance with
+  `ELARA_HEALTH_HIDE_VERSION=true` has no `version`; comments show _none_.
 - **Dedupe**: a restart is reported once per new `bootId`; a single failed
   check alerts nothing. A crash loop gives at most one comment per run.
   The comment is posted before the state is saved, so a failed post is

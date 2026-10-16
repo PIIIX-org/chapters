@@ -199,7 +199,7 @@ Exports a vault zip archive or single note markdown file.
 
 ## Elara MCP Tool Reference (57 Tools)
 
-Elara exposes 57 tools across 7 functional domains. **Capability** is the token access level a tool needs: a token is `read`, `write` or `admin` (ordered), chosen when it is minted, and may also carry a tool allow-list and an expiry. Account tokens default to `admin`; vault- and repository-pinned tokens default to `write`, so they cannot share, update, trash or purge their pin or erase history unless the owner minted them with `admin`. A refusal names the missing capability (`<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`); ask the user for a token with that capability instead of retrying.
+Elara exposes 57 tools across 7 functional domains. **Capability** is the token access level a tool needs: a token is `read`, `write` or `admin` (ordered), chosen when it is minted, and may also carry a tool allow-list and an expiry. Through the API, account tokens default to `admin`; vault- and repository-pinned tokens default to `write`, so they cannot share, update, trash or purge their pin or erase history unless the owner minted them with `admin`. The Settings and vault forms start at `write`. `tools/list` shows a token only the tools it can call (allow-list, access level, scope). A refusal names the missing capability (`<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`); ask the user for a token with that capability instead of retrying.
 
 ### 1. Vault Management (14 tools)
 | Tool | Scope | Capability | Description |
@@ -265,7 +265,7 @@ Elara exposes 57 tools across 7 functional domains. **Capability** is the token 
 | `find_graph_path` | Any | `read` | Find shortest path connecting two concepts, notes, or code files in the knowledge graph. |
 | `list_graph_perspectives` | Vault/Account | `read` | List saved graph perspectives (UI presets) for a vault, or global ones (account tokens only): your own only. |
 | `save_graph_perspective` | Vault/Account | `write` | Save a graph perspective (types, tags, date range, color mode). `graph` cannot apply it. Needs edit access to the vault; a global one needs an account token and an instance admin, and is visible only to you. |
-| `delete_graph_perspective` | Vault/Account | `write` | Delete a saved graph perspective by its ID: needs edit access, then your own or (vault owner) any; a global one only its creator. A vault-scoped token reaches only its vault's perspectives (others answer "not found"). |
+| `delete_graph_perspective` | Vault/Account | `write` | Permanently delete a saved graph perspective by its ID (no trash): needs edit access, then your own or (vault owner) any member's; a global one only its creator. A vault-scoped token reaches only its vault's perspectives (others answer "not found"). |
 
 ### 6. Teams & Users (7 tools)
 | Tool | Scope | Capability | Description |
