@@ -17,9 +17,10 @@ fill in a copy. Claims link their run or artifact; the `pr-evidence`
 check enforces it (rules: `github-workflow.md`, CI, PR evidence). Every
 agent commit ends with a `Co-Authored-By:` trailer, and a bug you find is
 filed as an issue with repro steps and a `found-by:*` label
-(`github-workflow.md`, change cycle and Issues). Before finishing a fix
-PR, run `node .github/scripts/state-md.mjs --write` and commit STATE.md if
-it changed.
+(`github-workflow.md`, change cycle and Issues). STATE.md's generated
+block is refreshed by a workflow: run `node .github/scripts/state-md.mjs
+--write` only in the PR that lands the bot's block or one that edits the
+hand-written part of STATE.md, not in every fix PR.
 
 `docs/agents/backend-reference.md` documents the server as built.
 Design specs: `docs/superpowers/specs/` (historical intent; where a spec

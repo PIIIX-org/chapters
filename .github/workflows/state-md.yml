@@ -9,18 +9,19 @@ name: STATE.md
 #            (`gh workflow run state-md.yml --ref dev`). When `dev`'s block
 #            is stale, it writes the diff to the job summary and
 #            force-pushes `bot/state-md` (one commit on top of `dev`).
-#            - With the repository secret STATE_MD_TOKEN (an owner's
-#              fine-grained token, Contents and Pull requests read/write),
-#              it pushes and opens or updates the PR to `dev` with that
-#              token. Events made with it start workflows, so the PR gets
-#              its required checks like any other PR.
-#            - Without it, the job pushes with GITHUB_TOKEN and fails with
-#              instructions. GitHub starts no workflows for GITHUB_TOKEN
-#              events and does not count checks from hand-started
-#              (workflow_dispatch) runs toward a PR, so a PR opened or
-#              updated here could never get its required checks. A person
-#              opens the PR instead, or any PR runs
-#              `node .github/scripts/state-md.mjs --write`.
+#            - With the secret STATE_MD_TOKEN (environment `state-md`,
+#              limited to `dev`; an owner's fine-grained token, Contents
+#              and Pull requests read/write; #635), it pushes and opens or
+#              updates the PR to `dev` with that token. Events made with it
+#              start workflows, so the PR gets its required checks like any
+#              other PR.
+#            - Without it, the job pushes with GITHUB_TOKEN and ends with a
+#              warning (not a failure) and the commands in its summary.
+#              GitHub runs no checks for GITHUB_TOKEN events and does not
+#              count checks from hand-started (workflow_dispatch) runs
+#              toward a PR, so a PR opened or updated here could never get
+#              its required checks. A person opens the PR instead, or the
+#              PR that lands it runs `node .github/scripts/state-md.mjs --write`.
 #            When `dev` is current, it closes the bot PR and deletes the
 #            branch.
 #   preview  on PRs that change the generator, this workflow or STATE.md:
@@ -75,6 +76,9 @@ jobs:
 
   refresh:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev'
+    # Holds the STATE_MD_TOKEN secret; its deployment branches are limited
+    # to `dev` (#635). Created on first use if it does not exist.
+    environment: state-md
     runs-on: ubuntu-latest
     permissions:
       contents: write # push bot/state-md without STATE_MD_TOKEN
@@ -183,7 +187,7 @@ jobs:
           fi
           if [ -n "$pr" ]; then
             gh pr edit "$pr" --body-file "$RUNNER_TEMP/body.md" > /dev/null
-            summary "Updated #$pr, but a push with GITHUB_TOKEN starts no workflows, so its required checks did not re-run. Close and reopen #$pr to run them."
+            summary "Updated #$pr, but a push with GITHUB_TOKEN runs no checks, so its required checks did not re-run. Close and reopen #$pr to run them."
           else
             summary "No PR opened: without the STATE_MD_TOKEN secret its required checks would never run."
           fi
@@ -191,12 +195,12 @@ jobs:
             echo '### To land this block'
             echo
             echo "- Open the PR yourself (a PR a person opens gets its checks): save the body below as \`body.md\` and run \`gh pr create --base dev --head $BRANCH --title '$TITLE' --body-file body.md\`."
-            echo '- Or run `node .github/scripts/state-md.mjs --write` in any open PR and commit the result.'
-            echo '- Owner action, once: add the repository secret `STATE_MD_TOKEN` (fine-grained personal access token for this repository with Contents and Pull requests read and write). This job then opens and updates the PR itself (docs/agents/github-workflow.md, STATE.md).'
+            echo '- Or run `node .github/scripts/state-md.mjs --write` in a PR that edits the hand-written part of STATE.md and commit the result.'
+            echo '- Owner action, once (#635): add `STATE_MD_TOKEN` (fine-grained token for this repository, Contents and Pull requests read and write, with an expiry) as a secret of the environment `state-md`, limited to `dev`. This job then opens and updates the PR itself (docs/agents/github-workflow.md, STATE.md).'
             echo
             echo '```markdown'
             cat "$RUNNER_TEMP/body.md"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error title=STATE.md is stale::No STATE_MD_TOKEN secret, so no PR with checks could be opened; see the job summary."
-          exit 1
+          # Not a failure: `dev` is fine, only the generated block is behind.
+          echo "::warning title=STATE.md block is stale::No STATE_MD_TOKEN, so no PR was opened; bot/state-md has the block. See the job summary (#635)."

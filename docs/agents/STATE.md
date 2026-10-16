@@ -1,18 +1,19 @@
 # STATE
 
-Resume anchor. The block between the `state:generated` markers is rebuilt from GitHub (issues, milestones, promotions, runs on `dev`) by `.github/scripts/state-md.mjs`: run `node .github/scripts/state-md.mjs --write` at the end of every fix PR; the `state-md.yml` workflow pushes `bot/state-md` when `dev`'s block is stale (`github-workflow.md`, STATE.md). Don't edit inside the markers. Keep the hand-written part below short and update it when it changes.
+Resume anchor. The block between the `state:generated` markers is rebuilt from GitHub (issues, milestones, promotions, runs on `dev`) by `.github/scripts/state-md.mjs`; the `state-md.yml` workflow pushes `bot/state-md` when `dev`'s block is stale. Run `node .github/scripts/state-md.mjs --write` only in the PR that lands the bot's block or one that edits the hand-written part, not in every fix PR (`github-workflow.md`, STATE.md). Don't edit inside the markers. Keep the hand-written part below short and update it when it changes.
 
 <!-- state:generated:start -->
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
 - **Last promotion to `prod`**: #407 Promote: Elara study fixes (#400, #405, #398, #402) and docs (#406) (merged 2026-10-15, `111e3f1`).
 - **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) **failure**; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
-- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 0/4, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 9/21, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 0/35, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/60, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/29, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/34.
-- **Open issues**: [184](https://github.com/PIIIX-org/chapters/issues): P0 65, P1 92, P2 22, no priority 5; `bug` 8, `security` 2, `decision` 4, `deferred` 2.
+- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 0/5, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 9/21, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 0/35, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/60, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/29, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/34.
+- **Open issues**: [185](https://github.com/PIIIX-org/chapters/issues): P0 65, P1 92, P2 22, no priority 6; `bug` 8, `security` 2, `decision` 4, `deferred` 2.
 - **Owner actions** (label `owner`):
   - #586 [fix 189] Redeploy production (docker compose pull && docker compose up -d) so… (P0)
   - #587 [fix 190] Rotate the webhook secret pasted in chat; decide on the inactive GitHub hook… (P0)
   - #588 [fix 191] Decide whether to keep the upstream rea connection (re-clones every 5 min) and… (P0)
   - #589 [fix 192] Revoke the 5 GitHub tokens exposed before #383 (P0)
+  - #635 Add STATE_MD_TOKEN so the STATE.md bot can open its PR
 - **In progress: [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2)** (12 open, owner actions excluded):
   - #546 [fix 149] Route every handler through vaultFor/repositoryFor: find_symbols (P0)
   - #547 [fix 150] Scoped-token tests for every tool (P0)
