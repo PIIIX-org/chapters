@@ -1,0 +1,122 @@
+name: Agent trial
+
+# Real AI agents on the study's 8 A/B tasks (#571): one arm uses only
+# Elara's MCP tools against a lab instance built from this commit (the
+# staging server; never production), the other only read/grep on a checkout
+# of the same pinned commit, both through one capped agent loop
+# (benchmarks/agent-trial/). Graded deterministically; results go to the
+# agent-trial-results artifact only. These are the only agent-trial numbers
+# that may be published (benchmarks/README.md, "Agent trial").
+#
+# The owner provides no model API key for CI. The trial runs a model only
+# when an agent credential is configured: repository secret
+# AGENT_TRIAL_API_KEY plus AGENT_TRIAL_MODEL (variable or secret); optional
+# variables AGENT_TRIAL_PROVIDER (openai | anthropic), AGENT_TRIAL_BASE_URL,
+# AGENT_TRIAL_JUDGE=1. Without them the gate reports
+# "skipped: no agent credential (#571)" and the run succeeds without
+# building anything. `model: scripted` is a dry run with a deterministic fake
+# model that exercises the whole plumbing against the lab.
+#   gh workflow run agent-trial.yml --ref <branch> [-f model=scripted] [-f tasks=T1,T3] [-f arms=local]
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'auto = the configured agent credential (skips without one); scripted = dry run with a fake model'
+        type: choice
+        options: [auto, scripted]
+        default: auto
+      tasks:
+        description: 'Comma-separated task ids (empty = all 8)'
+        required: false
+        default: ''
+      arms:
+        description: 'Comma-separated arms: elara, local (empty = both)'
+        required: false
+        default: ''
+
+concurrency:
+  group: agent-trial-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      mode: ${{ steps.gate.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: benchmarks/agent-trial
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Agent credential configured?
+        id: gate
+        env:
+          AGENT_TRIAL_MODE: ${{ inputs.model || 'auto' }}
+          AGENT_TRIAL_API_KEY: ${{ secrets.AGENT_TRIAL_API_KEY }}
+          AGENT_TRIAL_MODEL: ${{ vars.AGENT_TRIAL_MODEL || secrets.AGENT_TRIAL_MODEL }}
+          AGENT_TRIAL_PROVIDER: ${{ vars.AGENT_TRIAL_PROVIDER }}
+          AGENT_TRIAL_JUDGE: ${{ vars.AGENT_TRIAL_JUDGE }}
+        run: node benchmarks/agent-trial/gate.ts
+
+  trial:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # 8 tasks x 2 arms, each capped at 20 min, plus build and indexing.
+    timeout-minutes: 350
+    permissions:
+      contents: read
+    env:
+      COMPOSE: docker compose -f docker-compose.yml -f lab/docker-compose.lab.yml
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: ./.github/actions/lab-instance
+
+      - name: Agent trial (${{ needs.gate.outputs.mode }})
+        env:
+          AGENT_TRIAL_MODE: ${{ needs.gate.outputs.mode == 'scripted' && 'scripted' || 'auto' }}
+          AGENT_TRIAL_API_KEY: ${{ needs.gate.outputs.mode == 'live' && secrets.AGENT_TRIAL_API_KEY || '' }}
+          AGENT_TRIAL_MODEL: ${{ vars.AGENT_TRIAL_MODEL || secrets.AGENT_TRIAL_MODEL }}
+          AGENT_TRIAL_PROVIDER: ${{ vars.AGENT_TRIAL_PROVIDER }}
+          AGENT_TRIAL_BASE_URL: ${{ vars.AGENT_TRIAL_BASE_URL }}
+          AGENT_TRIAL_JUDGE: ${{ vars.AGENT_TRIAL_JUDGE }}
+          AGENT_TRIAL_TASKS: ${{ inputs.tasks }}
+          AGENT_TRIAL_ARMS: ${{ inputs.arms }}
+        run: bun benchmarks/agent-trial/run.ts
+
+      - name: Collect compose logs
+        if: always()
+        run: |
+          mkdir -p agent-trial-results
+          $COMPOSE ps -a > agent-trial-results/compose-ps.txt 2>&1 || true
+          $COMPOSE logs --no-color --timestamps > agent-trial-results/compose.log 2>&1 || true
+
+      # The runner already replaced the minted token and the API key; this
+      # covers the lab's own secrets (compose.log holds the setup token).
+      - name: Redact secrets from agent-trial-results
+        if: always()
+        run: bun lab/redact.ts agent-trial-results
+
+      - name: Upload agent-trial-results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-trial-results
+          path: agent-trial-results/
+          retention-days: 90
