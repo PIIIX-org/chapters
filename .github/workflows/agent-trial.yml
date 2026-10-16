@@ -18,9 +18,6 @@ name: Agent trial
 # model that exercises the whole plumbing against the lab.
 #   gh workflow run agent-trial.yml --ref <branch> [-f model=scripted] [-f tasks=T1,T3] [-f arms=local]
 on:
-  # TEMPORARY (#571 proof): registers the workflow from this branch; removed before review.
-  push:
-    branches: [fix-571-agent-trial]
   schedule:
     - cron: '0 4 * * 1'
   workflow_dispatch:
