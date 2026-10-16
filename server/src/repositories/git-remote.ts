@@ -111,8 +111,9 @@ export function redactUrlQuery(text: string): string {
 }
 
 /**
- * Usernames that name a kind of token rather than being one. Redacting them
- * would mangle every error that mentions `git`, and they are not secret.
+ * Usernames that name a kind of token rather than being one (compared
+ * lower-cased). Redacting them would mangle every error that mentions them,
+ * and they are not secret.
  */
 const NON_SECRET_USERNAMES: Record<string, true> = {
   git: true,
@@ -123,13 +124,22 @@ const NON_SECRET_USERNAMES: Record<string, true> = {
 }
 
 /**
+ * Shortest user part redacted on its own. A token used as the user (the
+ * legacy GitHub `TOKEN:x-oauth-basic` form) is always longer; a login such as
+ * `alice` is not secret, and starring it would mangle every path it is in.
+ */
+const MIN_TOKEN_USER_LENGTH = 8
+
+/**
  * Removes secrets from text bound for storage or logs (git error messages can
- * echo the authenticated clone URL): every given credential in each form a
- * URL or an echo may carry it; on its own, the password of a `user:password`
- * one and its user too unless that names a token type (the legacy GitHub
- * `TOKEN:x-oauth-basic` form puts the token there); then any userinfo in a
- * `scheme://userinfo@` URL, up to the last `@` of the authority so a raw `@`
- * in a password leaves no tail; and every URL query and fragment value.
+ * echo the authenticated clone URL). First the URL-shaped parts: any userinfo
+ * in a `scheme://userinfo@` URL, up to the last `@` of the authority so a raw
+ * `@` in a password leaves no tail, and every URL query and fragment value.
+ * Then every given credential in each form a URL or an echo may carry it; on
+ * its own, the password of a `user:password` one, and its user too when that
+ * looks like a token (`MIN_TOKEN_USER_LENGTH`, not a token-type name). In that
+ * order, because a short credential replaced first (user `s`, password `?`)
+ * would break the URLs the regexes look for and let their tokens through.
  */
 export function redactGitSecrets(text: string, secrets: Array<string | null | undefined>): string {
   const forms = new Set<string>()
@@ -140,7 +150,9 @@ export function redactGitSecrets(text: string, secrets: Array<string | null | un
     if (colon !== -1) {
       const user = secret.slice(0, colon)
       parts.push(secret.slice(colon + 1))
-      if (!Object.hasOwn(NON_SECRET_USERNAMES, user)) parts.push(user)
+      if (user.length >= MIN_TOKEN_USER_LENGTH && !Object.hasOwn(NON_SECRET_USERNAMES, user.toLowerCase())) {
+        parts.push(user)
+      }
     }
     for (const part of parts) {
       if (!part) continue
@@ -153,7 +165,7 @@ export function redactGitSecrets(text: string, secrets: Array<string | null | un
       }
     }
   }
-  let out = text
+  let out = redactUrlQuery(text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s]*@/gi, '$1***@'))
   // Longest first, so a password never leaves the rest of its credential
   // behind. A form made of `*` alone is skipped: replacing it would only grow
   // the marker on every pass, and `***` already shows nothing.
@@ -161,7 +173,7 @@ export function redactGitSecrets(text: string, secrets: Array<string | null | un
     if (/^\*+$/.test(form)) continue
     out = out.split(form).join('***')
   }
-  return redactUrlQuery(out.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s]*@/gi, '$1***@'))
+  return out
 }
 
 /**

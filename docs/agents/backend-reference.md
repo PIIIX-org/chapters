@@ -647,15 +647,17 @@ With no encryption key the connect is refused
 rather than store the token in plaintext. `authenticatedUrl` puts
 `user:password` or a bare token back for the clone. Sync errors are
 redacted before they reach `lastSyncError` (served to viewers) or the
-log: `redactGitSecrets` removes the credential (stored or still in the
-URL) in raw and URL-encoded forms; on its own, the password of a
-`user:password` credential and its user too, unless that names a token
-type (`git`, `x-access-token`, `oauth2`, …), since the legacy GitHub
-`TOKEN:x-oauth-basic` form puts the token there; any URL userinfo up to
-the last `@` of the authority; and every URL query and fragment value
-(`?private_token=***`, `#access_token=***`, a bare `?***`). A form made
-of `*` alone is not replaced, so redaction is idempotent. The cost is
-quadratic on long error text (#644).
+log: `redactGitSecrets` first removes any URL userinfo up to the last `@`
+of the authority and every URL query and fragment value
+(`?private_token=***`, `#access_token=***`, a bare `?***`), then the
+credential (stored or still in the URL) in raw and URL-encoded forms; on
+its own, the password of a `user:password` credential, and its user too
+when that looks like a token (8+ characters and not a token-type name such
+as `git` or `x-access-token`, compared lower-cased), since the legacy
+GitHub `TOKEN:x-oauth-basic` form puts the token there. URL passes run
+first so a short credential (user `s`, password `?`) cannot break the
+URLs they match. A form made of `*` alone is not replaced, so redaction
+is idempotent. The cost is quadratic on long error text (#644).
 `scrubStoredGitCredentials()` runs at boot and moves credentials
 out of remotes stored before the fix (idempotent; a row it cannot
 encrypt keeps its URL and is warned about, but its `lastSyncError` is
