@@ -30,4 +30,6 @@ jobs:
           # only on promotion #121, where the merge commits it created finally
           # entered the diff. Merging now happens from Taha-Mahmoodi, but the
           # four already in history still need it allowlisted.
-          allowlist: Taha-Mahmoodi,sadeqisaidmohaddes-star,dependabot[bot]
+          # github-actions[bot] authors the STATE.md refresh commits
+          # (state-md.yml, #582).
+          allowlist: Taha-Mahmoodi,sadeqisaidmohaddes-star,dependabot[bot],github-actions[bot]

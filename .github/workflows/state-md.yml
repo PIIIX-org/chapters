@@ -6,22 +6,29 @@ name: STATE.md
 # promotions, runs on `dev`); the hand-written rest is left alone.
 #
 #   refresh  daily, on every push to `dev` and by hand
-#            (`gh workflow run state-md.yml --ref dev`): when the block
-#            changed, force-pushes `bot/state-md` (one commit on top of `dev`)
-#            and opens or updates its PR to `dev`; when `dev` already matches,
-#            closes that PR. The PR is opened with GITHUB_TOKEN, and GitHub
-#            starts no pull_request workflows for it, so this job dispatches
-#            the required checks on the branch itself: ci.yml (`checks`),
-#            elara-lab.yml (`plan`; tier none and no benchmark, so `lab` and
-#            `bench-gate` are skipped, as on any PR that changes neither the
-#            image nor search), pr-evidence.yml and fails-before.yml (with the
-#            PR number). Needs "Allow GitHub Actions to create and approve
-#            pull requests" (organization and repository settings).
+#            (`gh workflow run state-md.yml --ref dev`). When `dev`'s block
+#            is stale, it writes the diff to the job summary and
+#            force-pushes `bot/state-md` (one commit on top of `dev`).
+#            - With the repository secret STATE_MD_TOKEN (an owner's
+#              fine-grained token, Contents and Pull requests read/write),
+#              it pushes and opens or updates the PR to `dev` with that
+#              token. Events made with it start workflows, so the PR gets
+#              its required checks like any other PR.
+#            - Without it, the job pushes with GITHUB_TOKEN and fails with
+#              instructions. GitHub starts no workflows for GITHUB_TOKEN
+#              events and does not count checks from hand-started
+#              (workflow_dispatch) runs toward a PR, so a PR opened or
+#              updated here could never get its required checks. A person
+#              opens the PR instead, or any PR runs
+#              `node .github/scripts/state-md.mjs --write`.
+#            When `dev` is current, it closes the bot PR and deletes the
+#            branch.
 #   preview  on PRs that change the generator, this workflow or STATE.md:
-#            prints the block it would write; writes nothing.
+#            prints the block and whether the PR's STATE.md is current;
+#            writes nothing.
 #
-# The block holds no time and no run id of a passing run, so regenerating
-# after the bot PR merges gives the same text and opens nothing. Docs:
+# The block holds no time and no run id, so regenerating after the refreshed
+# block merges gives the same text and opens nothing. Docs:
 # docs/agents/github-workflow.md (STATE.md).
 
 on:
@@ -61,7 +68,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - name: Build the generated block (not committed)
+      - name: Build the generated block (not written)
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/state-md.mjs
@@ -70,17 +77,21 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     permissions:
-      contents: write # push bot/state-md
-      pull-requests: write # open, update or close its PR
+      contents: write # push bot/state-md without STATE_MD_TOKEN
+      pull-requests: write # update or close the bot PR
       issues: read
-      actions: write # read runs; dispatch the required checks
+      actions: read
     env:
-      GH_TOKEN: ${{ github.token }}
       BRANCH: bot/state-md
       TITLE: 'docs(state): refresh generated STATE.md block (bot)'
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      HAS_TOKEN: ${{ secrets.STATE_MD_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The push and the PR use this token: with STATE_MD_TOKEN they
+          # start the PR's workflows, with GITHUB_TOKEN they do not.
+          token: ${{ secrets.STATE_MD_TOKEN || github.token }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -88,43 +99,52 @@ jobs:
         id: gen
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node .github/scripts/state-md.mjs
+        run: node .github/scripts/state-md.mjs --write
 
-      - name: Open, update or close the bot PR
+      - name: Push bot/state-md and open, update or close its PR
         env:
           CHANGED: ${{ steps.gen.outputs.changed }}
+          GH_TOKEN: ${{ secrets.STATE_MD_TOKEN || github.token }}
         run: |
           set -euo pipefail
-          summary() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          summary() { printf '%s\n\n' "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
           pr=$(gh pr list --head "$BRANCH" --base dev --state open --json number --jq '.[0].number // empty')
 
           if [ "$CHANGED" != true ]; then
             if [ -n "$pr" ]; then
-              gh pr close "$pr" --delete-branch \
-                --comment "The generated block on \`dev\` already matches GitHub data ($RUN_URL). Closing."
+              gh pr close "$pr" --comment "The generated block on \`dev\` already matches GitHub data ($RUN_URL). Closing."
               summary "Closed #$pr: \`dev\` is current."
-            else
-              summary "STATE.md on \`dev\` is current; no PR needed."
             fi
+            if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+              git push --quiet origin --delete "$BRANCH"
+              summary "Deleted \`$BRANCH\`."
+            fi
+            summary "STATE.md on \`dev\` is current."
             exit 0
           fi
 
-          # The open PR may already carry this block on top of this `dev` head.
-          if [ -n "$pr" ] && git fetch --quiet --depth 2 origin "$BRANCH" &&
+          { echo '### Diff against `dev`'; echo; echo '```diff'; git diff --no-color -- docs/agents/STATE.md; echo '```'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+          # Push unless the branch already carries this block on this `dev` head.
+          pushed=false
+          if git fetch --quiet --depth 2 origin "$BRANCH" 2>/dev/null &&
             [ "$(git rev-parse FETCH_HEAD^)" = "$GITHUB_SHA" ] &&
             git diff --quiet FETCH_HEAD -- docs/agents/STATE.md; then
-            summary "#$pr already has this block on \`dev\` $GITHUB_SHA; nothing to push."
-            exit 0
+            head=$(git rev-parse FETCH_HEAD)
+            summary "\`$BRANCH\` already has this block on \`dev\` $GITHUB_SHA."
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git switch --quiet -c "$BRANCH"
+            git commit --quiet -m 'docs(state): refresh generated STATE.md block' \
+              -m "Built by .github/scripts/state-md.mjs in $RUN_URL" -- docs/agents/STATE.md
+            [ "$(git diff --name-only HEAD^ HEAD)" = docs/agents/STATE.md ] ||
+              { echo '::error::the bot commit must change only docs/agents/STATE.md'; exit 1; }
+            git push --quiet --force origin "$BRANCH"
+            head=$(git rev-parse HEAD)
+            pushed=true
+            summary "Pushed \`$BRANCH\` at $head."
           fi
-
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git switch --quiet -c "$BRANCH"
-          git commit --quiet -m 'docs(state): refresh generated STATE.md block' \
-            -m "Built by .github/scripts/state-md.mjs in $RUN_URL" -- docs/agents/STATE.md
-          [ "$(git diff --name-only HEAD^ HEAD)" = docs/agents/STATE.md ] || { echo '::error::the bot commit must change only docs/agents/STATE.md'; exit 1; }
-          git push --quiet --force origin "$BRANCH"
-          head=$(git rev-parse HEAD)
 
           cat > "$RUNNER_TEMP/body.md" <<EOF
           ## Problem
@@ -137,41 +157,46 @@ jobs:
 
           ## Evidence
 
-          - Source run (the block and what changed are in its summary): $RUN_URL
-          - Commit: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/$head
-          - Generator: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/$GITHUB_SHA/.github/scripts/state-md.mjs
-          - GitHub starts no \`pull_request\` workflows for a PR opened with \`GITHUB_TOKEN\`, so the source run dispatched the required checks on \`$BRANCH\`: \`ci.yml\`, \`elara-lab.yml\` (tier none, no benchmark), \`pr-evidence.yml\` and \`fails-before.yml\` with this PR's number.
+          - Source run (the block and the diff are in its summary): $RUN_URL
+          - Commit: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$head
+          - Generator: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/.github/scripts/state-md.mjs
 
           ## Not covered
 
           The data is as of the source run. A reviewer checks that the diff touches only the generated block.
           EOF
 
-          if [ -z "$pr" ]; then
-            if ! url=$(gh pr create --base dev --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md" 2>"$RUNNER_TEMP/err"); then
-              cat "$RUNNER_TEMP/err"
-              summary "Could not open the PR: $(cat "$RUNNER_TEMP/err"). \`$BRANCH\` is pushed. GITHUB_TOKEN can open PRs only when \"Allow GitHub Actions to create and approve pull requests\" is on in the organization and repository Actions settings (github-workflow.md, STATE.md)."
-              echo "::error title=STATE.md PR::GitHub refused to open the PR; see the summary."
-              exit 1
+          if [ "$HAS_TOKEN" = true ]; then
+            if [ -n "$pr" ]; then
+              gh pr edit "$pr" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md" > /dev/null
+              summary "Updated #$pr."
+            else
+              url=$(gh pr create --base dev --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md")
+              summary "Opened $url."
             fi
-            pr=${url##*/}
-            summary "Opened #$pr."
-          else
-            gh pr edit "$pr" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md" > /dev/null
-            summary "Updated #$pr."
+            exit 0
           fi
 
-          # The dispatched PR checks run on refs/pull/N/merge: wait until
-          # GitHub has rebuilt it for this head.
-          for _ in $(seq 1 24); do
-            state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '"\(.head.sha) \(.mergeable)"')
-            [ "$state" = "$head true" ] && break
-            sleep 5
-          done
-          [ "$state" = "$head true" ] || { echo "::error::#$pr is not mergeable at $head ($state)"; exit 1; }
-
-          gh workflow run ci.yml --ref "$BRANCH"
-          gh workflow run elara-lab.yml --ref "$BRANCH" -f tier=none -f bench=none
-          gh workflow run pr-evidence.yml --ref "$BRANCH" -f pr="$pr"
-          gh workflow run fails-before.yml --ref "$BRANCH" -f pr="$pr"
-          summary "Dispatched \`checks\`, \`plan\`/\`lab\`/\`bench-gate\`, \`pr-evidence\` and \`fails-before\` on \`$BRANCH\` ($head) for #$pr."
+          if [ -n "$pr" ] && [ "$pushed" = false ]; then
+            summary "#$pr is open with this block; its checks ran when it was opened or last pushed."
+            exit 0
+          fi
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --body-file "$RUNNER_TEMP/body.md" > /dev/null
+            summary "Updated #$pr, but a push with GITHUB_TOKEN starts no workflows, so its required checks did not re-run. Close and reopen #$pr to run them."
+          else
+            summary "No PR opened: without the STATE_MD_TOKEN secret its required checks would never run."
+          fi
+          {
+            echo '### To land this block'
+            echo
+            echo "- Open the PR yourself (a PR a person opens gets its checks): save the body below as \`body.md\` and run \`gh pr create --base dev --head $BRANCH --title '$TITLE' --body-file body.md\`."
+            echo '- Or run `node .github/scripts/state-md.mjs --write` in any open PR and commit the result.'
+            echo '- Owner action, once: add the repository secret `STATE_MD_TOKEN` (fine-grained personal access token for this repository with Contents and Pull requests read and write). This job then opens and updates the PR itself (docs/agents/github-workflow.md, STATE.md).'
+            echo
+            echo '```markdown'
+            cat "$RUNNER_TEMP/body.md"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=STATE.md is stale::No STATE_MD_TOKEN secret, so no PR with checks could be opened; see the job summary."
+          exit 1

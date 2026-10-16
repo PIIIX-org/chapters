@@ -1,11 +1,13 @@
 // Commit attribution check (#580). Agents commit from the owner's account,
 // so the only record of who wrote a commit is a `Co-Authored-By: Name
-// <email>` trailer. On a PR from this repository whose head branch has an
-// agent branch prefix (BRANCH_PREFIXES), every commit needs that trailer,
-// unless the PR has the label `human-only`. Commits GitHub makes in its web
-// UI (merge button, "Update branch", web edits; committer GitHub
-// <noreply@github.com>) are exempt: no agent makes them. Workflow:
-// .github/workflows/attribution.yml; rules: docs/agents/github-workflow.md.
+// <email>` trailer. On a PR from this repository whose head branch starts
+// with an agent branch type (BRANCH_TYPES, then `/` or `-`), every commit
+// needs that trailer, unless the PR has the label `human-only` (anyone who
+// can label can set it; it is a convention, not an identity check). Commits
+// GitHub makes and signs in its web UI ("Update branch", web edits;
+// committer GitHub <noreply@github.com> with a valid signature) are
+// exempt: no agent makes them. Workflow: .github/workflows/attribution.yml;
+// rules: docs/agents/github-workflow.md.
 //
 // Plain Node, no dependencies, one file: the workflow copies the base
 // commit's version of this file alone to a temp dir when there is one, so it
@@ -14,8 +16,9 @@
 import { appendFileSync, readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-/** Head branch prefixes of agent work (github-workflow.md, Branches). */
-export const BRANCH_PREFIXES = ['fix/', 'ci/', 'docs/', 'feat/', 'chore/', 'test/']
+/** Head branch types of agent work (github-workflow.md, Branches). */
+export const BRANCH_TYPES = ['fix', 'ci', 'docs', 'feat', 'chore', 'test']
+const BRANCH = new RegExp(`^(${BRANCH_TYPES.join('|')})[/-]`)
 
 /** A PR with this label is human work: no trailer is required. */
 export const EXEMPT_LABEL = 'human-only'
@@ -65,11 +68,18 @@ export function hasCoAuthor(message) {
   )
 }
 
-/** Whether GitHub made the commit in its web UI (an API commit object). */
+/**
+ * Whether GitHub made the commit in its web UI (an API commit object): the
+ * committer is GitHub <noreply@github.com> and GitHub verified the
+ * signature. Anyone can set a committer email; only GitHub can sign as
+ * web-flow.
+ */
 export function isWebFlow(commit) {
+  const c = commit?.commit
   return (
-    commit?.committer?.login === 'web-flow' ||
-    commit?.commit?.committer?.email?.toLowerCase() === WEB_FLOW_EMAIL
+    c?.committer?.email?.toLowerCase() === WEB_FLOW_EMAIL &&
+    c?.verification?.verified === true &&
+    c?.verification?.reason === 'valid'
   )
 }
 
@@ -84,13 +94,14 @@ export function appliesTo(pr, repo) {
   if (headRepo && headRepo !== repo) {
     return { applies: false, reason: `the head branch is in \`${headRepo}\`, not this repository` }
   }
-  const prefix = BRANCH_PREFIXES.find((p) => branch.startsWith(p))
+  const prefix = BRANCH.exec(branch)?.[0]
   if (!prefix) {
     return {
       applies: false,
       reason:
         `the head branch \`${branch}\` does not start with ` +
-        BRANCH_PREFIXES.map((p) => `\`${p}\``).join(', '),
+        BRANCH_TYPES.map((t) => `\`${t}/\``).join(', ') +
+        ' (or the same with `-`)',
     }
   }
   const labels = (pr.labels ?? []).map((l) => l.name)
@@ -147,7 +158,8 @@ export function check(pr, commits, repo) {
       `${missing.length} of ${commits.length} commit(s) have no \`Co-Authored-By: Name <email>\` ` +
         'trailer in their last paragraph. Agents add one to every commit (for example ' +
         '`Co-Authored-By: Claude Opus <noreply@anthropic.com>`); fix with `git commit --amend` ' +
-        'or `git rebase -i` and force-push. A PR written by a person gets the label ' +
+        '(also for a merge commit) or `git rebase -i` (it drops merge commits) and force-push. ' +
+        'A PR written by a person gets the label ' +
         `\`${EXEMPT_LABEL}\` instead.\n\n| Commit | Subject |\n| --- | --- |\n` +
         missing.map((m) => `| ${m.sha.slice(0, 12)} | ${cell(m.subject)} |`).join('\n'),
     )

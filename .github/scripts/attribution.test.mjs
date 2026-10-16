@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
-  BRANCH_PREFIXES,
+  BRANCH_TYPES,
   EXEMPT_LABEL,
   appliesTo,
   check,
@@ -23,10 +23,14 @@ const pr = (ref, extra = {}) => ({
   ...extra,
 })
 
-const commit = (sha, message, committer = { name: 'Taha', email: 'taha@users.noreply.github.com' }, login = 'Taha-Mahmoodi') => ({
+const ME = { name: 'Taha', email: 'taha@users.noreply.github.com' }
+const GITHUB = { name: 'GitHub', email: 'noreply@github.com' }
+const SIGNED = { verified: true, reason: 'valid' }
+const UNSIGNED = { verified: false, reason: 'unsigned' }
+
+const commit = (sha, message, committer = ME, verification = UNSIGNED) => ({
   sha,
-  commit: { message, committer },
-  committer: { login },
+  commit: { message, committer, verification },
 })
 
 describe('trailers', () => {
@@ -69,16 +73,25 @@ describe('hasCoAuthor', () => {
 })
 
 describe('isWebFlow', () => {
-  it('recognises commits GitHub made in its web UI', () => {
-    assert.equal(isWebFlow(commit('a', 'Merge', { name: 'GitHub', email: 'noreply@github.com' }, 'web-flow')), true)
-    assert.equal(isWebFlow(commit('a', 'Merge', { name: 'GitHub', email: 'noreply@github.com' }, null)), true)
+  it('recognises commits GitHub made and signed in its web UI', () => {
+    assert.equal(isWebFlow(commit('a', 'Merge', GITHUB, SIGNED)), true)
     assert.equal(isWebFlow(commit('a', 'fix: a')), false)
+    assert.equal(isWebFlow(commit('a', 'fix: a', ME, SIGNED)), false)
+  })
+
+  it('does not trust a committer email alone', () => {
+    assert.equal(isWebFlow(commit('a', 'fix: spoofed', GITHUB)), false)
+    assert.equal(isWebFlow(commit('a', 'fix: spoofed', GITHUB, { verified: false, reason: 'bad_email' })), false)
+    assert.equal(isWebFlow(commit('a', 'fix: spoofed', GITHUB, { verified: true, reason: 'unknown_key' })), false)
   })
 })
 
 describe('appliesTo', () => {
-  it('applies to every agent branch prefix', () => {
-    for (const p of BRANCH_PREFIXES) assert.equal(appliesTo(pr(`${p}x`), REPO).applies, true, p)
+  it('applies to every agent branch type, with / or -', () => {
+    for (const t of BRANCH_TYPES) {
+      assert.equal(appliesTo(pr(`${t}/x`), REPO).applies, true, `${t}/`)
+      assert.equal(appliesTo(pr(`${t}-579-x`), REPO).applies, true, `${t}-`)
+    }
   })
 
   it('skips other branches, forks and the human-only label', () => {
@@ -86,6 +99,8 @@ describe('appliesTo', () => {
     assert.equal(appliesTo(pr('bot/state-md'), REPO).applies, false)
     assert.equal(appliesTo(pr('dependabot/npm/x'), REPO).applies, false)
     assert.equal(appliesTo(pr('fixes/x'), REPO).applies, false)
+    assert.equal(appliesTo(pr('lab/x'), REPO).applies, false)
+    assert.equal(appliesTo(pr('fix'), REPO).applies, false)
     assert.equal(
       appliesTo({ ...pr('fix/x'), head: { ref: 'fix/x', repo: { full_name: 'someone/chapters' } } }, REPO).applies,
       false,
@@ -113,13 +128,19 @@ describe('check', () => {
       pr('ci/x'),
       [
         commit('1111111111111111', `ci: a\n\n${TRAILER}`),
-        commit('3333333333333333', "Merge branch 'dev' into ci/x", { name: 'GitHub', email: 'noreply@github.com' }, 'web-flow'),
+        commit('3333333333333333', "Merge branch 'dev' into ci/x", GITHUB, SIGNED),
       ],
       REPO,
     )
     assert.equal(r.ok, true)
     assert.equal(r.skipped, false)
     assert.deepEqual(r.webFlow.map((c) => c.sha), ['3333333333333333'])
+  })
+
+  it('flags an unsigned commit that only claims GitHub as committer', () => {
+    const r = check(pr('fix-579-x'), [commit('4444444444444444', 'fix: spoofed', GITHUB)], REPO)
+    assert.equal(r.ok, false)
+    assert.deepEqual(r.missing.map((c) => c.sha), ['4444444444444444'])
   })
 
   it('is skipped (passes) when the rule does not apply', () => {

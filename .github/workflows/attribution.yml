@@ -2,12 +2,13 @@ name: Commit attribution
 
 # Agents commit from the owner's account, so a `Co-Authored-By: Name
 # <email>` trailer is the only record that an agent wrote a commit (#580).
-# On a PR from this repository whose head branch starts with `fix/`, `ci/`,
-# `docs/`, `feat/`, `chore/` or `test/`, the `attribution` job fails if a
-# commit lacks that trailer, unless the PR has the label `human-only`.
-# Commits made in GitHub's web UI (merge button, "Update branch") are
-# exempt. Logic and messages: .github/scripts/attribution.mjs; rules:
-# docs/agents/github-workflow.md (CI, Commit attribution).
+# On a PR from this repository whose head branch starts with `fix`, `ci`,
+# `docs`, `feat`, `chore` or `test` followed by `/` or `-`, the
+# `attribution` job fails if a commit lacks that trailer, unless the PR has
+# the label `human-only`. Commits GitHub made and signed in its web UI
+# ("Update branch", web edits) are exempt. Logic and messages:
+# .github/scripts/attribution.mjs; rules: docs/agents/github-workflow.md
+# (CI, Commit attribution).
 #
 # Not a required check (yet): it reports on every PR to `dev` or `prod`.
 

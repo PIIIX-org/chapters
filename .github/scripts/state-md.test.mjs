@@ -21,10 +21,9 @@ const issue = (number, title, labels = [], milestone = null) => ({ number, title
 const data = () => ({
   repo: REPO,
   promotion: { number: 407, title: 'Promote: study fixes', mergedAt: '2026-10-15T09:00:00Z', sha: '111e3f1abcdef0' },
-  ci: { conclusion: 'success', url: 'https://github.com/PIIIX-org/chapters/actions/runs/1' },
+  ci: { conclusion: 'success' },
   lab: {
     conclusion: 'failure',
-    url: 'https://github.com/PIIIX-org/chapters/actions/runs/2',
     jobs: { plan: 'success', lab: 'failure', 'bench-gate': 'success' },
   },
   milestones: [
@@ -51,12 +50,18 @@ describe('render', () => {
     assert.ok(block.endsWith(`\n${END}`))
   })
 
-  it('reports the promotion, the checks on dev and links only runs that did not pass', () => {
+  it('reports the promotion and the checks on dev, with no run link that changes daily', () => {
     assert.match(block, /Last promotion to `prod`\*\*: #407 Promote: study fixes \(merged 2026-10-15, `111e3f1`\)/)
     assert.match(block, /CI \(latest push run\) success;/)
-    assert.doesNotMatch(block, /actions\/runs\/1\b/)
-    assert.match(block, /nightly lab \(full tier\) \*\*failure\*\* \(\[run\]\(https:\/\/github\.com\/PIIIX-org\/chapters\/actions\/runs\/2\)\)/)
+    assert.match(block, /nightly lab \(full tier\) \*\*failure\*\*;/)
     assert.match(block, /bench-gate \(all suites\) success\./)
+    assert.doesNotMatch(block, /actions\/runs\//)
+  })
+
+  it('says "not run" for a lab job the nightly skipped', () => {
+    const d = data()
+    d.lab.jobs = { plan: 'success' }
+    assert.match(render(d), /nightly lab \(full tier\) \*\*not run\*\*/)
   })
 
   it('lists phase progress in phase order and ignores other milestones', () => {
@@ -131,6 +136,13 @@ describe('replaceBlock', () => {
   it('replaces only the block and keeps the hand-written text', () => {
     const out = replaceBlock(doc, `${START}\nnew\n${END}`)
     assert.equal(out, `# STATE\n\nIntro.\n\n${START}\nnew\n${END}\n\n- **Architecture Traps**: keep me.\n`)
+    assert.equal(replaceBlock(out, `${START}\nnew\n${END}`), out)
+  })
+
+  it('keeps the CRLF line endings of a Windows checkout', () => {
+    const crlf = doc.replace(/\n/g, '\r\n')
+    const out = replaceBlock(crlf, `${START}\nnew\n${END}`)
+    assert.equal(out, `# STATE\n\nIntro.\n\n${START}\nnew\n${END}\n\n- **Architecture Traps**: keep me.\n`.replace(/\n/g, '\r\n'))
     assert.equal(replaceBlock(out, `${START}\nnew\n${END}`), out)
   })
 

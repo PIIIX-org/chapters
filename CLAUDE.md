@@ -17,7 +17,9 @@ fill in a copy. Claims link their run or artifact; the `pr-evidence`
 check enforces it (rules: `github-workflow.md`, CI, PR evidence). Every
 agent commit ends with a `Co-Authored-By:` trailer, and a bug you find is
 filed as an issue with repro steps and a `found-by:*` label
-(`github-workflow.md`, change cycle and Issues).
+(`github-workflow.md`, change cycle and Issues). Before finishing a fix
+PR, run `node .github/scripts/state-md.mjs --write` and commit STATE.md if
+it changed.
 
 `docs/agents/backend-reference.md` documents the server as built.
 Design specs: `docs/superpowers/specs/` (historical intent; where a spec

@@ -6,17 +6,20 @@
 // markers (Architecture Traps, Decided against, ...) is hand-written and
 // left alone.
 //
-// The output depends only on GitHub state, never on the time or on run ids
-// of passing runs, so regenerating after merging the bot's own PR gives the
-// same text and opens no new PR. Workflow: .github/workflows/state-md.yml;
-// docs: docs/agents/github-workflow.md (STATE.md).
+// The output depends only on GitHub state, never on the time or on run ids,
+// so regenerating after the refreshed block merges gives the same text and
+// opens no new PR (a red check shows as **failure** with a link to the
+// workflow's history, not to the run, so a daily red nightly does not change
+// it). Workflow: .github/workflows/state-md.yml; docs:
+// docs/agents/github-workflow.md (STATE.md).
 //
 // Usage (plain Node, no dependencies):
-//   node .github/scripts/state-md.mjs [--file docs/agents/STATE.md] [--repo owner/name]
-// Token: GITHUB_TOKEN, GH_TOKEN, or `gh auth token`. Repo: --repo or
-// GITHUB_REPOSITORY. Writes the file only when the block changed; prints the
-// block; in Actions also writes the step summary and `changed=true|false`
-// to GITHUB_OUTPUT.
+//   node .github/scripts/state-md.mjs [--write] [--file docs/agents/STATE.md] [--repo owner/name]
+// Without --write it only prints the block and says whether the file is
+// current; --write updates the file when the block changed. Token:
+// GITHUB_TOKEN, GH_TOKEN, or `gh auth token`. Repo: --repo,
+// GITHUB_REPOSITORY, or the `origin` remote. In Actions it also writes the
+// step summary and `changed=true|false` to GITHUB_OUTPUT.
 
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
@@ -79,18 +82,18 @@ function issueList(issues, moreUrl) {
   return lines
 }
 
-function runState(label, run, conclusion = run?.conclusion) {
-  if (!run) return `${label} no completed run`
+function runState(label, conclusion) {
+  if (conclusion === undefined) return `${label} no completed run`
   const c = conclusion ?? 'not run'
-  return c === 'success' ? `${label} ${c}` : `${label} **${c}** ([run](${run.url}))`
+  return c === 'success' ? `${label} ${c}` : `${label} **${c}**`
 }
 
 /**
  * The generated block, markers included. `data`:
  * { repo, promotion: { number, title, mergedAt, sha } | null,
- *   ci: { conclusion, url } | null,
- *   lab: { conclusion, url, jobs: { [name]: conclusion } } | null,
- *   milestones: [{ number, title, open, closed }],
+ *   ci: { conclusion } | null,
+ *   lab: { conclusion, jobs: { [name]: conclusion } } | null,
+ *   milestones: [{ number, title, open, closed }] (issues only, no PRs),
  *   issues: [{ number, title, labels: [name], milestone: number | null }] }
  */
 export function render(data) {
@@ -111,9 +114,9 @@ export function render(data) {
   lines.push(
     '- **Checks on `dev`**: ' +
       [
-        runState('CI (latest push run)', data.ci),
-        runState('nightly lab (full tier)', lab, lab ? lab.jobs.lab : undefined),
-        runState('bench-gate (all suites)', lab, lab ? lab.jobs['bench-gate'] : undefined),
+        runState('CI (latest push run)', data.ci ? data.ci.conclusion : undefined),
+        runState('nightly lab (full tier)', lab ? lab.jobs.lab ?? null : undefined),
+        runState('bench-gate (all suites)', lab ? lab.jobs['bench-gate'] ?? null : undefined),
       ].join('; ') +
       `. History: [CI](${gh}/actions/workflows/ci.yml?query=branch%3Adev), [lab](${gh}/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).`,
   )
@@ -160,7 +163,10 @@ export function render(data) {
   return lines.join('\n')
 }
 
-/** `doc` with its generated block replaced by `block`. */
+/**
+ * `doc` with its generated block replaced by `block`, in the document's
+ * line endings (a Windows checkout has CRLF).
+ */
 export function replaceBlock(doc, block) {
   const start = doc.indexOf(START)
   const end = doc.indexOf(END)
@@ -169,7 +175,8 @@ export function replaceBlock(doc, block) {
     throw new Error('STATE.md has more than one generated block')
   }
   if (end < start) throw new Error(`${END} comes before ${START} in STATE.md`)
-  return doc.slice(0, start) + block + doc.slice(end + END.length)
+  const eol = doc.includes('\r\n') ? '\r\n' : '\n'
+  return doc.slice(0, start) + block.replace(/\r?\n/g, eol) + doc.slice(end + END.length)
 }
 
 // ---------------------------------------------------------------------------
@@ -226,28 +233,35 @@ export async function fetchData(repo, auth) {
     .filter((p) => p.merged_at)
     .sort((a, b) => b.merged_at.localeCompare(a.merged_at))[0]
   const jobs = lab ? await all(`${r}/actions/runs/${lab.id}/jobs?per_page=100`, auth, (d) => d.jobs) : []
+  const open = issues.filter((i) => !i.pull_request)
+  // A milestone's own counts include PRs; count its issues instead.
+  const phaseMilestones = phases(milestones)
+  const closed = await Promise.all(
+    phaseMilestones.map((m) =>
+      all(`${r}/issues?milestone=${m.number}&state=closed&per_page=100`, auth).then(
+        (list) => list.filter((i) => !i.pull_request).length,
+      ),
+    ),
+  )
   return {
     repo,
     promotion: promotion
       ? { number: promotion.number, title: promotion.title, mergedAt: promotion.merged_at, sha: promotion.merge_commit_sha }
       : null,
-    ci: ci ? { conclusion: ci.conclusion, url: ci.html_url } : null,
-    lab: lab
-      ? {
-          conclusion: lab.conclusion,
-          url: lab.html_url,
-          jobs: Object.fromEntries(jobs.map((j) => [j.name, j.conclusion])),
-        }
-      : null,
-    milestones: milestones.map((m) => ({ number: m.number, title: m.title, open: m.open_issues, closed: m.closed_issues })),
-    issues: issues
-      .filter((i) => !i.pull_request)
-      .map((i) => ({
-        number: i.number,
-        title: i.title,
-        labels: i.labels.map((l) => (typeof l === 'string' ? l : l.name)),
-        milestone: i.milestone?.number ?? null,
-      })),
+    ci: ci ? { conclusion: ci.conclusion } : null,
+    lab: lab ? { conclusion: lab.conclusion, jobs: Object.fromEntries(jobs.map((j) => [j.name, j.conclusion])) } : null,
+    milestones: phaseMilestones.map((m, k) => ({
+      number: m.number,
+      title: m.title,
+      open: open.filter((i) => i.milestone?.number === m.number).length,
+      closed: closed[k],
+    })),
+    issues: open.map((i) => ({
+      number: i.number,
+      title: i.title,
+      labels: i.labels.map((l) => (typeof l === 'string' ? l : l.name)),
+      milestone: i.milestone?.number ?? null,
+    })),
   }
 }
 
@@ -259,22 +273,34 @@ function arg(name, fallback) {
   return i >= 0 ? process.argv[i + 1] : fallback
 }
 
+/** owner/name of the `origin` remote, or undefined. */
+function originRepo() {
+  try {
+    const url = execFileSync('git', ['config', '--get', 'remote.origin.url'], { encoding: 'utf8' }).trim()
+    return /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/.exec(url)?.[1]
+  } catch {
+    return undefined
+  }
+}
+
 async function main() {
   const file = arg('--file', 'docs/agents/STATE.md')
-  const repo = arg('--repo', process.env.GITHUB_REPOSITORY)
+  const write = process.argv.includes('--write')
+  const repo = arg('--repo', process.env.GITHUB_REPOSITORY) ?? originRepo()
   if (!repo) throw new Error('No repository: pass --repo owner/name or set GITHUB_REPOSITORY')
   const before = readFileSync(file, 'utf8')
   const block = render(await fetchData(repo, token()))
   const after = replaceBlock(before, block)
   const changed = after !== before
-  if (changed) writeFileSync(file, after)
+  if (changed && write) writeFileSync(file, after)
+  const state = !changed ? 'current' : write ? 'updated' : 'stale (run with --write to update it)'
   console.log(block)
-  console.log(`\n${file}: ${changed ? 'changed' : 'unchanged'}`)
+  console.log(`\n${file}: ${state}`)
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `changed=${changed}\n`)
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
-      `## STATE.md: ${changed ? 'changed' : 'unchanged'}\n\nGenerated block:\n\n\`\`\`markdown\n${block}\n\`\`\`\n`,
+      `## STATE.md: ${state}\n\nGenerated block:\n\n\`\`\`markdown\n${block}\n\`\`\`\n`,
     )
   }
 }

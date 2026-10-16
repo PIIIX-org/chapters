@@ -14,23 +14,13 @@ on:
   pull_request:
     branches: [dev, prod]
     types: [opened, synchronize, reopened, edited, ready_for_review]
-  # GitHub starts no pull_request workflow for a PR opened or pushed with
-  # GITHUB_TOKEN, so state-md.yml dispatches this on its PR's branch with
-  # the PR number (#582). The run checks that PR's current body, and its
-  # check run lands on the PR's head commit (the dispatched ref's head).
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: 'PR number (dispatch with --ref <its head branch>)'
-        required: true
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   pr-evidence:
@@ -39,15 +29,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           # HEAD is GitHub's merge of the PR into its base; HEAD^1 (the base)
-          # must be in the clone. A dispatch checks out the same merge.
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr) || '' }}
+          # must be in the clone.
           fetch-depth: 2
           persist-credentials: false
-      - if: github.event_name == 'workflow_dispatch'
-        uses: ./.github/actions/dispatched-pr
-        with:
-          pr: ${{ inputs.pr }}
-          bases: dev prod
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -57,7 +41,6 @@ jobs:
       # must stay a single file with no sibling imports.
       - name: Check the PR body for evidence
         run: |
-          export GITHUB_EVENT_PATH="${PR_EVENT_PATH:-$GITHUB_EVENT_PATH}"
           checker=.github/scripts/pr-evidence.mjs
           if git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
             git show "HEAD^1:$checker" > "$RUNNER_TEMP/pr-evidence.mjs"

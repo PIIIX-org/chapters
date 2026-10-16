@@ -1,11 +1,11 @@
 # STATE
 
-Resume anchor. The block between the `state:generated` markers is rebuilt from GitHub (issues, milestones, promotions, runs on `dev`) by `.github/scripts/state-md.mjs`; the `state-md.yml` workflow opens or updates a `bot/state-md` PR when it changes (daily and on every push to `dev`; `github-workflow.md`, STATE.md). Don't edit inside the markers. Keep the hand-written part below short and update it when it changes.
+Resume anchor. The block between the `state:generated` markers is rebuilt from GitHub (issues, milestones, promotions, runs on `dev`) by `.github/scripts/state-md.mjs`: run `node .github/scripts/state-md.mjs --write` at the end of every fix PR; the `state-md.yml` workflow pushes `bot/state-md` when `dev`'s block is stale (`github-workflow.md`, STATE.md). Don't edit inside the markers. Keep the hand-written part below short and update it when it changes.
 
 <!-- state:generated:start -->
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
 - **Last promotion to `prod`**: #407 Promote: Elara study fixes (#400, #405, #398, #402) and docs (#406) (merged 2026-10-15, `111e3f1`).
-- **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) **failure** ([run](https://github.com/PIIIX-org/chapters/actions/runs/38867185912)); bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
+- **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) **failure**; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
 - **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 0/4, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 9/21, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 0/35, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/60, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/29, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/34.
 - **Open issues**: [184](https://github.com/PIIIX-org/chapters/issues): P0 65, P1 92, P2 22, no priority 5; `bug` 8, `security` 2, `decision` 4, `deferred` 2.
 - **Owner actions** (label `owner`):

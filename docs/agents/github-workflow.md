@@ -8,9 +8,9 @@ Two long-lived branches, everything else is short-lived.
 - **`prod`** — stable branch. Only ever receives promotions from `dev`.
   What's on `prod` is verified, working software.
 - Feature branches: `<type>/<short-topic>` off `dev` — types: `feat`,
-  `fix`, `ci`, `docs`, `chore`, `test`. Deleted after merge. `bot/` is
-  for branches a workflow writes (`bot/state-md`, see **STATE.md** under
-  CI); nobody else pushes there.
+  `fix`, `ci`, `docs`, `chore`, `test` (`<type>-<topic>` is checked the
+  same way). Deleted after merge. `bot/` is for branches a workflow writes
+  (`bot/state-md`, see **STATE.md** under CI); nobody else pushes there.
 - Never commit directly to `dev` or `prod`. No exceptions, including docs.
 
 ## The change cycle
@@ -378,18 +378,25 @@ the claim: reviewers open the links (step 4 above).
 opened, pushed, reopened, labeled, unlabeled or marked ready. Like
 pr-evidence it runs the base commit's copy of
 `.github/scripts/attribution.mjs` when the base has one. It applies to PRs
-from this repository whose head branch starts with `fix/`, `ci/`,
-`docs/`, `feat/`, `chore/` or `test/` (the agent branch types), and
-fails if any commit lacks a `Co-Authored-By: Name <email>` trailer in the
-last paragraph of its message (the key in any case, a name and an email
-in `<>`; a mention in the body does not count). Exempt: PRs with the
-label `human-only` (the owner's own work), commits GitHub made in its web
-UI (committer `GitHub <noreply@github.com>`: the merge button, "Update
-branch", web edits), and every other branch (`dev` for promotions, `bot/`,
-`dependabot/`, `lab/`) and fork PRs. Fix a red check with
-`git commit --amend` or `git rebase -i` and a force-push. The summary lists
-each commit without the trailer. A PR with more than 250 commits fails
-(the API lists no more). Unit tests:
+from this repository whose head branch starts with `fix`, `ci`, `docs`,
+`feat`, `chore` or `test` followed by `/` or `-` (the agent branch types;
+`fix-579-...` counts), and fails if any commit lacks a
+`Co-Authored-By: Name <email>` trailer in the last paragraph of its
+message (the key in any case, a name and an email in `<>`; a mention in
+the body does not count). Exempt: PRs with the label `human-only`, commits
+GitHub made and signed in its web UI (committer `GitHub
+<noreply@github.com>` **and** a valid GitHub signature: "Update branch",
+web edits; a committer email alone is not trusted), every other branch
+(`dev` for promotions, `bot/`, `dependabot/`, `lab/`) and fork PRs.
+`human-only` is a convention, not an identity check: every agent works
+from the same account and can set the label, so it is for the owner's own
+PRs only, and a reviewer who sees it on an agent PR treats that as a
+finding. Fix a red check with `git commit --amend` (also for a merge
+commit you made with `git merge`; or merge with
+`-m '...' -m 'Co-Authored-By: ...'` in the first place) or
+`git rebase -i` (which drops merge commits) and a force-push. The summary
+lists each commit without the trailer. A PR with more than 250 commits
+fails (the API lists no more). Unit tests:
 `.github/scripts/attribution.test.mjs`, run by `checks`. It is **not** a
 required check: it reports on every PR, and making it required is an
 owner decision (add `attribution` to both branches' required checks).
@@ -398,50 +405,59 @@ owner decision (add `attribution` to both branches' required checks).
 `docs/agents/STATE.md` between `<!-- state:generated:start -->` and
 `<!-- state:generated:end -->` is built from GitHub data by
 `.github/scripts/state-md.mjs`: the last promotion to `prod`, the latest
-CI push run, nightly lab and `bench-gate` on `dev` (a run is linked only
-when it did not pass), the `Phase N` milestones (closed of total), open
-issues by priority and label, `owner` issues, the open issues of the first
-phase with work an agent can do, and open `bug` issues (at most 12 per
-list, then a count and a link). The rest of the file is hand-written and
-never touched. The block holds no time and no run id of a passing run,
-so the same GitHub state always gives the same text. Run it locally with
-`node .github/scripts/state-md.mjs --repo PIIIX-org/chapters` (token from
-`GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`; writes the file only when
-the block changed). The workflow:
+CI push run, nightly lab and `bench-gate` on `dev` (a check that did not
+pass is shown in bold, with the workflow's history linked, not the run),
+the `Phase N` milestones (closed of total, issues only), open issues by
+priority and label, `owner` issues, the open issues of the first phase
+with work an agent can do, and open `bug` issues (at most 12 per list,
+then a count and a link). The rest of the file is hand-written and never
+touched. The block holds no time and no run id, so the same GitHub state
+always gives the same text.
 
-- **refresh**: daily (05:17 UTC), on every push to `dev` and by
-  `gh workflow run state-md.yml --ref dev`. When the block changed, it
-  force-pushes `bot/state-md` (one commit on top of `dev`, changing only
-  STATE.md) and opens or updates the PR
-  `docs(state): refresh generated STATE.md block (bot)` with a fixed body
-  whose Evidence links the source run, the commit and the generator.
-  When `dev` already matches, it closes that PR. Merging the bot PR is
-  itself a push to `dev`, which regenerates the same block and opens
-  nothing. Review it like any PR: the diff must touch only the block; then
-  merge it.
-- GitHub starts no `pull_request` workflow for a PR opened or pushed with
-  `GITHUB_TOKEN`, so the bot PR's required checks would never report.
-  The refresh job dispatches them on `bot/state-md` instead: `ci.yml`
-  (`checks`), `elara-lab.yml` with `tier=none bench=none` (`plan` runs,
-  `lab` and `bench-gate` are skipped, as on any PR that changes neither
-  the image nor search), and `pr-evidence.yml` / `fails-before.yml` with
-  `-f pr=<N>`. Those two have a `workflow_dispatch` path for this: they
-  check out `refs/pull/<N>/merge` and the `dispatched-pr` action
-  (`.github/actions/dispatched-pr`) loads the PR from the API as the event,
-  after refusing it unless it is open, from this repository, headed at the
-  dispatched commit, with an allowed base and an up-to-date merge ref. A
-  required check counts by name on the head commit, whatever started it.
-  If a dispatched check fails for a transient reason, re-run it.
-- GitHub lets `GITHUB_TOKEN` open a PR only when "Allow GitHub Actions to
-  create and approve pull requests" is on in both the organization and the
-  repository Actions settings (repository:
-  `gh api repos/PIIIX-org/chapters/actions/permissions/workflow`, field
-  `can_approve_pull_request_reviews`). Until then the job pushes the
-  branch and fails with that message. Approvals by Actions count for
-  nothing here: `dev` needs none and `review-verdict` ignores bots.
-- **preview**: on PRs that change the generator, this workflow or
-  STATE.md, the job summary shows the block the PR's generator builds;
-  nothing is written.
+- **Agents refresh it in their PR.** At the end of every fix PR run
+  `node .github/scripts/state-md.mjs --write` (token from `GITHUB_TOKEN`,
+  `GH_TOKEN` or `gh auth token`; repository from `--repo`,
+  `GITHUB_REPOSITORY` or the `origin` remote) and commit STATE.md if it
+  changed. Without `--write` it only prints the block and says whether
+  the file is current. It keeps the file's line endings.
+- **refresh** job: daily (05:17 UTC), on every push to `dev` and by
+  `gh workflow run state-md.yml --ref dev`. When `dev`'s block is stale,
+  it writes the diff to the job summary and force-pushes `bot/state-md`
+  (one commit on top of `dev` by `github-actions[bot]`, changing only
+  STATE.md). When `dev` is current, it closes the bot PR and deletes the
+  branch.
+  - With the repository secret **`STATE_MD_TOKEN`** it pushes with that
+    token and opens or updates the PR
+    `docs(state): refresh generated STATE.md block (bot)`, whose fixed
+    body links the source run, the commit and the generator in its
+    Evidence section. Pushes and PRs made with a personal token start
+    workflows, so the PR gets `checks`, `pr-evidence`, `fails-before`
+    (skipped: not a `fix` title), `plan`, `lab` and `bench-gate` (both
+    skipped: no image or search change) like any PR; `attribution`
+    skips `bot/` branches. Review it like any PR (the diff must touch
+    only the block) and merge it. The merge is a push to `dev`, which
+    regenerates the same block and opens nothing.
+  - Without the secret it pushes with `GITHUB_TOKEN` and **fails**, with
+    the PR body and the commands in its summary. GitHub starts no
+    workflow for a push or PR made with `GITHUB_TOKEN`, and checks from a
+    hand-started (`workflow_dispatch`) run never count toward a PR's
+    required checks (GitHub docs, "Troubleshooting required status
+    checks"), so a PR it opened could never become mergeable. A person
+    lands the block instead: open the PR from `bot/state-md` with
+    `gh pr create --base dev --head bot/state-md --title '...' --body-file
+    body.md` (a PR a person opens starts its workflows), or run
+    `--write` in any PR. If a person already opened the bot PR, a later
+    refresh that pushes with `GITHUB_TOKEN` re-runs none of its checks:
+    close and reopen it.
+  - **Owner action**: create a fine-grained personal access token for
+    `PIIIX-org/chapters` with Contents and Pull requests read and write
+    and save it as the repository secret `STATE_MD_TOKEN`
+    (`gh secret set STATE_MD_TOKEN -R PIIIX-org/chapters`). PRs it opens
+    show the token owner as author. A GitHub App would need a step that
+    mints its installation token in the job; that is not built.
+- **preview** job: on PRs that change the generator, this workflow or
+  STATE.md, the summary shows the block and whether the PR's STATE.md is
+  current; nothing is written.
 
 Unit tests: `.github/scripts/state-md.test.mjs`, run by `checks`; one of
 them fails if STATE.md loses its markers or its hand-written Architecture

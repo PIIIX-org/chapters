@@ -38,7 +38,8 @@ These are standing rules for every session and every agent.
   feature branch are fine — the PR title carries the real message.
 - `STATE.md` is the resume anchor. Its generated block (phase progress,
   open issues, owner actions, bugs, the last promotion, checks on `dev`)
-  is rebuilt from GitHub by a workflow (`github-workflow.md`, STATE.md);
+  is rebuilt from GitHub by `node .github/scripts/state-md.mjs --write`
+  (run it at the end of every fix PR; `github-workflow.md`, STATE.md);
   don't edit it by hand. Update the hand-written part (and push) at every
   task boundary and before starting any long operation when what it says
   (traps, decisions, gates) changed.
