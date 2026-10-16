@@ -67,10 +67,96 @@ Every change — code, spec, doc — follows the same loop:
 ## Promotion to prod
 
 When a coherent unit of work on `dev` is **verified** — suite green, the
-feature exercised end-to-end per the sandbox/visual protocols — open a PR
-`dev → prod` titled `Promote: <what>`, confirm the diff is exactly the
-verified work, and merge. If something on `dev` turns out broken, it
-simply doesn't get promoted until fixed — `prod` never waits on a revert.
+feature exercised end-to-end per the sandbox/visual protocols — it is
+promoted with a PR `dev → prod` titled `Promote: <what>`, reviewed (the
+**review gate** below) and then fast-forwarded. If something on `dev`
+turns out broken, it simply doesn't get promoted until fixed — `prod` never
+waits on a revert.
+
+A promotion needs a review of exactly what it merges, by the owner or by a
+second agent whose job is to disprove the PR's claims (#574). Fix-list item
+177 asked for that agent to run on a *different model*. It does not: the
+owner requires every study agent to run on Claude Opus, so the reviewer is a
+**separate Opus session** that did not write the PR, started with an
+adversarial brief (find what is wrong, verify every claim against its
+linked run) and no access to the author's conversation. Independence comes
+from the separate session and the brief, not from a different model, so
+blind spots the model shares with the author are not covered.
+
+The procedure, in order:
+
+1. **Keep `prod` an ancestor of `dev`.** A promotion merged with the merge
+   button adds a merge commit that only `prod` has. With `strict: true` a
+   later promotion can then show as `BEHIND`, and "Update branch" cannot
+   fix that, because it would push to protected `dev`. GitHub has not
+   enforced this every time: #407 merged while `prod` had commits its head
+   lacked. Check with
+   `gh api repos/PIIIX-org/chapters/compare/dev...prod --jq .ahead_by`;
+   it should be `0`. If it is not, sync first:
+   - branch off `dev` and run `git merge --no-ff origin/prod`. The prod-only
+     commits are merge commits with no file changes, so the diff is empty;
+   - open a PR to `dev` titled
+     `chore: merge prod back into dev (zero file changes)`;
+   - merge it with **Create a merge commit**. A squash or rebase merge drops
+     `prod`'s parents and fixes nothing.
+
+   Do this before opening the promotion, because it moves `dev`'s head. The
+   first sync, for the 12 promotion merge commits up to #407, is #627.
+2. **Open the promotion PR** `dev → prod` and wait for every required
+   check. On `prod` the lab runs its full tier and the benchmark all five
+   suites. Don't merge anything into `dev` until the promotion is done: a new
+   `dev` head is a new PR head, which re-runs every check and makes the
+   verdict stale.
+3. **Review** at the head commit, then post the verdict as a PR comment
+   (format below), or approve on GitHub from another account with write
+   permission. `review-verdict` turns green.
+4. **Promote by fast-forward, not the merge button**:
+   `git push origin <reviewed head sha>:prod`. Both rule layers (see
+   **Branch protection and the review gate**) accept this push of an open
+   PR's head once every required check on that commit is green, and the PR
+   is then marked merged with the head as its merge commit. Otherwise the
+   push is refused:
+   - classic protection, while a required check is red:
+     `GH006: Protected branch update failed … Required status check
+     "review-verdict" is failing`;
+   - ruleset 24421063, for a commit that is not a PR's mergeable head:
+     `GH013: Repository rule violations … Changes must be made through a
+     pull request`.
+
+   All three outcomes were shown on a scratch branch with classic
+   protection and a copy of ruleset 24421063 in #630, with the classic-only
+   cases in #626. `prod` is then exactly the reviewed commit and stays an
+   ancestor of `dev`. The push starts CI on `prod` and the publish job, as a
+   merge does. If the merge button was used anyway, do the step 1 sync
+   before the next promotion.
+
+The verdict comment:
+
+```
+VERDICT: MERGE
+
+Review: <https:// link to the review record, or [[reviews/<pr>]] in Elara>
+Head reviewed: <full head sha, at least 12 hex digits>
+Reviewer: <owner, or: separate Opus session, adversarial brief>
+```
+
+The first line must be exactly `VERDICT: MERGE` or `VERDICT: CHANGES` (not
+bold, not quoted). `Head reviewed` must name the PR's current head.
+`Reviewer` is for the record and is not checked. `VERDICT: CHANGES` keeps
+the status red until a later `VERDICT: MERGE` comment replaces it. A push
+after the verdict makes the verdict stale: review the new commits and post
+again.
+
+**Emergency hotfix** (production is broken and the full gate is too slow):
+the owner relaxes `prod`'s required checks to `checks` only (the rollback
+call in **Branch protection and the review gate**), promotes the fix, and
+re-applies the full list right away. Record it in an issue: what was
+skipped, why, the commit, and both protection calls. Then run the skipped
+gates on that commit after the fact (`gh workflow run elara-lab.yml --ref
+prod -f tier=full -f bench=all`). Ruleset 24421063 stays in force, so the
+hotfix still needs a PR with `checks` green; it is not relaxed. A fix
+committed straight to a branch off `prod` also needs to reach `dev`
+(step 1).
 
 The promotion PR uses the same template, and `pr-evidence` checks it like
 any other PR. Its Evidence section links (full URL) the green CI run on
@@ -87,7 +173,7 @@ and the hosted instance stays on the previous image — fix on `dev` and
 promote again. (Before this, publish ran on every `prod` push regardless:
 promotion #334 shipped an image while its CI failed on lint.)
 
-After the merge, confirm the CI run on `prod` ended with `publish`
+After the promotion, confirm the CI run on `prod` ended with `publish`
 succeeded (`gh run list --workflow ci.yml --branch prod`, then
 `gh run view <id>`). Until it does, the hosted instance is still on the
 previous image.
@@ -96,7 +182,7 @@ The push event can be late. On 2026-10-12, promotion #392 (`1c1ea12`,
 merged 08:59:14Z) showed no run at first; `publish.yml` was dispatched by
 hand 88 s later, and at 09:01:08Z the push event fired CI and Publish
 anyway, so the image was published twice. If no CI run shows up for the
-merge commit, **wait a few minutes** and check
+promoted commit (the new `prod` head), **wait a few minutes** and check
 `gh run list --commit <sha>`. Only if there is still no CI run, start it
 by hand: `gh workflow run ci.yml --ref prod`. It runs `checks` and then
 publishes, exactly like a push. This uses `prod`'s copy of `ci.yml`, so
@@ -199,11 +285,12 @@ missing exports). Escape hatch: label `no-fails-before` plus a
 count); the job then runs no test, passes, and prints the justification.
 The label without a valid line fails. The pure logic has unit tests in
 `.github/scripts/fails-before.test.mjs`, run by `checks` (`node --test`).
-`fails-before` is not a required status check yet; branch protection is
-fix-list item 177. Until then, treat a red `fails-before` on a fix PR as
-blocking review. It is a guard, not a proof: a test that fails on base
-only because the diff is missing (for example asserting on source text)
-still counts, so reviewers read the failing test names in the summary.
+`fails-before` is a required status check on `dev` and `prod` (#574). On
+PRs to `prod` the job is skipped (a skipped required check passes): each
+fix a promotion carries passed it on its PR to `dev`. It is a guard, not a
+proof: a test that fails on base only because the diff is missing (for
+example asserting on source text) still counts, so reviewers read the
+failing test names in the summary.
 
 **PR evidence** (`.github/workflows/pr-evidence.yml`, job `pr-evidence`,
 #579) runs on every PR to `dev` or `prod` (promotions included) when it
@@ -250,10 +337,9 @@ from GitHub's Revert button (title `Revert "..."`, body
 `Reverts owner/repo#N`) needs no Evidence section, but its claims are
 still checked. The job summary lists each failing sentence or item with
 its claims. Unit tests: `.github/scripts/pr-evidence.test.mjs`, run by
-`checks`. Like fails-before, it is not a required status check yet (item
-177): treat a red `pr-evidence` as blocking review. It checks that a
-claim has a link, not that the link shows the claim: reviewers open the
-links (step 4 above).
+`checks`. Like fails-before, it is a required status check on `dev` and
+`prod` (#574). It checks that a claim has a link, not that the link shows
+the claim: reviewers open the links (step 4 above).
 
 **Elara lab** (`.github/workflows/elara-lab.yml`, job `lab`, #576) runs
 the integration tests where the collab relay, the note store, the disk,
@@ -269,9 +355,11 @@ compares the results with `lab/known-defects.json` (every check that fails
 or is inconclusive today, each with its open issue): a new failure, a new
 inconclusive check, a known defect that no longer shows, a regex entry
 that covers more than one kind of check, or a crashed test turns it red.
-A fix that makes a known defect pass removes its entry in the same PR. Not
-a required status check yet (item 177): treat a red lab run as blocking
-review. Tiers, the baseline, how to add a test: `docs/agents/lab.md`.
+A fix that makes a known defect pass removes its entry in the same PR.
+`lab` is a required status check on `dev` and `prod` (#574): when `plan`
+picks no tier the job is skipped, which passes; `plan` is required too, so
+a failed `plan` (which skips `lab`) cannot pass as a skipped lab. Tiers,
+the baseline, how to add a test: `docs/agents/lab.md`.
 
 **Premise benchmark** (same workflow, jobs `bench` ×3 and `bench-gate`,
 #570/#572) measures the tokens and calls a scripted agent needs to reach
@@ -295,12 +383,154 @@ and a `Bench-baseline-lowered: <why>` line; and when the run no longer
 matches the PR's baseline (an improvement is recorded in the same PR with
 `--write-baseline` from the PR's own three instances). Labels are read when
 the gate runs: re-run `bench-gate` after adding one. The delta table is in
-the job summary. Not a required check yet (item 177): treat a red
-`bench-gate` as blocking review.
+the job summary. `bench-gate` is a required status check on `dev` and
+`prod` (#574); it is skipped (passes) when no suite applies, and it fails
+when a `bench` instance did not produce results.
 Method, thresholds and the only publishable numbers:
 `benchmarks/README.md`.
 
-Both `dev` and `prod` enforce strict GitHub branch protection with
-`required_status_checks` on `checks` and `enforce_admins: true`. No PR
-can be merged unless all CI checks are green; bypassing is blocked at the
-repository level.
+## Branch protection and the review gate
+
+Two layers of rules apply to `dev` and `prod`, and both must pass:
+
+- **Classic branch protection** on each branch: `enforce_admins: true`
+  (admins cannot bypass it), `strict: true` (the PR must be up to date with
+  its base), and the required status checks in the table below (#574).
+- **Repository ruleset 24421063, "Require CI green before merge"**
+  (`gh api repos/PIIIX-org/chapters/rulesets/24421063`). It targets `dev`,
+  `prod` and `main` and has no bypass actors
+  (`current_user_can_bypass: never`). Rules:
+  - `pull_request`: changes go through a PR, 0 approvals,
+    `dismiss_stale_reviews_on_push`, all three merge methods allowed.
+  - `required_status_checks`: `checks` (integration 15368), strict.
+
+  `gh api repos/PIIIX-org/chapters/rules/branches/<branch>` lists the
+  ruleset rules in force on a branch. #574 does not change the ruleset.
+
+Required status checks (classic protection, #574):
+
+| check | workflow | `dev` | `prod` | why it always reports |
+|---|---|---|---|---|
+| `checks` | `ci.yml` | required | required | runs on every PR |
+| `pr-evidence` | `pr-evidence.yml` | required | required | runs on every PR to `dev` or `prod` |
+| `fails-before` | `fails-before.yml` | required | required | on `dev` it runs on every PR and passes for titles that are not `fix`; on `prod` it is skipped (passes) |
+| `plan` | `elara-lab.yml` | required | required | runs on every PR to `dev` or `prod` |
+| `lab` | `elara-lab.yml` | required | required | skipped (passes) when `plan` picks no tier |
+| `bench-gate` | `elara-lab.yml` | required | required | skipped (passes) when no benchmark suite applies |
+| `review-verdict` | `review-verdict.yml` | — | required | a commit status set on every PR event, review and comment of a same-repo PR to `prod` |
+| `review-verdict/dev` | `review-verdict.yml` | informational | — | the same rules on PRs to `dev`; never required |
+
+A skipped job counts as passing; a check that never reports keeps the PR
+at "Expected — Waiting for status to be reported" forever. So a required
+check must come from a workflow that starts on every PR to that branch with
+no path filter, and renaming a job renames its check: change the
+protection in the same PR. The `bench (1)`..`bench (3)` jobs are not
+required; `bench-gate` judges them. A head commit whose message contains
+`[skip ci]` starts no workflow at all, so its required checks never report:
+don't use it on a PR branch. Read the settings with
+`gh api repos/PIIIX-org/chapters/branches/<branch>/protection`.
+
+Before `prod` requires `lab` and `bench-gate`, the prod configuration (lab
+full tier, all five benchmark suites) must have run green once on `dev`:
+`gh workflow run elara-lab.yml --ref dev -f tier=full -f bench=all`.
+Otherwise the first promotion is the first run of that configuration, and
+a red one blocks it. Rollback for either branch (and the emergency hotfix
+path under **Promotion to prod**):
+`gh api -X PATCH repos/PIIIX-org/chapters/branches/<branch>/protection/required_status_checks --input <file>`
+with `{"strict": true, "checks": [{"context": "checks", "app_id": 15368}]}`.
+App 15368 is GitHub Actions. It owns the job check runs and also the
+`review-verdict` status, which the workflow posts with its token.
+
+**Review gate** (`.github/workflows/review-verdict.yml`, script
+`.github/scripts/review-verdict.mjs`, unit tests
+`.github/scripts/review-verdict.test.mjs` run by `checks`). On every PR
+event (opened, pushed, reopened, edited, ready), review (submitted, edited,
+dismissed) and PR comment (created, edited, deleted) the job `evaluate`
+reads the PR through the API and sets a commit status on the PR's current
+head. It is a commit status, not the job's check run, because a
+comment-triggered run belongs to the default branch and its check run
+would never show on the PR. The job itself is green whenever it could
+evaluate; read the status (its details link opens the run, whose summary
+lists what counted, each verdict author's permission and how to pass).
+
+A status belongs to a **commit, not a PR**, and a promotion's head (the
+tip of `dev`) can also be the head of other PRs. So:
+
+- the context depends on the base: `review-verdict` for PRs to `prod`,
+  `review-verdict/dev` for PRs to `dev`, and no status at all for any other
+  base. A verdict on a `dev → lab/*` PR never marks the commit as reviewed
+  for a promotion.
+- fork PRs never *set* the status: the job does not run for their PR and
+  review events, and on comment events the script refuses them. Since a
+  status belongs to a commit, a fork PR whose head is the promotion's head
+  still *shows* the promotion's status; that is harmless because
+  promotions always come from `dev`.
+- two PRs with the same base and the same head have the same diff, so a
+  verdict on one is a review of the other. No extra check exists for that
+  case. An earlier version refused it, but that let any fork PR with the
+  promotion's head turn the required status red.
+
+The rules:
+
+- Only users whose repository permission is admin, maintain or write count,
+  read from `GET /repos/{owner}/{repo}/collaborators/{user}/permission` (not
+  `author_association`: `MEMBER` is any organisation member and
+  `COLLABORATOR` includes read and triage). Bots never count, neither as
+  reviewers nor as verdict authors.
+- An approval counts when it is that reviewer's latest decisive review, is
+  on the current head commit, and the reviewer is not the PR author. A
+  reviewer's latest `CHANGES_REQUESTED` blocks.
+- A comment counts when its first non-empty line is exactly
+  `VERDICT: MERGE` or `VERDICT: CHANGES` (not bold, not quoted). Only
+  comments posted after the head became the head count: after the latest
+  of the head commit's committer date, the first check suite GitHub created
+  for that commit (its push, which a backdated commit cannot hide) and the
+  last force-push of the PR branch. The latest such comment decides.
+- `VERDICT: MERGE` must have a `Head reviewed: <sha>` line on its own
+  whose 12 to 40 hex digits match the start of the current head (post the
+  full SHA), and a link
+  to the review record: an `https://` URL (not this PR's own page) or an
+  Elara `[[...]]` link. A bare path or `#123` is not a record. Prefer a link
+  that stays valid (an Elara note, an issue comment), not a file on a branch
+  that will be deleted.
+
+If the status looks stale, re-run the newest **Review verdict** run, or
+edit the PR body.
+
+What the gate does and does not guarantee. By policy everything is done
+from the `Taha-Mahmoodi` account (step 7 of the change cycle), and GitHub
+never lets an author approve their own PR, so `required_pull_request_reviews`
+would block every promotion and is not used. Two other accounts have write
+access (`wafa-khairi-1020`, admin, and `sohrabq`, maintain), and their
+approvals and verdicts count. Agents never use them. The verdict comment of
+a reviewing agent is posted by the author's own account, so GitHub cannot
+tell the reviewer from the author: this is a **procedural gate, not an
+identity guarantee**. It guarantees that a `VERDICT: MERGE` naming the head
+and a review record was posted after the last push, and nothing about who
+wrote it or whether the review was any good. Further limits:
+
+- On PR events the workflow file comes from the PR (and the script from
+  the base, or from the PR when the base has none); on comment events both
+  come from `dev`. Anyone who can push can edit or forge the status, like
+  every other check. A promotion that touches `.github/workflows/**` or
+  `.github/scripts/**` needs the reviewer to read those changes first.
+- Comment events run the default branch's workflow, so posting a comment
+  re-evaluates only once this workflow is on `dev`.
+- Required checks are matched by name on the commit, not per workflow
+  event, and the newest run of a name is the one that counts. On #626 a
+  second PR with the same head started another `checks` run, and #626 went
+  back to `BLOCKED` until that run finished. These all add newer runs on
+  the promotion's head commit (dev's tip):
+  - the nightly lab (`30 2 * * *`, full tier and all suites): a flaky night
+    turns an open promotion red, and while it runs the promotion is pending;
+  - a `workflow_dispatch` or a `lab/**` push of that commit, which replaces
+    `plan`, `lab` and `bench-gate` with a smaller tier's results;
+  - another PR with the same head, including a **fork PR** to `prod`. It
+    starts `pr-evidence` with its own body (which can be red) and a full lab
+    run. First-time contributors need approval before their workflows run
+    (`approval_policy: first_time_contributors`); other accounts do not.
+
+  Keep promotions short. Don't dispatch the lab on `dev` or open other PRs
+  from `dev` while one is open. If a newer run turns a check red, re-run
+  that check on the promotion PR. Not enforced: a prod-only job name would
+  close this.
