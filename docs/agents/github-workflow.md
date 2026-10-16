@@ -523,6 +523,57 @@ when a `bench` instance did not produce results.
 Method, thresholds and the only publishable numbers:
 `benchmarks/README.md`.
 
+**Production uptime monitor** (`.github/workflows/uptime.yml`, script
+`.github/scripts/uptime-monitor.mjs`, #583). Production once restarted
+(likely out of memory) and nobody noticed; in-memory queues were lost. We
+have no access to the host, only its public URL, so every 10 minutes
+(`*/10 * * * *`, the default branch's copy; GitHub may run it late) a job
+makes one read-only `GET https://chapters.piiix.org/health` (monitoring,
+not testing) and compares the process identity it reports (`bootId`,
+`startedAt`, `version`, `lastShutdown`; `backend-reference.md`,
+Deployment) with the last one seen.
+
+- **Where the state lives**: in a hidden `<!-- uptime-state {...} -->`
+  block in the body of the pinned open issue **Production uptime**
+  labelled `owner` (#636), keyed by URL. Body edits notify nobody, and the
+  body is rewritten only when the state changes (not on every run). If no
+  such open issue exists, the job creates one; a bot-created issue has no
+  human subscriber, so subscribe to it (or recreate it from the owner's
+  account and pin it).
+- **Alerts** are comments on that issue, so they notify its subscribers
+  (the owner created #636):
+  - **restart**: `bootId` changed; old and new `startedAt` and `version`,
+    and `lastShutdown`. `unclean` (the previous process was killed or
+    crashed before finishing a clean shutdown) also adds the label
+    `unclean-restart`; remove it once the restart is explained.
+  - **down**: `/health` failed (network error, timeout, non-2xx such as
+    the `503` for an unreachable database) 2 checks in a row; once per
+    outage, however long it lasts.
+  - **recovered**: it answers again; once. A restart seen at the same
+    time goes in the same comment.
+- **Dedupe**: a restart is reported once per new `bootId`; a single failed
+  check alerts nothing. A crash loop gives at most one comment per run.
+  The comment is posted before the state is saved, so a failed post is
+  retried by the next run rather than lost.
+- **Old images**: a `/health` without `bootId` (an image built before
+  #583) is recorded as unknown and never compared, so production keeps
+  quiet until the promotion that ships the fields; the first run that sees
+  a `bootId` records it as the baseline without alerting.
+- **By hand**: `gh workflow run uptime.yml -R PIIIX-org/chapters`
+  (`-f dry_run=true` reads `/health` and the issue and posts nothing;
+  `-f url=<base>` checks another public instance with its own state on
+  the same issue). Locally or anywhere else:
+  `node .github/scripts/uptime-monitor.mjs --url <base> --state-file s.json`
+  keeps the state in a file and only prints the alerts (one JSON line).
+- **Proof**: unit tests in `.github/scripts/uptime-monitor.test.mjs` (run
+  by `checks`); the fast-tier lab test `uptime-monitor`
+  (`lab/tests/uptime-monitor.test.ts`) runs the same script against the
+  lab instance through a graceful restart, a SIGKILL, a stop and a start
+  (`lab.md`).
+- GitHub disables scheduled workflows in a public repository after 60
+  days without repository activity; a disabled monitor is silent, so
+  re-enable it in the Actions tab if that ever happens.
+
 ## Branch protection and the review gate
 
 Two layers of rules apply to `dev` and `prod`, and both must pass:

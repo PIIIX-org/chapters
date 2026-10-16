@@ -150,7 +150,8 @@ describe('what the SPA shell must never answer for', () => {
 
   it('leaves /health alone', async () => {
     const res = await app.inject({ method: 'GET', url: '/health' })
-    expect(res.json()).toEqual({ status: 'ok' })
+    expect(res.json()).toMatchObject({ status: 'ok' })
+    expect(res.body).not.toContain('<!doctype html>')
   })
 })
 

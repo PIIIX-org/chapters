@@ -11,8 +11,8 @@ committed baseline of known defects.
 | file | what |
 |---|---|
 | `.github/workflows/elara-lab.yml` | the workflow: `plan` picks the lab tier and the benchmark tier, `lab` builds, bootstraps, runs, gates, uploads; `bench` runs the premise benchmark on its own instance |
-| `.github/actions/lab-instance/action.yml` | shared by `lab` and `bench`: per-run secrets in `.env`, `docker compose up -d --build`, `bun lab/bootstrap.ts` |
-| `lab/docker-compose.lab.yml` | compose override: mailpit for signup mail, `MCP_RATE_LIMIT`, local backups |
+| `.github/actions/lab-instance/action.yml` | shared by `lab` and `bench`: per-run secrets and `ELARA_VERSION` (the commit, baked into the image like `publish.yml` does) in `.env`, `docker compose up -d --build`, `bun lab/bootstrap.ts` |
+| `lab/docker-compose.lab.yml` | compose override: mailpit for signup mail, `MCP_RATE_LIMIT`, local backups, the `ELARA_VERSION` build arg |
 | `lab/bootstrap.ts` | setup → signup → verify → approve → login, pinned vault + repo, 4 MCP tokens; writes `lab-env.json` (runner only, holds tokens) |
 | `lab/run.ts` | selects tests by tier or filter, waits for `/health` before each, runs them in file-name order, writes `lab-results/` |
 | `lab/redact.ts` | replaces this run's secrets (`.env` values, bootstrap passwords, cookies, tokens) with `***` in `lab-results/` before upload |
@@ -35,7 +35,10 @@ changes (Dependabot bumps of `yjs` or `@hocuspocus/*`, for example) run the
 fast tier. Fast-tier tests today: `smoke`, `concurrency`, `scoped-tokens`,
 `collab-duplication` (without the eight-kill S17 sweep),
 `fix-attribution`, `fix-crash-catchup`, `fix-frontmatter`,
-`fix-import-edges` (without the chapters repo), `zz-fix-minified-bundle`.
+`fix-import-edges` (without the chapters repo), `uptime-monitor`
+(`.github/scripts/uptime-monitor.mjs` against the instance through a
+graceful restart, a SIGKILL, a stop and a start; #583),
+`zz-fix-minified-bundle`.
 Full tier adds `attachments`, `backup-restore`, `big-notes`, `browser`
 (Playwright/Chromium), `crash-write`, `export-roundtrip`,
 `multilingual-search`, `restart-extraction`, `zz-fix-pretty-bundle`.

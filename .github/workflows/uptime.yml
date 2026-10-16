@@ -1,0 +1,71 @@
+name: Production uptime
+
+# Restart and outage alerts for production (#583). Every 10 minutes
+# .github/scripts/uptime-monitor.mjs reads the public `/health` of
+# https://chapters.piiix.org (one read-only GET: monitoring, not testing)
+# and compares the process identity it reports (`bootId`, `startedAt`,
+# `version`, `lastShutdown`) with the last one seen. The last-seen state is
+# a hidden block in the body of the open issue "Production uptime" labelled
+# `owner` (pinned). Alerts are comments on that issue, which notify its
+# subscribers:
+#   - restart: `bootId` changed; an `unclean` restart also adds the label
+#     `unclean-restart`
+#   - down: `/health` failed 2 checks in a row (once per outage)
+#   - recovered: it answers again (once)
+# A `/health` without `bootId` (an image older than #583) never alerts.
+#
+# Scheduled runs use the default branch's copy (`dev`). By hand:
+#   gh workflow run uptime.yml -R PIIIX-org/chapters                       # production
+#   gh workflow run uptime.yml -R PIIIX-org/chapters -f dry_run=true       # posts and saves nothing
+#   gh workflow run uptime.yml -R PIIIX-org/chapters -f url=https://other  # own state, same issue
+# The lab runs the same script against its instance with a state file
+# (lab/tests/uptime-monitor.test.ts). Docs: docs/agents/github-workflow.md
+# (Production uptime monitor).
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Base URL whose /health is read (state is kept per URL).
+        type: string
+        default: https://chapters.piiix.org
+      dry_run:
+        description: Read /health and the issue, post and save nothing.
+        type: boolean
+        default: false
+
+# One run at a time, so two runs never read the same state and alert twice.
+concurrency:
+  group: uptime-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Check /health and alert on the uptime issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          URL: ${{ inputs.url || 'https://chapters.piiix.org' }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
+        run: |
+          set -euo pipefail
+          args=(--url "$URL")
+          if [ "$DRY_RUN" = true ]; then args+=(--dry-run); fi
+          node .github/scripts/uptime-monitor.mjs "${args[@]}"

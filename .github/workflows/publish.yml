@@ -161,6 +161,10 @@ jobs:
           push: ${{ !inputs.dry_run }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # `/health` reports it as `version` (#583), so the uptime monitor
+          # can say which build restarted.
+          build-args: |
+            ELARA_VERSION=${{ github.sha }}
           # The runtime stage installs onnxruntime-node and sharp. Uncached,
           # that build is slow enough to time out patience, not CI.
           cache-from: type=gha

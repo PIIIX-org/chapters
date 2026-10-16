@@ -6,6 +6,12 @@ export const config = {
   nodeEnv: env.NODE_ENV ?? 'development',
   isProd: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
+  /**
+   * Commit the image was built from: publish.yml passes it as the
+   * `ELARA_VERSION` build arg and the Dockerfile bakes it in. Reported by
+   * `/health` (#583); null for builds that did not set it.
+   */
+  version: env.ELARA_VERSION || null,
   port: Number(env.ELARA_PORT ?? env.CHAPTERS_PORT ?? env.PORT ?? 3000),
   /** Base public application URL for external callbacks (OIDC, emails, etc.). */
   appUrl: env.ELARA_APP_URL ?? env.CHAPTERS_APP_URL ?? env.APP_URL ?? env.BASE_URL ?? null,

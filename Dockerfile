@@ -79,6 +79,13 @@ ENV NODE_ENV=production
 ENV DATA_DIR=/data/elara
 ENV LOCAL_REPOS_ROOT=/data/elara/local-repos
 
+# The commit this image was built from, reported by `/health` as `version`
+# (#583). publish.yml passes it; a plain `docker compose build` leaves it
+# empty and `/health` says null. Declared after every install and copy so a
+# new commit does not invalidate any cached layer.
+ARG ELARA_VERSION
+ENV ELARA_VERSION=${ELARA_VERSION}
+
 # One process, one port: the Yjs collaboration relay is attached to
 # Fastify's own HTTP server (server/src/index.ts) and answers websocket
 # upgrades on /collab. There is no second port to expose.

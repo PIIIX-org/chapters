@@ -10,6 +10,12 @@ import { startBackupScheduler } from './export/backup-service.js'
 import { config } from './config.js'
 import { sql } from './db/client.js'
 import { COLLAB_PATH } from './sync/routes.js'
+import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
+
+// Before anything that can fail: a boot that dies in migrations still marks
+// this process `running`, so the next boot reports it as unclean (#583).
+const { boot, previous } = recordBoot()
+console.log(bootLogLine(boot, previous))
 
 const app = await buildApp()
 
@@ -44,6 +50,9 @@ try {
         .destroy()
         .then(() => app.close())
         .then(() => sql.end({ timeout: 5 }))
+        // Only once every flush finished: a shutdown that fails or that
+        // Docker cuts short with SIGKILL stays `unclean`.
+        .then(() => recordGracefulShutdown(signal))
         .finally(() => process.exit(0))
     })
   }
