@@ -9,7 +9,7 @@ import { eq } from 'drizzle-orm'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
-import { db } from '../src/db/client.js'
+import { db, sql } from '../src/db/client.js'
 import { mcpConnections } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
@@ -185,6 +185,14 @@ describe('MCP token capabilities (#548)', () => {
   it('an account token minted without an access level keeps every tool (admin)', async () => {
     const minted = await mint({ name: 'cap-default-account', scope: 'account' })
     expect(await listed(minted.id)).toMatchObject({ access: 'admin', allowedTools: null, expiresAt: null })
+  })
+
+  it('the access column has no database default: every insert names its level (#641)', async () => {
+    // Migration 0019 left DEFAULT 'write' while the route gives account tokens admin; 0020 drops it.
+    const columns = await sql`
+      select column_default from information_schema.columns
+      where table_schema = 'public' and table_name = 'mcp_connections' and column_name = 'access'`
+    expect([...columns]).toEqual([{ column_default: null }])
   })
 })
 

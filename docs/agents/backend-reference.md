@@ -267,10 +267,13 @@ storage, resolved on every request via a Fastify `onRequest` hook.
   user to own the pinned vault or repository, else 403),
   `allowedTools` (names checked against `listMcpTools()`, 400 for an
   unknown one) and `expiresAt` (ISO time, must be in the future).
+  The Settings and vault forms always send a level, starting at `write`,
+  and the vault form offers `admin` only to the vault's owner (#641).
   `GET /mcp-connections/tools` returns `listMcpTools()` (name, scope,
   capability) for the Settings allow-list picker. Migration 0019 set
   existing account tokens to `admin` and left existing pinned tokens at
-  `write`; a restore of an older dump applies the same rule.
+  `write`; a restore of an older dump applies the same rule. Migration
+  0020 dropped the column default, so every insert names its level.
   Resolution (`resolveMcpToken`) is fully live — a revoked, expired, or
   now-inactive-owner token never resolves regardless of when it was
   issued (HTTP 401 `invalid, revoked or expired MCP token`).
@@ -491,7 +494,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   throws, so a tool registered without a declaration fails when the
   server is built. That is a guard against forgetting the declaration,
   not a security boundary: the low-level `server.server.setRequestHandler`
-  would bypass it (unused). Scopes: `account` (account tokens only:
+  would bypass it (here it is only wrapped, to filter `tools/list`).
+  Scopes: `account` (account tokens only:
   `list_vaults`, `create_vault`, `restore_vault`, `purge_vault`, the two
   vault-preference tools, `list_repositories`, `connect_repository`, the
   team tools, `lookup_user`, the notification tools); `vault` (the note
@@ -528,9 +532,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `write` unless its owner minted it `admin`, so by default it cannot
   share, update, trash or purge its pin or erase history. Prompts are
   not registered for a connection with an allow-list (they read notes
-  outside `tool()`). `listMcpTools()` builds the catalog once from the
+  outside `tool()`). `tools/list` advertises only the tools the
+  connection can call (#641): in its allow-list, within its access level
+  and of a scope class its scope reaches (`account` tools for account
+  tokens only, `vault`/`vault-or-account` not for repository tokens,
+  `repository`/`repository-or-account` not for vault tokens). Every tool
+  stays registered, so calling a hidden one still returns the refusal
+  above. `listMcpTools()` builds the catalog once from the
   registrations; `test/mcp-tool-capabilities.test.ts` pins the admin
-  set and `test/mcp-capabilities.test.ts` covers each rule.
+  set, `test/mcp-capabilities.test.ts` covers each rule and
+  `test/mcp-tool-visibility.test.ts` the filtered `tools/list`.
 - **Tools** (57, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):
   - *Vaults* (14): `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `get_vault_graph_preference`, `set_vault_graph_preference`, `get_vault_preferences`, `update_vault_preferences`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.

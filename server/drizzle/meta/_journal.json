@@ -141,6 +141,13 @@
       "when": 1790900000000,
       "tag": "0019_mcp_token_capabilities",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791000000000,
+      "tag": "0020_mcp_access_no_default",
+      "breakpoints": true
     }
   ]
 }

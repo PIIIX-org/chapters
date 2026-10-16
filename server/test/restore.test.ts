@@ -139,6 +139,66 @@ describe('restoreBackup', () => {
     expect(state?.setupCompletedAt).toBeInstanceOf(Date)
   })
 
+  it('restores a pre-0019 dump with account tokens at admin and pinned tokens at write, and keeps a newer dump\'s capabilities', async () => {
+    const userId = randomUUID()
+    const vaultId = randomUUID()
+    const accountId = randomUUID()
+    const pinnedId = randomUUID()
+    const limitedId = randomUUID()
+    const now = new Date().toISOString()
+    const expiresAt = new Date(Date.now() + 7 * 24 * 3600_000).toISOString()
+    const connection = (id: string, scope: 'account' | 'vault') => ({
+      id,
+      userId,
+      name: `restored-${id}`,
+      scope,
+      vaultId: scope === 'vault' ? vaultId : null,
+      repositoryId: null,
+      tokenHash: `unusable-${id}`,
+      expiresAt: null,
+      revokedAt: null,
+      lastUsedAt: null,
+      createdAt: now,
+    })
+    const dump = {
+      users: [
+        {
+          id: userId,
+          email: uniqueEmail('restore-capabilities'),
+          passwordHash: 'x',
+          status: 'active',
+          role: 'member',
+          emailVerifiedAt: now,
+          totpSecret: null,
+          mfaEnabledAt: null,
+          createdAt: now,
+        },
+      ],
+      teams: [],
+      teamMemberships: [],
+      vaults: [{ id: vaultId, name: 'Capabilities Vault', ownerId: userId, mergeable: false, createdAt: now }],
+      vaultShares: [],
+      // The first two rows predate migration 0019: no access, allowedTools or expiry columns.
+      mcpConnections: [
+        connection(accountId, 'account'),
+        connection(pinnedId, 'vault'),
+        { ...connection(limitedId, 'vault'), access: 'read', allowedTools: ['read_note'], expiresAt },
+      ],
+      securityEvents: [],
+      notifications: [],
+    }
+    const zip = new AdmZip()
+    zip.addFile('account-dump.json', Buffer.from(JSON.stringify(dump), 'utf8'))
+
+    expect((await restoreBackup(zip.toBuffer())).mcpConnections).toBe(3)
+
+    const restored = await db.select().from(mcpConnections).where(eq(mcpConnections.userId, userId))
+    const byId = new Map(restored.map((c) => [c.id, c]))
+    expect(byId.get(accountId)).toMatchObject({ access: 'admin', allowedTools: null, expiresAt: null })
+    expect(byId.get(pinnedId)).toMatchObject({ access: 'write', allowedTools: null, expiresAt: null })
+    expect(byId.get(limitedId)).toMatchObject({ access: 'read', allowedTools: ['read_note'], expiresAt: new Date(expiresAt) })
+  })
+
   it('skips a note that fails OKF validation and reports it, without aborting the restore', async () => {
     const userId = randomUUID()
     const vaultId = randomUUID()

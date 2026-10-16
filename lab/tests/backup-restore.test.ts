@@ -245,7 +245,7 @@ const test: LabTest = {
       vaults: await ctx.docker.psqlRows(`select id, name, owner_id, mergeable, deleted_at is not null as trashed from vaults order by id`),
       vault_shares: await ctx.docker.psqlRows(`select id, vault_id, grantee_type, grantee_id, permission from vault_shares order by id`),
       mcp_connections: await ctx.docker.psqlRows(
-        `select id, user_id, name, scope, vault_id, repository_id, token_hash, revoked_at is not null as revoked from mcp_connections order by id`,
+        `select id, user_id, name, scope, vault_id, repository_id, token_hash, access, allowed_tools, floor(extract(epoch from expires_at) * 1000)::bigint as expires_at_ms, revoked_at is not null as revoked from mcp_connections order by id`,
       ),
       repositories: await ctx.docker.psqlRows(`select id, name from repositories order by id`),
       mfa_backup_codes: await ctx.docker.psqlRows(`select user_id, count(*)::int as n from mfa_backup_codes group by user_id order by user_id`),
@@ -439,7 +439,7 @@ const test: LabTest = {
         team_memberships: await rq(`select team_id, user_id, role from team_memberships order by team_id, user_id`),
         vaults: await rq(`select id, name, owner_id, mergeable, deleted_at is not null as trashed from vaults order by id`),
         vault_shares: await rq(`select id, vault_id, grantee_type, grantee_id, permission from vault_shares order by id`),
-        mcp_connections: await rq(`select id, user_id, name, scope, vault_id, repository_id, token_hash, revoked_at is not null as revoked from mcp_connections order by id`),
+        mcp_connections: await rq(`select id, user_id, name, scope, vault_id, repository_id, token_hash, access, allowed_tools, floor(extract(epoch from expires_at) * 1000)::bigint as expires_at_ms, revoked_at is not null as revoked from mcp_connections order by id`),
         repositories: await rq(`select id, name from repositories order by id`),
         mfa_backup_codes: await rq(`select user_id, count(*)::int as n from mfa_backup_codes group by user_id order by user_id`),
         sessions: await rq(`select count(*)::int as n from sessions`),
