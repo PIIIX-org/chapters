@@ -73,6 +73,46 @@ describe('git remote credentials (#383)', () => {
     expect(redactGitSecrets('fatal: git could not read from git.example.com', ['git:pw1'])).toBe(
       'fatal: git could not read from git.example.com',
     )
+    // Token-type names match in any case; a short login is not a secret.
+    expect(redactGitSecrets('auth as X-Access-Token failed', ['X-Access-Token:gho_pw_upper'])).toBe(
+      'auth as X-Access-Token failed',
+    )
+    expect(
+      redactGitSecrets("fatal: repository 'https://gitlab.com/alice/repo.git/' not found", ['alice:pw-alice1']),
+    ).toBe("fatal: repository 'https://gitlab.com/alice/repo.git/' not found")
+  })
+
+  // Review of 228a8b8: a short credential replaced before the URL passes
+  // broke the URLs they look for, and their tokens came through.
+  it.each([
+    [
+      'user `s`, query token',
+      's:pw-s1',
+      "fatal: unable to access 'https://h/r.git?private_token=QTOKEN/'",
+      "fatal: unable to access 'https://h/r.git?private_token=***'",
+    ],
+    [
+      'user `https`, query and fragment tokens',
+      'https:pw-h2',
+      "fatal: unable to access 'https://h/r.git?private_token=QTOKEN#access_token=FTOKEN/'",
+      "fatal: unable to access 'https://h/r.git?private_token=***#access_token=***'",
+    ],
+    [
+      "user `h`, another URL's userinfo",
+      'h:pw-h3',
+      "fatal: unable to access 'https://other:SECRETPW@h2/r.git/'",
+      "fatal: unable to access 'https://***@h2/r.git/'",
+    ],
+    [
+      'password `?`, query token',
+      'user:?',
+      "fatal: unable to access 'https://h/r.git?private_token=QTOKEN/'",
+      "fatal: unable to access 'https://h/r.git***private_token=***'",
+    ],
+  ])('redacts URL tokens before short credential strings: %s', (_case, credential, text, expected) => {
+    const out = redactGitSecrets(text, [credential])
+    expect(out).not.toMatch(/QTOKEN|FTOKEN|SECRETPW/)
+    expect(out).toBe(expected)
   })
 
   it('is idempotent, also for a password made of `*` alone', () => {
