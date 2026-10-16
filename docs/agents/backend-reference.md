@@ -237,9 +237,13 @@ storage, resolved on every request via a Fastify `onRequest` hook.
 - **Password reset**: anti-enumeration response, kills all sessions on
   successful reset.
 - **Admin routes** (`admin-routes.ts`): approve/promote/deactivate
-  users, transfer vault ownership. Deactivation cascades — kills
-  sessions, removes team memberships and direct vault shares, fires a
-  live permission-change event, notifies the user.
+  users, transfer vault ownership. Deactivation cascades in one
+  transaction — kills sessions, removes team memberships and direct
+  vault shares, revokes every MCP connection of the user (one
+  `mcp_connection_revoked` audit event each, #646) — then fires a live
+  permission-change event and notifies the user. Reactivation restores
+  the account only: revoked tokens stay revoked (a connection a pre-#646
+  deactivation left live is revoked then), and the user mints new ones.
 - **Admin dashboard** (`admin-dashboard-routes.ts`): metadata-only by
   explicit design — stats, audit trail, force-revoke a share or MCP
   connection. No endpoint here can return note content.
@@ -779,16 +783,16 @@ flips both.
 |---|---|---|---|
 | A revoked MCP token is refused on the very next request (HTTP 401, every method) | holds | `mcp-token-lifecycle` | `revoked token: refused on the next request (HTTP 401)` |
 | An expired token (`expires_at`, #640) is refused; a token cannot be minted already expired (400) | holds | `mcp-token-lifecycle` | `scoped-tokens`: `expired token rejected (HTTP 401)` |
-| Deactivating a user stops all of that user's tokens on the next request | holds; the connections are not revoked, so a reactivated user's unexpired tokens work again | `mcp-token-lifecycle` | `deactivated user: their token is refused on the next request (HTTP 401)` |
-| Tokens are stored only as a SHA-256 hash; the raw token is in no row, audit event or listing | holds | `mcp-token-lifecycle` | `token stored only as its SHA-256 hash` |
+| Deactivating a user stops all of that user's tokens on the next request | holds; deactivation revokes every connection (account, vault- and repository-pinned) and reactivation does not restore them (#646) | `mcp-token-lifecycle` | `deactivated user: their token is refused on the next request (HTTP 401)`, `reactivated user: the token revoked at deactivation stays refused (HTTP 401)` |
+| Tokens are stored only as a SHA-256 hash; the raw token is in neither the token's `mcp_connections` row, the audit events naming that connection nor the connection listing | holds | `mcp-token-lifecycle` | `token stored only as its SHA-256 hash` |
 | The MCP limit (`MCP_RATE_LIMIT`, default 120/min) refuses request N+1 with HTTP 429 | holds | `mcp-rate-limit` | `rate limit: request MCP_RATE_LIMIT+1 on one connection within a minute gets HTTP 429` |
 | The limit is per connection, not per user: a user with N tokens gets N x the limit | holds (by design today) | `mcp-rate-limit` | `rate limit: counted per connection (another token of the same user is not limited)` |
 | The 429 carries `Retry-After` and a JSON-RPC error body | **defect #440**: no header, body `{"error":"rate limit exceeded for this connection"}` | `mcp-rate-limit` (pins today's 429) | the two `rate limit: the 429 ...` checks (known defects) |
 | B's search, graph, `find_symbols`, related-note edges (local graph, backlinks), notifications, perspective listings, vaults, repositories and teams name nothing of A's | holds | `account-separation` | `separation: B's ... names nothing of A's` (six checks) |
 | `lookup_user` returns only `{id, email}` of an active account; deactivated and unknown emails answer alike | holds; any active account is found by exact email (sharing needs the id) | `account-separation` | `separation: B's lookup_user returns A's id and email only` |
-| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, the REST routes, every prompt that takes a vault) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
+| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
 | Semantic neighbours are chosen within the owner's reach | **defect #461**: the neighbour lookup spans every account; every read filters the stored edges | `account-separation` (inserts such an edge and checks B's reads) | `semantic edges are stored only between notes of the same account` (known defect) |
-| Note text in a prompt sits in a separate, delimited data block, apart from the instructions | **defect #556**: `active_project_companion`, `prepare_task_context`, `test_gap_analysis` (bodies) and `plan_feature_implementation`, `explain_code_architecture` (snippets) put it inside their one user-role instruction message, after a heading, with no end marker | `mcp-prompt-note-content` (pins today's placement) | `prompt note text: placed in a separate data block, not inside the instructions` (known defect) |
+| Note text in a prompt sits in a separate, delimited data block, apart from the instructions | **defect #556**: `active_project_companion`, `prepare_task_context`, `test_gap_analysis` (bodies) and `plan_feature_implementation`, `explain_code_architecture` (snippets) put it inside their one user-role instruction message, after a heading and before the prompt's own instructions | `mcp-prompt-note-content` (pins today's placement) | `prompt note text: placed in a separate data block, not inside the instructions` (known defect) |
 
 ---
 
