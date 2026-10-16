@@ -438,17 +438,18 @@ always gives the same text.
     only the block) and merge it. The merge is a push to `dev`, which
     regenerates the same block and opens nothing.
   - Without the secret it pushes with `GITHUB_TOKEN` and **fails**, with
-    the PR body and the commands in its summary. GitHub starts no
-    workflow for a push or PR made with `GITHUB_TOKEN`, and checks from a
-    hand-started (`workflow_dispatch`) run never count toward a PR's
-    required checks (GitHub docs, "Troubleshooting required status
-    checks"), so a PR it opened could never become mergeable. A person
-    lands the block instead: open the PR from `bot/state-md` with
-    `gh pr create --base dev --head bot/state-md --title '...' --body-file
-    body.md` (a PR a person opens starts its workflows), or run
-    `--write` in any PR. If a person already opened the bot PR, a later
-    refresh that pushes with `GITHUB_TOKEN` re-runs none of its checks:
-    close and reopen it.
+    the PR body and the commands in its summary. Pushes and PRs made with
+    `GITHUB_TOKEN` run no checks (on scratch PR #634 the push created
+    runs in "action required" state that never started a job and cannot
+    be approved), and checks from a hand-started (`workflow_dispatch`)
+    run never count toward a PR's required checks (GitHub docs,
+    "Troubleshooting required status checks"), so a PR it opened could
+    never become mergeable. A person lands the block instead: open the PR
+    from `bot/state-md` with `gh pr create --base dev --head bot/state-md
+    --title '...' --body-file body.md` (a PR a person opens runs its
+    checks), or run `--write` in any PR. If a person already opened the
+    bot PR, a later refresh pushes with `GITHUB_TOKEN` and its checks do
+    not re-run: close and reopen the PR.
   - **Owner action**: create a fine-grained personal access token for
     `PIIIX-org/chapters` with Contents and Pull requests read and write
     and save it as the repository secret `STATE_MD_TOKEN`
