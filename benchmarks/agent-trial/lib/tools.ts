@@ -3,8 +3,9 @@
 //          server, offered with the server's own schemas; each call is one
 //          MCP tools/call.
 //   local: read_file / grep / list_files over a checkout of the same commit,
-//          in plain node:fs (no ripgrep, no network), so the mapping is
-//          unit-testable under `node --test`.
+//          in plain node:fs (no ripgrep, no network; grep in a worker thread,
+//          grep-worker.mjs, so it can be stopped), unit-testable under
+//          `node --test`.
 import { readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { Worker } from 'node:worker_threads'

@@ -290,7 +290,7 @@ are not quoted.
 | deterministic grading | [`agent-trial/lib/grade.ts`](agent-trial/lib/grade.ts) |
 | the agent loop and its caps | [`agent-trial/lib/loop.ts`](agent-trial/lib/loop.ts) |
 | model adapters (OpenAI-compatible, Anthropic) and the scripted dry-run model | [`agent-trial/lib/model.ts`](agent-trial/lib/model.ts) |
-| the two arms' tools | [`agent-trial/lib/tools.ts`](agent-trial/lib/tools.ts) |
+| the two arms' tools | [`agent-trial/lib/tools.ts`](agent-trial/lib/tools.ts), [`agent-trial/lib/grep-worker.mjs`](agent-trial/lib/grep-worker.mjs) |
 | what each arm is told; dry-run plans | [`agent-trial/lib/arms.ts`](agent-trial/lib/arms.ts) |
 | credential gate | [`agent-trial/lib/config.ts`](agent-trial/lib/config.ts), [`agent-trial/gate.ts`](agent-trial/gate.ts) |
 | optional LLM judge | [`agent-trial/lib/judge.ts`](agent-trial/lib/judge.ts) |
