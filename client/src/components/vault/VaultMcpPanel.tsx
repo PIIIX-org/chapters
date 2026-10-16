@@ -14,8 +14,33 @@ import {
   TableRow,
 } from '../ui/table.js'
 import { FormError } from '../FormError.js'
-import { useCreateMcpConnection, useMcpConnections, useRevokeMcpConnection } from '../../hooks/useMcpConnections.js'
-import type { McpConnection, McpTarget } from '../../api/mcp.js'
+import {
+  useCreateMcpConnection,
+  useMcpConnections,
+  useMcpTools,
+  useRevokeMcpConnection,
+} from '../../hooks/useMcpConnections.js'
+import type { McpAccess, McpConnection, McpTarget, McpToolInfo } from '../../api/mcp.js'
+
+// Native <select>, same as the sharing panels — no shadcn select is installed.
+const selectClassName =
+  'h-9 sm:h-8 rounded-lg border border-input bg-transparent px-2 text-sm sm:text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50'
+
+const ACCESS_RANK: Record<McpAccess, number> = { read: 0, write: 1, admin: 2 }
+const ACCESS_LABEL: Record<McpAccess, string> = {
+  read: 'Read only',
+  write: 'Read and write',
+  admin: 'Admin: also share, change settings, delete, purge',
+}
+// Days until the token stops working; 0 = never.
+const EXPIRY_PRESETS = [
+  { days: 7, label: '7 days' },
+  { days: 30, label: '30 days' },
+  { days: 90, label: '90 days' },
+  { days: 0, label: 'Never' },
+] as const
+// Tools a vault-pinned token can reach at all; account-only tools would always be refused.
+const VAULT_TOOL_SCOPES: Partial<Record<McpToolInfo['scope'], true>> = { vault: true, 'vault-or-account': true, 'vault-or-repo': true }
 
 /**
  * Copy differs by scope because the blast radius does: a vault-scoped token
@@ -30,6 +55,10 @@ const COPY = {
     loadError: "Could not load this vault's MCP connections. Try again.",
     createError: 'Could not create a connection for this vault.',
     reach: 'loses access to this vault on its next request',
+    // The token is pinned to this vault: admin lets it act on the vault itself.
+    adminWarning:
+      'Admin lets this token share this vault, revoke its shares, change its settings, move it to the trash, purge notes and erase history. Only you, the owner, can grant it, and only now. Grant it only to an agent you trust with all of that.',
+    defaultAccess: 'write' as McpAccess,
   },
   account: {
     blurb:
@@ -38,11 +67,18 @@ const COPY = {
     loadError: 'Could not load your account-wide MCP connections. Try again.',
     createError: 'Could not create an account-wide connection.',
     reach: 'loses access to every vault and repository this account can reach, on its next request',
+    adminWarning: null,
+    defaultAccess: 'admin' as McpAccess,
   },
 } as const
 
 function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString()
+}
+
+function expiryText(expiresAt: string | null): string {
+  if (!expiresAt) return 'Never'
+  return new Date(expiresAt) <= new Date() ? `Expired ${formatTimestamp(expiresAt)}` : formatTimestamp(expiresAt)
 }
 
 function McpConnectionRow({ connection, reach }: { connection: McpConnection; reach: string }) {
@@ -66,6 +102,17 @@ function McpConnectionRow({ connection, reach }: { connection: McpConnection; re
       <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 font-mono text-xs text-muted-foreground h-auto">
         <span className="sm:hidden font-mono text-muted-foreground/70">Scope: </span>
         {connection.scope}
+      </TableCell>
+      <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 font-mono text-xs text-muted-foreground h-auto whitespace-normal">
+        <span className="sm:hidden font-mono text-muted-foreground/70">Access: </span>
+        {connection.access}
+        <span className="block break-words">
+          {connection.allowedTools ? `only ${connection.allowedTools.join(', ')}` : 'all tools'}
+        </span>
+      </TableCell>
+      <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 font-mono text-xs text-muted-foreground h-auto">
+        <span className="sm:hidden font-mono text-muted-foreground/70">Expires: </span>
+        {expiryText(connection.expiresAt)}
       </TableCell>
       <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 font-mono text-xs text-muted-foreground h-auto">
         <span className="sm:hidden font-mono text-muted-foreground/70">Created: </span>
@@ -104,39 +151,140 @@ function McpConnectionRow({ connection, reach }: { connection: McpConnection; re
 }
 
 function CreateMcpConnectionForm({ target, onCreated }: { target: McpTarget; onCreated: (token: string, name: string) => void }) {
+  const copy = COPY[target.scope]
   const [name, setName] = useState('')
+  const [access, setAccess] = useState<McpAccess>(copy.defaultAccess)
+  const [expiryDays, setExpiryDays] = useState(0)
+  const [limitTools, setLimitTools] = useState(false)
+  const [allowedTools, setAllowedTools] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const createConnection = useCreateMcpConnection(target)
+  const toolsQuery = useMcpTools(limitTools)
+
+  // Tools this token could call at all: within its access level and its scope.
+  const offered = (toolsQuery.data ?? []).filter(
+    (t) => ACCESS_RANK[t.capability] <= ACCESS_RANK[access] && (target.scope === 'account' || VAULT_TOOL_SCOPES[t.scope] === true),
+  )
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
     const trimmed = name.trim()
     if (!trimmed) return
+    const tools = limitTools ? allowedTools.filter((t) => offered.some((o) => o.name === t)) : []
+    if (limitTools && tools.length === 0) {
+      setError('Pick at least one tool, or stop limiting the tools.')
+      return
+    }
     setError(null)
-    createConnection.mutate(trimmed, {
-      onSuccess: (connection) => {
-        onCreated(connection.token, connection.name)
-        setName('')
+    createConnection.mutate(
+      {
+        name: trimmed,
+        access,
+        ...(limitTools ? { allowedTools: tools } : {}),
+        ...(expiryDays ? { expiresAt: new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString() } : {}),
       },
-      onError: (err) => setError(err.message || COPY[target.scope].createError),
-    })
+      {
+        onSuccess: (connection) => {
+          onCreated(connection.token, connection.name)
+          setName('')
+          setAllowedTools([])
+        },
+        onError: (err) => setError(err.message || copy.createError),
+      },
+    )
   }
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-      <div className="flex items-end gap-2">
-        <div className="flex flex-1 flex-col gap-1">
-          <Label htmlFor="mcp-connection-name">New connection</Label>
-          <Input
-            id="mcp-connection-name"
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value)
-              setError(null)
-            }}
-            placeholder="Claude"
-          />
+      <div className="flex flex-1 flex-col gap-1">
+        <Label htmlFor="mcp-connection-name">New connection</Label>
+        <Input
+          id="mcp-connection-name"
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value)
+            setError(null)
+          }}
+          placeholder="Claude"
+        />
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="mcp-connection-access">Access</Label>
+          <select
+            id="mcp-connection-access"
+            className={selectClassName}
+            value={access}
+            onChange={(e) => setAccess(e.target.value as McpAccess)}
+          >
+            {(['read', 'write', 'admin'] as const).map((level) => (
+              <option key={level} value={level}>
+                {ACCESS_LABEL[level]}
+              </option>
+            ))}
+          </select>
         </div>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="mcp-connection-expiry">Expires after</Label>
+          <select
+            id="mcp-connection-expiry"
+            className={selectClassName}
+            value={expiryDays}
+            onChange={(e) => setExpiryDays(Number(e.target.value))}
+          >
+            {EXPIRY_PRESETS.map((preset) => (
+              <option key={preset.days} value={preset.days}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {access === 'admin' && copy.adminWarning && (
+        <p role="alert" className="rounded-lg border border-destructive/40 p-2 text-xs text-destructive">
+          {copy.adminWarning}
+        </p>
+      )}
+      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <input
+          type="checkbox"
+          className="size-4 shrink-0 accent-primary touch-manipulation"
+          checked={limitTools}
+          onChange={(e) => setLimitTools(e.target.checked)}
+        />
+        Limit this token to specific tools
+      </label>
+      {limitTools && (
+        <fieldset className="flex flex-col gap-1 rounded-lg border border-border p-2">
+          <legend className="px-1 text-xs text-muted-foreground">Allowed tools</legend>
+          {toolsQuery.isError ? (
+            <p role="alert" className="text-xs text-destructive">
+              Could not load the tool list. Try again.
+            </p>
+          ) : toolsQuery.isPending ? (
+            <p className="text-xs text-muted-foreground">Loading tools…</p>
+          ) : (
+            <div className="grid grid-cols-1 gap-x-3 gap-y-1 sm:grid-cols-2">
+              {offered.map((t) => (
+                <label key={t.name} className="flex items-center gap-2 font-mono text-xs text-foreground">
+                  <input
+                    type="checkbox"
+                    className="size-4 shrink-0 accent-primary touch-manipulation"
+                    checked={allowedTools.includes(t.name)}
+                    onChange={(e) => {
+                      const { checked } = e.target
+                      setAllowedTools((current) => (checked ? [...current, t.name] : current.filter((n) => n !== t.name)))
+                    }}
+                  />
+                  {t.name}
+                  <span className="text-muted-foreground">({t.capability})</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </fieldset>
+      )}
+      <div>
         <Button type="submit" disabled={createConnection.isPending}>
           Create
         </Button>
@@ -189,6 +337,8 @@ export function McpPanel(target: McpTarget) {
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Scope</TableHead>
+                <TableHead>Access</TableHead>
+                <TableHead>Expires</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead>Last used</TableHead>
                 <TableHead className="text-right w-24 shrink-0">

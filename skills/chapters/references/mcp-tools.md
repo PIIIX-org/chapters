@@ -1,6 +1,6 @@
 # Elara MCP Tool Reference
 
-Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prompts. Every entry is taken from the zod input schemas and handlers in `server/src/mcp/server.ts` and `server/src/mcp/prompts.ts`. If this file and the code disagree, the code wins.
+Parameters, scopes, capabilities, and return shapes for the 57 Elara MCP tools and 20 MCP prompts. Every entry is taken from the zod input schemas and handlers in `server/src/mcp/server.ts` and `server/src/mcp/prompts.ts`. If this file and the code disagree, the code wins.
 
 ## Transport and conventions
 
@@ -12,6 +12,12 @@ Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prom
   - Tools marked **account only** refuse vault- and repository-scoped tokens.
   - `everywhere: true` (on `search` and `find_symbols`) is account only.
   - A refusal says why: `this connection is pinned to a different vault`, `this connection is scoped to a repository, not a vault`, or `<tool> requires an account-scoped connection`.
+- **Capabilities** (set when the token is minted, never raised later; every tool declares one, and the server checks them before the scope):
+  - Each token has an access level, ordered `read` < `write` < `admin`. A tool runs only if the level is at or above the tool's **Capability** below. `read` tools only read; `write` tools create, edit, trash, restore or revert; `admin` tools widen access to or destroy a resource or change its settings (share, revoke, `update_vault`/`update_repository`, `delete_vault`, `purge_*`, `purge_revision`, `connect_repository`, team membership, `delete_team`).
+  - Defaults: an account token gets `admin` (every tool); a vault- or repository-pinned token gets `write`, so it cannot share, update, trash or purge its pin or erase history. Only the owner of the pinned vault or repository can mint a pinned token with `admin`.
+  - An optional tool allow-list limits the token to the named tools. A token with an allow-list gets no MCP prompts (prompts read notes on the server side).
+  - An optional expiry: after it, every request is refused with HTTP 401 (`invalid, revoked or expired MCP token`).
+  - A refusal names what is missing: `<tool> needs the admin capability; this connection has write access ...` or `<tool> is not in this connection's tool allow-list`.
 - **Response**: the result is returned as JSON text (`content[0].text`). Errors come back as `Error: <message>` with `isError: true`. A filesystem or network error is reported only by its code (`internal storage error (ENOENT)`); the full error goes to the server log.
 - **Unknown arguments are silently dropped.** The schemas strip keys they don't declare, so a misspelled or outdated argument (for example `content` instead of `body` on `create_note`) is ignored without an error.
 - IDs (`vaultId`, `repositoryId`, `noteId`, `revisionId`, `shareId`, `teamId`, `userId`, `notificationId`, perspective `id`) must be UUIDs.
@@ -23,11 +29,13 @@ Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prom
 
 ### `list_vaults`
 - **Scope**: account only.
+- **Capability**: `read`.
 - **Parameters**: none.
 - **Returns**: array of `{ id, name, ownerId, mergeable, access }`, where `access` is `owner` | `edit` | `read`.
 
 ### `create_vault`
 - **Scope**: account only.
+- **Capability**: `write`.
 - **Parameters**:
   - `name` (string, required, 1-200 chars).
   - `mergeable` (boolean, optional, default `false`): whether the vault may appear in merged cross-resource graphs.
@@ -35,6 +43,7 @@ Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prom
 
 ### `browse_vault`
 - **Scope**: vault. Read access.
+- **Capability**: `read`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, optional): a directory such as `domains/auth`.
@@ -45,6 +54,7 @@ Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prom
 
 ### `update_vault`
 - **Scope**: vault. Owner only.
+- **Capability**: `admin`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `name` (string, optional, 1-200 chars).
@@ -53,11 +63,13 @@ Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prom
 
 ### `get_vault_graph_preference`
 - **Scope**: vault. Read access.
+- **Capability**: `read`.
 - **Parameters**: `vaultId` (uuid, optional).
 - **Returns**: `{ include }` (default `false`).
 
 ### `set_vault_graph_preference`
 - **Scope**: vault. Read access.
+- **Capability**: `write`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `include` (boolean, required): whether to include this vault in your merged graph view.
@@ -65,11 +77,13 @@ Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prom
 
 ### `get_vault_preferences`
 - **Scope**: account only. These are the token owner's account-wide preferences (keyed by vault id), so pinned tokens cannot read them.
+- **Capability**: `read`.
 - **Parameters**: none.
 - **Returns**: `{ storageMode: "online" | "local", folders, folderColors, vaultColors, favorites }`.
 
 ### `update_vault_preferences`
 - **Scope**: account only.
+- **Capability**: `write`.
 - **Parameters** (all optional; each one you pass replaces that whole field, and fields you omit keep their stored value):
   - `storageMode` (enum `"online"` | `"local"`).
   - `folders` (record<string, string>).
@@ -80,26 +94,31 @@ Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prom
 
 ### `delete_vault`
 - **Scope**: vault. Owner only.
+- **Capability**: `admin`.
 - **Parameters**: `vaultId` (uuid, optional).
 - **Returns**: `{ status: "trashed", id }`.
 
 ### `restore_vault`
 - **Scope**: account only. Owner only; the vault must be in the trash.
+- **Capability**: `write`.
 - **Parameters**: `vaultId` (uuid, required).
 - **Returns**: the restored vault row.
 
 ### `purge_vault`
 - **Scope**: account only. Owner only; the vault must be in the trash.
+- **Capability**: `admin`.
 - **Parameters**: `vaultId` (uuid, required).
 - **Returns**: `{ status: "purged", id }`. Permanent.
 
 ### `list_vault_shares`
 - **Scope**: vault. Owner only.
+- **Capability**: `read`.
 - **Parameters**: `vaultId` (uuid, optional).
 - **Returns**: array of share rows (`id`, `vaultId`, `granteeType`: `user` | `team`, `granteeId`, `permission`: `read` | `edit`, ...). Team shares add `members: [{ teamId, userId, email }]`; user shares add `email`.
 
 ### `share_vault`
 - **Scope**: vault. Owner only.
+- **Capability**: `admin`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `granteeType` (enum `"user"` | `"team"`, required).
@@ -109,6 +128,7 @@ Parameters, scopes, and return shapes for the 57 Elara MCP tools and 20 MCP prom
 
 ### `revoke_vault_share`
 - **Scope**: vault. Owner only.
+- **Capability**: `admin`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `shareId` (uuid, required): the `id` from `list_vault_shares`.
@@ -129,6 +149,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `read_note`
 - **Scope**: vault. Read access.
+- **Capability**: `read`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -136,6 +157,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `create_note`
 - **Scope**: vault. Edit access.
+- **Capability**: `write`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, optional): full note path, for example `domains/storage/postgres`.
@@ -147,6 +169,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `edit_note`
 - **Scope**: vault. Edit access.
+- **Capability**: `write`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -158,6 +181,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `rename_note`
 - **Scope**: vault. Edit access.
+- **Capability**: `write`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `from` (string, required): current note path.
@@ -167,6 +191,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `delete_note`
 - **Scope**: vault. Edit access.
+- **Capability**: `write`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -174,6 +199,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `list_trash`
 - **Scope**: vault. Edit access.
+- **Capability**: `read`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `limit` (integer, optional, 1-100, default 50).
@@ -182,6 +208,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `restore_note`
 - **Scope**: vault. Edit access.
+- **Capability**: `write`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `noteId` (uuid, required): the trashed note's id (from `delete_note` or `list_trash`).
@@ -189,6 +216,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `purge_note`
 - **Scope**: vault. Owner only; the note must be in the trash.
+- **Capability**: `admin`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `noteId` (uuid, required).
@@ -196,6 +224,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `note_history`
 - **Scope**: vault. Edit access.
+- **Capability**: `read`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -204,6 +233,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `revert_note`
 - **Scope**: vault. Edit access.
+- **Capability**: `write`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -212,6 +242,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `purge_revision`
 - **Scope**: vault. Owner only.
+- **Capability**: `admin`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `revisionId` (uuid, required). There is no `path` parameter.
@@ -219,6 +250,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `audit_okf_conformance`
 - **Scope**: vault. Read access. On a vault-scoped token, repositories are outside the pin: every `[[repo:...]]` link is listed in `brokenRepoLinks` with the repository name or id as written in the note, without looking it up, so the result says nothing about which repositories or files exist.
+- **Capability**: `read`.
 - **Parameters**: `vaultId` (uuid, optional).
 - **Returns**:
   ```json
@@ -245,11 +277,13 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `list_repositories`
 - **Scope**: account only.
+- **Capability**: `read`.
 - **Parameters**: none.
 - **Returns**: array of repository records: `{ id, name, ownerId, ingestionMethod, gitUrl, localPath, defaultBranch, mergeable, syncStatus, lastSyncedAt, lastSyncError, lastWebhookAt, webhookConfigured, createdAt, access }`. Credentials are never returned.
 
 ### `connect_repository`
 - **Scope**: account only.
+- **Capability**: `admin`.
 - **Parameters**:
   - `name` (string, required, 1-200 chars).
   - `ingestionMethod` (enum `"git"` | `"local_path"`, required).
@@ -260,11 +294,13 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `browse_repository`
 - **Scope**: repository. Repository access.
+- **Capability**: `read`.
 - **Parameters**: `repositoryId` (uuid, optional). There is no `path` parameter.
 - **Returns**: a flat array of every indexed file: `{ id, path, language, size, updatedAt }`.
 
 ### `read_file`
 - **Scope**: repository. Repository access.
+- **Capability**: `read`.
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `path` (string, required): file path inside the repository.
@@ -272,11 +308,13 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `repository_status`
 - **Scope**: repository. Repository access.
+- **Capability**: `read`.
 - **Parameters**: `repositoryId` (uuid, optional).
 - **Returns**: `{ syncStatus, lastSyncedAt, lastSyncError, filesPendingExtraction }`. `syncStatus` is `idle`, `syncing`, or `error`. `filesPendingExtraction` counts files with no embedding yet (queued, or failed; the server re-queues them at its next start), so `idle` with a non-zero count means symbols are still arriving. The indexed commit is not reported.
 
 ### `sync_repository`
 - **Scope**: repository. Repository access.
+- **Capability**: `write`.
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `force` (boolean, optional): start even if a sync is already marked running.
@@ -284,6 +322,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `update_repository`
 - **Scope**: repository. Owner only.
+- **Capability**: `admin`.
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `name` (string, optional, 1-200 chars).
@@ -292,11 +331,13 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `get_repository_graph_preference`
 - **Scope**: repository. Repository access.
+- **Capability**: `read`.
 - **Parameters**: `repositoryId` (uuid, optional).
 - **Returns**: `{ include }` (default `false`).
 
 ### `set_repository_graph_preference`
 - **Scope**: repository. Repository access.
+- **Capability**: `write`.
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `include` (boolean, required).
@@ -304,16 +345,19 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `delete_repository`
 - **Scope**: repository. Owner only.
+- **Capability**: `admin`.
 - **Parameters**: `repositoryId` (uuid, optional).
 - **Returns**: `{ status: "deleted", id }`. Permanent; there is no repository trash.
 
 ### `list_repository_shares`
 - **Scope**: repository. Owner only.
+- **Capability**: `read`.
 - **Parameters**: `repositoryId` (uuid, optional).
 - **Returns**: array of share rows (`id`, `repositoryId`, `granteeType`, `granteeId`, ...). Repository shares are read-only; there is no permission field.
 
 ### `share_repository`
 - **Scope**: repository. Owner only.
+- **Capability**: `admin`.
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `granteeType` (enum `"user"` | `"team"`, required).
@@ -322,6 +366,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `revoke_repository_share`
 - **Scope**: repository. Owner only.
+- **Capability**: `admin`.
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `shareId` (uuid, required).
@@ -333,6 +378,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `search`
 - **Scope**: vault, repository, or account. Read access to each resource searched.
+- **Capability**: `read`.
 - **Parameters**:
   - `query` (string, required).
   - `vaultId` (uuid, optional) and/or `repositoryId` (uuid, optional). An account-scoped token must pass at least one, or `everywhere`.
@@ -343,6 +389,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `find_symbols`
 - **Scope**: repository, or account. A repository-scoped token searches its pinned repository; another `repositoryId` is an error. A vault-scoped token cannot use it. An account-scoped token searches `repositoryId` if given, otherwise (or with `everywhere`) every repository you can access.
+- **Capability**: `read`.
 - **Parameters**:
   - `query` (string, required).
   - `kind` (enum `"function"` | `"class"` | `"interface"` | `"type"`, optional).
@@ -358,6 +405,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `graph`
 - **Scope**: vault and/or repository. An account-scoped token must pass `vaultId` or `repositoryId`.
+- **Capability**: `read`.
 - **Parameters** (these are all of them):
   - `vaultId` (uuid, optional).
   - `repositoryId` (uuid, optional).
@@ -376,6 +424,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `find_graph_path`
 - **Scope**: as for `graph`.
+- **Capability**: `read`.
 - **Parameters**:
   - `source` (string, required): a node `id` or exact node `path` (note path without `.md`, or repository file path).
   - `target` (string, required): same.
@@ -385,11 +434,13 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `list_graph_perspectives`
 - **Scope**: vault, or account. A vault-scoped token lists the perspectives of its pinned vault (an omitted `vaultId` means the pinned vault; global perspectives are not shown to it). A repository-scoped token cannot use it. Read access to the vault.
+- **Capability**: `read`.
 - **Parameters**: `vaultId` (uuid, optional). An account-scoped token that omits it lists global perspectives.
 - **Returns**: array of perspective rows (`id`, `name`, `vaultId`, `userId`, `filters`, `isShared`, `createdAt`, ...): yours plus shared ones.
 
 ### `save_graph_perspective`
 - **Scope**: vault, or account, as for `list_graph_perspectives`: a vault-scoped token saves into its pinned vault. With a vault, read access to it is enough. A global perspective (account-scoped token, no `vaultId`) needs an instance admin role.
+- **Capability**: `write`.
 - **Parameters**:
   - `name` (string, required).
   - `vaultId` (uuid, optional).
@@ -399,6 +450,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `delete_graph_perspective`
 - **Scope**: vault, or account, applied to the perspective's own vault. A vault-scoped token can delete perspectives of its pinned vault only; any other id (another vault's perspective, a global one, or no such perspective) answers `not found`, so a pinned token cannot tell which perspectives exist. A global perspective needs an account-scoped token; a repository-scoped token always gets `not found`. Allowed for the creator, the vault owner (vault perspectives), or an instance admin (global perspectives).
+- **Capability**: `write`.
 - **Parameters**: `id` (uuid, required).
 - **Returns**: `{ ok: true }`.
 
@@ -409,30 +461,37 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 All team and user tools are **account only**.
 
 ### `list_teams`
+- **Capability**: `read`.
 - **Parameters**: none.
 - **Returns**: array of `{ id, name, role }` for teams you belong to.
 
 ### `create_team`
+- **Capability**: `write`.
 - **Parameters**: `name` (string, required, 1-200 chars).
 - **Returns**: the team row. You become its owner.
 
 ### `list_team_members`
+- **Capability**: `read`.
 - **Parameters**: `teamId` (uuid, required). You must be a member.
 - **Returns**: array of `{ userId, email, role }`.
 
 ### `add_team_member`
+- **Capability**: `admin`.
 - **Parameters**: `teamId` (uuid, required), `userId` (uuid, required; must be an active user). Team owner only.
 - **Returns**: `{ status: "added", teamId, userId }`.
 
 ### `remove_team_member`
+- **Capability**: `admin`.
 - **Parameters**: `teamId` (uuid, required), `userId` (uuid, required). Team owner only; owners cannot be removed.
 - **Returns**: `{ status: "removed" }`.
 
 ### `delete_team`
+- **Capability**: `admin`.
 - **Parameters**: `teamId` (uuid, required). Team owner only. The team's vault shares are removed.
 - **Returns**: `{ status: "deleted" }`.
 
 ### `lookup_user`
+- **Capability**: `read`.
 - **Parameters**: `email` (string, required, email format).
 - **Returns**: `{ id, email }` of the active user with that email.
 
@@ -442,11 +501,13 @@ All team and user tools are **account only**.
 
 ### `export_vault`
 - **Scope**: vault. Edit access.
+- **Capability**: `read`.
 - **Parameters**: `vaultId` (uuid, optional).
 - **Returns**: `{ vaultId, zipBase64, sizeBytes }`. Live notes only; revisions and trash are not included.
 
 ### `export_note`
 - **Scope**: vault. Read access.
+- **Capability**: `read`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -454,6 +515,7 @@ All team and user tools are **account only**.
 
 ### `list_notifications`
 - **Scope**: account only.
+- **Capability**: `read`.
 - **Parameters**:
   - `unreadOnly` (boolean, optional).
   - `limit` (integer, optional, 1-100, default 50).
@@ -461,6 +523,7 @@ All team and user tools are **account only**.
 
 ### `mark_notification_read`
 - **Scope**: account only.
+- **Capability**: `write`.
 - **Parameters**: `notificationId` (uuid, required).
 - **Returns**: the updated notification row.
 

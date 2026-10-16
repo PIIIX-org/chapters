@@ -7,8 +7,9 @@
 //   pinned                    vaultId=P (vault token) / RP (repo)  expect allow
 //                             (owner-admin actions on the pin — share, delete,
 //                             rename, purge — are expected DENY as policy:
-//                             a content-scoped token should not be able to
-//                             widen access to or destroy its resource)
+//                             a pinned token minted without the admin
+//                             capability cannot widen access to or destroy
+//                             its resource, #549)
 //   omitted                   optional vaultId/repositoryId left out:
 //                             expect allow, confined to the pin (no leak)
 //   account-surface           tools with no vault/repo id: expect deny
@@ -16,14 +17,16 @@
 // any success with another id is a scope breach. Allowed results are also
 // scanned for "leak markers" (ids, names and a body marker of the other
 // resources). The account token re-runs the read-only "other" cases as a
-// control proving the arguments are valid.
+// control proving the arguments are valid. Last, the capabilities set at mint
+// time (#548): a read-only token, a tool allow-list and an expired token.
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { McpClient, type JsonSchema, type ToolInfo, type ToolResult } from '../lib/mcp.ts'
 
 const OTHER_REPO_URL = process.env.LAB_SCOPE_OTHER_REPO_URL ?? 'https://github.com/PIIIX-org/git-a-profile'
 const PINNED_REPO_URL = process.env.LAB_SCOPE_PINNED_REPO_URL ?? 'https://github.com/PIIIX-org/portfolio.me'
 const MARK = { P: 'LABPINNEDVAULTMARKER', O: 'LABOTHERVAULTMARKER' }
-const SCOPE_DENIAL = /pinned to a different|is scoped to a (vault|repository)|requires an account-scoped connection|account-scoped connections only/i
+const SCOPE_DENIAL =
+  /pinned to a different|is scoped to a (vault|repository)|requires an account-scoped connection|account-scoped connections only|needs the (write|admin) capability|not in this connection's tool allow-list/i
 
 /** Owner/admin actions on the token's own resource: expected denied by policy, not by isolation. */
 const POLICY_DENY = new Set([
@@ -466,13 +469,51 @@ const test: LabTest = {
     const breaches = pinnedOnly.filter((o) => o.ok === false && !o.policy)
     const policy = pinnedOnly.filter((o) => o.ok === false && o.policy)
     const inconclusive = pinnedOnly.filter((o) => o.ok === null)
+
+    // ---- capabilities set at mint time (#548): access level, tool allow-list, expiry
+    const capVault = await ctx.createVault('admin', 'lab-scope-capabilities')
+    await acct.must('create_note', { vaultId: capVault.id, type: 'docs', name: 'cap', body: 'capability probe' })
+    const reader = ctx.mcp((await ctx.mintToken('admin', 'lab cap read-only', 'vault', { vaultId: capVault.id, access: 'read' })).token, 'cap-read')
+    const limited = ctx.mcp(
+      (await ctx.mintToken('admin', 'lab cap allow-list', 'vault', { vaultId: capVault.id, allowedTools: ['read_note'] })).token,
+      'cap-allow',
+    )
+    const expiring = await ctx.mintToken('admin', 'lab cap expiring', 'account', { expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString() })
+    const expiringClient = ctx.mcp(expiring.token, 'cap-expiring')
+    const allowed = (name: string, r: ToolResult): Check => ({
+      name, expected: 'allowed', actual: r.text.slice(0, 160), ok: r.ok ? true : r.httpStatus === 0 ? null : false, severity: r.ok ? 'info' : 'high',
+    })
+    const refused = (name: string, r: ToolResult, why: RegExp): Check => ({
+      name, expected: `refused: ${why.source}`, actual: r.text.slice(0, 160),
+      ok: r.isError && why.test(r.text) ? true : r.ok ? false : null, severity: r.ok ? 'critical' : 'info',
+    })
+    const capChecks: Check[] = [
+      allowed('read-only token: read_note works', await reader.call('read_note', { path: 'docs/cap' })),
+      refused('read-only token: create_note refused', await reader.call('create_note', { type: 'docs', name: 'nope', body: 'x' }), /needs the write capability/),
+      refused('read-only token: edit_note refused', await reader.call('edit_note', { path: 'docs/cap', body: 'overwritten' }), /needs the write capability/),
+      allowed('allow-list token: listed read_note works', await limited.call('read_note', { path: 'docs/cap' })),
+      refused('allow-list token: unlisted search refused', await limited.call('search', { query: 'capability probe' }), /not in this connection's tool allow-list/),
+      allowed('expiring token works before its expiry', await expiringClient.call('list_vaults', {})),
+    ]
+    await ctx.docker.psql(`update mcp_connections set expires_at = now() - interval '1 minute' where id = '${expiring.id}'`)
+    const expired = await expiringClient.call('list_vaults', {})
+    capChecks.push({
+      name: 'expired token rejected (HTTP 401)',
+      expected: 'HTTP 401',
+      actual: `HTTP ${expired.httpStatus}: ${expired.text.slice(0, 120)}`,
+      ok: expired.httpStatus === 401 ? true : expired.httpStatus === 0 ? null : false,
+      severity: expired.httpStatus === 401 ? 'info' : 'critical',
+    })
+    checks.push(...capChecks)
+
     return {
       summary:
         `${tools.length} tools, ${pinnedOnly.length} pinned-token cases. Isolation breaches (allowed outside the pin, or leaked other resources): ${breaches.length}` +
         (breaches.length ? ` — ${breaches.map((b) => `${b.token}:${b.tool}[${b.kind}]`).join(', ')}` : '') +
         `. Policy (owner actions on the pin allowed): ${policy.length}` +
         (policy.length ? ` — ${policy.map((b) => `${b.token}:${b.tool}`).join(', ')}` : '') +
-        `. Inconclusive (non-scope error): ${inconclusive.length}.`,
+        `. Inconclusive (non-scope error): ${inconclusive.length}.` +
+        ` Mint-time capabilities: ${capChecks.filter((c) => c.ok === true).length}/${capChecks.length} as expected.`,
       checks,
       data: {
         ids: { P: P.id, O: O.id, RP: RP.id, RO: RO.id, team: team.id, globalPerspectiveId, memberVault: memberVault.id },

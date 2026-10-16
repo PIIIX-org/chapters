@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { mockJsonResponse } from '../../lib/api'
 import { expectNoA11yViolations } from '../../test/axe'
-import { VaultMcpPanel } from './VaultMcpPanel'
-import type { McpConnection } from '../../api/mcp'
+import { McpPanel, VaultMcpPanel } from './VaultMcpPanel'
+import type { McpConnection, McpToolInfo } from '../../api/mcp'
 
 const ACCOUNT_SCOPED: McpConnection = {
   id: 'c-account',
@@ -13,6 +13,8 @@ const ACCOUNT_SCOPED: McpConnection = {
   scope: 'account',
   vaultId: null,
   repositoryId: null,
+  access: 'admin',
+  allowedTools: null,
   createdAt: '2026-08-01T00:00:00.000Z',
   lastUsedAt: null,
   expiresAt: null,
@@ -25,6 +27,8 @@ const OTHER_VAULT: McpConnection = {
   scope: 'vault',
   vaultId: 'v-other',
   repositoryId: null,
+  access: 'write',
+  allowedTools: null,
   createdAt: '2026-08-01T00:00:00.000Z',
   lastUsedAt: null,
   expiresAt: null,
@@ -37,10 +41,27 @@ const THIS_VAULT: McpConnection = {
   scope: 'vault',
   vaultId: 'v1',
   repositoryId: null,
+  access: 'write',
+  allowedTools: null,
   createdAt: '2026-08-01T00:00:00.000Z',
   lastUsedAt: null,
   expiresAt: null,
   revokedAt: null,
+}
+
+const TOOLS: McpToolInfo[] = [
+  { name: 'list_vaults', scope: 'account', capability: 'read' },
+  { name: 'read_note', scope: 'vault', capability: 'read' },
+  { name: 'create_note', scope: 'vault', capability: 'write' },
+  { name: 'share_vault', scope: 'vault', capability: 'admin' },
+  { name: 'search', scope: 'vault-or-repo', capability: 'read' },
+]
+
+function postBody(fetchMock: Mock): Record<string, unknown> {
+  const postCall = fetchMock.mock.calls.find(
+    (c) => c[0] === '/api/mcp-connections' && (c[1] as RequestInit)?.method === 'POST',
+  ) as [string, RequestInit]
+  return JSON.parse(postCall[1].body as string) as Record<string, unknown>
 }
 
 // Every test builds a fresh Response per call — this panel both queries and
@@ -61,22 +82,32 @@ function stubFetch(opts: {
       return Promise.resolve(mockJsonResponse(200, { status: 'revoked' }))
     }
     if (url === '/api/mcp-connections' && init?.method === 'POST') {
-      const body = JSON.parse(init.body as string) as { name: string; scope: string; vaultId?: string }
+      const body = JSON.parse(init.body as string) as {
+        name: string
+        scope: string
+        vaultId?: string
+        access: McpConnection['access']
+        allowedTools?: string[]
+        expiresAt?: string
+      }
       const created: McpConnection & { token: string } = {
         id: 'c-new',
         name: body.name,
         scope: body.scope as McpConnection['scope'],
         vaultId: body.vaultId ?? null,
         repositoryId: null,
+        access: body.access,
+        allowedTools: body.allowedTools ?? null,
         createdAt: '2026-08-23T00:00:00.000Z',
         lastUsedAt: null,
-        expiresAt: null,
+        expiresAt: body.expiresAt ?? null,
         revokedAt: null,
         token: 'mcp_live_secret_token',
       }
       if (Array.isArray(connections)) connections = [...connections, created]
       return Promise.resolve(mockJsonResponse(200, created))
     }
+    if (url === '/api/mcp-connections/tools') return Promise.resolve(mockJsonResponse(200, TOOLS))
     if (url === '/api/mcp-connections') {
       if (connections === 'error') return Promise.resolve(mockJsonResponse(500, { error: 'boom' }))
       return Promise.resolve(mockJsonResponse(200, connections))
@@ -92,6 +123,15 @@ function renderPanel(vaultId = 'v1') {
   return render(
     <QueryClientProvider client={queryClient}>
       <VaultMcpPanel vaultId={vaultId} />
+    </QueryClientProvider>,
+  )
+}
+
+function renderAccountPanel() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <McpPanel scope="account" />
     </QueryClientProvider>,
   )
 }
@@ -118,7 +158,7 @@ describe('VaultMcpPanel', () => {
     expect(screen.queryByText('Claude')).toBeNull()
   })
 
-  it('create POSTs /api/mcp-connections with scope vault and this vaultId', async () => {
+  it('create POSTs /api/mcp-connections with scope vault, this vaultId and write access by default', async () => {
     const fetchMock = stubFetch({ connections: [] })
     const user = userEvent.setup()
     renderPanel()
@@ -133,10 +173,101 @@ describe('VaultMcpPanel', () => {
         true,
       ),
     )
-    const postCall = fetchMock.mock.calls.find(
-      (c) => c[0] === '/api/mcp-connections' && (c[1] as RequestInit)?.method === 'POST',
-    ) as [string, RequestInit]
-    expect(JSON.parse(postCall[1].body as string)).toEqual({ name: 'Claude', scope: 'vault', vaultId: 'v1' })
+    // No allow-list and no expiry unless chosen; the tool catalog is never fetched.
+    expect(postBody(fetchMock)).toEqual({ name: 'Claude', scope: 'vault', vaultId: 'v1', access: 'write' })
+    expect(fetchMock.mock.calls.some((c) => c[0] === '/api/mcp-connections/tools')).toBe(false)
+  })
+
+  it('a read-only token with a 30-day expiry sends access read and an expiresAt 30 days ahead', async () => {
+    const fetchMock = stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderPanel()
+
+    await screen.findByText('No MCP connections for this vault yet.')
+    await user.type(screen.getByLabelText('New connection'), 'Reader')
+    await user.selectOptions(screen.getByLabelText('Access'), 'read')
+    await user.selectOptions(screen.getByLabelText('Expires after'), '30')
+    const before = Date.now()
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
+    const body = postBody(fetchMock)
+    expect(body).toMatchObject({ name: 'Reader', scope: 'vault', vaultId: 'v1', access: 'read' })
+    const days = (new Date(String(body.expiresAt)).getTime() - before) / (24 * 60 * 60 * 1000)
+    expect(days).toBeGreaterThan(29.99)
+    expect(days).toBeLessThan(30.01)
+  })
+
+  it('granting admin to a vault-pinned token shows a warning first', async () => {
+    stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderPanel()
+
+    await screen.findByText('No MCP connections for this vault yet.')
+    expect(screen.queryByText(/Admin lets this token share this vault/)).toBeNull()
+    await user.selectOptions(screen.getByLabelText('Access'), 'admin')
+    expect(screen.getByRole('alert')).toHaveTextContent(/share this vault.*move it to the trash, purge notes and erase history/)
+  })
+
+  it('an account token defaults to admin, without the pinned-token warning', async () => {
+    const fetchMock = stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderAccountPanel()
+
+    await screen.findByText('No account-wide MCP connections yet.')
+    expect(screen.getByLabelText('Access')).toHaveValue('admin')
+    expect(screen.queryByRole('alert')).toBeNull()
+    await user.type(screen.getByLabelText('New connection'), 'Laptop')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
+    expect(postBody(fetchMock)).toEqual({ name: 'Laptop', scope: 'account', access: 'admin' })
+  })
+
+  it('the allow-list offers only tools the access level and the vault pin can use, and sends the picked ones', async () => {
+    const fetchMock = stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderPanel()
+
+    await screen.findByText('No MCP connections for this vault yet.')
+    await user.type(screen.getByLabelText('New connection'), 'Limited')
+    await user.click(screen.getByLabelText('Limit this token to specific tools'))
+
+    const group = await screen.findByRole('group', { name: 'Allowed tools' })
+    await within(group).findByLabelText(/read_note/)
+    expect(within(group).getByLabelText(/create_note/)).toBeInTheDocument()
+    expect(within(group).getByLabelText(/search/)).toBeInTheDocument()
+    // share_vault needs admin (this token is write); list_vaults is account-only.
+    expect(within(group).queryByLabelText(/share_vault/)).toBeNull()
+    expect(within(group).queryByLabelText(/list_vaults/)).toBeNull()
+
+    // Nothing picked: refused before any request.
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByText('Pick at least one tool, or stop limiting the tools.')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(false)
+
+    await user.click(within(group).getByLabelText(/read_note/))
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
+    expect(postBody(fetchMock)).toEqual({ name: 'Limited', scope: 'vault', vaultId: 'v1', access: 'write', allowedTools: ['read_note'] })
+  })
+
+  it('the list shows each token\'s access, allow-list and expiry', async () => {
+    stubFetch({
+      connections: [
+        { ...THIS_VAULT, access: 'read', allowedTools: ['read_note', 'search'], expiresAt: '2020-01-01T00:00:00.000Z' },
+        { ...THIS_VAULT, id: 'c2', name: 'Writer' },
+      ],
+    })
+    renderPanel()
+
+    const row = (await screen.findByText('Claude')).closest('tr') as HTMLElement
+    expect(row).toHaveTextContent('read')
+    expect(row).toHaveTextContent('only read_note, search')
+    expect(row).toHaveTextContent(/Expired/)
+    const writer = screen.getByText('Writer').closest('tr') as HTMLElement
+    expect(writer).toHaveTextContent('write')
+    expect(writer).toHaveTextContent('all tools')
+    expect(within(writer).getByText('Never')).toBeInTheDocument()
   })
 
   it('shows the returned token once, clears it on Done, and never leaks it into the refetched row', async () => {

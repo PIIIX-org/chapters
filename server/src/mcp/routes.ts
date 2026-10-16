@@ -19,7 +19,7 @@ export function mcpRoutes(app: FastifyInstance) {
     const auth = token ? await resolveMcpToken(token) : null
     if (!auth) {
       await logSecurityEvent({ type: 'mcp_auth_failed', ip: req.ip })
-      return reply.code(401).send({ error: 'invalid or revoked MCP token' })
+      return reply.code(401).send({ error: 'invalid, revoked or expired MCP token' })
     }
     if (!checkRateLimit(auth.connection.id)) {
       return reply.code(429).send({ error: 'rate limit exceeded for this connection' })

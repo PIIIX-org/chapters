@@ -252,8 +252,9 @@ beforeAll(async () => {
     memberEmail: member.email,
     globalPerspectiveId: globalPerspective.id,
   }
-  tokens.vault = await mint({ name: 'scope-vault', scope: 'vault', vaultId: P.id })
-  tokens.repo = await mint({ name: 'scope-repo', scope: 'repository', repositoryId: RP })
+  // Admin, so the admin tools (share, delete, purge) are confined by the pin too, not refused by the access level.
+  tokens.vault = await mint({ name: 'scope-vault', scope: 'vault', vaultId: P.id, access: 'admin' })
+  tokens.repo = await mint({ name: 'scope-repo', scope: 'repository', repositoryId: RP, access: 'admin' })
 }, 60_000)
 
 afterAll(async () => {

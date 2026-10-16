@@ -92,9 +92,15 @@ export class LabContext {
     user: UserKey,
     name: string,
     scope: 'account' | 'vault' | 'repository' = 'account',
-    ids: { vaultId?: string; repositoryId?: string } = {},
+    options: {
+      vaultId?: string
+      repositoryId?: string
+      access?: 'read' | 'write' | 'admin'
+      allowedTools?: string[]
+      expiresAt?: string
+    } = {},
   ): Promise<{ id: string; token: string }> {
-    return this.rest(user).must('POST', '/api/mcp-connections', { name, scope, ...ids })
+    return this.rest(user).must('POST', '/api/mcp-connections', { name, scope, ...options })
   }
 
   /** Creates a vault through REST (POST /api/vaults). */

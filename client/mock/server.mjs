@@ -1142,11 +1142,11 @@ const repoShares = [
 ]
 
 const mcpConnections = [
-  { id: uuid(), userId: ME.id, name: 'Claude Desktop', scope: 'account', vaultId: null, repositoryId: null, createdAt: ago(33), lastUsedAt: ago(0, 1), expiresAt: null, revokedAt: null },
-  { id: uuid(), userId: ME.id, name: 'Research agent', scope: 'vault', vaultId: RESEARCH.id, repositoryId: null, createdAt: ago(14), lastUsedAt: ago(1), expiresAt: ago(-76), revokedAt: null },
-  { id: uuid(), userId: ME.id, name: 'Code indexer', scope: 'repository', vaultId: null, repositoryId: CHAPTERS_REPO.id, createdAt: ago(9), lastUsedAt: ago(0, 3), expiresAt: null, revokedAt: null },
-  { id: uuid(), userId: ME.id, name: 'Old laptop', scope: 'account', vaultId: null, repositoryId: null, createdAt: ago(80), lastUsedAt: ago(41), expiresAt: null, revokedAt: ago(40) },
-  { id: uuid(), userId: ADA.id, name: 'Ada — Cursor', scope: 'vault', vaultId: PRODUCT.id, repositoryId: null, createdAt: ago(5), lastUsedAt: ago(0, 6), expiresAt: null, revokedAt: null },
+  { id: uuid(), userId: ME.id, name: 'Claude Desktop', scope: 'account', vaultId: null, repositoryId: null, access: 'admin', allowedTools: null, createdAt: ago(33), lastUsedAt: ago(0, 1), expiresAt: null, revokedAt: null },
+  { id: uuid(), userId: ME.id, name: 'Research agent', scope: 'vault', vaultId: RESEARCH.id, repositoryId: null, access: 'read', allowedTools: ['read_note', 'search', 'browse_vault'], createdAt: ago(14), lastUsedAt: ago(1), expiresAt: ago(-76), revokedAt: null },
+  { id: uuid(), userId: ME.id, name: 'Code indexer', scope: 'repository', vaultId: null, repositoryId: CHAPTERS_REPO.id, access: 'write', allowedTools: null, createdAt: ago(9), lastUsedAt: ago(0, 3), expiresAt: null, revokedAt: null },
+  { id: uuid(), userId: ME.id, name: 'Old laptop', scope: 'account', vaultId: null, repositoryId: null, access: 'admin', allowedTools: null, createdAt: ago(80), lastUsedAt: ago(41), expiresAt: null, revokedAt: ago(40) },
+  { id: uuid(), userId: ADA.id, name: 'Ada — Cursor', scope: 'vault', vaultId: PRODUCT.id, repositoryId: null, access: 'write', allowedTools: null, createdAt: ago(5), lastUsedAt: ago(0, 6), expiresAt: null, revokedAt: null },
 ]
 
 const notifications = [
@@ -2042,12 +2042,47 @@ put('/repositories/:id/graph-preference', ({ params, body }) => {
 })
 
 // --- mcp connections --------------------------------------------------------
+// Mirrors listMcpTools() on the server: [name, scope, capability].
+const MCP_TOOLS = [
+  ['list_vaults', 'account', 'read'], ['create_vault', 'account', 'write'], ['browse_vault', 'vault', 'read'],
+  ['update_vault', 'vault', 'admin'], ['get_vault_graph_preference', 'vault', 'read'],
+  ['set_vault_graph_preference', 'vault', 'write'], ['get_vault_preferences', 'account', 'read'],
+  ['update_vault_preferences', 'account', 'write'], ['delete_vault', 'vault', 'admin'],
+  ['restore_vault', 'account', 'write'], ['purge_vault', 'account', 'admin'], ['list_vault_shares', 'vault', 'read'],
+  ['share_vault', 'vault', 'admin'], ['revoke_vault_share', 'vault', 'admin'], ['read_note', 'vault', 'read'],
+  ['create_note', 'vault', 'write'], ['edit_note', 'vault', 'write'], ['rename_note', 'vault', 'write'],
+  ['delete_note', 'vault', 'write'], ['list_trash', 'vault', 'read'], ['restore_note', 'vault', 'write'],
+  ['purge_note', 'vault', 'admin'], ['note_history', 'vault', 'read'], ['revert_note', 'vault', 'write'],
+  ['purge_revision', 'vault', 'admin'], ['list_repositories', 'account', 'read'],
+  ['connect_repository', 'account', 'admin'], ['browse_repository', 'repository', 'read'],
+  ['read_file', 'repository', 'read'], ['repository_status', 'repository', 'read'],
+  ['sync_repository', 'repository', 'write'], ['update_repository', 'repository', 'admin'],
+  ['get_repository_graph_preference', 'repository', 'read'],
+  ['set_repository_graph_preference', 'repository', 'write'], ['delete_repository', 'repository', 'admin'],
+  ['list_repository_shares', 'repository', 'read'], ['share_repository', 'repository', 'admin'],
+  ['revoke_repository_share', 'repository', 'admin'], ['list_teams', 'account', 'read'],
+  ['create_team', 'account', 'write'], ['list_team_members', 'account', 'read'],
+  ['add_team_member', 'account', 'admin'], ['remove_team_member', 'account', 'admin'],
+  ['delete_team', 'account', 'admin'], ['export_vault', 'vault', 'read'], ['export_note', 'vault', 'read'],
+  ['lookup_user', 'account', 'read'], ['list_notifications', 'account', 'read'],
+  ['mark_notification_read', 'account', 'write'], ['search', 'vault-or-repo', 'read'],
+  ['find_symbols', 'repository-or-account', 'read'], ['graph', 'vault-or-repo', 'read'],
+  ['find_graph_path', 'vault-or-repo', 'read'], ['list_graph_perspectives', 'vault-or-account', 'read'],
+  ['save_graph_perspective', 'vault-or-account', 'write'], ['delete_graph_perspective', 'vault-or-account', 'write'],
+  ['audit_okf_conformance', 'vault', 'read'],
+].map(([name, scope, capability]) => ({ name, scope, capability }))
 get('/mcp-connections', () => mcpConnections.filter((c) => c.userId === ME.id).map(publicMcp))
+get('/mcp-connections/tools', () => MCP_TOOLS)
 post('/mcp-connections', ({ body }) => {
   if (!body?.name?.trim() || !['account', 'vault', 'repository'].includes(body?.scope)) throw bad('name and scope required')
   if (body.scope === 'vault') vaultOr404(body.vaultId)
   if (body.scope === 'repository') repoOr404(body.repositoryId)
-  const c = { id: randomUUID(), userId: ME.id, name: body.name.trim(), scope: body.scope, vaultId: body.scope === 'vault' ? body.vaultId : null, repositoryId: body.scope === 'repository' ? body.repositoryId : null, createdAt: now(), lastUsedAt: null, expiresAt: null, revokedAt: null }
+  const access = body.access ?? (body.scope === 'account' ? 'admin' : 'write')
+  if (!['read', 'write', 'admin'].includes(access)) throw bad('access must be read, write or admin')
+  const unknown = (body.allowedTools ?? []).filter((t) => !MCP_TOOLS.some((x) => x.name === t))
+  if (unknown.length) throw bad(`unknown MCP tools: ${unknown.join(', ')}`)
+  if (body.expiresAt && new Date(body.expiresAt) <= new Date()) throw bad('expiresAt must be in the future')
+  const c = { id: randomUUID(), userId: ME.id, name: body.name.trim(), scope: body.scope, vaultId: body.scope === 'vault' ? body.vaultId : null, repositoryId: body.scope === 'repository' ? body.repositoryId : null, access, allowedTools: body.allowedTools ?? null, createdAt: now(), lastUsedAt: null, expiresAt: body.expiresAt ?? null, revokedAt: null }
   mcpConnections.push(c)
   return { ...publicMcp(c), token: `mcp_${randomBytes(32).toString('base64url')}` }
 })

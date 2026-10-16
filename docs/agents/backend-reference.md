@@ -161,7 +161,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | `vaultShares` | direct-user or team grants on a vault, `read`/`edit`, unique on `(vaultId, granteeType, granteeId)` |
 | `vaultGraphPreferences` | per-user opt-in for a vault in the merged graph view |
 | `userVaultPreferences` | per-user vault organization preferences: storage mode ('online'/'local'), folders, colors, and favorites |
-| `mcpConnections` | issued MCP bearer tokens, scoped `account`/`vault`/`repository`, hashed |
+| `mcpConnections` | issued MCP bearer tokens, scoped `account`/`vault`/`repository`, hashed; `access` (`read`/`write`/`admin`), `allowedTools` (null = all), `expiresAt` (null = never), all set at mint time |
 | `instanceState` | singleton row: setup-token lifecycle, instance-wide MFA requirement |
 | `securityEvents` | append-only audit log (login failures, permission denials, admin actions, MFA events, export/backup access) |
 | `notifications` | in-app notification rows |
@@ -260,9 +260,20 @@ storage, resolved on every request via a Fastify `onRequest` hook.
   currently shared with the team.
 - **`mcp-connection-routes.ts`**: issues/lists/revokes MCP bearer
   tokens scoped to `account`, a specific `vault`, or a specific
-  `repository`. Resolution (`resolveMcpToken`) is fully live — a
-  revoked, expired, or now-inactive-owner token never resolves
-  regardless of when it was issued.
+  `repository`. `POST /mcp-connections` also takes the token's
+  capabilities (#548, #549), which no route changes later: `access`
+  (`read` | `write` | `admin`; default `admin` for an account token,
+  `write` for a pinned one; `admin` on a pinned token needs the minting
+  user to own the pinned vault or repository, else 403),
+  `allowedTools` (names checked against `listMcpTools()`, 400 for an
+  unknown one) and `expiresAt` (ISO time, must be in the future).
+  `GET /mcp-connections/tools` returns `listMcpTools()` (name, scope,
+  capability) for the Settings allow-list picker. Migration 0019 set
+  existing account tokens to `admin` and left existing pinned tokens at
+  `write`; a restore of an older dump applies the same rule.
+  Resolution (`resolveMcpToken`) is fully live — a revoked, expired, or
+  now-inactive-owner token never resolves regardless of when it was
+  issued (HTTP 401 `invalid, revoked or expired MCP token`).
 
 Every share/membership mutation calls `emitPermissionChange()` (see
 §5.6) and writes a `securityEvents` row.
@@ -487,6 +498,24 @@ re-resolved live.
   id, no id, `everywhere`), checks that confined calls still return
   their own data, and fails on a tool with no case there: **a new tool
   needs a case there**.
+- **Capabilities** (`server.ts`, #548, #549): every `tool()` also
+  declares `capability: 'read' | 'write' | 'admin'`, and the wrapper
+  checks the connection before the scope: the tool must be in
+  `allowedTools` when that is set (`<tool> is not in this connection's
+  tool allow-list`), and `access` must rank at or above the tool's
+  capability (read < write < admin; `<tool> needs the admin capability;
+  this connection has write access ...`). `admin` tools: share/revoke
+  (vault and repository), `update_vault`, `update_repository`,
+  `delete_vault`, `purge_vault`, `purge_note`, `purge_revision`,
+  `connect_repository`, `delete_repository`, `add_team_member`,
+  `remove_team_member`, `delete_team`. `write` tools create, edit,
+  trash, restore or revert; the rest are `read`. A pinned token is
+  `write` unless its owner minted it `admin`, so by default it cannot
+  share, update, trash or purge its pin or erase history. Prompts are
+  not registered for a connection with an allow-list (they read notes
+  outside `tool()`). `listMcpTools()` builds the catalog once from the
+  registrations; `test/mcp-tool-capabilities.test.ts` pins the admin
+  set and `test/mcp-capabilities.test.ts` covers each rule.
 - **Tools** (57, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):
   - *Vaults* (14): `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `get_vault_graph_preference`, `set_vault_graph_preference`, `get_vault_preferences`, `update_vault_preferences`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.

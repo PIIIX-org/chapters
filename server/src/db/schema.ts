@@ -38,6 +38,8 @@ export const teamRole = pgEnum('team_role', ['owner', 'member'])
 export const granteeType = pgEnum('grantee_type', ['user', 'team'])
 export const permission = pgEnum('permission', ['read', 'edit'])
 export const mcpScope = pgEnum('mcp_scope', ['account', 'vault', 'repository'])
+/** What an MCP token may do, ordered: read < write < admin (#548, #549). */
+export const mcpAccess = pgEnum('mcp_access', ['read', 'write', 'admin'])
 export const emailTokenPurpose = pgEnum('email_token_purpose', [
   'verify_email',
   'password_reset',
@@ -232,6 +234,10 @@ export const mcpConnections = pgTable(
       onDelete: 'cascade',
     }),
     tokenHash: text('token_hash').notNull().unique(),
+    // Set at mint time only. Each MCP tool declares the level it needs.
+    access: mcpAccess('access').notNull().default('write'),
+    // null = every tool `access` permits; otherwise only these tool names.
+    allowedTools: text('allowed_tools').array(),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
