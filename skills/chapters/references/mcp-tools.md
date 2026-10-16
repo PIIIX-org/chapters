@@ -435,11 +435,11 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 ### `list_graph_perspectives`
 - **Scope**: vault, or account. A vault-scoped token lists the perspectives of its pinned vault (an omitted `vaultId` means the pinned vault; global perspectives are not shown to it). A repository-scoped token cannot use it. Read access to the vault.
 - **Capability**: `read`.
-- **Parameters**: `vaultId` (uuid, optional). An account-scoped token that omits it lists global perspectives: only your own, or every one for an instance admin. Global perspectives are personal; nobody else sees yours.
+- **Parameters**: `vaultId` (uuid, optional). An account-scoped token that omits it lists global perspectives: only your own. Global perspectives are personal; nobody else sees yours, an instance admin included.
 - **Returns**: array of perspective rows (`id`, `name`, `vaultId`, `userId`, `filters`, `isShared`, `createdAt`, ...). For a vault: yours plus shared ones.
 
 ### `save_graph_perspective`
-- **Scope**: vault, or account, as for `list_graph_perspectives`: a vault-scoped token saves into its pinned vault. With a vault, edit access to it is required (a read-only member gets `not found`). A global perspective (account-scoped token, no `vaultId`) needs an instance admin role and is visible only to you and instance admins.
+- **Scope**: vault, or account, as for `list_graph_perspectives`: a vault-scoped token saves into its pinned vault. With a vault, edit access to it is required (a read-only member gets `not found`). A global perspective (account-scoped token, no `vaultId`) needs an instance admin role and is visible only to you.
 - **Capability**: `write`.
 - **Parameters**:
   - `name` (string, required).
@@ -450,7 +450,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 
 ### `delete_graph_perspective`
 - **Scope**: vault, or account, applied to the perspective's own vault. A vault-scoped token can delete perspectives of its pinned vault only; any other id (another vault's perspective, a global one, or no such perspective) answers `not found`, so a pinned token cannot tell which perspectives exist. A global perspective needs an account-scoped token; a repository-scoped token always gets `not found`.
-- **Who**: a vault perspective needs edit access to its vault (else `not found`), then the creator or the vault owner (another editor gets `owner permission required`). A global perspective only its creator (an instance admin gets `forbidden`, anyone else `not found`).
+- **Who**: a vault perspective needs edit access to its vault (else `not found`), then the creator or the vault owner (another editor gets `owner permission required`). A global perspective only its creator (anyone else, an instance admin included, gets `not found`).
 - **Capability**: `write`.
 - **Parameters**: `id` (uuid, required).
 - **Returns**: `{ ok: true }`.

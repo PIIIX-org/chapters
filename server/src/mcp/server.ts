@@ -1829,7 +1829,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault-or-account',
       capability: 'read',
       description:
-        'List saved graph perspectives and filter presets for a vault (yours plus shared ones) or merged graph (global perspectives: your own; an instance admin sees all). A vault-scoped connection sees only the perspectives of its vault.',
+        'List saved graph perspectives and filter presets for a vault (yours plus shared ones) or merged graph (your own global perspectives). A vault-scoped connection sees only the perspectives of its vault.',
       inputSchema: {
         vaultId: z
           .string()
@@ -1859,7 +1859,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       return db
         .select()
         .from(graphPerspectives)
-        .where(visibleGlobalPerspectives(auth.user))
+        .where(visibleGlobalPerspectives(auth.user.id))
         .orderBy(asc(graphPerspectives.createdAt))
     },
   )
@@ -1870,7 +1870,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault-or-account',
       capability: 'write',
       description:
-        'Save a scoped graph perspective with filter presets (types, tags, date range, color mode) for a vault (needs edit access) or merged graph (instance admins only; a global perspective is visible only to you and admins).',
+        'Save a scoped graph perspective with filter presets (types, tags, date range, color mode) for a vault (needs edit access) or merged graph (instance admins only; a global perspective is visible only to you).',
       inputSchema: {
         name: z.string().min(1).describe('Perspective name'),
         vaultId: z.string().uuid().optional().describe('Optional vault ID constraint'),
@@ -1963,8 +1963,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         await requireAccess(perspective.vaultId, 'edit')
         if (perspective.userId !== auth.user.id) await requireVaultOwner(perspective.vaultId)
       } else if (perspective.userId !== auth.user.id) {
-        // Admins see every global perspective, so they get the honest answer.
-        throw new McpToolError(isInstanceAdmin(auth.user.role) ? 'forbidden' : 'not found')
+        // Listed only to its creator, so anyone else gets the answer for a missing id.
+        throw new McpToolError('not found')
       }
 
       await db.delete(graphPerspectives).where(eq(graphPerspectives.id, args.id))

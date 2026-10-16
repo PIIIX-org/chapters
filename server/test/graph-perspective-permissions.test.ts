@@ -25,7 +25,7 @@ const userId: Record<string, string> = {}
 const clients: Client[] = []
 const mcp: Record<string, Client> = {}
 
-type Who = 'creator' | 'otherAdmin' | 'editor' | 'reader' | 'member'
+type Who = 'creator' | 'otherAdmin' | 'editor' | 'reader' | 'member' | 'teamEditor' | 'teamReader'
 
 function rest(who: Who, method: 'GET' | 'POST' | 'DELETE', url: string, body?: Record<string, unknown>) {
   return app.inject({ method, url, headers: { cookie: cookie[who]! }, ...(body === undefined ? {} : { body }) })
@@ -92,6 +92,8 @@ beforeAll(async () => {
     editor: await createActiveUser(),
     reader: await createActiveUser(),
     member: await createActiveUser(),
+    teamEditor: await createActiveUser(),
+    teamReader: await createActiveUser(),
   }
   for (const [who, user] of Object.entries(users)) {
     cookie[who] = await loginCookie(app, user.email)
@@ -105,6 +107,13 @@ beforeAll(async () => {
       granteeId: userId[who],
       permission,
     })
+    expect(res.statusCode).toBeLessThan(300)
+  }
+  // The same rules through a team share: one team with edit, one with read.
+  for (const [who, permission] of [['teamEditor', 'edit'], ['teamReader', 'read']] as const) {
+    const team = (await rest('creator', 'POST', '/api/teams', { name: `${who} team` })).json<{ id: string }>()
+    expect((await rest('creator', 'POST', `/api/teams/${team.id}/members`, { userId: userId[who] })).statusCode).toBeLessThan(300)
+    const res = await rest('creator', 'POST', `/api/vaults/${vaultId}/shares`, { granteeType: 'team', granteeId: team.id, permission })
     expect(res.statusCode).toBeLessThan(300)
   }
 
@@ -163,22 +172,27 @@ describe('vault perspectives need edit access (REST)', () => {
 })
 
 describe('global perspectives are personal (REST)', () => {
-  it('is listed to its creator and to instance admins, never to another account', async () => {
+  it('is listed to its creator only, not to another account or another instance admin', async () => {
     const global = await saveRest('creator', { name: 'creator global', isShared: true })
     expect(global.vaultId).toBeNull()
 
     expect(await listRest('creator')).toContain(global.id)
-    expect(await listRest('otherAdmin')).toContain(global.id)
-    for (const who of ['member', 'editor', 'reader'] as const) {
+    for (const who of ['otherAdmin', 'member', 'editor', 'reader'] as const) {
       expect(await listRest(who)).not.toContain(global.id)
     }
   })
 
-  it('only its creator deletes it', async () => {
+  it('a private global perspective of one admin is not listed to another admin', async () => {
+    const global = await saveRest('creator', { name: 'creator private global', isShared: false })
+    expect(await listRest('creator')).toContain(global.id)
+    expect(await listRest('otherAdmin')).not.toContain(global.id)
+  })
+
+  it('only its creator deletes it; anyone else, an admin too, gets not found', async () => {
     const global = await saveRest('creator', { name: 'creator global delete', isShared: true })
 
     expect((await rest('member', 'DELETE', `/api/graph/perspectives/${global.id}`)).statusCode).toBe(404)
-    expect((await rest('otherAdmin', 'DELETE', `/api/graph/perspectives/${global.id}`)).statusCode).toBe(403)
+    expect((await rest('otherAdmin', 'DELETE', `/api/graph/perspectives/${global.id}`)).statusCode).toBe(404)
     expect(await listRest('creator')).toContain(global.id)
 
     expect((await rest('creator', 'DELETE', `/api/graph/perspectives/${global.id}`)).statusCode).toBe(200)
@@ -207,26 +221,56 @@ describe('the same rules over MCP', () => {
     expect(await listMcp('creator', { vaultId })).toContain(own)
   })
 
-  it('a global perspective is listed to its creator and admins only, and only its creator deletes it', async () => {
+  it('a global perspective is listed to its creator only, and only its creator deletes it', async () => {
     const saved = await call('creator', 'save_graph_perspective', { name: 'mcp creator global', isShared: true })
     expect(saved.isError).toBe(false)
     const global = perspectivesOf(saved.text)[0]!.id
 
     expect(await listMcp('creator')).toContain(global)
-    expect(await listMcp('otherAdmin')).toContain(global)
-    expect(await listMcp('member')).not.toContain(global)
-    expect(await listMcp('editor')).not.toContain(global)
+    for (const who of ['otherAdmin', 'member', 'editor'] as const) {
+      expect(await listMcp(who)).not.toContain(global)
+    }
 
-    const byMember = await call('member', 'delete_graph_perspective', { id: global })
-    expect(byMember.isError).toBe(true)
-    expect(byMember.text).toMatch(/not found/)
-    const byAdmin = await call('otherAdmin', 'delete_graph_perspective', { id: global })
-    expect(byAdmin.isError).toBe(true)
-    expect(byAdmin.text).toMatch(/forbidden/)
+    for (const who of ['member', 'otherAdmin'] as const) {
+      const denied = await call(who, 'delete_graph_perspective', { id: global })
+      expect(denied.isError).toBe(true)
+      expect(denied.text).toMatch(/not found/)
+    }
     expect(await listMcp('creator')).toContain(global)
 
     const byCreator = await call('creator', 'delete_graph_perspective', { id: global })
     expect(byCreator.isError).toBe(false)
     expect(await listMcp('creator')).not.toContain(global)
+  })
+
+  it('an editor cannot delete another member perspective; the vault owner can', async () => {
+    const ownersView = perspectivesOf((await call('creator', 'save_graph_perspective', { vaultId, name: 'mcp owner view' })).text)[0]!.id
+    const byEditor = await call('editor', 'delete_graph_perspective', { id: ownersView })
+    expect(byEditor.isError).toBe(true)
+    expect(byEditor.text).toMatch(/owner permission required/)
+    expect(await listMcp('creator', { vaultId })).toContain(ownersView)
+
+    const editors = perspectivesOf((await call('editor', 'save_graph_perspective', { vaultId, name: 'mcp editor moderated' })).text)[0]!.id
+    const byOwner = await call('creator', 'delete_graph_perspective', { id: editors })
+    expect(byOwner.isError).toBe(false)
+    expect(await listMcp('creator', { vaultId })).not.toContain(editors)
+  })
+})
+
+describe('edit access through a team share', () => {
+  it('a member of an edit team saves and deletes; a member of a read-only team cannot save', async () => {
+    const saved = await saveRest('teamEditor', { name: 'team editor view', vaultId })
+    expect((await rest('teamEditor', 'DELETE', `/api/graph/perspectives/${saved.id}`)).statusCode).toBe(200)
+
+    expect((await rest('teamReader', 'POST', '/api/graph/perspectives', { name: 'team reader publish', vaultId })).statusCode).toBe(404)
+    const denied = await call('teamReader', 'save_graph_perspective', { vaultId, name: 'mcp team reader publish' })
+    expect(denied.isError).toBe(true)
+    expect(denied.text).toMatch(/not found/)
+    // The read-only team member still lists the vault's shared perspectives; neither save landed.
+    await saveRest('editor', { name: 'shared with the read team', vaultId, isShared: true })
+    const names = (await rest('teamReader', 'GET', `/api/graph/perspectives?vaultId=${vaultId}`)).json<Perspective[]>().map((p) => p.name)
+    expect(names).toContain('shared with the read team')
+    expect(names).not.toContain('team reader publish')
+    expect(names).not.toContain('mcp team reader publish')
   })
 })

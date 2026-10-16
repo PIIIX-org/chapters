@@ -432,11 +432,48 @@ describe('GraphFilters', () => {
     unmount()
     vi.unstubAllGlobals()
 
-    stubFetch([], { role: 'admin' })
+    const fetchMock = stubFetch([], { role: 'admin' })
     renderFilters({ initialEntry: '/' })
     await user.click(await screen.findByRole('button', { name: '+ Save view' }))
-    expect(screen.getByPlaceholderText('Perspective name...')).toBeInTheDocument()
     expect(screen.queryByRole('checkbox', { name: 'Share with team' })).toBeNull()
+    await user.type(screen.getByPlaceholderText('Perspective name...'), 'Admin Global')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    // A global perspective is personal, so the request does not claim to share it.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/graph/perspectives', expect.objectContaining({ method: 'POST' })))
+    const post = fetchMock.mock.calls.find(([url, init]) => url === '/api/graph/perspectives' && init?.method === 'POST')
+    const sent: unknown = JSON.parse(String(post?.[1]?.body))
+    expect(sent).toEqual(expect.objectContaining({ name: 'Admin Global', vaultId: null }))
+    expect(sent).not.toHaveProperty('isShared')
+  })
+
+  it('shows the vault owner Delete on another member perspective', async () => {
+    stubFetch([{ id: 'members', name: 'Member View', vaultId: 'v1', userId: 'u2', filters: { tags: ['travel'] }, isShared: true }], {
+      access: 'owner',
+    })
+    const user = userEvent.setup()
+    renderFilters()
+
+    const select = await screen.findByRole('combobox', { name: 'Graph perspective' })
+    await waitFor(() => expect(screen.getByText('Member View')).toBeInTheDocument())
+    await user.selectOptions(select, 'members')
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument()
+  })
+
+  it('shows an instance admin no Delete on another admin global perspective', async () => {
+    stubFetch([{ id: 'other-global', name: 'Other Admin Global', vaultId: null, userId: 'u2', filters: { tags: ['travel'] }, isShared: true }], {
+      role: 'admin',
+    })
+    const user = userEvent.setup()
+    renderFilters({ initialEntry: '/' })
+
+    // The admin can save (so the session has loaded) but not delete what someone else created.
+    expect(await screen.findByRole('button', { name: '+ Save view' })).toBeInTheDocument()
+    const select = screen.getByRole('combobox', { name: 'Graph perspective' })
+    await waitFor(() => expect(screen.getByText('Other Admin Global')).toBeInTheDocument())
+    await user.selectOptions(select, 'other-global')
+    await waitFor(() => expect(screen.getByTestId('params').textContent).toContain('tags=travel'))
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
   })
 
   it('cleans up stale color param when applying a perspective without colorMode', async () => {

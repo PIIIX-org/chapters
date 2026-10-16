@@ -263,8 +263,8 @@ Elara exposes 57 tools across 7 functional domains. **Capability** is the token 
 | :--- | :--- | :--- | :--- |
 | `graph` | Any (needs `vaultId` or `repositoryId`) | `read` | Graph nodes and edges (`extracted`/`structural`/`semantic`) with Louvain communities; filters `types`, `tags`, `aggregate: "community"`, `community`. |
 | `find_graph_path` | Any | `read` | Find shortest path connecting two concepts, notes, or code files in the knowledge graph. |
-| `list_graph_perspectives` | Vault/Account | `read` | List saved graph perspectives (UI presets) for a vault, or global ones (account tokens only): your own, or all for an instance admin. |
-| `save_graph_perspective` | Vault/Account | `write` | Save a graph perspective (types, tags, date range, color mode). `graph` cannot apply it. Needs edit access to the vault; a global one needs an account token and an instance admin, and is visible only to you and admins. |
+| `list_graph_perspectives` | Vault/Account | `read` | List saved graph perspectives (UI presets) for a vault, or global ones (account tokens only): your own only. |
+| `save_graph_perspective` | Vault/Account | `write` | Save a graph perspective (types, tags, date range, color mode). `graph` cannot apply it. Needs edit access to the vault; a global one needs an account token and an instance admin, and is visible only to you. |
 | `delete_graph_perspective` | Vault/Account | `write` | Delete a saved graph perspective by its ID: needs edit access, then your own or (vault owner) any; a global one only its creator. A vault-scoped token reaches only its vault's perspectives (others answer "not found"). |
 
 ### 6. Teams & Users (7 tools)

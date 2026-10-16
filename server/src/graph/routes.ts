@@ -145,7 +145,7 @@ export function graphRoutes(app: FastifyInstance) {
   // saving or deleting a vault perspective needs edit access (below that the
   // answer is 404, as on the other edit-only routes), and among editors the
   // creator deletes their own, the vault owner any. A global perspective is
-  // personal; admins see every one but delete only their own.
+  // personal: listed to and deleted by its creator only.
   app.get<{
     Querystring: { vaultId?: string }
   }>(
@@ -173,7 +173,7 @@ export function graphRoutes(app: FastifyInstance) {
       return db
         .select()
         .from(graphPerspectives)
-        .where(visibleGlobalPerspectives(req.user!))
+        .where(visibleGlobalPerspectives(req.user!.id))
         .orderBy(asc(graphPerspectives.createdAt))
     },
   )
@@ -239,9 +239,8 @@ export function graphRoutes(app: FastifyInstance) {
           return reply.code(403).send({ error: 'forbidden' })
         }
       } else if (perspective.userId !== req.user!.id) {
-        // Admins see every global perspective, so they get the honest answer.
-        if (!isInstanceAdmin(req.user!.role)) return reply.code(404).send({ error: 'not found' })
-        return reply.code(403).send({ error: 'forbidden' })
+        // Listed only to its creator, so anyone else gets the answer for a missing id.
+        return reply.code(404).send({ error: 'not found' })
       }
 
       await db.delete(graphPerspectives).where(eq(graphPerspectives.id, req.params.id))

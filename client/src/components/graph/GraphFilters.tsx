@@ -192,7 +192,8 @@ export function GraphFilters({ nodes = [], paramPrefix = '', vaultId: propVaultI
         name: newPerspectiveName.trim(),
         vaultId: effectiveVaultId || null,
         filters: { ...filters, colorMode },
-        isShared: newPerspectiveShared,
+        // A global perspective is personal: there is nobody to share it with.
+        isShared: effectiveVaultId ? newPerspectiveShared : undefined,
       })
       setPerspectives((prev) => [...prev, created])
       setSelectedPerspectiveId(created.id)
