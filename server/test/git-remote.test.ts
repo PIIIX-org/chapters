@@ -9,6 +9,8 @@ describe('git remote credentials (#383)', () => {
     'https://gho_abc123@github.com/o/r.git',
     'https://oauth2:glpat-xyz@gitlab.com/group/sub/r.git',
     'https://us%40er:p%3Ass@git.example.com/r.git',
+    // #593: an ssh:// password is a secret too (a bare ssh user is not, below).
+    'ssh://git:ssh-pass@git.example.com/o/r.git',
   ])('round-trips %s through split + authenticatedUrl', (original) => {
     const { url, credential } = splitGitUrlCredential(original)
     expect(url).not.toContain('@')
@@ -28,5 +30,26 @@ describe('git remote credentials (#383)', () => {
     const out = redactGitSecrets(text, ['x-access-token:gho_abc', 'gho_abc'])
     expect(out).not.toContain('gho_abc')
     expect(out).toContain('https://***@github.com/o/r.git/')
+  })
+
+  // #593: git or the remote can echo the password without the user part.
+  it('redacts the password of a user:password credential on its own, in every encoding', () => {
+    const out = redactGitSecrets('remote: token gho_pw123 rejected; retried with p%40s$ and p%40s%24', [
+      'x-access-token:gho_pw123',
+      'user:p@s$',
+    ])
+    expect(out).toBe('remote: token *** rejected; retried with *** and ***')
+  })
+
+  it('redacts userinfo up to the last @ of the authority, so a raw @ in a password leaves no tail', () => {
+    const out = redactGitSecrets("fatal: unable to access 'https://user:p@ss-tail@git.example.com/r.git/'", [])
+    expect(out).toBe("fatal: unable to access 'https://***@git.example.com/r.git/'")
+  })
+
+  it('redacts query values in a URL', () => {
+    const text = "fatal: unable to access 'https://git.example.com/r.git?private_token=glpat-query&x=1/': 403"
+    expect(redactGitSecrets(text, [])).toBe(
+      "fatal: unable to access 'https://git.example.com/r.git?private_token=***&x=***': 403",
+    )
   })
 })

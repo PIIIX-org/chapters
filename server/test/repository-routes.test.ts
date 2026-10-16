@@ -115,6 +115,36 @@ describe('repository CRUD + shares', () => {
     expect(again).toEqual(scrubbed)
   })
 
+  // #593: with no key the URL must keep its credential (stripping it would
+  // break the next sync), but redacting the error text needs no key.
+  it('boot scrub with no encryption key still redacts lastSyncError and leaves the remote alone', async () => {
+    const owner = await createActiveUser()
+    const url = 'https://x-access-token:gho_NOKEYLEGACY@github.com/o/nokey.git'
+    const [legacy] = await db
+      .insert(repositories)
+      .values({
+        name: 'legacy-no-key',
+        ownerId: owner.id,
+        ingestionMethod: 'git',
+        gitUrl: url,
+        lastSyncError: `fatal: unable to access '${url}/': token gho_NOKEYLEGACY rejected`,
+      })
+      .returning()
+
+    const original = config.credentialsEncryptionKey
+    config.credentialsEncryptionKey = undefined
+    try {
+      const result = await scrubStoredGitCredentials()
+      expect(result.skipped).toBeGreaterThan(0)
+    } finally {
+      config.credentialsEncryptionKey = original
+    }
+    const [row] = await db.select().from(repositories).where(eq(repositories.id, legacy!.id))
+    expect(row!.gitUrl).toBe(url)
+    expect(row!.gitCredentialEncrypted).toBeNull()
+    expect(row!.lastSyncError).toBe("fatal: unable to access 'https://***@github.com/o/nokey.git/': token *** rejected")
+  })
+
   it('rejects a local path outside the configured root', async () => {
     const owner = await createActiveUser()
     const cookie = await loginCookie(app, owner.email)

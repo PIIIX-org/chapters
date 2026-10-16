@@ -239,6 +239,57 @@ describe('listAccessibleRepositories field visibility', () => {
     expect(listed.find((r) => r.id === odd!.id)!.gitUrl).toBeNull()
   })
 
+  // #593: a token can sit outside the userinfo. A query value is served to
+  // viewers by the deep-link URL and to everyone by the sync error, and an
+  // ssh:// password came back to the owner in `gitUrl`.
+  it('serves no query-string token and no ssh password, to the owner or a viewer', async () => {
+    const owner = await createActiveUser()
+    const viewer = await createActiveUser()
+    const queryUrl = 'https://gitlab.example.com/acme/r.git?private_token=glpat-query-token-593'
+    const [query] = await db
+      .insert(repositories)
+      .values({
+        name: 'query-token',
+        ownerId: owner.id,
+        ingestionMethod: 'git',
+        gitUrl: queryUrl,
+        lastSyncError: `fatal: unable to access '${queryUrl}/': The requested URL returned error: 403`,
+      })
+      .returning()
+    const sshUrl = 'ssh://git:ssh-password-593@git.example.com/acme/r.git'
+    const [ssh] = await db
+      .insert(repositories)
+      .values({
+        name: 'ssh-password',
+        ownerId: owner.id,
+        ingestionMethod: 'git',
+        gitUrl: sshUrl,
+        lastSyncError: `fatal: could not read from '${sshUrl}': ssh-password-593 rejected`,
+      })
+      .returning()
+    for (const repo of [query!, ssh!]) {
+      await db
+        .insert(repositoryShares)
+        .values({ repositoryId: repo.id, granteeType: 'user', granteeId: viewer.id })
+    }
+
+    const asOwner = await listAccessibleRepositories(owner.id)
+    const asViewer = await listAccessibleRepositories(viewer.id)
+    for (const listed of [asOwner, asViewer]) {
+      const served = JSON.stringify(listed.filter((r) => r.id === query!.id || r.id === ssh!.id))
+      expect(served).toContain('query-token')
+      expect(served).not.toContain('glpat-query-token-593')
+      expect(served).not.toContain('ssh-password-593')
+    }
+    // The deep link needs host and path only; the owner keeps the parameter
+    // names of the remote they configured.
+    expect(asViewer.find((r) => r.id === query!.id)!.gitUrl).toBe('https://gitlab.example.com/acme/r.git')
+    expect(asOwner.find((r) => r.id === query!.id)!.gitUrl).toBe(
+      'https://gitlab.example.com/acme/r.git?private_token=***',
+    )
+    expect(asOwner.find((r) => r.id === ssh!.id)!.gitUrl).toBe('ssh://git.example.com/acme/r.git')
+  })
+
   it('keeps the owner an owner when the repository is also shared back to them', async () => {
     const owner = await createActiveUser()
     const [repo] = await db

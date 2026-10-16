@@ -36,6 +36,9 @@ import { TEST_PASSWORD, createActiveUser, loginCookie } from './helpers.js'
 
 const SECRET_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
   ['userinfo in a URL', /:\/\/[^/@\s]+:[^/@\s]+@/g],
+  // A bare token as the URL username (`https://glpat-…@host`); `ssh://git@` is too short to match.
+  ['token as URL username', /:\/\/[^/@\s:]{20,}@/g],
+  ['token in a URL query', /[?&][\w-]*(?:token|key|secret|password)[\w-]*=[^&\s'"*]/gi],
   ['GitHub token', /gh[opsu]_[A-Za-z0-9]{20,}/g],
   ['x-access-token', /x-access-token/g],
   ['PEM block', /-----BEGIN/g],
@@ -56,6 +59,33 @@ interface ScanContext {
   userAuthored: readonly string[]
 }
 
+/** How much text around a match the scanned string must share with a user text. */
+const USER_TEXT_CONTEXT = 8
+
+/**
+ * True when the match at `start` in `s` is part of text a user wrote: `s`
+ * carries the match together with at least `USER_TEXT_CONTEXT` characters
+ * around it exactly as a user text does. The matched substring alone is not
+ * enough (#593): a note mentioning `x-access-token` must not let the same
+ * word through in a sync error or any other field.
+ */
+function fromUserText(s: string, start: number, match: string, userAuthored: readonly string[]): boolean {
+  const end = start + match.length
+  for (const text of userAuthored) {
+    for (let at = text.indexOf(match); at !== -1; at = text.indexOf(match, at + 1)) {
+      let left = 0
+      while (left < start && left < at && s[start - left - 1] === text[at - left - 1]) left++
+      let right = 0
+      const textEnd = at + match.length
+      while (end + right < s.length && textEnd + right < text.length && s[end + right] === text[textEnd + right]) {
+        right++
+      }
+      if (left + right >= USER_TEXT_CONTEXT) return true
+    }
+  }
+  return false
+}
+
 /**
  * Every string in `value`, recursively: JSON inside strings is parsed and
  * base64 zips (`export_vault`) are unpacked, so nothing is scanned as an
@@ -69,7 +99,7 @@ function findSecrets(value: unknown, ctx: ScanContext): string[] {
     seen.add(s)
     for (const [label, pattern] of SECRET_PATTERNS) {
       for (const match of s.matchAll(pattern)) {
-        if (ctx.userAuthored.some((text) => text.includes(match[0]))) continue
+        if (fromUserText(s, match.index, match[0], ctx.userAuthored)) continue
         findings.add(`${label}: ${match[0]}`)
       }
     }
@@ -119,6 +149,11 @@ const LEGACY_TOKEN = ghToken('o', 'legacyUrlFixture')
 const EXPLICIT_CREDENTIAL = ghToken('p', 'explicitCredentialFixture')
 const LEGACY_WEBHOOK_SECRET = 'legacy-webhook-secret-fixture-5f2c9a1e'
 const LEGACY_URL = `https://x-access-token:${LEGACY_TOKEN}@github.com/acme/legacy.git`
+// #593: tokens that are neither `gh*_` nor in a `user:password` userinfo.
+const TOKEN_ONLY_TOKEN = ['glpat', 'tokenOnlyUrlFixture0'].join('-')
+const QUERY_TOKEN = ['glpat', 'queryStringFixture00'].join('-')
+const SSH_PASSWORD = 'ssh-password-fixture-7c1d'
+const SSH_URL = `ssh://git:${SSH_PASSWORD}@127.0.0.1:1/acme/ssh.git`
 
 // What a user pasted into their own notes and code. Comes back as written.
 const USER_NOTE = [
@@ -147,6 +182,9 @@ interface Fixture {
   cloneRepoId: string
   explicitRepoId: string
   legacyRepoId: string
+  tokenOnlyRepoId: string
+  queryRepoId: string
+  sshRepoId: string
   pushRepoId: string
   pushRepoName: string
   // Filled by write steps, consumed by destructive ones.
@@ -168,6 +206,9 @@ const secrets: string[] = [
   LEGACY_TOKEN,
   EXPLICIT_CREDENTIAL,
   LEGACY_WEBHOOK_SECRET,
+  TOKEN_ONLY_TOKEN,
+  QUERY_TOKEN,
+  SSH_PASSWORD,
   TEST_PASSWORD,
 ]
 const scanContext: ScanContext = {
@@ -283,13 +324,27 @@ beforeAll(async () => {
     gitUrl: 'https://127.0.0.1:1/acme/explicit.git',
     gitCredential: EXPLICIT_CREDENTIAL,
   })
+  // #593: a bare non-GitHub token as the URL username, and one in the query
+  // string (stored as given: it is not userinfo, so nothing moves it).
+  fx.tokenOnlyRepoId = await createRepository(ownerCookie, {
+    name: 'token-only-remote',
+    ingestionMethod: 'git',
+    gitUrl: `https://${TOKEN_ONLY_TOKEN}@127.0.0.1:1/acme/gitlab.git`,
+  })
+  fx.queryRepoId = await createRepository(ownerCookie, {
+    name: 'query-token-remote',
+    ingestionMethod: 'git',
+    gitUrl: `https://127.0.0.1:1/acme/query.git?private_token=${QUERY_TOKEN}`,
+  })
   // Creation starts a sync in the background without exposing it; one more,
   // awaited, guarantees git's error text is on the row before anything reads it.
-  for (const id of [fx.cloneRepoId, fx.explicitRepoId]) await syncGitRepository(id).catch(() => {})
+  for (const id of [fx.cloneRepoId, fx.explicitRepoId, fx.tokenOnlyRepoId, fx.queryRepoId]) {
+    await syncGitRepository(id).catch(() => {})
+  }
 
   // A row stored before #383 was fixed and never scrubbed (the boot scrub
   // leaves a row alone when no encryption key is set): the token is still in
-  // the URL and in the clone error git wrote at the time.
+  // the URL and in the clone error git wrote at the time, once on its own.
   const [legacy] = await db
     .insert(repositories)
     .values({
@@ -298,11 +353,25 @@ beforeAll(async () => {
       ingestionMethod: 'git',
       gitUrl: LEGACY_URL,
       syncStatus: 'error',
-      lastSyncError: `fatal: unable to access '${LEGACY_URL}/': The requested URL returned error: 403`,
+      lastSyncError: `fatal: unable to access '${LEGACY_URL}/': The requested URL returned error: 403\nremote: token ${LEGACY_TOKEN} is revoked`,
       webhookSecretEncrypted: encryptCredential(LEGACY_WEBHOOK_SECRET),
     })
     .returning()
   fx.legacyRepoId = legacy!.id
+  // The same for an ssh:// remote with a password, inserted directly: a
+  // background ssh sync could wait on a prompt.
+  const [ssh] = await db
+    .insert(repositories)
+    .values({
+      name: 'ssh-password-remote',
+      ownerId: owner.id,
+      ingestionMethod: 'git',
+      gitUrl: SSH_URL,
+      syncStatus: 'error',
+      lastSyncError: `fatal: Could not read from remote repository '${SSH_URL}'`,
+    })
+    .returning()
+  fx.sshRepoId = ssh!.id
 
   fx.pushRepoName = 'push-repo'
   fx.pushRepoId = await createRepository(ownerCookie, { name: fx.pushRepoName, ingestionMethod: 'agent_push' })
@@ -336,6 +405,9 @@ beforeAll(async () => {
   await db.insert(repositoryShares).values([
     { repositoryId: fx.cloneRepoId, granteeType: 'user', granteeId: viewer.id },
     { repositoryId: fx.legacyRepoId, granteeType: 'user', granteeId: viewer.id },
+    { repositoryId: fx.tokenOnlyRepoId, granteeType: 'user', granteeId: viewer.id },
+    { repositoryId: fx.queryRepoId, granteeType: 'user', granteeId: viewer.id },
+    { repositoryId: fx.sshRepoId, granteeType: 'user', granteeId: viewer.id },
     { repositoryId: fx.pushRepoId, granteeType: 'team', granteeId: fx.teamId },
   ])
   const [notification] = await db
@@ -382,7 +454,17 @@ beforeAll(async () => {
   for (const r of await db
     .select({ credential: repositories.gitCredentialEncrypted, webhook: repositories.webhookSecretEncrypted })
     .from(repositories)
-    .where(inArray(repositories.id, [fx.cloneRepoId, fx.explicitRepoId, fx.legacyRepoId, fx.pushRepoId]))) {
+    .where(
+      inArray(repositories.id, [
+        fx.cloneRepoId,
+        fx.explicitRepoId,
+        fx.legacyRepoId,
+        fx.tokenOnlyRepoId,
+        fx.queryRepoId,
+        fx.sshRepoId,
+        fx.pushRepoId,
+      ]),
+    )) {
     if (r.credential) secrets.push(r.credential)
     if (r.webhook) secrets.push(r.webhook)
   }
@@ -405,45 +487,62 @@ interface Step {
   tool: string
   args: () => Args | Promise<Args>
   capture?: (result: unknown) => void | Promise<void>
+  /**
+   * Text the owner account's response must contain: a tool that returns
+   * nothing has nothing to leak, so an empty result must not pass the scan.
+   */
+  contains?: string
 }
 
 // Reads run first, as every caller; nothing they touch has been changed yet.
 const readSteps: Step[] = [
-  { tool: 'list_vaults', args: () => ({}) },
-  { tool: 'browse_vault', args: () => ({ vaultId: fx.vaultId }) },
-  { tool: 'browse_vault', args: () => ({ vaultId: fx.vaultId, path: 'docs' }) },
+  { tool: 'list_vaults', args: () => ({}), contains: 'secret-scan vault' },
+  { tool: 'browse_vault', args: () => ({ vaultId: fx.vaultId }), contains: 'docs' },
+  { tool: 'browse_vault', args: () => ({ vaultId: fx.vaultId, path: 'docs' }), contains: 'credentials' },
   { tool: 'get_vault_graph_preference', args: () => ({ vaultId: fx.vaultId }) },
   { tool: 'get_vault_preferences', args: () => ({}) },
   { tool: 'list_vault_shares', args: () => ({ vaultId: fx.vaultId }) },
-  { tool: 'read_note', args: () => ({ vaultId: fx.vaultId, path: 'docs/credentials' }) },
+  { tool: 'read_note', args: () => ({ vaultId: fx.vaultId, path: 'docs/credentials' }), contains: 'wiki login' },
   { tool: 'note_history', args: () => ({ vaultId: fx.vaultId, path: 'docs/credentials' }) },
-  { tool: 'list_trash', args: () => ({ vaultId: fx.vaultId }) },
-  { tool: 'export_vault', args: () => ({ vaultId: fx.vaultId }) },
+  { tool: 'list_trash', args: () => ({ vaultId: fx.vaultId }), contains: 'docs/scratch' },
+  { tool: 'export_vault', args: () => ({ vaultId: fx.vaultId }), contains: 'UEsDB' },
   { tool: 'export_note', args: () => ({ vaultId: fx.vaultId, path: 'docs/credentials' }) },
   { tool: 'audit_okf_conformance', args: () => ({ vaultId: fx.vaultId }) },
-  { tool: 'list_repositories', args: () => ({}) },
-  { tool: 'browse_repository', args: () => ({ repositoryId: fx.pushRepoId }) },
-  { tool: 'read_file', args: () => ({ repositoryId: fx.pushRepoId, path: 'src/service.ts' }) },
+  { tool: 'list_repositories', args: () => ({}), contains: 'ssh-password-remote' },
+  { tool: 'browse_repository', args: () => ({ repositoryId: fx.pushRepoId }), contains: 'service.ts' },
+  {
+    tool: 'read_file',
+    args: () => ({ repositoryId: fx.pushRepoId, path: 'src/service.ts' }),
+    contains: 'AWS_EXAMPLE_KEY',
+  },
   { tool: 'repository_status', args: () => ({ repositoryId: fx.cloneRepoId }) },
   { tool: 'repository_status', args: () => ({ repositoryId: fx.explicitRepoId }) },
-  { tool: 'repository_status', args: () => ({ repositoryId: fx.legacyRepoId }) },
+  { tool: 'repository_status', args: () => ({ repositoryId: fx.legacyRepoId }), contains: 'revoked' },
+  { tool: 'repository_status', args: () => ({ repositoryId: fx.tokenOnlyRepoId }) },
+  { tool: 'repository_status', args: () => ({ repositoryId: fx.queryRepoId }) },
+  { tool: 'repository_status', args: () => ({ repositoryId: fx.sshRepoId }), contains: 'Could not read' },
   { tool: 'repository_status', args: () => ({ repositoryId: fx.pushRepoId }) },
   { tool: 'get_repository_graph_preference', args: () => ({ repositoryId: fx.pushRepoId }) },
   { tool: 'list_repository_shares', args: () => ({ repositoryId: fx.cloneRepoId }) },
   { tool: 'list_repository_shares', args: () => ({ repositoryId: fx.legacyRepoId }) },
-  { tool: 'list_teams', args: () => ({}) },
+  { tool: 'list_teams', args: () => ({}), contains: 'secret-scan team' },
   { tool: 'list_team_members', args: () => ({ teamId: fx.teamId }) },
   { tool: 'lookup_user', args: () => ({ email: fx.viewerEmail }) },
-  { tool: 'list_notifications', args: () => ({}) },
-  { tool: 'search', args: () => ({ query: 'credentials', vaultId: fx.vaultId }) },
-  { tool: 'search', args: () => ({ query: 'helper', repositoryId: fx.pushRepoId }) },
-  { tool: 'search', args: () => ({ query: 'legacy remote credentials', everywhere: true }) },
-  { tool: 'find_symbols', args: () => ({ query: 'run', everywhere: true }) },
-  { tool: 'graph', args: () => ({ vaultId: fx.vaultId }) },
-  { tool: 'graph', args: () => ({ repositoryId: fx.pushRepoId }) },
+  { tool: 'list_notifications', args: () => ({}), contains: 'was shared with you' },
+  {
+    tool: 'search',
+    args: () => ({ query: 'credentials', vaultId: fx.vaultId }),
+    contains: 'docs/credentials',
+  },
+  { tool: 'search', args: () => ({ query: 'helper', repositoryId: fx.pushRepoId }), contains: 'src/helper.ts' },
+  { tool: 'search', args: () => ({ query: 'credentials', everywhere: true }), contains: 'docs/credentials' },
+  { tool: 'find_symbols', args: () => ({ query: 'run', everywhere: true }), contains: '"name":"run"' },
+  { tool: 'graph', args: () => ({ vaultId: fx.vaultId }), contains: 'docs/credentials' },
+  { tool: 'graph', args: () => ({ repositoryId: fx.pushRepoId }), contains: 'src/service.ts' },
   {
     tool: 'find_graph_path',
     args: () => ({ vaultId: fx.vaultId, source: 'docs/roadmap', target: 'docs/credentials' }),
+    contains: 'docs/roadmap',
   },
   { tool: 'list_graph_perspectives', args: () => ({ vaultId: fx.vaultId }) },
   { tool: 'list_graph_perspectives', args: () => ({}) },
@@ -587,6 +686,8 @@ describe('MCP secret scan (#577)', () => {
     }
     const samples = [
       'https://user:pass@github.com/o/r.git',
+      `https://${['glpat', 'x'.repeat(20)].join('-')}@gitlab.com/o/r.git`,
+      'https://gitlab.com/o/r.git?private_token=abc',
       ghToken('o', 'sample'),
       `ghs_${'s'.repeat(30)}`,
       'x-access-token',
@@ -604,6 +705,23 @@ describe('MCP secret scan (#577)', () => {
     zip.addFile('docs/note.md', Buffer.from(`token: ${ghToken('p', 'zipped')}`))
     expect(findSecrets({ zipBase64: zip.toBuffer().toString('base64') }, ctx)).not.toEqual([])
     expect(findSecrets('pasted https://bob:hunter2@intranet.example.com/x', ctx)).toEqual([])
+  })
+
+  // #593: the allowance belonged to the matched substring, so one note
+  // mentioning `x-access-token` let that word through in every response.
+  it('lets a pattern match through only in the text a user wrote, not in another field', () => {
+    const note = 'The deploy note says x-access-token is the username for the bot.'
+    const ctx: ScanContext = {
+      secrets: ['exact-fixture-secret-value'],
+      userAuthored: [note, 'pasted exact-fixture-secret-value'],
+    }
+    expect(findSecrets({ body: note }, ctx)).toEqual([])
+    expect(findSecrets(JSON.stringify({ body: note }), ctx)).toEqual([])
+    expect(findSecrets({ body: note, lastSyncError: 'auth failed for x-access-token' }, ctx)).toEqual([
+      'x-access-token: x-access-token',
+    ])
+    // Exact fixture values are never allowed, not even inside user text.
+    expect(findSecrets('pasted exact-fixture-secret-value', ctx)).not.toEqual([])
   })
 
   it('every registered tool has a fixture step', async () => {
@@ -666,6 +784,9 @@ describe('MCP secret scan (#577)', () => {
       if (result.isError) {
         failures.push(`${step.tool}: ${textOf(result)}`)
         return
+      }
+      if (step.contains && !textOf(result).includes(step.contains)) {
+        failures.push(`${step.tool}: expected "${step.contains}" in ${textOf(result).slice(0, 300)}`)
       }
       if (step.capture) {
         try {
