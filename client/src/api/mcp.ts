@@ -41,6 +41,8 @@ export interface McpToolInfo {
   name: string
   scope: 'account' | 'vault' | 'vault-or-account' | 'repository' | 'repository-or-account' | 'vault-or-repo'
   capability: McpAccess
+  /** The user's permission on a pinned vault or repository that the tool needs (#649). */
+  pinPermission: 'read' | 'edit' | 'owner'
 }
 
 // Only the create response carries the raw token, and only once.

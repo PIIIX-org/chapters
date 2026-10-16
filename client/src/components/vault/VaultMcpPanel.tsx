@@ -21,12 +21,18 @@ import {
   useRevokeMcpConnection,
 } from '../../hooks/useMcpConnections.js'
 import type { McpAccess, McpConnection, McpTarget, McpToolInfo } from '../../api/mcp.js'
+import type { VaultAccess } from '../../api/vaults.js'
 
 // Native <select>, same as the sharing panels — no shadcn select is installed.
 const selectClassName =
   'h-9 sm:h-8 rounded-lg border border-input bg-transparent px-2 text-sm sm:text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50'
 
 const ACCESS_RANK: Record<McpAccess, number> = { read: 0, write: 1, admin: 2 }
+const ACCESS_LEVELS: McpAccess[] = ['read', 'write', 'admin']
+// The API refuses a vault token above its minter's permission on the vault (#649).
+const MAX_ACCESS_FOR_VAULT: Record<VaultAccess, McpAccess> = { owner: 'admin', edit: 'write', read: 'read' }
+// A tool's `pinPermission` is the vault permission its handler requires; ranked like VaultAccess.
+const PERMISSION_RANK: Record<VaultAccess, number> = { read: 1, edit: 2, owner: 3 }
 const ACCESS_LABEL: Record<McpAccess, string> = {
   read: 'Read only',
   write: 'Read and write',
@@ -159,18 +165,22 @@ function McpConnectionRow({ connection, reach }: { connection: McpConnection; re
 
 function CreateMcpConnectionForm({
   target,
-  canGrantAdmin,
+  vaultAccess,
   onCreated,
 }: {
   target: McpTarget
-  canGrantAdmin: boolean
+  /** The user's permission on the target vault; null for an account token. */
+  vaultAccess: VaultAccess | null
   onCreated: (token: string, name: string) => void
 }) {
   const copy = COPY[target.scope]
   const [name, setName] = useState('')
-  const [access, setAccess] = useState<McpAccess>(copy.defaultAccess)
-  // The API refuses admin on a vault token to anyone but the vault's owner, so it is not offered.
-  const levels: McpAccess[] = canGrantAdmin ? ['read', 'write', 'admin'] : ['read', 'write']
+  // Levels above what the API grants this user are not offered.
+  const maxAccess: McpAccess = vaultAccess ? MAX_ACCESS_FOR_VAULT[vaultAccess] : 'admin'
+  const levels = ACCESS_LEVELS.filter((level) => ACCESS_RANK[level] <= ACCESS_RANK[maxAccess])
+  const [access, setAccess] = useState<McpAccess>(
+    ACCESS_RANK[copy.defaultAccess] <= ACCESS_RANK[maxAccess] ? copy.defaultAccess : maxAccess,
+  )
   const [expiryDays, setExpiryDays] = useState(0)
   const [limitTools, setLimitTools] = useState(false)
   const [allowedTools, setAllowedTools] = useState<string[]>([])
@@ -178,9 +188,13 @@ function CreateMcpConnectionForm({
   const createConnection = useCreateMcpConnection(target)
   const toolsQuery = useMcpTools(limitTools)
 
-  // Tools this token could call at all: within its access level and its scope.
+  // Tools this token could call at all: within its access level and its scope,
+  // and for a vault token within the user's own permission on the vault.
   const offered = (toolsQuery.data ?? []).filter(
-    (t) => ACCESS_RANK[t.capability] <= ACCESS_RANK[access] && (target.scope === 'account' || VAULT_TOOL_SCOPES[t.scope] === true),
+    (t) =>
+      ACCESS_RANK[t.capability] <= ACCESS_RANK[access] &&
+      (vaultAccess === null ||
+        (VAULT_TOOL_SCOPES[t.scope] === true && PERMISSION_RANK[t.pinPermission] <= PERMISSION_RANK[vaultAccess])),
   )
 
   function handleSubmit(e: FormEvent) {
@@ -314,9 +328,10 @@ function CreateMcpConnectionForm({
 /**
  * One list, two scopes. The account-wide settings list and the vault settings
  * list are literally this component — only the target and the copy differ.
- * `canGrantAdmin` defaults to true for the account scope only.
+ * `vaultAccess`, the user's permission on the vault (default edit), bounds
+ * the levels and tools a vault token is offered.
  */
-export function McpPanel(props: McpTarget & { canGrantAdmin?: boolean }) {
+export function McpPanel(props: McpTarget & { vaultAccess?: VaultAccess }) {
   // Only the target goes into the create request, never the panel's own props.
   const target: McpTarget = props.scope === 'vault' ? { scope: 'vault', vaultId: props.vaultId } : { scope: 'account' }
   const connectionsQuery = useMcpConnections()
@@ -376,7 +391,7 @@ export function McpPanel(props: McpTarget & { canGrantAdmin?: boolean }) {
 
         <CreateMcpConnectionForm
           target={target}
-          canGrantAdmin={props.canGrantAdmin ?? target.scope === 'account'}
+          vaultAccess={target.scope === 'vault' ? (props.vaultAccess ?? 'edit') : null}
           onCreated={(token, name) => setRevealed({ token, name })}
         />
       </PanelBody>
@@ -384,7 +399,7 @@ export function McpPanel(props: McpTarget & { canGrantAdmin?: boolean }) {
   )
 }
 
-/** The vault settings modal's call site; only the vault's owner can grant a token admin. */
-export function VaultMcpPanel({ vaultId, isOwner }: { vaultId: string; isOwner: boolean }) {
-  return <McpPanel scope="vault" vaultId={vaultId} canGrantAdmin={isOwner} />
+/** The vault settings modal's call site: a token gets at most the user's own permission on the vault. */
+export function VaultMcpPanel({ vaultId, access }: { vaultId: string; access: VaultAccess }) {
+  return <McpPanel scope="vault" vaultId={vaultId} vaultAccess={access} />
 }

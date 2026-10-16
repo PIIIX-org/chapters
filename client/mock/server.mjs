@@ -2042,7 +2042,10 @@ put('/repositories/:id/graph-preference', ({ params, body }) => {
 })
 
 // --- mcp connections --------------------------------------------------------
-// Mirrors listMcpTools() on the server: [name, scope, capability].
+// Mirrors listMcpTools() on the server: [name, scope, capability], plus the
+// permission on a pinned vault or repository each tool needs (pinPermission).
+const MCP_PIN_OWNER = ['update_vault', 'delete_vault', 'list_vault_shares', 'share_vault', 'revoke_vault_share', 'purge_note', 'purge_revision', 'update_repository', 'delete_repository', 'list_repository_shares', 'share_repository', 'revoke_repository_share']
+const MCP_PIN_EDIT = ['create_note', 'edit_note', 'rename_note', 'delete_note', 'list_trash', 'restore_note', 'note_history', 'revert_note', 'export_vault', 'save_graph_perspective', 'delete_graph_perspective']
 const MCP_TOOLS = [
   ['list_vaults', 'account', 'read'], ['create_vault', 'account', 'write'], ['browse_vault', 'vault', 'read'],
   ['update_vault', 'vault', 'admin'], ['get_vault_graph_preference', 'vault', 'read'],
@@ -2070,7 +2073,12 @@ const MCP_TOOLS = [
   ['find_graph_path', 'vault-or-repo', 'read'], ['list_graph_perspectives', 'vault-or-account', 'read'],
   ['save_graph_perspective', 'vault-or-account', 'write'], ['delete_graph_perspective', 'vault-or-account', 'write'],
   ['audit_okf_conformance', 'vault', 'read'],
-].map(([name, scope, capability]) => ({ name, scope, capability }))
+].map(([name, scope, capability]) => ({
+  name,
+  scope,
+  capability,
+  pinPermission: MCP_PIN_OWNER.includes(name) ? 'owner' : MCP_PIN_EDIT.includes(name) ? 'edit' : 'read',
+}))
 get('/mcp-connections', () => mcpConnections.filter((c) => c.userId === ME.id).map(publicMcp))
 get('/mcp-connections/tools', () => MCP_TOOLS)
 post('/mcp-connections', ({ body }) => {

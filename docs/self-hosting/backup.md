@@ -20,7 +20,7 @@ BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
 mkdir -p ./backups/${BACKUP_DATE}
 
 # 2. Dump the PostgreSQL database
-docker compose exec -T db pg_dump -U ${POSTGRES_USER:-chapters} ${POSTGRES_DB:-chapters} > ./backups/${BACKUP_DATE}/chapters-db.sql
+docker compose exec -T db pg_dump -U ${POSTGRES_USER:-elara} ${POSTGRES_DB:-elara} > ./backups/${BACKUP_DATE}/chapters-db.sql
 
 # 3. Archive the files volume (raw markdown files & vaults)
 docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/${BACKUP_DATE}:/backup alpine tar czf /backup/chapters-data.tar.gz -C /data .
@@ -49,7 +49,7 @@ docker compose up -d db
 docker compose exec db pg_isready
 
 # 2. Restore PostgreSQL database
-docker compose exec -T db psql -U ${POSTGRES_USER:-chapters} -d ${POSTGRES_DB:-chapters} < ./backups/<TIMESTAMP>/chapters-db.sql
+docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} < ./backups/<TIMESTAMP>/chapters-db.sql
 
 # 3. Restore the data volume (raw markdown notes)
 docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/<TIMESTAMP>:/backup alpine tar xzf /backup/chapters-data.tar.gz -C /data
@@ -92,3 +92,28 @@ docker compose exec app pnpm check-notes
 It prints one `BROKEN` line per problem: a missing file (`missing-file`), damaged frontmatter (`unparseable`), or a file whose frontmatter or body differs from the database row (`frontmatter-mismatch`, `body-mismatch`, e.g. when the database and the files were restored from different points in time). It exits with code 1 if there are any. A clean restore ends with `checked N notes, 0 broken`.
 
 If someone is editing while it runs, a note being saved at that moment can show up as a mismatch once. Run the check again before acting on a single mismatch.
+
+---
+
+## 5. Rolling Back to an Older Release
+
+Database migrations only run forward. Going back to an older image keeps the newer schema, so take a backup (section 1) before every upgrade: restoring it is the clean way back. If you run older code against the newer schema instead, apply the step below for every release you roll back over.
+
+- **Migrations 0019 and 0020 (MCP token capabilities, #548, #549)** add `mcp_connections.access` as `NOT NULL` and then drop its default. Code from before 0019 does not set `access` when it mints a token, so every new MCP connection fails until the column has its default back. Run this before starting the older code:
+
+  ```bash
+  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "ALTER TABLE mcp_connections ALTER COLUMN access SET DEFAULT 'write'"
+  ```
+
+  The older code does not read `access` or `allowed_tools`, so read-only and allow-listed tokens get every tool of their scope while it runs. Revoke any of those you would not trust with more. Note the time you rolled back.
+
+  When you upgrade again, the newer code runs no migration (0019 and 0020 are already applied) and always names a level, so the restored default does no harm. Two things to put back:
+
+  ```bash
+  # Account tokens minted while rolled back got 'write'; 0019 gives account tokens 'admin'.
+  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "UPDATE mcp_connections SET access = 'admin' WHERE scope = 'account' AND created_at > '<rollback time, e.g. 2026-10-20T12:00:00Z>'"
+  # Back to the schema 0020 left: no default, so an insert that forgets the level fails.
+  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "ALTER TABLE mcp_connections ALTER COLUMN access DROP DEFAULT"
+  ```
+
+  Pinned tokens minted while rolled back keep `write`. The newer code lists and runs on them only what the user's permission on the pin allows, so a read-only member's token is not widened.

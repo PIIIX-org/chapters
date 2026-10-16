@@ -6,6 +6,7 @@ import { mockJsonResponse } from '../../lib/api'
 import { expectNoA11yViolations } from '../../test/axe'
 import { McpPanel, VaultMcpPanel } from './VaultMcpPanel'
 import type { McpConnection, McpToolInfo } from '../../api/mcp'
+import type { VaultAccess } from '../../api/vaults'
 
 const ACCOUNT_SCOPED: McpConnection = {
   id: 'c-account',
@@ -50,11 +51,13 @@ const THIS_VAULT: McpConnection = {
 }
 
 const TOOLS: McpToolInfo[] = [
-  { name: 'list_vaults', scope: 'account', capability: 'read' },
-  { name: 'read_note', scope: 'vault', capability: 'read' },
-  { name: 'create_note', scope: 'vault', capability: 'write' },
-  { name: 'share_vault', scope: 'vault', capability: 'admin' },
-  { name: 'search', scope: 'vault-or-repo', capability: 'read' },
+  { name: 'list_vaults', scope: 'account', capability: 'read', pinPermission: 'read' },
+  { name: 'read_note', scope: 'vault', capability: 'read', pinPermission: 'read' },
+  { name: 'list_trash', scope: 'vault', capability: 'read', pinPermission: 'edit' },
+  { name: 'list_vault_shares', scope: 'vault', capability: 'read', pinPermission: 'owner' },
+  { name: 'create_note', scope: 'vault', capability: 'write', pinPermission: 'edit' },
+  { name: 'share_vault', scope: 'vault', capability: 'admin', pinPermission: 'owner' },
+  { name: 'search', scope: 'vault-or-repo', capability: 'read', pinPermission: 'read' },
 ]
 
 function postBody(fetchMock: Mock): Record<string, unknown> {
@@ -118,11 +121,11 @@ function stubFetch(opts: {
   return fetchMock
 }
 
-function renderPanel(vaultId = 'v1', isOwner = true) {
+function renderPanel(vaultId = 'v1', access: VaultAccess = 'owner') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
-      <VaultMcpPanel vaultId={vaultId} isOwner={isOwner} />
+      <VaultMcpPanel vaultId={vaultId} access={access} />
     </QueryClientProvider>,
   )
 }
@@ -212,7 +215,7 @@ describe('VaultMcpPanel', () => {
   it('a vault member who is not its owner is not offered admin (the API would refuse it)', async () => {
     const fetchMock = stubFetch({ connections: [] })
     const user = userEvent.setup()
-    renderPanel('v1', false)
+    renderPanel('v1', 'edit')
 
     await screen.findByText('No MCP connections for this vault yet.')
     const options = within(screen.getByLabelText('Access')).getAllByRole('option')
@@ -221,6 +224,21 @@ describe('VaultMcpPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
     expect(postBody(fetchMock)).toEqual({ name: 'Member agent', scope: 'vault', vaultId: 'v1', access: 'write' })
+  })
+
+  it('a member with a read-only share is offered read only, the default (#649)', async () => {
+    const fetchMock = stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderPanel('v1', 'read')
+
+    await screen.findByText('No MCP connections for this vault yet.')
+    expect(screen.getByLabelText('Access')).toHaveValue('read')
+    const options = within(screen.getByLabelText('Access')).getAllByRole('option')
+    expect(options.map((o) => o.getAttribute('value'))).toEqual(['read'])
+    await user.type(screen.getByLabelText('New connection'), 'Reader agent')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
+    expect(postBody(fetchMock)).toEqual({ name: 'Reader agent', scope: 'vault', vaultId: 'v1', access: 'read' })
   })
 
   it('an account token defaults to read and write, admin stays available, without the pinned-token warning', async () => {
@@ -267,6 +285,34 @@ describe('VaultMcpPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
     expect(postBody(fetchMock)).toEqual({ name: 'Limited', scope: 'vault', vaultId: 'v1', access: 'write', allowedTools: ['read_note'] })
+  })
+
+  it("the allow-list leaves out tools that need more than the user's own permission on the vault (#649)", async () => {
+    stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderPanel('v1', 'read')
+
+    await screen.findByText('No MCP connections for this vault yet.')
+    await user.click(screen.getByLabelText('Limit this token to specific tools'))
+    const group = await screen.findByRole('group', { name: 'Allowed tools' })
+    await within(group).findByLabelText(/read_note/)
+    expect(within(group).getByLabelText(/search/)).toBeInTheDocument()
+    // list_trash needs edit permission, list_vault_shares ownership: a read-only member gets neither.
+    expect(within(group).queryByLabelText(/list_trash/)).toBeNull()
+    expect(within(group).queryByLabelText(/list_vault_shares/)).toBeNull()
+  })
+
+  it('an editor is offered the edit-gated tools but not the owner-only ones', async () => {
+    stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderPanel('v1', 'edit')
+
+    await screen.findByText('No MCP connections for this vault yet.')
+    await user.click(screen.getByLabelText('Limit this token to specific tools'))
+    const group = await screen.findByRole('group', { name: 'Allowed tools' })
+    await within(group).findByLabelText(/list_trash/)
+    expect(within(group).getByLabelText(/create_note/)).toBeInTheDocument()
+    expect(within(group).queryByLabelText(/list_vault_shares/)).toBeNull()
   })
 
   it('the list shows each token\'s access, allow-list and expiry', async () => {

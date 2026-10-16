@@ -267,16 +267,30 @@ storage, resolved on every request via a Fastify `onRequest` hook.
   `repository`. `POST /mcp-connections` also takes the token's
   capabilities (#548, #549), which no route changes later: `access`
   (`read` | `write` | `admin`; default `admin` for an account token,
-  `write` for a pinned one; `admin` on a pinned token needs the minting
-  user to own the pinned vault or repository, else 403),
+  `write` for a pinned one). A pinned token is capped at the minting
+  user's permission on the pin (#649): `admin` needs ownership (403
+  `admin access on a <scope>-pinned connection requires owning the
+  <scope>`), `write` needs an edit share on a vault (a read-only vault
+  share, direct or through a team, gets 403 `write access on a
+  vault-pinned connection requires edit permission on the vault; you
+  have read permission, so mint a read token`); a repository share
+  allows `write`. An omitted level takes the pin default lowered to the
+  cap, so a read-only member's token is `read`.
   `allowedTools` (names checked against `listMcpTools()`, 400 for an
   unknown one) and `expiresAt` (ISO time, must be in the future).
-  The Settings and vault forms always send a level, starting at `write`,
-  and the vault form offers `admin` only to the vault's owner (#641).
+  The Settings and vault forms always send a level. The vault form
+  offers only the levels the route grants (`admin` to the owner, up to
+  `write` to an editor, `read` alone to a read-only member) and starts
+  at `write`, or at `read` for a read-only member; its allow-list picker
+  leaves out tools whose `pinPermission` is above the user's permission.
   `GET /mcp-connections/tools` returns `listMcpTools()` (name, scope,
-  capability) for the Settings allow-list picker. Migration 0019 set
+  capability, pinPermission) for the allow-list picker. Migration 0019 set
   existing account tokens to `admin` and left existing pinned tokens at
-  `write`; a restore of an older dump applies the same rule. Migration
+  `write`, whoever minted them; a restore of an older dump applies the
+  same rule. Such a token held by a read-only member keeps `write` in
+  the database, but `tools/list` filters by the live permission (§5.8),
+  and every call is refused by the handler's own permission check, so no
+  data migration is needed. Migration
   0020 dropped the column default, so every insert names its level.
   Resolution (`resolveMcpToken`) is fully live — a revoked, expired, or
   now-inactive-owner token never resolves regardless of when it was
@@ -516,11 +530,12 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   than arguments stay inside the pin too: `audit_okf_conformance` on a
   vault token reports every `[[repo:...]]` link as broken without
   looking the repository up (a vault pin reaches no repository).
-  `test/mcp-scope.test.ts` calls every tool from `tools/list` with a
-  vault-pinned and a repository-pinned token (another vault/repository
-  id, no id, `everywhere`), checks that confined calls still return
-  their own data, and fails on a tool with no case there: **a new tool
-  needs a case there**.
+  `test/mcp-scope.test.ts` takes its tool list from an admin account
+  token's `tools/list` (a pinned token's list is filtered, #641), calls
+  every tool with a vault-pinned and a repository-pinned token (another
+  vault/repository id, no id, `everywhere`), checks that confined calls
+  still return their own data, and fails on a tool with no case there:
+  **a new tool needs a case there**.
 - **Capabilities** (`server.ts`, #548, #549): every `tool()` also
   declares `capability: 'read' | 'write' | 'admin'`, and the wrapper
   checks the connection before the scope: the tool must be in
@@ -534,17 +549,39 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `remove_team_member`, `delete_team`. `write` tools create, edit,
   trash, restore or revert; the rest are `read`. A pinned token is
   `write` unless its owner minted it `admin`, so by default it cannot
-  share, update, trash or purge its pin or erase history. Prompts are
+  share, update, trash or purge its pin or erase history. A pinned
+  token never gets more than its minter's permission on the pin (#649):
+  `admin` only for the owner, `write` for an edit share on a vault or
+  any access to a repository, `read` for a read-only vault share. An
+  explicit `access` above that is refused (403, the message names the
+  permission needed); an omitted one takes the pin default (`write`)
+  lowered to it. Prompts are
   not registered for a connection with an allow-list (they read notes
   outside `tool()`). `tools/list` advertises only the tools the
   connection can call (#641): in its allow-list, within its access level
   and of a scope class its scope reaches (`account` tools for account
   tokens only, `vault`/`vault-or-account` not for repository tokens,
-  `repository`/`repository-or-account` not for vault tokens). Every tool
+  `repository`/`repository-or-account` not for vault tokens). For a
+  pinned token it also leaves out every tool whose `pinPermission` is
+  above the user's live permission on the pin (#649): `owner` for the
+  12 tools whose handler calls `requireVaultOwner` /
+  `requireRepositoryOwner` (share listing, share, revoke, update,
+  delete, both purges), `edit` for the 11 whose handler calls
+  `requireAccess(…, 'edit')` (note writes, `list_trash`,
+  `note_history`, `export_vault`, saving and deleting perspectives),
+  `read` (any access) for the rest; a repository viewer meets `edit`.
+  The permission is read with one `resolveAccess` /
+  `resolveRepositoryAccess` per `tools/list` (skipped for an account
+  token or when the static filters leave nothing), so an ownership
+  transfer, a share change or a token older than the mint cap is
+  reflected on the next request; a user with no access left sees an
+  empty list. Every tool
   stays registered, so calling a hidden one still returns the refusal
   above. `listMcpTools()` builds the catalog once from the
   registrations; `test/mcp-tool-capabilities.test.ts` pins the admin
-  set, `test/mcp-capabilities.test.ts` covers each rule and
+  set and the `owner`/`edit` pin-permission sets (a new tool whose
+  handler checks owner or edit permission must declare `pinPermission`),
+  `test/mcp-capabilities.test.ts` covers each rule and
   `test/mcp-tool-visibility.test.ts` the filtered `tools/list`.
 - **Tools** (57, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):

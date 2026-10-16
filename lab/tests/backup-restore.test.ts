@@ -189,7 +189,16 @@ const test: LabTest = {
     const liveToken = await ctx.mintToken('admin', 'br-live-token')
     const revokedToken = await ctx.mintToken('admin', 'br-revoked-token')
     await admin.must('POST', `/api/mcp-connections/${revokedToken.id}/revoke`, {})
-    if (process.env.GITHUB_ACTIONS) console.log(`::add-mask::${liveToken.token}\n::add-mask::${revokedToken.token}`)
+    // Its own check below: the table-wide mcp_connections comparison is a known
+    // failure (#409), which would hide a lost access level, allow-list or expiry (#649).
+    const cappedExpiry = new Date(Date.now() + 30 * 24 * 3600_000).toISOString()
+    const cappedToken = await ctx.mintToken('admin', 'br-capped-token', 'vault', {
+      vaultId: V,
+      access: 'read',
+      allowedTools: ['read_note', 'search'],
+      expiresAt: cappedExpiry,
+    })
+    if (process.env.GITHUB_ACTIONS) console.log(`::add-mask::${liveToken.token}\n::add-mask::${revokedToken.token}\n::add-mask::${cappedToken.token}`)
 
     const mfaEmail = `${ctx.uniq('mfa')}@example.com`
     const mfaPassword = `Lab-${crypto.randomUUID()}`
@@ -489,6 +498,17 @@ const test: LabTest = {
         const note = same(t) ? '' : (patchNote[t] ?? '')
         checks.push({ name: `restored ${t} identical (ids, hashes, flags)`, expected: `${row(t).source}`, actual: `${row(t).restored} restored, ${row(t).missingOrChanged} missing/changed${note}`, ok: same(t), severity: t === 'vaults' || t === 'users' ? 'high' : 'medium', detail: row(t) })
       }
+      const cappedQuery = `select id, scope, vault_id, token_hash, access, allowed_tools, floor(extract(epoch from expires_at) * 1000)::bigint as expires_at_ms, revoked_at is not null as revoked from mcp_connections where id = '${cappedToken.id}'`
+      const [cappedSource] = await ctx.docker.psqlRows<Record<string, unknown>>(cappedQuery)
+      const [cappedRestored] = await rq(cappedQuery)
+      const shown = (r: Record<string, unknown> | undefined) => (r ? JSON.stringify({ ...r, token_hash: '<hash>' }) : 'missing')
+      checks.push({
+        name: 'restored read-only token keeps its access, allow-list and expiry',
+        expected: shown(cappedSource),
+        actual: shown(cappedRestored),
+        ok: Boolean(cappedSource && cappedRestored) && JSON.stringify(cappedSource) === JSON.stringify(cappedRestored),
+        severity: 'high',
+      })
       const cliNoise = restored.stderr.match(/CONNECTION_ENDED|embedding failed|permanently failed/g) ?? []
       checks.push({
         name: 'restore CLI finishes without errors after "Restore complete"',
