@@ -95,7 +95,7 @@ describe('MCP token lifecycle over HTTP (#552)', () => {
     expect(after.body).toEqual(REFUSED)
   })
 
-  it("deactivating a user stops that user's tokens on the next request", async () => {
+  it("deactivating a user revokes that user's tokens, and reactivation does not revive them (#646)", async () => {
     const admin = await createActiveUser({ role: 'admin' })
     const adminCookie = await loginCookie(app, admin.email)
     const user = await createActiveUser()
@@ -104,8 +104,18 @@ describe('MCP token lifecycle over HTTP (#552)', () => {
     const created = await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'lifecycle-pinned' } })
     const vault: { id: string } = created.json()
     const pinned = (await mint(cookie, { scope: 'vault', vaultId: vault.id })).json
+    const repoCreated = await app.inject({
+      method: 'POST',
+      url: '/api/repositories',
+      headers: { cookie },
+      body: { name: 'lifecycle-repo', ingestionMethod: 'agent_push' },
+    })
+    const repository: { id: string } = repoCreated.json()
+    const repoPinned = (await mint(cookie, { scope: 'repository', repositoryId: repository.id })).json
+    const tokens = [account, pinned, repoPinned]
     expect((await mcp(account.token)).status).toBe(200)
     expect((await mcp(pinned.token, 'tools/list', {})).status).toBe(200)
+    expect((await mcp(repoPinned.token, 'tools/list', {})).status).toBe(200)
 
     const deactivate = await app.inject({
       method: 'POST',
@@ -114,25 +124,39 @@ describe('MCP token lifecycle over HTTP (#552)', () => {
     })
     expect(deactivate.statusCode).toBe(200)
 
-    // Both the account token and the vault-pinned token stop at once.
-    for (const token of [account.token, pinned.token]) {
+    // The account, vault-pinned and repository-pinned tokens all stop at once.
+    for (const { token } of tokens) {
       const after = await mcp(token)
       expect(after.status).toBe(401)
       expect(after.body).toEqual(REFUSED)
     }
 
-    // Today's behaviour, documented: deactivation does not revoke the
-    // connections, it makes them unresolvable while the user is inactive. A
-    // reactivated user's unrevoked, unexpired tokens work again.
+    // Deactivation revokes every connection of the user (#646), with one
+    // audit event each naming the admin who deactivated.
     const rows = await db.select().from(mcpConnections).where(eq(mcpConnections.userId, user.id))
-    expect(rows.map((r) => r.revokedAt)).toEqual([null, null])
+    expect(rows).toHaveLength(3)
+    for (const row of rows) expect(row.revokedAt).toBeInstanceOf(Date)
+    for (const { id } of tokens) {
+      const events = await db.select().from(securityEvents).where(eq(securityEvents.mcpConnectionId, id))
+      expect(events.filter((e) => e.type === 'mcp_connection_revoked')).toEqual([
+        expect.objectContaining({ actorUserId: admin.id, subjectUserId: user.id, detail: { reason: 'user_deactivated' } }),
+      ])
+    }
+
+    // Reactivation restores the account, not the tokens: the user mints new ones.
     const reactivate = await app.inject({
       method: 'POST',
       url: `/api/admin/users/${user.id}/reactivate`,
       headers: { cookie: adminCookie },
     })
     expect(reactivate.statusCode).toBe(200)
-    expect((await mcp(account.token)).status).toBe(200)
+    for (const { token } of tokens) {
+      const after = await mcp(token, 'tools/list', {})
+      expect(after.status).toBe(401)
+      expect(after.body).toEqual(REFUSED)
+    }
+    const fresh = (await mint(await loginCookie(app, user.email))).json
+    expect((await mcp(fresh.token)).status).toBe(200)
   })
 
   it('stores only a SHA-256 hash of the token, never the token itself', async () => {

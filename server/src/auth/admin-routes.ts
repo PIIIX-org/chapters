@@ -1,8 +1,16 @@
 import type { FastifyInstance } from 'fastify'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { teamMemberships, users, vaults, vaultShares, type UserRole } from '../db/schema.js'
-import { destroyUserSessions } from './sessions.js'
+import {
+  mcpConnections,
+  securityEvents,
+  sessions,
+  teamMemberships,
+  users,
+  vaults,
+  vaultShares,
+  type UserRole,
+} from '../db/schema.js'
 import { WELCOME_SUBJECT, WELCOME_TEXT } from '../email/welcome.js'
 import { logSecurityEvent } from './security-events.js'
 import { notify } from '../notifications/notify.js'
@@ -188,23 +196,41 @@ export function adminRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'cannot deactivate a superadmin' })
     }
 
-    const [user] = await db
-      .update(users)
-      .set({ status: 'deactivated' })
-      .where(eq(users.id, req.params.id))
-      .returning()
-    if (!user) return reply.code(404).send({ error: 'user not found' })
-    // Cascade cleanup per spec hardening: sessions, memberships, direct shares.
-    await destroyUserSessions(user.id)
-    await db.delete(teamMemberships).where(eq(teamMemberships.userId, user.id))
-    await db
-      .delete(vaultShares)
-      .where(and(eq(vaultShares.granteeType, 'user'), eq(vaultShares.granteeId, user.id)))
-    await logSecurityEvent({
-      type: 'user_deactivated',
-      actorUserId: req.user!.id,
-      subjectUserId: user.id,
+    const actorUserId = req.user!.id
+    // One transaction: the status change and every cascade (sessions,
+    // memberships, direct shares, MCP connections) land together or not at all.
+    const user = await db.transaction(async (tx) => {
+      const [deactivated] = await tx
+        .update(users)
+        .set({ status: 'deactivated' })
+        .where(eq(users.id, req.params.id))
+        .returning()
+      if (!deactivated) return null
+      await tx.delete(sessions).where(eq(sessions.userId, deactivated.id))
+      await tx.delete(teamMemberships).where(eq(teamMemberships.userId, deactivated.id))
+      await tx
+        .delete(vaultShares)
+        .where(and(eq(vaultShares.granteeType, 'user'), eq(vaultShares.granteeId, deactivated.id)))
+      // Revoked, not suspended: reactivation restores the account but no token,
+      // so a token that leaked before the deactivation stays dead (#646).
+      const revoked = await tx
+        .update(mcpConnections)
+        .set({ revokedAt: new Date() })
+        .where(and(eq(mcpConnections.userId, deactivated.id), isNull(mcpConnections.revokedAt)))
+        .returning({ id: mcpConnections.id })
+      await tx.insert(securityEvents).values([
+        { type: 'user_deactivated', actorUserId, subjectUserId: deactivated.id },
+        ...revoked.map((c) => ({
+          type: 'mcp_connection_revoked',
+          actorUserId,
+          subjectUserId: deactivated.id,
+          mcpConnectionId: c.id,
+          detail: { reason: 'user_deactivated' },
+        })),
+      ])
+      return deactivated
     })
+    if (!user) return reply.code(404).send({ error: 'user not found' })
     emitPermissionChange({ userIds: [user.id] })
     await notify({
       recipientId: user.id,

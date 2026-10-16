@@ -8,7 +8,8 @@
 //                token of the same user is not). The 429 should carry
 //                Retry-After and a JSON-RPC error body (#440).
 //   tokens       revoked: refused on the next request; deactivated owner:
-//                refused on the next request; stored as SHA-256 only.
+//                refused on the next request, and still refused after the
+//                reactivation (deactivation revokes, #646); stored as SHA-256 only.
 //                (Expiry: scoped-tokens, "expired token rejected (HTTP 401)".)
 //   separation   admin (A) and member (B) with lookalike notes. B's search,
 //                graph, related-note edges, find_symbols, notifications,
@@ -49,7 +50,7 @@ async function rawPost(baseUrl: string, token: string): Promise<RawResponse> {
 const test: LabTest = {
   name: 'access-behaviour',
   tier: 'fast',
-  description: 'Token revocation/deactivation/hashing, the MCP rate limit and its 429, two-account separation, note text in prompts (#552).',
+  description: 'Token revocation/deactivation/reactivation/hashing, the MCP rate limit and its 429, two-account separation, note text in prompts (#552).',
   async run(ctx) {
     const checks: Check[] = []
     const data: Record<string, unknown> = {}
@@ -331,6 +332,15 @@ const test: LabTest = {
       ok: beforeDeactivate.ok ? afterDeactivate.httpStatus === 401 : null,
       severity: afterDeactivate.ok ? 'critical' : 'info',
     })
+    await admin.must('POST', `/api/admin/users/${third.id}/reactivate`, {})
+    const afterReactivate = await thirdClient.call('list_vaults', {})
+    checks.push({
+      name: 'reactivated user: the token revoked at deactivation stays refused (HTTP 401)',
+      expected: 'HTTP 401 after the reactivation: deactivation revoked the token, the user mints a new one (#646)',
+      actual: `HTTP ${afterReactivate.httpStatus}: ${afterReactivate.text.slice(0, 120)}`,
+      ok: afterDeactivate.httpStatus === 401 ? afterReactivate.httpStatus === 401 : null,
+      severity: afterReactivate.ok ? 'critical' : 'info',
+    })
 
     // ------------------------------------------------------------ prompts
     const promptRes = await acctA.rpc('prompts/get', {
@@ -362,7 +372,7 @@ const test: LabTest = {
     return {
       summary:
         `MCP limit ${limit}/min: first 429 at request ${first429 || 'none'} (${burstMs} ms), Retry-After ${limited?.retryAfter ?? 'absent'}. ` +
-        `Revoked token after revoke: HTTP ${afterRevoke.httpStatus}; deactivated user's token: HTTP ${afterDeactivate.httpStatus}. ` +
+        `Revoked token after revoke: HTTP ${afterRevoke.httpStatus}; deactivated user's token: HTTP ${afterDeactivate.httpStatus}, after reactivation HTTP ${afterReactivate.httpStatus}. ` +
         `Separation: ${checks.filter((c) => c.name.startsWith('separation') && c.ok === true).length} checks clean; cross-account semantic edges stored: ${crossCount}. ` +
         `${failing.length} of ${checks.length} checks not passing: ${failing.map((c) => c.name).join('; ') || 'none'}.`,
       checks,
