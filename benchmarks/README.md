@@ -219,7 +219,13 @@ every metric. Elara:
 | rea | 0.6 / 0.6 | 30,872 / 30,876 | 2 (tokens only) |
 | vectorcraft | 0.7 / 0.7 | 30,776 / 30,776 | 0 |
 
-So hit@5 did not move and tokens-to-gold moved by at most 1.4 %. The gate's
+A third instance (the first `chapters` run of PR #622,
+[38852760271](https://github.com/PIIIX-org/chapters/actions/runs/38852760271))
+moved one question across the top-5 line (A1, rank 3 to 6): hit@5 0.9655
+to 0.931, exactly the one-question tolerance, with tokens-to-gold within
+10 %.
+
+Between the two runs hit@5 did not move and tokens-to-gold moved by at most 1.4 %. The gate's
 tolerances (hit@5: one question per suite; tokens-to-gold: 10 %) are above
 that noise; one question that flips between hit and miss can still move a
 suite with a low mean (chapters) by more than 10 %, and the gate treats that
