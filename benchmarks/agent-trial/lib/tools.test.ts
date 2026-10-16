@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
-import { ELARA_TOOLS, LOCAL_TOOL_SPECS, elaraToolset, globToRegExp, localToolset, toParameters, type McpToolInfo } from './tools.ts'
+import { ELARA_TOOLS, LOCAL_TOOL_SPECS, TOOL_CALL_MAX_MS, elaraToolset, globToRegExp, localToolset, toParameters, type McpToolInfo } from './tools.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'agent-trial-tools-'))
 after(() => rmSync(root, { recursive: true, force: true }))
@@ -139,20 +139,35 @@ test('elara tools: the allow-listed MCP tools with the server schemas, minus the
   assert.deepEqual(calls, [])
 })
 
-test('elara tools: a call is one MCP tools/call with the same name and arguments; failures become error results', async () => {
-  const calls: Array<[string, Record<string, unknown>]> = []
-  const set = elaraToolset(listed, async (tool, args) => {
-    calls.push([tool, args])
+test('elara tools: a call is one MCP tools/call with the same name, arguments and time limit; failures become error results', async () => {
+  const calls: Array<[string, Record<string, unknown>, number]> = []
+  const set = elaraToolset(listed, async (tool, args, timeoutMs) => {
+    calls.push([tool, args, timeoutMs])
     return tool === 'read_file' ? { text: 'Error: file not found', ok: false } : { text: '{"hits":[]}', ok: true }
   })
-  assert.deepEqual(await set.run('search', { query: 'rrf', limit: 5 }), { text: '{"hits":[]}', isError: false })
-  assert.deepEqual(await set.run('read_file', { path: 'nope.ts' }), { text: 'Error: file not found', isError: true })
+  assert.deepEqual(await set.run('search', { query: 'rrf', limit: 5 }, 5_000), { text: '{"hits":[]}', isError: false })
+  assert.deepEqual(await set.run('read_file', { path: 'nope.ts' }, 10 * 60_000), { text: 'Error: file not found', isError: true })
   const refused = await set.run('edit_note', { path: 'x' })
   assert.equal(refused.isError, true)
+  // The episode's time left, never more than TOOL_CALL_MAX_MS.
   assert.deepEqual(calls, [
-    ['search', { query: 'rrf', limit: 5 }],
-    ['read_file', { path: 'nope.ts' }],
+    ['search', { query: 'rrf', limit: 5 }, 5_000],
+    ['read_file', { path: 'nope.ts' }, TOOL_CALL_MAX_MS],
   ])
+})
+
+test('local grep is stopped at its time limit, so a catastrophic pattern cannot hang the episode', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'agent-trial-redos-'))
+  after(() => rmSync(base, { recursive: true, force: true }))
+  writeFileSync(join(base, 'slow.txt'), `${'a'.repeat(40)}!\n`)
+  const tools = localToolset(base)
+  const t0 = performance.now()
+  const r = await tools.run('grep', { pattern: '^(a+)+$' }, 300)
+  assert.equal(r.isError, true)
+  assert.match(r.text, /^Error: grep stopped after 0 s: the pattern is too slow/)
+  assert.ok(performance.now() - t0 < 5_000, `took ${Math.round(performance.now() - t0)} ms`)
+  // A normal pattern on the same file still answers.
+  assert.equal((await tools.run('grep', { pattern: 'a!' }, 5_000)).text, '1 matching line(s)\nslow.txt:1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!')
 })
 
 test('elara tools: a server without one of the tools is a setup error', () => {

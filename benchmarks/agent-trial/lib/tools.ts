@@ -5,8 +5,9 @@
 //   local: read_file / grep / list_files over a checkout of the same commit,
 //          in plain node:fs (no ripgrep, no network), so the mapping is
 //          unit-testable under `node --test`.
-import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
+import { Worker } from 'node:worker_threads'
 import type { JsonObjectSchema, ToolSpec } from './model.ts'
 
 export interface ToolOutput {
@@ -16,7 +17,8 @@ export interface ToolOutput {
 
 export interface Toolset {
   specs: ToolSpec[]
-  run(name: string, args: Record<string, unknown>): Promise<ToolOutput>
+  /** `timeoutMs`: the time this call may take (the loop passes what is left before its tool deadline). */
+  run(name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<ToolOutput>
 }
 
 // ---------------------------------------------------------------- Elara
@@ -35,7 +37,11 @@ export interface McpToolInfo {
   inputSchema?: Record<string, unknown>
 }
 
-export type McpCall = (tool: string, args: Record<string, unknown>) => Promise<{ text: string; ok: boolean }>
+/** One MCP tools/call; `timeoutMs` aborts the HTTP request. */
+export type McpCall = (tool: string, args: Record<string, unknown>, timeoutMs: number) => Promise<{ text: string; ok: boolean }>
+
+/** No single tool call runs longer than this, whatever time the episode has left. */
+export const TOOL_CALL_MAX_MS = 120_000
 
 /** An MCP input schema as a model tool's parameters: an object schema without the draft marker. */
 export function toParameters(schema: Record<string, unknown> | undefined): JsonObjectSchema {
@@ -56,9 +62,9 @@ export function elaraToolset(listed: McpToolInfo[], call: McpCall, allow: readon
   })
   return {
     specs,
-    async run(name, args) {
+    async run(name, args, timeoutMs = TOOL_CALL_MAX_MS) {
       if (!allow.includes(name)) return { text: `Error: unknown tool ${name}; available: ${allow.join(', ')}`, isError: true }
-      const r = await call(name, args)
+      const r = await call(name, args, Math.min(timeoutMs, TOOL_CALL_MAX_MS))
       return { text: r.text, isError: !r.ok }
     },
   }
@@ -170,24 +176,48 @@ function listAll(root: string): string[] {
   return out.sort()
 }
 
+/** A grep call is stopped after this long (or the episode's time left, if less). */
+export const GREP_MAX_MS = 30_000
+const GREP_WORKER = new URL('./grep-worker.mjs', import.meta.url)
+
+interface GrepJob {
+  root: string
+  files: string[]
+  pattern: string
+  flags: string
+  max: number
+  lineChars: number
+  maxFileBytes: number
+}
+
+/** Runs grep-worker.mjs; null when it did not finish within `timeoutMs` (the worker is terminated). */
+function grepInWorker(job: GrepJob, timeoutMs: number): Promise<{ total: number; hits: string[] } | null> {
+  const { promise, resolve, reject } = Promise.withResolvers<{ total: number; hits: string[] } | null>()
+  const worker = new Worker(GREP_WORKER, { workerData: job })
+  const timer = setTimeout(() => {
+    void worker.terminate()
+    resolve(null)
+  }, timeoutMs)
+  worker.once('message', (message: { total: number; hits: string[] }) => {
+    clearTimeout(timer)
+    void worker.terminate()
+    resolve(message)
+  })
+  worker.once('error', (err) => {
+    clearTimeout(timer)
+    reject(err)
+  })
+  return promise
+}
+
 export function localToolset(root: string): Toolset {
   const realRoot = realpathSync(root)
   let files: string[] | undefined
-  const text = new Map<string, string | null>()
-  /** File content for grep; null for binary or oversized files. */
-  const grepText = (path: string): string | null => {
-    if (!text.has(path)) {
-      const full = join(root, path)
-      const buf = statSync(full).size > MAX_GREP_FILE_BYTES ? null : readFileSync(full)
-      text.set(path, buf && !buf.subarray(0, 8192).includes(0) ? buf.toString('utf8') : null)
-    }
-    return text.get(path)!
-  }
   const error = (message: string): ToolOutput => ({ text: `Error: ${message}`, isError: true })
 
   return {
     specs: LOCAL_TOOL_SPECS,
-    async run(name, args) {
+    async run(name, args, timeoutMs = TOOL_CALL_MAX_MS) {
       try {
         if (name === 'list_files') {
           if (typeof args.pattern !== 'string' || args.pattern === '') return error('pattern is required')
@@ -199,9 +229,9 @@ export function localToolset(root: string): Toolset {
         }
         if (name === 'grep') {
           if (typeof args.pattern !== 'string' || args.pattern === '') return error('pattern is required')
-          let re: RegExp
+          const flags = args.ignore_case === true ? 'i' : ''
           try {
-            re = new RegExp(args.pattern, args.ignore_case === true ? 'i' : '')
+            new RegExp(args.pattern, flags)
           } catch (err) {
             return error(`invalid regular expression: ${err instanceof Error ? err.message : String(err)}`)
           }
@@ -209,20 +239,11 @@ export function localToolset(root: string): Toolset {
           if (scope === null) return error('path must stay inside the repository')
           const glob = typeof args.glob === 'string' && args.glob !== '' ? globToRegExp(args.glob) : null
           const max = intArg(args, 'max_results', 100, 500)
-          const hits: string[] = []
-          let total = 0
-          for (const f of (files ??= listAll(root))) {
-            if (scope && f !== scope && !f.startsWith(`${scope}/`)) continue
-            if (glob && !glob.test(f)) continue
-            const content = grepText(f)
-            if (content === null) continue
-            const lines = content.split('\n')
-            for (let i = 0; i < lines.length; i++) {
-              if (!re.test(lines[i]!)) continue
-              total++
-              if (hits.length < max) hits.push(`${f}:${i + 1}:${lines[i]!.slice(0, GREP_LINE_CHARS)}`)
-            }
-          }
+          const selected = (files ??= listAll(root)).filter((f) => (!scope || f === scope || f.startsWith(`${scope}/`)) && (!glob || glob.test(f)))
+          const limitMs = Math.max(1, Math.min(timeoutMs, GREP_MAX_MS))
+          const found = await grepInWorker({ root, files: selected, pattern: args.pattern, flags, max, lineChars: GREP_LINE_CHARS, maxFileBytes: MAX_GREP_FILE_BYTES }, limitMs)
+          if (found === null) return error(`grep stopped after ${Math.round(limitMs / 1000)} s: the pattern is too slow on this repository; simplify it or narrow it with path or glob`)
+          const { total, hits } = found
           return { text: total === 0 ? 'no matches' : `${total} matching line(s)${total > max ? `, first ${max}` : ''}\n${hits.join('\n')}`, isError: false }
         }
         if (name === 'read_file') {

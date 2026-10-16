@@ -48,7 +48,7 @@ if (mode.mode === 'skip') {
 /** Everything that turns model output into numbers, hashed with line endings normalised. */
 const HARNESS = createHash('sha256')
   .update(
-    [`${DIR}/run.ts`, `${DIR}/tasks.json`, ...readdirSync(`${DIR}/lib`).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts')).sort().map((f) => `${DIR}/lib/${f}`)]
+    [`${DIR}/run.ts`, `${DIR}/tasks.json`, ...readdirSync(`${DIR}/lib`).filter((f) => /\.(ts|mjs)$/.test(f) && !f.endsWith('.test.ts')).sort().map((f) => `${DIR}/lib/${f}`)]
       .map((f) => `${f}\n${readFileSync(f, 'utf8').replaceAll('\r\n', '\n')}`)
       .join('\n'),
   )
@@ -108,8 +108,8 @@ if (index.outcome !== 'complete') throw new Error(`indexing did not complete (${
 const minted = await ctx.mintToken('admin', ctx.uniq('agent-trial'), 'repository', { repositoryId: repo.id, access: 'read', allowedTools: ELARA_TOOLS })
 const mcp = ctx.mcp(minted.token, 'agent-trial')
 const toolsets: Record<Arm, Toolset> = {
-  elara: elaraToolset(await mcp.listTools(), async (tool, args) => {
-    const r = await mcp.call(tool, args)
+  elara: elaraToolset(await mcp.listTools(), async (tool, args, timeoutMs) => {
+    const r = await mcp.call(tool, args, timeoutMs)
     return { text: r.text, ok: r.ok }
   }),
   local: localToolset(root),
@@ -209,7 +209,7 @@ function flush(complete: boolean): string {
     '# Agent trial',
     '',
     ...(dryRun ? ['**DRY RUN**: scripted model (a fixed tool-call script, no language model). These numbers test the plumbing; they are not agent numbers.', ''] : []),
-    ...(complete ? [] : [`**INCOMPLETE**: ${rows.length} of ${tasks.length * arms.length} episodes so far.`, '']),
+    ...(complete ? [] : [`**INCOMPLETE**: ${rows.length} of ${tasks.length * arms.length} episodes run${notRun.length > 0 ? `, ${notRun.length} not run (run budget)` : ' so far'}.`, '']),
     `Model ${modelInfo.provider}/${modelInfo.name}; Elara at ${process.env.GITHUB_SHA ?? '(local)'}; run ${runUrl ?? '-'}; tasks on ${file.repo.url} @ ${file.repo.commit.slice(0, 7)}; harness ${HARNESS}; ${at}`,
     '',
     `Index: ${index.outcome}, ${index.files} files, ${index.symbols} symbols, ${Math.round(index.ms / 1000)} s. Caps per task: ${caps.maxToolCalls} tool calls, ${caps.maxTokens} tokens (judge included), ${Math.round(caps.maxWallMs / 60_000)} min.`,
@@ -229,7 +229,11 @@ function flush(complete: boolean): string {
       return `| ${a} | ${t.factsFound}/${t.factsTotal} | ${t.recall} | ${t.falseClaims} | ${t.tokensIn} | ${t.tokensOut} | ${t.toolCalls} | ${Math.round(t.wallMs / 1000)} |`
     }),
     '',
-    rows.some((r) => r.episode.tokensEstimated) ? 'Token counts are characters / 4 estimates (scripted model).' : 'Token counts are as reported by the provider; judge tokens are in results.json (`judgeTokensIn/Out`).',
+    dryRun
+      ? 'Token counts are characters / 4 estimates (scripted model).'
+      : rows.some((r) => r.episode.tokensEstimated)
+        ? `Token counts of ${rows.filter((r) => r.episode.tokensEstimated).map((r) => `${r.task}/${r.arm}`).join(', ')} include characters / 4 estimates: the provider reported no usage for some turns. The rest are as reported by the provider.`
+        : 'Token counts are as reported by the provider; judge tokens are in results.json (`judgeTokensIn/Out`).',
     '',
     'Only numbers from this workflow may be published (benchmarks/README.md, "Agent trial").',
   ]
@@ -269,7 +273,8 @@ for (const task of tasks) {
   }
 }
 
-const summary = flush(true)
+// Complete only when every selected episode ran (none skipped for the run budget).
+const summary = flush(notRun.length === 0)
 console.log(summary)
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`)
 rmSync(workDir, { recursive: true, force: true })

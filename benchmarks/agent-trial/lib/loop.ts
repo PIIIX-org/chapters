@@ -9,8 +9,9 @@
 //   a final answer turn after it would still fit, and the final turn drops
 //   the newest tool results if it has to.
 // - wall time: tools stop at `maxWallMs` minus a reserve for the final
-//   answer; every request carries an abort signal for the time left.
-import { estimateRequestTokens, type CompletionRequest, type Message, type Model, type ToolCall, type ToolResultPart, type Usage } from './model.ts'
+//   answer; every request carries an abort signal for the time left, and
+//   every tool call gets the time left until the tool deadline.
+import { estimateRequestTokens, estimateTokens, type CompletionRequest, type Message, type Model, type ToolCall, type ToolResultPart, type Usage } from './model.ts'
 import type { Toolset } from './tools.ts'
 
 export interface Caps {
@@ -43,7 +44,10 @@ export const DEFAULT_CAPS: Caps = {
 /**
  * Provider tokens per characters/4 assumed before the first reported usage:
  * code and JSON tokenize denser than prose. Afterwards the estimate uses the
- * largest ratio the provider has reported in this episode, plus 5 %.
+ * largest ratio the provider has reported in this episode, plus 5 %. A turn
+ * whose provider reports no usage is counted at that estimate (input) plus
+ * characters/4 of what it returned (output), and the episode is marked
+ * `tokensEstimated`.
  */
 export const INITIAL_TOKEN_SCALE = 1.5
 /** Below this many output tokens a final answer is not worth requesting. */
@@ -70,7 +74,7 @@ export interface EpisodeResult {
   error?: string
   tokensIn: number
   tokensOut: number
-  /** True when token counts are characters/4 estimates (scripted model). */
+  /** True when any token count is a characters/4 estimate: the scripted model, or a provider turn that reported no usage. */
   tokensEstimated: boolean
   toolCalls: number
   turns: number
@@ -188,15 +192,23 @@ export async function runEpisode(e: Episode): Promise<EpisodeResult> {
       }
       return result('', 'error', err instanceof Error ? err.message : String(err))
     }
-    if (turn.estimated) scale = 1 // the scripted model reports exactly this estimate
-    else if (turn.usage.input > 0) {
-      const ratio = (turn.usage.input / sentIn) * 1.05
-      scale = calibrated ? Math.max(scale, ratio) : ratio
-      calibrated = true
+    let usage: Usage
+    if (turn.usage === null) {
+      // No counts from the provider: count the estimate, so the cap still holds and the numbers say so.
+      usage = { input: Math.ceil(sentIn * scale), output: estimateTokens(turn.text + (turn.toolCalls.length > 0 ? JSON.stringify(turn.toolCalls) : '')) }
+      estimated = true
+    } else {
+      usage = turn.usage
+      if (turn.estimated) scale = 1 // the scripted model reports exactly this estimate
+      else if (usage.input > 0) {
+        const ratio = (usage.input / sentIn) * 1.05
+        scale = calibrated ? Math.max(scale, ratio) : ratio
+        calibrated = true
+      }
     }
     turns++
-    used.input += turn.usage.input
-    used.output += turn.usage.output
+    used.input += usage.input
+    used.output += usage.output
     estimated ||= turn.estimated === true
     lastText = turn.text
     messages.push({ role: 'assistant', text: turn.text, toolCalls: turn.toolCalls })
@@ -208,18 +220,18 @@ export async function runEpisode(e: Episode): Promise<EpisodeResult> {
       if (refusal) results.push({ callId: call.id, name: call.name, text: `Error: not run, ${refusal}`, isError: true })
       else {
         calls++
-        results.push(await runCall(e, call, turns, trace, now))
+        results.push(await runCall(e, call, turns, trace, now, Math.max(1, Math.floor(toolDeadline - (now() - t0)))))
       }
     }
     messages.push({ role: 'tool', results })
   }
 }
 
-async function runCall(e: Episode, call: ToolCall, turn: number, trace: TraceEntry[], now: () => number): Promise<ToolResultPart> {
+async function runCall(e: Episode, call: ToolCall, turn: number, trace: TraceEntry[], now: () => number, timeoutMs: number): Promise<ToolResultPart> {
   const t0 = now()
   const out = call.argsError
     ? { text: `Error: ${call.argsError}`, isError: true }
-    : await e.tools.run(call.name, call.args).catch((err: unknown) => ({ text: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true }))
+    : await e.tools.run(call.name, call.args, timeoutMs).catch((err: unknown) => ({ text: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true }))
   const truncated = out.text.length > e.caps.maxToolResultChars
   const text = truncated ? `${out.text.slice(0, e.caps.maxToolResultChars)}\n[truncated: ${out.text.length} characters, showing the first ${e.caps.maxToolResultChars}]` : out.text
   trace.push({ turn, tool: call.name, args: call.args, chars: out.text.length, truncated, isError: out.isError, ms: Math.round(now() - t0), preview: out.text.slice(0, 300) })

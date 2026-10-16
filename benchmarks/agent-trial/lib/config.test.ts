@@ -117,6 +117,11 @@ test('judge: runs one tool-less turn and counts the facts judged stated', async 
   const skipped = await judgeAnswer(model('{"T1.1": true}'), t, 'answer', { tokensLeft: 2_500, timeoutMs: 60_000 })
   assert.deepEqual(skipped.usage, { input: 0, output: 0 })
   assert.match(skipped.error!, /^not run: needs about \d+ tokens, 2500 left in the task budget$/)
+  // No usage from the provider: estimated, and marked.
+  const silent: Model = { provider: 'openai', name: 'judge', complete: async () => ({ text: '{"T1.1": true}', toolCalls: [], usage: null, stop: 'stop' }) }
+  const est = await judgeAnswer(silent, t, 'answer', budget)
+  assert.equal(est.usageEstimated, true)
+  assert.ok(est.usage.input > 0 && est.usage.output > 0)
   assert.deepEqual(seen, [
     [0, 'none', true],
     [0, 'none', true],

@@ -329,24 +329,35 @@ cost), 8,192 output tokens per turn, 100,000 characters per tool result,
   tools, whose output limit is cut to what is left, and which drops the
   newest tool results (replaced by a `[dropped: ...]` stub, counted in
   `droppedResults`) if they would not fit. If even the conversation without
-  them does not fit, the episode ends with no answer. Input is estimated
-  before sending as characters / 4 × 1.5, then × the largest provider
-  tokens-per-estimate ratio seen in the episode plus 5 %, so the cap is hard
-  to the accuracy of that estimate. The unit tests drive a model that spends
-  its whole output allowance against 100,000-character tool results (1 and
-  10 calls per turn); the old between-turns check let that reach 901,625 and
-  1,501,568 tokens (#651 review).
+  them does not fit, the episode ends with no answer. The running total is
+  what the provider reports per turn. Before sending, input is estimated as
+  characters / 4 × 1.5, then × the largest provider tokens-per-estimate
+  ratio seen in the episode plus 5 %. A turn whose provider reports no usage
+  (some OpenAI-compatible servers omit it) is counted at that estimate plus
+  characters / 4 of its reply, and the episode is marked `tokensEstimated`.
+  So the cap holds as far as the provider's usage reports, or else that
+  estimate, are right; hidden output a provider bills but does not return
+  (reasoning tokens) is only counted when it is reported. The unit tests
+  drive a model that spends its whole output allowance against
+  100,000-character tool results (1 and 10 calls per turn) and one that
+  reports no usage; the old checks let them reach 901,625, 1,501,568 and
+  975,342 tokens (#651 reviews).
 - **Time.** Tools stop at 15 minutes minus a reserve for the final answer
   (a fifth of the cap, at most 3 minutes); every model request carries an
   abort signal for the time left, retries included; a tool turn cut off at
-  the tool deadline is followed by the final turn (`abortedTurns`).
+  the tool deadline is followed by the final turn (`abortedTurns`). Each
+  tool call gets the time left before the tool deadline, at most 2 minutes:
+  the MCP request is aborted then, and the local `grep` runs in a worker
+  thread that is terminated after at most 30 seconds, so a catastrophic
+  regular expression cannot hang the run.
 - **Judge.** The optional judge spends from the same 600,000 tokens (it is
   not run when it would not fit) and is cut off after 3 minutes.
 - **Run.** An episode starts only while it and its judge call fit in the
   run budget (`AGENT_TRIAL_RUN_BUDGET_MIN`, 300 in the workflow, under the
   job's 350-minute timeout and GitHub's 360-minute limit); the rest are
-  listed as not run. Results are written after every episode
-  (`complete: false` until the end), so a cut-off run keeps what it measured.
+  listed as not run. Results are written after every episode; `complete` is
+  true only when every selected episode ran, so a cut-off run keeps what it
+  measured and says it is partial.
 
 Recorded per task and arm: tokens in and out (as the provider reports them),
 tool calls, turns, wall time, stop reason, the answer and a trace of every

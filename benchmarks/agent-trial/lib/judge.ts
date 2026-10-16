@@ -2,7 +2,7 @@
 // and is recorded next to the deterministic grade, never instead of it. The
 // judge reads the task's key facts and the answer and says, per fact,
 // whether the answer states it (paraphrases count). Node-compatible.
-import { estimateRequestTokens, type CompletionRequest, type Model, type Usage } from './model.ts'
+import { estimateRequestTokens, estimateTokens, type CompletionRequest, type Model, type Usage } from './model.ts'
 import type { Task } from './tasks.ts'
 
 export interface JudgeResult {
@@ -10,6 +10,8 @@ export interface JudgeResult {
   facts: Record<string, boolean>
   found: number
   usage: Usage
+  /** True when the provider reported no usage and `usage` is a characters/4 estimate. */
+  usageEstimated?: boolean
   /** Set when the reply held no usable verdict, or the judge was not run (budget). */
   error?: string
 }
@@ -71,7 +73,9 @@ export async function judgeAnswer(model: Model, task: Task, answer: string, budg
   const need = Math.ceil(estimateRequestTokens(req) * 1.5) + JUDGE_OUTPUT_TOKENS
   if (need > budget.tokensLeft) return { facts: {}, found: 0, usage: { input: 0, output: 0 }, error: `not run: needs about ${need} tokens, ${budget.tokensLeft} left in the task budget` }
   const turn = await model.complete({ ...req, signal: AbortSignal.timeout(budget.timeoutMs) })
+  const usage = turn.usage ?? { input: estimateRequestTokens(req), output: estimateTokens(turn.text) }
+  const est = turn.usage === null ? { usageEstimated: true } : {}
   const facts = parseVerdict(task, turn.text)
-  if (!facts) return { facts: {}, found: 0, usage: turn.usage, error: `no JSON verdict in: ${turn.text.slice(0, 200)}` }
-  return { facts, found: Object.values(facts).filter(Boolean).length, usage: turn.usage }
+  if (!facts) return { facts: {}, found: 0, usage, ...est, error: `no JSON verdict in: ${turn.text.slice(0, 200)}` }
+  return { facts, found: Object.values(facts).filter(Boolean).length, usage, ...est }
 }

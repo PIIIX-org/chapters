@@ -145,6 +145,34 @@ test('the final turn drops the newest tool results when the answer would not fit
   assert.match(JSON.stringify(model.requests.at(-1)!.messages), /\[dropped: 100000 characters, to keep the final answer within the token budget\]/)
 })
 
+test('a provider that reports no usage: the loop counts estimates, the cap still holds, and the episode says tokensEstimated (#651 review 2)', async () => {
+  for (const parallel of [1, 10]) {
+    // What the provider would bill (characters / 4 of each request and of its reply), never reported.
+    let billed = 0
+    const silent: Model = {
+      provider: 'openai',
+      name: 'silent',
+      async complete(req) {
+        const reply: ModelTurn =
+          req.toolChoice === 'none'
+            ? { text: 'final', toolCalls: [], usage: null, stop: 'stop' }
+            : { text: '', toolCalls: Array.from({ length: parallel }, (_, i) => call(`${billed}-${i}`)), usage: null, stop: 'tool_calls' }
+        billed += estimateRequestTokens(req) + Math.ceil((reply.text + (reply.toolCalls.length > 0 ? JSON.stringify(reply.toolCalls) : '')).length / 4)
+        return reply
+      },
+    }
+    const r = await runEpisode({ model: silent, tools: fakeTools({ grep: 'x'.repeat(100_000) }), system: 's', prompt: 'p', caps: caps() })
+    const label = `${parallel} per turn`
+    assert.equal(r.tokensEstimated, true, label)
+    assert.equal(r.stop, 'cap:tokens', label)
+    assert.equal(r.answer, 'final', label)
+    assert.ok(r.tokensIn > 0 && r.tokensOut > 0, label)
+    assert.ok(billed <= DEFAULT_CAPS.maxTokens, `${label}: billed ${billed}`)
+    assert.ok(r.tokensIn + r.tokensOut <= DEFAULT_CAPS.maxTokens, `${label}: counted ${r.tokensIn + r.tokensOut}`)
+    assert.ok(r.tokensIn >= billed - r.tokensOut, `${label}: counted input ${r.tokensIn} below what was sent`)
+  }
+})
+
 test('a budget too small for even the prompt ends without a model call', async () => {
   const model = greedy(1, 1)
   const r = await runEpisode({ model, tools: fakeTools(), system: 's', prompt: 'p'.repeat(4_000), caps: caps({ maxTokens: 900 }) })

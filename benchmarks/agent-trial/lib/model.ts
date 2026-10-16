@@ -57,7 +57,8 @@ export interface Usage {
 export interface ModelTurn {
   text: string
   toolCalls: ToolCall[]
-  usage: Usage
+  /** null when the provider reported no token counts (some OpenAI-compatible servers omit `usage`). */
+  usage: Usage | null
   /** The provider's stop reason, verbatim. */
   stop: string
   /** True when usage is a characters/4 estimate (the scripted model), not provider-reported. */
@@ -136,7 +137,7 @@ export function parseOpenAiResponse(body: unknown): ModelTurn {
   return {
     text: choice.message.content ?? '',
     toolCalls: (choice.message.tool_calls ?? []).map((c) => ({ id: c.id, name: c.function.name, ...parseArgs(c.function.arguments) })),
-    usage: { input: r.usage?.prompt_tokens ?? 0, output: r.usage?.completion_tokens ?? 0 },
+    usage: typeof r.usage?.prompt_tokens === 'number' && typeof r.usage.completion_tokens === 'number' ? { input: r.usage.prompt_tokens, output: r.usage.completion_tokens } : null,
     stop: choice.finish_reason ?? 'unknown',
   }
 }
@@ -196,7 +197,7 @@ interface AnthropicResponse {
 export function parseAnthropicResponse(body: unknown): ModelTurn {
   const r = body as AnthropicResponse
   if (!Array.isArray(r.content)) throw new Error(`Anthropic response has no content: ${JSON.stringify(body).slice(0, 300)}`)
-  const u = r.usage ?? {}
+  const u = r.usage
   return {
     text: r.content
       .filter((b) => b.type === 'text')
@@ -204,7 +205,10 @@ export function parseAnthropicResponse(body: unknown): ModelTurn {
       .join(''),
     toolCalls: r.content.filter((b) => b.type === 'tool_use').map((b) => ({ id: b.id ?? '', name: b.name ?? '', ...parseArgs(b.input) })),
     // Cached prompt tokens are still input the model read.
-    usage: { input: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), output: u.output_tokens ?? 0 },
+    usage:
+      typeof u?.input_tokens === 'number' && typeof u.output_tokens === 'number'
+        ? { input: u.input_tokens + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), output: u.output_tokens }
+        : null,
     stop: r.stop_reason ?? 'unknown',
   }
 }
