@@ -27,8 +27,9 @@
 // Tolerances: measured noise plus a margin (benchmarks/README.md, "Noise").
 // They live here, not in the baseline, and on pull requests the workflow
 // runs the base commit's copy of this file, so a PR does not change the
-// rules it is judged by. (The workflow file itself comes from the PR; that
-// gap closes with required checks and code owners, fix-list item 177.)
+// rules it is judged by. (The workflow file itself comes from the PR. The
+// check is required on dev and prod (#574), so it cannot be dropped, but an
+// edited job can still pass: reviewers read changes to the workflow.)
 //
 // Plain Node, no dependencies, one file (it is copied alone to a temp dir).
 //
