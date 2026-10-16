@@ -333,19 +333,24 @@ const test: LabTest = {
         )
         const failedButCreated: number[] = []
         const ackedMissing: number[] = []
+        const existing: number[] = []
         for (const o of outcomes) {
           const row = await dbNote(ctx, vault.id, createPath(o.writer))
+          if (row) existing.push(o.writer)
           if (!o.ok && row) failedButCreated.push(o.writer)
           if (o.ok && !row) ackedMissing.push(o.writer)
         }
+        // The regenerated folder index must list every note the folder holds
+        // (a lost update between concurrent regenerations drops entries).
         const index = await ctx.docker.appExec(['cat', `/data/elara/vaults/${vault.id}/${createFolder}/index.md`])
-        const listed = ws.filter((w) => index.stdout.includes(`note-${w.i}`)).length
+        const unlisted = existing.filter((i) => !new RegExp(`note-${i}(?!\\d)`).test(index.stdout))
         const t = tally(outcomes)
-        data[`create-same-folder N=${N}`] = { ...t, failedButCreated, ackedMissing, indexListed: listed, indexExit: index.code }
+        data[`create-same-folder N=${N}`] = { ...t, failedButCreated, ackedMissing, existing: existing.length, unlisted, indexExit: index.code }
         checks.push(
           { name: `create-same-folder N=${N}: write errors`, expected: '0', actual: `${t.failed} ${JSON.stringify(t.errors)}`, ok: t.failed === 0, severity: 'high' },
           { name: `create-same-folder N=${N}: failed creates not persisted`, expected: '0 creates that returned an error but exist', actual: `${failedButCreated.length} of ${t.failed} failed creates exist anyway`, ok: failedButCreated.length === 0, severity: 'high' },
           { name: `create-same-folder N=${N}: acknowledged creates exist`, expected: '0 missing', actual: `${ackedMissing.length} of ${t.ok} missing`, ok: ackedMissing.length === 0, severity: 'high' },
+          { name: `create-same-folder N=${N}: folder index lists every note`, expected: '0 notes missing from index.md', actual: index.code === 0 ? `${unlisted.length} of ${existing.length} missing` : `index.md unreadable (exit ${index.code})`, ok: index.code === 0 && unlisted.length === 0, severity: 'medium' },
         )
       }
       ctx.log(`N=${N} done`)

@@ -5,15 +5,17 @@
 //                                     declare `tier: 'fast'`, full = all;
 //                                     tests also read it (ctx.tier) to skip
 //                                     their long parts in the fast tier
-// Writes lab-results/<test>.json, lab-results/summary.md and
-// lab-results/run.json (tier + selected tests, read by the gate). Exit code
-// is non-zero only when nothing ran: whether the run passes is decided by
-// .github/scripts/lab-gate.mjs against lab/known-defects.json (a check that
-// failed and is not a known defect, a known defect that passed, or a test
-// that threw / timed out).
+//   LAB_ALSO="browser"                tests added to the tier's selection
+// Before each test the instance must answer /health (else that test counts
+// as crashed); after a test times out the rest are not run (it may still be
+// driving the instance). Writes lab-results/<test>.json, summary.md and
+// run.json (tier, filters, selected tests; read by the gate). Exit code is
+// non-zero only when nothing was selected: whether the run passes is decided
+// by .github/scripts/lab-gate.mjs against lab/known-defects.json.
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { LabContext, loadEnv, type Check, type LabTest, type Tier } from './lib/context.ts'
+import { waitHealthy } from './lib/docker.ts'
 import { mcpCallLog } from './lib/mcp.ts'
 
 const outDir = 'lab-results'
@@ -52,9 +54,16 @@ const all = await Promise.all(
     .map(load),
 )
 // A test that fails to load is selected in every tier, so a broken full-tier
-// test still turns the fast tier red.
+// test still turns the fast tier red. LAB_ALSO adds tests to the tier's
+// selection (the workflow adds `browser` when client collab code changes).
+const also = (process.env.LAB_ALSO ?? '')
+  .split(',')
+  .map((f) => f.trim())
+  .filter(Boolean)
 const selected = all.filter((t) =>
-  filters.length > 0 ? filters.some((x) => t.file.includes(x)) : tier === 'full' || !t.test || t.test.tier === 'fast',
+  filters.length > 0
+    ? filters.some((x) => t.file.includes(x))
+    : tier === 'full' || !t.test || t.test.tier === 'fast' || also.some((x) => t.file.includes(x)),
 )
 
 if (selected.length === 0) {
@@ -63,7 +72,7 @@ if (selected.length === 0) {
 }
 writeFileSync(
   join(outDir, 'run.json'),
-  JSON.stringify({ tier, filters, tests: selected.map((t) => t.name), commit: process.env.GITHUB_SHA ?? null }, null, 2),
+  JSON.stringify({ tier, filters, also, tests: selected.map((t) => t.name), commit: process.env.GITHUB_SHA ?? null }, null, 2),
 )
 
 const env = loadEnv()
@@ -81,6 +90,9 @@ interface Row {
 }
 const rows: Row[] = []
 
+/** Set once a test times out: it may still be driving the instance, so later tests are not run. */
+let abort: string | undefined
+
 for (const { file, name, test, loadError } of selected) {
   const ctx = new LabContext(env, name, tier)
   const callStart = mcpCallLog.length
@@ -88,13 +100,22 @@ for (const { file, name, test, loadError } of selected) {
   console.log(`\n=== ${name} (${tier}) ===`)
   let row: Row
   let record: Record<string, unknown>
+  let healthyMs: number | undefined
   try {
+    if (abort) throw new Error(`not run: ${abort}`)
     if (!test) throw new Error(`failed to load: ${loadError}`)
+    // A test that left the app down must not be blamed on the next one.
+    healthyMs = Math.round(await waitHealthy(env.baseUrl, 180_000).catch(() => {
+      throw new Error('the instance was not healthy within 180 s before this test started')
+    }))
     let timer: Timer | undefined
     const out = await Promise.race([
       test.run(ctx),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs)
+        timer = setTimeout(() => {
+          abort = `${name} timed out after ${timeoutMs} ms and may still be running`
+          reject(new Error(`timed out after ${timeoutMs} ms`))
+        }, timeoutMs)
       }),
     ]).finally(() => clearTimeout(timer))
     const ms = performance.now() - t0
@@ -109,13 +130,13 @@ for (const { file, name, test, loadError } of selected) {
       summary: out.summary,
       failedChecks,
     }
-    record = { name, description: test.description, tier, harness: 'ok', ms: Math.round(ms), ...out }
+    record = { name, description: test.description, tier, harness: 'ok', ms: Math.round(ms), healthyBeforeMs: healthyMs, ...out }
   } catch (err) {
     const ms = performance.now() - t0
     const error = describeError(err)
     console.error(`!!! ${name} crashed: ${error}`)
     row = { file, harness: 'crashed', ms, passed: 0, failed: 0, inconclusive: 0, summary: '', failedChecks: [], error }
-    record = { name, tier, harness: 'crashed', ms: Math.round(ms), error }
+    record = { name, tier, harness: 'crashed', ms: Math.round(ms), healthyBeforeMs: healthyMs, error }
   }
   const calls = mcpCallLog.slice(callStart)
   const sorted = calls.map((c) => c.ms).sort((a, b) => a - b)

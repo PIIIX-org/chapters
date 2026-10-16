@@ -6,15 +6,20 @@ name: Elara lab
 # the real setup/signup/approval flow (lab/bootstrap.ts), then exercised by
 # lab/tests/*.test.ts via lab/run.ts. Never deploys.
 #
-# Tiers (cost: the fast tier takes ~7 min, the full tier about an hour):
-#   fast  PRs to dev that touch server/**, lab/**, docker-compose.yml,
-#         Dockerfile or this lab's own workflow/gate; pushes to lab/**
+# Tiers (cost: the fast tier takes ~6 min, the full tier about an hour):
+#   fast  PRs to dev that change what goes into the image or the lab:
+#         server/**, client/**, lab/**, package.json, pnpm-lock.yaml,
+#         pnpm-workspace.yaml, tsconfig.base.json, Dockerfile, .dockerignore,
+#         docker-compose.yml, this workflow, the gate; pushes to lab/**.
+#         Client collab code (useCollabDoc, useCodeMirrorEditor, api/collab)
+#         adds the browser test to the fast tier.
 #   full  nightly on dev, every PR to prod (promotions), and by hand:
 #         gh workflow run elara-lab.yml --ref <branch> [-f tier=fast] [-f tests=a,b]
 # The gate (.github/scripts/lab-gate.mjs) compares the results with
-# lab/known-defects.json: a failed check outside the baseline, a baseline
-# entry that now passes, or a crashed test fails the job. Not a required
-# check yet (fix-list item 177). Docs: docs/agents/lab.md.
+# lab/known-defects.json: a failed or inconclusive check outside the
+# baseline, a baseline entry that no longer shows, or a crashed test fails
+# the job. Not a required check yet (fix-list item 177). Docs:
+# docs/agents/lab.md.
 on:
   pull_request:
     branches: [dev, prod]
@@ -38,9 +43,10 @@ on:
         required: false
         default: '600'
 
+# The nightly gets its own group, so a dispatch or PR on dev never cancels it.
 concurrency:
-  group: elara-lab-${{ github.ref }}
-  cancel-in-progress: true
+  group: elara-lab-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 permissions:
   contents: read
@@ -53,6 +59,7 @@ jobs:
       pull-requests: read
     outputs:
       tier: ${{ steps.plan.outputs.tier }}
+      also: ${{ steps.plan.outputs.also }}
     steps:
       - name: Pick the tier
         id: plan
@@ -62,6 +69,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           INPUT_TIER: ${{ inputs.tier }}
         run: |
+          also=
           case "$GITHUB_EVENT_NAME" in
             schedule) tier=full ;;
             workflow_dispatch) tier="$INPUT_TIER" ;;
@@ -71,17 +79,23 @@ jobs:
                 tier=full
               else
                 gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
-                if grep -Eq '^(server/|lab/|docker-compose\.yml$|Dockerfile$|\.github/workflows/elara-lab\.yml$|\.github/scripts/lab-gate\.mjs$)' "$RUNNER_TEMP/changed.txt"; then
+                # Everything the Dockerfile copies into the image, plus the lab itself.
+                if grep -Eq '^(server/|client/|lab/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig\.base\.json$|Dockerfile$|\.dockerignore$|docker-compose\.yml$|\.github/workflows/elara-lab\.yml$|\.github/scripts/lab-gate\.mjs$)' "$RUNNER_TEMP/changed.txt"; then
                   tier=fast
                 else
                   tier=none
+                fi
+                # The browser test is the only one that drives the client's collab code.
+                if grep -Eq '^client/src/(hooks/(useCollabDoc|useCodeMirrorEditor)|api/collab)' "$RUNNER_TEMP/changed.txt"; then
+                  also=browser
                 fi
               fi
               ;;
             *) echo "unexpected event $GITHUB_EVENT_NAME"; exit 1 ;;
           esac
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          echo "Lab tier: **$tier** ($GITHUB_EVENT_NAME)" >> "$GITHUB_STEP_SUMMARY"
+          echo "also=$also" >> "$GITHUB_OUTPUT"
+          echo "Lab tier: **$tier**${also:+ + $also} ($GITHUB_EVENT_NAME)" >> "$GITHUB_STEP_SUMMARY"
 
   lab:
     needs: plan
@@ -109,7 +123,10 @@ jobs:
           node-version: 24
 
       - name: Generate secrets (.env for compose interpolation)
+        env:
+          RATE_LIMIT: ${{ inputs.mcp_rate_limit || '600' }}
         run: |
+          case "$RATE_LIMIT" in ''|*[!0-9]*) echo "mcp_rate_limit must be a number"; exit 1 ;; esac
           key=$(openssl rand -hex 32)
           setup=$(openssl rand -hex 24)
           pg=$(openssl rand -hex 16)
@@ -120,7 +137,7 @@ jobs:
             echo "CREDENTIALS_ENCRYPTION_KEY=$key"
             echo "SETUP_TOKEN=$setup"
             echo "POSTGRES_PASSWORD=$pg"
-            echo "MCP_RATE_LIMIT=${{ inputs.mcp_rate_limit || '600' }}"
+            echo "MCP_RATE_LIMIT=$RATE_LIMIT"
           } > .env
 
       - name: Build and start (docker compose up -d --build)
@@ -146,6 +163,7 @@ jobs:
       - name: Run lab tests (${{ needs.plan.outputs.tier }} tier)
         env:
           LAB_TESTS: ${{ inputs.tests }}
+          LAB_ALSO: ${{ needs.plan.outputs.also }}
         run: bun lab/run.ts
 
       - name: Collect compose logs
@@ -155,6 +173,12 @@ jobs:
           $COMPOSE ps -a > lab-results/compose-ps.txt 2>&1 || true
           $COMPOSE logs --no-color --timestamps > lab-results/compose.log 2>&1 || true
           [ -f lab-results/summary.md ] && cat lab-results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      # Masking covers the job log, not artifacts: the app prints its setup
+      # token into compose.log. Replace every generated secret before upload.
+      - name: Redact secrets from lab-results
+        if: always()
+        run: bun lab/redact.ts lab-results
 
       # On a PR, run the base's copy of the gate so a PR cannot edit the
       # check it is judged by (the baseline comes from the PR: updating it is

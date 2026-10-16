@@ -354,14 +354,9 @@ const test: LabTest = {
     }
     const mix = m('mix', 'hybrid')
     checks.push({ name: 'mixed Persian/English queries', expected: 'hit@5 = 1', actual: `hit@1 ${mix.hit1}, hit@5 ${mix.hit5}`, ok: mix.hit5 === 1, severity: 'low' })
+    // Cross-lingual has no expectation (English-only model, no translation):
+    // reported in the summary and data.metrics, not as a check.
     const cross = m('cross', 'hybrid')
-    checks.push({
-      name: 'cross-lingual (en query -> fa note, fa query -> en note)',
-      expected: 'info: English-only model, no translation — expected to miss',
-      actual: `hit@5 ${cross.hit5}`,
-      ok: null,
-      severity: 'info',
-    })
 
     // Ground truth: how the 'english' FTS config tokenizes Persian; embedding collapse.
     const tsDebug = await ctx.docker.psqlRows<{ alias: string; token: string; lexemes: string[] | null }>(

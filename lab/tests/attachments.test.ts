@@ -205,15 +205,9 @@ const test: LabTest = {
         htmlGet?.headers['x-content-type-options'] === 'nosniff',
       severity: 'high',
     })
+    // No expectation either way: both answers are kept in data.uploads (empty, dup).
     const empty = await postFile(base, `/api/vaults/${V}/assets`, admin.cookie, 'empty.png', new Uint8Array(0), 'image/png')
     const dup = await postFile(base, `/api/vaults/${V}/assets`, admin.cookie, 'diagram.png', png, 'image/png')
-    checks.push({
-      name: 'same bytes uploaded twice are stored twice (no dedupe)',
-      expected: 'info: second upload gets a new name',
-      actual: `empty upload ${empty.status}; duplicate -> ${(dup.json as Uploaded | undefined)?.fileName}`,
-      ok: null,
-      severity: 'info',
-    })
 
     // -------------------------------------------------------- lifecycle
     const before = await lsAssets()

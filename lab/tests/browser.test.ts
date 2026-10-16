@@ -1007,9 +1007,9 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
   })
   checks.push({
     name: 'S8a: context.setOffline stops collab traffic',
-    expected: 'informational (Chromium emulation, not Elara)',
+    expected: 'stopped (precondition of the S8a steps; Chromium emulation, not Elara)',
     actual: offline.setOfflineCutSocket ? 'stopped (agent text did not arrive while offline)' : 'NOT stopped: agent text arrived while "offline"',
-    ok: null,
+    ok: offline.setOfflineCutSocket ? true : null,
     severity: 'info',
   })
   checks.push({

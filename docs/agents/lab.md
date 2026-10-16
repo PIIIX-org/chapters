@@ -13,10 +13,11 @@ committed baseline of known defects.
 | `.github/workflows/elara-lab.yml` | the workflow: `plan` picks the tier, `lab` builds, bootstraps, runs, gates, uploads |
 | `lab/docker-compose.lab.yml` | compose override: mailpit for signup mail, `MCP_RATE_LIMIT`, local backups |
 | `lab/bootstrap.ts` | setup → signup → verify → approve → login, pinned vault + repo, 4 MCP tokens; writes `lab-env.json` (runner only, holds tokens) |
-| `lab/run.ts` | selects tests by tier or filter, runs them in file-name order, writes `lab-results/` |
+| `lab/run.ts` | selects tests by tier or filter, waits for `/health` before each, runs them in file-name order, writes `lab-results/` |
+| `lab/redact.ts` | replaces this run's secrets (`.env` values, bootstrap passwords, cookies, tokens) with `***` in `lab-results/` before upload |
 | `lab/lib/*.ts` | helpers: `context` (types, `ctx`), `mcp`, `rest`, `docker` (compose, psql, app restart/crash/state/exec), `collab` (Hocuspocus client), `datapath` (disk/DB/.crdt ground truth, memory and health samplers), `fixlab` (repo progress, local_path repos), `portability` (zip, fixtures, OKF), `bundle-test` |
 | `lab/tests/*.test.ts` | the tests |
-| `lab/known-defects.json` | the baseline: every check that fails today, with its open issue |
+| `lab/known-defects.json` | the baseline: every check that fails or is inconclusive today, with its open issue |
 | `.github/scripts/lab-gate.mjs` | the gate; unit tests in `lab-gate.test.mjs` (run by `checks`) |
 | `lab/package.json`, `lab/bun.lock` | lab-only dependencies (`@hocuspocus/provider`, `yjs`, `playwright`); not a pnpm workspace package |
 
@@ -24,18 +25,25 @@ committed baseline of known defects.
 
 | tier | when | tests | time |
 |---|---|---|---|
-| fast | PRs to `dev` that change `server/**`, `lab/**`, `docker-compose.yml`, `Dockerfile`, the lab workflow or the gate; pushes to `lab/**` | tests with `tier: 'fast'`, with their long parts skipped | ~7 min (run 38825028453) |
-| full | nightly 02:30 UTC on `dev`, every PR to `prod` (promotion), and by hand | every test, every part | ~61 min (run 38824113737; `restart-extraction` 20 min, `big-notes` 18 min) |
+| fast | PRs to `dev` that change anything the image is built from (`server/**`, `client/**`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`) or the lab (`lab/**`, the lab workflow, the gate); pushes to `lab/**` | tests with `tier: 'fast'`, with their long parts skipped | lab job 5 min 37 s (run 38830575391) |
+| full | nightly 02:30 UTC on `dev`, every PR to `prod` (promotion), and by hand | every test, every part | lab job 61 min (run 38830570057; `restart-extraction` 19 min, `big-notes` 18 min) |
 
 The `plan` job reads the PR's changed files (GitHub API); a PR to `dev`
-that touches none of those paths skips the `lab` job. Fast-tier tests
-today: `smoke`, `concurrency`, `scoped-tokens`, `collab-duplication`
-(without the eight-kill S17 sweep), `fix-attribution`,
-`fix-crash-catchup`, `fix-frontmatter`, `fix-import-edges` (without the
-chapters repo), `zz-fix-minified-bundle`. Full tier adds `attachments`,
-`backup-restore`, `big-notes`, `browser` (Playwright/Chromium),
-`crash-write`, `export-roundtrip`, `multilingual-search`,
-`restart-extraction`, `zz-fix-pretty-bundle`.
+that touches none of those paths skips the `lab` job. Lockfile-only
+changes (Dependabot bumps of `yjs` or `@hocuspocus/*`, for example) run the
+fast tier. Fast-tier tests today: `smoke`, `concurrency`, `scoped-tokens`,
+`collab-duplication` (without the eight-kill S17 sweep),
+`fix-attribution`, `fix-crash-catchup`, `fix-frontmatter`,
+`fix-import-edges` (without the chapters repo), `zz-fix-minified-bundle`.
+Full tier adds `attachments`, `backup-restore`, `big-notes`, `browser`
+(Playwright/Chromium), `crash-write`, `export-roundtrip`,
+`multilingual-search`, `restart-extraction`, `zz-fix-pretty-bundle`.
+
+`browser` is the only test that drives the web client. A PR that changes
+the client's collab code (`client/src/hooks/useCollabDoc*`,
+`client/src/hooks/useCodeMirrorEditor*`, `client/src/api/collab*`) adds it
+to the fast tier (`LAB_ALSO=browser`); any other client change is
+exercised in the browser only by the nightly full tier.
 
 By hand (any branch that has this workflow):
 
@@ -49,70 +57,104 @@ gh run download <id> -R PIIIX-org/chapters -n lab-results -D <dir>
 
 `tests` is a comma-separated list of substrings of test file names and
 overrides the tier's selection (the tier still decides whether a test runs
-its long parts). A newer run on the same ref cancels the older one. The
-lab job is **not a required check** yet (branch protection is fix-list
-item 177); treat a red lab run on a PR as blocking review.
+its long parts). A newer run on the same ref cancels the older one; the
+nightly has its own concurrency group, so a dispatch or PR on `dev` never
+cancels it. The lab job is **not a required check** yet (branch protection
+is fix-list item 177); treat a red lab run on a PR as blocking review.
 
 ## The gate and the baseline
 
 A test reports **checks**: `ok: true` (Elara met the expectation),
-`ok: false` (Elara defect), `ok: null` (inconclusive: a precondition broke).
-A test that **throws** or times out (`LAB_TEST_TIMEOUT_MS`, default 90 min)
-is a harness crash. `lab/run.ts` only records; the gate step decides.
+`ok: false` (Elara defect), `ok: null` (inconclusive: a precondition broke,
+for example a token was refused or the instance did not answer). A test that
+**throws**, times out (`LAB_TEST_TIMEOUT_MS`, default 90 min) or reports no
+checks is a harness crash; so is a test whose instance is not healthy within
+180 s before it starts. After a timeout the remaining tests are not run (the
+timed-out test may still be driving the instance) and count as crashed.
+`lab/run.ts` only records; the gate step decides.
 
-`lab/known-defects.json` lists every check that fails today:
+`lab/known-defects.json` lists every check that does not pass today:
 
 ```json
 {
   "defects": [
     { "test": "fix-attribution", "check": "sequential edit_note credited to the MCP connection", "issue": 403 },
     { "test": "crash-write", "match": "^kill \\S+: check-notes clean$", "issue": 486,
-      "intermittent": "depends on where the SIGKILL lands relative to the writes" }
+      "intermittent": "depends on where the SIGKILL lands relative to the writes" },
+    { "test": "scoped-tokens", "check": "repo-pinned delete_vault [omitted]", "state": "inconclusive", "issue": 549 }
   ]
 }
 ```
 
-- `check` is the exact check name; `match` a regex for a family of checks
+- `check` is the exact check name; `match` an anchored regex (`^...$`) for
+  a family of checks that differ only in numbers (kill delay or round, N)
   (exactly one of the two).
+- `state` is `failed` (default) or `inconclusive`: the state the check is in
+  today. An entry only covers checks in its state.
 - `issue` is the open GitHub issue that tracks the defect.
 - `intermittent` (optional, a reason) marks a check whose outcome depends
   on timing, so it may pass without being fixed.
 
 The job fails when:
 
-1. a test crashed, timed out or wrote no result, or the runner never
-   started (build or bootstrap failed);
-2. **regression**: a check failed that no entry covers;
-3. **stale baseline**: an entry's checks all passed (unless
-   `intermittent`), or, in the full tier, its test ran and no longer reports
-   a check with that name (renamed or removed). The fast tier skips some
-   checks, so a missing check is not stale there;
-4. an entry points at a closed issue or at a PR;
-5. the baseline file is malformed.
+1. a test crashed, timed out, wrote no result, reported no checks or found
+   the instance unhealthy, or the runner never started (build or bootstrap
+   failed);
+2. **regression**: a check failed, or came out inconclusive, and no entry
+   for that state covers it. Inconclusive is not a pass: if pinned tokens
+   stopped working altogether, `scoped-tokens` would turn ~250 checks
+   inconclusive, and that must be red;
+3. **stale baseline**: an entry's checks are no longer in its state (unless
+   `intermittent`), or, in an unfiltered full-tier run, its check or its
+   whole test is no longer reported (renamed or removed). The fast tier
+   skips some checks, so a missing check is not stale there;
+4. **over-broad family**: a `match` entry covers checks of more than one
+   kind in this run. The kind is the check name with every number (and a
+   letter glued to it: `t100`, `S17`, `N=5`) replaced by `#`. So
+   `^S17 SIGKILL \d+ ms after ack: .*$` is rejected as soon as it also
+   covers the `disk = DB = .crdt = clients` checks, which pass; a family
+   cannot hide a different check that shares its prefix;
+5. an entry points at a closed issue or at a PR;
+6. the baseline file is malformed (including an unanchored regex).
 
-Inconclusive checks never fail the job. The gate writes its verdict to the
-job summary and to `lab-results/gate.md`: regressions, stale entries, known
-defects still failing (with issue links), intermittent ones that passed,
-inconclusive checks. On a PR the workflow runs the **base** commit's copy of
-the gate, like `pr-evidence` and `fails-before`; the baseline always comes
-from the PR.
+The gate writes its verdict to the job summary and to
+`lab-results/gate.md`: regressions (with their state), stale entries,
+over-broad families, known defects (with issue links), intermittent ones
+that passed. On a PR the workflow runs the **base** commit's copy of the
+gate, like `pr-evidence` and `fails-before`; the baseline, the tests and
+`lab/run.ts` always come from the PR, so that protects the verdict logic
+only.
 
 What to do when it is red:
 
-- **Regression**: fix the code. If it is a real defect you are not fixing
-  in this PR, open an issue and add an entry (that is a decision for the
-  reviewer to see in the diff).
+- **Regression**: fix the code. An inconclusive regression usually means a
+  precondition broke (tokens refused, instance down, a fixture call failed):
+  read `actual`. If it is a real defect you are not fixing in this PR, open
+  an issue and add an entry (that is a decision for the reviewer to see in
+  the diff).
 - **Stale entry** (your fix made a check pass): delete the entry in the same
   PR, and close the issue with the fix (`Closes #N`) or comment the lab run
   on it if the issue covers more than this check.
+- **Over-broad family**: narrow the regex to the failing kind, or split it.
 - **Harness crash**: read the error in the summary and the test's JSON; the
   instance logs are in `compose.log` of the artifact.
 
 Regenerating the baseline after a deliberate change: dispatch the full
-tier, download `lab-results`, and add or remove entries from the failed
-checks of each `<test>.json` (`checks[] | select(.ok == false) | .name`),
-each with the issue it belongs to. Prefer exact `check` names; use `match`
-only for a family that fails together (kill rounds, per-N scenarios).
+tier, download `lab-results`, and add or remove entries from the checks of
+each `<test>.json` that are not `ok: true` (`checks[] | select(.ok != true)`),
+each with the issue it belongs to and `"state": "inconclusive"` for
+`ok: null`. Prefer exact `check` names; use `match` only for a family that
+differs in numbers (kill rounds, per-N scenarios). Then lint it against
+the runs it came from (fast and full):
+
+```sh
+node .github/scripts/lab-gate.mjs --lint <full-run-dir>,<fast-run-dir>
+```
+
+The lint fails when an entry matches no check in those runs, or when an
+entry (or one kind of check a family covers) was never in the entry's
+state in any of them, which is how a family that also covers an
+always-passing check shows up.
 
 ## Adding a test
 
@@ -143,7 +185,12 @@ Rules:
 
 - **Check names are identities**: the baseline matches them exactly. Keep
   run-specific values (ids, random markers, counts, timings) in `actual`,
-  never in `name`.
+  never in `name`. Scenario parameters (`N=5`, `900 KiB x 300`) may be in
+  the name; the baseline holds for the default tunables, so a dispatch with
+  `LAB_CONCURRENCY_SIZES` or `LAB_BIG_SIZES_KIB` changed reports their
+  checks as regressions or stale.
+- An observation with no expectation is not a check: put it in `data`.
+  `ok: null` means "could not judge" and is a failure unless baselined.
 - Fast tier only if the test runs in about a minute; put long parts behind
   `ctx.tier === 'full'`.
 - Tests run sequentially in file-name order on **one** instance. Create
@@ -153,7 +200,11 @@ Rules:
   can take the instance down are named `zz-` so they run last.
 - Never print secrets: credentials and tokens come from `ctx.env`; redact
   them from error text you throw (see `browser.test.ts`). The workflow
-  generates `.env` per run and masks it; `lab-env.json` is never uploaded.
+  generates `.env` per run and masks it in the job log; masking does not
+  reach artifacts, so `lab/redact.ts` replaces every generated secret (the
+  app prints its setup token into `compose.log`) and the bootstrap
+  passwords, cookies and tokens in `lab-results/` before upload.
+  `lab-env.json` itself is never uploaded.
 - A new failing check needs a baseline entry and an open issue in the same
   PR, or the gate fails.
 
@@ -179,11 +230,11 @@ in `pnpm lint`; for types run `tsc --noEmit` with `types: ["bun"]`,
 | `ctx.log(...)`, `ctx.uniq(prefix)` | timestamped log line; unique slug-safe name |
 
 Tunables via env (set in the workflow step if needed): `LAB_TESTS`,
-`LAB_TIER`, `LAB_TEST_TIMEOUT_MS`, `LAB_CONCURRENCY_SIZES` (`5,10,20`),
-`LAB_RESTART_REPO_URL`, `LAB_RESTART_AT` (0.25), `LAB_RESTART_STALL_MS`
-(120000), `LAB_SCOPE_OTHER_REPO_URL`, `LAB_SCOPE_PINNED_REPO_URL`,
-`LAB_IMPORTS_REPO_URL`, `LAB_CRASH_EDITS`, `LAB_CRASH_CREATES`,
-`LAB_BIG_SIZES_KIB`, `LAB_BUNDLE_*`.
+`LAB_TIER`, `LAB_ALSO`, `LAB_TEST_TIMEOUT_MS`, `LAB_CONCURRENCY_SIZES`
+(`5,10,20`), `LAB_RESTART_REPO_URL`, `LAB_RESTART_AT` (0.25),
+`LAB_RESTART_STALL_MS` (120000), `LAB_SCOPE_OTHER_REPO_URL`,
+`LAB_SCOPE_PINNED_REPO_URL`, `LAB_IMPORTS_REPO_URL`, `LAB_CRASH_EDITS`,
+`LAB_CRASH_CREATES`, `LAB_BIG_SIZES_KIB`, `LAB_BUNDLE_*`.
 
 ## Gotchas
 
@@ -195,8 +246,13 @@ Tunables via env (set in the workflow step if needed): `LAB_TESTS`,
   `RestSession` carries them by hand over http.
 - `EMBEDDINGS=local`: the first embedding downloads the ONNX model (~130 MB)
   inside the container; the first search or extraction is slower.
-- The runner has 4 vCPU and 16 GB; `big-notes` deliberately drives the app
-  into a V8 heap OOM (#411) and waits for Docker to restart it.
+- `big-notes` deliberately drives the app into a V8 heap OOM (#411; peak
+  about 6 GB in the container) and waits for Docker to restart it. The app
+  service has no memory limit, so this relies on the 16 GB `ubuntu-latest`
+  runner: on a smaller runner the kernel OOM killer could take Postgres or
+  the runner instead. Do not move the lab to a smaller runner while #411
+  stands.
 - No secrets of its own: the workflow generates `.env` per run
-  (`CREDENTIALS_ENCRYPTION_KEY`, `SETUP_TOKEN`, `POSTGRES_PASSWORD`) and
-  masks it; `MCP_RATE_LIMIT` is 600 unless dispatched otherwise.
+  (`CREDENTIALS_ENCRYPTION_KEY`, `SETUP_TOKEN`, `POSTGRES_PASSWORD`), masks
+  it in the job log and redacts it from the artifact; `MCP_RATE_LIMIT` is
+  600 unless dispatched otherwise.

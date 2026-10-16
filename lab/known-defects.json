@@ -142,12 +142,6 @@
     },
     {
       "test": "browser",
-      "match": "^S8[ab]-(back-online|reconnected): typing done while disconnected stays where it was typed$",
-      "issue": 485,
-      "intermittent": "offline text lands at position 0 in about half the merges, depending on where the agent's insert falls among deleted characters"
-    },
-    {
-      "test": "browser",
       "check": "agent visible in presence while it writes (edit_note says \"attributed to this connection\")",
       "issue": 481
     },
@@ -188,14 +182,32 @@
     },
     {
       "test": "browser",
+      "check": "S8a-back-online: typing done while disconnected stays where it was typed",
+      "issue": 485,
+      "intermittent": "offline text lands at position 0 in about half the merges, depending on where the agent's insert falls among deleted characters"
+    },
+    {
+      "test": "browser",
+      "check": "S8b-reconnected: typing done while disconnected stays where it was typed",
+      "issue": 485,
+      "intermittent": "offline text lands at position 0 in about half the merges, depending on where the agent's insert falls among deleted characters"
+    },
+    {
+      "test": "browser",
       "check": "undo (Ctrl+Z) removes the user's own last typing after an agent append",
       "issue": 483
     },
     {
       "test": "collab-duplication",
-      "match": "^S17 SIGKILL \\d+ ms after ack: ",
+      "match": "^S17 SIGKILL \\d+ ms after ack: @M17d\\d+@ kept exactly once on disk$",
       "issue": 488,
-      "intermittent": "which kill delays duplicate text depends on where the SIGKILL lands between the relay's note write and its .crdt write (2-4 of 8 delays per run)"
+      "intermittent": "which kill delays duplicate text depends on where the SIGKILL lands between the relay's note write and its .crdt write (2-5 of 8 delays per run)"
+    },
+    {
+      "test": "collab-duplication",
+      "match": "^S17 SIGKILL \\d+ ms after ack: no duplicated text$",
+      "issue": 488,
+      "intermittent": "which kill delays duplicate text depends on where the SIGKILL lands between the relay's note write and its .crdt write (2-5 of 8 delays per run)"
     },
     {
       "test": "collab-duplication",
@@ -424,9 +436,24 @@
     },
     {
       "test": "multilingual-search",
-      "match": "^normalization: ",
+      "check": "normalization: Arabic kaf ك (\"فرش كاشان\" vs stored \"فرش کاشان\")",
+      "issue": 528
+    },
+    {
+      "test": "multilingual-search",
+      "check": "normalization: Arabic kaf ك + Arabic yeh ي (\"كوير لوت\" vs stored \"کویر لوت\")",
       "issue": 528,
-      "intermittent": "the keyword channel misses every variant spelling; whether the hybrid rank still drops depends on vector ranks, which shift with timestamp noise (#459)"
+      "intermittent": "the keyword channel misses this variant every time; the hybrid rank drops only when the vector ranks, which shift with timestamp noise (#459), do not carry it (failed in 3 of 5 runs)"
+    },
+    {
+      "test": "multilingual-search",
+      "check": "normalization: Arabic yeh ي (\"يلدا\" vs stored \"یلدا\")",
+      "issue": 528
+    },
+    {
+      "test": "multilingual-search",
+      "check": "normalization: Persian digits -> ASCII digits (\"برج آزادی 1349\" vs stored \"برج آزادی ۱۳۴۹\")",
+      "issue": 528
     },
     {
       "test": "multilingual-search",
@@ -460,7 +487,19 @@
     },
     {
       "test": "scoped-tokens",
+      "check": "repo-pinned delete_repository [omitted]",
+      "state": "inconclusive",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
       "check": "repo-pinned delete_repository [pinned]",
+      "issue": 549
+    },
+    {
+      "test": "scoped-tokens",
+      "check": "repo-pinned delete_vault [omitted]",
+      "state": "inconclusive",
       "issue": 549
     },
     {
