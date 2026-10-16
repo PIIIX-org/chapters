@@ -52,10 +52,14 @@ interface ScopeCase {
   args?: (fx: Fixtures) => Args | Promise<Args>
   /** Destroys the token's pin when confined: runs after every other case. */
   last?: true
+  /** Text a confined (no id) call must return for that token: proof it works inside the pin. */
+  finds?: Partial<Record<Token, string[]>>
 }
 
 const MARK = { P: 'SCOPEPINNEDVAULTMARK', O: 'SCOPEOTHERVAULTMARK' }
 const SYMBOL = { RP: 'scopeProbePinned', RO: 'scopeProbeOther' }
+// Links from a note in the pinned vault into the other repository: one file missing, one present.
+const REPO_LINK = { missing: 'repo:scope-other-repo/missing.ts', present: 'repo:scope-other-repo/src/other-only.ts' }
 const SCOPE_DENIAL =
   /pinned to a different|is scoped to a (vault|repository)|requires an account-scoped connection/i
 
@@ -86,7 +90,7 @@ const CASES: Record<string, ScopeCase> = {
   mark_notification_read: { kind: 'account', args: () => ({ notificationId: randomUUID() }) },
 
   // one vault
-  browse_vault: { kind: 'vault' },
+  browse_vault: { kind: 'vault', finds: { vault: ['docs/probe'] } },
   update_vault: { kind: 'vault', args: () => ({ mergeable: false }) },
   get_vault_graph_preference: { kind: 'vault' },
   set_vault_graph_preference: { kind: 'vault', args: () => ({ include: false }) },
@@ -110,12 +114,13 @@ const CASES: Record<string, ScopeCase> = {
   purge_revision: { kind: 'vault', args: (fx) => ({ revisionId: fx.O.revisionId }) },
   export_vault: { kind: 'vault' },
   export_note: { kind: 'vault', args: (fx) => ({ path: fx.O.onlyPath }) },
-  audit_okf_conformance: { kind: 'vault' },
+  // Repo links in the pinned vault are reported, never resolved outside the pin: both show up as broken.
+  audit_okf_conformance: { kind: 'vault', finds: { vault: [REPO_LINK.missing, REPO_LINK.present] } },
   list_graph_perspectives: { kind: 'vault' },
   save_graph_perspective: { kind: 'vault', args: () => ({ name: `scope-perspective-${next()}` }) },
 
   // one repository
-  browse_repository: { kind: 'repository' },
+  browse_repository: { kind: 'repository', finds: { repo: ['src/pinned.ts'] } },
   read_file: { kind: 'repository', args: (fx) => ({ path: fx.RO.onlyPath }) },
   repository_status: { kind: 'repository' },
   sync_repository: { kind: 'repository' },
@@ -126,10 +131,10 @@ const CASES: Record<string, ScopeCase> = {
   list_repository_shares: { kind: 'repository' },
   share_repository: { kind: 'repository', args: (fx) => ({ granteeType: 'user', granteeId: fx.memberId }) },
   revoke_repository_share: { kind: 'repository', args: (fx) => ({ shareId: fx.RO.shareId }) },
-  find_symbols: { kind: 'repository', args: () => ({ query: 'scopeProbe' }) },
+  find_symbols: { kind: 'repository', args: () => ({ query: 'scopeProbe' }), finds: { repo: [SYMBOL.RP] } },
 
   // vaults and/or repositories
-  search: { kind: 'vault-or-repo', args: () => ({ query: 'scope probe marker' }) },
+  search: { kind: 'vault-or-repo', args: () => ({ query: 'scope probe marker' }), finds: { vault: [MARK.P] } },
   graph: { kind: 'vault-or-repo' },
   find_graph_path: { kind: 'vault-or-repo', args: (fx) => ({ source: fx.O.onlyPath, target: fx.RO.onlyPath }) },
 
@@ -201,6 +206,13 @@ beforeAll(async () => {
   const P = await must<{ id: string }>(acct, 'create_vault', { name: 'scope-pinned' })
   const O = await must<{ id: string }>(acct, 'create_vault', { name: 'scope-other' })
   await must(acct, 'create_note', { vaultId: P.id, type: 'docs', name: 'probe', body: `${MARK.P} scope probe marker` })
+  // Deep links from the pinned vault into the other repository (created below).
+  await must(acct, 'create_note', {
+    vaultId: P.id,
+    type: 'docs',
+    name: 'repo-links',
+    body: `Code: [[${REPO_LINK.missing}]] and [[${REPO_LINK.present}]].`,
+  })
   await must(acct, 'create_note', { vaultId: O.id, type: 'docs', name: 'probe', body: `${MARK.O} scope probe marker` })
   await must(acct, 'create_note', { vaultId: O.id, type: 'docs', name: 'other-only', body: MARK.O })
   await must(acct, 'create_note', { vaultId: O.id, type: 'docs', name: 'other-trashed', body: MARK.O })
@@ -268,7 +280,9 @@ interface Probe {
   tool: string
   label: string
   args: () => Promise<Args>
-  expect: 'refuse' | 'confine'
+  /** refuse: a scope refusal. hide: "not found", as for an id that does not exist. confine: works inside the pin. */
+  expect: 'refuse' | 'hide' | 'confine'
+  finds: string[]
   last: boolean
 }
 
@@ -276,8 +290,8 @@ function probesFor(tool: string, c: ScopeCase, takesEverywhere: boolean): Probe[
   const base = async () => (c.args ? await c.args(fx) : {})
   const probes: Probe[] = []
   for (const token of ['vault', 'repo'] as const) {
-    const add = (label: string, args: () => Promise<Args>, expect: Probe['expect']) =>
-      probes.push({ token, tool, label, args, expect, last: expect === 'confine' && c.last === true })
+    const add = (label: string, args: () => Promise<Args>, expect: Probe['expect'], finds: string[] = []) =>
+      probes.push({ token, tool, label, args, expect, finds, last: expect === 'confine' && c.last === true })
     const fits =
       c.kind === 'vault-or-repo' || (c.kind === 'vault' && token === 'vault') || (c.kind === 'repository' && token === 'repo')
     switch (c.kind) {
@@ -285,21 +299,23 @@ function probesFor(tool: string, c: ScopeCase, takesEverywhere: boolean): Probe[
         add('account surface', base, 'refuse')
         break
       case 'perspective-id':
-        add('other vault perspective', async () => ({ id: fx.O.perspectiveId }), 'refuse')
-        add('global perspective', async () => ({ id: fx.globalPerspectiveId }), 'refuse')
+        // A perspective outside the pin answers like one that does not exist: no existence oracle.
+        add('other vault perspective', async () => ({ id: fx.O.perspectiveId }), 'hide')
+        add('global perspective', async () => ({ id: fx.globalPerspectiveId }), 'hide')
         add(
           'pinned vault perspective',
           async () => {
             const p = await must<{ id: string }>(acct, 'save_graph_perspective', { vaultId: fx.P.id, name: `scope-${next()}` })
             return { id: p.id }
           },
-          token === 'vault' ? 'confine' : 'refuse',
+          token === 'vault' ? 'confine' : 'hide',
+          token === 'vault' ? ['"ok":true'] : [],
         )
         break
       default:
         if (c.kind !== 'repository') add('other vault', async () => ({ ...(await base()), vaultId: fx.O.id }), 'refuse')
         if (c.kind !== 'vault') add('other repository', async () => ({ ...(await base()), repositoryId: fx.RO.id }), 'refuse')
-        add('no id', base, fits ? 'confine' : 'refuse')
+        add('no id', base, fits ? 'confine' : 'refuse', fits ? (c.finds?.[token] ?? []) : [])
     }
     if (takesEverywhere) add('everywhere', async () => ({ ...(await base()), everywhere: true }), 'refuse')
   }
@@ -315,7 +331,7 @@ describe('MCP tools respect a pinned token (#546, #547)', () => {
 
     const other = await call(vault, 'delete_graph_perspective', { id: fx.O.perspectiveId })
     expect(other.isError).toBe(true)
-    expect(other.text).toMatch(SCOPE_DENIAL)
+    expect(other.text).toBe('Error: not found')
     const listed = await must<Array<{ id: string }>>(acct, 'list_graph_perspectives', { vaultId: fx.O.id })
     expect(listed.map((p) => p.id)).toContain(fx.O.perspectiveId)
   })
@@ -339,6 +355,10 @@ describe('MCP tools respect a pinned token (#546, #547)', () => {
         if (!r.isError || !SCOPE_DENIAL.test(r.text)) failures.push(`${where}: expected a scope refusal, got ${r.text.slice(0, 160)}`)
         continue
       }
+      if (p.expect === 'hide') {
+        if (r.text !== 'Error: not found') failures.push(`${where}: expected "not found", got ${r.text.slice(0, 160)}`)
+        continue
+      }
       if (r.isError && SCOPE_DENIAL.test(r.text)) {
         failures.push(`${where}: refused inside its own pin: ${r.text.slice(0, 160)}`)
         continue
@@ -351,6 +371,8 @@ describe('MCP tools respect a pinned token (#546, #547)', () => {
         .filter(([needle]) => r.text.includes(needle))
         .map(([, what]) => what)
       if (leaks.length) failures.push(`${where}: response leaks ${leaks.join(', ')}`)
+      const missing = p.finds.filter((needle) => !r.text.includes(needle))
+      if (missing.length) failures.push(`${where}: confined call did not return ${missing.join(', ')}: ${r.text.slice(0, 160)}`)
     }
     expect(failures).toEqual([])
   }, 120_000)
@@ -365,5 +387,11 @@ describe('MCP tools respect a pinned token (#546, #547)', () => {
     expect(() =>
       server.registerTool('unscoped_probe', { description: 'no scope', inputSchema: {} }, async () => ({ content: [] })),
     ).toThrow(/scope/)
+    expect(() => server.tool('unscoped_probe', async () => ({ content: [] }))).toThrow(/scope/)
+    // Resources would be a second way to serve data without the scope check.
+    expect(() =>
+      server.registerResource('unscoped_probe', 'elara://probe', {}, async () => ({ contents: [] })),
+    ).toThrow(/scope/)
+    expect(() => server.resource('unscoped_probe', 'elara://probe', async () => ({ contents: [] }))).toThrow(/scope/)
   })
 })
