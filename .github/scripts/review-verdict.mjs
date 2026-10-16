@@ -28,6 +28,8 @@ import { pathToFileURL } from 'node:url'
 export const CONTEXTS = new Map([
   ['prod', 'review-verdict'],
   ['dev', 'review-verdict/dev'],
+  // SCRATCH ONLY (#574 proof, never merged): gate the scratch copy of prod.
+  ['lab/protect-demo', 'review-verdict'],
 ])
 
 /**
