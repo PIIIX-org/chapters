@@ -11,7 +11,8 @@ committed baseline of known defects.
 | file | what |
 |---|---|
 | `.github/workflows/elara-lab.yml` | the workflow: `plan` picks the lab tier and the benchmark tier, `lab` builds, bootstraps, runs, gates, uploads; `bench` runs the premise benchmark on its own instance |
-| `.github/actions/lab-instance/action.yml` | shared by `lab` and `bench`: per-run secrets and `ELARA_VERSION` (the commit, baked into the image like `publish.yml` does) in `.env`, `docker compose up -d --build`, `bun lab/bootstrap.ts` |
+| `.github/workflows/agent-trial.yml` | the agent trial (#571): real AI agents on the 8 A/B tasks against a lab instance, weekly and by hand; skips without an agent credential (see below) |
+| `.github/actions/lab-instance/action.yml` | shared by `lab`, `bench` and the agent trial's `trial` job: per-run secrets and `ELARA_VERSION` (the commit, baked into the image like `publish.yml` does) in `.env`, `docker compose up -d --build`, `bun lab/bootstrap.ts` |
 | `lab/docker-compose.lab.yml` | compose override: mailpit for signup mail, `MCP_RATE_LIMIT`, local backups, the `ELARA_VERSION` build arg |
 | `lab/bootstrap.ts` | setup → signup → verify → approve → login, pinned vault + repo, 4 MCP tokens; writes `lab-env.json` (runner only, holds tokens) |
 | `lab/run.ts` | selects tests by tier or filter, waits for `/health` before each, runs them in file-name order, writes `lab-results/` |
@@ -97,6 +98,35 @@ queue), then runs both scripted agents on every question and writes
 regressions against the base commit's baseline, and needs an owner label
 for a changed suite or a lowered baseline. Method, metrics, thresholds,
 overrides and how to regenerate the baseline: `benchmarks/README.md`.
+
+## The agent trial (`agent-trial.yml`)
+
+Real AI agents on the study's 8 A/B tasks (#571), Elara-only (MCP) against
+local-only (read/grep on a checkout of the same commit), on a lab instance
+built by the same `lab-instance` action. A separate workflow, not part of
+`elara-lab.yml` and not a required check: weekly (Mondays 04:00 UTC) and by
+hand.
+
+| job | what |
+|---|---|
+| `gate` | `node benchmarks/agent-trial/gate.ts`, given only whether the key exists (`AGENT_TRIAL_HAS_KEY`) and `AGENT_TRIAL_MODEL`: with no agent credential it prints `skipped: no agent credential (#571)` and the run ends green; nothing is built |
+| `trial` | lab instance, then `bun benchmarks/agent-trial/run.ts`: refuses a non-lab base URL, fetches PIIIX-org/chapters at the pinned commit, checks every evidence range of `tasks.json`, indexes the tree as a `local_path` repository, mints a repository-pinned read token allow-listed to the Elara arm's tools, runs each task in both arms, grades, writes `agent-trial-results/` after every episode (artifact, 90 days) |
+
+The key is a secret of the `agent-trial` environment, whose deployment
+branches are `dev` only; it must not be a repository secret. Only a run on
+`dev` (the schedule, or a dispatch on dev) binds the environment, so a
+dispatch on any other branch sees no key: there, only `model=scripted` runs.
+
+```sh
+gh workflow run agent-trial.yml -R PIIIX-org/chapters --ref dev                       # live; skips without a credential
+gh workflow run agent-trial.yml -R PIIIX-org/chapters --ref <branch> -f model=scripted  # dry run, fake model
+gh workflow run agent-trial.yml -R PIIIX-org/chapters --ref dev -f tasks=T1 -f arms=elara
+```
+
+The owner provides no model API key, so the scheduled run skips until one
+is configured. A dry run tests the plumbing end to end and its numbers are
+not agent numbers. Method, caps, grading, settings and how to read a run:
+`benchmarks/README.md`, "Agent trial".
 
 ## The gate and the baseline
 
