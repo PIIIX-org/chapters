@@ -64,7 +64,7 @@ describe('contextFor', () => {
   it('gates prod (required) and dev (informational) only', () => {
     assert.equal(contextFor('prod'), 'review-verdict')
     assert.equal(contextFor('dev'), 'review-verdict/dev')
-    for (const base of ['lab/protect-demo', 'main', 'constructor', '__proto__', '']) assert.equal(contextFor(base), null)
+    for (const base of ['lab/elara-study', 'main', 'constructor', '__proto__', '']) assert.equal(contextFor(base), null)
   })
 })
 
