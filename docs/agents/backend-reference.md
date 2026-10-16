@@ -735,7 +735,7 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     server at `/collab`; there is no second port.
 - **`GET /health`** (root, not under `/api`, no login needed): runs
   `SELECT 1`, then answers `200`
-  `{ status: 'ok', startedAt, bootId, version, lastShutdown }`, or `503`
+  `{ status: 'ok', startedAt, bootId, version, lastShutdown, previousBootId }`, or `503`
   `{ status: 'error', error: 'Database unreachable' }`. The extra fields
   (#583, `server/src/lifecycle.ts`) let an outside monitor see a restart
   without host access, and hold nothing sensitive:
@@ -754,10 +754,31 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     `graceful`; `running` → `unclean` (SIGKILL, OOM kill, crash, uncaught
     exception, a boot that died in migrations, or a shutdown Docker cut
     short after its stop timeout); missing or unreadable → `unknown`
-    (first boot on this data directory). The marker is written to a temp
-    file and renamed, so a kill mid-write leaves the previous marker.
+    (first boot on this data directory).
+    - A SIGTERM that arrives before `index.ts` installs its handlers
+      (during migrations and the boot catch-ups, before `listen`) ends the
+      process with Node's default action, so it reads as `unclean`: a
+      redeploy of a container that is still booting shows as unclean.
+    - The marker is written to a per-process temp file
+      (`lifecycle.json.<pid>.tmp`) and renamed, so a kill mid-write leaves
+      the previous marker.
+    - If the `running` write fails (full or read-only volume), this boot
+      reports `unknown` (the marker it read may be stale, left by an older
+      process that failed the same way) and deletes the marker (unlink
+      works on a full disk), so the next boot reports `unknown` rather than
+      reading an older process's `stopped` as `graceful`. On a read-only
+      volume the delete fails too, and every boot keeps reporting `unknown`.
+      The boot log line carries the error as `markerError`.
+    - It assumes **one process per `DATA_DIR`**, which the deployment is
+      (single container; the collab relay and the queues are in-process,
+      §9). A second process would overwrite the marker, and the verdict
+      would be about whichever wrote last.
+  - `previousBootId`: the `bootId` of the process `lastShutdown` is about
+    (from the marker), or `null` when that is `unknown`. A monitor that
+    last saw a different `bootId` missed a restart in between, and knows
+    `lastShutdown` is not about the process it saw.
   - At boot `index.ts` also prints one JSON line,
-    `{"event":"boot","bootId",...,"lastShutdown","previous":{bootId,startedAt,version,stoppedAt,signal}}`.
+    `{"event":"boot","bootId",...,"lastShutdown","previousBootId","previous":{bootId,startedAt,version,stoppedAt,signal},"markerError"}`.
   - The production monitor that reads these fields is
     `.github/workflows/uptime.yml` (`github-workflow.md`, Production uptime
     monitor).

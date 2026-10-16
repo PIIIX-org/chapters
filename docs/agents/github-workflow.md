@@ -530,27 +530,51 @@ have no access to the host, only its public URL, so every 10 minutes
 (`*/10 * * * *`, the default branch's copy; GitHub may run it late) a job
 makes one read-only `GET https://chapters.piiix.org/health` (monitoring,
 not testing) and compares the process identity it reports (`bootId`,
-`startedAt`, `version`, `lastShutdown`; `backend-reference.md`,
-Deployment) with the last one seen.
+`startedAt`, `version`, `lastShutdown`, `previousBootId`;
+`backend-reference.md`, Deployment) with the last one seen.
 
 - **Where the state lives**: in a hidden `<!-- uptime-state {...} -->`
   block in the body of the pinned open issue **Production uptime**
   labelled `owner` (#636), keyed by URL. Body edits notify nobody, and the
-  body is rewritten only when the state changes (not on every run). If no
-  such open issue exists, the job creates one; a bot-created issue has no
-  human subscriber, so subscribe to it (or recreate it from the owner's
-  account and pin it).
+  body is rewritten only when the state changes (not on every run). The
+  job re-reads the body right before writing and replaces only the block's
+  entry for its URL, so an edit made to the rest of the body survives
+  (one made in the second between that read and the write would not).
+  Every page of open `owner` issues is searched for it. If no such open
+  issue exists, the job creates one; a bot-created issue has no human
+  subscriber, so subscribe to it (or recreate it from the owner's account
+  and pin it).
 - **Alerts** are comments on that issue, so they notify its subscribers
   (the owner created #636):
   - **restart**: `bootId` changed; old and new `startedAt` and `version`,
     and `lastShutdown`. `unclean` (the previous process was killed or
     crashed before finishing a clean shutdown) also adds the label
-    `unclean-restart`; remove it once the restart is explained.
+    `unclean-restart`; remove it once the restart is explained. When
+    `previousBootId` is not the `bootId` the monitor last saw, the app
+    restarted more than once between two checks: `lastShutdown` is about a
+    process the monitor never saw, and the comment says that how the one
+    it saw ended is not known (it may have crashed).
   - **down**: `/health` failed (network error, timeout, non-2xx such as
     the `503` for an unreachable database) 2 checks in a row; once per
     outage, however long it lasts.
   - **recovered**: it answers again; once. A restart seen at the same
     time goes in the same comment.
+  - **weekly check-in**: 7 days after the last check-in (the first one
+    counts from the first run). It says whether `/health` is up and with
+    which `bootId`.
+- **A broken monitor is otherwise silent.** A failed scheduled run
+  notifies only whoever last edited the workflow's cron line, not the
+  issue's subscribers, and a disabled schedule notifies nobody. The weekly
+  check-in is the dead-man switch: no check-in for more than a week means
+  the monitor is broken, so look at the `uptime.yml` runs in the Actions
+  tab.
+- **What reaches a comment**: values from `/health` are format-checked
+  first (`bootId`/`previousBootId` UUIDs, `startedAt` ISO 8601 UTC,
+  `version` 7-40 lower-case hex); anything else is dropped as unknown.
+  Error text keeps plain characters only, and `url` must be a plain
+  `http(s)://host[:port][/path]`, so a wrong `url` input or a hostile
+  endpoint cannot put Markdown, links or mentions into a comment that
+  notifies the owner.
 - **Dedupe**: a restart is reported once per new `bootId`; a single failed
   check alerts nothing. A crash loop gives at most one comment per run.
   The comment is posted before the state is saved, so a failed post is
@@ -571,7 +595,7 @@ Deployment) with the last one seen.
   lab instance through a graceful restart, a SIGKILL, a stop and a start
   (`lab.md`).
 - GitHub disables scheduled workflows in a public repository after 60
-  days without repository activity; a disabled monitor is silent, so
+  days without repository activity; the weekly check-ins then stop, so
   re-enable it in the Actions tab if that ever happens.
 
 ## Branch protection and the review gate

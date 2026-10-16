@@ -12,6 +12,9 @@ name: Production uptime
 #     `unclean-restart`
 #   - down: `/health` failed 2 checks in a row (once per outage)
 #   - recovered: it answers again (once)
+#   - weekly check-in: 7 days after the last one, so a monitor that stopped
+#     running shows as a missing check-in (a failed scheduled run only
+#     notifies whoever last edited the cron line)
 # A `/health` without `bootId` (an image older than #583) never alerts.
 #
 # Scheduled runs use the default branch's copy (`dev`). By hand:

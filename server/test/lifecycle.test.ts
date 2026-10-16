@@ -1,7 +1,7 @@
 // Lifecycle marker logic (#583): how the previous process ended, read from
 // DATA_DIR/lifecycle.json. The end-to-end version (a real server, SIGTERM
 // and SIGKILL) is lifecycle-boot.test.ts.
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -76,6 +76,9 @@ describe('recordBoot / recordGracefulShutdown', () => {
     const second = recordBoot(dir)
     expect(second.boot.lastShutdown).toBe('graceful')
     expect(bootInfo().lastShutdown).toBe('graceful')
+    // Same process in this test, so the previous bootId is this one.
+    expect(second.boot.previousBootId).toBe(bootInfo().bootId)
+    expect(second.markerError).toBeNull()
     expect(second.previous).toMatchObject({ state: 'stopped', signal: 'SIGTERM' })
     expect(marker(dir).state).toBe('running')
   })
@@ -97,7 +100,7 @@ describe('recordBoot / recordGracefulShutdown', () => {
     const dir = tempDir()
     recordBoot(dir)
     recordGracefulShutdown('SIGINT', dir)
-    expect(existsSync(join(dir, `${LIFECYCLE_FILE}.tmp`))).toBe(false)
+    expect(readdirSync(dir)).toEqual([LIFECYCLE_FILE])
   })
 
   it('does not throw when the marker cannot be written; the boot is then unknown', () => {
@@ -109,6 +112,32 @@ describe('recordBoot / recordGracefulShutdown', () => {
     expect(bootInfo().lastShutdown).toBe('unknown')
     expect(() => recordGracefulShutdown('SIGTERM', blocked)).not.toThrow()
   })
+
+  it('never reports graceful from a stale `stopped` marker it could not replace (full or read-only volume)', () => {
+    const dir = tempDir()
+    // An older process shut down cleanly.
+    writeLifecycleMarker(dir, { state: 'stopped', bootId: 'older', startedAt: 't0', version: null, stoppedAt: 't1', signal: 'SIGTERM' })
+    // Writes now fail: the temp path is a directory, so writeFileSync throws (EISDIR).
+    const tmp = join(dir, `${LIFECYCLE_FILE}.${process.pid}.tmp`)
+    mkdirSync(tmp)
+
+    const blocked = recordBoot(dir)
+    // The marker just read may itself be stale, so this boot does not trust it.
+    expect(blocked.boot.lastShutdown).toBe('unknown')
+    expect(blocked.boot.previousBootId).toBeNull()
+    expect(blocked.markerError).toBeTruthy()
+    expect(blocked.previous).toMatchObject({ bootId: 'older', state: 'stopped' })
+    // The stale marker is gone, so a crash of this process cannot be read as graceful.
+    expect(existsSync(join(dir, LIFECYCLE_FILE))).toBe(false)
+    expect(readPreviousShutdown(dir).lastShutdown).toBe('unknown')
+
+    // This process dies (nothing written); the next boot, still blocked, says unknown.
+    expect(recordBoot(dir).boot.lastShutdown).toBe('unknown')
+    // Once writes work again: unknown for the boot that fixed it, then normal tracking.
+    rmSync(tmp, { recursive: true })
+    expect(recordBoot(dir).boot.lastShutdown).toBe('unknown')
+    expect(recordBoot(dir).boot.lastShutdown).toBe('unclean')
+  })
 })
 
 describe('bootLogLine', () => {
@@ -116,14 +145,16 @@ describe('bootLogLine', () => {
     const dir = tempDir()
     recordBoot(dir)
     recordGracefulShutdown('SIGTERM', dir)
-    const { boot, previous } = recordBoot(dir)
-    const line = bootLogLine(boot, previous)
+    const record = recordBoot(dir)
+    const line = bootLogLine(record)
     expect(line).not.toContain('\n')
     expect(JSON.parse(line)).toMatchObject({
       event: 'boot',
-      bootId: boot.bootId,
+      bootId: record.boot.bootId,
       lastShutdown: 'graceful',
-      previous: { bootId: boot.bootId, signal: 'SIGTERM' },
+      previousBootId: record.boot.bootId,
+      previous: { bootId: record.boot.bootId, signal: 'SIGTERM' },
+      markerError: null,
     })
   })
 })

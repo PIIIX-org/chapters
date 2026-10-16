@@ -18,13 +18,19 @@ import type { Check, LabContext, LabTest } from '../lib/context.ts'
 const MONITOR = fileURLToPath(new URL('../../.github/scripts/uptime-monitor.mjs', import.meta.url))
 
 interface Alert {
-  kind: 'restart' | 'down' | 'recovered'
+  kind: 'restart' | 'down' | 'recovered' | 'heartbeat'
   lastShutdown?: string
   previous?: { bootId: string | null }
   current?: { bootId: string | null }
+  previousBootId?: string | null
+  unseen?: boolean
 }
 interface MonitorRun {
-  observation: { ok: boolean; error?: string; health?: { bootId: string | null; startedAt: string | null; version: string | null; lastShutdown: string | null } }
+  observation: {
+    ok: boolean
+    error?: string
+    health?: { bootId: string | null; startedAt: string | null; version: string | null; lastShutdown: string | null; previousBootId: string | null }
+  }
   alerts: Alert[]
   labels: string[]
   comment: string | null
@@ -42,7 +48,7 @@ const describeRun = (r: MonitorRun) =>
   `alerts [${kinds(r)}]` +
   r.alerts
     .filter((a) => a.kind === 'restart')
-    .map((a) => ` lastShutdown=${a.lastShutdown} ${a.previous?.bootId} -> ${a.current?.bootId}`)
+    .map((a) => ` lastShutdown=${a.lastShutdown} ${a.previous?.bootId} -> ${a.current?.bootId}${a.unseen ? ` (unseen: follows ${a.previousBootId})` : ''}`)
     .join('') +
   (r.labels.length ? ` labels [${r.labels.join(',')}]` : '')
 
@@ -98,6 +104,9 @@ const test: LabTest = {
         ok:
           kinds(runs.graceful) === 'restart' &&
           g?.lastShutdown === 'graceful' &&
+          // previousBootId on /health chains to the process the monitor saw.
+          g.unseen === false &&
+          g.previousBootId === h?.bootId &&
           g.previous?.bootId === h?.bootId &&
           g.current?.bootId !== h?.bootId &&
           runs.graceful.labels.length === 0,
@@ -115,6 +124,7 @@ const test: LabTest = {
         ok:
           kinds(runs.unclean) === 'restart' &&
           u?.lastShutdown === 'unclean' &&
+          u.unseen === false &&
           u.previous?.bootId === g?.current?.bootId &&
           runs.unclean.labels.join(',') === 'unclean-restart',
         severity: 'high',
@@ -153,7 +163,7 @@ const test: LabTest = {
         name: 'recovery: one recovered alert with the restart (compose stop is graceful)',
         expected: 'alerts [recovered,restart] lastShutdown=graceful',
         actual: describeRun(runs.recovered),
-        ok: kinds(runs.recovered) === 'recovered,restart' && r?.lastShutdown === 'graceful',
+        ok: kinds(runs.recovered) === 'recovered,restart' && r?.lastShutdown === 'graceful' && r.unseen === false,
         severity: 'high',
       })
 

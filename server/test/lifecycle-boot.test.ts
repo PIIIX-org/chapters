@@ -29,6 +29,7 @@ interface Health {
   startedAt?: string
   version?: string | null
   lastShutdown?: string
+  previousBootId?: string | null
 }
 
 interface Running {
@@ -141,6 +142,7 @@ describe('restart observability (#583)', () => {
     const first = start()
     const h1 = await healthy(first)
     expect(h1.lastShutdown).toBe('unknown')
+    expect(h1.previousBootId).toBeNull()
     expect(h1.version).toBe('lifecycle-test')
     expect(h1.bootId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     expect(Date.parse(h1.startedAt ?? '')).toBeLessThanOrEqual(Date.now())
@@ -152,6 +154,7 @@ describe('restart observability (#583)', () => {
     const second = start()
     const h2 = await healthy(second)
     expect(h2.lastShutdown).toBe('graceful')
+    expect(h2.previousBootId).toBe(h1.bootId)
     expect(h2.bootId).not.toBe(h1.bootId)
     expect((h2.bootId ?? '') > (h1.bootId ?? '')).toBe(true)
     expect(Date.parse(h2.startedAt ?? '')).toBeGreaterThan(Date.parse(h1.startedAt ?? ''))
@@ -166,6 +169,7 @@ describe('restart observability (#583)', () => {
     const third = start()
     const h3 = await healthy(third)
     expect(h3.lastShutdown).toBe('unclean')
+    expect(h3.previousBootId).toBe(h2.bootId)
     expect(h3.bootId).not.toBe(h2.bootId)
     expect(bootLine(third)).toMatchObject({ lastShutdown: 'unclean', previous: { bootId: h2.bootId, stoppedAt: null } })
 

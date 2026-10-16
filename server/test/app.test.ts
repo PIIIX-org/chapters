@@ -7,7 +7,7 @@ describe('app', () => {
     const res = await app.inject({ method: 'GET', url: '/health' })
     expect(res.statusCode).toBe(200)
     const body = res.json()
-    expect(Object.keys(body).sort()).toEqual(['bootId', 'lastShutdown', 'startedAt', 'status', 'version'])
+    expect(Object.keys(body).sort()).toEqual(['bootId', 'lastShutdown', 'previousBootId', 'startedAt', 'status', 'version'])
     expect(body.status).toBe('ok')
     expect(body.bootId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     expect(new Date(body.startedAt).toISOString()).toBe(body.startedAt)
@@ -15,6 +15,7 @@ describe('app', () => {
     // No ELARA_VERSION in the test env; boot was never recorded in this process.
     expect(body.version).toBeNull()
     expect(body.lastShutdown).toBe('unknown')
+    expect(body.previousBootId).toBeNull()
     const again = (await app.inject({ method: 'GET', url: '/health' })).json()
     expect(again.bootId).toBe(body.bootId)
     await app.close()

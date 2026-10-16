@@ -2,17 +2,23 @@
 // read-only GET; monitoring, not testing) and compares the process identity
 // it reports with the last one seen:
 //   - `bootId` changed            -> restart alert (old/new startedAt,
-//     version, lastShutdown); `lastShutdown: unclean` also labels the issue
+//     version, lastShutdown); `lastShutdown: unclean` also labels the issue.
+//     When `previousBootId` is not the bootId last seen, `lastShutdown`
+//     describes a process the monitor never saw: the alert says so.
 //   - 2 failed checks in a row    -> one down alert
 //   - answers again after a down  -> one recovered alert
+//   - 7 days without a comment    -> one heartbeat, so a monitor that stopped
+//     running shows as a missing weekly comment
 // A payload without `bootId` (an image older than #583) is unknown: it is
-// recorded, never compared, so it cannot alert in a loop.
+// recorded, never compared, so it cannot alert in a loop. Every value from
+// `/health` that ends up in a comment is format-checked first (a misdirected
+// URL must not be able to write Markdown, links or mentions into it).
 //
 // Two stores for the last-seen state:
 //   - issue mode (the workflow, .github/workflows/uptime.yml): a hidden JSON
 //     block in the body of the open issue titled ISSUE_TITLE with the label
 //     ISSUE_LABEL; alerts are comments on it, which notify its subscribers.
-//     The body is rewritten only when the state changes.
+//     The body is re-read and rewritten only when the state changes.
 //   - file mode (`--state-file <path>`, the lab test): a JSON file; nothing
 //     is posted.
 // Either way the run prints one JSON line: the observation, the alerts and
@@ -32,8 +38,13 @@ export const ISSUE_LABEL = 'owner'
 export const UNCLEAN_LABEL = 'unclean-restart'
 /** Consecutive failed checks before a down alert (one transient failure is not an outage). */
 export const DOWN_AFTER = 2
+/** A heartbeat comment after this long without one. */
+export const HEARTBEAT_MS = 7 * 24 * 60 * 60 * 1000
 const SHUTDOWN_KINDS = new Set(['graceful', 'unclean', 'unknown'])
 const STATE_BLOCK = /<!-- uptime-state ([\s\S]*?) -->/
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/
+const SHA = /^[0-9a-f]{7,40}$/
 
 export function emptyState() {
   return {
@@ -44,28 +55,35 @@ export function emptyState() {
     failures: 0,
     firstFailureAt: null,
     down: false,
+    heartbeatAt: null,
   }
 }
 
-const str = (v) => (typeof v === 'string' && v.length > 0 ? v : null)
+/** The value when it is a string matching `re`, else null. */
+const valid = (v, re) => (typeof v === 'string' && re.test(v) ? v : null)
+/** Error text for a comment: plain characters only, bounded. */
+const plain = (v) => String(v).replace(/[^\w .:/()-]/g, '?').slice(0, 160)
 
 /**
  * One `/health` response -> observation. `status` and `body` are what came
  * back; `error` is set when nothing usable did (network error, timeout).
  * Up means HTTP 2xx and `status: 'ok'`; a 503 (database unreachable) is down.
+ * Fields with an unexpected format are dropped (null).
  */
 export function observe({ at, status = null, body = null, error = null }) {
-  if (error) return { at, ok: false, error: String(error) }
-  if (status === null || status < 200 || status >= 300) return { at, ok: false, error: `HTTP ${status}` }
-  if (body?.status !== 'ok') return { at, ok: false, error: `status ${JSON.stringify(body?.status ?? null)}` }
+  if (error) return { at, ok: false, error: plain(error) }
+  if (status === null || status < 200 || status >= 300) return { at, ok: false, error: `HTTP ${plain(status)}` }
+  if (body?.status !== 'ok') return { at, ok: false, error: `status ${plain(JSON.stringify(body?.status ?? null))}` }
+  const startedAt = valid(body.startedAt, ISO)
   return {
     at,
     ok: true,
     health: {
-      bootId: str(body.bootId),
-      startedAt: str(body.startedAt),
-      version: str(body.version),
+      bootId: valid(body.bootId, UUID),
+      startedAt: startedAt && Number.isFinite(Date.parse(startedAt)) ? startedAt : null,
+      version: valid(body.version, SHA),
       lastShutdown: SHUTDOWN_KINDS.has(body.lastShutdown) ? body.lastShutdown : null,
+      previousBootId: valid(body.previousBootId, UUID),
     },
   }
 }
@@ -74,33 +92,58 @@ export function observe({ at, status = null, body = null, error = null }) {
  * The decision: previous state + observation -> next state + alerts.
  * Every alert fires once per event: a restart once per new bootId, down once
  * per outage (failures stop counting at DOWN_AFTER, so the state does not
- * change while it stays down), recovered once.
+ * change while it stays down), recovered once, a heartbeat once per
+ * HEARTBEAT_MS.
  */
 export function step(prev, obs) {
   const p = { ...emptyState(), ...prev }
   const alerts = []
+  let state
   if (!obs.ok) {
     const failures = Math.min(p.failures + 1, DOWN_AFTER)
     const firstFailureAt = p.firstFailureAt ?? obs.at
     const down = p.down || failures >= DOWN_AFTER
     if (down && !p.down) alerts.push({ kind: 'down', since: firstFailureAt, at: obs.at, error: obs.error })
-    return { state: { ...p, failures, firstFailureAt, down }, alerts }
+    state = { ...p, failures, firstFailureAt, down }
+  } else {
+    if (p.down) alerts.push({ kind: 'recovered', since: p.firstFailureAt, at: obs.at })
+    const h = obs.health
+    if (h.bootId && p.bootId && h.bootId !== p.bootId) {
+      alerts.push({
+        kind: 'restart',
+        at: obs.at,
+        previous: { bootId: p.bootId, startedAt: p.startedAt, version: p.version },
+        current: { bootId: h.bootId, startedAt: h.startedAt, version: h.version },
+        lastShutdown: h.lastShutdown ?? 'unknown',
+        previousBootId: h.previousBootId,
+        // lastShutdown is about h.previousBootId; if that is not the process
+        // last seen, at least one more restart happened between checks.
+        unseen: h.previousBootId !== null && h.previousBootId !== p.bootId,
+      })
+    }
+    state = {
+      ...emptyState(),
+      bootId: h.bootId,
+      startedAt: h.startedAt,
+      version: h.version,
+      lastShutdown: h.lastShutdown,
+      heartbeatAt: p.heartbeatAt,
+    }
   }
-  if (p.down) alerts.push({ kind: 'recovered', since: p.firstFailureAt, at: obs.at })
-  const h = obs.health
-  if (h.bootId && p.bootId && h.bootId !== p.bootId) {
+  if (!state.heartbeatAt) {
+    state.heartbeatAt = obs.at
+  } else if (Date.parse(obs.at) - Date.parse(state.heartbeatAt) >= HEARTBEAT_MS) {
     alerts.push({
-      kind: 'restart',
+      kind: 'heartbeat',
       at: obs.at,
-      previous: { bootId: p.bootId, startedAt: p.startedAt, version: p.version },
-      current: { bootId: h.bootId, startedAt: h.startedAt, version: h.version },
-      lastShutdown: h.lastShutdown ?? 'unknown',
+      since: state.heartbeatAt,
+      ok: obs.ok,
+      health: obs.ok ? obs.health : null,
+      error: obs.ok ? null : obs.error,
     })
+    state.heartbeatAt = obs.at
   }
-  return {
-    state: { ...emptyState(), bootId: h.bootId, startedAt: h.startedAt, version: h.version, lastShutdown: h.lastShutdown },
-    alerts,
-  }
+  return { state, alerts }
 }
 
 /** Labels the alerts add to the issue. */
@@ -109,10 +152,11 @@ export function labelsFor(alerts) {
 }
 
 const SHUTDOWN_MEANING = {
-  graceful: 'the previous process finished a clean SIGTERM/SIGINT shutdown (redeploy, `docker compose restart`, host reboot that stopped the container first)',
+  graceful: 'it finished a clean SIGTERM/SIGINT shutdown (redeploy, `docker compose restart`, host reboot that stopped the container first)',
   unclean:
-    'the previous process never finished a clean shutdown: crash, OOM kill, SIGKILL, uncaught exception, or a shutdown Docker cut short. Note edits inside the collab debounce may be lost; queued embedding and extraction work is re-queued by the boot catch-up',
-  unknown: 'no lifecycle marker was found (first boot on this data directory, or the previous image predates #583)',
+    'it never finished a clean shutdown: crash, OOM kill, SIGKILL, uncaught exception, a SIGTERM during boot, or a shutdown Docker cut short. Note edits inside the collab debounce may be lost; queued embedding and extraction work is re-queued by the boot catch-up',
+  unknown:
+    'there is no trustworthy lifecycle marker (first boot on this data directory, a data directory the app could not write, or the previous image predates #583)',
 }
 
 const code = (v) => (v ? `\`${v}\`` : '_none_')
@@ -144,8 +188,19 @@ export function formatComment(alerts, url) {
         `| version | ${code(a.previous.version)} | ${code(a.current.version)} |`,
         `| bootId | ${code(a.previous.bootId)} | ${code(a.current.bootId)} |`,
         '',
-        `lastShutdown: **${a.lastShutdown}**: ${SHUTDOWN_MEANING[a.lastShutdown] ?? SHUTDOWN_MEANING.unknown}.`,
+        a.unseen
+          ? `**More than one restart since the last check.** The current process follows ${code(a.previousBootId)}, which this monitor never saw, so the process it last saw (${code(a.previous.bootId)}) also restarted, and how that one ended is not known (it may have crashed). lastShutdown **${a.lastShutdown}** is about ${code(a.previousBootId)}: ${SHUTDOWN_MEANING[a.lastShutdown] ?? SHUTDOWN_MEANING.unknown}.`
+          : `lastShutdown: **${a.lastShutdown}**: the previous process ${SHUTDOWN_MEANING[a.lastShutdown] ?? SHUTDOWN_MEANING.unknown}.`,
         ...(a.lastShutdown === 'unclean' ? ['', `Label \`${UNCLEAN_LABEL}\` added; remove it once this restart is explained.`] : []),
+      )
+    } else if (a.kind === 'heartbeat') {
+      parts.push(
+        `### Weekly check-in: ${url}`,
+        '',
+        a.ok
+          ? `The monitor is running and \`/health\` is up: bootId ${code(a.health.bootId)}, startedAt ${code(a.health.startedAt)}, version ${code(a.health.version)}.`
+          : `The monitor is running and \`/health\` is failing (${code(a.error)}).`,
+        `No comment between ${a.since} and this one means no restart and no outage was seen. **If this weekly comment stops coming, the monitor itself is broken**: check the \`uptime.yml\` runs in the Actions tab (a failed scheduled run only emails whoever last edited its cron line).`,
       )
     }
     parts.push('')
@@ -179,7 +234,8 @@ export function issueBody(url) {
     `Pinned issue of the uptime monitor (\`.github/workflows/uptime.yml\`, #583). Every 10 minutes it reads ${url}/health and comments here when:`,
     '',
     '- the app restarted (`bootId` changed): previous and current `startedAt`, `version`, and how the previous process ended (`lastShutdown`). An `unclean` restart also adds the label `unclean-restart`;',
-    `- \`/health\` failed ${DOWN_AFTER} checks in a row (once per outage), and again when it answers.`,
+    `- \`/health\` failed ${DOWN_AFTER} checks in a row (once per outage), and again when it answers;`,
+    '- a week passed without any of these (a heartbeat: if it stops, the monitor is broken).',
     '',
     'Subscribe to this issue to be notified. How it works and how to change it: `docs/agents/github-workflow.md` (Production uptime monitor).',
     '',
@@ -190,6 +246,21 @@ export function issueBody(url) {
 // ---------------------------------------------------------------------------
 // Runner
 
+/** `--url` -> `http(s)://host[:port][/path]`, no credentials, query or fragment; the URL is printed in comments. */
+export function normalizeUrl(raw) {
+  let u
+  try {
+    u = new URL(raw)
+  } catch {
+    throw new Error(`--url must be an http(s) URL, got ${JSON.stringify(raw)}`)
+  }
+  const out = `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}`
+  if (!/^https?:$/.test(u.protocol) || u.username || u.password || u.search || u.hash || !/^https?:\/\/[A-Za-z0-9.:[\]-]+(\/[\w.~/-]*)?$/.test(out)) {
+    throw new Error(`--url must be a plain http(s) URL (host, optional port and path), got ${JSON.stringify(raw)}`)
+  }
+  return out
+}
+
 export function parseArgs(argv) {
   const args = { url: process.env.UPTIME_URL || DEFAULT_URL, stateFile: null, dryRun: false }
   for (let i = 0; i < argv.length; i++) {
@@ -199,8 +270,7 @@ export function parseArgs(argv) {
     else if (a === '--dry-run') args.dryRun = true
     else throw new Error(`unknown argument ${a}`)
   }
-  if (!/^https?:\/\/[^/]/.test(args.url ?? '')) throw new Error(`--url must be an http(s) URL, got ${JSON.stringify(args.url)}`)
-  args.url = args.url.replace(/\/+$/, '')
+  args.url = normalizeUrl(args.url)
   return args
 }
 
@@ -223,8 +293,9 @@ async function probe(url) {
   }
 }
 
+/** One GitHub API call -> `{ data, next }` (`next`: the Link header's next page URL). */
 async function api(path, { method = 'GET', body } = {}) {
-  const url = `${process.env.GITHUB_API_URL ?? 'https://api.github.com'}${path}`
+  const url = path.startsWith('https://') ? path : `${process.env.GITHUB_API_URL ?? 'https://api.github.com'}${path}`
   const res = await fetch(url, {
     method,
     headers: {
@@ -236,22 +307,27 @@ async function api(path, { method = 'GET', body } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`)
-  return res.json()
+  return { data: await res.json(), next: /<([^>]+)>;\s*rel="next"/.exec(res.headers.get('link') ?? '')?.[1] }
 }
 
 /**
- * The open monitor issue, created (labelled ISSUE_LABEL) when there is none.
- * A dry run creates nothing and starts from an empty state.
+ * The open monitor issue (every page of open ISSUE_LABEL issues is searched),
+ * created when there is none. A dry run creates nothing and starts from an
+ * empty state.
  */
 async function monitorIssue(repo, url, dryRun) {
-  const issues = await api(`/repos/${repo}/issues?state=open&labels=${encodeURIComponent(ISSUE_LABEL)}&per_page=100`)
-  const found = issues.find((i) => !i.pull_request && i.title === ISSUE_TITLE)
-  if (found) return found
+  for (let next = `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(ISSUE_LABEL)}&per_page=100`; next; ) {
+    const page = await api(next)
+    const found = page.data.find((i) => !i.pull_request && i.title === ISSUE_TITLE)
+    if (found) return found
+    next = page.next
+  }
   if (dryRun) return { number: null, body: '', html_url: `(no open "${ISSUE_TITLE}" issue labelled ${ISSUE_LABEL}; a real run creates it)` }
-  return api(`/repos/${repo}/issues`, {
+  const { data } = await api(`/repos/${repo}/issues`, {
     method: 'POST',
     body: { title: ISSUE_TITLE, labels: [ISSUE_LABEL], body: writeStates(issueBody(url), {}) },
   })
+  return data
 }
 
 function summary(markdown) {
@@ -281,14 +357,18 @@ async function main() {
   const comment = alerts.length ? formatComment(alerts, args.url) : null
   Object.assign(out, { issue: issue.html_url, alerts, labels, comment, state, dryRun: args.dryRun })
   if (!args.dryRun) {
+    const r = `/repos/${repo}/issues/${issue.number}`
     // Alert first, state second: if the comment fails the state is not
     // saved and the next run alerts again, instead of never.
-    if (comment) await api(`/repos/${repo}/issues/${issue.number}/comments`, { method: 'POST', body: { body: comment } })
-    if (labels.length) await api(`/repos/${repo}/issues/${issue.number}/labels`, { method: 'POST', body: { labels } })
+    if (comment) await api(`${r}/comments`, { method: 'POST', body: { body: comment } })
+    if (labels.length) await api(`${r}/labels`, { method: 'POST', body: { labels } })
     if (JSON.stringify(states[args.url] ?? null) !== JSON.stringify(state)) {
-      await api(`/repos/${repo}/issues/${issue.number}`, {
+      // Re-read right before writing, so an edit made to the body during
+      // this run (a few seconds) is kept; only our URL's state is replaced.
+      const { data: fresh } = await api(r)
+      await api(r, {
         method: 'PATCH',
-        body: { body: writeStates(issue.body, { ...states, [args.url]: state }) },
+        body: { body: writeStates(fresh.body, { ...readStates(fresh.body), [args.url]: state }) },
       })
     }
   }
@@ -298,7 +378,7 @@ async function main() {
       `## Uptime: ${args.url}`,
       '',
       obs.ok
-        ? `Up. bootId ${code(obs.health.bootId)}, startedAt ${code(obs.health.startedAt)}, version ${code(obs.health.version)}, lastShutdown ${code(obs.health.lastShutdown)}.`
+        ? `Up. bootId ${code(obs.health.bootId)}, startedAt ${code(obs.health.startedAt)}, version ${code(obs.health.version)}, lastShutdown ${code(obs.health.lastShutdown)}, previousBootId ${code(obs.health.previousBootId)}.`
         : `Check failed: ${code(obs.error)} (${state.failures} in a row${state.down ? ', down' : ''}).`,
       '',
       comment ? `${args.dryRun ? 'Would post' : 'Posted'} on ${issue.html_url}:\n\n${comment}` : `No alert. Issue: ${issue.html_url}`,
