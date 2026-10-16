@@ -51,11 +51,13 @@ const THIS_VAULT: McpConnection = {
 }
 
 const TOOLS: McpToolInfo[] = [
-  { name: 'list_vaults', scope: 'account', capability: 'read' },
-  { name: 'read_note', scope: 'vault', capability: 'read' },
-  { name: 'create_note', scope: 'vault', capability: 'write' },
-  { name: 'share_vault', scope: 'vault', capability: 'admin' },
-  { name: 'search', scope: 'vault-or-repo', capability: 'read' },
+  { name: 'list_vaults', scope: 'account', capability: 'read', pinPermission: 'read' },
+  { name: 'read_note', scope: 'vault', capability: 'read', pinPermission: 'read' },
+  { name: 'list_trash', scope: 'vault', capability: 'read', pinPermission: 'edit' },
+  { name: 'list_vault_shares', scope: 'vault', capability: 'read', pinPermission: 'owner' },
+  { name: 'create_note', scope: 'vault', capability: 'write', pinPermission: 'edit' },
+  { name: 'share_vault', scope: 'vault', capability: 'admin', pinPermission: 'owner' },
+  { name: 'search', scope: 'vault-or-repo', capability: 'read', pinPermission: 'read' },
 ]
 
 function postBody(fetchMock: Mock): Record<string, unknown> {
@@ -283,6 +285,34 @@ describe('VaultMcpPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
     expect(postBody(fetchMock)).toEqual({ name: 'Limited', scope: 'vault', vaultId: 'v1', access: 'write', allowedTools: ['read_note'] })
+  })
+
+  it("the allow-list leaves out tools that need more than the user's own permission on the vault (#649)", async () => {
+    stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderPanel('v1', 'read')
+
+    await screen.findByText('No MCP connections for this vault yet.')
+    await user.click(screen.getByLabelText('Limit this token to specific tools'))
+    const group = await screen.findByRole('group', { name: 'Allowed tools' })
+    await within(group).findByLabelText(/read_note/)
+    expect(within(group).getByLabelText(/search/)).toBeInTheDocument()
+    // list_trash needs edit permission, list_vault_shares ownership: a read-only member gets neither.
+    expect(within(group).queryByLabelText(/list_trash/)).toBeNull()
+    expect(within(group).queryByLabelText(/list_vault_shares/)).toBeNull()
+  })
+
+  it('an editor is offered the edit-gated tools but not the owner-only ones', async () => {
+    stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderPanel('v1', 'edit')
+
+    await screen.findByText('No MCP connections for this vault yet.')
+    await user.click(screen.getByLabelText('Limit this token to specific tools'))
+    const group = await screen.findByRole('group', { name: 'Allowed tools' })
+    await within(group).findByLabelText(/list_trash/)
+    expect(within(group).getByLabelText(/create_note/)).toBeInTheDocument()
+    expect(within(group).queryByLabelText(/list_vault_shares/)).toBeNull()
   })
 
   it('the list shows each token\'s access, allow-list and expiry', async () => {

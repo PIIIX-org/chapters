@@ -31,6 +31,8 @@ const ACCESS_RANK: Record<McpAccess, number> = { read: 0, write: 1, admin: 2 }
 const ACCESS_LEVELS: McpAccess[] = ['read', 'write', 'admin']
 // The API refuses a vault token above its minter's permission on the vault (#649).
 const MAX_ACCESS_FOR_VAULT: Record<VaultAccess, McpAccess> = { owner: 'admin', edit: 'write', read: 'read' }
+// A tool's `pinPermission` is the vault permission its handler requires; ranked like VaultAccess.
+const PERMISSION_RANK: Record<VaultAccess, number> = { read: 1, edit: 2, owner: 3 }
 const ACCESS_LABEL: Record<McpAccess, string> = {
   read: 'Read only',
   write: 'Read and write',
@@ -163,16 +165,18 @@ function McpConnectionRow({ connection, reach }: { connection: McpConnection; re
 
 function CreateMcpConnectionForm({
   target,
-  maxAccess,
+  vaultAccess,
   onCreated,
 }: {
   target: McpTarget
-  maxAccess: McpAccess
+  /** The user's permission on the target vault; null for an account token. */
+  vaultAccess: VaultAccess | null
   onCreated: (token: string, name: string) => void
 }) {
   const copy = COPY[target.scope]
   const [name, setName] = useState('')
   // Levels above what the API grants this user are not offered.
+  const maxAccess: McpAccess = vaultAccess ? MAX_ACCESS_FOR_VAULT[vaultAccess] : 'admin'
   const levels = ACCESS_LEVELS.filter((level) => ACCESS_RANK[level] <= ACCESS_RANK[maxAccess])
   const [access, setAccess] = useState<McpAccess>(
     ACCESS_RANK[copy.defaultAccess] <= ACCESS_RANK[maxAccess] ? copy.defaultAccess : maxAccess,
@@ -184,9 +188,13 @@ function CreateMcpConnectionForm({
   const createConnection = useCreateMcpConnection(target)
   const toolsQuery = useMcpTools(limitTools)
 
-  // Tools this token could call at all: within its access level and its scope.
+  // Tools this token could call at all: within its access level and its scope,
+  // and for a vault token within the user's own permission on the vault.
   const offered = (toolsQuery.data ?? []).filter(
-    (t) => ACCESS_RANK[t.capability] <= ACCESS_RANK[access] && (target.scope === 'account' || VAULT_TOOL_SCOPES[t.scope] === true),
+    (t) =>
+      ACCESS_RANK[t.capability] <= ACCESS_RANK[access] &&
+      (vaultAccess === null ||
+        (VAULT_TOOL_SCOPES[t.scope] === true && PERMISSION_RANK[t.pinPermission] <= PERMISSION_RANK[vaultAccess])),
   )
 
   function handleSubmit(e: FormEvent) {
@@ -320,10 +328,10 @@ function CreateMcpConnectionForm({
 /**
  * One list, two scopes. The account-wide settings list and the vault settings
  * list are literally this component — only the target and the copy differ.
- * `maxAccess`, the highest level offered, defaults to admin for the account
- * scope and write for a vault.
+ * `vaultAccess`, the user's permission on the vault (default edit), bounds
+ * the levels and tools a vault token is offered.
  */
-export function McpPanel(props: McpTarget & { maxAccess?: McpAccess }) {
+export function McpPanel(props: McpTarget & { vaultAccess?: VaultAccess }) {
   // Only the target goes into the create request, never the panel's own props.
   const target: McpTarget = props.scope === 'vault' ? { scope: 'vault', vaultId: props.vaultId } : { scope: 'account' }
   const connectionsQuery = useMcpConnections()
@@ -383,7 +391,7 @@ export function McpPanel(props: McpTarget & { maxAccess?: McpAccess }) {
 
         <CreateMcpConnectionForm
           target={target}
-          maxAccess={props.maxAccess ?? (target.scope === 'account' ? 'admin' : 'write')}
+          vaultAccess={target.scope === 'vault' ? (props.vaultAccess ?? 'edit') : null}
           onCreated={(token, name) => setRevealed({ token, name })}
         />
       </PanelBody>
@@ -393,5 +401,5 @@ export function McpPanel(props: McpTarget & { maxAccess?: McpAccess }) {
 
 /** The vault settings modal's call site: a token gets at most the user's own permission on the vault. */
 export function VaultMcpPanel({ vaultId, access }: { vaultId: string; access: VaultAccess }) {
-  return <McpPanel scope="vault" vaultId={vaultId} maxAccess={MAX_ACCESS_FOR_VAULT[access]} />
+  return <McpPanel scope="vault" vaultId={vaultId} vaultAccess={access} />
 }

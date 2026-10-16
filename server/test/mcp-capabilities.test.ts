@@ -306,12 +306,72 @@ describe("A pinned token is capped at its minter's permission on the pin (#649)"
     expect(byDefault.statusCode).toBe(200)
     const minted: { id: string; token: string; access: string } = byDefault.json()
     expect(minted.access).toBe('read')
-    const names = await listedNames(await mcpClient(minted.token))
+    const reader = await mcpClient(minted.token)
+    const names = await listedNames(reader)
     expect(names).toContain('read_note')
     expect(names).not.toContain('create_note')
+    // Read-level tools whose handler needs edit permission are not listed either, and still refuse.
+    for (const editGated of ['list_trash', 'note_history', 'export_vault']) expect(names).not.toContain(editGated)
+    expect(await call(reader, 'list_trash', {})).toEqual({ isError: true, text: 'Error: not found' })
 
     const read = await mintAs(memberCookie, { name: 'reader-read', scope: 'vault', vaultId: vault.id, access: 'read' })
     expect(read.statusCode).toBe(200)
+  })
+
+  it('a read-only share through a team caps the token the same way', async () => {
+    const vault = await must<{ id: string }>(acct, 'create_vault', { name: 'cap-team-read-share' })
+    const team = await must<{ id: string }>(acct, 'create_team', { name: 'cap-team-readers' })
+    await must(acct, 'add_team_member', { teamId: team.id, userId: memberId })
+    await must(acct, 'share_vault', { vaultId: vault.id, granteeType: 'team', granteeId: team.id, permission: 'read' })
+
+    const write = await mintAs(memberCookie, { name: 'team-reader-write', scope: 'vault', vaultId: vault.id, access: 'write' })
+    expect(write.statusCode).toBe(403)
+    const byDefault = await mintAs(memberCookie, { name: 'team-reader-default', scope: 'vault', vaultId: vault.id })
+    expect(byDefault.statusCode).toBe(200)
+    expect(byDefault.json()).toMatchObject({ access: 'read' })
+  })
+
+  it('a write token a read-only member already holds (0019 set pinned tokens to write) lists only what that member can call', async () => {
+    const vault = await must<{ id: string }>(acct, 'create_vault', { name: 'cap-legacy-write' })
+    await must(acct, 'share_vault', { vaultId: vault.id, granteeType: 'user', granteeId: memberId, permission: 'read' })
+    const minted: { id: string; token: string } = (
+      await mintAs(memberCookie, { name: 'legacy-write', scope: 'vault', vaultId: vault.id })
+    ).json()
+    // What migration 0019 (and a restore of an older dump) left on every pinned token.
+    await db.update(mcpConnections).set({ access: 'write' }).where(eq(mcpConnections.id, minted.id))
+    const legacy = await mcpClient(minted.token)
+
+    const names = await listedNames(legacy)
+    expect(names).toContain('read_note')
+    for (const hidden of ['create_note', 'edit_note', 'delete_note', 'list_trash', 'note_history', 'export_vault', 'list_vault_shares']) {
+      expect(names).not.toContain(hidden)
+    }
+    // A write tool that needs only read permission stays listed, and works.
+    expect(names).toContain('set_vault_graph_preference')
+    expect((await call(legacy, 'set_vault_graph_preference', { include: false })).isError).toBe(false)
+    expect(await call(legacy, 'create_note', { type: 'docs', name: 'nope', body: 'x' })).toEqual({ isError: true, text: 'Error: not found' })
+  })
+
+  it("tools/list follows an ownership transfer on the next request (both users' pinned tokens)", async () => {
+    const v = await vaultFixture('cap-transfer')
+    const ownerClient = await mcpClient((await mint({ name: 'transfer-old-owner', scope: 'vault', vaultId: v.id })).token)
+    const memberToken: { token: string } = (await mintAs(memberCookie, { name: 'transfer-new-owner', scope: 'vault', vaultId: v.id })).json()
+    const memberClient = await mcpClient(memberToken.token)
+    expect(await listedNames(ownerClient)).toContain('list_vault_shares')
+    expect(await listedNames(memberClient)).not.toContain('list_vault_shares')
+
+    const transfer = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${v.id}/transfer`,
+      headers: { cookie: ownerCookie },
+      body: { newOwnerId: memberId },
+    })
+    expect(transfer.statusCode).toBe(200)
+
+    expect(await listedNames(memberClient)).toContain('list_vault_shares')
+    // The old owner has no share on the vault: every tool of the pin would refuse, so none is listed.
+    expect(await listedNames(ownerClient)).toEqual([])
+    expect(await call(ownerClient, 'read_note', { path: 'docs/kept' })).toEqual({ isError: true, text: 'Error: not found' })
   })
 
   it("share-listing and other owner-only tools are not listed for a non-owner's pinned token", async () => {
@@ -333,8 +393,14 @@ describe("A pinned token is capped at its minter's permission on the pin (#649)"
 
     const repositoryId = await repoFixture('cap-owner-only-repo')
     await must(acct, 'share_repository', { repositoryId, granteeType: 'user', granteeId: memberId })
-    const viewerToken: { token: string } = (await mintAs(memberCookie, { name: 'viewer-pinned', scope: 'repository', repositoryId })).json()
-    expect(await listedNames(await mcpClient(viewerToken.token))).not.toContain('list_repository_shares')
+    // A repository share has no read-only tier: a viewer's token keeps the write default.
+    const viewerMint = await mintAs(memberCookie, { name: 'viewer-pinned', scope: 'repository', repositoryId })
+    expect(viewerMint.statusCode).toBe(200)
+    const viewerToken: { token: string; access: string } = viewerMint.json()
+    expect(viewerToken.access).toBe('write')
+    const viewerNames = await listedNames(await mcpClient(viewerToken.token))
+    expect(viewerNames).toContain('sync_repository')
+    expect(viewerNames).not.toContain('list_repository_shares')
     const repoOwner = await mcpClient((await mint({ name: 'owner-repo-pinned', scope: 'repository', repositoryId })).token)
     expect(await listedNames(repoOwner)).toContain('list_repository_shares')
   })

@@ -125,10 +125,20 @@ const REACHABLE_SCOPES: Record<McpAuth['connection']['scope'], Partial<Record<To
   repository: { repository: true, 'repository-or-account': true, 'vault-or-repo': true },
 }
 
+/**
+ * The user's live permission on a pinned connection's pin that a tool's
+ * handler requires (#649): `read` (any access; the default), `edit`, or
+ * `owner`. A repository has no read-only tier: a repository viewer meets
+ * `edit` (repository write tools need only access).
+ */
+export type PinPermission = 'read' | 'edit' | 'owner'
+const PIN_RANK: Record<PinPermission, number> = { read: 1, edit: 2, owner: 3 }
+
 export interface McpToolInfo {
   name: string
   scope: ToolScope
   capability: ToolCapability
+  pinPermission: PinPermission
 }
 
 /**
@@ -189,13 +199,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   server.resource = unscoped
 
   // tools/list advertises only the tools this connection can call (#641):
-  // its allow-list, access level and scope. Every tool stays registered, so
+  // its allow-list, access level and scope, and for a pinned connection the
+  // user's live permission on the pin (#649). Every tool stays registered, so
   // calling a hidden one still answers with the refusal that says why. The
   // SDK sets its tools/list handler on the first registration, through here.
   const hiddenTools = new Set<string>()
-  // Tools whose handler refuses anyone but the owner of the target: a pinned
-  // token whose user does not own its pin is refused every time (#649).
-  const ownerOnlyTools = new Set<string>()
+  const pinPermissionOf = new Map<string, PinPermission>()
   const setRequestHandler = server.server.setRequestHandler.bind(server.server) as (
     schema: unknown,
     handler: unknown,
@@ -206,20 +215,26 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     const listAll = handler as (...args: unknown[]) => ListToolsResult | Promise<ListToolsResult>
     setRequestHandler(schema, async (...args: unknown[]) => {
       const listed = await listAll(...args)
-      const ownsPin = await connectionOwnsPin()
-      return {
-        ...listed,
-        tools: listed.tools.filter((t) => !hiddenTools.has(t.name) && (ownsPin || !ownerOnlyTools.has(t.name))),
-      }
+      const visible = listed.tools.filter((t) => !hiddenTools.has(t.name))
+      if (auth.connection.scope === 'account' || visible.length === 0) return { ...listed, tools: visible }
+      // One live lookup per tools/list. It also covers tokens minted before
+      // the mint-time cap (0019 set every pinned token to write) and
+      // permissions that changed after mint: nothing is listed that the
+      // handler would refuse for want of permission on the pin.
+      const live = await livePinRank()
+      return { ...listed, tools: visible.filter((t) => PIN_RANK[pinPermissionOf.get(t.name) ?? 'read'] <= live) }
     })
   }
 
-  /** Whether the user owns the connection's pin, read live; an account connection has no pin. */
-  async function connectionOwnsPin(): Promise<boolean> {
+  /** The user's live permission on the connection's pin as a PIN_RANK; 0 when it has none left. */
+  async function livePinRank(): Promise<number> {
     const { scope, vaultId, repositoryId } = auth.connection
-    if (scope === 'vault') return (await resolveAccess(auth.user.id, vaultId!)) === 'owner'
-    if (scope === 'repository') return (await resolveRepositoryAccess(auth.user.id, repositoryId!)) === 'owner'
-    return true
+    if (scope === 'vault') {
+      const access = await resolveAccess(auth.user.id, vaultId!)
+      return access ? PIN_RANK[access] : 0
+    }
+    const access = await resolveRepositoryAccess(auth.user.id, repositoryId!)
+    return access === 'owner' ? PIN_RANK.owner : access === 'viewer' ? PIN_RANK.edit : 0
   }
 
   /** Resolves the target vault under the connection's scope (hard, never narrowed). */
@@ -378,15 +393,16 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
    * arguments) are resolved under the connection's scope before `handler`
    * runs, and the handler gets the result. Thrown errors become an `isError`
    * result. A tool the connection can never call is left out of tools/list;
-   * so is an `ownerOnly` tool (its handler requires owner permission on the
-   * target) for a pinned connection whose user does not own the pin.
+   * so, for a pinned connection, is a tool whose `pinPermission` (the
+   * permission on the target its handler requires, default `read`) is above
+   * the user's live permission on the pin.
    */
   function tool<S extends ToolScope, A extends Record<string, unknown> = Record<string, unknown>>(
     name: string,
     def: {
       scope: S
       capability: ToolCapability
-      ownerOnly?: true
+      pinPermission?: Exclude<PinPermission, 'read'>
       ids?: (args: A) => Promise<ScopeIds>
       description: string
       inputSchema?: z.ZodRawShape
@@ -401,9 +417,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     }
     const resolve: ScopeResolvers[S] = scopeResolvers[def.scope]
     const inputSchema: z.ZodRawShape = def.inputSchema ?? {}
-    tools.push({ name, scope: def.scope, capability: def.capability })
+    const pinPermission = def.pinPermission ?? 'read'
+    tools.push({ name, scope: def.scope, capability: def.capability, pinPermission })
     if (!callable(name, def.scope, def.capability)) hiddenTools.add(name)
-    if (def.ownerOnly) ownerOnlyTools.add(name)
+    pinPermissionOf.set(name, pinPermission)
     registerTool(name, { description: def.description, inputSchema }, async (raw: unknown) => {
       try {
         requireCapability(name, def.capability)
@@ -526,7 +543,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'admin',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description: 'Update vault metadata (name, mergeable). Requires owner permission.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
@@ -703,7 +720,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'admin',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description: 'Soft-delete a vault to the recoverable trash. Requires owner permission.',
       inputSchema: { vaultId: z.string().uuid().optional() },
     },
@@ -766,7 +783,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'read',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description: 'List user and team shares for a vault. Requires owner permission.',
       inputSchema: { vaultId: z.string().uuid().optional() },
     },
@@ -805,7 +822,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'admin',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description: 'Share a vault with a user or team. Requires owner permission.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
@@ -881,7 +898,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'admin',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description: 'Revoke a user or team share on a vault. Requires owner permission.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
@@ -941,6 +958,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'write',
+      pinPermission: 'edit',
       description:
         'Create an OKF note. Specify either `path` (hierarchical path like concepts/sub/name) or `type` and `name`. Requires edit access.',
       inputSchema: {
@@ -975,6 +993,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'write',
+      pinPermission: 'edit',
       description:
         'Update a note. The edit flows through the live collaboration engine — humans with the note open see it stream in, attributed to this connection.',
       inputSchema: {
@@ -1000,6 +1019,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'write',
+      pinPermission: 'edit',
       description:
         'Rename or move a note to a new name slug within its type folder. Requires edit access.',
       inputSchema: {
@@ -1021,6 +1041,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'write',
+      pinPermission: 'edit',
       description: 'Soft-delete a note to the recoverable trash. Requires edit access.',
       inputSchema: { vaultId: z.string().uuid().optional(), path: z.string() },
     },
@@ -1037,6 +1058,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'read',
+      pinPermission: 'edit',
       description: 'List soft-deleted notes in a vault. Requires edit access.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
@@ -1055,6 +1077,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'write',
+      pinPermission: 'edit',
       description: 'Restore a soft-deleted note from the trash. Requires edit access.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
@@ -1074,7 +1097,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'admin',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description:
         'Permanently delete a trashed note from database and disk. Requires owner permission.',
       inputSchema: {
@@ -1095,6 +1118,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'read',
+      pinPermission: 'edit',
       description: 'Change history for a note (actor-attributed). Requires edit access.',
       inputSchema: { vaultId: z.string().uuid().optional(), path: z.string() },
     },
@@ -1111,6 +1135,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'write',
+      pinPermission: 'edit',
       description: 'Restore a note to a recorded revision. Requires edit access.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
@@ -1131,7 +1156,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'admin',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description:
         'Permanently remove a single recorded revision from history (e.g. leaked secret). Requires owner permission.',
       inputSchema: {
@@ -1330,7 +1355,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'admin',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description: 'Update repository settings (name, mergeable). Requires owner permission.',
       inputSchema: {
         repositoryId: z.string().uuid().optional(),
@@ -1411,7 +1436,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'admin',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description: 'Disconnect and delete a repository. Requires owner permission.',
       inputSchema: { repositoryId: z.string().uuid().optional() },
     },
@@ -1428,7 +1453,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'read',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description: 'List user and team shares for a repository. Requires owner permission.',
       inputSchema: { repositoryId: z.string().uuid().optional() },
     },
@@ -1443,7 +1468,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'admin',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description: 'Share a repository with a user or team. Requires owner permission.',
       inputSchema: {
         repositoryId: z.string().uuid().optional(),
@@ -1485,7 +1510,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'admin',
-      ownerOnly: true,
+      pinPermission: 'owner',
       description: 'Revoke a repository share. Requires owner permission.',
       inputSchema: {
         repositoryId: z.string().uuid().optional(),
@@ -1674,6 +1699,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'read',
+      pinPermission: 'edit',
       description:
         'Export an entire vault as a zip archive (returns base64 payload and size). Requires edit access.',
       inputSchema: { vaultId: z.string().uuid().optional() },
@@ -1945,6 +1971,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault-or-account',
       capability: 'write',
+      pinPermission: 'edit',
       description:
         'Save a scoped graph perspective with filter presets (types, tags, date range, color mode) for a vault (needs edit access) or merged graph (instance admins only; a global perspective is visible only to you).',
       inputSchema: {
@@ -2004,6 +2031,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault-or-account',
       capability: 'write',
+      pinPermission: 'edit',
       // The pin applies to the perspective's own vault; a global perspective is account-wide.
       // A pinned connection gets "not found" for anything outside its vault, as for an id that
       // does not exist, so it cannot tell which perspectives exist elsewhere.
