@@ -1,12 +1,16 @@
 name: Review verdict
 
-# Review gate for promotions (#574). Sets the commit status `review-verdict`
-# on the PR's current head: success only with an approving review of the
-# head by someone other than the author, or a PR comment whose first line is
-# `VERDICT: MERGE`, posted after the latest push, that links the review
-# record. Required on `prod`; informational on every other base. Logic and
-# messages: .github/scripts/review-verdict.mjs; rules and the single-account
-# caveat: docs/agents/github-workflow.md (Review gate).
+# Review gate for promotions (#574). Sets a commit status on the PR's current
+# head: success only with an approving review of the head by someone other
+# than the author, or a PR comment whose first line is `VERDICT: MERGE`,
+# posted after the latest push, naming the head (`Head reviewed: <sha>`) and
+# linking the review record; only users with write permission count.
+# Context `review-verdict` (required) on PRs to `prod`, `review-verdict/dev`
+# (informational) on PRs to `dev`, nothing on other bases or on fork PRs: a
+# status belongs to a commit, and a promotion's head can be the head of
+# other PRs too. Logic and messages: .github/scripts/review-verdict.mjs;
+# rules and caveats: docs/agents/github-workflow.md (Branch protection and
+# the review gate).
 #
 # A commit status, not this job's own check run: an `issue_comment` run
 # belongs to the default branch, so its check run would never reach the PR.
@@ -39,8 +43,11 @@ permissions:
 
 jobs:
   evaluate:
-    # Comments on plain issues are not reviews.
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    # Comments on plain issues are not reviews. Fork PRs never run here (the
+    # script also refuses them on comment events, whose payload has no head).
+    if: >-
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
+      (github.event_name != 'issue_comment' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

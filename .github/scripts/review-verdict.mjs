@@ -1,13 +1,16 @@
-// Review gate for promotions (#574). Sets the commit status `review-verdict`
-// on a PR's current head: success only when someone reviewed exactly what
+// Review gate for promotions (#574). Sets a commit status on a PR's current
+// head: success only when someone with write access reviewed exactly what
 // is about to merge, shown by either
 //   - an approving GitHub review on the head commit by someone other than
 //     the PR author, or
 //   - a PR comment whose first line is `VERDICT: MERGE`, posted after the
-//     head became the head, that links the review record.
-// Required on `prod`; informational on every other base. Workflow:
-// .github/workflows/review-verdict.yml; rules and the single-account
-// caveat: docs/agents/github-workflow.md (Review gate).
+//     head became the head, that names the head (`Head reviewed: <sha>`) and
+//     links the review record.
+// A status belongs to a commit, not to a PR, so it is set only for PRs from
+// this repository to a base listed in CONTEXTS (each base its own context),
+// and never to success while another open PR to the same base has the same
+// head. Workflow: .github/workflows/review-verdict.yml; rules and caveats:
+// docs/agents/github-workflow.md (Branch protection and the review gate).
 //
 // Plain Node, no dependencies, one file: the workflow copies the base
 // commit's version of this file alone to a temp dir when there is one, so it
@@ -16,16 +19,26 @@
 import { appendFileSync, readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-/** The status context branch protection requires on `prod`. */
-export const CONTEXT = 'review-verdict'
+/**
+ * The status context set for PRs to each base. `review-verdict` is required
+ * on `prod`; `review-verdict/dev` only reports. Any other base gets no
+ * status: a verdict on a PR to `lab/*` must not mark the same commit as
+ * reviewed for a promotion.
+ */
+export const CONTEXTS = new Map([
+  ['prod', 'review-verdict'],
+  ['dev', 'review-verdict/dev'],
+])
 
 /**
- * Who can give a verdict: users with write access. Anyone can comment on
- * or review a public repo's PR; their verdicts never count.
+ * Repository permissions that can give a verdict, as returned in
+ * `permission` by GET /repos/{o}/{r}/collaborators/{user}/permission
+ * (`maintain` is reported as `write` there, `triage` as `read`).
  */
-export const WRITE_ACCESS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
+export const WRITE_PERMISSIONS = new Set(['admin', 'write'])
 
 const VERDICT = /^VERDICT: (MERGE|CHANGES)$/
+const HEAD_REVIEWED = /^[ \t]*Head reviewed:[ \t]*`?([0-9a-fA-F]{7,40})`?[ \t]*$/m
 
 /**
  * 'MERGE', 'CHANGES' or null. The first line of the comment (leading blank
@@ -39,6 +52,20 @@ export function verdictOf(body) {
     .find((l) => l.trim() !== '')
   const m = VERDICT.exec(line?.trim() ?? '')
   return m ? m[1] : null
+}
+
+/**
+ * The commit a verdict names on its own `Head reviewed: <sha>` line (7 to 40
+ * hex digits, optionally in backticks), lower-cased, or null.
+ */
+export function headReviewed(body) {
+  const m = HEAD_REVIEWED.exec(String(body ?? '').replace(/\r\n/g, '\n'))
+  return m ? m[1].toLowerCase() : null
+}
+
+/** The status context for PRs to `base`, or null when the base is not gated. */
+export function contextFor(base) {
+  return CONTEXTS.get(base) ?? null
 }
 
 /**
@@ -89,19 +116,22 @@ const iso = (ms) => (ms === null ? 'unknown' : new Date(ms).toISOString())
 /**
  * The verdict for a PR.
  *
- *   pr        GET /pulls/{n} (user.login, head.sha, html_url)
- *   reviews   GET /pulls/{n}/reviews (user, state, commit_id, submitted_at,
- *             author_association)
- *   comments  GET /issues/{n}/comments (user, body, created_at,
- *             author_association, html_url)
+ *   pr        GET /pulls/{n} (user.login, head.sha, base.ref, html_url)
+ *   reviews   GET /pulls/{n}/reviews (user, state, commit_id, submitted_at)
+ *   comments  GET /issues/{n}/comments (user, body, created_at, html_url)
  *   since     headSince(...)
+ *   writers   logins whose repository permission is in WRITE_PERMISSIONS
+ *   samePrs   numbers of the other open PRs to the same base whose head is
+ *             this PR's head
  *
  * Returns { ok, description (status text, <= 140 chars), report (markdown) }.
  */
-export function evaluate({ pr, reviews = [], comments = [], since }) {
+export function evaluate({ pr, reviews = [], comments = [], since, writers = new Set(), samePrs = [] }) {
   const author = pr.user?.login
   const head = pr.head?.sha
   const lines = []
+  const person = (u) => Boolean(u?.login) && u.type !== 'Bot'
+  const counts = (u) => person(u) && writers.has(u.login)
 
   // Reviews: each other writer's latest decisive review.
   const latest = new Map()
@@ -109,34 +139,37 @@ export function evaluate({ pr, reviews = [], comments = [], since }) {
     .filter((r) => ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(r.state))
     .sort((a, b) => (time(a.submitted_at) ?? 0) - (time(b.submitted_at) ?? 0))
   for (const r of decisive) {
-    const who = r.user?.login
-    if (!who || who === author) continue
-    if (!WRITE_ACCESS.has(r.author_association)) continue
-    latest.set(who, r)
+    if (!counts(r.user) || r.user.login === author) continue
+    latest.set(r.user.login, r)
   }
   const changesRequested = [...latest.values()].filter((r) => r.state === 'CHANGES_REQUESTED')
   const approvals = [...latest.values()].filter((r) => r.state === 'APPROVED' && r.commit_id === head)
   const staleApprovals = [...latest.values()].filter((r) => r.state === 'APPROVED' && r.commit_id !== head)
 
   // Comments: verdicts from writers, split at the moment the head appeared.
-  const verdicts = comments
-    .filter((c) => c.user?.type !== 'Bot' && WRITE_ACCESS.has(c.author_association))
+  const found = comments
     .map((c) => ({ c, verdict: verdictOf(c.body), at: time(c.created_at) }))
     .filter((v) => v.verdict && v.at !== null)
     .sort((a, b) => a.at - b.at)
+  const ignored = found.filter((v) => !counts(v.c.user))
+  const verdicts = found.filter((v) => counts(v.c.user))
   const current = since.at === null ? [] : verdicts.filter((v) => v.at > since.at)
   const stale = verdicts.filter((v) => !current.includes(v))
   const last = current.at(-1)
-  const lastLinks = last ? reviewLinks(last.c.body, pr.html_url) : []
 
   lines.push(
-    `Head \`${short(head)}\`, the head since ${iso(since.at)} (${since.source}). PR author: @${author}.`,
+    `Head \`${short(head)}\`, the head since ${iso(since.at)} (${since.source}). Base \`${pr.base?.ref}\`. PR author: @${author}.`,
     '',
   )
+  for (const n of samePrs) lines.push(`- Open PR #${n} to \`${pr.base?.ref}\` has the same head.`)
   for (const r of approvals) lines.push(`- Approved on the head by @${r.user.login}.`)
   for (const r of staleApprovals)
     lines.push(`- Approval by @${r.user.login} is on \`${short(r.commit_id)}\`, not the head: does not count.`)
   for (const r of changesRequested) lines.push(`- Changes requested by @${r.user.login} (latest review).`)
+  for (const v of ignored)
+    lines.push(
+      `- \`VERDICT: ${v.verdict}\` by @${v.c.user?.login} ignored: ${person(v.c.user) ? 'no write access' : 'a bot'} (${v.c.html_url}).`,
+    )
   for (const v of stale)
     lines.push(
       `- \`VERDICT: ${v.verdict}\` by @${v.c.user?.login} at ${v.c.created_at} predates the head: does not count (${v.c.html_url}).`,
@@ -155,25 +188,36 @@ export function evaluate({ pr, reviews = [], comments = [], since }) {
     return done(false, `Changes requested by @${changesRequested.map((r) => r.user.login).join(', @')}`)
   if (last?.verdict === 'CHANGES')
     return done(false, `Latest verdict after ${short(head)} is VERDICT: CHANGES (@${last.c.user?.login})`)
+  // A status belongs to the commit, so it would also show on the other PR,
+  // whose diff nobody reviewed here.
+  if (samePrs.length)
+    return done(false, `Open PR #${samePrs.join(', #')} to ${pr.base?.ref} has the same head ${short(head)}: close it`)
   if (approvals.length) return done(true, `Approved on ${short(head)} by @${approvals[0].user.login}`)
   if (last?.verdict === 'MERGE') {
-    if (lastLinks.length === 0)
-      return done(false, `VERDICT: MERGE by @${last.c.user?.login} links no review record`)
-    lines.push('', `Review record: ${lastLinks[0]}`)
-    return done(true, `VERDICT: MERGE by @${last.c.user?.login} after ${short(head)}`)
+    const who = `@${last.c.user?.login}`
+    const named = headReviewed(last.c.body)
+    if (!named) return done(false, `VERDICT: MERGE by ${who} has no "Head reviewed: <sha>" line`)
+    if (!String(head).toLowerCase().startsWith(named))
+      return done(false, `VERDICT: MERGE by ${who} names ${named.slice(0, 7)}, not the head ${short(head)}`)
+    const links = reviewLinks(last.c.body, pr.html_url)
+    if (links.length === 0) return done(false, `VERDICT: MERGE by ${who} links no review record`)
+    lines.push('', `Review record: ${links[0]}`)
+    return done(true, `VERDICT: MERGE by ${who} on ${short(head)}`)
   }
   if (stale.some((v) => v.verdict === 'MERGE') || staleApprovals.length)
     return done(false, `Review predates head ${short(head)}: review the new commits, post the verdict again`)
-  return done(false, `No review of ${short(head)}: post VERDICT: MERGE with a review link, or approve`)
+  return done(false, `No review of ${short(head)}: post VERDICT: MERGE with the head and a review link, or approve`)
 }
 
 const HOW_TO = (head) =>
   [
     '**How to pass.** Review the PR at its head (`' + head + '`), then either',
     '- approve it on GitHub from an account other than the PR author, or',
-    '- post a PR comment whose first line is exactly `VERDICT: MERGE`, with a link to the review record (an `https://` URL or an Elara `[[reviews/...]]` link) below it. A comment posted before the latest push does not count: re-review and post again. `VERDICT: CHANGES` (first line) blocks until a later `VERDICT: MERGE` follows a fixing push.',
+    '- post a PR comment whose first line is exactly `VERDICT: MERGE`, with a line `Head reviewed: ' +
+      head +
+      '` (the head, 7 to 40 hex digits) and a link to the review record (an `https://` URL or an Elara `[[reviews/...]]` link). A comment posted before the latest push does not count: re-review and post again.',
     '',
-    'Only users with write access count. Rules: `docs/agents/github-workflow.md` (Review gate).',
+    'The latest verdict comment decides: a `VERDICT: CHANGES` stays red until a later `VERDICT: MERGE` comment replaces it. Only users with admin, maintain or write permission on the repository count; bots never do. Rules: `docs/agents/github-workflow.md` (Branch protection and the review gate).',
   ].join('\n')
 
 // ---------------------------------------------------------------------------
@@ -227,15 +271,22 @@ async function main() {
 
   const r = `/repos/${repo}`
   const { data: pr } = await api(`${r}/pulls/${number}`)
+  // A fork PR can have the same head as a promotion (dev's tip): a status
+  // set for it would land on the promotion's commit. Forks never get one.
+  if (pr.head.repo?.full_name !== repo)
+    return summary(`PR #${number} comes from ${pr.head.repo?.full_name ?? 'a deleted fork'}; fork PRs get no status.`)
+  const context = contextFor(pr.base.ref)
+  if (!context) return summary(`PR #${number} targets \`${pr.base.ref}\`, which has no review gate; no status set.`)
   if (pr.state !== 'open') return summary(`PR #${number} is ${pr.state}; no status set.`)
   const head = pr.head.sha
 
-  const [reviews, comments, commit, suites, timeline] = await Promise.all([
+  const [reviews, comments, commit, suites, timeline, open] = await Promise.all([
     all(`${r}/pulls/${number}/reviews?per_page=100`),
     all(`${r}/issues/${number}/comments?per_page=100`),
     api(`${r}/commits/${head}`).then((x) => x.data),
     all(`${r}/commits/${head}/check-suites?per_page=100`, (d) => d.check_suites),
     all(`${r}/issues/${number}/timeline?per_page=100`),
+    all(`${r}/pulls?state=open&base=${encodeURIComponent(pr.base.ref)}&per_page=100`),
   ])
   const minIso = (xs) => xs.filter(Boolean).sort((a, b) => time(a) - time(b))[0]
   const maxIso = (xs) => xs.filter(Boolean).sort((a, b) => time(b) - time(a))[0]
@@ -244,12 +295,32 @@ async function main() {
     firstSeen: minIso(suites.map((s) => s.created_at)),
     forcePushed: maxIso(timeline.filter((e) => e.event === 'head_ref_force_pushed').map((e) => e.created_at)),
   })
+  const samePrs = open.filter((p) => p.number !== pr.number && p.head.sha === head).map((p) => p.number)
 
-  const v = evaluate({ pr, reviews, comments, since })
+  // Write access is the repository permission, not author_association:
+  // MEMBER is any org member and COLLABORATOR includes read and triage.
+  const logins = new Set(
+    [...reviews.map((x) => x.user), ...comments.filter((c) => verdictOf(c.body)).map((c) => c.user)]
+      .filter((u) => u?.login && u.type !== 'Bot')
+      .map((u) => u.login),
+  )
+  const writers = new Set()
+  const permissions = []
+  for (const login of logins) {
+    try {
+      const { data } = await api(`${r}/collaborators/${encodeURIComponent(login)}/permission`)
+      if (WRITE_PERMISSIONS.has(data.permission)) writers.add(login)
+      permissions.push(`@${login}: ${data.permission}${data.role_name ? ` (${data.role_name})` : ''}`)
+    } catch (err) {
+      permissions.push(`@${login}: lookup failed, not counted (${String(err.message).slice(0, 120)})`)
+    }
+  }
+
+  const v = evaluate({ pr, reviews, comments, since, writers, samePrs })
   const runUrl = `${process.env.GITHUB_SERVER_URL}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`
   await api(`${r}/statuses/${head}`, {
     method: 'POST',
-    body: { state: v.ok ? 'success' : 'failure', context: CONTEXT, description: v.description, target_url: runUrl },
+    body: { state: v.ok ? 'success' : 'failure', context, description: v.description, target_url: runUrl },
   })
   summary(
     [
@@ -257,13 +328,15 @@ async function main() {
       '',
       `**${v.description}**`,
       '',
-      `Status \`${CONTEXT}\` set to ${v.ok ? 'success' : 'failure'} on \`${head}\` (base \`${pr.base.ref}\`; required on \`prod\` only).`,
+      `Status \`${context}\` set to ${v.ok ? 'success' : 'failure'} on \`${head}\` (base \`${pr.base.ref}\`).`,
       '',
       v.report,
+      '',
+      `Permissions: ${permissions.length ? permissions.join('; ') : 'no reviewer or verdict author to check'}.`,
       ...(CHECKER ? ['', CHECKER] : []),
     ].join('\n'),
   )
-  if (!v.ok) console.log(`::notice title=review-verdict: failure::${v.description}`)
+  if (!v.ok) console.log(`::notice title=${context}: failure::${v.description}`)
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
