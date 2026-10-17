@@ -22,7 +22,7 @@ import { pathToFileURL } from 'node:url'
 
 /**
  * The status context set for PRs to each base. `review-verdict` is required
- * on `prod`; `review-verdict/dev` only reports. Any other base gets no
+ * on `prod`, and `review-verdict/dev` on `dev` (since 2026-10-17). Any other base gets no
  * status: a verdict on a PR to `lab/*` must not mark the same commit as
  * reviewed for a promotion.
  */

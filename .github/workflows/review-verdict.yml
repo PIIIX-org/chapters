@@ -6,7 +6,7 @@ name: Review verdict
 # posted after the latest push, naming the head (`Head reviewed: <sha>`) and
 # linking the review record; only users with write permission count.
 # Context `review-verdict` (required) on PRs to `prod`, `review-verdict/dev`
-# (informational) on PRs to `dev`, nothing on other bases or on fork PRs: a
+# (required since 2026-10-17) on PRs to `dev`, nothing on other bases or on fork PRs: a
 # status belongs to a commit, and a promotion's head can be the head of
 # other PRs too. Logic and messages: .github/scripts/review-verdict.mjs;
 # rules and caveats: docs/agents/github-workflow.md (Branch protection and

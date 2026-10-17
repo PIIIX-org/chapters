@@ -39,10 +39,10 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tbody>
 <tr><td>Study</td><td>Done. Round 1 + round 2 reports, the 59-project landscape study and the Zep study produced a fix list of 192 items (<code>FIX-LIST.md</code>).</td></tr>
 <tr><td>Issues</td><td>All 183 open items filed as GitHub issues (#413–#589 plus #403, #408–#411), label <code>elara-study</code>, one milestone per phase.</td></tr>
-<tr><td>Plan</td><td>Elara, Chapters vault: <code>fixes/index</code>, <code>fixes/phase-0</code> … <code>fixes/phase-5</code> (order and status of every item).</td></tr>
+<tr><td>Plan</td><td>Elara, Chapters vault: <code>fixes/index</code>, <code>fixes/phase-0</code> … <code>fixes/phase-7</code> and <code>fixes/features</code> (order and status of every item).</td></tr>
 <tr><td>Phase 0 (owner actions)</td><td>4 of 6 closed. Open: #589 (revoke 5 old GitHub tokens; the owner will do it) and #664 (production deploys on push, before CI; found during the promotion).</td></tr>
 <tr><td>Phase 1 (guardrails and security)</td><td><strong>Done and on <code>prod</code>: 25 of 25 issues closed</strong>, 24 PRs merged to <code>dev</code>, promoted in <a href="https://github.com/PIIIX-org/chapters/pull/660">#660</a> (<code>prod</code> = <code>5c5bdc0</code>).</td></tr>
-<tr><td>Phases 2–5</td><td>Not started. 38, 73, 35 and 43 open issues (review follow-ups and the new features of section 8a included).</td></tr>
+<tr><td>Phases 2–5</td><td>Not started. 42, 74, 35 and 46 open issues (review follow-ups and the new features of section 8a included).</td></tr>
 <tr><td>Phase 6 (added 2026-10-17)</td><td>Rendered views, data attachments and structured fields, after phase 3: 5 open issues (#668–#671, #692); decision #667 (Markdown stays the only stored note format).</td></tr>
 <tr><td>Phase 7 (added 2026-10-17)</td><td>New capabilities: 8 issues (#693–#700). See section 8a.</td></tr>
 </tbody>
@@ -83,13 +83,11 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <p>Docs and housekeeping: #627 (prod merged back into dev), #652 (first bot STATE.md refresh), #659 (STATE.md: auto redeploy, promotion procedure), #661 (lab baseline: the #496 bundle check marked intermittent after two full runs on the same commit disagreed).</p>
 <p><strong>Reviews.</strong> Every PR was reviewed by a separate Opus session told to disprove the PR (docs-only and bot PRs by the coordinator). Reviews sent PRs back with blocking problems many times; in the last stretch alone #642, #643, #648, #651 (twice), #655 and #661, each fixed before merging. Reviews: <code>D:/taha/research/elara-study/fixes/reviews/&lt;pr&gt;.md</code> and Elara <code>reviews/pr-&lt;n&gt;</code>.</p>
 <h2>3. How the work is done (keep doing it this way)</h2>
-<div class="flow"><div class="step">GitHub issue</div><div class="arrow">→</div><div class="step">Plan note in Elara fixes/issue-slug</div><div class="arrow">→</div><div class="step">Test that fails on the old code</div><div class="arrow">→</div><div class="step">Fix in a worktree</div><div class="arrow">→</div><div class="step">CI + lab fast tier + benchmark</div><div class="arrow">→</div><div class="step">Independent review VERDICT: MERGE / CHANGES</div><div class="arrow">→</div><div class="step">Merge to dev, close issue, status</div><div class="arrow">→</div><div class="step">Next item</div></div><p class="flow-note">Review outcomes: &gt; T[Test that fails&lt;br/&gt;on the old code]
-  T, &gt; G[CI + lab fast tier&lt;br/&gt;+ benchmark]
-  G, CHANGES, MERGE. CHANGES goes back to the fix; MERGE continues.</p>
+<div class="flow"><div class="step">GitHub issue</div><div class="arrow">→</div><div class="step">Plan note in Elara fixes/issue-slug</div><div class="arrow">→</div><div class="step">Test that fails on the old code</div><div class="arrow">→</div><div class="step">Fix in a worktree</div><div class="arrow">→</div><div class="step">CI + lab fast tier + benchmark</div><div class="arrow">→</div><div class="step">Independent review VERDICT: MERGE / CHANGES</div><div class="arrow">→</div><div class="step">Merge to dev, close issue, status</div><div class="arrow">→</div><div class="step">Next item</div></div><p class="flow-note">Outcomes: CHANGES goes to &quot;Fix in a worktree&quot;; MERGE goes to &quot;Merge to dev, close issue, status&quot;.</p>
 <ul>
 <li><strong>Briefs.</strong> Fix agents follow <code>D:/taha/research/elara-study/fixes/BRIEF.md</code>; reviewers follow <code>fixes/REVIEW.md</code>. Both are complete; hand them to a new agent as-is.</li>
 <li><strong>One fix at a time, in phase order</strong> (owner's rule). Related items may share a PR. A review may run while the next fix starts.</li>
-<li><strong>Merging to <code>dev</code>.</strong> Post the verdict comment (first line <code>VERDICT: MERGE</code>, then <code>Review: [[reviews/pr-&lt;n&gt;]]</code>, <code>Head reviewed: &lt;full sha&gt;</code>, <code>Reviewer: …</code>), then <code>gh pr merge &lt;n&gt; --merge --delete-branch</code>. If GitHub says the branch is behind, run <code>gh pr update-branch</code>, wait for the checks, and post a new verdict naming the new head (the update adds no content).</li>
+<li><strong>Merging to <code>dev</code> (hard rule: never with a red or pending check, required or not).</strong> Post the verdict comment (first line <code>VERDICT: MERGE</code>, then <code>Review: [[reviews/pr-&lt;n&gt;]]</code> (a review record link is mandatory, also for docs and bot PRs), <code>Head reviewed: &lt;full sha&gt;</code>, <code>Reviewer: …</code>). Then merge only with <code>bun D:/taha/research/tools/safe-merge.ts &lt;n&gt;</code>: it waits until every check run and commit status on the head is green, including <code>review-verdict/dev</code>, refuses otherwise, and merges with <code>--match-head-commit</code>. Never <code>gh pr merge</code> by hand. Since 2026-10-17 <code>review-verdict/dev</code> is also a required check on <code>dev</code>, so GitHub blocks the merge too. If the branch is behind, run <code>gh pr update-branch</code>, wait for the checks, and post a new verdict naming the new head.</li>
 <li><strong>After a CHANGES review</strong>, the fix goes back to the same reviewer, and the merge needs a <code>VERDICT: MERGE</code> on the head that is merged. Coordinator-only checks of post-review commits made the phase 1 promotion review fail once (six delta reviews had to be done after the fact).</li>
 <li><strong>Status in Elara.</strong> <code>bun D:/taha/research/tools/fix-status.ts &lt;item&gt; &quot;&lt;status&gt;&quot;</code> updates the phase table.</li>
 <li><strong>Promotion to <code>prod</code>, once per phase.</strong> PR <code>dev</code>→<code>prod</code>; full lab tier and full benchmark on that exact head (the PR's own lab run is full tier because its base is <code>prod</code>; <code>gh workflow run elara-lab.yml --ref dev -f tier=full -f bench=all</code> for an extra run); independent review of the promotion (REVIEW.md §9), which also checks that every PR in the range has a verdict on its merged head; verdict comment; then <code>git push origin &lt;sha&gt;:prod</code> (fast-forward, not the merge button), and only after every check on the promotion PR is green, because production deploys on that push (#664).</li>
@@ -128,6 +126,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <h2>6. Waiting on the owner (optional unless marked)</h2>
 <ol>
 <li><strong>#589 (required):</strong> revoke the 5 GitHub tokens exposed before #383, then close the issue.</li>
+<li><strong>#703 and #704 (required before item 87):</strong> give access for a verified production backup and a migration rehearsal on a copy of production (#703), and sign off the design of the authoritative store (#704).</li>
 <li><strong>#664 (required):</strong> make production deploy from the CI-published image (or wait for the CI <code>publish</code> job) instead of on every push to <code>prod</code>, and pass the version so <code>/health</code> shows it.</li>
 <li><strong>Replace <code>STATE_MD_TOKEN</code></strong> with a fine-grained token when convenient: <code>gh secret set STATE_MD_TOKEN --env state-md -R PIIIX-org/chapters</code>. Revoking the current gh login breaks the STATE.md bot until then.</li>
 <li><strong>Turn on the agent trial:</strong> add <code>AGENT_TRIAL_API_KEY</code> as a secret and <code>AGENT_TRIAL_MODEL</code> as a variable in the <code>agent-trial</code> environment (optional <code>AGENT_TRIAL_PROVIDER</code>, <code>AGENT_TRIAL_BASE_URL</code>). Details in <code>benchmarks/README.md</code>, section &quot;Agent trial&quot;.</li>
@@ -158,15 +157,15 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><th>Phase</th><th>Items</th><th>Goal</th><th>First items</th></tr>
 </thead>
 <tbody>
-<tr><td>2: stop data loss</td><td>38</td><td>Never lose or corrupt what a person or agent wrote: edits that delete live typing (#408), lost appends, one authoritative store, crash safety, size caps, backups (#409).</td><td>35 strict schemas, 36 frontmatter merge, 24 <code>note_history</code> (#411), 140 webhook disables polling (#410), 94/95 backup restore.</td></tr>
-<tr><td>3: the premise</td><td>73</td><td>Exact answers in fewer tokens than grep (today 1.9–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools.</td><td>17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits.</td></tr>
+<tr><td>2: stop data loss</td><td>42</td><td>Never lose or corrupt what a person or agent wrote: edits that delete live typing (#408), lost appends, one authoritative store, crash safety, size caps, backups (#409).</td><td>35 strict schemas, 36 frontmatter merge, 24 <code>note_history</code> (#411), 140 webhook disables polling (#410), 94/95 backup restore.</td></tr>
+<tr><td>3: the premise</td><td>74</td><td>Exact answers in fewer tokens than grep (today 2–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools.</td><td>17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits.</td></tr>
 <tr><td>4: knowledge truth and memory</td><td>35</td><td>Code claims tied to commits and re-checked on sync; session logs and handoff for agents.</td><td>104 claim anchors, 105 quote resolution.</td></tr>
-<tr><td>5: everything else</td><td>43</td><td>Persian/Arabic search, sync/webhooks, prompts, graph, attachments, OKF, docs; re-prioritised after phase 3 numbers.</td><td>130 Persian normalisation.</td></tr>
-<tr><td>6: rendered views and data attachments</td><td>5</td><td>Markdown stays the only stored note format (HTML is 35% more tokens, breaks line-addressed citations and co-editing; JavaScript in notes is stored XSS). Instead: rendered HTML/PDF/public views generated from Markdown, queryable JSON/CSV/YAML attachments, text extraction for every attachment type, sandboxed interactive HTML attachments. Starts after phase 3.</td><td>#667 decision, #668 rendered views.</td></tr>
+<tr><td>5: everything else</td><td>46</td><td>Persian/Arabic search, sync/webhooks, prompts, graph, attachments, OKF, docs; re-prioritised after phase 3 numbers.</td><td>130 Persian normalisation.</td></tr>
+<tr><td>6: rendered views and data attachments</td><td>6 (5 open)</td><td>Markdown stays the only stored note format (HTML is 35% more bytes, breaks line-addressed citations and co-editing; JavaScript in notes is stored XSS). Instead: rendered HTML/PDF/public views generated from Markdown, queryable JSON/CSV/YAML attachments, text extraction for every attachment type, sandboxed interactive HTML attachments. Starts after phase 3.</td><td>#667 decision, #668 rendered views.</td></tr>
 <tr><td>7: new capabilities</td><td>8</td><td>Secret guard on write, issue/PR/CI links, multi-agent coordination, outbound events, transclusion, capture, importers, review inbox (section 8a).</td><td>#693 secret guard.</td></tr>
 </tbody>
 </table>
-<p>Section 8a explains the features added on 2026-10-17 (speed, caching, drift repair, structure, new capabilities). Appendix A at the end lists every remaining item of phases 0 and 2–7 in order, with its issue, priority and the full change text, plus the follow-up issues filed into each phase. The same order is in Elara <code>fixes/phase-2</code> … <code>fixes/phase-5</code>.</p>
+<p>Section 8a explains the features added on 2026-10-17 (speed, caching, drift repair, structure, new capabilities). Appendix A at the end lists every remaining item of phases 0 and 2–7 in order, with its issue, priority and the full change text, plus the issues added to each phase. The fix-list order is also in Elara <code>fixes/phase-2</code> … <code>fixes/phase-5</code>; the added issues and their place in the work order are in <code>fixes/features</code> and section 8a.</p>
 <h2>8a. New features (added 2026-10-17)</h2>
 <p>The premise: agents faster, smarter and cheaper, <strong>without losing anything the user would have without Elara</strong>. Today Elara breaks that rule twice: installing it costs about 8.5k tokens of tool definitions in every session before any call, and many answers cost more than grep. These features were added after the study, from using Elara as the main agent during phase 1 and from the 59-project comparison. All are filed with the <code>new-feature</code> label; the Elara note <code>fixes/features</code> has the same content.</p>
 <p><strong>Must do first (already in the plan):</strong> finish phase 2 (never lose user text); slim tool profile under ~2k tokens (#428, #429) plus a cacheable prompt (#681); every answer cheaper than finding it yourself (phase 3, gated by the benchmark); turn on the agent trial with an API key (owner action, section 6), because only real agents on real tasks show whether the premise holds.</p>
@@ -176,7 +175,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><th>Issue</th><th>Feature</th><th>Why</th></tr>
 </thead>
 <tbody>
-<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/674">#674</a></td><td>Elara tells the agent when not to use it (routing hints)</td><td>For an exact string in one repo, grep is 1.9–5× cheaper today; saying so beats losing quietly.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/674">#674</a></td><td>Elara tells the agent when not to use it (routing hints)</td><td>For an exact string in one repo, grep is 2–5× cheaper today; saying so beats losing quietly.</td></tr>
 <tr><td><a href="https://github.com/PIIIX-org/chapters/issues/675">#675</a></td><td>One budgeted call for compound questions: where, callers, why, still true</td><td>Turns, not single responses, drive time and cost; most turns were such chains.</td></tr>
 <tr><td><a href="https://github.com/PIIIX-org/chapters/issues/676">#676</a></td><td>Answers for the code being edited: ref and working-tree overlay</td><td>The index describes <code>dev</code>; agents work in branches and worktrees with uncommitted changes.</td></tr>
 <tr><td><a href="https://github.com/PIIIX-org/chapters/issues/677">#677</a></td><td>Vault as a git remote: clone, grep locally, push back</td><td>Lets Elara feed grep instead of competing with it; the tools agents use well keep plain files.</td></tr>
@@ -246,10 +245,26 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td><a href="https://github.com/PIIIX-org/chapters/issues/700">#700</a></td><td>Review inbox for agent changes (approve or revert)</td></tr>
 </tbody>
 </table>
+<h3>Plan gaps (found 2026-10-17)</h3>
+<table>
+<thead>
+<tr><th>Issue</th><th>Phase</th><th>Gap</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/703">#703</a></td><td>2 (first)</td><td>Verified production backup and a migration rehearsal on a copy of production before item 87. Needs the owner.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/704">#704</a></td><td>2 (before #486)</td><td>Design review and owner sign-off before item 87 (authoritative store).</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/705">#705</a></td><td>2 (first)</td><td>Production error and performance monitoring beyond the uptime check.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/706">#706</a></td><td>2</td><td>Alert when the nightly lab fails.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/709">#709</a></td><td>3</td><td>Compatibility runs with several agent clients (Claude Code, Codex, Cursor, Gemini).</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/707">#707</a></td><td>5 (with #556)</td><td>Mark note and file content as untrusted data in every tool response, not only prompts.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/708">#708</a></td><td>5</td><td>Real account deletion: erase a user and their data.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/710">#710</a></td><td>5</td><td>User-facing release notes for each promotion.</td></tr>
+</tbody>
+</table>
 <h3>Not doing</h3>
 <p>No server-side LLM calls (answer synthesis, query rewriting), no LLM-extracted entity graphs, no features only humans can use. They make Elara more expensive, which works against the premise (landscape study: Khoj, Open Notebook, LazyGraphRAG, Cognee).</p>
 <h3>Work order</h3>
-<p>Phase 2 → phase 3 (fix-list items, slim profile and budgets first; then #681, #680 and the caches; then #674–#679) → phase 4 (#686 first, then the claim items, then #687–#691) → phase 5 → phase 6 → phase 7. Appendix A lists every issue per phase.</p>
+<p>Phase 2 (#703 backup and rehearsal setup and #705 monitoring first; #704 design sign-off before #486) → phase 3 (fix-list items, slim profile and budgets first; then #681, #680 and the caches; then #674–#679 and #709) → phase 4 (#686 first, then the claim items, then #687–#691) → phase 5 → phase 6 → phase 7. Appendix A lists every issue per phase.</p>
 <h2>9. Where everything is</h2>
 <table>
 <thead>
@@ -265,13 +280,13 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>Elara notes</td><td>Chapters vault (<code>c1e3c446-…</code>): <code>fixes/*</code>, <code>reviews/pr-*</code>, <code>audit/2026-10-14-*</code>; landscape vault <code>second-brain-landscape</code></td></tr>
 <tr><td>Benchmark</td><td><code>benchmarks/</code> in the repo; method and numbers only from CI (<code>benchmarks/README.md</code>)</td></tr>
 <tr><td>Lab</td><td><code>lab/</code>, <code>docs/agents/lab.md</code>; workflow <code>elara-lab.yml</code></td></tr>
-<tr><td><strong>Backup of everything above</strong></td><td>Private repo <a href="https://github.com/PIIIX-org/elara-study-archive">PIIIX-org/elara-study-archive</a> (all of <code>research/elara-study</code>, <code>research/tools</code>, study notes, landscape notes, workspace rules and skills; secrets and upstream clones excluded on purpose; see its README)</td></tr>
+<tr><td><strong>Backup of everything above</strong></td><td>Private repo <code>PIIIX-org/elara-study-archive</code>, visible only to the owner and org members with access (all of <code>research/elara-study</code>, <code>research/tools</code>, study notes, landscape notes, workspace rules and skills; secrets and upstream clones excluded on purpose; see its README)</td></tr>
 </tbody>
 </table>
 <h2>10. Gotchas</h2>
 <ul>
 <li><strong>Rolling back past phase 1:</strong> migrations 0019 + 0020 leave <code>mcp_connections.access</code> NOT NULL with no default. Before running older code: <code>ALTER TABLE mcp_connections ALTER COLUMN access SET DEFAULT 'write'</code> (<code>docs/self-hosting/backup.md</code>).</li>
-<li><strong><code>review-verdict/dev</code> is red on every open PR</strong> until a verdict comment is posted; it is required only on <code>prod</code>.</li>
+<li><strong>Never merge with a failing or pending check.</strong> Until 2026-10-17, 20 PRs were merged while <code>review-verdict/dev</code> was red: the verdict comment was posted seconds before the merge, the workflow then found the PR closed and set no status, and 8 coordinator verdicts had no review link. Repair: the 12 phase-1 fix PRs had been independently reviewed before the merge (only their status was never evaluated); the 8 coordinator-only PRs (#627, #652, #653, #659, #665, #666, #672, #701) got independent reviews after the merge; 16 now pass (their statuses were set from the owner account by running the repo's own checker after the merge, <code>verdict-after-merge.ts</code>); #659, #665, #672 and #701 keep a red CHANGES status, and their corrections landed in #711. <code>review-verdict/dev</code> became required on <code>dev</code>, and <code>safe-merge.ts</code> is now the only way to merge.</li>
 <li><strong>Never test against production</strong> (<code>chapters.piiix.org</code>); the lab instance is the staging server.</li>
 <li><strong>Clean room:</strong> never copy code or prompt text from MiroFish, OASIS, CAMEL, Graphiti, Zep or the landscape projects.</li>
 <li><strong>Local machine:</strong> no Docker or pnpm (the sandbox blocks symlinks); CI and the lab are the test runners. All files stay under <code>D:/taha</code>; point Bun/npm caches at <code>D:/taha/tools/cache</code>.</li>
@@ -281,9 +296,9 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <li><strong>Flaky lab checks:</strong> if two full runs on the same commit disagree on a known-defect check, mark that entry <code>intermittent</code> with the measured reason (as in #661) rather than re-running until green.</li>
 </ul>
 <h2>Appendix A. Every remaining item, in order</h2>
-<p>Generated 2026-10-17 from <code>FIX-LIST.md</code>, <code>fix-issues.json</code>, the phase order in Elara <code>fixes/phase-N</code> and the GitHub milestones. &quot;State&quot; is the GitHub issue state at generation time. Work them top to bottom within a phase; follow-ups at the end of each phase are placed where they fit when the phase starts.</p>
+<p>Generated 2026-10-17 from <code>FIX-LIST.md</code>, <code>fix-issues.json</code>, the phase order in Elara <code>fixes/phase-N</code> and the GitHub milestones. &quot;State&quot; is the GitHub issue state at generation time. Work the fix-list items top to bottom within a phase. Added issues are listed by number after them; their place in the work order is given in section 8a (Work order) and in the line under each phase heading.</p>
 <h3>Phase 0: owner actions</h3>
-<p>4 fix-list items plus 1 added issues (review follow-ups and new features, after the fix-list items).</p>
+<p>4 fix-list items plus 2 added issues (after the fix-list items).</p>
 <table>
 <thead>
 <tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
@@ -293,11 +308,12 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>2</td><td>190</td><td><a href="https://github.com/PIIIX-org/chapters/issues/587">#587</a></td><td>Now</td><td>closed</td><td>Rotate the webhook secret pasted in chat; decide on the inactive GitHub hook 697510656.</td></tr>
 <tr><td>3</td><td>191</td><td><a href="https://github.com/PIIIX-org/chapters/issues/588">#588</a></td><td>Now</td><td>closed</td><td>Decide whether to keep the upstream <code>rea</code> connection (re-clones every 5 min) and the scratch repos <code>elara-freshness-lab</code> and <code>rea-snapshot</code>.</td></tr>
 <tr><td>4</td><td>192</td><td><a href="https://github.com/PIIIX-org/chapters/issues/589">#589</a></td><td>Now</td><td>open</td><td>Revoke the 5 GitHub tokens exposed before #383 (from the bug log; still on the owner's list).</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/635">#635</a></td><td>—</td><td>closed</td><td>Add STATE_MD_TOKEN so the STATE.md bot can open its PR</td></tr>
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/664">#664</a></td><td>P1</td><td>open</td><td>Production deploys on the push to prod, before CI publishes the gated image (#590 is bypassed)</td></tr>
 </tbody>
 </table>
 <h3>Phase 2: stop data loss</h3>
-<p>36 fix-list items plus 3 added issues (review follow-ups and new features, after the fix-list items).</p>
+<p>36 fix-list items plus 7 added issues (#703 (backup and rehearsal set-up) and #705 (monitoring) come first; #704 (design sign-off) before #486; the rest where they fit).</p>
 <table>
 <thead>
 <tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
@@ -342,10 +358,14 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/621">#621</a></td><td>P1</td><td>open</td><td>Import applies shares from the archive manifest without asking</td></tr>
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/658">#658</a></td><td>P2</td><td>open</td><td>Lab: app stays down after a SIGKILL step when 'compose start' fails or runs too early</td></tr>
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/663">#663</a></td><td>P2</td><td>open</td><td>Lab: restart-extraction file-count check failed once without printing the clean run's count</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/703">#703</a></td><td>P0</td><td>open</td><td>[phase 2] Verified production backup and a migration rehearsal on a copy of production before item 87</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/704">#704</a></td><td>P0</td><td>open</td><td>[phase 2] Design review and owner sign-off before item 87 (authoritative store)</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/705">#705</a></td><td>P1</td><td>open</td><td>[phase 2] Production error and performance monitoring beyond the uptime check</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/706">#706</a></td><td>P2</td><td>open</td><td>[phase 2] Alert when the nightly lab fails</td></tr>
 </tbody>
 </table>
 <h3>Phase 3: the premise (fewer tokens, exact answers)</h3>
-<p>60 fix-list items plus 13 added issues (review follow-ups and new features, after the fix-list items).</p>
+<p>60 fix-list items plus 14 added issues (after the fix-list items: #681, #680, #682–#685, then #674–#679 and #709; #623 where it fits).</p>
 <table>
 <thead>
 <tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
@@ -424,10 +444,11 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/683">#683</a></td><td>P2</td><td>open</td><td>[phase 3] Per-session de-duplication: refer to content already sent in this session</td></tr>
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/684">#684</a></td><td>P1</td><td>open</td><td>[phase 3] Content-addressed index caches: reuse parse, symbols and embeddings by blob hash</td></tr>
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/685">#685</a></td><td>P2</td><td>open</td><td>[phase 3] Search and graph result cache keyed by query, scope and index version</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/709">#709</a></td><td>P2</td><td>open</td><td>[phase 3] Compatibility runs with several agent clients (Claude Code, Codex, Cursor, Gemini)</td></tr>
 </tbody>
 </table>
 <h3>Phase 4: knowledge truth and memory</h3>
-<p>29 fix-list items plus 6 added issues (review follow-ups and new features, after the fix-list items).</p>
+<p>29 fix-list items plus 6 added issues (#686 comes before the fix-list items; #687–#691 after the claim items #502–#505).</p>
 <table>
 <thead>
 <tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
@@ -471,7 +492,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 </tbody>
 </table>
 <h3>Phase 5: everything else</h3>
-<p>34 fix-list items plus 9 added issues (review follow-ups and new features, after the fix-list items).</p>
+<p>34 fix-list items plus 12 added issues (#707 together with #556; the rest where they fit).</p>
 <table>
 <thead>
 <tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
@@ -520,6 +541,9 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/656">#656</a></td><td>P2</td><td>open</td><td>Deactivation leaves repository sync tokens and export links working; concurrent admin deactivation</td></tr>
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/657">#657</a></td><td>P2</td><td>open</td><td>Agent trial follow-ups from the #651 review</td></tr>
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/662">#662</a></td><td>P2</td><td>open</td><td>Gate hardening follow-ups from the post-merge delta reviews (#590, #597, #602, #622)</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/707">#707</a></td><td>P1</td><td>open</td><td>[phase 5] Mark note and file content as untrusted data in every tool response, not only prompts</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/708">#708</a></td><td>P1</td><td>open</td><td>[phase 5] Real account deletion: erase a user and their data</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/710">#710</a></td><td>P2</td><td>open</td><td>[phase 5] User-facing release notes for each promotion</td></tr>
 </tbody>
 </table>
 <h3>Phase 6: rendered views and data attachments</h3>
