@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Elara fix programme: hand-off after phase 1</title>
+<style>
+:root { --fg:#1d2433; --muted:#5b6475; --border:#d9dee7; --surface:#f6f8fb; --accent:#3b5bdb; --ok:#2b8a3e; }
+@media (prefers-color-scheme: dark) { :root { --fg:#e6e9ef; --muted:#9aa3b2; --border:#2f3645; --surface:#1a1f2a; --accent:#8da2fb; --ok:#69db7c; } body { background:#11151d; } }
+* { box-sizing: border-box; }
+body { margin:0; font:15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--fg); }
+main { max-width: 1040px; margin: 0 auto; padding: 32px 24px 64px; }
+h1 { font-size: 28px; margin: 0 0 8px; }
+h2 { font-size: 21px; margin: 36px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+p, li { max-width: 80ch; }
+a { color: var(--accent); }
+code { font: 13px/1.4 ui-monospace, "Cascadia Code", Consolas, monospace; background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+th { background: var(--surface); }
+.flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 16px 0 6px; }
+.step { border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; font-size: 13px; background: var(--surface); max-width: 170px; }
+.arrow { color: var(--muted); }
+.flow-note { color: var(--muted); font-size: 13px; }
+footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Elara fix programme: hand-off after phase 1</h1>
+<p>Date: 2026-10-17. Repository: <a href="https://github.com/PIIIX-org/chapters">PIIIX-org/chapters</a> (product name Elara). Written for whoever continues the work: the owner, another agent, or a future session.</p>
+<h2>1. Where things stand</h2>
+<table>
+<thead>
+<tr><th></th><th>State</th></tr>
+</thead>
+<tbody>
+<tr><td>Study</td><td>Done. Round 1 + round 2 reports, the 59-project landscape study and the Zep study produced a fix list of 192 items (<code>FIX-LIST.md</code>).</td></tr>
+<tr><td>Issues</td><td>All 183 open items filed as GitHub issues (#413–#589 plus #403, #408–#411), label <code>elara-study</code>, one milestone per phase.</td></tr>
+<tr><td>Plan</td><td>Elara, Chapters vault: <code>fixes/index</code>, <code>fixes/phase-0</code> … <code>fixes/phase-5</code> (order and status of every item).</td></tr>
+<tr><td>Phase 0 (owner actions)</td><td>4 of 6 closed. Open: #589 (revoke 5 old GitHub tokens; the owner will do it) and #664 (production deploys on push, before CI; found during the promotion).</td></tr>
+<tr><td>Phase 1 (guardrails and security)</td><td><strong>Done and on <code>prod</code>: 25 of 25 issues closed</strong>, 24 PRs merged to <code>dev</code>, promoted in <a href="https://github.com/PIIIX-org/chapters/pull/660">#660</a> (<code>prod</code> = <code>5c5bdc0</code>).</td></tr>
+<tr><td>Phases 2–5</td><td>Not started. 38, 61, 29 and 43 open issues (follow-ups found by reviews included).</td></tr>
+</tbody>
+</table>
+<h2>2. What phase 1 delivered</h2>
+<p><strong>Release gates (nothing reaches <code>prod</code> without proof)</strong></p>
+<table>
+<thead>
+<tr><th>PR</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/590">#590</a></td><td>The prod image is published only after CI passes on that exact commit. (The production server currently deploys on the push itself, not from this image: #664.)</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/591">#591</a></td><td>CI checks every note file parses and matches its database row.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/597">#597</a></td><td><code>fails-before</code>: a fix PR's new tests must fail on the old code.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/602">#602</a></td><td>PR template with an Evidence section; <code>pr-evidence</code> rejects claims without links.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/616">#616</a></td><td>The integration lab runs in CI (fast tier on every PR, full tier nightly and on demand). Known defects live in <code>lab/known-defects.json</code>; a fix must remove its own entries.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/622">#622</a></td><td>Premise benchmark as a release gate (<code>bench</code> ×3 instances, median, <code>bench-gate</code>), correct NDCG, never against production.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/625">#625</a></td><td><code>review-verdict</code> gate: a promotion needs a <code>VERDICT: MERGE</code> comment naming the exact head. Required checks applied to <code>dev</code> and <code>prod</code>.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/631">#631</a></td><td>Commit attribution check, issue forms with &quot;found by&quot;, STATE.md generated from GitHub by a bot.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/637">#637</a>, <a href="https://github.com/PIIIX-org/chapters/pull/648">#648</a></td><td><code>/health</code> reports restarts (<code>bootId</code>, <code>lastShutdown</code>, …); an uptime monitor posts to issue <a href="https://github.com/PIIIX-org/chapters/issues/636">#636</a>.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/651">#651</a></td><td>Weekly trial with real AI agents against the lab instance (8 tasks, Elara arm vs local grep arm). Inactive until an API key is added (section 6).</td></tr>
+</tbody>
+</table>
+<p><strong>Security</strong></p>
+<table>
+<thead>
+<tr><th>PR</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/592">#592</a>, <a href="https://github.com/PIIIX-org/chapters/pull/643">#643</a></td><td>Every MCP tool and prompt response is scanned for secrets in CI. Git credentials no longer leak through sync errors, query strings, fragments, <code>ssh://user:pw@</code> remotes or broken URL encodings. The review caught a crash at server start in the first version.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/639">#639</a></td><td>Every MCP tool declares its scope; one wrapper enforces the token's pin.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/640">#640</a>, <a href="https://github.com/PIIIX-org/chapters/pull/647">#647</a>, <a href="https://github.com/PIIIX-org/chapters/pull/655">#655</a></td><td>Token levels read / write / admin, tool allow-lists, expiry. Pinned tokens lose admin tools and can't exceed the minter's permission. <code>tools/list</code> shows only tools the token can actually call (live permission check).</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/642">#642</a></td><td>Saving a perspective needs edit access; global perspectives are visible only to their creator.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/645">#645</a></td><td>Behaviour tests for token revocation, expiry, deactivation, the rate limit, account separation and prompt note text.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/pull/654">#654</a></td><td>Deactivating a user revokes their MCP tokens; reactivation brings none back.</td></tr>
+</tbody>
+</table>
+<p>Docs and housekeeping: #627 (prod merged back into dev), #652 (first bot STATE.md refresh), #659 (STATE.md: auto redeploy, promotion procedure), #661 (lab baseline: the #496 bundle check marked intermittent after two full runs on the same commit disagreed).</p>
+<p><strong>Reviews.</strong> Every PR was reviewed by a separate Opus session told to disprove the PR (docs-only and bot PRs by the coordinator). Reviews sent PRs back with blocking problems many times; in the last stretch alone #642, #643, #648, #651 (twice), #655 and #661, each fixed before merging. Reviews: <code>D:/taha/research/elara-study/fixes/reviews/&lt;pr&gt;.md</code> and Elara <code>reviews/pr-&lt;n&gt;</code>.</p>
+<h2>3. How the work is done (keep doing it this way)</h2>
+<div class="flow"><div class="step">GitHub issue</div><div class="arrow">→</div><div class="step">Plan note in Elara fixes/issue-slug</div><div class="arrow">→</div><div class="step">Test that fails on the old code</div><div class="arrow">→</div><div class="step">Fix in a worktree</div><div class="arrow">→</div><div class="step">CI + lab fast tier + benchmark</div><div class="arrow">→</div><div class="step">Independent review VERDICT: MERGE / CHANGES</div><div class="arrow">→</div><div class="step">Merge to dev, close issue, status</div><div class="arrow">→</div><div class="step">Next item</div></div><p class="flow-note">Review outcomes: &gt; T[Test that fails&lt;br/&gt;on the old code]
+  T, &gt; G[CI + lab fast tier&lt;br/&gt;+ benchmark]
+  G, CHANGES, MERGE. CHANGES goes back to the fix; MERGE continues.</p>
+<ul>
+<li><strong>Briefs.</strong> Fix agents follow <code>D:/taha/research/elara-study/fixes/BRIEF.md</code>; reviewers follow <code>fixes/REVIEW.md</code>. Both are complete; hand them to a new agent as-is.</li>
+<li><strong>One fix at a time, in phase order</strong> (owner's rule). Related items may share a PR. A review may run while the next fix starts.</li>
+<li><strong>Merging to <code>dev</code>.</strong> Post the verdict comment (first line <code>VERDICT: MERGE</code>, then <code>Review: [[reviews/pr-&lt;n&gt;]]</code>, <code>Head reviewed: &lt;full sha&gt;</code>, <code>Reviewer: …</code>), then <code>gh pr merge &lt;n&gt; --merge --delete-branch</code>. If GitHub says the branch is behind, run <code>gh pr update-branch</code>, wait for the checks, and post a new verdict naming the new head (the update adds no content).</li>
+<li><strong>After a CHANGES review</strong>, the fix goes back to the same reviewer, and the merge needs a <code>VERDICT: MERGE</code> on the head that is merged. Coordinator-only checks of post-review commits made the phase 1 promotion review fail once (six delta reviews had to be done after the fact).</li>
+<li><strong>Status in Elara.</strong> <code>bun D:/taha/research/tools/fix-status.ts &lt;item&gt; &quot;&lt;status&gt;&quot;</code> updates the phase table.</li>
+<li><strong>Promotion to <code>prod</code>, once per phase.</strong> PR <code>dev</code>→<code>prod</code>; full lab tier and full benchmark on that exact head (the PR's own lab run is full tier because its base is <code>prod</code>; <code>gh workflow run elara-lab.yml --ref dev -f tier=full -f bench=all</code> for an extra run); independent review of the promotion (REVIEW.md §9), which also checks that every PR in the range has a verdict on its merged head; verdict comment; then <code>git push origin &lt;sha&gt;:prod</code> (fast-forward, not the merge button), and only after every check on the promotion PR is green, because production deploys on that push (#664).</li>
+<li><strong>Owner decisions without an answer</strong> get the conservative default, written on the issue and in the plan note, with the alternatives listed.</li>
+</ul>
+<h2>4. Phase 1 promotion</h2>
+<p><strong>Done: 2026-10-17 01:37 UTC, <a href="https://github.com/PIIIX-org/chapters/pull/660">#660</a>, <code>prod</code> <code>111e3f1</code> → <code>5c5bdc0</code> (fast-forward).</strong></p>
+<table>
+<thead>
+<tr><th>Step</th><th>Result</th></tr>
+</thead>
+<tbody>
+<tr><td>Full lab tier + full benchmark on <code>5c5bdc0</code></td><td><a href="https://github.com/PIIIX-org/chapters/actions/runs/38977444259">run 38977444259</a>: gate PASS on attempt 2 (20 tests, 676 checks passed, 118 known failures, 0 regressions, 0 stale); <code>bench</code> ×3 and <code>bench-gate</code> green. Attempt 1 failed only because #496 had been closed by mistake (see section 10) and was reopened.</td></tr>
+<tr><td>Flaky check found on the way</td><td>Two full runs on the same commit disagreed on the #496 bundle check; marked <code>intermittent</code> in <a href="https://github.com/PIIIX-org/chapters/pull/661">#661</a> after its own review.</td></tr>
+<tr><td>CI on <code>5c5bdc0</code></td><td><a href="https://github.com/PIIIX-org/chapters/actions/runs/38977444289">PR run 38977444289</a>, <a href="https://github.com/PIIIX-org/chapters/actions/runs/38977440491">dev push 38977440491</a>, <a href="https://github.com/PIIIX-org/chapters/actions/runs/38991686362">prod push 38991686362</a> (image published 01:43 UTC).</td></tr>
+<tr><td>Promotion review</td><td>Independent, REVIEW.md §9 (Elara <code>reviews/pr-660</code>). First answer CHANGES: 9 of 25 PRs lacked a verdict comment on their merged head. Fixed with six post-merge independent delta reviews (#590, #591, #597, #602, #616, #622; all MERGE), coordinator verdicts for #412 and #627, a formatted verdict for #592, and body corrections. Second answer MERGE.</td></tr>
+<tr><td>Production</td><td>New code running since 01:38:18 UTC (<code>/health</code> shows the #637 fields, bootId <code>01a14782…</code>; <a href="https://github.com/PIIIX-org/chapters/actions/runs/38992345112">uptime run 38992345112</a>).</td></tr>
+</tbody>
+</table>
+<p><strong>Found during the promotion: <a href="https://github.com/PIIIX-org/chapters/issues/664">#664</a> (owner).</strong> Production booted the new code 23 seconds after the push, 5 minutes before CI published the gated image. The server therefore deploys on the push to <code>prod</code>, not from the image #590 publishes after CI, so a commit that fails CI would still reach production. Today's deploy was safe because the same commit had passed CI, the full lab and the benchmark first. Until #664 is fixed, never push to <code>prod</code> before every check on the promotion PR is green. <code>/health</code> reports <code>version: null</code> because the deploy doesn't pass the version.</p>
+<p>After deploy (from the promotion body): migrations 0019 and 0020 ran at boot; to roll back past phase 1 see section 10.</p>
+<h2>5. Decisions taken for the owner (can be changed)</h2>
+<table>
+<thead>
+<tr><th>Issue</th><th>Default taken</th><th>Alternatives (on the issue)</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/549">#549</a></td><td>Pinned tokens get no admin tools unless granted at mint; account tokens minted through the API without a level get <code>admin</code> (the Settings form defaults to read+write).</td><td>API default <code>write</code> for account tokens.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/550">#550</a></td><td>Global perspectives visible and deletable only by their creator. A deactivated creator's globals become invisible to everyone (no data removed).</td><td>Admins see and delete all globals (option C); any account may save private globals.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/593">#593</a></td><td>Owners also see URL query tokens as <code>***</code>.</td><td>Show the raw query to owners.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/571">#571</a></td><td>Agent trial built but inactive without an API key.</td><td>Add the key (section 6).</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/588">#588</a></td><td><code>rea-snapshot</code> and <code>elara-freshness-lab</code> archived (not deleted); the freshness-lab webhook deleted.</td><td>Unarchive or delete.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/635">#635</a></td><td><code>STATE_MD_TOKEN</code> is the owner's gh login token (owner's choice).</td><td>A fine-grained token with Contents + Pull requests on <code>chapters</code> only (recommended later).</td></tr>
+</tbody>
+</table>
+<h2>6. Waiting on the owner (optional unless marked)</h2>
+<ol>
+<li><strong>#589 (required):</strong> revoke the 5 GitHub tokens exposed before #383, then close the issue.</li>
+<li><strong>#664 (required):</strong> make production deploy from the CI-published image (or wait for the CI <code>publish</code> job) instead of on every push to <code>prod</code>, and pass the version so <code>/health</code> shows it.</li>
+<li><strong>Replace <code>STATE_MD_TOKEN</code></strong> with a fine-grained token when convenient: <code>gh secret set STATE_MD_TOKEN --env state-md -R PIIIX-org/chapters</code>. Revoking the current gh login breaks the STATE.md bot until then.</li>
+<li><strong>Turn on the agent trial:</strong> add <code>AGENT_TRIAL_API_KEY</code> as a secret and <code>AGENT_TRIAL_MODEL</code> as a variable in the <code>agent-trial</code> environment (optional <code>AGENT_TRIAL_PROVIDER</code>, <code>AGENT_TRIAL_BASE_URL</code>). Details in <code>benchmarks/README.md</code>, section &quot;Agent trial&quot;.</li>
+<li><strong>Prod repository connections</strong> <code>rea</code> and <code>elara-freshness-lab</code> are no longer needed (Settings → Repositories → delete). Leaving them costs only polling. Removing one needs a logged-in owner session; there is no MCP tool for it.</li>
+<li>Decide the #549 / #550 defaults if the ones in section 5 don't suit.</li>
+</ol>
+<h2>7. Open follow-ups found during phase 1</h2>
+<table>
+<thead>
+<tr><th>Issue</th><th>Phase</th><th>What</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/658">#658</a></td><td>2</td><td>Lab: app stays down after a SIGKILL step if <code>compose start</code> fails (one flaky run seen).</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/621">#621</a></td><td>2</td><td>Import applies shares from the archive manifest without asking.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/623">#623</a></td><td>3</td><td>Search results with equal scores have no tie-breaker.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/644">#644</a></td><td>5</td><td>Credential redaction is quadratic on long error text.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/650">#650</a></td><td>5</td><td><code>fails-before</code> can't check <code>.github/scripts/*.test.mjs</code> tests.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/656">#656</a></td><td>5</td><td>Deactivation leaves repository sync tokens and export links working; two admins can deactivate each other.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/657">#657</a></td><td>5</td><td>Agent trial: zero usage trusted, estimate factor, timeouts across retries.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/662">#662</a></td><td>5</td><td>Gate hardening follow-ups from the post-merge delta reviews (#590, #597, #602, #622).</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/663">#663</a></td><td>2</td><td>Lab: restart-extraction file-count check failed once without printing the clean run's count.</td></tr>
+<tr><td>#617–#620</td><td>5</td><td>Small bugs and OKF/attachment gaps from the lab.</td></tr>
+</tbody>
+</table>
+<h2>8. What the next phases fix</h2>
+<table>
+<thead>
+<tr><th>Phase</th><th>Items</th><th>Goal</th><th>First items</th></tr>
+</thead>
+<tbody>
+<tr><td>2: stop data loss</td><td>38</td><td>Never lose or corrupt what a person or agent wrote: edits that delete live typing (#408), lost appends, one authoritative store, crash safety, size caps, backups (#409).</td><td>35 strict schemas, 36 frontmatter merge, 24 <code>note_history</code> (#411), 140 webhook disables polling (#410), 94/95 backup restore.</td></tr>
+<tr><td>3: the premise</td><td>61</td><td>Exact answers in fewer tokens than grep (today 1.9–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools.</td><td>17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits.</td></tr>
+<tr><td>4: knowledge truth and memory</td><td>29</td><td>Code claims tied to commits and re-checked on sync; session logs and handoff for agents.</td><td>104 claim anchors, 105 quote resolution.</td></tr>
+<tr><td>5: everything else</td><td>43</td><td>Persian/Arabic search, sync/webhooks, prompts, graph, attachments, OKF, docs; re-prioritised after phase 3 numbers.</td><td>130 Persian normalisation.</td></tr>
+</tbody>
+</table>
+<p>Full order: Elara <code>fixes/phase-2</code> … <code>fixes/phase-5</code>.</p>
+<h2>9. Where everything is</h2>
+<table>
+<thead>
+<tr><th>What</th><th>Where</th></tr>
+</thead>
+<tbody>
+<tr><td>Code</td><td><code>D:/taha/chapters</code> (main checkout on <code>dev</code>; agents work in <code>D:/taha/worktrees/&lt;name&gt;</code>, never in the main checkout)</td></tr>
+<tr><td>Study reports</td><td><code>D:/taha/research/elara-study/REPORT.md</code>, <code>REPORT-ROUND2.md</code>, <code>elara-what-we-did-wrong.html</code></td></tr>
+<tr><td>Fix list and issue map</td><td><code>FIX-LIST.md</code>, <code>fix-issues.json</code> (item → issue)</td></tr>
+<tr><td>Briefs and reviews</td><td><code>fixes/BRIEF.md</code>, <code>fixes/REVIEW.md</code>, <code>fixes/reviews/&lt;pr&gt;.md</code></td></tr>
+<tr><td>Promotion bodies</td><td><code>merge/promote-body.md</code> (#407), <code>merge/promote-phase-1-body.md</code></td></tr>
+<tr><td>Tools</td><td><code>D:/taha/research/tools/</code>: <code>elara-call.ts</code> (Elara MCP helper), <code>fix-status.ts</code>, <code>publish-fix-plan.ts</code>, <code>file-fix-issues.ts</code></td></tr>
+<tr><td>Elara notes</td><td>Chapters vault (<code>c1e3c446-…</code>): <code>fixes/*</code>, <code>reviews/pr-*</code>, <code>audit/2026-10-14-*</code>; landscape vault <code>second-brain-landscape</code></td></tr>
+<tr><td>Benchmark</td><td><code>benchmarks/</code> in the repo; method and numbers only from CI (<code>benchmarks/README.md</code>)</td></tr>
+<tr><td>Lab</td><td><code>lab/</code>, <code>docs/agents/lab.md</code>; workflow <code>elara-lab.yml</code></td></tr>
+</tbody>
+</table>
+<h2>10. Gotchas</h2>
+<ul>
+<li><strong>Rolling back past phase 1:</strong> migrations 0019 + 0020 leave <code>mcp_connections.access</code> NOT NULL with no default. Before running older code: <code>ALTER TABLE mcp_connections ALTER COLUMN access SET DEFAULT 'write'</code> (<code>docs/self-hosting/backup.md</code>).</li>
+<li><strong><code>review-verdict/dev</code> is red on every open PR</strong> until a verdict comment is posted; it is required only on <code>prod</code>.</li>
+<li><strong>Never test against production</strong> (<code>chapters.piiix.org</code>); the lab instance is the staging server.</li>
+<li><strong>Clean room:</strong> never copy code or prompt text from MiroFish, OASIS, CAMEL, Graphiti, Zep or the landscape projects.</li>
+<li><strong>Local machine:</strong> no Docker or pnpm (the sandbox blocks symlinks); CI and the lab are the test runners. All files stay under <code>D:/taha</code>; point Bun/npm caches at <code>D:/taha/tools/cache</code>.</li>
+<li><strong>Commits:</strong> author and committer <code>Taha-Mahmoodi &lt;Taha-Mahmoodi@users.noreply.github.com&gt;</code> plus the trailer <code>Co-Authored-By: Claude Opus &lt;noreply@anthropic.com&gt;</code> (the <code>attribution</code> check).</li>
+<li><strong>Elara <code>edit_note</code> frontmatter</strong> replaces the whole map; never put <code>---</code> inside a frontmatter value.</li>
+<li><strong>GitHub closing keywords:</strong> never write &quot;fix #N&quot;, &quot;fixes #N&quot; or &quot;closes #N&quot; in a PR body unless the PR really closes it, not even in &quot;does not fix #N&quot;. #661 closed #496 that way; it was reopened, and the lab gate fails while a baseline entry points at a closed issue.</li>
+<li><strong>Flaky lab checks:</strong> if two full runs on the same commit disagree on a known-defect check, mark that entry <code>intermittent</code> with the measured reason (as in #661) rather than re-running until green.</li>
+</ul>
+
+<footer>Generated from phase-1.md on 2026-10-17.</footer>
+</main>
+</body>
+</html>
