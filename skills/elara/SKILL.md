@@ -34,7 +34,7 @@ Elara is a team knowledge base and codebase mapping platform built on four found
 
 ### 1. Graph-First Navigation Protocol
 When exploring a project or answering questions about architecture, concepts, or code:
-- **Do not scan all files blindly.**
+- **Pick the cheaper tool.** Use Elara for cross-repo questions, notes, decisions, history, verified claims, and code questions that span repos. For an exact identifier or string in one checked-out repo, `grep`/`glob` plus a ranged read is cheaper ([benchmark](https://github.com/PIIIX-org/chapters/blob/dev/benchmarks/README.md)). Never read a whole file when a line range or outline will do.
 - **Step 1 — Search & Symbols**:
   - Run `search` (or `/elara-search` / legacy `/chapters-search`) with a query to find relevant notes and code files using hybrid (lexical + vector) retrieval.
   - Run `find_symbols` (or `/elara-symbols` / legacy `/chapters-symbols`) to pinpoint specific functions, classes, interfaces, or types with exact declaration line numbers without reading whole files.
@@ -94,7 +94,7 @@ When `/elara` (or `/chapters`) skill or MCP is invoked on any project:
 
   This project is permanently bound to Elara (Chapters). All tasks, architecture inquiries, code changes, and workflows must operate through Elara to ensure documentation, notes, and the knowledge graph remain synchronized at all times.
 
-  - **Always Use Elara**: Never explore codebase architecture blindly; use Elara MCP tools (`search`, `find_symbols`, `graph`, `find_graph_path`, `read_note`, `read_file`).
+  - **Use Elara Where It Is Cheaper**: Use Elara MCP tools (`search`, `find_symbols`, `graph`, `find_graph_path`, `read_note`, `read_file`) for cross-repo questions, notes, decisions, history, verified claims, and code questions across repos. Use `grep`/`glob` and ranged reads for exact identifiers or strings in one checked-out repo. Never read whole files when a range or outline will do.
   - **Pre-Task Drift Check**: Always verify notes against recent git commits before executing tasks; update stale notes first.
   - **Post-Task Note Evaluation**: Always evaluate and update relevant vault notes upon finishing code changes.
   ```
