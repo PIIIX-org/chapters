@@ -4,18 +4,28 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
 
 <!-- state:generated:start -->
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
-- **Last promotion to `prod`**: #407 Promote: Elara study fixes (#400, #405, #398, #402) and docs (#406) (merged 2026-10-15, `111e3f1`).
+- **Last promotion to `prod`**: #660 Promote: Elara study phase 1 (guardrails and security) (merged 2026-10-17, `5c5bdc0`).
 - **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) **failure**; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
-- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 3/5, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 22/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 0/35, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/60, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/29, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/34.
-- **Open issues**: [176](https://github.com/PIIIX-org/chapters/issues): P0 60, P1 83, P2 26, no priority 7; `bug` 9, `security` 2, `decision` 2, `deferred` 2.
+- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/6, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 0/38, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/61, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/29, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/43.
+- **Open issues**: [178](https://github.com/PIIIX-org/chapters/issues): P0 60, P1 83, P2 30, no priority 5; `bug` 8, `security` 2, `decision` 2, `deferred` 2.
 - **Owner actions** (label `owner`):
   - #589 [fix 192] Revoke the 5 GitHub tokens exposed before #383 (P0)
-  - #635 Add STATE_MD_TOKEN so the STATE.md bot can open its PR
+  - #664 Production deploys on the push to prod, before CI publishes the gated image (#590 is… (P1)
   - #636 Production uptime
-- **In progress: [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2)** (3 open, owner actions excluded):
-  - #571 [fix 174] Scheduled agent trial against a staging server; the only published numbers come… (P1)
-  - #646 Deactivating a user does not revoke their MCP connections; reactivation revives them (P2)
-  - #649 Token capability follow-ups from the #647 review (P2)
+- **In progress: [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3)** (38 open, owner actions excluded):
+  - #403 MCP/REST edits are attributed to collab/null in the audit trail when the collab relay is… (P0)
+  - #408 edit_note replaces the whole body and deletes text a user is typing at the same moment (P0)
+  - #409 Backup restore crashes and loses attachments, trash, revisions and MFA secrets (P0)
+  - #410 A repository is never polled again after one successful webhook (P0)
+  - #411 note_history returns full bodies of every revision with no limit (hang and OOM) (P0)
+  - #437 [fix 35] All tool input schemas .strict(): unknown arguments rejected with the real… (P0)
+  - #438 [fix 36] edit_note frontmatter merges per key, with explicit replace:true and removeKeys (P0)
+  - #474 [fix 74] read_note serves the live document when it is loaded, not the debounced file on… (P0)
+  - #475 [fix 75] Compare-and-set: a stale base is three-way merged; clean merges apply and report… (P0)
+  - #476 [fix 76] Whole-markdown writes accepted only as a structural diff against the live doc (P0)
+  - #477 [fix 77] Every write returns {rev, status: applied|merged|conflicted|retry, diff_stats,… (P0)
+  - #478 [fix 79] Atomic append_note / upsert_note so read-then-write appends are never lost (P0)
+  - … and 26 more: https://github.com/PIIIX-org/chapters/milestone/3
 - **Open bugs** (label `bug`):
   - #403 MCP/REST edits are attributed to collab/null in the audit trail when the collab relay is… (P0)
   - #408 edit_note replaces the whole body and deletes text a user is typing at the same moment (P0)
@@ -25,7 +35,6 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #621 Import applies shares from the archive manifest without asking (P1)
   - #617 Web client logs a 401 console error after logout (P2)
   - #619 Attachment upload drops non-ASCII file names (P2)
-  - #646 Deactivating a user does not revoke their MCP connections; reactivation revives them (P2)
 <!-- state:generated:end -->
 
 - **Product**: **Elara**; the repo keeps the name `chapters`. Current work: the fixes from the Elara AI-performance study (Elara vault notes `audit/2026-10-14-ai-performance-study` and its round-2 follow-up), one GitHub issue per fix-list item, grouped by the `Phase N` milestones above; plan in the Chapters vault `fixes/index`, hand-off `fixes/handoff-phase-1`. Production (`chapters.piiix.org`) redeploys by itself when a new `prod` image is published, and since #590 the image is published only after CI passes on that `prod` commit. A promotion is a PR `dev`→`prod` with every required check green (full lab tier and bench on its head) and a `VERDICT: MERGE` comment from an independent review, then a fast-forward push of the reviewed head (`git push origin <sha>:prod`).
