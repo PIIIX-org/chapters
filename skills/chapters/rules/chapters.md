@@ -7,12 +7,12 @@ You are connected to **Elara**, an open-source, self-hostable second brain and A
 ## Core Directives
 
 1. **Elara is Always Active**:
-   - Use Elara for cross-repo questions, notes, decisions, history, verified claims, and code questions across repos. For an exact identifier or string in one checked-out repo, use `grep`/`glob` and ranged reads; they are cheaper there. Never read whole files when a range or outline will do.
-   - When answering questions about project architecture, specifications, concepts, or code relationships, always leverage Elara MCP tools (Streamable HTTP at `POST /mcp` or `POST /elara/mcp`; hosted at `https://chapters.piiix.org/mcp`, as `elara.piiix.org` is not live yet).
-2. **Graph-First & Symbol Navigation Protocol**:
-   - **Search & Symbols**: Run `search` (hybrid lexical + semantic retrieval with AST code symbols) or `find_symbols` (AST declarations with file path and line range across repos) before reading files.
+   - Use Elara for cross-repo questions, notes, decisions, history, verified claims, and code questions across repos. In one checked-out repo, try Elara `search` first for natural-language questions; for an exact identifier or string, use `grep`/`glob` and ranged reads; they are cheaper there. Never read whole files when a range or outline will do.
+   - Elara MCP tools are always available (Streamable HTTP at `POST /mcp` or `POST /elara/mcp`; hosted at `https://chapters.piiix.org/mcp`, as `elara.piiix.org` is not live yet).
+2. **Elara Search, Symbol & Graph Navigation**:
+   - **Search & Symbols**: For natural-language and cross-repo questions, run `search` (hybrid lexical + semantic retrieval with AST code symbols) or `find_symbols` (AST declarations with file path and line range across repos) to find where to read.
    - **Traverse Graph & Pathfinding**: Run `graph` scoped to one `vaultId` or `repositoryId` (with `aggregate: "community"`, then a specific `community` id) to inspect architectural clusters. `graph` has no neighbour query or `limit`. Use `find_graph_path` to find the shortest connection between concepts, notes, and code. Use `list_graph_perspectives` for saved viewpoint presets (UI only; `graph` cannot apply them).
-   - **Targeted Reading**: Read specific notes (`read_note`) and code files (`read_file`) discovered through search, symbols, or the graph.
+   - **Targeted Reading**: Read specific notes (`read_note`) discovered through search, symbols, or the graph. `read_file` returns a whole file: in a locally checked-out repo, read only the returned line range instead; use `read_file` for repos you do not have locally.
 3. **Project Mapping (`/elara-map` or legacy `/chapters-map`)**:
    - Follow the 5-Phase Flawless OKF v0.2 Protocol (`references/codebase-mapping-protocol.md`): Target Binding & Ingestion Choice → Deep Discovery → Domain Partitioning → Structured OKF Note Synthesis → Progressive Disclosure Indices → Graph Validation.
    - **Vault & Sync Choices**: Prompt whether to map in a new vault (using repo name or custom name) or an existing vault. Ask whether to connect the Git repo for continuous sync; mapping the codebase is mandatory for any programming repository.
@@ -37,6 +37,6 @@ You are connected to **Elara**, an open-source, self-hostable second brain and A
    - When `/elara` (or `/chapters`) skill or MCP is invoked on any project, that project is by default permanently bound to Elara from that point forward.
    - The AI must immediately embed this permanent binding into the project's root instruction and configuration files (`AGENTS.md`, `GEMINI.md`, and `.agents/rules/elara.md` or `.agents/rules/chapters.md`).
    - Future AI sessions in this workspace must recognize that this project is permanently managed through Elara, meaning:
-     - Use Elara MCP tools (`search`, `find_symbols`, `graph`, `find_graph_path`, `read_note`, `read_file`) for cross-repo questions, notes, decisions, history, verified claims, and code questions across repos; use `grep`/`glob` and ranged reads for exact identifiers or strings in one checked-out repo; never read whole files when a range or outline will do.
+     - Use Elara MCP tools (`search`, `find_symbols`, `graph`, `find_graph_path`, `read_note`, `read_file`) for cross-repo questions, notes, decisions, history, verified claims, and code questions across repos; in one checked-out repo, try Elara `search` first for natural-language questions and use `grep`/`glob` and ranged reads for exact identifiers or strings; never read whole files when a range or outline will do.
      - Perform the Pre-Task Codebase Drift check before touching code.
      - Perform the Post-Task Note Evaluation Protocol after any code changes to keep docs, notes, and the second-brain graph synchronized.

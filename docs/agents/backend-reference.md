@@ -623,8 +623,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   does not pass. A tool with no
   fixture step fails the test: **a new tool needs a step there**.
 - **Agent skills**: `skills/elara/` (current) and `skills/chapters/`
-  (legacy copy, kept consistent) give AI assistants graph-first
-  navigation, the 57-tool catalog (`references/mcp-tools.md`), slash
+  (legacy copy, kept consistent) give AI assistants navigation rules
+  (Elara for cross-repo and natural-language questions, grep for exact
+  strings in one repo), the 57-tool catalog (`references/mcp-tools.md`), slash
   commands (`/elara-*`, with `/chapters-*` aliases), the OKF rules
   (`references/okf-format.md`), the `/elara-map` protocol, and an
   always-active rule file (`rules/elara.md`).

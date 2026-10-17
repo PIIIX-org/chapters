@@ -33,9 +33,9 @@ Elara is a team knowledge base and codebase mapping platform built on four found
 
 ## Agent Operating Guidelines
 
-### 1. Graph-First Navigation Protocol
+### 1. Navigation Protocol: Pick the Cheaper Tool
 When exploring a project or answering questions about architecture, concepts, or code:
-- **Pick the cheaper tool.** Use Elara for cross-repo questions, notes, decisions, history, verified claims, and code questions that span repos. For an exact identifier or string in one checked-out repo, `grep`/`glob` plus a ranged read is cheaper ([benchmark](https://github.com/PIIIX-org/chapters/blob/dev/benchmarks/README.md)). Never read a whole file when a line range or outline will do.
+- **Pick the cheaper tool.** Use Elara for cross-repo questions, notes, decisions, history, verified claims, and code questions that span repos. In one checked-out repo, try Elara `search` first for natural-language questions; for an exact identifier or string, `grep`/`glob` plus a ranged read is cheaper ([benchmark](https://github.com/PIIIX-org/chapters/blob/dev/benchmarks/README.md)). Never read a whole file when a line range or outline will do.
 - **Step 1 — Search & Symbols**:
   - Run `search` (or `/elara-search` / legacy `/chapters-search`) with a query to find relevant notes and code files using hybrid (lexical + vector) retrieval.
   - Run `find_symbols` (or `/elara-symbols` / legacy `/chapters-symbols`) to pinpoint specific functions, classes, interfaces, or types with exact declaration line numbers without reading whole files.
@@ -44,7 +44,8 @@ When exploring a project or answering questions about architecture, concepts, or
   - Use `find_graph_path` (or `/elara-path` / legacy `/chapters-path`) to trace the shortest conceptual path between two components, notes, or code files.
   - Use `list_graph_perspectives` to see curated domain or subsystem perspectives.
 - **Step 3 — Read Context**:
-  - Use `read_note` or `read_file` only for the specific notes and code files identified by the search/graph.
+  - Use `read_note` for the specific notes identified by the search/graph.
+  - For code, `read_file` returns the whole file. When the repo is checked out locally, read only the line range that `find_symbols` or `search` returned; use `read_file` only for repos you do not have locally.
 
 ### 2. Note Creation & Editing (OKF Standard)
 When creating or editing notes via `create_note` or `edit_note`:
@@ -93,13 +94,13 @@ When `/elara` (or `/chapters`) skill or MCP is invoked on any project:
   ```markdown
   # Elara Project Binding: Permanent Knowledge Synchronization
 
-  This project is permanently bound to Elara (Chapters). All tasks, architecture inquiries, code changes, and workflows must operate through Elara to ensure documentation, notes, and the knowledge graph remain synchronized at all times.
+  This project is permanently bound to Elara (Chapters). Its notes and knowledge graph must stay synchronized with the code: check them for drift before a task and update them after code changes.
 
-  - **Use Elara Where It Is Cheaper**: Use Elara MCP tools (`search`, `find_symbols`, `graph`, `find_graph_path`, `read_note`, `read_file`) for cross-repo questions, notes, decisions, history, verified claims, and code questions across repos. Use `grep`/`glob` and ranged reads for exact identifiers or strings in one checked-out repo. Never read whole files when a range or outline will do.
+  - **Use Elara Where It Is Cheaper**: Use Elara MCP tools (`search`, `find_symbols`, `graph`, `find_graph_path`, `read_note`, `read_file`) for cross-repo questions, notes, decisions, history, verified claims, and code questions across repos. In one checked-out repo, try Elara `search` first for natural-language questions; use `grep`/`glob` and ranged reads for exact identifiers or strings. Never read whole files when a range or outline will do.
   - **Pre-Task Drift Check**: Always verify notes against recent git commits before executing tasks; update stale notes first.
   - **Post-Task Note Evaluation**: Always evaluate and update relevant vault notes upon finishing code changes.
   ```
-- **Cross-Session Durability**: This ensures future sessions across any AI coding tool, subagent, or model never lose context and always work through Elara to keep documentation, notes, and the second brain synchronized.
+- **Cross-Session Durability**: This ensures future sessions across any AI coding tool, subagent, or model never lose context and keep documentation, notes, and the second brain synchronized with the code.
 
 ---
 
