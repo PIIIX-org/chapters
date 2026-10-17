@@ -11,7 +11,7 @@ Date: 2026-10-17. Repository: [PIIIX-org/chapters](https://github.com/PIIIX-org/
 | Plan | Elara, Chapters vault: `fixes/index`, `fixes/phase-0` … `fixes/phase-5` (order and status of every item). |
 | Phase 0 (owner actions) | 4 of 6 closed. Open: #589 (revoke 5 old GitHub tokens; the owner will do it) and #664 (production deploys on push, before CI; found during the promotion). |
 | Phase 1 (guardrails and security) | **Done and on `prod`: 25 of 25 issues closed**, 24 PRs merged to `dev`, promoted in [#660](https://github.com/PIIIX-org/chapters/pull/660) (`prod` = `5c5bdc0`). |
-| Phases 2–5 | Not started. 38, 73, 35 and 43 open issues (review follow-ups and the new features of section 8a included). |
+| Phases 2–5 | Not started. 42, 74, 35 and 46 open issues (review follow-ups and the new features of section 8a included). |
 | Phase 6 (added 2026-10-17) | Rendered views, data attachments and structured fields, after phase 3: 5 open issues (#668–#671, #692); decision #667 (Markdown stays the only stored note format). |
 | Phase 7 (added 2026-10-17) | New capabilities: 8 issues (#693–#700). See section 8a. |
 
@@ -63,7 +63,7 @@ flowchart LR
 
 - **Briefs.** Fix agents follow `D:/taha/research/elara-study/fixes/BRIEF.md`; reviewers follow `fixes/REVIEW.md`. Both are complete; hand them to a new agent as-is.
 - **One fix at a time, in phase order** (owner's rule). Related items may share a PR. A review may run while the next fix starts.
-- **Merging to `dev`.** Post the verdict comment (first line `VERDICT: MERGE`, then `Review: [[reviews/pr-<n>]]`, `Head reviewed: <full sha>`, `Reviewer: …`), then `gh pr merge <n> --merge --delete-branch`. If GitHub says the branch is behind, run `gh pr update-branch`, wait for the checks, and post a new verdict naming the new head (the update adds no content).
+- **Merging to `dev` (hard rule: never with a red or pending check, required or not).** Post the verdict comment (first line `VERDICT: MERGE`, then `Review: [[reviews/pr-<n>]]` (a review record link is mandatory, also for docs and bot PRs), `Head reviewed: <full sha>`, `Reviewer: …`). Then merge only with `bun D:/taha/research/tools/safe-merge.ts <n>`: it waits until every check run and commit status on the head is green, including `review-verdict/dev`, refuses otherwise, and merges with `--match-head-commit`. Never `gh pr merge` by hand. Since 2026-10-17 `review-verdict/dev` is also a required check on `dev`, so GitHub blocks the merge too. If the branch is behind, run `gh pr update-branch`, wait for the checks, and post a new verdict naming the new head.
 - **After a CHANGES review**, the fix goes back to the same reviewer, and the merge needs a `VERDICT: MERGE` on the head that is merged. Coordinator-only checks of post-review commits made the phase 1 promotion review fail once (six delta reviews had to be done after the fact).
 - **Status in Elara.** `bun D:/taha/research/tools/fix-status.ts <item> "<status>"` updates the phase table.
 - **Promotion to `prod`, once per phase.** PR `dev`→`prod`; full lab tier and full benchmark on that exact head (the PR's own lab run is full tier because its base is `prod`; `gh workflow run elara-lab.yml --ref dev -f tier=full -f bench=all` for an extra run); independent review of the promotion (REVIEW.md §9), which also checks that every PR in the range has a verdict on its merged head; verdict comment; then `git push origin <sha>:prod` (fast-forward, not the merge button), and only after every check on the promotion PR is green, because production deploys on that push (#664).
@@ -99,11 +99,12 @@ After deploy (from the promotion body): migrations 0019 and 0020 ran at boot; to
 ## 6. Waiting on the owner (optional unless marked)
 
 1. **#589 (required):** revoke the 5 GitHub tokens exposed before #383, then close the issue.
-2. **#664 (required):** make production deploy from the CI-published image (or wait for the CI `publish` job) instead of on every push to `prod`, and pass the version so `/health` shows it.
-3. **Replace `STATE_MD_TOKEN`** with a fine-grained token when convenient: `gh secret set STATE_MD_TOKEN --env state-md -R PIIIX-org/chapters`. Revoking the current gh login breaks the STATE.md bot until then.
-4. **Turn on the agent trial:** add `AGENT_TRIAL_API_KEY` as a secret and `AGENT_TRIAL_MODEL` as a variable in the `agent-trial` environment (optional `AGENT_TRIAL_PROVIDER`, `AGENT_TRIAL_BASE_URL`). Details in `benchmarks/README.md`, section "Agent trial".
-5. **Prod repository connections** `rea` and `elara-freshness-lab` are no longer needed (Settings → Repositories → delete). Leaving them costs only polling. Removing one needs a logged-in owner session; there is no MCP tool for it.
-6. Decide the #549 / #550 defaults if the ones in section 5 don't suit.
+2. **#703 and #704 (required before item 87):** give access for a verified production backup and a migration rehearsal on a copy of production (#703), and sign off the design of the authoritative store (#704).
+3. **#664 (required):** make production deploy from the CI-published image (or wait for the CI `publish` job) instead of on every push to `prod`, and pass the version so `/health` shows it.
+4. **Replace `STATE_MD_TOKEN`** with a fine-grained token when convenient: `gh secret set STATE_MD_TOKEN --env state-md -R PIIIX-org/chapters`. Revoking the current gh login breaks the STATE.md bot until then.
+5. **Turn on the agent trial:** add `AGENT_TRIAL_API_KEY` as a secret and `AGENT_TRIAL_MODEL` as a variable in the `agent-trial` environment (optional `AGENT_TRIAL_PROVIDER`, `AGENT_TRIAL_BASE_URL`). Details in `benchmarks/README.md`, section "Agent trial".
+6. **Prod repository connections** `rea` and `elara-freshness-lab` are no longer needed (Settings → Repositories → delete). Leaving them costs only polling. Removing one needs a logged-in owner session; there is no MCP tool for it.
+7. Decide the #549 / #550 defaults if the ones in section 5 don't suit.
 
 ## 7. Open follow-ups found during phase 1
 
@@ -124,14 +125,14 @@ After deploy (from the promotion body): migrations 0019 and 0020 ran at boot; to
 
 | Phase | Items | Goal | First items |
 |---|---|---|---|
-| 2: stop data loss | 38 | Never lose or corrupt what a person or agent wrote: edits that delete live typing (#408), lost appends, one authoritative store, crash safety, size caps, backups (#409). | 35 strict schemas, 36 frontmatter merge, 24 `note_history` (#411), 140 webhook disables polling (#410), 94/95 backup restore. |
-| 3: the premise | 73 | Exact answers in fewer tokens than grep (today 1.9–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools. | 17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits. |
+| 2: stop data loss | 42 | Never lose or corrupt what a person or agent wrote: edits that delete live typing (#408), lost appends, one authoritative store, crash safety, size caps, backups (#409). | 35 strict schemas, 36 frontmatter merge, 24 `note_history` (#411), 140 webhook disables polling (#410), 94/95 backup restore. |
+| 3: the premise | 74 | Exact answers in fewer tokens than grep (today 2–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools. | 17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits. |
 | 4: knowledge truth and memory | 35 | Code claims tied to commits and re-checked on sync; session logs and handoff for agents. | 104 claim anchors, 105 quote resolution. |
-| 5: everything else | 43 | Persian/Arabic search, sync/webhooks, prompts, graph, attachments, OKF, docs; re-prioritised after phase 3 numbers. | 130 Persian normalisation. |
-| 6: rendered views and data attachments | 5 | Markdown stays the only stored note format (HTML is 35% more tokens, breaks line-addressed citations and co-editing; JavaScript in notes is stored XSS). Instead: rendered HTML/PDF/public views generated from Markdown, queryable JSON/CSV/YAML attachments, text extraction for every attachment type, sandboxed interactive HTML attachments. Starts after phase 3. | #667 decision, #668 rendered views. |
+| 5: everything else | 46 | Persian/Arabic search, sync/webhooks, prompts, graph, attachments, OKF, docs; re-prioritised after phase 3 numbers. | 130 Persian normalisation. |
+| 6: rendered views and data attachments | 6 (5 open) | Markdown stays the only stored note format (HTML is 35% more bytes, breaks line-addressed citations and co-editing; JavaScript in notes is stored XSS). Instead: rendered HTML/PDF/public views generated from Markdown, queryable JSON/CSV/YAML attachments, text extraction for every attachment type, sandboxed interactive HTML attachments. Starts after phase 3. | #667 decision, #668 rendered views. |
 | 7: new capabilities | 8 | Secret guard on write, issue/PR/CI links, multi-agent coordination, outbound events, transclusion, capture, importers, review inbox (section 8a). | #693 secret guard. |
 
-Section 8a explains the features added on 2026-10-17 (speed, caching, drift repair, structure, new capabilities). Appendix A at the end lists every remaining item of phases 0 and 2–7 in order, with its issue, priority and the full change text, plus the follow-up issues filed into each phase. The same order is in Elara `fixes/phase-2` … `fixes/phase-5`.
+Section 8a explains the features added on 2026-10-17 (speed, caching, drift repair, structure, new capabilities). Appendix A at the end lists every remaining item of phases 0 and 2–7 in order, with its issue, priority and the full change text, plus the issues added to each phase. The fix-list order is also in Elara `fixes/phase-2` … `fixes/phase-5`; the added issues and their place in the work order are in `fixes/features` and section 8a.
 
 ## 8a. New features (added 2026-10-17)
 
@@ -143,7 +144,7 @@ The premise: agents faster, smarter and cheaper, **without losing anything the u
 
 | Issue | Feature | Why |
 |---|---|---|
-| [#674](https://github.com/PIIIX-org/chapters/issues/674) | Elara tells the agent when not to use it (routing hints) | For an exact string in one repo, grep is 1.9–5× cheaper today; saying so beats losing quietly. |
+| [#674](https://github.com/PIIIX-org/chapters/issues/674) | Elara tells the agent when not to use it (routing hints) | For an exact string in one repo, grep is 2–5× cheaper today; saying so beats losing quietly. |
 | [#675](https://github.com/PIIIX-org/chapters/issues/675) | One budgeted call for compound questions: where, callers, why, still true | Turns, not single responses, drive time and cost; most turns were such chains. |
 | [#676](https://github.com/PIIIX-org/chapters/issues/676) | Answers for the code being edited: ref and working-tree overlay | The index describes `dev`; agents work in branches and worktrees with uncommitted changes. |
 | [#677](https://github.com/PIIIX-org/chapters/issues/677) | Vault as a git remote: clone, grep locally, push back | Lets Elara feed grep instead of competing with it; the tools agents use well keep plain files. |
@@ -201,13 +202,26 @@ Code drift breaks notes, Markdown docs inside repos, links and the index itself.
 | [#699](https://github.com/PIIIX-org/chapters/issues/699) | Importers for Obsidian, Notion and Logseq |
 | [#700](https://github.com/PIIIX-org/chapters/issues/700) | Review inbox for agent changes (approve or revert) |
 
+### Plan gaps (found 2026-10-17)
+
+| Issue | Phase | Gap |
+|---|---|---|
+| [#703](https://github.com/PIIIX-org/chapters/issues/703) | 2 (first) | Verified production backup and a migration rehearsal on a copy of production before item 87. Needs the owner. |
+| [#704](https://github.com/PIIIX-org/chapters/issues/704) | 2 (before #486) | Design review and owner sign-off before item 87 (authoritative store). |
+| [#705](https://github.com/PIIIX-org/chapters/issues/705) | 2 (early) | Production error and performance monitoring beyond the uptime check. |
+| [#706](https://github.com/PIIIX-org/chapters/issues/706) | 2 | Alert when the nightly lab fails. |
+| [#709](https://github.com/PIIIX-org/chapters/issues/709) | 3 | Compatibility runs with several agent clients (Claude Code, Codex, Cursor, Gemini). |
+| [#707](https://github.com/PIIIX-org/chapters/issues/707) | 5 (with #556) | Mark note and file content as untrusted data in every tool response, not only prompts. |
+| [#708](https://github.com/PIIIX-org/chapters/issues/708) | 5 | Real account deletion: erase a user and their data. |
+| [#710](https://github.com/PIIIX-org/chapters/issues/710) | 5 | User-facing release notes for each promotion. |
+
 ### Not doing
 
 No server-side LLM calls (answer synthesis, query rewriting), no LLM-extracted entity graphs, no features only humans can use. They make Elara more expensive, which works against the premise (landscape study: Khoj, Open Notebook, LazyGraphRAG, Cognee).
 
 ### Work order
 
-Phase 2 → phase 3 (fix-list items, slim profile and budgets first; then #681, #680 and the caches; then #674–#679) → phase 4 (#686 first, then the claim items, then #687–#691) → phase 5 → phase 6 → phase 7. Appendix A lists every issue per phase.
+Phase 2 (#703 backup and rehearsal setup and #705 monitoring first; #704 design sign-off before #486) → phase 3 (fix-list items, slim profile and budgets first; then #681, #680 and the caches; then #674–#679 and #709) → phase 4 (#686 first, then the claim items, then #687–#691) → phase 5 → phase 6 → phase 7. Appendix A lists every issue per phase.
 
 ## 9. Where everything is
 
@@ -222,12 +236,12 @@ Phase 2 → phase 3 (fix-list items, slim profile and budgets first; then #681, 
 | Elara notes | Chapters vault (`c1e3c446-…`): `fixes/*`, `reviews/pr-*`, `audit/2026-10-14-*`; landscape vault `second-brain-landscape` |
 | Benchmark | `benchmarks/` in the repo; method and numbers only from CI (`benchmarks/README.md`) |
 | Lab | `lab/`, `docs/agents/lab.md`; workflow `elara-lab.yml` |
-| **Backup of everything above** | Private repo [PIIIX-org/elara-study-archive](https://github.com/PIIIX-org/elara-study-archive) (all of `research/elara-study`, `research/tools`, study notes, landscape notes, workspace rules and skills; secrets and upstream clones excluded on purpose; see its README) |
+| **Backup of everything above** | Private repo `PIIIX-org/elara-study-archive`, visible only to the owner and org members with access (all of `research/elara-study`, `research/tools`, study notes, landscape notes, workspace rules and skills; secrets and upstream clones excluded on purpose; see its README) |
 
 ## 10. Gotchas
 
 - **Rolling back past phase 1:** migrations 0019 + 0020 leave `mcp_connections.access` NOT NULL with no default. Before running older code: `ALTER TABLE mcp_connections ALTER COLUMN access SET DEFAULT 'write'` (`docs/self-hosting/backup.md`).
-- **`review-verdict/dev` is red on every open PR** until a verdict comment is posted; it is required only on `prod`.
+- **Never merge with a failing or pending check.** Until 2026-10-17, 20 PRs were merged while `review-verdict/dev` was red: the verdict comment was posted seconds before the merge, the workflow then found the PR closed and set no status, and 8 coordinator verdicts had no review link. All were repaired (post-merge independent reviews, statuses set by the repo's own checker), `review-verdict/dev` became required on `dev`, and `safe-merge.ts` is now the only way to merge.
 - **Never test against production** (`chapters.piiix.org`); the lab instance is the staging server.
 - **Clean room:** never copy code or prompt text from MiroFish, OASIS, CAMEL, Graphiti, Zep or the landscape projects.
 - **Local machine:** no Docker or pnpm (the sandbox blocks symlinks); CI and the lab are the test runners. All files stay under `D:/taha`; point Bun/npm caches at `D:/taha/tools/cache`.
@@ -238,11 +252,11 @@ Phase 2 → phase 3 (fix-list items, slim profile and budgets first; then #681, 
 
 ## Appendix A. Every remaining item, in order
 
-Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in Elara `fixes/phase-N` and the GitHub milestones. "State" is the GitHub issue state at generation time. Work them top to bottom within a phase; follow-ups at the end of each phase are placed where they fit when the phase starts.
+Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in Elara `fixes/phase-N` and the GitHub milestones. "State" is the GitHub issue state at generation time. Work the fix-list items top to bottom within a phase. Added issues are listed by number after them; their place in the work order is given in section 8a (Work order) and in the line under each phase heading.
 
 ### Phase 0: owner actions
 
-4 fix-list items plus 1 added issues (review follow-ups and new features, after the fix-list items).
+4 fix-list items plus 2 added issues (after the fix-list items).
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -250,11 +264,12 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 | 2 | 190 | [#587](https://github.com/PIIIX-org/chapters/issues/587) | Now | closed | Rotate the webhook secret pasted in chat; decide on the inactive GitHub hook 697510656. |
 | 3 | 191 | [#588](https://github.com/PIIIX-org/chapters/issues/588) | Now | closed | Decide whether to keep the upstream `rea` connection (re-clones every 5 min) and the scratch repos `elara-freshness-lab` and `rea-snapshot`. |
 | 4 | 192 | [#589](https://github.com/PIIIX-org/chapters/issues/589) | Now | open | Revoke the 5 GitHub tokens exposed before #383 (from the bug log; still on the owner's list). |
+| — | — | [#635](https://github.com/PIIIX-org/chapters/issues/635) | — | closed | Add STATE_MD_TOKEN so the STATE.md bot can open its PR |
 | — | — | [#664](https://github.com/PIIIX-org/chapters/issues/664) | P1 | open | Production deploys on the push to prod, before CI publishes the gated image (#590 is bypassed) |
 
 ### Phase 2: stop data loss
 
-36 fix-list items plus 3 added issues (review follow-ups and new features, after the fix-list items).
+36 fix-list items plus 7 added issues (#703 (backup and rehearsal set-up) and #705 (monitoring) come first; #704 (design sign-off) before #486; the rest where they fit).
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -297,10 +312,14 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 | — | — | [#621](https://github.com/PIIIX-org/chapters/issues/621) | P1 | open | Import applies shares from the archive manifest without asking |
 | — | — | [#658](https://github.com/PIIIX-org/chapters/issues/658) | P2 | open | Lab: app stays down after a SIGKILL step when 'compose start' fails or runs too early |
 | — | — | [#663](https://github.com/PIIIX-org/chapters/issues/663) | P2 | open | Lab: restart-extraction file-count check failed once without printing the clean run's count |
+| — | — | [#703](https://github.com/PIIIX-org/chapters/issues/703) | P0 | open | [phase 2] Verified production backup and a migration rehearsal on a copy of production before item 87 |
+| — | — | [#704](https://github.com/PIIIX-org/chapters/issues/704) | P0 | open | [phase 2] Design review and owner sign-off before item 87 (authoritative store) |
+| — | — | [#705](https://github.com/PIIIX-org/chapters/issues/705) | P1 | open | [phase 2] Production error and performance monitoring beyond the uptime check |
+| — | — | [#706](https://github.com/PIIIX-org/chapters/issues/706) | P2 | open | [phase 2] Alert when the nightly lab fails |
 
 ### Phase 3: the premise (fewer tokens, exact answers)
 
-60 fix-list items plus 13 added issues (review follow-ups and new features, after the fix-list items).
+60 fix-list items plus 14 added issues (after the fix-list items: #681, #680, #682–#685, then #674–#679 and #709; #623 where it fits).
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -377,10 +396,11 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 | — | — | [#683](https://github.com/PIIIX-org/chapters/issues/683) | P2 | open | [phase 3] Per-session de-duplication: refer to content already sent in this session |
 | — | — | [#684](https://github.com/PIIIX-org/chapters/issues/684) | P1 | open | [phase 3] Content-addressed index caches: reuse parse, symbols and embeddings by blob hash |
 | — | — | [#685](https://github.com/PIIIX-org/chapters/issues/685) | P2 | open | [phase 3] Search and graph result cache keyed by query, scope and index version |
+| — | — | [#709](https://github.com/PIIIX-org/chapters/issues/709) | P2 | open | [phase 3] Compatibility runs with several agent clients (Claude Code, Codex, Cursor, Gemini) |
 
 ### Phase 4: knowledge truth and memory
 
-29 fix-list items plus 6 added issues (review follow-ups and new features, after the fix-list items).
+29 fix-list items plus 6 added issues (#686 comes before the fix-list items; #687–#691 after the claim items #502–#505).
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -422,7 +442,7 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 
 ### Phase 5: everything else
 
-34 fix-list items plus 9 added issues (review follow-ups and new features, after the fix-list items).
+34 fix-list items plus 12 added issues (#707 together with #556; the rest where they fit).
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -469,6 +489,9 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 | — | — | [#656](https://github.com/PIIIX-org/chapters/issues/656) | P2 | open | Deactivation leaves repository sync tokens and export links working; concurrent admin deactivation |
 | — | — | [#657](https://github.com/PIIIX-org/chapters/issues/657) | P2 | open | Agent trial follow-ups from the #651 review |
 | — | — | [#662](https://github.com/PIIIX-org/chapters/issues/662) | P2 | open | Gate hardening follow-ups from the post-merge delta reviews (#590, #597, #602, #622) |
+| — | — | [#707](https://github.com/PIIIX-org/chapters/issues/707) | P1 | open | [phase 5] Mark note and file content as untrusted data in every tool response, not only prompts |
+| — | — | [#708](https://github.com/PIIIX-org/chapters/issues/708) | P1 | open | [phase 5] Real account deletion: erase a user and their data |
+| — | — | [#710](https://github.com/PIIIX-org/chapters/issues/710) | P2 | open | [phase 5] User-facing release notes for each promotion |
 
 ### Phase 6: rendered views and data attachments
 

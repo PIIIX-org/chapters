@@ -639,8 +639,16 @@ Required status checks (classic protection, #574):
 | `lab` | `elara-lab.yml` | required | required | skipped (passes) when `plan` picks no tier |
 | `bench-gate` | `elara-lab.yml` | required | required | skipped (passes) when no benchmark suite applies |
 | `review-verdict` | `review-verdict.yml` | — | required | a commit status set on every PR event, review and comment of a same-repo PR to `prod` |
-| `review-verdict/dev` | `review-verdict.yml` | informational | — | the same rules on PRs to `dev`; never required |
+| `review-verdict/dev` | `review-verdict.yml` | required | — | the same rules on PRs to `dev`; required since 2026-10-17 |
 | `attribution` | `attribution.yml` | informational | informational | runs on every PR to `dev` or `prod`; not required (owner decision) |
+
+**Merging.** Never merge while any check or status on the head is red or
+pending, required or not. Post the `VERDICT:` comment (with `Head reviewed:`
+and a link to the review record), then wait until `review-verdict` has
+evaluated it: the workflow skips closed PRs, so a verdict posted seconds
+before a merge is never evaluated and leaves the status red (this happened
+on 20 PRs before 2026-10-17; repaired, and `review-verdict/dev` is now
+required on `dev`).
 
 A skipped job counts as passing; a check that never reports keeps the PR
 at "Expected — Waiting for status to be reported" forever. So a required
