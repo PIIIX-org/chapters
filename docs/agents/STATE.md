@@ -5,14 +5,16 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
 <!-- state:generated:start -->
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
 - **Last promotion to `prod`**: #660 Promote: Elara study phase 1 (guardrails and security) (merged 2026-10-17, `5c5bdc0`).
-- **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) **failure**; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
-- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/6, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 0/38, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/61, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/29, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/43.
-- **Open issues**: [178](https://github.com/PIIIX-org/chapters/issues): P0 60, P1 83, P2 30, no priority 5; `bug` 8, `security` 2, `decision` 2, `deferred` 2.
+- **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) success; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
+- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/6, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 0/44, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/74, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/35, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/46, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/46.
+- **Open issues**: [265](https://github.com/PIIIX-org/chapters/issues): P0 64, P1 126, P2 70, no priority 5; `bug` 56, `security` 13, `decision` 3, `deferred` 2.
 - **Owner actions** (label `owner`):
   - #589 [fix 192] Revoke the 5 GitHub tokens exposed before #383 (P0)
+  - #703 [phase 2] Verified production backup and a migration rehearsal on a copy of production… (P0)
+  - #704 [phase 2] Design review and owner sign-off before item 87 (authoritative store) (P0)
   - #664 Production deploys on the push to prod, before CI publishes the gated image (#590 is… (P1)
   - #636 Production uptime
-- **In progress: [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3)** (38 open, owner actions excluded):
+- **In progress: [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3)** (42 open, owner actions excluded):
   - #403 MCP/REST edits are attributed to collab/null in the audit trail when the collab relay is… (P0)
   - #408 edit_note replaces the whole body and deletes text a user is typing at the same moment (P0)
   - #409 Backup restore crashes and loses attachments, trash, revisions and MFA secrets (P0)
@@ -25,16 +27,21 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #476 [fix 76] Whole-markdown writes accepted only as a structural diff against the live doc (P0)
   - #477 [fix 77] Every write returns {rev, status: applied|merged|conflicted|retry, diff_stats,… (P0)
   - #478 [fix 79] Atomic append_note / upsert_note so read-then-write appends are never lost (P0)
-  - … and 26 more: https://github.com/PIIIX-org/chapters/milestone/3
+  - … and 30 more: https://github.com/PIIIX-org/chapters/milestone/3
 - **Open bugs** (label `bug`):
   - #403 MCP/REST edits are attributed to collab/null in the audit trail when the collab relay is… (P0)
   - #408 edit_note replaces the whole body and deletes text a user is typing at the same moment (P0)
   - #409 Backup restore crashes and loses attachments, trash, revisions and MFA secrets (P0)
   - #410 A repository is never polled again after one successful webhook (P0)
   - #411 note_history returns full bodies of every revision with no limit (hang and OOM) (P0)
+  - #712 [ui] Graph scope picker never opens (P0)
+  - #720 [ui] Offline edits: wrong status, no persistence, no unload guard (P0)
   - #621 Import applies shares from the archive manifest without asking (P1)
-  - #617 Web client logs a 401 console error after logout (P2)
-  - #619 Attachment upload drops non-ASCII file names (P2)
+  - #713 [ui] Landing page says "No notes" to a user with notes (P1)
+  - #714 [ui] Floating top bar collides with page controls; status pill duplicated (DEF-02, DEF-08… (P1)
+  - #715 [ui] Primary actions rest at 20 % opacity (P1)
+  - #716 [ui] Session expiry is not handled (P1)
+  - … and 44 more: https://github.com/PIIIX-org/chapters/issues?q=is%3Aopen+label%3Abug
 <!-- state:generated:end -->
 
 - **Product**: **Elara**; the repo keeps the name `chapters`. Current work: the fixes from the Elara AI-performance study (Elara vault notes `audit/2026-10-14-ai-performance-study` and its round-2 follow-up), one GitHub issue per fix-list item, grouped by the `Phase N` milestones above; plan in the Chapters vault `fixes/index`, hand-off `fixes/handoff-phase-1`. Production (`chapters.piiix.org`) redeploys by itself on every push to `prod` (about 20 s after the push, before CI has run), not from the image #590 publishes after CI (#664, owner action). Until #664 is fixed, the only gate on production is that the push is refused unless every required check on that commit is green, so never push to `prod` by any other route. A promotion is a PR `dev`→`prod` with every required check green (full lab tier and bench on its head) and a `VERDICT: MERGE` comment from an independent review, then a fast-forward push of the reviewed head (`git push origin <sha>:prod`).
