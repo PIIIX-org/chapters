@@ -14,7 +14,7 @@ Date: 2026-10-17. Repository: [PIIIX-org/chapters](https://github.com/PIIIX-org/
 | Phases 2–5 | Not started. 44, 74, 35 and 46 open issues (review follow-ups and the new features of section 8a included). |
 | Phase 6 (added 2026-10-17) | Rendered views, data attachments and structured fields, after phase 3: 5 open issues (#668–#671, #692); decision #667 (Markdown stays the only stored note format). |
 | Phase 7 (added 2026-10-17) | New capabilities: 8 issues (#693–#700). See section 8a. |
-| Phase 8 (added 2026-10-17) | UI and UX: 46 findings of the UI/UX audit (#713–#759; the two P0s #712 and #720 are in phase 2). See section 8b. |
+| Phase 8 (added 2026-10-17) | UI and UX: 46 findings of the UI/UX audit (#713–#759 except #720; the two P0s #712 and #720 are in phase 2). See section 8b. |
 
 ## 2. What phase 1 delivered
 
@@ -132,7 +132,7 @@ After deploy (from the promotion body): migrations 0019 and 0020 ran at boot; to
 | 5: everything else | 46 | Persian/Arabic search, sync/webhooks, prompts, graph, attachments, OKF, docs; re-prioritised after phase 3 numbers. | 130 Persian normalisation. |
 | 6: rendered views and data attachments | 6 (5 open) | Markdown stays the only stored note format (HTML is 35% more bytes, breaks line-addressed citations and co-editing; JavaScript in notes is stored XSS). Instead: rendered HTML/PDF/public views generated from Markdown, queryable JSON/CSV/YAML attachments, text extraction for every attachment type, sandboxed interactive HTML attachments. Starts after phase 3. | #667 decision, #668 rendered views. |
 | 7: new capabilities | 8 | Secret guard on write, issue/PR/CI links, multi-agent coordination, outbound events, transclusion, capture, importers, review inbox (section 8a). | #693 secret guard. |
-| 8: UI and UX | 46 | Fixes from the UI/UX audit: navigation, editor, search, graph, vault and token screens, sharing and admin, auth, accessibility (section 8b). Fixes, not redesigns. | #741 token tables, #742 invisible tokens. |
+| 8: UI and UX | 46 | Fixes from the UI/UX audit: navigation, editor, search, graph, vault and token screens, sharing and admin, auth, accessibility (section 8b). Fixes, not redesigns. | #713 landing page says "No notes", #714 top bar collisions. |
 
 Section 8a explains the features added on 2026-10-17 (speed, caching, drift repair, structure, new capabilities). Section 8b summarises the UI/UX audit. Appendix A at the end lists every remaining item of phases 0 and 2–8 in order, with its issue, priority and the full change text, plus the issues added to each phase. The fix-list order is also in Elara `fixes/phase-2` … `fixes/phase-5`; the added issues and their place in the work order are in `fixes/features` and section 8a.
 
@@ -245,11 +245,11 @@ An audit of the web client on `dev` (same code as `prod` plus docs), with real s
 | [#752](https://github.com/PIIIX-org/chapters/issues/752) | P1 | Email verification can dead-end (no resend; 5 wrong codes invalidate it; signing up again sends nothing). |
 | [#755](https://github.com/PIIIX-org/chapters/issues/755)–[#758](https://github.com/PIIIX-org/chapters/issues/758) | P1 | Accessibility: 1,317 colour-contrast failures on 81 of 89 screens, missing focus indicators, 81.5% of mobile tap targets under 44 px, note drawer without semantics. |
 
-The other 36 findings (#714–#719, #721–#727, #729–#733, #735–#740, #743–#746, #749–#751, #753, #754, #759) are listed in Appendix A under phase 8.
+The other 34 findings (#714–#719, #721–#727, #729–#733, #735–#740, #743–#746, #749–#751, #753, #754, #759) are listed in Appendix A under phase 8.
 
-**Still present from earlier audits:** the SYNCED pill covering buttons (DEF-02), the duplicate status pill (DEF-08), the clipped Revoke button (DEF-07, worse), small touch targets (DEF-16), untyped wikilinks can't be created, search results don't jump to the match. **Fixed since:** DEF-01, 06, 11, 13–15, 17, plus diffs, backlinks, KaTeX/Mermaid and presence.
+**Still present from earlier audits:** the SYNCED pill covering buttons (DEF-02), the duplicate status pill (DEF-08), the clipped Revoke button (DEF-07, worse), small touch targets (DEF-16), untyped wikilinks can't be created, search results don't jump to the match, invite by email, users shown as bare emails, no bulk note actions. **Fixed since:** DEF-01, 06, 11, 13–15, 17, plus diffs, backlinks, KaTeX/Mermaid and presence.
 
-**What is good and should stay:** a 290 KB note is editable in 929 ms, typing 40 characters takes 160 ms, the 250-note graph runs at 60 fps, palette results appear in 253 ms, no long tasks; error, empty and loading states are handled almost everywhere; the deactivation copy matches #654.
+**What is good and should stay:** a 290 KB note is editable in 929 ms, typing 40 characters takes 160 ms, the 250-note graph runs at 60 fps, palette results appear in 253 ms, only 4 tasks over 200 ms; error, empty and loading states are handled almost everywhere; the deactivation copy matches #654.
 
 ## 9. Where everything is
 
