@@ -8,7 +8,7 @@ Date: 2026-10-17. Repository: [PIIIX-org/chapters](https://github.com/PIIIX-org/
 |---|---|
 | Study | Done. Round 1 + round 2 reports, the 59-project landscape study and the Zep study produced a fix list of 192 items (`FIX-LIST.md`). |
 | Issues | All 183 open items filed as GitHub issues (#413–#589 plus #403, #408–#411), label `elara-study`, one milestone per phase. |
-| Plan | Elara, Chapters vault: `fixes/index`, `fixes/phase-0` … `fixes/phase-5` (order and status of every item). |
+| Plan | Elara, Chapters vault: `fixes/index`, `fixes/phase-0` … `fixes/phase-7` and `fixes/features` (order and status of every item). |
 | Phase 0 (owner actions) | 4 of 6 closed. Open: #589 (revoke 5 old GitHub tokens; the owner will do it) and #664 (production deploys on push, before CI; found during the promotion). |
 | Phase 1 (guardrails and security) | **Done and on `prod`: 25 of 25 issues closed**, 24 PRs merged to `dev`, promoted in [#660](https://github.com/PIIIX-org/chapters/pull/660) (`prod` = `5c5bdc0`). |
 | Phases 2–5 | Not started. 42, 74, 35 and 46 open issues (review follow-ups and the new features of section 8a included). |
@@ -208,7 +208,7 @@ Code drift breaks notes, Markdown docs inside repos, links and the index itself.
 |---|---|---|
 | [#703](https://github.com/PIIIX-org/chapters/issues/703) | 2 (first) | Verified production backup and a migration rehearsal on a copy of production before item 87. Needs the owner. |
 | [#704](https://github.com/PIIIX-org/chapters/issues/704) | 2 (before #486) | Design review and owner sign-off before item 87 (authoritative store). |
-| [#705](https://github.com/PIIIX-org/chapters/issues/705) | 2 (early) | Production error and performance monitoring beyond the uptime check. |
+| [#705](https://github.com/PIIIX-org/chapters/issues/705) | 2 (first) | Production error and performance monitoring beyond the uptime check. |
 | [#706](https://github.com/PIIIX-org/chapters/issues/706) | 2 | Alert when the nightly lab fails. |
 | [#709](https://github.com/PIIIX-org/chapters/issues/709) | 3 | Compatibility runs with several agent clients (Claude Code, Codex, Cursor, Gemini). |
 | [#707](https://github.com/PIIIX-org/chapters/issues/707) | 5 (with #556) | Mark note and file content as untrusted data in every tool response, not only prompts. |
@@ -241,7 +241,7 @@ Phase 2 (#703 backup and rehearsal setup and #705 monitoring first; #704 design 
 ## 10. Gotchas
 
 - **Rolling back past phase 1:** migrations 0019 + 0020 leave `mcp_connections.access` NOT NULL with no default. Before running older code: `ALTER TABLE mcp_connections ALTER COLUMN access SET DEFAULT 'write'` (`docs/self-hosting/backup.md`).
-- **Never merge with a failing or pending check.** Until 2026-10-17, 20 PRs were merged while `review-verdict/dev` was red: the verdict comment was posted seconds before the merge, the workflow then found the PR closed and set no status, and 8 coordinator verdicts had no review link. All were repaired (post-merge independent reviews, statuses set by the repo's own checker), `review-verdict/dev` became required on `dev`, and `safe-merge.ts` is now the only way to merge.
+- **Never merge with a failing or pending check.** Until 2026-10-17, 20 PRs were merged while `review-verdict/dev` was red: the verdict comment was posted seconds before the merge, the workflow then found the PR closed and set no status, and 8 coordinator verdicts had no review link. Repair: post-merge independent reviews of all 20; 16 now pass (their statuses were set from the owner account by running the repo's own checker after the merge, `verdict-after-merge.ts`); #659, #665, #672 and #701 keep a red CHANGES status, and their corrections landed in #711. `review-verdict/dev` became required on `dev`, and `safe-merge.ts` is now the only way to merge.
 - **Never test against production** (`chapters.piiix.org`); the lab instance is the staging server.
 - **Clean room:** never copy code or prompt text from MiroFish, OASIS, CAMEL, Graphiti, Zep or the landscape projects.
 - **Local machine:** no Docker or pnpm (the sandbox blocks symlinks); CI and the lab are the test runners. All files stay under `D:/taha`; point Bun/npm caches at `D:/taha/tools/cache`.
