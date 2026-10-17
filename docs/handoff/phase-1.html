@@ -43,6 +43,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>Phase 0 (owner actions)</td><td>4 of 6 closed. Open: #589 (revoke 5 old GitHub tokens; the owner will do it) and #664 (production deploys on push, before CI; found during the promotion).</td></tr>
 <tr><td>Phase 1 (guardrails and security)</td><td><strong>Done and on <code>prod</code>: 25 of 25 issues closed</strong>, 24 PRs merged to <code>dev</code>, promoted in <a href="https://github.com/PIIIX-org/chapters/pull/660">#660</a> (<code>prod</code> = <code>5c5bdc0</code>).</td></tr>
 <tr><td>Phases 2–5</td><td>Not started. 38, 61, 29 and 43 open issues (follow-ups found by reviews included).</td></tr>
+<tr><td>Phase 6 (added 2026-10-17)</td><td>Rendered views and data attachments, after phase 3: 5 issues (#667–#671). Markdown stays the only stored note format (owner decision).</td></tr>
 </tbody>
 </table>
 <h2>2. What phase 1 delivered</h2>
@@ -160,9 +161,10 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>3: the premise</td><td>61</td><td>Exact answers in fewer tokens than grep (today 1.9–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools.</td><td>17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits.</td></tr>
 <tr><td>4: knowledge truth and memory</td><td>29</td><td>Code claims tied to commits and re-checked on sync; session logs and handoff for agents.</td><td>104 claim anchors, 105 quote resolution.</td></tr>
 <tr><td>5: everything else</td><td>43</td><td>Persian/Arabic search, sync/webhooks, prompts, graph, attachments, OKF, docs; re-prioritised after phase 3 numbers.</td><td>130 Persian normalisation.</td></tr>
+<tr><td>6: rendered views and data attachments</td><td>5</td><td>Markdown stays the only stored note format (HTML is 35% more tokens, breaks line-addressed citations and co-editing; JavaScript in notes is stored XSS). Instead: rendered HTML/PDF/public views generated from Markdown, queryable JSON/CSV/YAML attachments, text extraction for every attachment type, sandboxed interactive HTML attachments. Starts after phase 3.</td><td>#667 decision, #668 rendered views.</td></tr>
 </tbody>
 </table>
-<p>Appendix A at the end lists every remaining item of phases 0 and 2–5 in order, with its issue, priority and the full change text, plus the follow-up issues filed into each phase. The same order is in Elara <code>fixes/phase-2</code> … <code>fixes/phase-5</code>.</p>
+<p>Appendix A at the end lists every remaining item of phases 0 and 2–6 in order, with its issue, priority and the full change text, plus the follow-up issues filed into each phase. The same order is in Elara <code>fixes/phase-2</code> … <code>fixes/phase-5</code>.</p>
 <h2>9. Where everything is</h2>
 <table>
 <thead>
@@ -415,6 +417,20 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/656">#656</a></td><td>P2</td><td>open</td><td>Deactivation leaves repository sync tokens and export links working; concurrent admin deactivation</td></tr>
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/657">#657</a></td><td>P2</td><td>open</td><td>Agent trial follow-ups from the #651 review</td></tr>
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/662">#662</a></td><td>P2</td><td>open</td><td>Gate hardening follow-ups from the post-merge delta reviews (#590, #597, #602, #622)</td></tr>
+</tbody>
+</table>
+<h3>Phase 6: rendered views and data attachments</h3>
+<p>5 issues, not from the fix list; plan note in Elara <code>fixes/phase-6</code>.</p>
+<table>
+<thead>
+<tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/667">#667</a></td><td>P1</td><td>closed</td><td>Decision: Markdown stays the only stored note format</td></tr>
+<tr><td>2</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/668">#668</a></td><td>P2</td><td>open</td><td>Rendered views of any note: HTML page, PDF, public link</td></tr>
+<tr><td>3</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/669">#669</a></td><td>P2</td><td>open</td><td>Data attachments that can be queried: JSON, CSV, YAML</td></tr>
+<tr><td>4</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/670">#670</a></td><td>P2</td><td>open</td><td>Extract text from every attachment type for search and citations</td></tr>
+<tr><td>5</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/671">#671</a></td><td>P2</td><td>open</td><td>Sandboxed interactive HTML attachments</td></tr>
 </tbody>
 </table>
 <h2>Appendix B. Fix-list items marked done before the programme</h2>

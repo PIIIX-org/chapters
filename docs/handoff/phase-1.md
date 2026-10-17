@@ -12,6 +12,7 @@ Date: 2026-10-17. Repository: [PIIIX-org/chapters](https://github.com/PIIIX-org/
 | Phase 0 (owner actions) | 4 of 6 closed. Open: #589 (revoke 5 old GitHub tokens; the owner will do it) and #664 (production deploys on push, before CI; found during the promotion). |
 | Phase 1 (guardrails and security) | **Done and on `prod`: 25 of 25 issues closed**, 24 PRs merged to `dev`, promoted in [#660](https://github.com/PIIIX-org/chapters/pull/660) (`prod` = `5c5bdc0`). |
 | Phases 2–5 | Not started. 38, 61, 29 and 43 open issues (follow-ups found by reviews included). |
+| Phase 6 (added 2026-10-17) | Rendered views and data attachments, after phase 3: 5 issues (#667–#671). Markdown stays the only stored note format (owner decision). |
 
 ## 2. What phase 1 delivered
 
@@ -126,8 +127,9 @@ After deploy (from the promotion body): migrations 0019 and 0020 ran at boot; to
 | 3: the premise | 61 | Exact answers in fewer tokens than grep (today 1.9–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools. | 17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits. |
 | 4: knowledge truth and memory | 29 | Code claims tied to commits and re-checked on sync; session logs and handoff for agents. | 104 claim anchors, 105 quote resolution. |
 | 5: everything else | 43 | Persian/Arabic search, sync/webhooks, prompts, graph, attachments, OKF, docs; re-prioritised after phase 3 numbers. | 130 Persian normalisation. |
+| 6: rendered views and data attachments | 5 | Markdown stays the only stored note format (HTML is 35% more tokens, breaks line-addressed citations and co-editing; JavaScript in notes is stored XSS). Instead: rendered HTML/PDF/public views generated from Markdown, queryable JSON/CSV/YAML attachments, text extraction for every attachment type, sandboxed interactive HTML attachments. Starts after phase 3. | #667 decision, #668 rendered views. |
 
-Appendix A at the end lists every remaining item of phases 0 and 2–5 in order, with its issue, priority and the full change text, plus the follow-up issues filed into each phase. The same order is in Elara `fixes/phase-2` … `fixes/phase-5`.
+Appendix A at the end lists every remaining item of phases 0 and 2–6 in order, with its issue, priority and the full change text, plus the follow-up issues filed into each phase. The same order is in Elara `fixes/phase-2` … `fixes/phase-5`.
 
 ## 9. Where everything is
 
@@ -372,7 +374,18 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 | — | — | [#657](https://github.com/PIIIX-org/chapters/issues/657) | P2 | open | Agent trial follow-ups from the #651 review |
 | — | — | [#662](https://github.com/PIIIX-org/chapters/issues/662) | P2 | open | Gate hardening follow-ups from the post-merge delta reviews (#590, #597, #602, #622) |
 
+### Phase 6: rendered views and data attachments
+
+5 issues, not from the fix list; plan note in Elara `fixes/phase-6`.
+
+| Order | Item | Issue | Priority | State | Change |
+|---|---|---|---|---|---|
+| 1 | — | [#667](https://github.com/PIIIX-org/chapters/issues/667) | P1 | closed | Decision: Markdown stays the only stored note format |
+| 2 | — | [#668](https://github.com/PIIIX-org/chapters/issues/668) | P2 | open | Rendered views of any note: HTML page, PDF, public link |
+| 3 | — | [#669](https://github.com/PIIIX-org/chapters/issues/669) | P2 | open | Data attachments that can be queried: JSON, CSV, YAML |
+| 4 | — | [#670](https://github.com/PIIIX-org/chapters/issues/670) | P2 | open | Extract text from every attachment type for search and citations |
+| 5 | — | [#671](https://github.com/PIIIX-org/chapters/issues/671) | P2 | open | Sandboxed interactive HTML attachments |
+
 ## Appendix B. Fix-list items marked done before the programme
 
 Items 1–9 of `FIX-LIST.md` ("Already done") were fixed before the issues were filed (#398, #400, #402, #405, #406) and are on `prod` since #407.
-
