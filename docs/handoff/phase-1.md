@@ -11,9 +11,10 @@ Date: 2026-10-17. Repository: [PIIIX-org/chapters](https://github.com/PIIIX-org/
 | Plan | Elara, Chapters vault: `fixes/index`, `fixes/phase-0` … `fixes/phase-7` and `fixes/features` (order and status of every item). |
 | Phase 0 (owner actions) | 4 of 6 closed. Open: #589 (revoke 5 old GitHub tokens; the owner will do it) and #664 (production deploys on push, before CI; found during the promotion). |
 | Phase 1 (guardrails and security) | **Done and on `prod`: 25 of 25 issues closed**, 24 PRs merged to `dev`, promoted in [#660](https://github.com/PIIIX-org/chapters/pull/660) (`prod` = `5c5bdc0`). |
-| Phases 2–5 | Not started. 42, 74, 35 and 46 open issues (review follow-ups and the new features of section 8a included). |
+| Phases 2–5 | Not started. 44, 74, 35 and 46 open issues (review follow-ups and the new features of section 8a included). |
 | Phase 6 (added 2026-10-17) | Rendered views, data attachments and structured fields, after phase 3: 5 open issues (#668–#671, #692); decision #667 (Markdown stays the only stored note format). |
 | Phase 7 (added 2026-10-17) | New capabilities: 8 issues (#693–#700). See section 8a. |
+| Phase 8 (added 2026-10-17) | UI and UX: 46 findings of the UI/UX audit (#713–#759 except #720; the two P0s #712 and #720 are in phase 2). See section 8b. |
 
 ## 2. What phase 1 delivered
 
@@ -125,14 +126,15 @@ After deploy (from the promotion body): migrations 0019 and 0020 ran at boot; to
 
 | Phase | Items | Goal | First items |
 |---|---|---|---|
-| 2: stop data loss | 42 | Never lose or corrupt what a person or agent wrote: edits that delete live typing (#408), lost appends, one authoritative store, crash safety, size caps, backups (#409). | 35 strict schemas, 36 frontmatter merge, 24 `note_history` (#411), 140 webhook disables polling (#410), 94/95 backup restore. |
+| 2: stop data loss | 44 | Never lose or corrupt what a person or agent wrote: edits that delete live typing (#408), lost appends, one authoritative store, crash safety, size caps, backups (#409). | 35 strict schemas, 36 frontmatter merge, 24 `note_history` (#411), 140 webhook disables polling (#410), 94/95 backup restore. |
 | 3: the premise | 74 | Exact answers in fewer tokens than grep (today 2–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools. | 17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits. |
 | 4: knowledge truth and memory | 35 | Code claims tied to commits and re-checked on sync; session logs and handoff for agents. | 104 claim anchors, 105 quote resolution. |
 | 5: everything else | 46 | Persian/Arabic search, sync/webhooks, prompts, graph, attachments, OKF, docs; re-prioritised after phase 3 numbers. | 130 Persian normalisation. |
 | 6: rendered views and data attachments | 6 (5 open) | Markdown stays the only stored note format (HTML is 35% more bytes, breaks line-addressed citations and co-editing; JavaScript in notes is stored XSS). Instead: rendered HTML/PDF/public views generated from Markdown, queryable JSON/CSV/YAML attachments, text extraction for every attachment type, sandboxed interactive HTML attachments. Starts after phase 3. | #667 decision, #668 rendered views. |
 | 7: new capabilities | 8 | Secret guard on write, issue/PR/CI links, multi-agent coordination, outbound events, transclusion, capture, importers, review inbox (section 8a). | #693 secret guard. |
+| 8: UI and UX | 46 | Fixes from the UI/UX audit: navigation, editor, search, graph, vault and token screens, sharing and admin, auth, accessibility (section 8b). Fixes, not redesigns. | #713 landing page says "No notes", #714 top bar collisions. |
 
-Section 8a explains the features added on 2026-10-17 (speed, caching, drift repair, structure, new capabilities). Appendix A at the end lists every remaining item of phases 0 and 2–7 in order, with its issue, priority and the full change text, plus the issues added to each phase. The fix-list order is also in Elara `fixes/phase-2` … `fixes/phase-5`; the added issues and their place in the work order are in `fixes/features` and section 8a.
+Section 8a explains the features added on 2026-10-17 (speed, caching, drift repair, structure, new capabilities). Section 8b summarises the UI/UX audit. Appendix A at the end lists every remaining item of phases 0 and 2–8 in order, with its issue, priority and the full change text, plus the issues added to each phase. The fix-list order is also in Elara `fixes/phase-2` … `fixes/phase-5`; the added issues and their place in the work order are in `fixes/features` and section 8a.
 
 ## 8a. New features (added 2026-10-17)
 
@@ -221,7 +223,33 @@ No server-side LLM calls (answer synthesis, query rewriting), no LLM-extracted e
 
 ### Work order
 
-Phase 2 (#703 backup and rehearsal setup and #705 monitoring first; #704 design sign-off before #486) → phase 3 (fix-list items, slim profile and budgets first; then #681, #680 and the caches; then #674–#679 and #709) → phase 4 (#686 first, then the claim items, then #687–#691) → phase 5 → phase 6 → phase 7. Appendix A lists every issue per phase.
+Phase 2 (#703 backup and rehearsal setup, #705 monitoring and the UI P0s #712 and #720 first; #704 design sign-off before #486) → phase 3 (fix-list items, slim profile and budgets first; then #681, #680 and the caches; then #674–#679 and #709) → phase 4 (#686 first, then the claim items, then #687–#691) → phase 5 → phase 6 → phase 7 → phase 8 (UI/UX fixes; the owner may pull them forward). Appendix A lists every issue per phase.
+
+## 8b. UI and UX audit (2026-10-17)
+
+An audit of the web client on `dev` (same code as `prod` plus docs), with real screenshots from a lab instance: 370 screenshots of 89 screens and dialogs at desktop and mobile size in light and dark themes, an axe-core accessibility scan per screen, keyboard focus walks and timings ([lab run 39004182960](https://github.com/PIIIX-org/chapters/actions/runs/39004182960), artifact `lab-results`, folder `ui-audit/`), plus a code review of `client/src`. Report: Elara `audit/2026-10-17-ui-ux-audit` and `research/elara-study/ui-audit/REPORT.md` in the archive.
+
+**48 findings: 2 P0, 23 P1, 23 P2**, all filed (label `ui-ux`). The two P0 findings go into phase 2 because they block users or can lose text; the rest are milestone **Phase 8: UI and UX** ([milestone 9](https://github.com/PIIIX-org/chapters/milestone/9)). These are fixes, not redesigns, so the redesign freeze (#584) does not apply; the owner can pull phase-8 items forward.
+
+| Issue | Severity | Finding |
+|---|---|---|
+| [#712](https://github.com/PIIIX-org/chapters/issues/712) | P0 (phase 2) | The Graph page's vault picker never opens (its toolbar clips the dropdown), so vault switching, settings, new vault and trash are unreachable from the landing page. |
+| [#720](https://github.com/PIIIX-org/chapters/issues/720) | P0 (phase 2) | Typing done while offline shows "Syncing…", lives only in the tab, and nothing warns before closing or reloading. |
+| [#713](https://github.com/PIIIX-org/chapters/issues/713) | P1 | The first screen after login says "No notes in merged view" to a user with 300 notes. |
+| [#741](https://github.com/PIIIX-org/chapters/issues/741) | P1 | MCP token tables are unusable on desktop (names wrap one letter per line; Last used and Revoke off-screen). |
+| [#742](https://github.com/PIIIX-org/chapters/issues/742) | P1, security | Repository tokens and tokens on vaults you don't own never appear in your settings, so you can't see or revoke them. |
+| [#728](https://github.com/PIIIX-org/chapters/issues/728) | P1, security | In the Cmd-K palette, Enter after any search creates a vault named after the query. |
+| [#748](https://github.com/PIIIX-org/chapters/issues/748) | P1, security | Public vault export links can't be listed or revoked once the settings dialog closes. |
+| [#734](https://github.com/PIIIX-org/chapters/issues/734) | P1, security | "Delete forever" has a weaker check than "Move to trash". |
+| [#747](https://github.com/PIIIX-org/chapters/issues/747) | P1, security | The admin role dropdown offers 10 roles but only admin-level ones change anything; changes apply instantly and fail silently. |
+| [#752](https://github.com/PIIIX-org/chapters/issues/752) | P1 | Email verification can dead-end (no resend; 5 wrong codes invalidate it; signing up again sends nothing). |
+| [#755](https://github.com/PIIIX-org/chapters/issues/755)–[#758](https://github.com/PIIIX-org/chapters/issues/758) | P1 | Accessibility: 1,317 colour-contrast failures on 81 of 89 screens, missing focus indicators, 81.5% of mobile tap targets under 44 px, note drawer without semantics. |
+
+The other 34 findings (#714–#719, #721–#727, #729–#733, #735–#740, #743–#746, #749–#751, #753, #754, #759) are listed in Appendix A under phase 8.
+
+**Still present from earlier audits:** the SYNCED pill covering buttons (DEF-02), the duplicate status pill (DEF-08), the clipped Revoke button (DEF-07, worse), small touch targets (DEF-16), untyped wikilinks can't be created, search results don't jump to the match, invite by email, users shown as bare emails, no bulk note actions. **Fixed since:** DEF-01, 06, 11, 13–15, 17, plus diffs, backlinks, KaTeX/Mermaid and presence.
+
+**What is good and should stay:** a 290 KB note is editable in 929 ms, typing 40 characters takes 160 ms, the 250-note graph runs at 60 fps, palette results appear in 253 ms, only 4 tasks over 200 ms; error, empty and loading states are handled almost everywhere; the deactivation copy matches #654.
 
 ## 9. Where everything is
 
@@ -232,10 +260,11 @@ Phase 2 (#703 backup and rehearsal setup and #705 monitoring first; #704 design 
 | Fix list and issue map | `FIX-LIST.md`, `fix-issues.json` (item → issue) |
 | Briefs and reviews | `fixes/BRIEF.md`, `fixes/REVIEW.md`, `fixes/reviews/<pr>.md` |
 | Promotion bodies | `merge/promote-body.md` (#407), `merge/promote-phase-1-body.md` |
-| Tools | `D:/taha/research/tools/`: `elara-call.ts` (Elara MCP helper), `fix-status.ts`, `publish-fix-plan.ts`, `file-fix-issues.ts` |
+| Tools | `D:/taha/research/tools/`: `safe-merge.ts` (the only way to merge or promote), `verdict-after-merge.ts`, `audit-merged-checks.ts`, `elara-call.ts` (Elara MCP helper), `fix-status.ts`, `publish-fix-plan.ts`, `file-fix-issues.ts`, `file-features.ts`, `file-ui-issues.ts`, `handoff-appendix.ts`, `handoff-html.ts` |
 | Elara notes | Chapters vault (`c1e3c446-…`): `fixes/*`, `reviews/pr-*`, `audit/2026-10-14-*`; landscape vault `second-brain-landscape` |
 | Benchmark | `benchmarks/` in the repo; method and numbers only from CI (`benchmarks/README.md`) |
 | Lab | `lab/`, `docs/agents/lab.md`; workflow `elara-lab.yml` |
+| UI/UX audit | `research/elara-study/ui-audit/` (report, 48 proposed issues, screenshots, scan data, capture test) in the archive; Elara `audit/2026-10-17-ui-ux-audit` |
 | **Backup of everything above** | Private repo `PIIIX-org/elara-study-archive`, visible only to the owner and org members with access (all of `research/elara-study`, `research/tools`, study notes, landscape notes, workspace rules and skills; secrets and upstream clones excluded on purpose; see its README) |
 
 ## 10. Gotchas
@@ -269,7 +298,7 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 
 ### Phase 2: stop data loss
 
-36 fix-list items plus 7 added issues (#703 (backup and rehearsal set-up) and #705 (monitoring) come first; #704 (design sign-off) before #486; the rest where they fit).
+36 fix-list items plus 9 added issues (#703 (backup and rehearsal set-up), #705 (monitoring) and the two UI P0 fixes #712 and #720 come first; #704 (design sign-off) before #486; the rest where they fit).
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -316,6 +345,8 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 | — | — | [#704](https://github.com/PIIIX-org/chapters/issues/704) | P0 | open | [phase 2] Design review and owner sign-off before item 87 (authoritative store) |
 | — | — | [#705](https://github.com/PIIIX-org/chapters/issues/705) | P1 | open | [phase 2] Production error and performance monitoring beyond the uptime check |
 | — | — | [#706](https://github.com/PIIIX-org/chapters/issues/706) | P2 | open | [phase 2] Alert when the nightly lab fails |
+| — | — | [#712](https://github.com/PIIIX-org/chapters/issues/712) | P0 | open | [ui] Graph scope picker never opens |
+| — | — | [#720](https://github.com/PIIIX-org/chapters/issues/720) | P0 | open | [ui] Offline edits: wrong status, no persistence, no unload guard |
 
 ### Phase 3: the premise (fewer tokens, exact answers)
 
@@ -520,6 +551,59 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 | 6 | — | [#698](https://github.com/PIIIX-org/chapters/issues/698) | P2 | open | Save external sources as citable notes: URL snapshots with date and provenance |
 | 7 | — | [#699](https://github.com/PIIIX-org/chapters/issues/699) | P2 | open | Importers for Obsidian, Notion and Logseq |
 | 8 | — | [#700](https://github.com/PIIIX-org/chapters/issues/700) | P2 | open | Review inbox for agent changes: approve or revert what agents wrote |
+
+### Phase 8: UI and UX
+
+46 issues, not from the fix list; plan note in Elara `fixes/phase-8`.
+
+| Order | Item | Issue | Priority | State | Change |
+|---|---|---|---|---|---|
+| 1 | — | [#713](https://github.com/PIIIX-org/chapters/issues/713) | P1 | open | [ui] Landing page says "No notes" to a user with notes |
+| 2 | — | [#714](https://github.com/PIIIX-org/chapters/issues/714) | P1 | open | [ui] Floating top bar collides with page controls; status pill duplicated (DEF-02, DEF-08 still present) |
+| 3 | — | [#715](https://github.com/PIIIX-org/chapters/issues/715) | P1 | open | [ui] Primary actions rest at 20 % opacity |
+| 4 | — | [#716](https://github.com/PIIIX-org/chapters/issues/716) | P1 | open | [ui] Session expiry is not handled |
+| 5 | — | [#717](https://github.com/PIIIX-org/chapters/issues/717) | P2 | open | [ui] Settings and Admin sections are not in the URL |
+| 6 | — | [#718](https://github.com/PIIIX-org/chapters/issues/718) | P2 | open | [ui] Mobile navigation gaps |
+| 7 | — | [#719](https://github.com/PIIIX-org/chapters/issues/719) | P2 | open | [ui] Bottom bar paints over popovers and content |
+| 8 | — | [#721](https://github.com/PIIIX-org/chapters/issues/721) | P1 | open | [ui] Note load: blank while loading, one message for every error |
+| 9 | — | [#722](https://github.com/PIIIX-org/chapters/issues/722) | P2 | open | [ui] Markdown tables render as raw pipes in the editor |
+| 10 | — | [#723](https://github.com/PIIIX-org/chapters/issues/723) | P2 | open | [ui] Notes are shown by slug, not title |
+| 11 | — | [#724](https://github.com/PIIIX-org/chapters/issues/724) | P2 | open | [ui] Duplicate surfaces and inconsistent dialogs |
+| 12 | — | [#725](https://github.com/PIIIX-org/chapters/issues/725) | P2 | open | [ui] Global Ctrl+Z |
+| 13 | — | [#726](https://github.com/PIIIX-org/chapters/issues/726) | P2 | open | [ui] Untyped wikilinks still cannot be created (prior "missing journey", still present) |
+| 14 | — | [#727](https://github.com/PIIIX-org/chapters/issues/727) | P2 | open | [ui] Read-only note gives no feedback to typing |
+| 15 | — | [#728](https://github.com/PIIIX-org/chapters/issues/728) | P1 | open | [ui] Enter after a search creates a vault |
+| 16 | — | [#729](https://github.com/PIIIX-org/chapters/issues/729) | P1 | open | [ui] Snippets show markup; mobile drops the title |
+| 17 | — | [#730](https://github.com/PIIIX-org/chapters/issues/730) | P2 | open | [ui] Opening a note result starts at the top (prior item, still present) |
+| 18 | — | [#731](https://github.com/PIIIX-org/chapters/issues/731) | P1 | open | [ui] The default graph of a small vault is four unlabeled dots |
+| 19 | — | [#732](https://github.com/PIIIX-org/chapters/issues/732) | P2 | open | [ui] Perspective and inspector polish |
+| 20 | — | [#733](https://github.com/PIIIX-org/chapters/issues/733) | P1 | open | [ui] Vault card footer clips "Delete"; the delete confirmation is unreadable |
+| 21 | — | [#734](https://github.com/PIIIX-org/chapters/issues/734) | P1 | open | [ui] The irreversible action has the weaker guard |
+| 22 | — | [#735](https://github.com/PIIIX-org/chapters/issues/735) | P2 | open | [ui] Vault settings is one long dialog |
+| 23 | — | [#736](https://github.com/PIIIX-org/chapters/issues/736) | P2 | open | [ui] Delete wording disagrees with behaviour |
+| 24 | — | [#737](https://github.com/PIIIX-org/chapters/issues/737) | P2 | open | [ui] Vault pages lack identity and actions |
+| 25 | — | [#738](https://github.com/PIIIX-org/chapters/issues/738) | P2 | open | [ui] Attachments and export have no feedback surfaces |
+| 26 | — | [#739](https://github.com/PIIIX-org/chapters/issues/739) | P1 | open | [ui] Repository page double-offsets the content |
+| 27 | — | [#740](https://github.com/PIIIX-org/chapters/issues/740) | P2 | open | [ui] Two token concepts, no repository MCP |
+| 28 | — | [#741](https://github.com/PIIIX-org/chapters/issues/741) | P1 | open | [ui] Token tables are unusable on desktop |
+| 29 | — | [#742](https://github.com/PIIIX-org/chapters/issues/742) | P1 | open | [ui] Some tokens are invisible to their owner |
+| 30 | — | [#743](https://github.com/PIIIX-org/chapters/issues/743) | P1 | open | [ui] No screen says how to connect a client |
+| 31 | — | [#744](https://github.com/PIIIX-org/chapters/issues/744) | P1 | open | [ui] The allow-list picker is raw and overlapping |
+| 32 | — | [#745](https://github.com/PIIIX-org/chapters/issues/745) | P2 | open | [ui] Form and list polish |
+| 33 | — | [#746](https://github.com/PIIIX-org/chapters/issues/746) | P1 | open | [ui] Admin oversight cannot see token capabilities |
+| 34 | — | [#747](https://github.com/PIIIX-org/chapters/issues/747) | P1 | open | [ui] Role dropdown promises what the server does not do |
+| 35 | — | [#748](https://github.com/PIIIX-org/chapters/issues/748) | P1 | open | [ui] Export links cannot be revoked later |
+| 36 | — | [#749](https://github.com/PIIIX-org/chapters/issues/749) | P2 | open | [ui] Sharing panel rough edges |
+| 37 | — | [#750](https://github.com/PIIIX-org/chapters/issues/750) | P2 | open | [ui] Approvals queue has no decline |
+| 38 | — | [#751](https://github.com/PIIIX-org/chapters/issues/751) | P2 | open | [ui] Team page stats and membership |
+| 39 | — | [#752](https://github.com/PIIIX-org/chapters/issues/752) | P1 | open | [ui] Email verification dead end |
+| 40 | — | [#753](https://github.com/PIIIX-org/chapters/issues/753) | P2 | open | [ui] Auth copy and states |
+| 41 | — | [#754](https://github.com/PIIIX-org/chapters/issues/754) | P2 | open | [ui] Security settings has only MFA |
+| 42 | — | [#755](https://github.com/PIIIX-org/chapters/issues/755) | P1 | open | [ui] Color contrast |
+| 43 | — | [#756](https://github.com/PIIIX-org/chapters/issues/756) | P1 | open | [ui] Missing focus indicators and a non-keyboard menu |
+| 44 | — | [#757](https://github.com/PIIIX-org/chapters/issues/757) | P1 | open | [ui] Touch targets (DEF-16 still present) |
+| 45 | — | [#758](https://github.com/PIIIX-org/chapters/issues/758) | P1 | open | [ui] Note drawer has no semantics |
+| 46 | — | [#759](https://github.com/PIIIX-org/chapters/issues/759) | P2 | open | [ui] Structure |
 
 ## Appendix B. Fix-list items marked done before the programme
 
