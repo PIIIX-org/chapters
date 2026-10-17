@@ -42,8 +42,9 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>Plan</td><td>Elara, Chapters vault: <code>fixes/index</code>, <code>fixes/phase-0</code> … <code>fixes/phase-5</code> (order and status of every item).</td></tr>
 <tr><td>Phase 0 (owner actions)</td><td>4 of 6 closed. Open: #589 (revoke 5 old GitHub tokens; the owner will do it) and #664 (production deploys on push, before CI; found during the promotion).</td></tr>
 <tr><td>Phase 1 (guardrails and security)</td><td><strong>Done and on <code>prod</code>: 25 of 25 issues closed</strong>, 24 PRs merged to <code>dev</code>, promoted in <a href="https://github.com/PIIIX-org/chapters/pull/660">#660</a> (<code>prod</code> = <code>5c5bdc0</code>).</td></tr>
-<tr><td>Phases 2–5</td><td>Not started. 38, 61, 29 and 43 open issues (follow-ups found by reviews included).</td></tr>
-<tr><td>Phase 6 (added 2026-10-17)</td><td>Rendered views and data attachments, after phase 3: 5 issues (#667–#671). Markdown stays the only stored note format (owner decision).</td></tr>
+<tr><td>Phases 2–5</td><td>Not started. 38, 73, 35 and 43 open issues (review follow-ups and the new features of section 8a included).</td></tr>
+<tr><td>Phase 6 (added 2026-10-17)</td><td>Rendered views, data attachments and structured fields, after phase 3: 5 open issues (#668–#671, #692); decision #667 (Markdown stays the only stored note format).</td></tr>
+<tr><td>Phase 7 (added 2026-10-17)</td><td>New capabilities: 8 issues (#693–#700). See section 8a.</td></tr>
 </tbody>
 </table>
 <h2>2. What phase 1 delivered</h2>
@@ -158,13 +159,97 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 </thead>
 <tbody>
 <tr><td>2: stop data loss</td><td>38</td><td>Never lose or corrupt what a person or agent wrote: edits that delete live typing (#408), lost appends, one authoritative store, crash safety, size caps, backups (#409).</td><td>35 strict schemas, 36 frontmatter merge, 24 <code>note_history</code> (#411), 140 webhook disables polling (#410), 94/95 backup restore.</td></tr>
-<tr><td>3: the premise</td><td>61</td><td>Exact answers in fewer tokens than grep (today 1.9–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools.</td><td>17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits.</td></tr>
-<tr><td>4: knowledge truth and memory</td><td>29</td><td>Code claims tied to commits and re-checked on sync; session logs and handoff for agents.</td><td>104 claim anchors, 105 quote resolution.</td></tr>
+<tr><td>3: the premise</td><td>73</td><td>Exact answers in fewer tokens than grep (today 1.9–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools.</td><td>17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits.</td></tr>
+<tr><td>4: knowledge truth and memory</td><td>35</td><td>Code claims tied to commits and re-checked on sync; session logs and handoff for agents.</td><td>104 claim anchors, 105 quote resolution.</td></tr>
 <tr><td>5: everything else</td><td>43</td><td>Persian/Arabic search, sync/webhooks, prompts, graph, attachments, OKF, docs; re-prioritised after phase 3 numbers.</td><td>130 Persian normalisation.</td></tr>
 <tr><td>6: rendered views and data attachments</td><td>5</td><td>Markdown stays the only stored note format (HTML is 35% more tokens, breaks line-addressed citations and co-editing; JavaScript in notes is stored XSS). Instead: rendered HTML/PDF/public views generated from Markdown, queryable JSON/CSV/YAML attachments, text extraction for every attachment type, sandboxed interactive HTML attachments. Starts after phase 3.</td><td>#667 decision, #668 rendered views.</td></tr>
+<tr><td>7: new capabilities</td><td>8</td><td>Secret guard on write, issue/PR/CI links, multi-agent coordination, outbound events, transclusion, capture, importers, review inbox (section 8a).</td><td>#693 secret guard.</td></tr>
 </tbody>
 </table>
-<p>Appendix A at the end lists every remaining item of phases 0 and 2–6 in order, with its issue, priority and the full change text, plus the follow-up issues filed into each phase. The same order is in Elara <code>fixes/phase-2</code> … <code>fixes/phase-5</code>.</p>
+<p>Section 8a explains the features added on 2026-10-17 (speed, caching, drift repair, structure, new capabilities). Appendix A at the end lists every remaining item of phases 0 and 2–7 in order, with its issue, priority and the full change text, plus the follow-up issues filed into each phase. The same order is in Elara <code>fixes/phase-2</code> … <code>fixes/phase-5</code>.</p>
+<h2>8a. New features (added 2026-10-17)</h2>
+<p>The premise: agents faster, smarter and cheaper, <strong>without losing anything the user would have without Elara</strong>. Today Elara breaks that rule twice: installing it costs about 8.5k tokens of tool definitions in every session before any call, and many answers cost more than grep. These features were added after the study, from using Elara as the main agent during phase 1 and from the 59-project comparison. All are filed with the <code>new-feature</code> label; the Elara note <code>fixes/features</code> has the same content.</p>
+<p><strong>Must do first (already in the plan):</strong> finish phase 2 (never lose user text); slim tool profile under ~2k tokens (#428, #429) plus a cacheable prompt (#681); every answer cheaper than finding it yourself (phase 3, gated by the benchmark); turn on the agent trial with an API key (owner action, section 6), because only real agents on real tasks show whether the premise holds.</p>
+<h3>Speed and cost (phase 3, after its fix-list items)</h3>
+<table>
+<thead>
+<tr><th>Issue</th><th>Feature</th><th>Why</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/674">#674</a></td><td>Elara tells the agent when not to use it (routing hints)</td><td>For an exact string in one repo, grep is 1.9–5× cheaper today; saying so beats losing quietly.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/675">#675</a></td><td>One budgeted call for compound questions: where, callers, why, still true</td><td>Turns, not single responses, drive time and cost; most turns were such chains.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/676">#676</a></td><td>Answers for the code being edited: ref and working-tree overlay</td><td>The index describes <code>dev</code>; agents work in branches and worktrees with uncommitted changes.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/677">#677</a></td><td>Vault as a git remote: clone, grep locally, push back</td><td>Lets Elara feed grep instead of competing with it; the tools agents use well keep plain files.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/678">#678</a></td><td>Learn from real usage (zero-result searches, unread notes, fallbacks to grep)</td><td>The benchmark measures fixed questions; real use shows which notes and tools to fix.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/679">#679</a></td><td>Shared reading cache across agents (one digest per file at a commit)</td><td>~25 parallel agents re-read the same files in phase 1.</td></tr>
+</tbody>
+</table>
+<h3>Caching (phase 3)</h3>
+<p>Cache everything that can be cached, under one rule: <strong>a cache key always carries the caller's scope and the content revision</strong>, so a cached answer is never served to someone without access or after the content changed.</p>
+<table>
+<thead>
+<tr><th>Issue</th><th>Cache</th><th>Saves</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/680">#680</a></td><td>Caching contract: scope + revision in every key, metrics, cross-tenant tests</td><td>Makes every other cache safe.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/681">#681</a></td><td>Cacheable agent prompt: byte-stable tool list, prompts and instructions</td><td>Provider prompt caching bills repeated prefixes at a fraction of the price; Elara's definitions sit at the start of every prompt.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/682">#682</a></td><td>&quot;Unchanged since revision N&quot; answers (<code>if_revision</code>, ETag)</td><td>Re-reads cost a few tokens instead of the whole content.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/683">#683</a></td><td>Per-session de-duplication (refer to passages already sent)</td><td>Repeated passages within one session.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/679">#679</a></td><td>Shared reading cache across agents</td><td>Parallel agents reading the same files.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/684">#684</a></td><td>Content-addressed index caches (parse, symbols, embeddings by blob hash; query embeddings; no re-clone)</td><td>Server time and cost; a no-change sync does no work.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/685">#685</a></td><td>Search and graph result cache keyed by query, scope and <code>index_version</code></td><td>Latency of repeated searches.</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/668">#668</a></td><td>Rendered views cached per note revision (phase 6)</td><td>Rendering cost.</td></tr>
+</tbody>
+</table>
+<h3>Memory and drift (phase 4; lessons first, drift repair after the claim items)</h3>
+<p>Code drift breaks notes, Markdown docs inside repos, links and the index itself. Phase 4 already detects it (claims graded fresh / moved / stale / lost, #502–#505; links surviving renames, #512; <code>doctor</code>, #495). What was missing is <strong>automatic repair</strong>, at three levels:</p>
+<ul>
+<li><strong>Server, automatic (no judgment needed):</strong> moved or renamed code whose quote is unchanged is re-anchored on every sync (#687); the index verifies itself against the remote and the files and repairs from the authoritative copy (#691).</li>
+<li><strong>In the app and by request (judgment needed):</strong> <code>fix_drift</code> returns, per stale claim, the old quote, the current code and a ready edit for the agent to apply; the app shows a drift inbox and banners with accept / edit / mark lost (#688). No LLM runs on the server; the calling agent writes new wording.</li>
+<li><strong>Before merge:</strong> a PR check lists notes and docs that cite the lines a PR changes, so they are fixed in the same PR (#689). Repo Markdown docs get the same treatment as notes (#690).</li>
+</ul>
+<table>
+<thead>
+<tr><th>Issue</th><th>Feature</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/686">#686</a></td><td>Lessons shown at the moment they matter (procedural memory; first in phase 4). Phase 1 relearned the same traps repeatedly; memory pays off as fewer corrections (Hindsight 0.85 → 0.36 per task).</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/687">#687</a></td><td>Drift auto-repair: re-anchor moved citations on every sync</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/688">#688</a></td><td>Drift repair proposals: <code>fix_drift</code> tool and drift inbox</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/689">#689</a></td><td>PR check: notes that cite the changed lines</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/690">#690</a></td><td>Markdown docs inside repos as claim-bearing documents</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/691">#691</a></td><td>Index drift self-check and automatic repair</td></tr>
+</tbody>
+</table>
+<h3>Structure (phase 6)</h3>
+<table>
+<thead>
+<tr><th>Issue</th><th>Feature</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/692">#692</a></td><td>Structured note fields and live queries: user-defined types, <code>query_notes</code>, live tables (phase-1 status tables were edited by a script; verdicts could not be queried).</td></tr>
+</tbody>
+</table>
+<h3>New capabilities (phase 7)</h3>
+<table>
+<thead>
+<tr><th>Issue</th><th>Feature</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/693">#693</a></td><td>Secret guard on write (block, quarantine or redact), P1</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/694">#694</a></td><td>Index issues, PRs, reviews and CI runs, linked to code and notes</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/695">#695</a></td><td>Coordination for many agents: claims, expiring locks, assignment, inbox</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/696">#696</a></td><td>Outbound events and subscriptions (note changed, claim stale, drift found)</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/697">#697</a></td><td>Transclusion: embed a block of one note in another</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/698">#698</a></td><td>Capture external sources as citable, dated notes</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/699">#699</a></td><td>Importers for Obsidian, Notion and Logseq</td></tr>
+<tr><td><a href="https://github.com/PIIIX-org/chapters/issues/700">#700</a></td><td>Review inbox for agent changes (approve or revert)</td></tr>
+</tbody>
+</table>
+<h3>Not doing</h3>
+<p>No server-side LLM calls (answer synthesis, query rewriting), no LLM-extracted entity graphs, no features only humans can use. They make Elara more expensive, which works against the premise (landscape study: Khoj, Open Notebook, LazyGraphRAG, Cognee).</p>
+<h3>Work order</h3>
+<p>Phase 2 → phase 3 (fix-list items, slim profile and budgets first; then #681, #680 and the caches; then #674–#679) → phase 4 (#686 first, then the claim items, then #687–#691) → phase 5 → phase 6 → phase 7. Appendix A lists every issue per phase.</p>
 <h2>9. Where everything is</h2>
 <table>
 <thead>
@@ -198,7 +283,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <h2>Appendix A. Every remaining item, in order</h2>
 <p>Generated 2026-10-17 from <code>FIX-LIST.md</code>, <code>fix-issues.json</code>, the phase order in Elara <code>fixes/phase-N</code> and the GitHub milestones. &quot;State&quot; is the GitHub issue state at generation time. Work them top to bottom within a phase; follow-ups at the end of each phase are placed where they fit when the phase starts.</p>
 <h3>Phase 0: owner actions</h3>
-<p>4 fix-list items plus 1 follow-up issues.</p>
+<p>4 fix-list items plus 1 added issues (review follow-ups and new features, after the fix-list items).</p>
 <table>
 <thead>
 <tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
@@ -212,7 +297,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 </tbody>
 </table>
 <h3>Phase 2: stop data loss</h3>
-<p>36 fix-list items plus 3 follow-up issues.</p>
+<p>36 fix-list items plus 3 added issues (review follow-ups and new features, after the fix-list items).</p>
 <table>
 <thead>
 <tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
@@ -260,7 +345,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 </tbody>
 </table>
 <h3>Phase 3: the premise (fewer tokens, exact answers)</h3>
-<p>60 fix-list items plus 1 follow-up issues.</p>
+<p>60 fix-list items plus 13 added issues (review follow-ups and new features, after the fix-list items).</p>
 <table>
 <thead>
 <tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
@@ -327,10 +412,22 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>59</td><td>71</td><td><a href="https://github.com/PIIIX-org/chapters/issues/473">#473</a></td><td>P1</td><td>open</td><td>No LLM in the query path for these tools; deterministic answers only.</td></tr>
 <tr><td>60</td><td>136</td><td><a href="https://github.com/PIIIX-org/chapters/issues/534">#534</a></td><td>P0</td><td>open</td><td><code>orient(query?, focus?, budget)</code>: ranked repo map (definitions ranked by references, biased to the query and focus files, signatures with line numbers, fit to budget) plus vault outline, one level at a time, ≤10 entries.</td></tr>
 <tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/623">#623</a></td><td>P2</td><td>open</td><td>Search results with equal scores have no tie-breaker: ranks move between identical instances</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/674">#674</a></td><td>P1</td><td>open</td><td>[phase 3] Elara tells the agent when not to use it</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/675">#675</a></td><td>P1</td><td>open</td><td>[phase 3] One budgeted call for compound questions: where, who calls it, why, is it still true</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/676">#676</a></td><td>P1</td><td>open</td><td>[phase 3] Answer for the code the agent is editing: branch, ref and working-tree overlay</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/677">#677</a></td><td>P1</td><td>open</td><td>[phase 3] Vault as a git remote: clone, grep locally, push back</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/678">#678</a></td><td>P2</td><td>open</td><td>[phase 3] Learn from real usage: zero-result searches, unread notes, fallbacks to grep</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/679">#679</a></td><td>P1</td><td>open</td><td>[phase 3] Shared reading cache across agents: one digest per file at a commit</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/680">#680</a></td><td>P1</td><td>open</td><td>[phase 3] Caching contract: every cache key carries the caller's scope and the content revision</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/681">#681</a></td><td>P1</td><td>open</td><td>[phase 3] Make the agent's prompt cacheable: stable, deterministic tool list and instructions</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/682">#682</a></td><td>P1</td><td>open</td><td>[phase 3] &quot;Unchanged since revision N&quot; answers instead of repeating content</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/683">#683</a></td><td>P2</td><td>open</td><td>[phase 3] Per-session de-duplication: refer to content already sent in this session</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/684">#684</a></td><td>P1</td><td>open</td><td>[phase 3] Content-addressed index caches: reuse parse, symbols and embeddings by blob hash</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/685">#685</a></td><td>P2</td><td>open</td><td>[phase 3] Search and graph result cache keyed by query, scope and index version</td></tr>
 </tbody>
 </table>
 <h3>Phase 4: knowledge truth and memory</h3>
-<p>29 fix-list items.</p>
+<p>29 fix-list items plus 6 added issues (review follow-ups and new features, after the fix-list items).</p>
 <table>
 <thead>
 <tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
@@ -365,10 +462,16 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>27</td><td>137</td><td><a href="https://github.com/PIIIX-org/chapters/issues/535">#535</a></td><td>P1</td><td>open</td><td>Retire the heavy mapping protocol: one deterministic, cited outline note per repo; agent notes only for why, invariants and decisions, with auto-anchored citations; a budgeted mapping job with caps.</td></tr>
 <tr><td>28</td><td>138</td><td><a href="https://github.com/PIIIX-org/chapters/issues/536">#536</a></td><td>P1 (partial)</td><td>open</td><td>Mapping protocol: templates server-valid and links un-backticked (#406); still to do: read-only Phase 0 with no writes into repos the user doesn't own, audit instead of graph dump in Phase 5, size guidance for large repos, commit pinning of line anchors, line-range validation.</td></tr>
 <tr><td>29</td><td>139</td><td><a href="https://github.com/PIIIX-org/chapters/issues/537">#537</a></td><td>P1</td><td>open</td><td>One <code>elara</code> vault per project; remove the duplicate <code>codebase/chapters</code> and <code>project/chapters</code> notes across the <code>all</code>, Chapters and ELara vaults.</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/686">#686</a></td><td>P1</td><td>open</td><td>[phase 4] Lessons shown at the moment they matter (procedural memory)</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/687">#687</a></td><td>P1</td><td>open</td><td>[phase 4] Drift auto-repair: re-anchor moved citations automatically on every sync</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/688">#688</a></td><td>P1</td><td>open</td><td>[phase 4] Drift repair proposals: fix_drift tool and a drift inbox in the app</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/689">#689</a></td><td>P1</td><td>open</td><td>[phase 4] Catch drift before merge: PR check lists notes that cite the changed lines</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/690">#690</a></td><td>P2</td><td>open</td><td>[phase 4] Treat Markdown docs inside repositories as claim-bearing documents</td></tr>
+<tr><td>—</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/691">#691</a></td><td>P1</td><td>open</td><td>[phase 4] Index drift self-check: compare indexed tree with the remote and the files, repair automatically</td></tr>
 </tbody>
 </table>
 <h3>Phase 5: everything else</h3>
-<p>34 fix-list items plus 9 follow-up issues.</p>
+<p>34 fix-list items plus 9 added issues (review follow-ups and new features, after the fix-list items).</p>
 <table>
 <thead>
 <tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
@@ -420,7 +523,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 </tbody>
 </table>
 <h3>Phase 6: rendered views and data attachments</h3>
-<p>5 issues, not from the fix list; plan note in Elara <code>fixes/phase-6</code>.</p>
+<p>6 issues, not from the fix list; plan note in Elara <code>fixes/phase-6</code>.</p>
 <table>
 <thead>
 <tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
@@ -431,6 +534,24 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr><td>3</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/669">#669</a></td><td>P2</td><td>open</td><td>Data attachments that can be queried: JSON, CSV, YAML</td></tr>
 <tr><td>4</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/670">#670</a></td><td>P2</td><td>open</td><td>Extract text from every attachment type for search and citations</td></tr>
 <tr><td>5</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/671">#671</a></td><td>P2</td><td>open</td><td>Sandboxed interactive HTML attachments</td></tr>
+<tr><td>6</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/692">#692</a></td><td>P1</td><td>open</td><td>Structured note fields and live queries: user-defined types, query_notes, live tables</td></tr>
+</tbody>
+</table>
+<h3>Phase 7: new capabilities</h3>
+<p>8 issues, not from the fix list; plan note in Elara <code>fixes/phase-7</code>.</p>
+<table>
+<thead>
+<tr><th>Order</th><th>Item</th><th>Issue</th><th>Priority</th><th>State</th><th>Change</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/693">#693</a></td><td>P1</td><td>open</td><td>Secret guard on write: block, quarantine or redact secrets in notes</td></tr>
+<tr><td>2</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/694">#694</a></td><td>P1</td><td>open</td><td>Index issues, PRs, reviews and CI runs, linked to code and notes</td></tr>
+<tr><td>3</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/695">#695</a></td><td>P2</td><td>open</td><td>Coordination for many agents: task claims, expiring locks, assignment, agent inbox</td></tr>
+<tr><td>4</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/696">#696</a></td><td>P2</td><td>open</td><td>Outbound events and subscriptions: note changed, claim stale, drift found</td></tr>
+<tr><td>5</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/697">#697</a></td><td>P2</td><td>open</td><td>Embed a section of one note in another (transclusion by block id)</td></tr>
+<tr><td>6</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/698">#698</a></td><td>P2</td><td>open</td><td>Save external sources as citable notes: URL snapshots with date and provenance</td></tr>
+<tr><td>7</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/699">#699</a></td><td>P2</td><td>open</td><td>Importers for Obsidian, Notion and Logseq</td></tr>
+<tr><td>8</td><td>—</td><td><a href="https://github.com/PIIIX-org/chapters/issues/700">#700</a></td><td>P2</td><td>open</td><td>Review inbox for agent changes: approve or revert what agents wrote</td></tr>
 </tbody>
 </table>
 <h2>Appendix B. Fix-list items marked done before the programme</h2>

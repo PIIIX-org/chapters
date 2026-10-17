@@ -11,8 +11,9 @@ Date: 2026-10-17. Repository: [PIIIX-org/chapters](https://github.com/PIIIX-org/
 | Plan | Elara, Chapters vault: `fixes/index`, `fixes/phase-0` … `fixes/phase-5` (order and status of every item). |
 | Phase 0 (owner actions) | 4 of 6 closed. Open: #589 (revoke 5 old GitHub tokens; the owner will do it) and #664 (production deploys on push, before CI; found during the promotion). |
 | Phase 1 (guardrails and security) | **Done and on `prod`: 25 of 25 issues closed**, 24 PRs merged to `dev`, promoted in [#660](https://github.com/PIIIX-org/chapters/pull/660) (`prod` = `5c5bdc0`). |
-| Phases 2–5 | Not started. 38, 61, 29 and 43 open issues (follow-ups found by reviews included). |
-| Phase 6 (added 2026-10-17) | Rendered views and data attachments, after phase 3: 5 issues (#667–#671). Markdown stays the only stored note format (owner decision). |
+| Phases 2–5 | Not started. 38, 73, 35 and 43 open issues (review follow-ups and the new features of section 8a included). |
+| Phase 6 (added 2026-10-17) | Rendered views, data attachments and structured fields, after phase 3: 5 open issues (#668–#671, #692); decision #667 (Markdown stays the only stored note format). |
+| Phase 7 (added 2026-10-17) | New capabilities: 8 issues (#693–#700). See section 8a. |
 
 ## 2. What phase 1 delivered
 
@@ -124,12 +125,89 @@ After deploy (from the promotion body): migrations 0019 and 0020 ran at boot; to
 | Phase | Items | Goal | First items |
 |---|---|---|---|
 | 2: stop data loss | 38 | Never lose or corrupt what a person or agent wrote: edits that delete live typing (#408), lost appends, one authoritative store, crash safety, size caps, backups (#409). | 35 strict schemas, 36 frontmatter merge, 24 `note_history` (#411), 140 webhook disables polling (#410), 94/95 backup restore. |
-| 3: the premise | 61 | Exact answers in fewer tokens than grep (today 1.9–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools. | 17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits. |
-| 4: knowledge truth and memory | 29 | Code claims tied to commits and re-checked on sync; session logs and handoff for agents. | 104 claim anchors, 105 quote resolution. |
+| 3: the premise | 73 | Exact answers in fewer tokens than grep (today 1.9–5× more): budgets, slim tool profile, located hits, working code index, grep/references tools. | 17–20 token budgets, 25 strip embeddings from replies, 21–23 browse/graph limits. |
+| 4: knowledge truth and memory | 35 | Code claims tied to commits and re-checked on sync; session logs and handoff for agents. | 104 claim anchors, 105 quote resolution. |
 | 5: everything else | 43 | Persian/Arabic search, sync/webhooks, prompts, graph, attachments, OKF, docs; re-prioritised after phase 3 numbers. | 130 Persian normalisation. |
 | 6: rendered views and data attachments | 5 | Markdown stays the only stored note format (HTML is 35% more tokens, breaks line-addressed citations and co-editing; JavaScript in notes is stored XSS). Instead: rendered HTML/PDF/public views generated from Markdown, queryable JSON/CSV/YAML attachments, text extraction for every attachment type, sandboxed interactive HTML attachments. Starts after phase 3. | #667 decision, #668 rendered views. |
+| 7: new capabilities | 8 | Secret guard on write, issue/PR/CI links, multi-agent coordination, outbound events, transclusion, capture, importers, review inbox (section 8a). | #693 secret guard. |
 
-Appendix A at the end lists every remaining item of phases 0 and 2–6 in order, with its issue, priority and the full change text, plus the follow-up issues filed into each phase. The same order is in Elara `fixes/phase-2` … `fixes/phase-5`.
+Section 8a explains the features added on 2026-10-17 (speed, caching, drift repair, structure, new capabilities). Appendix A at the end lists every remaining item of phases 0 and 2–7 in order, with its issue, priority and the full change text, plus the follow-up issues filed into each phase. The same order is in Elara `fixes/phase-2` … `fixes/phase-5`.
+
+## 8a. New features (added 2026-10-17)
+
+The premise: agents faster, smarter and cheaper, **without losing anything the user would have without Elara**. Today Elara breaks that rule twice: installing it costs about 8.5k tokens of tool definitions in every session before any call, and many answers cost more than grep. These features were added after the study, from using Elara as the main agent during phase 1 and from the 59-project comparison. All are filed with the `new-feature` label; the Elara note `fixes/features` has the same content.
+
+**Must do first (already in the plan):** finish phase 2 (never lose user text); slim tool profile under ~2k tokens (#428, #429) plus a cacheable prompt (#681); every answer cheaper than finding it yourself (phase 3, gated by the benchmark); turn on the agent trial with an API key (owner action, section 6), because only real agents on real tasks show whether the premise holds.
+
+### Speed and cost (phase 3, after its fix-list items)
+
+| Issue | Feature | Why |
+|---|---|---|
+| [#674](https://github.com/PIIIX-org/chapters/issues/674) | Elara tells the agent when not to use it (routing hints) | For an exact string in one repo, grep is 1.9–5× cheaper today; saying so beats losing quietly. |
+| [#675](https://github.com/PIIIX-org/chapters/issues/675) | One budgeted call for compound questions: where, callers, why, still true | Turns, not single responses, drive time and cost; most turns were such chains. |
+| [#676](https://github.com/PIIIX-org/chapters/issues/676) | Answers for the code being edited: ref and working-tree overlay | The index describes `dev`; agents work in branches and worktrees with uncommitted changes. |
+| [#677](https://github.com/PIIIX-org/chapters/issues/677) | Vault as a git remote: clone, grep locally, push back | Lets Elara feed grep instead of competing with it; the tools agents use well keep plain files. |
+| [#678](https://github.com/PIIIX-org/chapters/issues/678) | Learn from real usage (zero-result searches, unread notes, fallbacks to grep) | The benchmark measures fixed questions; real use shows which notes and tools to fix. |
+| [#679](https://github.com/PIIIX-org/chapters/issues/679) | Shared reading cache across agents (one digest per file at a commit) | ~25 parallel agents re-read the same files in phase 1. |
+
+### Caching (phase 3)
+
+Cache everything that can be cached, under one rule: **a cache key always carries the caller's scope and the content revision**, so a cached answer is never served to someone without access or after the content changed.
+
+| Issue | Cache | Saves |
+|---|---|---|
+| [#680](https://github.com/PIIIX-org/chapters/issues/680) | Caching contract: scope + revision in every key, metrics, cross-tenant tests | Makes every other cache safe. |
+| [#681](https://github.com/PIIIX-org/chapters/issues/681) | Cacheable agent prompt: byte-stable tool list, prompts and instructions | Provider prompt caching bills repeated prefixes at a fraction of the price; Elara's definitions sit at the start of every prompt. |
+| [#682](https://github.com/PIIIX-org/chapters/issues/682) | "Unchanged since revision N" answers (`if_revision`, ETag) | Re-reads cost a few tokens instead of the whole content. |
+| [#683](https://github.com/PIIIX-org/chapters/issues/683) | Per-session de-duplication (refer to passages already sent) | Repeated passages within one session. |
+| [#679](https://github.com/PIIIX-org/chapters/issues/679) | Shared reading cache across agents | Parallel agents reading the same files. |
+| [#684](https://github.com/PIIIX-org/chapters/issues/684) | Content-addressed index caches (parse, symbols, embeddings by blob hash; query embeddings; no re-clone) | Server time and cost; a no-change sync does no work. |
+| [#685](https://github.com/PIIIX-org/chapters/issues/685) | Search and graph result cache keyed by query, scope and `index_version` | Latency of repeated searches. |
+| [#668](https://github.com/PIIIX-org/chapters/issues/668) | Rendered views cached per note revision (phase 6) | Rendering cost. |
+
+### Memory and drift (phase 4; lessons first, drift repair after the claim items)
+
+Code drift breaks notes, Markdown docs inside repos, links and the index itself. Phase 4 already detects it (claims graded fresh / moved / stale / lost, #502–#505; links surviving renames, #512; `doctor`, #495). What was missing is **automatic repair**, at three levels:
+
+- **Server, automatic (no judgment needed):** moved or renamed code whose quote is unchanged is re-anchored on every sync (#687); the index verifies itself against the remote and the files and repairs from the authoritative copy (#691).
+- **In the app and by request (judgment needed):** `fix_drift` returns, per stale claim, the old quote, the current code and a ready edit for the agent to apply; the app shows a drift inbox and banners with accept / edit / mark lost (#688). No LLM runs on the server; the calling agent writes new wording.
+- **Before merge:** a PR check lists notes and docs that cite the lines a PR changes, so they are fixed in the same PR (#689). Repo Markdown docs get the same treatment as notes (#690).
+
+| Issue | Feature |
+|---|---|
+| [#686](https://github.com/PIIIX-org/chapters/issues/686) | Lessons shown at the moment they matter (procedural memory; first in phase 4). Phase 1 relearned the same traps repeatedly; memory pays off as fewer corrections (Hindsight 0.85 → 0.36 per task). |
+| [#687](https://github.com/PIIIX-org/chapters/issues/687) | Drift auto-repair: re-anchor moved citations on every sync |
+| [#688](https://github.com/PIIIX-org/chapters/issues/688) | Drift repair proposals: `fix_drift` tool and drift inbox |
+| [#689](https://github.com/PIIIX-org/chapters/issues/689) | PR check: notes that cite the changed lines |
+| [#690](https://github.com/PIIIX-org/chapters/issues/690) | Markdown docs inside repos as claim-bearing documents |
+| [#691](https://github.com/PIIIX-org/chapters/issues/691) | Index drift self-check and automatic repair |
+
+### Structure (phase 6)
+
+| Issue | Feature |
+|---|---|
+| [#692](https://github.com/PIIIX-org/chapters/issues/692) | Structured note fields and live queries: user-defined types, `query_notes`, live tables (phase-1 status tables were edited by a script; verdicts could not be queried). |
+
+### New capabilities (phase 7)
+
+| Issue | Feature |
+|---|---|
+| [#693](https://github.com/PIIIX-org/chapters/issues/693) | Secret guard on write (block, quarantine or redact), P1 |
+| [#694](https://github.com/PIIIX-org/chapters/issues/694) | Index issues, PRs, reviews and CI runs, linked to code and notes |
+| [#695](https://github.com/PIIIX-org/chapters/issues/695) | Coordination for many agents: claims, expiring locks, assignment, inbox |
+| [#696](https://github.com/PIIIX-org/chapters/issues/696) | Outbound events and subscriptions (note changed, claim stale, drift found) |
+| [#697](https://github.com/PIIIX-org/chapters/issues/697) | Transclusion: embed a block of one note in another |
+| [#698](https://github.com/PIIIX-org/chapters/issues/698) | Capture external sources as citable, dated notes |
+| [#699](https://github.com/PIIIX-org/chapters/issues/699) | Importers for Obsidian, Notion and Logseq |
+| [#700](https://github.com/PIIIX-org/chapters/issues/700) | Review inbox for agent changes (approve or revert) |
+
+### Not doing
+
+No server-side LLM calls (answer synthesis, query rewriting), no LLM-extracted entity graphs, no features only humans can use. They make Elara more expensive, which works against the premise (landscape study: Khoj, Open Notebook, LazyGraphRAG, Cognee).
+
+### Work order
+
+Phase 2 → phase 3 (fix-list items, slim profile and budgets first; then #681, #680 and the caches; then #674–#679) → phase 4 (#686 first, then the claim items, then #687–#691) → phase 5 → phase 6 → phase 7. Appendix A lists every issue per phase.
 
 ## 9. Where everything is
 
@@ -164,7 +242,7 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 
 ### Phase 0: owner actions
 
-4 fix-list items plus 1 follow-up issues.
+4 fix-list items plus 1 added issues (review follow-ups and new features, after the fix-list items).
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -176,7 +254,7 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 
 ### Phase 2: stop data loss
 
-36 fix-list items plus 3 follow-up issues.
+36 fix-list items plus 3 added issues (review follow-ups and new features, after the fix-list items).
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -222,7 +300,7 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 
 ### Phase 3: the premise (fewer tokens, exact answers)
 
-60 fix-list items plus 1 follow-up issues.
+60 fix-list items plus 13 added issues (review follow-ups and new features, after the fix-list items).
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -287,10 +365,22 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 | 59 | 71 | [#473](https://github.com/PIIIX-org/chapters/issues/473) | P1 | open | No LLM in the query path for these tools; deterministic answers only. |
 | 60 | 136 | [#534](https://github.com/PIIIX-org/chapters/issues/534) | P0 | open | `orient(query?, focus?, budget)`: ranked repo map (definitions ranked by references, biased to the query and focus files, signatures with line numbers, fit to budget) plus vault outline, one level at a time, ≤10 entries. |
 | — | — | [#623](https://github.com/PIIIX-org/chapters/issues/623) | P2 | open | Search results with equal scores have no tie-breaker: ranks move between identical instances |
+| — | — | [#674](https://github.com/PIIIX-org/chapters/issues/674) | P1 | open | [phase 3] Elara tells the agent when not to use it |
+| — | — | [#675](https://github.com/PIIIX-org/chapters/issues/675) | P1 | open | [phase 3] One budgeted call for compound questions: where, who calls it, why, is it still true |
+| — | — | [#676](https://github.com/PIIIX-org/chapters/issues/676) | P1 | open | [phase 3] Answer for the code the agent is editing: branch, ref and working-tree overlay |
+| — | — | [#677](https://github.com/PIIIX-org/chapters/issues/677) | P1 | open | [phase 3] Vault as a git remote: clone, grep locally, push back |
+| — | — | [#678](https://github.com/PIIIX-org/chapters/issues/678) | P2 | open | [phase 3] Learn from real usage: zero-result searches, unread notes, fallbacks to grep |
+| — | — | [#679](https://github.com/PIIIX-org/chapters/issues/679) | P1 | open | [phase 3] Shared reading cache across agents: one digest per file at a commit |
+| — | — | [#680](https://github.com/PIIIX-org/chapters/issues/680) | P1 | open | [phase 3] Caching contract: every cache key carries the caller's scope and the content revision |
+| — | — | [#681](https://github.com/PIIIX-org/chapters/issues/681) | P1 | open | [phase 3] Make the agent's prompt cacheable: stable, deterministic tool list and instructions |
+| — | — | [#682](https://github.com/PIIIX-org/chapters/issues/682) | P1 | open | [phase 3] "Unchanged since revision N" answers instead of repeating content |
+| — | — | [#683](https://github.com/PIIIX-org/chapters/issues/683) | P2 | open | [phase 3] Per-session de-duplication: refer to content already sent in this session |
+| — | — | [#684](https://github.com/PIIIX-org/chapters/issues/684) | P1 | open | [phase 3] Content-addressed index caches: reuse parse, symbols and embeddings by blob hash |
+| — | — | [#685](https://github.com/PIIIX-org/chapters/issues/685) | P2 | open | [phase 3] Search and graph result cache keyed by query, scope and index version |
 
 ### Phase 4: knowledge truth and memory
 
-29 fix-list items.
+29 fix-list items plus 6 added issues (review follow-ups and new features, after the fix-list items).
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -323,10 +413,16 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 | 27 | 137 | [#535](https://github.com/PIIIX-org/chapters/issues/535) | P1 | open | Retire the heavy mapping protocol: one deterministic, cited outline note per repo; agent notes only for why, invariants and decisions, with auto-anchored citations; a budgeted mapping job with caps. |
 | 28 | 138 | [#536](https://github.com/PIIIX-org/chapters/issues/536) | P1 (partial) | open | Mapping protocol: templates server-valid and links un-backticked (#406); still to do: read-only Phase 0 with no writes into repos the user doesn't own, audit instead of graph dump in Phase 5, size guidance for large repos, commit pinning of line anchors, line-range validation. |
 | 29 | 139 | [#537](https://github.com/PIIIX-org/chapters/issues/537) | P1 | open | One `elara` vault per project; remove the duplicate `codebase/chapters` and `project/chapters` notes across the `all`, Chapters and ELara vaults. |
+| — | — | [#686](https://github.com/PIIIX-org/chapters/issues/686) | P1 | open | [phase 4] Lessons shown at the moment they matter (procedural memory) |
+| — | — | [#687](https://github.com/PIIIX-org/chapters/issues/687) | P1 | open | [phase 4] Drift auto-repair: re-anchor moved citations automatically on every sync |
+| — | — | [#688](https://github.com/PIIIX-org/chapters/issues/688) | P1 | open | [phase 4] Drift repair proposals: fix_drift tool and a drift inbox in the app |
+| — | — | [#689](https://github.com/PIIIX-org/chapters/issues/689) | P1 | open | [phase 4] Catch drift before merge: PR check lists notes that cite the changed lines |
+| — | — | [#690](https://github.com/PIIIX-org/chapters/issues/690) | P2 | open | [phase 4] Treat Markdown docs inside repositories as claim-bearing documents |
+| — | — | [#691](https://github.com/PIIIX-org/chapters/issues/691) | P1 | open | [phase 4] Index drift self-check: compare indexed tree with the remote and the files, repair automatically |
 
 ### Phase 5: everything else
 
-34 fix-list items plus 9 follow-up issues.
+34 fix-list items plus 9 added issues (review follow-ups and new features, after the fix-list items).
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -376,7 +472,7 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 
 ### Phase 6: rendered views and data attachments
 
-5 issues, not from the fix list; plan note in Elara `fixes/phase-6`.
+6 issues, not from the fix list; plan note in Elara `fixes/phase-6`.
 
 | Order | Item | Issue | Priority | State | Change |
 |---|---|---|---|---|---|
@@ -385,6 +481,22 @@ Generated 2026-10-17 from `FIX-LIST.md`, `fix-issues.json`, the phase order in E
 | 3 | — | [#669](https://github.com/PIIIX-org/chapters/issues/669) | P2 | open | Data attachments that can be queried: JSON, CSV, YAML |
 | 4 | — | [#670](https://github.com/PIIIX-org/chapters/issues/670) | P2 | open | Extract text from every attachment type for search and citations |
 | 5 | — | [#671](https://github.com/PIIIX-org/chapters/issues/671) | P2 | open | Sandboxed interactive HTML attachments |
+| 6 | — | [#692](https://github.com/PIIIX-org/chapters/issues/692) | P1 | open | Structured note fields and live queries: user-defined types, query_notes, live tables |
+
+### Phase 7: new capabilities
+
+8 issues, not from the fix list; plan note in Elara `fixes/phase-7`.
+
+| Order | Item | Issue | Priority | State | Change |
+|---|---|---|---|---|---|
+| 1 | — | [#693](https://github.com/PIIIX-org/chapters/issues/693) | P1 | open | Secret guard on write: block, quarantine or redact secrets in notes |
+| 2 | — | [#694](https://github.com/PIIIX-org/chapters/issues/694) | P1 | open | Index issues, PRs, reviews and CI runs, linked to code and notes |
+| 3 | — | [#695](https://github.com/PIIIX-org/chapters/issues/695) | P2 | open | Coordination for many agents: task claims, expiring locks, assignment, agent inbox |
+| 4 | — | [#696](https://github.com/PIIIX-org/chapters/issues/696) | P2 | open | Outbound events and subscriptions: note changed, claim stale, drift found |
+| 5 | — | [#697](https://github.com/PIIIX-org/chapters/issues/697) | P2 | open | Embed a section of one note in another (transclusion by block id) |
+| 6 | — | [#698](https://github.com/PIIIX-org/chapters/issues/698) | P2 | open | Save external sources as citable notes: URL snapshots with date and provenance |
+| 7 | — | [#699](https://github.com/PIIIX-org/chapters/issues/699) | P2 | open | Importers for Obsidian, Notion and Logseq |
+| 8 | — | [#700](https://github.com/PIIIX-org/chapters/issues/700) | P2 | open | Review inbox for agent changes: approve or revert what agents wrote |
 
 ## Appendix B. Fix-list items marked done before the programme
 
