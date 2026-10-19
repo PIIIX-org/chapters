@@ -72,7 +72,7 @@ async function vaultFixture(name: string) {
   await must(acct, 'create_note', { vaultId: vault.id, type: 'docs', name: 'trashed', body: 'trashed' })
   await must(acct, 'delete_note', { vaultId: vault.id, path: 'docs/trashed' })
   const trash = await must<Array<{ id: string }>>(acct, 'list_trash', { vaultId: vault.id })
-  const revisions = await must<Array<{ id: string }>>(acct, 'note_history', { vaultId: vault.id, path: 'docs/kept' })
+  const { revisions } = await must<{ revisions: Array<{ id: string }> }>(acct, 'note_history', { vaultId: vault.id, path: 'docs/kept' })
   await must(acct, 'share_vault', { vaultId: vault.id, granteeType: 'user', granteeId: memberId, permission: 'edit' })
   const shares = await must<Array<{ id: string }>>(acct, 'list_vault_shares', { vaultId: vault.id })
   return { id: vault.id, trashedId: trash[0]!.id, revisionId: revisions[0]!.id, shareId: shares[0]!.id }
@@ -219,7 +219,7 @@ describe('Pinned tokens and admin tools (#549)', () => {
     // Nothing changed: the share, the trashed note, the revision and the vault are all still there.
     expect((await must<Array<{ id: string }>>(acct, 'list_vault_shares', { vaultId: v.id })).map((s) => s.id)).toEqual([v.shareId])
     expect((await must<Array<{ id: string }>>(acct, 'list_trash', { vaultId: v.id })).map((t) => t.id)).toContain(v.trashedId)
-    expect((await must<Array<{ id: string }>>(acct, 'note_history', { vaultId: v.id, path: 'docs/kept' })).map((r) => r.id)).toContain(
+    expect((await must<{ revisions: Array<{ id: string }> }>(acct, 'note_history', { vaultId: v.id, path: 'docs/kept' })).revisions.map((r) => r.id)).toContain(
       v.revisionId,
     )
     expect((await must<Array<{ id: string }>>(acct, 'list_vaults', {})).map((x) => x.id)).toContain(v.id)
@@ -311,7 +311,7 @@ describe("A pinned token is capped at its minter's permission on the pin (#649)"
     expect(names).toContain('read_note')
     expect(names).not.toContain('create_note')
     // Read-level tools whose handler needs edit permission are not listed either, and still refuse.
-    for (const editGated of ['list_trash', 'note_history', 'export_vault']) expect(names).not.toContain(editGated)
+    for (const editGated of ['list_trash', 'note_history', 'get_revision', 'export_vault']) expect(names).not.toContain(editGated)
     expect(await call(reader, 'list_trash', {})).toEqual({ isError: true, text: 'Error: not found' })
 
     const read = await mintAs(memberCookie, { name: 'reader-read', scope: 'vault', vaultId: vault.id, access: 'read' })
@@ -343,7 +343,7 @@ describe("A pinned token is capped at its minter's permission on the pin (#649)"
 
     const names = await listedNames(legacy)
     expect(names).toContain('read_note')
-    for (const hidden of ['create_note', 'edit_note', 'delete_note', 'list_trash', 'note_history', 'export_vault', 'list_vault_shares']) {
+    for (const hidden of ['create_note', 'edit_note', 'delete_note', 'list_trash', 'note_history', 'get_revision', 'export_vault', 'list_vault_shares']) {
       expect(names).not.toContain(hidden)
     }
     // A write tool that needs only read permission stays listed, and works.

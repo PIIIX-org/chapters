@@ -154,17 +154,20 @@ describe('MCP integration', () => {
       name: 'note_history',
       arguments: { vaultId, path: 'docs/readme' },
     })
-    const revisions = JSON.parse(textOf(history)) as Array<{
-      id: string
-      actorType: string
-      actorId: string | null
-      body: string
-    }>
+    const { revisions } = JSON.parse(textOf(history)) as {
+      revisions: Array<{ id: string; actorType: string; actorId: string | null }>
+    }
     expect(revisions.length).toBeGreaterThanOrEqual(2)
     expect(revisions[0]!.actorType).toBe('mcp')
     expect(revisions[0]!.actorId).toBe(accountConnectionId)
 
-    const original = revisions.find((r) => r.body.includes('quantum'))!
+    // The list is metadata only; the original content is one get_revision away.
+    const original = revisions.at(-1)!
+    const revision = await client.callTool({
+      name: 'get_revision',
+      arguments: { vaultId, path: 'docs/readme', revisionId: original.id },
+    })
+    expect(textOf(revision)).toContain('quantum')
     const revert = await client.callTool({
       name: 'revert_note',
       arguments: { vaultId, path: 'docs/readme', revisionId: original.id },

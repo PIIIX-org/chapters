@@ -48,6 +48,31 @@ export interface JsonSchema {
   anyOf?: JsonSchema[]
 }
 
+/** One row of a note_history page: metadata only (#411). */
+export interface RevisionMeta {
+  id: string
+  actorType: 'user' | 'mcp' | 'collab'
+  actorId: string | null
+  action: string
+  createdAt: string
+  bodyBytes: number
+}
+
+/** note_history's result: one page, newest first. */
+export interface HistoryPage {
+  revisions: RevisionMeta[]
+  hasMore: boolean
+  nextCursor: string | null
+}
+
+/** get_revision's result: one revision with its content. */
+export interface RevisionContent extends Omit<RevisionMeta, 'bodyBytes'> {
+  noteId: string
+  path: string
+  frontmatter: Record<string, unknown>
+  body: string
+}
+
 interface RpcBody {
   result?: { tools?: ToolInfo[]; content?: Array<{ text?: string }>; isError?: boolean }
   error?: unknown
@@ -163,5 +188,25 @@ export class McpClient {
     const r = await this.call(tool, args)
     if (!r.ok) throw new Error(`${this.label} ${tool} failed: ${r.text.slice(0, 500)}`)
     return (r.json ?? r.text) as T
+  }
+
+  /**
+   * The revisions of a note recorded after `sinceIso` (every revision when
+   * omitted), newest first, each with its content: note_history pages
+   * (metadata only, #411) until a revision at or before `sinceIso`, then one
+   * get_revision per revision kept. Throws when a call fails.
+   */
+  async revisionsSince(vaultId: string, path: string, sinceIso = ''): Promise<RevisionContent[]> {
+    const kept: RevisionMeta[] = []
+    let cursor: string | null = null
+    do {
+      const page: HistoryPage = await this.must('note_history', { vaultId, path, limit: 100, ...(cursor ? { cursor } : {}) })
+      const newer = page.revisions.filter((r) => r.createdAt > sinceIso)
+      kept.push(...newer)
+      cursor = newer.length === page.revisions.length ? page.nextCursor : null
+    } while (cursor)
+    const out: RevisionContent[] = []
+    for (const r of kept) out.push(await this.must<RevisionContent>('get_revision', { vaultId, path, revisionId: r.id }))
+    return out
   }
 }

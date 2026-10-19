@@ -309,18 +309,13 @@ Tunables via env (set in the workflow step if needed): `LAB_TESTS`,
 
 - Notes: `type` in frontmatter must equal the first path segment; segments
   `^[a-z0-9][a-z0-9-]*$`; `edit_note` frontmatter replaces the whole map.
-- `note_history` returns every revision with its full body (#411): fine on
-  lab notes, never on big ones.
+- `note_history` returns one page of metadata, no bodies (#411): read the
+  content with `get_revision`. `McpClient.revisionsSince()` (`lib/mcp.ts`)
+  does both for tests that check what a revision holds.
 - The image runs `NODE_ENV=production`: session cookies are `Secure`;
   `RestSession` carries them by hand over http.
 - `EMBEDDINGS=local`: the first embedding downloads the ONNX model (~130 MB)
   inside the container; the first search or extraction is slower.
-- `big-notes` deliberately drives the app into a V8 heap OOM (#411; peak
-  about 6 GB in the container) and waits for Docker to restart it. The app
-  service has no memory limit, so this relies on the 16 GB `ubuntu-latest`
-  runner: on a smaller runner the kernel OOM killer could take Postgres or
-  the runner instead. Do not move the lab to a smaller runner while #411
-  stands.
 - No secrets of its own: the workflow generates `.env` per run
   (`CREDENTIALS_ENCRYPTION_KEY`, `SETUP_TOKEN`, `POSTGRES_PASSWORD`), masks
   it in the job log and redacts it from the artifact; `MCP_RATE_LIMIT` is

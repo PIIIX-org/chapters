@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'n
 import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
@@ -565,25 +565,79 @@ export async function listTrash(
     .offset(offset)
 }
 
-/** Change history for a note, newest first (edit/owner only — enforced by callers). */
-export async function listRevisions(
-  vaultId: string,
-  path: string,
-): Promise<RevisionRow[] | null> {
-  const row = await getLiveNote(vaultId, path)
-  if (!row) return null
-  return db
-    .select()
-    .from(noteRevisions)
-    .where(eq(noteRevisions.noteId, row.id))
-    .orderBy(desc(noteRevisions.createdAt))
-}
-
 export type RevisionMeta = Pick<RevisionRow, 'id' | 'actorType' | 'actorId' | 'action' | 'createdAt'>
 
+/** One revision in an MCP history page: who changed the note, when, how, and how big the body was. */
+export interface RevisionSummary extends RevisionMeta {
+  /** UTF-8 bytes of the note body at this revision. */
+  bodyBytes: number
+}
+
+/**
+ * Where a history page ends: the last revision's `created_at` as microsecond
+ * UTC text (a JS Date keeps only milliseconds, which would skip or repeat
+ * revisions recorded within the same millisecond) and its id, which orders
+ * revisions recorded in the same instant.
+ */
+export interface RevisionPosition {
+  at: string
+  id: string
+}
+
+/**
+ * One page of a note's change history, newest first, metadata only (#411):
+ * the bodies are never read (`octet_length` takes the size from the stored
+ * value's header). Keyset-paged on (created_at, id) after `before`, so a
+ * revision recorded while a caller pages does not shift the pages. `next` is
+ * the position to continue from, or null on the last page. Null when the note
+ * does not exist. Edit/owner only — enforced by callers.
+ */
+export async function listRevisionPage(
+  vaultId: string,
+  path: string,
+  limit: number,
+  before?: RevisionPosition,
+): Promise<{ revisions: RevisionSummary[]; next: RevisionPosition | null } | null> {
+  const row = await getLiveNote(vaultId, path)
+  if (!row) return null
+  const rows = await db
+    .select({
+      id: noteRevisions.id,
+      actorType: noteRevisions.actorType,
+      actorId: noteRevisions.actorId,
+      action: noteRevisions.action,
+      createdAt: noteRevisions.createdAt,
+      bodyBytes: sql<number>`octet_length(${noteRevisions.body})`,
+      at: sql<string>`to_char(${noteRevisions.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+    })
+    .from(noteRevisions)
+    .where(
+      and(
+        eq(noteRevisions.noteId, row.id),
+        before
+          ? sql`(${noteRevisions.createdAt}, ${noteRevisions.id}) < (${before.at}::timestamptz, ${before.id}::uuid)`
+          : undefined,
+      ),
+    )
+    .orderBy(desc(noteRevisions.createdAt), desc(noteRevisions.id))
+    .limit(limit + 1)
+  const page = rows.slice(0, limit)
+  const last = page.at(-1)
+  return {
+    revisions: page.map((r) => ({
+      id: r.id,
+      actorType: r.actorType,
+      actorId: r.actorId,
+      action: r.action,
+      createdAt: r.createdAt,
+      bodyBytes: r.bodyBytes,
+    })),
+    next: rows.length > limit && last ? { at: last.at, id: last.id } : null,
+  }
+}
+
 /** Revision metadata only — never a note's content — newest first, always
- * bounded (perf rule 3: no unbounded reads). `listRevisions` still returns the
- * full payload for the MCP note_history tool. */
+ * bounded (perf rule 3: no unbounded reads). The REST history list. */
 export async function listRevisionMeta(
   vaultId: string,
   path: string,
