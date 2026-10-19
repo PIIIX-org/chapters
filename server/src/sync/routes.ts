@@ -3,6 +3,7 @@ import { atLeast, resolveAccess } from '../vaults/permissions.js'
 import { readNote, splitPath } from '../notes/store.js'
 import { addViewer } from './viewers.js'
 import { issueTicket } from './tickets.js'
+import { config } from '../config.js'
 
 /**
  * Where the browser should connect to the relay: **the page's own origin, at
@@ -53,11 +54,12 @@ export function syncRoutes(app: FastifyInstance) {
    * Mints the websocket credential (`client/src/api/collab.ts` is written
    * against this shape). Authentication only — no vault is named here, and a
    * ticket confers no permission: the relay still resolves live access on
-   * connect and on every inbound message.
+   * connect and on every inbound message. `maxNoteBytes` is the body size cap
+   * the relay enforces (#491), so the editor can say what to cut.
    */
   app.post('/collab/ticket', async (req) => {
     const { token, expiresAt } = issueTicket(req.user!.id)
-    return { token, url: COLLAB_PATH, expiresAt: expiresAt.toISOString() }
+    return { token, url: COLLAB_PATH, expiresAt: expiresAt.toISOString(), maxNoteBytes: config.noteMaxBytes }
   })
 
   app.get<{ Params: { id: string; '*': string } }>(

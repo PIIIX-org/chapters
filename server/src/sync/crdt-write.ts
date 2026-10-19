@@ -2,6 +2,7 @@ import type { DirectConnection } from '@hocuspocus/server'
 import { YAMLParseError } from 'yaml'
 import { getCollab } from './collab-server.js'
 import { getLiveNote, readNote, resolveNotePath, updateNote, type Actor, type NoteRow } from '../notes/store.js'
+import { assertBodyFits } from '../notes/size-cap.js'
 import { OkfValidationError } from '../notes/okf.js'
 import { withKeyLock } from '../notes/key-lock.js'
 
@@ -50,6 +51,8 @@ export async function writeThroughCollab(
     if (collab) {
       const existing = await getLiveNote(vaultId, path)
       if (!existing) return null
+      // Before the document edit: a refused body must never reach the editors (#491).
+      if (input.body !== undefined) assertBodyFits(input.body, existing.body)
       let connection: DirectConnection
       try {
         connection = await collab.openDirectConnection(docName, {

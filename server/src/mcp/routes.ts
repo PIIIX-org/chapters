@@ -4,6 +4,7 @@ import { resolveMcpToken } from '../vaults/mcp-connection-routes.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { buildMcpServer } from './server.js'
 import { checkRateLimit } from './rate-limit.js'
+import { noteTransportLimit } from '../notes/size-cap.js'
 
 /**
  * MCP endpoint: stateless Streamable HTTP — a fresh server+transport per
@@ -39,6 +40,8 @@ export function mcpRoutes(app: FastifyInstance) {
     })
   }
 
-  app.post('/mcp', handler)
-  app.post('/elara/mcp', handler)
+  // Room for a note body at the cap (#491); create_note/edit_note check the body itself.
+  const options = { bodyLimit: noteTransportLimit() }
+  app.post('/mcp', options, handler)
+  app.post('/elara/mcp', options, handler)
 }

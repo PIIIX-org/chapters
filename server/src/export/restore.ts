@@ -66,7 +66,8 @@ function withDates<T extends object>(row: T, fields: (keyof T)[]): T {
  * keys across the dump stay intact automatically. Account-layer tables
  * restore inside one transaction; notes restore afterward, per-note
  * best-effort through the same shared OKF-validation write path every
- * other write uses (no restore-specific bypass).
+ * other write uses (no restore-specific bypass), except the body size cap
+ * (#491), which would drop backed-up notes larger than it.
  */
 export async function restoreBackup(zipBuffer: Buffer): Promise<RestoreResult> {
   const zip = new AdmZip(zipBuffer)
@@ -148,6 +149,10 @@ export async function restoreBackup(zipBuffer: Buffer): Promise<RestoreResult> {
           body: parsed.body,
         },
         { type: 'user', id: owner },
+        // A backup may hold notes larger than today's ELARA_NOTE_MAX_BYTES
+        // (stored before #491, or under a larger cap): dropping them on a
+        // restore would lose them, so the cap is not applied here.
+        { enforceSizeCap: false },
       )
       notesImported += 1
     } catch (err) {

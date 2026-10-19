@@ -25,6 +25,7 @@ import {
 } from './okf/paths.js'
 import { atomicWrite } from './atomic-write.js'
 import { withKeyLock } from './key-lock.js'
+import { assertBodyFits } from './size-cap.js'
 
 export { splitPath, resolveNotePath, type ResolvedNotePath }
 
@@ -210,6 +211,8 @@ export async function createNote(
     body?: string
   },
   actor: Actor = SYSTEM_ACTOR,
+  /** Restore passes false: a backed-up note is kept whatever its size (notes/size-cap.ts). */
+  options: { enforceSizeCap?: boolean } = {},
 ): Promise<NoteRow> {
   const rawPath =
     input.path ??
@@ -224,6 +227,7 @@ export async function createNote(
   }
   const body = input.body ?? ''
   validateNote(resolved.type, resolved.name, frontmatter, body)
+  if (options.enforceSizeCap !== false) assertBodyFits(body)
   let row: NoteRow
   try {
     const inserted = await db
@@ -327,6 +331,7 @@ export async function updateNote(
     }
     const body = input.body ?? row.body
     validateNote(row.type, row.name, frontmatter, body)
+    assertBodyFits(body, row.body)
     const [updated] = await db
       .update(notes)
       .set({ frontmatter, body, updatedAt: new Date() })

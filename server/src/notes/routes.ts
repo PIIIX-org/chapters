@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { atLeast, listUsersWithAccess, resolveAccess, type Access } from '../vaults/permissions.js'
 import { OkfValidationError } from './okf.js'
+import { NoteTooLargeError, noteTransportLimit } from './size-cap.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
 import { writeThroughCollab } from '../sync/crdt-write.js'
@@ -40,6 +41,7 @@ export function noteRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAuth)
 
   app.setErrorHandler((err, req, reply) => {
+    if (err instanceof NoteTooLargeError) return reply.code(413).send({ error: err.message })
     if (err instanceof OkfValidationError) {
       return reply.code(err.message.includes('already exists') ? 409 : 400).send({ error: err.message })
     }
@@ -60,6 +62,7 @@ export function noteRoutes(app: FastifyInstance) {
   }>(
     '/vaults/:id/notes',
     {
+      bodyLimit: noteTransportLimit(),
       schema: {
         body: {
           type: 'object',
@@ -93,6 +96,7 @@ export function noteRoutes(app: FastifyInstance) {
   }>(
     '/vaults/:id/notes/*',
     {
+      bodyLimit: noteTransportLimit(),
       schema: {
         body: {
           type: 'object',
