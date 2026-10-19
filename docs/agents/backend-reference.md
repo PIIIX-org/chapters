@@ -691,19 +691,50 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   vault with a **new** owner and new IDs, re-validates every note
   through the normal OKF write path, best-effort per note (an invalid
   note is skipped and reported, not fatal).
-- **Instance backup** (`GET /api/admin/backup`, admin-only): a full
-  dump of every account-layer table plus a copy of every live note
-  file.
+- **Instance backup** (`GET /api/admin/backup`, admin-only; the
+  scheduled run in `backup-service.ts` writes the same zip):
+  `buildInstanceBackup()` in `archive.ts`, format 2
+  (`backup-format.ts`, #409). `backup.json` (format, time, row count per
+  table) plus one `db/<table>.jsonl` per table in `BACKUP_TABLES`, read
+  in one repeatable-read snapshot, rows as stored (TOTP secrets
+  included, embeddings left out), plus `vaults/<id>/notes/<path>.md`,
+  `trash/<note id>.md` and `assets/<file>`. Files are read after the
+  snapshot: a note file that no longer matches its snapshot row (body,
+  frontmatter key by key) is left out, and the restore writes it from
+  the row. `executeBackup` writes the local file with mode `0600`
+  (open + fchmod, whatever the umask). Not backed up: sessions,
+  email tokens, export links, note links, semantic edges, embeddings,
+  the repository file index, CRDT state (each rebuilt or reissued; the
+  table is in `docs/self-hosting/backup.md`).
 - **Restore** (`server/src/export/restore.ts` +
   `server/src/scripts/restore-backup.ts`): **CLI only**
-  (`pnpm restore-backup <zip>`), deliberately **not** an HTTP endpoint —
-  restoring over a live instance isn't a button. Hard-refuses to run
-  against a non-empty instance, no override flag. Preserves the
-  dump's original IDs — a true restore, not an import — account-layer
-  tables restore inside one transaction, then notes are recreated
-  per-file through `createNote`. Restored MCP connections are metadata
-  only; raw tokens were never recoverable (only hashes were ever
-  stored) and must be reissued.
+  (`pnpm restore-backup [--dry-run] <zip>`), deliberately **not** an
+  HTTP endpoint — restoring over a live instance isn't a button.
+  `restoreBackup()` validates (format, every table file, row counts,
+  columns, references inside the archive, note paths, attachment names;
+  `BackupInvalidError`), plans (per-table and per-file counts, conflicts;
+  `RestoreRefusedError`), then applies: rows in one transaction with
+  `on conflict (primary key) do nothing`, files written atomically
+  inside it (the files it created are removed if the transaction
+  fails), `instance_restored` security event with the archive's
+  SHA-256, then `index.md` regeneration. Runs on an empty instance
+  only; anything else is refused, no override flag. On an instance
+  whose marker for this archive exists it writes nothing
+  (`plan.alreadyRestored`): rows and marker commit together, so there
+  is nothing to resume, and a re-insert would revive rows deleted since
+  (shares, purged notes, rotated MFA backup codes). It only regenerates
+  a missing generated `index.md` there. The CLI prints counts, and for
+  an unexpected error only the driver's message and code (a drizzle
+  error's message carries the query parameters).
+  Ids are the archive's — a true restore, not an import. Rows are
+  inserted as stored, not re-validated through the OKF write path.
+  Restored MCP and sync tokens keep working (their hashes are
+  restored). Restored repositories get `last_synced_at`,
+  `last_synced_commit` and `last_webhook_at` cleared so the next poll
+  re-indexes git repositories. A
+  format-1 archive (`account-dump.json`) still restores: notes get ids
+  derived from vault and path, tokens pinned to a repository are left
+  out with a warning.
 
 ### 5.10 Repository ingestion & codebase mapping (`server/src/repositories/`)
 
@@ -722,9 +753,16 @@ is the history record, not Chapters).
    scratch temp dir on every sync, discarded after reading; no
    persistent working copy. Triggered by a webhook
    (`git-webhook-routes.ts`, HMAC-SHA256-verified,
-   `POST /repositories/:id/webhook`, unprefixed) or a polling fallback
-   (`scheduler.ts`) that only kicks in once the webhook signal goes
-   stale — `shouldPoll()` is a pure function, unit-tested on its own.
+   `POST /repositories/:id/webhook`, unprefixed) or the polling fallback
+   (`scheduler.ts`, every `POLL_INTERVAL_MS`, default 5 min).
+   `shouldPoll()` (a pure function, unit-tested on its own) skips a
+   repository only while its last webhook delivery is younger than
+   `WEBHOOK_STALE_THRESHOLD_MS` (default 10 min, 2× the poll interval)
+   and its `syncStatus` is not `error`; a repository with no webhook, a
+   stale one or a failed sync is polled every tick. `lastSyncedAt` takes
+   no part: every successful webhook sync ends after its delivery, so
+   "synced since the last webhook" once disabled polling for good (#410).
+   An unchanged remote costs one `ls-remote`, not a clone.
 2. **local_path** (`local-watch.ts`) — `chokidar`, debounced 300ms,
    real-time. The path must resolve under `LOCAL_REPOS_ROOT`, checked
    at repository-creation time.
@@ -849,7 +887,7 @@ the count as `filesPendingExtraction`.
 - **Mermaid preview XSS defense**: Initialized with `securityLevel: 'strict'`, `htmlLabels: false`, and SVG sanitized with `DOMPurify.sanitize(..., { USE_PROFILES: { svg: true, svgFilters: true } })`.
 - **MFA setup protection**: `POST /api/mfa/setup` forbids re-setup when MFA is already enabled, requiring explicit verification before modifying second-factor state.
 - **Mass assignment guards**: Fastify schema validation (`additionalProperties: false`) and explicit field destructuring on vault and repository update routes.
-- **Credential redaction in backups**: Sensitive 2FA seeds (`totpSecret`) and password hashes scrubbed from exported archive dumps.
+- **Secrets in backups** (SEC-06, revised by #409): the instance backup keeps password hashes, token hashes and TOTP secrets as stored (stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The scheduled local backup file is written with mode `0600` whatever the umask. The restore CLI prints counts, and only a driver message and code on errors. Manifest digests and a CI restore check: #493.
 - **OIDC host-header sanitization**: Validated against `APP_URL` and injection characters to protect authorization code callbacks.
 - **Admin role hierarchy**: Strict `ROLE_RANK` enforcement preventing self-promotion or subordinate demotion of superadmins and instance owners.
 - **Ingestion bounds**: Git clone ingestion capped to 1MB per file and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`).
@@ -1169,9 +1207,11 @@ structural) in the same PR.
 needs something Drizzle can't express (see §8), commit both the schema
 change and the migration file together.
 
-**Restore a backup**: `pnpm -C server restore-backup <path-to-zip>`
-against a **fresh, empty** instance only — it hard-refuses otherwise,
-by design. There is no HTTP restore path and no override flag.
+**Restore a backup**: `pnpm -C server restore-backup [--dry-run] <path-to-zip>`
+against an **empty** instance only — it refuses otherwise, by design;
+a re-run on an instance already restored from the same archive writes
+nothing (§5.9). There is no HTTP restore path and no override flag.
+Restart the server afterwards so it computes the embeddings.
 
 **Check note files**: `pnpm -C server check-notes` (or
 `-- --vault <uuid>`) after a restore, a disk incident, or a deploy that

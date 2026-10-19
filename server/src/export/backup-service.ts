@@ -1,4 +1,4 @@
-import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, open, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
@@ -141,7 +141,15 @@ export async function executeBackup(options?: { actorUserId?: string }): Promise
   try {
     if (localPath && destinations.includes('local')) {
       await mkdir(localPath, { recursive: true })
-      await writeFile(join(localPath, filename), zip)
+      // The archive holds password and token hashes and TOTP secrets (#409):
+      // owner-only, whatever the umask. fchmod also covers a file that existed.
+      const file = await open(join(localPath, filename), 'w', 0o600)
+      try {
+        await file.chmod(0o600)
+        await file.writeFile(zip)
+      } finally {
+        await file.close()
+      }
       const pruned = await pruneLocalBackups(localPath, config.backup.retentionCount)
       totalPruned += pruned
     }

@@ -97,7 +97,7 @@ export function noteFile(vaultId: string, path: string): string {
   return join(vaultDir(vaultId), `${path}.md`)
 }
 
-function trashFile(vaultId: string, noteId: string): string {
+export function trashFile(vaultId: string, noteId: string): string {
   return join(vaultDir(vaultId), '.trash', `${noteId}.md`)
 }
 
@@ -1167,20 +1167,16 @@ export async function saveAsset(
   return { fileName, size: buffer.length, mimeType }
 }
 
+/** A bare file name inside a vault's `assets/` directory: no path parts, no traversal. */
+export function isSafeAssetName(filename: string): boolean {
+  return Boolean(filename) && !filename.includes('..') && /^[a-zA-Z0-9._-]+$/.test(filename)
+}
+
 export async function readAsset(
   vaultId: string,
   filename: string,
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
-  if (
-    !filename ||
-    filename.includes('..') ||
-    filename.includes('/') ||
-    filename.includes('\\') ||
-    filename.includes('\0') ||
-    !/^[a-zA-Z0-9._-]+$/.test(filename)
-  ) {
-    return null
-  }
+  if (!isSafeAssetName(filename)) return null
   const filePath = assetFile(vaultId, filename)
   try {
     const buffer = await readFile(filePath)
