@@ -20,6 +20,7 @@ let cookie: string
 let vaultId: string
 let token: string
 let connectionId: string
+let ownerId: string
 let client: Client
 let counter = 0
 
@@ -32,6 +33,7 @@ beforeAll(async () => {
   const address = app.server.address()
   const baseUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
   const owner = await createActiveUser()
+  ownerId = owner.id
   cookie = await loginCookie(app, owner.email)
   vaultId = (
     await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'Merge vault' } })
@@ -105,20 +107,30 @@ function cases(live: () => Y.Doc | undefined, open: (path: string) => Promise<vo
     if (live()) expect(liveFrontmatter()).toMatchObject({ title: TITLE, tags: TAGS, status: 'active' })
   })
 
-  it('records one revision with the merged frontmatter, attributed as before', async () => {
+  it('records the merged frontmatter in a revision credited to the agent, and REST to the user', async () => {
     const path = await freshNote()
     await open(path)
     const before = (await listRevisions(vaultId, path))!.length
     expect((await editNote({ path, frontmatter: { description: 'Merged.' } })).isError).toBe(false)
+    // Through the relay its store of the document lands first, credited to
+    // `collab` (#403); the agent's write of the same state must still be
+    // recorded, credited to the connection.
     const revisions = (await listRevisions(vaultId, path))!
-    expect(revisions.length).toBe(before + 1)
-    expect(revisions[0]!.frontmatter).toMatchObject({ title: TITLE, tags: TAGS, description: 'Merged.' })
-    // KNOWN BUG, pinned on purpose (#403): through the relay, the document's
-    // store lands first and the agent's identical write dedupes into it, so
-    // the revision is credited to the relay, as for a body edit.
-    expect(revisions[0]).toMatchObject(
-      live() ? { action: 'update', actorType: 'collab' } : { action: 'update', actorType: 'mcp', actorId: connectionId },
-    )
+    const added = revisions.slice(0, revisions.length - before)
+    expect(added.map((r) => r.actorType)).toEqual(live() ? ['mcp', 'collab'] : ['mcp'])
+    expect(added[0]).toMatchObject({ action: 'update', actorType: 'mcp', actorId: connectionId })
+    for (const revision of added) {
+      expect(revision.frontmatter).toMatchObject({ title: TITLE, tags: TAGS, description: 'Merged.' })
+    }
+
+    const put = await app.inject({
+      method: 'PUT',
+      url: `/api/vaults/${vaultId}/notes/${path}`,
+      headers: { cookie },
+      body: { frontmatter: { status: 'active' } },
+    })
+    expect(put.statusCode).toBe(200)
+    expect((await listRevisions(vaultId, path))![0]).toMatchObject({ action: 'update', actorType: 'user', actorId: ownerId })
   })
 
   it('replace: true replaces the whole map (type is kept)', async () => {
@@ -258,5 +270,18 @@ describe('edit_note frontmatter merge through the live relay', () => {
       description: 'Typed live.',
       status: 'active',
     })
+  })
+
+  it('names an invalid key already in the live document, and replace: true gets past it', async () => {
+    const path = await freshNote()
+    await openLive(path)
+    // A person typed a value the relay refuses to store (it keeps the last valid file).
+    await connection!.transact((document) => document.getMap('frontmatter').set('status', 'bogus'))
+    const merged = await editNote({ path, frontmatter: { description: 'Agent note.' } })
+    expect(merged.isError).toBe(true)
+    expect(merged.text).toMatch(/"status" is already on the note.*`replace: true`/)
+    const replaced = await editNote({ path, frontmatter: { title: TITLE, description: 'Agent note.' }, replace: true })
+    expect(replaced.isError).toBe(false)
+    expect((await stored(path)).frontmatter).toEqual({ type: 'docs', title: TITLE, description: 'Agent note.' })
   })
 })

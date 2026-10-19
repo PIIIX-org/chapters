@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import { readdir } from 'node:fs/promises'
 import type * as FsPromises from 'node:fs/promises'
 import { join } from 'node:path'
@@ -88,7 +89,8 @@ describe('concurrent writes to one note', () => {
     const path = 'docs/collab-raced'
     const writes = bodies('collab')
     const results = await Promise.allSettled(
-      writes.map((body) => writeThroughCollab(vaultId, path, { body }, { type: 'mcp', id: 'race-test' })),
+      // A real connection id (a uuid): the agent's writes are recorded next to the relay's (#438).
+      writes.map((body) => writeThroughCollab(vaultId, path, { body }, { type: 'mcp', id: randomUUID() })),
     )
 
     expect(results.filter((r) => r.status === 'rejected')).toEqual([])

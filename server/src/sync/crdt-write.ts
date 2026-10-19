@@ -147,12 +147,13 @@ export async function writeThroughCollab(
         const fm = document.getMap('frontmatter')
         const current = fm.toJSON() as Record<string, unknown>
         next.frontmatter = nextFrontmatter(current, input, existing.type)
-        validateNote(
-          existing.type,
-          existing.name,
-          next.frontmatter ?? { ...storedFrontmatter, type: existing.type },
-          input.body ?? existing.body,
-        )
+        const nextNote = next.frontmatter ?? { ...storedFrontmatter, type: existing.type }
+        const body = input.body ?? existing.body
+        try {
+          validateNote(existing.type, existing.name, nextNote, body)
+        } catch (err) {
+          throw explainInheritedKeys(err, current, input, (candidate) => validateNote(existing.type, existing.name, candidate, body), nextNote)
+        }
         if (input.body !== undefined) {
           const text = document.getText('body')
           text.delete(0, text.length)
@@ -170,4 +171,39 @@ export async function writeThroughCollab(
     }
     return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: input.body }, actor)
   })
+}
+
+/**
+ * A merge can fail on a key the caller never sent: the live document may
+ * hold a value a person typed that the relay refused to store (it keeps the
+ * last valid file). Name such keys, and the ways out, instead of leaving the
+ * caller with an error about a key it did not touch. Any other error is
+ * returned unchanged.
+ */
+function explainInheritedKeys(
+  err: unknown,
+  current: Record<string, unknown>,
+  edit: NoteEdit,
+  validate: (frontmatter: Frontmatter) => void,
+  merged: Frontmatter,
+): unknown {
+  if (!(err instanceof OkfValidationError) || edit.frontmatterMode !== 'merge') return err
+  const inherited = Object.keys(current).filter(
+    (key) => key !== 'type' && Object.hasOwn(merged, key) && !(edit.frontmatter && Object.hasOwn(edit.frontmatter, key)),
+  )
+  const culprits = inherited.filter((key) => {
+    const without: Frontmatter = { ...merged }
+    delete without[key]
+    try {
+      validate(without)
+      return true
+    } catch {
+      return false
+    }
+  })
+  if (culprits.length === 0) return err
+  const keys = culprits.map((key) => `"${key}"`).join(', ')
+  return new OkfValidationError(
+    `${err.message} (frontmatter ${keys} is already on the note, not in this edit; send a valid value, list it in \`removeKeys\`, or pass \`replace: true\` with the whole map)`,
+  )
 }
