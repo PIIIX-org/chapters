@@ -9,7 +9,7 @@ import { atomicWrite } from '../notes/atomic-write.js'
 
 /**
  * A backup holds password and token hashes, TOTP secrets and every note:
- * readable by the server's user only, whatever the umask (#493).
+ * readable by the server's user only, whatever the umask (#409, #493).
  */
 const BACKUP_FILE_MODE = 0o600
 const BACKUP_DIR_MODE = 0o700
@@ -163,7 +163,8 @@ export async function executeBackup(options?: { actorUserId?: string }): Promise
   try {
     if (localPath && destinations.includes('local')) {
       await preparePrivateDir(localPath)
-      // Atomic: a crash mid-write leaves a temp file, never a truncated zip under a backup name.
+      // Atomic: a crash mid-write leaves a temp file, never a truncated zip under
+      // a backup name. The temp file is 0600 before the content goes in.
       await atomicWrite(join(localPath, filename), zip, { mode: BACKUP_FILE_MODE })
       const pruned = await pruneLocalBackups(localPath, config.backup.retentionCount)
       totalPruned += pruned

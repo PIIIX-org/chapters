@@ -668,14 +668,17 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   one `db/<table>.jsonl` per table in `BACKUP_TABLES`, read
   in one repeatable-read snapshot, rows as stored (TOTP secrets
   included, embeddings left out), plus `vaults/<id>/notes/<path>.md`,
-  `trash/<note id>.md` and `assets/<file>`. Not backed up: sessions,
+  `trash/<note id>.md` and `assets/<file>`. Files are read after the
+  snapshot: a note file that no longer matches its snapshot row (body,
+  frontmatter key by key) is left out, and the restore writes it from
+  the row. Not backed up: sessions,
   email tokens, export links, note links, semantic edges, embeddings,
   the repository file index, CRDT state (each rebuilt or reissued; the
-  table is in `docs/self-hosting/backup.md`). Local backups
-  (`BACKUP_LOCAL_PATH`) are written with `atomicWrite(..., { mode: 0o600 })`
+  table is in `docs/self-hosting/backup.md`). `executeBackup` writes
+  local backups (`BACKUP_LOCAL_PATH`) with `atomicWrite(..., { mode: 0o600 })`
   (temp file created and chmodded 600 before the content goes in, then
   renamed) in a directory made and chmodded 700, whatever the umask
-  (#493; a chmod the server can't do on an existing directory is a
+  (#409, #493; a chmod the server can't do on an existing directory is a
   warning, not a failed backup). The download is unchanged.
 - **Restore** (`server/src/export/restore.ts` +
   `server/src/scripts/restore-backup.ts`): **CLI only**
@@ -689,10 +692,17 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `BackupInvalidError`), plans (per-table and per-file counts, conflicts;
   `RestoreRefusedError`), then applies: rows in one transaction with
   `on conflict (primary key) do nothing`, files written atomically
-  inside it, `instance_restored` security event with the archive's
-  SHA-256. Runs on an empty instance or again on one restored from the
-  same archive (then only what is missing; a re-run after a complete
-  restore changes nothing); anything else is refused, no override flag.
+  inside it (the files it created are removed if the transaction
+  fails), `instance_restored` security event with the archive's
+  SHA-256, then `index.md` regeneration. Runs on an empty instance
+  only; anything else is refused, no override flag. On an instance
+  whose marker for this archive exists it writes nothing
+  (`plan.alreadyRestored`): rows and marker commit together, so there
+  is nothing to resume, and a re-insert would revive rows deleted since
+  (shares, purged notes, rotated MFA backup codes). It only regenerates
+  a missing generated `index.md` there. The CLI prints counts, and for
+  an unexpected error only the driver's message and code (a drizzle
+  error's message carries the query parameters).
   Ids are the archive's — a true restore, not an import. Rows are
   inserted as stored, not re-validated through the OKF write path.
   Restored MCP and sync tokens keep working (their hashes are
@@ -854,7 +864,7 @@ the count as `filesPendingExtraction`.
 - **Mermaid preview XSS defense**: Initialized with `securityLevel: 'strict'`, `htmlLabels: false`, and SVG sanitized with `DOMPurify.sanitize(..., { USE_PROFILES: { svg: true, svgFilters: true } })`.
 - **MFA setup protection**: `POST /api/mfa/setup` forbids re-setup when MFA is already enabled, requiring explicit verification before modifying second-factor state.
 - **Mass assignment guards**: Fastify schema validation (`additionalProperties: false`) and explicit field destructuring on vault and repository update routes.
-- **Secrets in backups**: the instance backup keeps password hashes, token hashes and TOTP secrets as stored (#409: stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The restore CLI prints counts only. Local backup files are mode 600 in a 700 directory (#493). The `backup.json` digests are integrity checks, not a signature: they catch damage and truncation, not someone who can rewrite the whole archive.
+- **Secrets in backups** (SEC-06, revised by #409): the instance backup keeps password hashes, token hashes and TOTP secrets as stored (stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The scheduled local backup file is written with mode `0600` (through a temp file of the same mode) in a `0700` directory, whatever the umask (#493). The restore CLI prints counts, and only a driver message and code on errors. The `backup.json` digests (#493) are integrity checks, not a signature: they catch damage and truncation, not someone who can rewrite the whole archive.
 - **OIDC host-header sanitization**: Validated against `APP_URL` and injection characters to protect authorization code callbacks.
 - **Admin role hierarchy**: Strict `ROLE_RANK` enforcement preventing self-promotion or subordinate demotion of superadmins and instance owners.
 - **Ingestion bounds**: Git clone ingestion capped to 1MB per file and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`).
@@ -1175,9 +1185,10 @@ needs something Drizzle can't express (see §8), commit both the schema
 change and the migration file together.
 
 **Restore a backup**: `pnpm -C server restore-backup [--dry-run] <path-to-zip>`
-against an **empty** instance, or again on one restored from the same
-archive — it refuses otherwise, by design (§5.9). There is no HTTP
-restore path and no override flag.
+against an **empty** instance only — it refuses otherwise, by design;
+a re-run on an instance already restored from the same archive writes
+nothing (§5.9). There is no HTTP restore path and no override flag.
+Restart the server afterwards so it computes the embeddings.
 
 **Check note files**: `pnpm -C server check-notes` (or
 `-- --vault <uuid>`) after a restore, a disk incident, or a deploy that

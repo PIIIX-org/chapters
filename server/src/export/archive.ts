@@ -1,10 +1,11 @@
 import AdmZip from 'adm-zip'
 import { readFile } from 'node:fs/promises'
+import { isDeepStrictEqual } from 'node:util'
 import { eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { teams, users, vaults, vaultShares } from '../db/schema.js'
 import { listAssets, listNotes, noteFile, readAsset, readNote, trashFile } from '../notes/store.js'
-import { serializeNote, type Frontmatter } from '../notes/okf.js'
+import { parseNote, serializeNote, type Frontmatter } from '../notes/okf.js'
 import {
   BACKUP_FORMAT,
   BACKUP_MANIFEST,
@@ -103,6 +104,27 @@ async function readIfPresent(file: string): Promise<Buffer | null> {
 }
 
 /**
+ * Whether a note file says what its snapshot row says. Files are read after
+ * the snapshot, so a save in between leaves a newer file; it is left out and
+ * the restore writes the file from the row, keeping the archive one point in
+ * time (#409). jsonb does not keep key order, so frontmatter is compared key
+ * by key (as check-notes does).
+ */
+function fileMatchesRow(data: Buffer, row: Row): boolean {
+  let parsed
+  try {
+    parsed = parseNote(data.toString('utf8'))
+  } catch {
+    return false
+  }
+  if (parsed.body !== row.body) return false
+  const rowFrontmatter: Record<string, unknown> =
+    typeof row.frontmatter === 'object' && row.frontmatter !== null ? { ...row.frontmatter } : {}
+  const keys = new Set([...Object.keys(parsed.frontmatter), ...Object.keys(rowFrontmatter)])
+  return [...keys].every((key) => isDeepStrictEqual(parsed.frontmatter[key], rowFrontmatter[key]))
+}
+
+/**
  * Full-instance admin backup (format `BACKUP_FORMAT`, see backup-format.ts):
  * every backed-up table as of one database snapshot, plus each note's file
  * (live and trashed, as on disk) and every attachment. `backup.json` lists
@@ -139,7 +161,7 @@ export async function buildInstanceBackup(): Promise<Buffer> {
     const noteId = String(note.id)
     const trashed = note.deletedAt != null
     const data = await readIfPresent(trashed ? trashFile(vaultId, noteId) : noteFile(vaultId, String(note.path)))
-    if (data) add(trashed ? trashEntry(vaultId, noteId) : noteEntry(vaultId, String(note.path)), data)
+    if (data && fileMatchesRow(data, note)) add(trashed ? trashEntry(vaultId, noteId) : noteEntry(vaultId, String(note.path)), data)
   }
   for (const vault of tables.get('vaults') ?? []) {
     const vaultId = String(vault.id)

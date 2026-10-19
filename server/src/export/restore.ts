@@ -1,6 +1,7 @@
 import AdmZip from 'adm-zip'
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { readFile, rm, stat } from 'node:fs/promises'
+import { join } from 'node:path'
 import { and, eq, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { instanceState, noteLinks, securityEvents, users } from '../db/schema.js'
@@ -12,6 +13,7 @@ import {
   regenProgressiveIndices,
   resolveNotePath,
   trashFile,
+  vaultDir,
 } from '../notes/store.js'
 import {
   OkfValidationError,
@@ -70,8 +72,13 @@ export interface RestorePlan {
   format: number
   /** SHA-256 of the archive; recorded on the instance by the restore. */
   archive: string
-  /** This instance was restored from this archive before: only what is missing is written. */
-  rerun: boolean
+  /**
+   * When this instance was restored from this archive (ISO time), else null.
+   * The rows and the marker commit together, so a restore that ran is
+   * complete: a re-run writes nothing (it would bring back what was deleted
+   * since, such as shares or rotated MFA backup codes).
+   */
+  alreadyRestored: string | null
   tables: TablePlan[]
   files: FilePlan[]
   /** Data the restore leaves out or can't bring back; it still runs. */
@@ -422,18 +429,24 @@ interface PreparedRestore {
 async function planRestore(contents: BackupContents): Promise<PreparedRestore> {
   const conflicts: string[] = []
   const warnings = [...contents.warnings]
-  const [userRow] = await db.select({ n: sql<number>`count(*)::int` }).from(users)
-  const marker = await db
-    .select({ id: securityEvents.id })
+  const [marker] = await db
+    .select({ createdAt: securityEvents.createdAt })
     .from(securityEvents)
     .where(and(eq(securityEvents.type, RESTORE_EVENT), sql`${securityEvents.detail}->>'archive' = ${contents.archive}`))
     .limit(1)
-  const rerun = marker.length > 0
+  if (marker) {
+    return {
+      plan: { format: contents.format, archive: contents.archive, alreadyRestored: marker.createdAt.toISOString(), tables: [], files: [], warnings: [], conflicts: [] },
+      inserts: new Map(),
+      writes: [],
+    }
+  }
+  const [userRow] = await db.select({ n: sql<number>`count(*)::int` }).from(users)
   const existingUsers = userRow?.n ?? 0
-  if (existingUsers > 0 && !rerun) {
+  if (existingUsers > 0) {
     conflicts.push(
       `this instance already has ${existingUsers} user(s) and was not restored from this archive. ` +
-        'Restore only runs on an empty instance, or again on one restored from this same archive',
+        'Restore only runs on an empty instance',
     )
   }
 
@@ -488,40 +501,63 @@ async function planRestore(contents: BackupContents): Promise<PreparedRestore> {
   if (differing > 0) warnings.push(`${differing} attachment(s) already on disk differ from the archive: kept as they are`)
 
   return {
-    plan: { format: contents.format, archive: contents.archive, rerun, tables, files, warnings, conflicts },
+    plan: { format: contents.format, archive: contents.archive, alreadyRestored: null, tables, files, warnings, conflicts },
     inserts,
     writes,
+  }
+}
+
+/** Regenerates the progressive-disclosure index.md files of the archive's live notes' directories (derived from the committed rows). */
+async function regenIndices(contents: BackupContents, onlyMissing: boolean): Promise<void> {
+  const dirsByVault = new Map<string, Set<string>>()
+  for (const note of contents.tables.get('notes')!) {
+    if (note.deletedAt != null) continue
+    const vaultId = String(note.vaultId)
+    const dirs = dirsByVault.get(vaultId) ?? new Set<string>()
+    for (const dir of resolveNotePath(String(note.path)).ancestorDirectories) dirs.add(dir)
+    dirsByVault.set(vaultId, dirs)
+  }
+  for (const [vaultId, dirs] of dirsByVault) {
+    let wanted = [...dirs]
+    if (onlyMissing) {
+      const missing = await Promise.all(wanted.map((dir) => stat(join(vaultDir(vaultId), dir, 'index.md')).then(() => false, () => true)))
+      wanted = wanted.filter((_, i) => missing[i])
+    }
+    await regenProgressiveIndices(vaultId, wanted)
   }
 }
 
 /**
  * Apply: every row in one transaction, idempotent by primary key. Files are
  * written (each atomically) inside it, so a file that can't be written rolls
- * the rows back; a re-run then writes them again.
+ * the rows back. If the transaction fails, the files it created are removed
+ * again; files it replaced keep the archive's version (they belonged to no
+ * row: the instance had no users).
  */
-async function applyRestore(contents: BackupContents, { plan, inserts, writes }: PreparedRestore): Promise<void> {
+async function applyRestore(contents: BackupContents, { inserts, writes }: PreparedRestore): Promise<void> {
   const newNotes = inserts.get('notes')!
-  await db.transaction(async (tx) => {
-    for (const spec of BACKUP_TABLES) {
-      const rows = inserts.get(spec.name)!.map((row) => (spec.onRestore ? spec.onRestore(row) : row))
-      if (rows.length === 0) continue
-      const columns = backupColumns(spec)
-      const target = primaryKeyOf(spec.table).map((k) => columns[k]!)
-      // Postgres takes at most 65535 bind parameters per statement.
-      const size = Math.max(1, Math.floor(30_000 / Object.keys(columns).length))
-      for (let i = 0; i < rows.length; i += size) {
-        await tx
-          .insert(spec.table)
-          .values(rows.slice(i, i + size))
-          .onConflictDoNothing({ target })
+  const created: string[] = []
+  try {
+    await db.transaction(async (tx) => {
+      for (const spec of BACKUP_TABLES) {
+        const rows = inserts.get(spec.name)!.map((row) => (spec.onRestore ? spec.onRestore(row) : row))
+        if (rows.length === 0) continue
+        const columns = backupColumns(spec)
+        const target = primaryKeyOf(spec.table).map((k) => columns[k]!)
+        // Postgres takes at most 65535 bind parameters per statement.
+        const size = Math.max(1, Math.floor(30_000 / Object.keys(columns).length))
+        for (let i = 0; i < rows.length; i += size) {
+          await tx
+            .insert(spec.table)
+            .values(rows.slice(i, i + size))
+            .onConflictDoNothing({ target })
+        }
       }
-    }
-    // Derived from the bodies, as on every save.
-    const links = newNotes.flatMap((n) => extractWikilinks(String(n.body)).map((targetPath) => ({ sourceNoteId: String(n.id), targetPath })))
-    for (let i = 0; i < links.length; i += 10_000) {
-      await tx.insert(noteLinks).values(links.slice(i, i + 10_000)).onConflictDoNothing()
-    }
-    if (!plan.rerun) {
+      // Derived from the bodies, as on every save.
+      const links = newNotes.flatMap((n) => extractWikilinks(String(n.body)).map((targetPath) => ({ sourceNoteId: String(n.id), targetPath })))
+      for (let i = 0; i < links.length; i += 10_000) {
+        await tx.insert(noteLinks).values(links.slice(i, i + 10_000)).onConflictDoNothing()
+      }
       // A restored instance needs no first-run setup; the setup token is never restored.
       if (contents.tables.get('users')!.length > 0) {
         const state = contents.instanceState
@@ -536,34 +572,36 @@ async function applyRestore(contents: BackupContents, { plan, inserts, writes }:
           .onConflictDoUpdate({ target: instanceState.id, set: values })
       }
       await tx.insert(securityEvents).values({ type: RESTORE_EVENT, detail: { archive: contents.archive, format: contents.format } })
-    }
-    for (const file of writes) await atomicWrite(fileTarget(file), file.data)
-  })
-
-  // Progressive-disclosure index.md files are derived: rebuilt from the committed rows.
-  const dirsByVault = new Map<string, string[]>()
-  for (const note of newNotes) {
-    if (note.deletedAt != null) continue
-    const dirs = dirsByVault.get(String(note.vaultId)) ?? []
-    dirs.push(...resolveNotePath(String(note.path)).ancestorDirectories)
-    dirsByVault.set(String(note.vaultId), dirs)
+      for (const file of writes) {
+        const target = fileTarget(file)
+        const existed = await stat(target).then(() => true, () => false)
+        await atomicWrite(target, file.data)
+        if (!existed) created.push(target)
+      }
+    })
+  } catch (err) {
+    await Promise.all(created.map((file) => rm(file, { force: true })))
+    throw err
   }
-  for (const [vaultId, dirs] of dirsByVault) await regenProgressiveIndices(vaultId, dirs)
+  await regenIndices(contents, false)
 }
 
 /**
  * Restores a full-instance backup: validate the archive (format, parts,
  * integrity) -> plan (counts per table and file kind, conflicts) -> apply.
  * Ids are the archive's: a restore, not an import. Runs on an empty
- * instance, or again on one restored from the same archive, where it writes
- * only what is missing (re-running a finished restore changes nothing).
- * Throws BackupInvalidError or RestoreRefusedError with nothing written.
- * Embeddings are not restored: the server computes them on boot.
+ * instance only. On an instance already restored from this archive it
+ * writes nothing (`alreadyRestored`), except index.md files a crash after
+ * the commit left missing. Throws BackupInvalidError or RestoreRefusedError
+ * with nothing written. Embeddings are not restored: the server computes
+ * them on boot.
  */
 export async function restoreBackup(buffer: Buffer, options: { dryRun?: boolean } = {}): Promise<RestorePlan> {
   const contents = readBackup(buffer)
   const prepared = await planRestore(contents)
   if (prepared.plan.conflicts.length > 0) throw new RestoreRefusedError(prepared.plan)
-  if (!options.dryRun) await applyRestore(contents, prepared)
+  if (options.dryRun) return prepared.plan
+  if (prepared.plan.alreadyRestored) await regenIndices(contents, true)
+  else await applyRestore(contents, prepared)
   return prepared.plan
 }

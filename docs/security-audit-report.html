@@ -1112,6 +1112,9 @@
             <p class="section-text">
               Encrypt <code>totp_secret</code> at rest in PostgreSQL using AES-256-GCM (matching repository credentials), or require instance backups to be encrypted with an administrator encryption key before persisting.
             </p>
+            <p class="section-text">
+              <strong>Status (#409):</strong> the first fix stripped <code>totpSecret</code> from the dump, which locked every MFA user out after a restore. Backups now keep the secrets as stored, so the archive is as sensitive as the database: the scheduled local backup file is written with mode <code>0600</code> whatever the umask (<code>server/src/export/backup-service.ts</code>). Manifest digests and a CI restore check follow in #493.
+            </p>
           </div>
         </div>
       </div>
