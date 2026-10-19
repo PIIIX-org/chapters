@@ -378,6 +378,28 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   revert always is) is written straight to the store and so repairs the
   file; a partial edit is refused with `NoteFileDamagedError` (409),
   since it would have to merge with content that cannot be read.
+- **Body size cap** (#491, `size-cap.ts`): one cap on every write path,
+  `ELARA_NOTE_MAX_BYTES` (`config.noteMaxBytes`, default 1 MiB =
+  1048576), measured as the **UTF-8 bytes of the body** (frontmatter is
+  not counted). `assertBodyFits` runs in `createNote` and `updateNote`
+  (REST, MCP, import, the relay's store) and in `writeThroughCollab`
+  before the live document is edited, so a refused write never reaches
+  editors. A write is refused (`NoteTooLargeError`, an
+  `OkfValidationError`) when the body is over the cap **and** larger than
+  the body it replaces, so a note stored before the cap can still shrink
+  and take frontmatter edits. REST answers 413 `{ error: "note body is N
+  bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)" }`, MCP
+  `create_note`/`edit_note` an `isError` result with the same text,
+  import lists the note in `skipped`. Restore of a full-instance backup
+  is exempt (`createNote(..., { enforceSizeCap: false })`): dropping a
+  backed-up note would lose it. The transport limit
+  (`noteTransportLimit()` = 4 × cap + 64 KiB, room for JSON escaping and
+  frontmatter) is the Fastify `bodyLimit` of the note create/update
+  routes and `/mcp`, and the relay's ws `maxPayload`. Before #491, REST
+  and MCP refused only at Fastify's default 1 MiB *request* limit (so a
+  body under 1 MiB with JSON escaping was refused), import took any size
+  and the relay stored up to ws's 100 MiB default (60 MiB froze the
+  server ~20 s in the lab).
 - Every mutation is attributed (`Actor {type: 'user'|'mcp'|'collab',
   id?}`), which is what makes `noteRevisions` a real audit trail across
   the UI, MCP, and live-collaboration write paths.
@@ -476,6 +498,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   debounces (default 2s) persistence back through the same OKF write
   path used everywhere else; a write that fails validation is logged
   and the last good file state is kept, never corrupted.
+- **Size cap on the relay** (#491, `collab-size.ts`): ws refuses a frame
+  over `noteTransportLimit()` before reading it (close 1009).
+  `beforeSync` refuses a sync-step-2 or update message whose Yjs update
+  would leave the body over `ELARA_NOTE_MAX_BYTES` (and larger than now)
+  *before* it is applied: Hocuspocus closes that document connection with
+  reason `note-too-large` (code 4413), so the relay never holds or stores
+  it. The check does not serialize the note per keystroke: each document
+  keeps the body's bytes at the last exact measure (load, each store)
+  plus the lengths of every update applied since, an upper bound because
+  an update carries its inserted text as UTF-8; only when bound + update
+  + Yjs's pending structs passes the cap does it measure exactly, and
+  only when still over does it apply the update to a scratch copy (work
+  bounded by the cap). Updates that insert no text always pass; a body
+  already over the cap takes deletions only. The collab ticket returns
+  `maxNoteBytes`; the editor (`useCollabDoc`) turns a `note-too-large`
+  or 1009 close into status `too-large`: it stops reconnecting, keeps
+  the text (on screen and in the browser's copy), shows how much to cut
+  (`TooLargeNotice`) and reconnects once the body fits.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
   Every share/team/deactivation mutation calls `emitPermissionChange()`;
   the collab server and the SSE viewer hub both subscribe and actively
@@ -1087,7 +1127,8 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     `${SETUP_TOKEN:-}`, which would always set it to the empty string.
   - Others: `DATABASE_URL`, `PORT`, `CLIENT_DIST`, `EMBEDDINGS`,
     `CORS_ORIGIN`, `LOCAL_REPOS_ROOT`, `ELARA_MONITORING_TOKEN` (Error
-    reports and metrics, above).
+    reports and metrics, above), `ELARA_NOTE_MAX_BYTES` (note body size
+    cap, §5.3; a reverse proxy must pass bodies up to 4 × it + 64 KiB).
 - **Migrations**: `drizzle-kit generate` produces SQL under
   `server/drizzle/`; a few migrations were hand-edited afterward for
   things Drizzle can't express directly (pgvector extension + HNSW

@@ -163,7 +163,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `path` (string, optional): full note path, for example `domains/storage/postgres`.
   - `type` (string, optional) and `name` (string, optional): used as `<type>/<name>` when `path` is omitted. You must give either `path` or both `type` and `name`.
   - `frontmatter` (object, optional): the YAML frontmatter as a JSON object. If `type` is omitted it is set to the first path segment; if given it must match. `timestamp` defaults to now.
-  - `body` (string, optional, default `""`): the markdown body, **without** a frontmatter block.
+  - `body` (string, optional, default `""`): the markdown body, **without** a frontmatter block. At most the server's note size limit, in UTF-8 bytes (`ELARA_NOTE_MAX_BYTES`, default 1048576 = 1 MiB); a larger body is refused with `isError: true` and `note body is N bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)`. Split such content across notes. The same limit applies to the editor, REST and import.
 - **Returns**: the created note row (`id`, `vaultId`, `type`, `name`, `path`, `frontmatter`, `body`, timestamps, ...).
 - There is no `content` argument. Passing one (or any other undeclared key) is refused with the parameter list, and no note is created.
 
@@ -174,7 +174,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `vaultId` (uuid, optional).
   - `path` (string, required).
   - `frontmatter` (object, optional): **replaces the whole frontmatter map**. Keys you leave out are deleted, so send every key you want to keep. `type` is always reset to the note's current type.
-  - `body` (string, optional): **replaces the whole body**.
+  - `body` (string, optional): **replaces the whole body**. Same size limit as `create_note`; a note already over it (stored before the limit) can be edited as long as the new body is no larger.
   - Omit a field to keep it as it is.
 - **Returns**: the updated note row.
 - The edit goes through the live collaboration document, so people with the note open see it change. Because the body is replaced, not merged, text a person is typing in the same note at that moment can be lost. To append, read the note, then send the full new body. Concurrent writes to one note run one at a time, but they are not merged: if two agents each read the note and write it back with a line appended, only the later write survives.

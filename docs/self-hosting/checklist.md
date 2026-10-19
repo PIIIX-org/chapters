@@ -97,3 +97,10 @@ A git repository stays current through its webhook (`POST /repositories/<id>/web
 - [ ] **`POLL_INTERVAL_MS`** (default `300000`, 5 min): how often the server checks git repositories. An unchanged remote costs one `git ls-remote`, not a clone.
 - [ ] **`WEBHOOK_STALE_THRESHOLD_MS`** (default `600000`, 10 min): a repository whose webhook delivered within this window is left to the webhook. Once no delivery has arrived for longer (the hook was deleted, disabled or cannot reach your host), or when the last sync failed, the repository is polled on every interval again. So a broken hook delays updates by at most the threshold plus one poll interval; keep the threshold at least twice the poll interval so a working hook is not polled needlessly.
 - [ ] **A quiet webhook is not an error**: a repository nobody pushes to gets no deliveries, so it falls back to polling after the threshold. `lastWebhookAt` (MCP `list_repositories`, REST repository list) shows when the last signed delivery arrived; `syncStatus`/`lastSyncError` show whether the last sync worked.
+
+---
+
+## 7. Note size limit
+
+- [ ] **`ELARA_NOTE_MAX_BYTES`** (default `1048576`, 1 MiB): the largest note body, in UTF-8 bytes, that any write path stores: the editor, REST, MCP and vault import. A change over it is refused (REST `413`, an MCP tool error naming the limit, the editor says the note is too large and keeps the text until it is shortened; import lists the note as skipped). A note already over the limit (stored before it, or under a larger one) can still be shortened. Restoring a full-instance backup keeps every note whatever its size. Any value that is not a positive whole number is ignored with a warning at start.
+- [ ] **Reverse proxy body size**: request bodies and live-edit frames that carry a note may be up to 4 × the limit + 64 KiB (JSON escaping and frontmatter ride along). nginx refuses request bodies over 1 MB by default, below a note at the default limit: set `client_max_body_size 5m;` (or 4 × your limit, rounded up).

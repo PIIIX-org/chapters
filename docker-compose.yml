@@ -97,6 +97,8 @@ services:
       # latency; read by the uptime monitor). `openssl rand -hex 32`.
       # Unset = only an admin session reads it. docs/self-hosting/monitoring.md
       - ELARA_MONITORING_TOKEN
+      # Largest note body in UTF-8 bytes (default 1 MiB), on every write path.
+      - ELARA_NOTE_MAX_BYTES
     volumes:
       # THE NOTES LIVE HERE. Vault content is markdown FILES ON DISK
       # (plus local-path repository clones), not rows in Postgres — a
