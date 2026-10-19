@@ -251,18 +251,8 @@
     },
     {
       "test": "concurrency",
-      "check": "append-same N=10: attribution",
-      "issue": 403
-    },
-    {
-      "test": "concurrency",
       "check": "append-same N=10: lost updates",
       "issue": 478
-    },
-    {
-      "test": "concurrency",
-      "check": "append-same N=20: attribution",
-      "issue": 403
     },
     {
       "test": "concurrency",
@@ -271,43 +261,8 @@
     },
     {
       "test": "concurrency",
-      "check": "append-same N=5: attribution",
-      "issue": 403
-    },
-    {
-      "test": "concurrency",
       "check": "append-same N=5: lost updates",
       "issue": 478
-    },
-    {
-      "test": "concurrency",
-      "check": "replace-different N=10: attribution",
-      "issue": 403
-    },
-    {
-      "test": "concurrency",
-      "check": "replace-different N=20: attribution",
-      "issue": 403
-    },
-    {
-      "test": "concurrency",
-      "check": "replace-different N=5: attribution",
-      "issue": 403
-    },
-    {
-      "test": "concurrency",
-      "check": "replace-same N=10: attribution",
-      "issue": 403
-    },
-    {
-      "test": "concurrency",
-      "check": "replace-same N=20: attribution",
-      "issue": 403
-    },
-    {
-      "test": "concurrency",
-      "check": "replace-same N=5: attribution",
-      "issue": 403
     },
     {
       "test": "crash-write",
@@ -343,11 +298,6 @@
       "match": "^kill \\S+: no orphan \\.tmp files in the vault$",
       "issue": 489,
       "intermittent": "a temp file is orphaned only when a SIGKILL lands between its write and its rename"
-    },
-    {
-      "test": "crash-write",
-      "check": "control: edit_note revisions are attributed to the MCP connection",
-      "issue": 403
     },
     {
       "test": "export-roundtrip",
@@ -423,11 +373,6 @@
       "test": "export-roundtrip",
       "check": "trash travels with the export",
       "issue": 499
-    },
-    {
-      "test": "fix-attribution",
-      "check": "sequential edit_note credited to the MCP connection",
-      "issue": 403
     },
     {
       "test": "multilingual-search",
