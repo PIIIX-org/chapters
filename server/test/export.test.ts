@@ -197,7 +197,7 @@ describe('export', () => {
   // The work is real, not a hang: give it room rather than chasing a flake.
   const BACKUP_TIMEOUT_MS = 30_000
 
-  it('admin backup bundles vaults + account dump; non-admins rejected', async () => {
+  it('admin backup bundles vaults + every table; non-admins rejected', async () => {
     const denied = await app.inject({
       method: 'GET',
       url: '/api/admin/backup',
@@ -215,14 +215,14 @@ describe('export', () => {
     expect(res.statusCode).toBe(200)
     const zip = new AdmZip(res.rawPayload)
     const names = zip.getEntries().map((e) => e.entryName)
-    expect(names).toContain('account-dump.json')
-    expect(names.some((n) => n.startsWith(`vaults/${vaultId}/`))).toBe(true)
-    const dump = JSON.parse(zip.getEntry('account-dump.json')!.getData().toString('utf8')) as {
-      users: Array<{ email: string; totpSecret?: string | null }>
-      vaultShares: unknown[]
-    }
-    expect(dump.users.length).toBeGreaterThan(0)
-    expect(dump.users.every((u) => u.totpSecret === null)).toBe(true)
+    expect(names).toEqual(expect.arrayContaining(['backup.json', 'db/users.jsonl', 'db/notes.jsonl', 'db/note_revisions.jsonl']))
+    expect(names.some((n) => n.startsWith(`vaults/${vaultId}/notes/`))).toBe(true)
+    const manifest: unknown = JSON.parse(zip.getEntry('backup.json')!.getData().toString('utf8'))
+    expect(manifest).toMatchObject({ format: 2 })
+    const userRows = zip.getEntry('db/users.jsonl')!.getData().toString('utf8').trim().split('\n')
+    expect(userRows.length).toBeGreaterThan(0)
+    // MFA secrets are kept as stored (#409): without them a restore locks MFA users out.
+    expect(userRows.every((line) => 'totpSecret' in JSON.parse(line))).toBe(true)
   }, BACKUP_TIMEOUT_MS)
 
   // createNote writes the row before the file, so a crash in between leaves a
@@ -255,11 +255,12 @@ describe('export', () => {
       headers: { cookie: adminCookie },
     })
     expect(res.statusCode).toBe(200)
-    const entry = new AdmZip(res.rawPayload).getEntry(
-      `vaults/${orphanVault}/people/orphan.md`,
-    )
-    expect(entry).not.toBeNull()
-    expect(entry!.getData().toString('utf8')).toContain('Row outlived the file.')
+    // The row (with its body) is in the archive; a restore writes the file from it.
+    const zip = new AdmZip(res.rawPayload)
+    expect(zip.getEntry(`vaults/${orphanVault}/notes/people/orphan.md`)).toBeNull()
+    const rows = zip.getEntry('db/notes.jsonl')!.getData().toString('utf8').trim().split('\n')
+    const orphan: unknown = rows.map((line) => JSON.parse(line)).find((r) => r.vaultId === orphanVault)
+    expect(orphan).toMatchObject({ path: 'people/orphan', body: 'Row outlived the file.' })
     // Give the note its file back for the CI vault-invariant gate (#578).
     await rewriteNoteFileFromRow(orphanVault, 'people/orphan')
   }, BACKUP_TIMEOUT_MS)

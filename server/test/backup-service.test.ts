@@ -1,4 +1,4 @@
-import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -196,11 +196,13 @@ describe('executeBackup & backup routes', () => {
 
     const files = await readdir(testBackupDir)
     expect(files).toContain(result.filename)
+    // It holds password and token hashes and TOTP secrets: owner-only (#409).
+    expect((await stat(join(testBackupDir, result.filename))).mode & 0o777).toBe(0o600)
 
-    // Verify it is a valid zip containing account dump
+    // Verify it is a valid instance backup zip
     const zip = new AdmZip(join(testBackupDir, result.filename))
     const entryNames = zip.getEntries().map((e) => e.entryName)
-    expect(entryNames).toContain('account-dump.json')
+    expect(entryNames).toEqual(expect.arrayContaining(['backup.json', 'db/users.jsonl']))
 
     const status = getBackupStatus()
     expect(status.configured).toBe(true)
