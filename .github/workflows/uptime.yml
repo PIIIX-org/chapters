@@ -17,6 +17,22 @@ name: Production uptime
 #     notifies whoever last edited the cron line)
 # A `/health` without `bootId` (an image older than #583) never alerts.
 #
+# Errors, failed jobs and slow endpoints (#705): with the repository secret
+# ELARA_MONITORING_TOKEN set (the same value as the production server's
+# ELARA_MONITORING_TOKEN), the script also reads the authenticated
+# `/api/admin/monitoring` while `/health` is up and comments on the same
+# issue for:
+#   - errors: new 5xx responses since the last check (>= repository
+#     variable ALERT_ERROR_THRESHOLD, default 1)
+#   - jobs: any new failed background job (embedding, extraction, sync,
+#     collab-store, backup)
+#   - slow: a route newly at p95 >= ALERT_SLOW_MS (default 2000) over
+#     >= ALERT_SLOW_MIN_COUNT (default 5) requests in 15 minutes
+#   - metrics-unavailable: the endpoint refuses while /health is up
+# Secret unset: these are skipped and the run still passes. The token is
+# only sent to production, never to a dispatched `url`. Optional secret
+# ALERT_WEBHOOK_URL: every comment is also POSTed there as JSON.
+#
 # Scheduled runs use the default branch's copy (`dev`). By hand:
 #   gh workflow run uptime.yml -R PIIIX-org/chapters                       # production
 #   gh workflow run uptime.yml -R PIIIX-org/chapters -f dry_run=true       # posts and saves nothing
@@ -67,6 +83,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           URL: ${{ inputs.url || 'https://chapters.piiix.org' }}
           DRY_RUN: ${{ inputs.dry_run == true }}
+          # Production only: a dispatch with another url must not receive it.
+          ELARA_MONITORING_TOKEN: ${{ (inputs.url || 'https://chapters.piiix.org') == 'https://chapters.piiix.org' && secrets.ELARA_MONITORING_TOKEN || '' }}
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          ALERT_ERROR_THRESHOLD: ${{ vars.ALERT_ERROR_THRESHOLD }}
+          ALERT_SLOW_MS: ${{ vars.ALERT_SLOW_MS }}
+          ALERT_SLOW_MIN_COUNT: ${{ vars.ALERT_SLOW_MIN_COUNT }}
         run: |
           set -euo pipefail
           args=(--url "$URL")
