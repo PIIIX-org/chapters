@@ -12,9 +12,9 @@ import type { CollabSession } from './useCollabDoc.js'
  * #720 across browser tabs. Each tab is its own module instance of the hook
  * and of everything it imports (`vi.resetModules`), so tabs share only what
  * tabs share in a browser: IndexedDB (fake-indexeddb), Web Locks (Node's,
- * since happy-dom has none) and BroadcastChannel. The tests use the hook alone: copies in the store are made
- * by tabs typing and closing, and what a store holds is read back by opening
- * the note in a new tab.
+ * since happy-dom has none) and BroadcastChannel. The tests use the hook
+ * alone: copies in the store are made by tabs typing and closing, and what a
+ * store holds is read back by opening the note in a new tab.
  *
  * The relay is a real `Y.Doc`; the provider is stubbed as in
  * `useCollabDoc.test.tsx`, and syncing is the Yjs state exchange done by hand.
@@ -179,7 +179,9 @@ describe('useCollabDoc copies across tabs (#720)', () => {
     goOffline(B)
     type(B, 10, 'B-offline ')
     // Tab R is busy (a throttled background tab): whatever other tabs tell it
-    // arrives late. It opens while the relay is unreachable.
+    // arrives late, so B stores its typing before R hears of the discard (the
+    // order that put the note in twice on 51a807e; tabs no longer message each
+    // other, the delay pins that order). R opens while the relay is unreachable.
     const Real = globalThis.BroadcastChannel
     class Slow extends Real {
       override set onmessage(handler: ((event: MessageEvent) => void) | null) {

@@ -1,282 +1,346 @@
 import * as Y from 'yjs'
-import { IndexeddbPersistence, storeState } from 'y-indexeddb'
+import { collabStashSupported, rememberCollabStash } from './collabStashNames.js'
 
 /**
- * This browser's copy of collab edits the relay has not acknowledged yet
- * (#720). Without it the note's `Y.Doc` lives only in the tab, and a reload or
- * a closed tab while the socket is down throws the typing away.
+ * This browser's copies of collab documents with edits the relay has not
+ * acknowledged yet (#720). Without them the note's `Y.Doc` lives only in the
+ * tab, and a reload or a closed tab while the socket is down throws the
+ * typing away. Database names and logout: `collabStashNames.ts`.
  *
- * One IndexedDB database per user + note (`<prefix>/<userId>/<vaultId>/<path>`):
- * the user id keeps one account's text out of another's session on a shared
- * browser, and logout deletes every database of that user
- * ({@link clearCollabStashes}). Their names are also kept in localStorage.
+ * Every record belongs to one **copy**: one `Y.Doc` in one tab (a tab's live
+ * document, or a copy it restored). A copy is written by that doc alone, as a
+ * whole-state record followed by its updates, and nothing is ever read back
+ * into a doc that is being kept. So each copy is one document's history, never
+ * a mixture: two unrelated documents (the note before and after it was
+ * re-created on the server) can sit in the same database without one leaking
+ * into the other, and a later session checks each copy on its own before
+ * merging it.
  *
- * A store holds a full document state (y-indexeddb writes the whole doc when it
- * opens, then every update), so it can be shown on its own after a reload with
- * the relay unreachable. It is only kept while something local is unsent: once
- * the relay has acknowledged everything, {@link releaseCollabStash} empties it.
- * Emptying is a `clear()` of the store, never `deleteDatabase`, which would
- * close the database under another tab that still writes to it.
+ * A copy is only kept while something in it is unsent. Once the relay has
+ * acknowledged everything, its tab deletes that copy's records and nobody
+ * else's. While its tab is open, the copy holds a Web Lock, so other tabs leave
+ * it alone; when the tab closes or crashes the lock goes with it, and the next
+ * tab to open the note claims the copy ({@link claimLeftoverCopies}).
  */
-const PREFIX = 'elara-collab-stash'
+const STORE = 'updates'
+const BY_COPY = 'copy'
+/** A copy with this many records is rewritten as one. */
+const COMPACT_AT = 500
 
-export function collabStashName(userId: string, docName: string): string {
-  return `${PREFIX}/${userId}/${docName}`
+interface Row {
+  copy: string
+  update: Uint8Array
 }
 
-function supported(): boolean {
-  return typeof indexedDB !== 'undefined'
-}
-
-/**
- * y-indexeddb with two lifecycle changes:
- *
- * - Its write runs inside the doc's `update` event, so a write that throws
- *   (the database was closed under it: logout in another tab deletes it, and
- *   lib0 closes on `versionchange`) would throw out of the user's keystroke.
- *   The local copy stopping is recoverable; a keystroke that fails is not.
- * - It destroys itself when the doc is destroyed, which on unmount can be
- *   before its first write landed. The handle below closes it instead, after
- *   that write.
- */
-class Persistence extends IndexeddbPersistence {
-  constructor(name: string, doc: Y.Doc) {
-    super(name, doc)
-    doc.off('destroy', this.destroy)
-    doc.off('update', this._storeUpdate)
-    const store = this._storeUpdate
-    this._storeUpdate = (update, origin) => {
-      try {
-        store(update, origin)
-      } catch {
-        // The database is gone; the document keeps working.
-      }
-    }
-    doc.on('update', this._storeUpdate)
-  }
-}
-
-/**
- * Every open, clear and delete of one database runs in call order. A clear
- * that lands after a reopen's first write would wipe a copy that was just
- * made; serialising them makes the reopen write the whole document after it.
- */
-const queues = new Map<string, Promise<unknown>>()
-function serial<T>(name: string, task: () => Promise<T>): Promise<T> {
-  const run = (queues.get(name) ?? Promise.resolve()).then(task, task)
-  const tail = run.catch(() => undefined)
-  queues.set(name, tail)
-  void tail.then(() => {
-    if (queues.get(name) === tail) queues.delete(name)
-  })
-  return run
-}
-
-export interface CollabStash {
-  readonly name: string
+export interface CollabCopy {
   readonly doc: Y.Doc
-  /** Resolves once the stored updates are in `doc` and `doc` is stored. */
-  readonly loaded: Promise<void>
+  /** Resolves once everything in `doc` so far is stored. */
+  flushed(): Promise<void>
+  /** Stops writing and keeps what is stored: something in it is still unsent. */
+  close(): Promise<void>
+  /** Stops writing and deletes the copy: it was sent, merged or discarded. */
+  release(): Promise<void>
 }
 
-class Handle implements CollabStash {
-  persistence: Persistence | null = null
-  closed = false
-  /** Set while the copy is held for the "not merged" notice: see {@link holdCollabStash}. */
-  onDiscarded: (() => void) | null = null
-  readonly loaded: Promise<void>
+function done(tx: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'))
+    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'))
+  })
+}
+
+function openDatabase(name: string, onGone: () => void): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(name, 1)
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(STORE, { autoIncrement: true }).createIndex(BY_COPY, 'copy')
+    }
+    request.onsuccess = () => {
+      const db = request.result
+      // Logout deletes the database: let it, and stop writing.
+      db.onversionchange = () => {
+        db.close()
+        onGone()
+      }
+      resolve(db)
+    }
+    request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'))
+  })
+}
+
+/** Locks held by this tab, for engines without Web Locks (plain-http origins). */
+const heldHere = new Set<string>()
+
+/**
+ * Takes the lock on a copy if nobody holds it, for as long as this tab keeps
+ * the copy. Without Web Locks only this tab's own copies count as taken.
+ */
+function claim(lock: string): Promise<(() => void) | null> {
+  if (heldHere.has(lock)) return Promise.resolve(null)
+  const taken = () => {
+    heldHere.add(lock)
+    return () => {
+      heldHere.delete(lock)
+    }
+  }
+  const locks = typeof navigator === 'undefined' ? undefined : navigator.locks
+  if (!locks) return Promise.resolve(taken())
+  return new Promise((resolve) => {
+    locks
+      .request(lock, { ifAvailable: true }, (granted) => {
+        if (!granted) {
+          resolve(null)
+          return undefined
+        }
+        const free = taken()
+        // Held until the returned promise settles.
+        return new Promise<void>((release) => {
+          resolve(() => {
+            free()
+            release()
+          })
+        })
+      })
+      .catch(() => resolve(taken()))
+  })
+}
+
+function newCopyId(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+class Copy implements CollabCopy {
+  private db: IDBDatabase | null = null
+  /** The database was deleted under this copy (logout): it stops writing. */
+  private gone = false
+  private stopped = false
+  private queue: Promise<void> = Promise.resolve()
+  private pending: Uint8Array[] = []
+  private scheduled = false
+  /** This copy's records, oldest first; `base` is its latest whole-state record. */
+  private keys: IDBValidKey[]
+  private base: IDBValidKey | null
 
   constructor(
-    readonly name: string,
+    private readonly name: string,
     readonly doc: Y.Doc,
+    private readonly id: string,
+    private unlock: (() => void) | null,
+    loaded: IDBValidKey[],
   ) {
-    live.add(this)
-    remember(name)
-    // Opens even if closed before its turn came: closing right after a
-    // keystroke (unmount) must still write that keystroke down first.
-    this.loaded = serial(name, async () => {
-      const persistence = new Persistence(name, doc)
-      this.persistence = persistence
-      await persistence._db
-      await persistence.whenSynced
+    this.keys = loaded
+    this.base = loaded[0] ?? null
+    doc.on('update', this.onUpdate)
+    if (this.base === null) this.schedule()
+  }
+
+  private readonly onUpdate = (update: Uint8Array) => {
+    if (this.stopped) return
+    this.pending.push(update)
+    this.schedule()
+  }
+
+  private run(task: () => Promise<void>): Promise<void> {
+    // A failed write leaves the text in the document; the copy stops short of it.
+    this.queue = this.queue.then(task).catch(() => undefined)
+    return this.queue
+  }
+
+  private schedule(): void {
+    if (this.scheduled) return
+    this.scheduled = true
+    void this.run(() => {
+      this.scheduled = false
+      return this.write()
     })
+  }
+
+  private async connect(): Promise<IDBDatabase | null> {
+    if (this.gone) return null
+    if (this.db) return this.db
+    // Held before the first record lands, so no other tab takes this copy
+    // for a left-over one.
+    this.unlock ??= await claim(`${this.name}#${this.id}`)
+    this.db = await openDatabase(this.name, () => {
+      this.gone = true
+      this.db = null
+    })
+    void rememberCollabStash(this.name)
+    return this.db
   }
 
   /**
-   * Another copy emptied the store. An unsent copy writes its whole document
-   * back. A copy held for the notice never does: it shares no history with the
-   * note, and back in the store it would reach a live document and put the
-   * note in twice. A discard ends the notice everywhere.
+   * Appends what changed since the last write. Writes the whole document
+   * instead (and drops this copy's older records) the first time, every
+   * {@link COMPACT_AT} records, and when this copy's whole-state record is gone:
+   * without Web Locks another tab can take a copy that is still open, merge it
+   * and delete it, and what follows must not be updates on a missing base.
    */
-  emptied(discarded: boolean): void {
-    if (this.onDiscarded) {
-      if (discarded) this.onDiscarded()
-      return
+  private async write(): Promise<void> {
+    const updates = this.pending
+    this.pending = []
+    const db = await this.connect()
+    if (!db) return
+    const tx = db.transaction(STORE, 'readwrite')
+    const store = tx.objectStore(STORE)
+    const added: IDBValidKey[] = []
+    let whole: IDBValidKey | null = null
+    const add = (update: Uint8Array, isWhole: boolean) => {
+      const request = store.add({ copy: this.id, update } satisfies Row)
+      request.onsuccess = () => {
+        if (isWhole) whole = request.result
+        else added.push(request.result)
+      }
     }
-    void serial(this.name, async () => {
-      if (!this.closed && this.persistence?.db) await storeState(this.persistence, true)
+    const writeWhole = () => {
+      add(Y.encodeStateAsUpdate(this.doc), true)
+      for (const key of this.keys) store.delete(key)
+    }
+    if (this.base === null || this.keys.length >= COMPACT_AT) writeWhole()
+    else {
+      const check = store.count(this.base)
+      check.onsuccess = () => {
+        if (check.result === 0) writeWhole()
+        else if (updates.length > 0) add(Y.mergeUpdates(updates), false)
+      }
+    }
+    try {
+      await done(tx)
+    } catch (error) {
+      // Not knowing what landed, the next write stores the whole document.
+      this.base = null
+      throw error
+    }
+    if (whole !== null) {
+      this.base = whole
+      this.keys = [whole]
+    } else this.keys.push(...added)
+  }
+
+  private stop(): void {
+    this.stopped = true
+    this.doc.off('update', this.onUpdate)
+  }
+
+  private finish(): void {
+    this.db?.close()
+    this.db = null
+    this.unlock?.()
+    this.unlock = null
+  }
+
+  flushed(): Promise<void> {
+    return this.queue
+  }
+
+  close(): Promise<void> {
+    if (this.stopped) return this.queue
+    this.stop()
+    return this.run(async () => {
+      try {
+        if (!this.gone) await this.write()
+      } finally {
+        this.finish()
+      }
+    })
+  }
+
+  release(): Promise<void> {
+    if (this.stopped) return this.queue
+    this.stop()
+    return this.run(async () => {
+      try {
+        const db = this.keys.length > 0 ? await this.connect() : null
+        if (!db) return
+        const tx = db.transaction(STORE, 'readwrite')
+        for (const key of this.keys) tx.objectStore(STORE).delete(key)
+        await done(tx)
+      } finally {
+        this.finish()
+      }
     })
   }
 }
 
-const live = new Set<Handle>()
-
-interface Emptied {
-  name: string
-  discarded: boolean
+/** Starts keeping `doc` in this browser as a new copy: its whole state, then every update. */
+export function keepCollabCopy(name: string, doc: Y.Doc): CollabCopy | null {
+  if (!collabStashSupported()) return null
+  return new Copy(name, doc, newCopyId(), null, [])
 }
 
-function emptied({ name, discarded }: Emptied): void {
-  for (const handle of [...live]) if (handle.name === name) handle.emptied(discarded)
-}
-
-const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(PREFIX)
-if (channel) {
-  channel.onmessage = (event: MessageEvent<unknown>) => {
-    const data = event.data as Partial<Emptied> | null
-    if (typeof data?.name === 'string') emptied({ name: data.name, discarded: data.discarded === true })
-  }
-}
-
-/**
- * The names of the stores this browser has opened, in localStorage: logout
- * and {@link hasCollabStash} need them, and `indexedDB.databases()` is missing
- * on older engines (Firefox before 126). Best effort: storage may be refused.
- */
-const INDEX_KEY = `${PREFIX}/index`
-
-function readIndex(): string[] | null {
+async function readRows(name: string): Promise<Array<{ key: IDBValidKey; row: Row }>> {
+  const db = await openDatabase(name, () => undefined)
   try {
-    const raw = localStorage.getItem(INDEX_KEY)
-    const names: unknown = raw === null ? [] : JSON.parse(raw)
-    return Array.isArray(names) ? names.filter((n): n is string => typeof n === 'string') : []
-  } catch {
-    return null
+    const rows: Array<{ key: IDBValidKey; row: Row }> = []
+    const tx = db.transaction(STORE, 'readonly')
+    const cursor = tx.objectStore(STORE).openCursor()
+    cursor.onsuccess = () => {
+      const at = cursor.result
+      if (!at) return
+      const value: unknown = at.value
+      // Records this module wrote; anything else in the store is skipped.
+      if (
+        value !== null &&
+        typeof value === 'object' &&
+        'copy' in value &&
+        typeof value.copy === 'string' &&
+        'update' in value &&
+        value.update instanceof Uint8Array
+      ) {
+        rows.push({ key: at.primaryKey, row: { copy: value.copy, update: value.update } })
+      }
+      at.continue()
+    }
+    await done(tx)
+    return rows
+  } finally {
+    db.close()
   }
 }
 
-function writeIndex(names: string[]): void {
+/**
+ * Copies of `name` left by tabs that are gone (reloaded, closed, crashed),
+ * now this tab's: each one is a doc of its own, the most recently written
+ * first, and keeps being stored as it changes. Copies whose tab is still open
+ * stay with that tab, which sends them itself.
+ */
+export async function claimLeftoverCopies(name: string): Promise<CollabCopy[]> {
+  if (!collabStashSupported()) return []
+  const ids = new Set((await readRows(name)).map(({ row }) => row.copy))
+  const claimed = new Map<string, () => void>()
+  for (const id of ids) {
+    const unlock = await claim(`${name}#${id}`)
+    if (unlock) claimed.set(id, unlock)
+  }
+  if (claimed.size === 0) return []
   try {
-    localStorage.setItem(INDEX_KEY, JSON.stringify(names))
-  } catch {
-    // Storage refused: the databases are still there, only harder to find.
+    // Read again under the locks: what a closing tab wrote last is in now.
+    const groups = new Map<string, { keys: IDBValidKey[]; updates: Uint8Array[] }>()
+    for (const { key, row } of await readRows(name)) {
+      if (!claimed.has(row.copy)) continue
+      const group = groups.get(row.copy) ?? { keys: [], updates: [] }
+      group.keys.push(key)
+      group.updates.push(row.update)
+      groups.set(row.copy, group)
+    }
+    const copies: Array<{ copy: CollabCopy; last: IDBValidKey }> = []
+    for (const [id, unlock] of claimed) {
+      const group = groups.get(id)
+      const doc = new Y.Doc()
+      if (group) Y.transact(doc, () => group.updates.forEach((update) => Y.applyUpdate(doc, update)))
+      const copy = new Copy(name, doc, id, unlock, group?.keys ?? [])
+      if (doc.store.clients.size === 0) {
+        // Nothing in it: not worth a restore.
+        void copy.release().then(() => doc.destroy())
+        continue
+      }
+      copies.push({ copy, last: group?.keys.at(-1) ?? 0 })
+    }
+    // Most recently written first: record keys only grow.
+    return copies.sort((a, b) => indexedDB.cmp(b.last, a.last)).map(({ copy }) => copy)
+  } catch (error) {
+    for (const unlock of claimed.values()) unlock()
+    throw error
   }
-}
-
-function remember(name: string): void {
-  const names = readIndex()
-  if (names && !names.includes(name)) writeIndex([...names, name])
-}
-
-function forget(names: string[]): void {
-  const index = readIndex()
-  if (index) writeIndex(index.filter((n) => !names.includes(n)))
-}
-
-/**
- * Starts keeping `doc` in this browser: loads what is stored into it (now and
- * whenever the store is compacted or rewritten), then stores every update.
- * Never open it on a document the relay syncs: what is stored can come from
- * another history, and loaded unchecked it goes to the relay (see
- * `useCollabDoc`, which opens it on a separate doc and merges only after a
- * history check).
- */
-export function openCollabStash(name: string, doc: Y.Doc): CollabStash | null {
-  if (!supported()) return null
-  return new Handle(name, doc)
-}
-
-/** True if a database for `name` may exist. Avoids creating one per note opened. */
-export async function hasCollabStash(name: string): Promise<boolean> {
-  if (!supported()) return false
-  if (typeof indexedDB.databases !== 'function') return readIndex()?.includes(name) ?? true
-  try {
-    return (await indexedDB.databases()).some((db) => db.name === name)
-  } catch {
-    return true
-  }
-}
-
-/**
- * Holds a copy for the "not merged" notice: it is never written back into the
- * store, and `onDiscarded` runs when the person discards it in another tab.
- */
-export function holdCollabStash(stash: CollabStash, onDiscarded: () => void): void {
-  ;(stash as Handle).onDiscarded = onDiscarded
-}
-
-/** Stops writing and keeps what is stored: something in it is still unsent. */
-export function closeCollabStash(stash: CollabStash): Promise<void> {
-  const handle = stash as Handle
-  if (handle.closed) return Promise.resolve()
-  handle.closed = true
-  live.delete(handle)
-  return serial(handle.name, async () => {
-    await handle.persistence?.destroy()
-  })
-}
-
-function empty(stash: CollabStash, discarded: boolean): Promise<void> {
-  const handle = stash as Handle
-  if (handle.closed) return Promise.resolve()
-  handle.closed = true
-  live.delete(handle)
-  return serial(handle.name, async () => {
-    const persistence = handle.persistence
-    if (!persistence?.db) return
-    await new Promise<void>((resolve, reject) => {
-      const tx = persistence.db!.transaction('updates', 'readwrite')
-      tx.objectStore('updates').clear()
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error ?? new Error('IndexedDB clear failed'))
-      tx.onabort = () => reject(tx.error ?? new Error('IndexedDB clear aborted'))
-    })
-    await persistence.destroy()
-    const message: Emptied = { name: handle.name, discarded }
-    emptied(message)
-    channel?.postMessage(message)
-  })
-}
-
-/**
- * The relay has acknowledged everything: empty the store and stop writing.
- * Any other unsent copy of the same note still open (another tab) writes its
- * whole document back, so emptying never drops text that tab has not sent.
- */
-export function releaseCollabStash(stash: CollabStash): Promise<void> {
-  return empty(stash, false)
-}
-
-/** The person discarded the copy behind the notice: empty the store, end the notice in every tab. */
-export function discardCollabStash(stash: CollabStash): Promise<void> {
-  return empty(stash, true)
-}
-
-function deleteDatabase(name: string): Promise<void> {
-  return new Promise((resolve) => {
-    const request = indexedDB.deleteDatabase(name)
-    request.onsuccess = () => resolve()
-    request.onerror = () => resolve()
-    // Another tab holds it open; it closes on `versionchange` and the delete
-    // then completes on its own. Waiting here would stall this queue.
-    request.onblocked = () => resolve()
-  })
-}
-
-/**
- * Logout: nothing one user typed may be restored into anyone else's session
- * on this browser. Deletes every database of `userId` that
- * `indexedDB.databases()` or the localStorage index knows about.
- */
-export async function clearCollabStashes(userId: string): Promise<void> {
-  if (!supported()) return
-  const prefix = collabStashName(userId, '')
-  await Promise.all([...live].filter((h) => h.name.startsWith(prefix)).map((h) => closeCollabStash(h)))
-  const found = new Set(readIndex() ?? [])
-  if (typeof indexedDB.databases === 'function') {
-    for (const db of await indexedDB.databases().catch(() => [])) if (db.name) found.add(db.name)
-  }
-  const names = [...found].filter((name) => name.startsWith(prefix))
-  await Promise.all(names.map((name) => serial(name, () => deleteDatabase(name))))
-  forget(names)
 }

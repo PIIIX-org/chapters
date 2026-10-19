@@ -5,13 +5,8 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import * as Y from 'yjs'
 import { getCollabTicket } from '../api/collab.js'
 import type * as CollabApi from '../api/collab.js'
-import {
-  clearCollabStashes,
-  closeCollabStash,
-  collabStashName,
-  hasCollabStash,
-  openCollabStash,
-} from '../lib/collabStash.js'
+import { claimLeftoverCopies, keepCollabCopy } from '../lib/collabStash.js'
+import { clearCollabStashes, collabStashName, hasCollabStash } from '../lib/collabStashNames.js'
 import { useCollabDoc } from './useCollabDoc.js'
 
 /**
@@ -97,36 +92,43 @@ function push(provider: StubProvider, relay: Y.Doc) {
 }
 
 /**
- * What is stored for `name`, read straight from IndexedDB: a handle of the
- * module's own would count as one more open copy and be rewritten.
+ * The text of every copy stored for `name`, sorted, read straight from
+ * IndexedDB: claiming them through the module would make them this tab's.
  */
-async function readStore(name: string): Promise<{ text: string; records: number }> {
+async function stored(name: string): Promise<string[]> {
   const open = indexedDB.open(name)
-  // Not there yet: abort instead of creating an empty database y-indexeddb
-  // would then open without its stores.
+  // Not there yet: abort instead of creating an empty database.
   open.onupgradeneeded = () => open.transaction?.abort()
   const db = await new Promise<IDBDatabase | null>((resolve) => {
     open.onsuccess = () => resolve(open.result)
     open.onerror = () => resolve(null)
   })
-  if (!db) return { text: '', records: 0 }
+  if (!db) return []
   try {
-    if (!db.objectStoreNames.contains('updates')) return { text: '', records: 0 }
+    if (!db.objectStoreNames.contains('updates')) return []
     const read = db.transaction('updates', 'readonly').objectStore('updates').getAll()
-    const updates = await new Promise<Uint8Array[]>((resolve, reject) => {
-      read.onsuccess = () => resolve(read.result as Uint8Array[])
+    const rows = await new Promise<Array<{ copy: string; update: Uint8Array }>>((resolve, reject) => {
+      read.onsuccess = () => resolve(read.result as Array<{ copy: string; update: Uint8Array }>)
       read.onerror = () => reject(read.error ?? new Error('read failed'))
     })
-    const doc = new Y.Doc()
-    for (const update of updates) Y.applyUpdate(doc, update)
-    return { text: doc.getText('body').toString(), records: updates.length }
+    const docs = new Map<string, Y.Doc>()
+    for (const { copy, update } of rows) {
+      const doc = docs.get(copy) ?? new Y.Doc()
+      Y.applyUpdate(doc, update)
+      docs.set(copy, doc)
+    }
+    return [...docs.values()].map((doc) => doc.getText('body').toString()).sort()
   } finally {
     db.close()
   }
 }
 
-async function stored(name: string): Promise<string> {
-  return (await readStore(name)).text
+/** Stores `text` as a copy left by a tab that is gone. */
+async function seed(name: string, text: string): Promise<Y.Doc> {
+  const doc = new Y.Doc()
+  doc.getText('body').insert(0, text)
+  await keepCollabCopy(name, doc)!.close()
+  return doc
 }
 
 function count(text: string, needle: string): number {
@@ -166,7 +168,7 @@ describe('useCollabDoc offline copy (#720)', () => {
     expect(first.result.current.unsynced).toBe(true)
     first.unmount()
 
-    await waitFor(async () => expect(await stored(STASH)).toBe('BASE line\ntyped-online typed-offline '))
+    await waitFor(async () => expect(await stored(STASH)).toEqual(['BASE line\ntyped-online typed-offline ']))
 
     // Someone else wrote while this browser was away.
     relay.getText('body').insert(relay.getText('body').length, 'AGENT line\n')
@@ -193,10 +195,12 @@ describe('useCollabDoc offline copy (#720)', () => {
 
     push(p2, relay)
     expect(relay.getText('body').toString()).toBe(merged)
+    // The restored copy is gone; the live document's own copy holds the merge.
+    await waitFor(async () => expect(await stored(STASH)).toEqual([merged]))
     second.unmount()
   })
 
-  it('empties the copy once the relay has acknowledged it', async () => {
+  it('deletes the copy once the relay has acknowledged it', async () => {
     const relay = new Y.Doc()
     relay.getText('body').insert(0, 'BASE line\n')
     const view = mount()
@@ -205,7 +209,7 @@ describe('useCollabDoc offline copy (#720)', () => {
     provider.hasUnsyncedChanges = true
     act(() => provider.options.onStatus({ status: 'disconnected' }))
     act(() => view.result.current.ydoc.getText('body').insert(10, 'offline '))
-    await waitFor(async () => expect(await stored(STASH)).toBe('BASE line\noffline '))
+    await waitFor(async () => expect(await stored(STASH)).toEqual(['BASE line\noffline ']))
 
     // Back online: the relay takes the update and acknowledges it.
     sync(provider, relay)
@@ -214,20 +218,14 @@ describe('useCollabDoc offline copy (#720)', () => {
     act(() => provider.options.onUnsyncedChanges({ number: 0 }))
     expect(view.result.current.unsynced).toBe(false)
 
-    // Emptied, so the next visit has nothing to restore.
-    await waitFor(async () => expect(await readStore(STASH)).toEqual({ text: '', records: 0 }), {
-      timeout: 4000,
-    })
+    // Gone, so the next visit has nothing to restore.
+    await waitFor(async () => expect(await stored(STASH)).toEqual([]), { timeout: 4000 })
     view.unmount()
   })
 
   it('does not merge a copy that shares no history with the relay, and offers its text instead', async () => {
     // The copy: a session on the note's old document, with text typed offline.
-    const old = new Y.Doc()
-    old.getText('body').insert(0, 'BASE line\nwritten offline\n')
-    const stash = openCollabStash(STASH, old)!
-    await stash.loaded
-    await closeCollabStash(stash)
+    await seed(STASH, 'BASE line\nwritten offline\n')
     // The relay rebuilt the document from the note's text (purged and
     // re-created, or its CRDT state lost): same words, no shared history.
     const relay = new Y.Doc()
@@ -245,15 +243,15 @@ describe('useCollabDoc offline copy (#720)', () => {
     push(provider, relay)
     expect(relay.getText('body').toString()).toBe('BASE line\n')
     // Kept until the person says otherwise.
-    expect(await stored(STASH)).toBe('BASE line\nwritten offline\n')
+    expect(await stored(STASH)).toEqual(['BASE line\nwritten offline\n'])
 
     act(() => view.result.current.discardUnmerged())
     expect(view.result.current.unmerged).toBeNull()
-    await waitFor(async () => expect(await stored(STASH)).toBe(''))
+    await waitFor(async () => expect(await stored(STASH)).toEqual([]))
     view.unmount()
   })
 
-  it('one tab emptying the copy never drops what another tab has not sent', async () => {
+  it('one tab sending its copy never drops what another tab has not sent', async () => {
     const relay = new Y.Doc()
     relay.getText('body').insert(0, 'BASE line\n')
     const tabA = mount()
@@ -271,103 +269,66 @@ describe('useCollabDoc offline copy (#720)', () => {
       act(() => provider.options.onStatus({ status: 'disconnected' }))
       act(() => tab.result.current.ydoc.getText('body').insert(10, text))
     }
-    await waitFor(async () => expect(await stored(STASH)).toContain('from-B'))
+    await waitFor(async () => expect(await stored(STASH)).toEqual(['BASE line\nfrom-A ', 'BASE line\nfrom-B ']))
 
-    expect((await readStore(STASH)).records).toBeGreaterThan(1)
-
-    // Tab A gets through first and empties the shared store.
+    // Tab A gets through first: its copy goes, tab B's stays.
     sync(pA, relay)
     push(pA, relay)
     pA.hasUnsyncedChanges = false
     act(() => pA.options.onUnsyncedChanges({ number: 0 }))
-    // Emptied, then tab B wrote its whole document back as one record.
-    await waitFor(async () => expect((await readStore(STASH)).records).toBe(1), { timeout: 4000 })
-
-    // Tab B is still cut off; its text is still in this browser.
-    expect(await stored(STASH)).toContain('from-B')
+    await waitFor(async () => expect(await stored(STASH)).toEqual(['BASE line\nfrom-B ']), { timeout: 4000 })
     tabA.unmount()
     tabB.unmount()
   })
 
-  /** The copy left by a session on the note's old document; the relay rebuilt it from the text. */
-  async function unrelatedCopy(): Promise<Y.Doc> {
-    const old = new Y.Doc()
-    old.getText('body').insert(0, 'BASE line\nwritten offline\n')
-    const stash = openCollabStash(STASH, old)!
-    await stash.loaded
-    await closeCollabStash(stash)
+  it('a discarded copy never comes back, and the note is never in twice (round-1 review)', async () => {
+    await seed(STASH, 'BASE line\nwritten offline\n')
     const relay = new Y.Doc()
     relay.getText('body').insert(0, 'BASE line\n')
-    return relay
-  }
-
-  it('two tabs show the notice: discarding in one and typing in the other never duplicates the note', async () => {
-    const relay = await unrelatedCopy()
     const tabA = mount()
     await waitFor(() => expect(tabA.result.current.restored).toBe(true))
     const pA = await nthProvider(0)
     const tabB = mount()
-    await waitFor(() => expect(tabB.result.current.restored).toBe(true))
     const pB = await nthProvider(1)
     sync(pA, relay)
     sync(pB, relay)
+    // The copy is tab A's: tab B leaves it alone.
     expect(tabA.result.current.unmerged).toBe('BASE line\nwritten offline\n')
-    expect(tabB.result.current.unmerged).toBe('BASE line\nwritten offline\n')
+    expect(tabB.result.current.unmerged).toBeNull()
 
-    // B discards the copy, then types.
-    act(() => tabB.result.current.discardUnmerged())
+    act(() => tabA.result.current.discardUnmerged())
     pB.hasUnsyncedChanges = true
     act(() => tabB.result.current.ydoc.getText('body').insert(10, 'typed-in-B '))
-    await waitFor(async () => expect(await stored(STASH)).toContain('typed-in-B'))
+    await waitFor(async () => expect(await stored(STASH)).toEqual(['BASE line\ntyped-in-B ']))
     push(pB, relay)
 
-    // Had the copy reached B's live document, this would be the note twice:
-    // "BASE line\nwritten offline\nBASE line\ntyped-in-B ".
     expect(tabB.result.current.ydoc.getText('body').toString()).toBe('BASE line\ntyped-in-B ')
     expect(relay.getText('body').toString()).toBe('BASE line\ntyped-in-B ')
-    // No tab put the discarded copy back, and the other tab stopped offering it.
-    expect(await stored(STASH)).toBe('BASE line\ntyped-in-B ')
-    await waitFor(() => expect(tabA.result.current.unmerged).toBeNull())
     tabA.unmount()
     tabB.unmount()
   })
 
-  it('never loads a copy without shared history into the live document when it starts keeping one', async () => {
+  it('a copy without shared history stored after a tab looked never reaches its live document', async () => {
     const relay = new Y.Doc()
     relay.getText('body').insert(0, 'BASE line\n')
     const view = mount()
     const provider = await nthProvider(0)
     sync(provider, relay)
     expect(view.result.current.restored).toBe(false)
-    // The store gets a copy of the note's old document after this tab looked.
-    const old = new Y.Doc()
-    old.getText('body').insert(0, 'BASE line\nwritten offline\n')
-    const stash = openCollabStash(STASH, old)!
-    await stash.loaded
-    await closeCollabStash(stash)
+    await seed(STASH, 'BASE line\nwritten offline\n')
 
     provider.hasUnsyncedChanges = true
     act(() => view.result.current.ydoc.getText('body').insert(10, 'typed '))
-    await waitFor(() => expect(view.result.current.unmerged).toBe('BASE line\nwritten offline\n'))
+    await waitFor(async () => expect(await stored(STASH)).toEqual(['BASE line\ntyped ', 'BASE line\nwritten offline\n']))
     push(provider, relay)
 
     expect(view.result.current.ydoc.getText('body').toString()).toBe('BASE line\ntyped ')
     expect(relay.getText('body').toString()).toBe('BASE line\ntyped ')
-    // The old copy stays as it was until the person discards it.
-    expect(await stored(STASH)).toBe('BASE line\nwritten offline\n')
-
-    act(() => view.result.current.discardUnmerged())
-    // Then the live document is kept, on its own.
-    await waitFor(async () => expect(await stored(STASH)).toBe('BASE line\ntyped '))
     view.unmount()
   })
 
   it('a restored copy says Offline, not Connecting, while the relay refuses the socket', async () => {
-    const old = new Y.Doc()
-    old.getText('body').insert(0, 'BASE line\nwritten offline\n')
-    const stash = openCollabStash(STASH, old)!
-    await stash.loaded
-    await closeCollabStash(stash)
+    await seed(STASH, 'BASE line\nwritten offline\n')
 
     const view = mount()
     const provider = await nthProvider(0)
@@ -380,16 +341,90 @@ describe('useCollabDoc offline copy (#720)', () => {
     expect(view.result.current.unsynced).toBe(true)
     view.unmount()
   })
+})
+
+describe('collab copies in IndexedDB (#720)', () => {
+  it('keeps unrelated documents apart in one store, also past compaction', async () => {
+    const before = new Y.Doc()
+    const after = new Y.Doc()
+    const copies = [keepCollabCopy(STASH, before)!, keepCollabCopy(STASH, after)!]
+    // Interleaved, one record per keystroke, past the 500 records a copy is
+    // rewritten at.
+    for (let i = 0; i < 600; i++) {
+      before.getText('body').insert(before.getText('body').length, 'o')
+      after.getText('body').insert(after.getText('body').length, 'n')
+      await Promise.all(copies.map((copy) => copy.flushed()))
+    }
+    await Promise.all(copies.map((copy) => copy.close()))
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      const open = indexedDB.open(STASH)
+      open.onsuccess = () => resolve(open.result)
+    })
+    const records = await new Promise<number>((resolve) => {
+      const counting = db.transaction('updates', 'readonly').objectStore('updates').count()
+      counting.onsuccess = () => resolve(counting.result)
+    })
+    db.close()
+    // Rewritten whole at the 501st keystroke: 1 + 99 records per copy, not 600.
+    expect(records).toBe(2 * 100)
+
+    const left = await claimLeftoverCopies(STASH)
+    expect(left.map((copy) => copy.doc.getText('body').toString()).sort()).toEqual(['n'.repeat(600), 'o'.repeat(600)])
+    // Each one written by its own document only.
+    expect(left.map((copy) => copy.doc.store.clients.size)).toEqual([1, 1])
+    await Promise.all(left.map((copy) => copy.close()))
+  })
+
+  it('without Web Locks, a copy taken by another tab while still open is stored whole again', async () => {
+    expect(navigator.locks ?? null).toBeNull()
+    const doc = new Y.Doc()
+    doc.getText('body').insert(0, 'BASE line\n')
+    const open = keepCollabCopy(STASH, doc)!
+    await open.flushed()
+
+    // Another tab cannot tell the copy is open: it takes it, merges it and deletes it.
+    vi.resetModules()
+    // Its own module instance, as another tab has.
+    const other = await import('../lib/collabStash.js')
+    const taken = await other.claimLeftoverCopies(STASH)
+    expect(taken).toHaveLength(1)
+    await taken[0]!.release()
+    expect(await stored(STASH)).toEqual([])
+
+    // The open tab keeps typing: what it stores next is the whole document.
+    doc.getText('body').insert(10, 'more ')
+    await open.close()
+    expect(await stored(STASH)).toEqual(['BASE line\nmore '])
+  })
+
+  it('logout deletes that user\'s copies and nobody else\'s', async () => {
+    const other = collabStashName('u-jane', `${NOTE.vaultId}/${NOTE.path}`)
+    for (const name of [STASH, other]) await seed(name, `kept for ${name}`)
+
+    await clearCollabStashes(USER.id)
+
+    const names = (await indexedDB.databases()).map((db) => db.name)
+    expect(names).not.toContain(STASH)
+    expect(names).toContain(other)
+    expect(await stored(other)).toEqual([`kept for ${other}`])
+  })
+
+  it('a copy still open when its user logs out stops writing instead of re-creating the store', async () => {
+    const doc = new Y.Doc()
+    const copy = keepCollabCopy(STASH, doc)!
+    doc.getText('body').insert(0, 'typed before logout')
+    await copy.flushed()
+
+    await clearCollabStashes(USER.id)
+    doc.getText('body').insert(0, 'typed after logout ')
+    await copy.close()
+
+    expect((await indexedDB.databases()).map((db) => db.name)).not.toContain(STASH)
+  })
 
   it('finds the copies without indexedDB.databases() (Firefox < 126)', async () => {
     const other = collabStashName('u-jane', `${NOTE.vaultId}/${NOTE.path}`)
-    for (const name of [STASH, other]) {
-      const doc = new Y.Doc()
-      doc.getText('body').insert(0, `kept for ${name}`)
-      const stash = openCollabStash(name, doc)!
-      await stash.loaded
-      await closeCollabStash(stash)
-    }
+    for (const name of [STASH, other]) await seed(name, `kept for ${name}`)
     const databases = indexedDB.databases.bind(indexedDB)
     Object.defineProperty(indexedDB, 'databases', { value: undefined, configurable: true })
     try {
@@ -404,23 +439,5 @@ describe('useCollabDoc offline copy (#720)', () => {
     const names = (await indexedDB.databases()).map((db) => db.name)
     expect(names).not.toContain(STASH)
     expect(names).toContain(other)
-  })
-
-  it('logout deletes that user\'s copies and nobody else\'s', async () => {
-    const other = collabStashName('u-jane', `${NOTE.vaultId}/${NOTE.path}`)
-    for (const name of [STASH, other]) {
-      const doc = new Y.Doc()
-      doc.getText('body').insert(0, `kept for ${name}`)
-      const stash = openCollabStash(name, doc)!
-      await stash.loaded
-      await closeCollabStash(stash)
-    }
-
-    await clearCollabStashes(USER.id)
-
-    const names = (await indexedDB.databases()).map((db) => db.name)
-    expect(names).not.toContain(STASH)
-    expect(names).toContain(other)
-    expect(await stored(other)).toBe(`kept for ${other}`)
   })
 })
