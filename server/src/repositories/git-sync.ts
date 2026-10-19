@@ -17,23 +17,31 @@ const IGNORED = /(^|\/)(\.git|node_modules|\.next|dist|build|\.turbo)(\/|$)/
 const MAX_FILE_BYTES = 1_048_576 // 1MB per file limit to prevent heap exhaustion
 const MAX_INDEXED_FILES = 10_000
 
+export type RepositorySyncStatus = (typeof repositories.$inferSelect)['syncStatus']
+
 /**
  * Git URL ingestion (spec 8): a fresh shallow clone (depth 1, no
  * history) into a scratch temp directory on every sync — simpler and
  * more robust than reusing/fetching into a persistent working copy, at
  * the cost of a full re-clone each time. The clone is discarded after
  * its tree is read; only the extracted file content is durable.
+ *
+ * `previousStatus` is the row's status before a caller claimed it as
+ * `syncing` (the manual sync route and MCP `sync_repository` do): a retry of
+ * a repository already in `error` is then still a repeat failure, not a new
+ * one (#705). Without it the status read here is the previous one.
  */
-export async function syncGitRepository(repositoryId: string): Promise<void> {
+export async function syncGitRepository(repositoryId: string, previousStatus?: RepositorySyncStatus): Promise<void> {
   const repo = (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]
   if (!repo || repo.ingestionMethod !== 'git' || !repo.gitUrl) return
+  const wasFailing = (previousStatus ?? repo.syncStatus) === 'error'
 
   if (!isSafeGitUrl(repo.gitUrl)) {
     await db
       .update(repositories)
       .set({ syncStatus: 'error', lastSyncError: 'Invalid or forbidden git clone URL' })
       .where(eq(repositories.id, repositoryId))
-    recordJob('sync', { error: { name: 'UnsafeGitUrl' }, repeat: repo.syncStatus === 'error' }, repositoryId)
+    recordJob('sync', { error: { name: 'UnsafeGitUrl' }, repeat: wasFailing }, repositoryId)
     return
   }
 
@@ -118,9 +126,10 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     recordJob('sync', 'ok', repositoryId)
   } catch (err) {
     // A repository that was already in `error` (the poller retries it every
-    // POLL_INTERVAL_MS) failing again is not a new failure: one report on
-    // the transition into `error`, not one alert per poll (#705).
-    recordJob('sync', { error: err, repeat: repo.syncStatus === 'error' }, repositoryId)
+    // POLL_INTERVAL_MS, a user or agent may retry it by hand) failing again
+    // is not a new failure: one report on the transition into `error`, not
+    // one alert per retry (#705).
+    recordJob('sync', { error: err, repeat: wasFailing }, repositoryId)
     // The raw message can carry the authenticated clone URL, and lastSyncError
     // is served to every viewer: store and rethrow only the redacted text (#383).
     const raw = err instanceof Error ? err.message : String(err)

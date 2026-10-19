@@ -211,6 +211,10 @@ export function startBackupScheduler(): () => void {
   const checkIntervalMs = 15 * 60 * 1000
   const intervalMs = config.backup.intervalHours * 60 * 60 * 1000
 
+  // A scheduled backup that fails right after a failed one is a repeat, not a
+  // new failure (#705): with intervalHours = 1 a broken destination would
+  // otherwise be a new alert every hour. Process-local, like the schedule.
+  let failing = false
   const timer = setInterval(() => {
     const now = Date.now()
     const lastRunTime = lastRunAt ? new Date(lastRunAt).getTime() : 0
@@ -218,10 +222,14 @@ export function startBackupScheduler(): () => void {
       // Scheduled runs only: an on-demand backup that fails is a 5xx, which
       // is reported as a server error already (#705).
       executeBackup().then(
-        () => recordJob('backup', 'ok'),
+        () => {
+          failing = false
+          recordJob('backup', 'ok')
+        },
         (err) => {
           console.error('[backup-scheduler] automated backup failed:', err)
-          recordJob('backup', { error: err })
+          recordJob('backup', { error: err, repeat: failing })
+          failing = true
         },
       )
     }

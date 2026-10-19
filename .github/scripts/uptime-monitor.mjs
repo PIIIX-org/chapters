@@ -16,7 +16,8 @@
 //     so a late check loses nothing; a new bootId counts from zero)
 //   - jobs: any new failed background job (embedding, extraction, sync,
 //     collab-store, backup; a repository that keeps failing counts once, on
-//     its way into `error`)
+//     its way into `error`, a scheduled backup once per run of failures; the
+//     server's `repeated` count of the rest is listed in the comment)
 //   - slow: a route that newly has p95 >= ALERT_SLOW_MS (default 2000) over
 //     at least ALERT_SLOW_MIN_COUNT (default 5) requests in the server's
 //     15-minute window (once until it is fast again)
@@ -83,8 +84,13 @@ export const RECENT_ERRORS = 10
 export const REALERT_MS = 24 * 60 * 60 * 1000
 /** A streak of `errors` or `jobs` ends after this long without a new one. */
 export const QUIET_MS = 60 * 60 * 1000
-/** Routes or job kinds a streak remembers (a new one alerts at once). */
-const STREAK_KEYS = 50
+/**
+ * Routes or job kinds a streak remembers (a new one alerts at once). Covers
+ * the server's route keys (MAX_ROUTES 300 in server/src/monitoring/metrics.ts,
+ * plus one `METHOD (other)` per method); once a streak is full, an unknown
+ * key is held like a known one, so it cannot alert on every run.
+ */
+export const STREAK_KEYS = 320
 const ROUTE = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|OTHER) (\/[\w/:*.-]{0,200}|\(other\))$/
 const IDENT = /^[A-Za-z][\w.-]{0,63}$/
 const ERROR_CODE = /^[\w.-]{1,64}$/
@@ -257,6 +263,15 @@ function checkedMetricsState(s, now) {
       errors: checkedStreak(streaks.errors, (k) => valid(k, ROUTE) !== null, now),
       jobs: checkedStreak(streaks.jobs, (k) => JOB_KINDS.includes(k), now),
     },
+    // A streak dropped for a time later than now (a hand edit, a clock
+    // change) still owes its held count: kept here until a read reports it.
+    resetHeld: Object.fromEntries(
+      ['errors', 'jobs'].map((kind) => {
+        const raw = streaks[kind]
+        const future = raw && typeof raw === 'object' && [raw.since, raw.lastAt, raw.alertedAt].some((v) => isoTime(v) && !pastTime(v, now))
+        return [kind, count(s.resetHeld?.[kind]) + (future ? count(raw.held) : 0)]
+      }),
+    ),
   }
 }
 
@@ -295,6 +310,7 @@ export function observeMetrics({ status = null, body = null, error = null }) {
     serverErrors: count(body.totals.serverErrors),
     jobFailures: count(body.totals.jobFailures),
     jobs: Object.fromEntries(JOB_KINDS.map((k) => [k, count(body.jobs?.[k]?.failed)])),
+    repeated: Object.fromEntries(JOB_KINDS.map((k) => [k, count(body.jobs?.[k]?.repeated)])),
     routes: (Array.isArray(body.routes) ? body.routes : [])
       .filter((r) => valid(r?.route, ROUTE))
       .slice(0, 1000)
@@ -319,10 +335,11 @@ export function metricsOptions(env = process.env) {
  * `n` is this run's new count (0 when below the threshold), `keys` the routes
  * or job kinds of this run's new records. No streak (or QUIET_MS since the
  * last new one): a new streak, alert. In a streak: alert for a key the streak
- * has not had (a new failure condition) or REALERT_MS after the last alert,
- * with the count held back since; otherwise hold the count back. A quiet
- * QUIET_MS ends the streak, with a closing note when something was held back
- * (so no count goes unreported).
+ * has not had (a new failure condition; only while it has room for
+ * STREAK_KEYS) or REALERT_MS after the last alert, with the count held back
+ * since; otherwise hold the count back. A quiet QUIET_MS ends the streak,
+ * with a closing note when something was held back (so no count goes
+ * unreported).
  */
 function streakStep(s, n, keys, at) {
   const t = Date.parse(at)
@@ -336,7 +353,7 @@ function streakStep(s, n, keys, at) {
     return { streak: { since: at, lastAt: at, alertedAt: at, held: 0, keys: keys.slice(0, STREAK_KEYS) }, alert: { since: at, held: 0, lastAlertAt: null }, ended }
   }
   const merged = [...new Set([...s.keys, ...keys])].slice(0, STREAK_KEYS)
-  const newKey = keys.some((k) => !s.keys.includes(k))
+  const newKey = s.keys.length < STREAK_KEYS && keys.some((k) => !s.keys.includes(k))
   if (!newKey && t - Date.parse(s.alertedAt) < REALERT_MS) {
     return { streak: { ...s, lastAt: at, held: s.held + n, keys: merged }, alert: null, ended: null }
   }
@@ -359,8 +376,9 @@ function streakStep(s, n, keys, at) {
 export function stepMetrics(prev, mobs, opts = METRICS_DEFAULTS, at = new Date().toISOString()) {
   const p = checkedMetricsState(prev, at)
   const streaks = p?.streaks ?? { errors: null, jobs: null }
+  const resetHeld = p?.resetHeld ?? { errors: 0, jobs: 0 }
   if (!mobs.ok) {
-    const base = p ?? { bootId: null, serverErrors: 0, jobFailures: 0, lastSeq: 0, slow: [], failedReads: 0, streaks }
+    const base = p ?? { bootId: null, serverErrors: 0, jobFailures: 0, lastSeq: 0, slow: [], failedReads: 0, streaks, resetHeld }
     const failedReads = Math.min(base.failedReads + 1, DOWN_AFTER)
     return {
       state: { ...base, failedReads },
@@ -376,6 +394,7 @@ export function stepMetrics(prev, mobs, opts = METRICS_DEFAULTS, at = new Date()
     slow: slowNow.map((r) => r.route),
     failedReads: 0,
     streaks,
+    resetHeld,
   }
   if (!p?.bootId) return { state, alerts: [] }
   const restarted = p.bootId !== mobs.bootId
@@ -396,7 +415,9 @@ export function stepMetrics(prev, mobs, opts = METRICS_DEFAULTS, at = new Date()
   )
   const jobs = streakStep(streaks.jobs, newFailures, [...new Set(failedJobs.map((e) => e.job))], at)
   state.streaks = { errors: errs.streak, jobs: jobs.streak }
+  state.resetHeld = { errors: 0, jobs: 0 }
   for (const [of, r] of [['errors', errs], ['jobs', jobs]]) {
+    if (resetHeld[of] > 0) alerts.push({ kind: 'settled', of, at, reset: true, held: resetHeld[of] })
     if (r.ended) alerts.push({ kind: 'settled', of, at, since: r.ended.since, lastAt: r.ended.lastAt, alertedAt: r.ended.alertedAt, held: r.ended.held })
   }
   if (errs.alert) {
@@ -418,6 +439,7 @@ export function stepMetrics(prev, mobs, opts = METRICS_DEFAULTS, at = new Date()
       restarted,
       streak: jobs.alert,
       failedSinceBoot: mobs.jobs,
+      repeatedSinceBoot: mobs.repeated,
       recent: failedJobs.slice(-RECENT_ERRORS),
     })
   }
@@ -529,6 +551,7 @@ export function formatComment(alerts, url) {
       )
     } else if (a.kind === 'jobs') {
       const sinceBoot = Object.entries(a.failedSinceBoot).filter(([, n]) => n > 0)
+      const repeated = Object.entries(a.repeatedSinceBoot ?? {}).filter(([, n]) => n > 0)
       parts.push(
         `### Failed background jobs: ${url}`,
         '',
@@ -537,7 +560,7 @@ export function formatComment(alerts, url) {
           ? ['', '| at | job | error |', '|---|---|---|', ...a.recent.map((e) => `| ${code(e.at)} | ${code(e.job)} | ${errorText(e.error)} |`)]
           : []),
         '',
-        `Failed since the process started: ${sinceBoot.length ? sinceBoot.map(([k, n]) => `${code(k)} ${n}`).join(', ') : '_none_'}. The note, file, repository or vault each one was about is on \`${METRICS_PATH}\` (admin session) and in the server log's \`job_failure\` lines. A failed \`collab-store\` means a live edit was not written to the note file.`,
+        `Failed since the process started: ${sinceBoot.length ? sinceBoot.map(([k, n]) => `${code(k)} ${n}`).join(', ') : '_none_'}.${repeated.length ? ` Failed again while already failing (a repository still in \`error\`, a backup after a failed one; counted, never alerted): ${repeated.map(([k, n]) => `${code(k)} ${n}`).join(', ')}.` : ''} The note, file, repository or vault each one was about is on \`${METRICS_PATH}\` (admin session) and in the server log's \`job_failure\` lines. A failed \`collab-store\` means a live edit was not written to the note file.`,
         ...streakText(a.streak, STREAK_WORDS.jobs),
       )
     } else if (a.kind === 'slow') {
@@ -553,9 +576,17 @@ export function formatComment(alerts, url) {
     } else if (a.kind === 'settled') {
       const w = STREAK_WORDS[a.of]
       parts.push(
-        `### ${w.title} stopped: ${url}`,
-        '',
-        `No new ${w.items} since ${a.lastAt}; this streak began at ${a.since}. ${a.held} more after the last comment (${a.alertedAt}) were held back, not commented one by one.`,
+        ...(a.reset
+          ? [
+              `### ${w.title} streak reset: ${url}`,
+              '',
+              `The saved streak had a time later than now (a hand edit or a clock change), so it was reset. ${a.held} ${w.items} held back in it were not commented one by one.`,
+            ]
+          : [
+              `### ${w.title} stopped: ${url}`,
+              '',
+              `No new ${w.items} since ${a.lastAt}; this streak began at ${a.since}. ${a.held} more after the last comment (${a.alertedAt}) were held back, not commented one by one.`,
+            ]),
       )
     } else if (a.kind === 'metrics-unavailable') {
       parts.push(

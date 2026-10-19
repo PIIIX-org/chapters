@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { and, eq, ne } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositories } from '../db/schema.js'
-import { syncGitRepository } from './git-sync.js'
+import { syncGitRepository, type RepositorySyncStatus } from './git-sync.js'
 import { listFilesRecursive } from './fs-scan.js'
 import { IGNORED, startWatching } from './local-watch.js'
 import { syncRepositoryFiles, type FileUpdate } from './store.js'
@@ -110,11 +110,13 @@ const watchers = new Map<string, () => void>()
  * `syncGitRepository`. The watcher keeps content current but reports nothing;
  * this is what writes `syncStatus`/`lastSyncedAt`/`lastSyncError`, so a
  * freshly connected folder reads as "synced, N files" instead of "never
- * synced".
+ * synced". `previousStatus`: as for `syncGitRepository` (the status before a
+ * caller claimed the row).
  */
-export async function syncLocalRepository(repositoryId: string): Promise<void> {
+export async function syncLocalRepository(repositoryId: string, previousStatus?: RepositorySyncStatus): Promise<void> {
   const repo = (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]
   if (!repo || repo.ingestionMethod !== 'local_path' || !repo.localPath) return
+  const wasFailing = (previousStatus ?? repo.syncStatus) === 'error'
   const root = repo.localPath
 
   await db.update(repositories).set({ syncStatus: 'syncing' }).where(eq(repositories.id, repositoryId))
@@ -147,7 +149,7 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
     recordJob('sync', 'ok', repositoryId)
   } catch (err) {
     // Already in `error`: a repeat, not a new failure (git-sync.ts, #705).
-    recordJob('sync', { error: err, repeat: repo.syncStatus === 'error' }, repositoryId)
+    recordJob('sync', { error: err, repeat: wasFailing }, repositoryId)
     const errorMsg = (err as Error).message.replace(/\0/g, '')
     await db
       .update(repositories)
