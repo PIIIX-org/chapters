@@ -40,9 +40,11 @@ export interface Actor {
 const SYSTEM_ACTOR: Actor = { type: 'collab' }
 
 /** Records a revision unless identical to the note's latest one (dedupes
- * the MCP-immediate + collab-debounced double-write of the same state). Key
- * order is not compared: jsonb returns keys in its own order, while the
- * collab document and a frontmatter merge (#438) keep theirs. */
+ * the MCP-immediate + collab-debounced double-write of the same state).
+ * Frontmatter is compared as jsonb stores it (#480): deep equality on its
+ * JSON form, so object key order (jsonb uses its own, the collab document
+ * and a frontmatter merge keep theirs), `undefined` members and Date vs
+ * ISO string never count, while array order and every value still do. */
 async function recordRevision(
   noteId: string,
   action: string,
@@ -58,7 +60,11 @@ async function recordRevision(
       .orderBy(desc(noteRevisions.createdAt))
       .limit(1)
   )[0]
-  if (last && last.body === body && isDeepStrictEqual(last.frontmatter, frontmatter)) {
+  if (
+    last &&
+    last.body === body &&
+    isDeepStrictEqual(last.frontmatter, JSON.parse(JSON.stringify(frontmatter ?? null)))
+  ) {
     return
   }
   await db.insert(noteRevisions).values({

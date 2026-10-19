@@ -362,9 +362,15 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   the store nor people with the note open; the document gets a per-key
   diff and `updateNote` the whole map. Internal full-state writers
   (revert, rename, the relay's own store) keep `frontmatterMode:
-  'replace'`, the default. `recordRevision` dedupes with deep equality
-  (key order ignored), so the relay's store and the attributed write of
-  the same state make one revision.
+  'replace'`, the default.
+- **Revision dedupe** (#480, `recordRevision`): a write whose body and
+  frontmatter equal the latest revision's records nothing. Frontmatter is
+  compared as jsonb stores it: deep equality on its JSON form, so object
+  key order (nested too), `undefined` members and Date vs ISO string never
+  count; array order and every value do. The relay's store and the
+  attributed write of the same state therefore make one revision. It used
+  to compare `JSON.stringify` output, and jsonb's key order made one edit
+  through the relay record two identical revisions.
 - **Progressive indexes** (`regenProgressiveIndices`): run on create,
   rename, delete, restore, and on updates whose frontmatter really
   changed (`isDeepStrictEqual`, so key order alone never counts: `jsonb`
