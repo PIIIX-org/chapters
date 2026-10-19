@@ -680,9 +680,16 @@ is the history record, not Chapters).
    scratch temp dir on every sync, discarded after reading; no
    persistent working copy. Triggered by a webhook
    (`git-webhook-routes.ts`, HMAC-SHA256-verified,
-   `POST /repositories/:id/webhook`, unprefixed) or a polling fallback
-   (`scheduler.ts`) that only kicks in once the webhook signal goes
-   stale — `shouldPoll()` is a pure function, unit-tested on its own.
+   `POST /repositories/:id/webhook`, unprefixed) or the polling fallback
+   (`scheduler.ts`, every `POLL_INTERVAL_MS`, default 5 min).
+   `shouldPoll()` (a pure function, unit-tested on its own) skips a
+   repository only while its last webhook delivery is younger than
+   `WEBHOOK_STALE_THRESHOLD_MS` (default 10 min, 2× the poll interval)
+   and its `syncStatus` is not `error`; a repository with no webhook, a
+   stale one or a failed sync is polled every tick. `lastSyncedAt` takes
+   no part: every successful webhook sync ends after its delivery, so
+   "synced since the last webhook" once disabled polling for good (#410).
+   An unchanged remote costs one `ls-remote`, not a clone.
 2. **local_path** (`local-watch.ts`) — `chokidar`, debounced 300ms,
    real-time. The path must resolve under `LOCAL_REPOS_ROOT`, checked
    at repository-creation time.

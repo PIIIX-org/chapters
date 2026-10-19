@@ -87,3 +87,13 @@ Work queued in memory (embeddings, code extraction, note edits inside the collab
 - [ ] **Watch it from outside the host.** Poll `/health` every few minutes and alert when `bootId` changes or when it fails twice in a row. Treat a missing `bootId` (an image older than these fields) as unknown rather than as a change. The Elara project does this for its own instance with a scheduled GitHub Actions workflow, [`.github/workflows/uptime.yml`](../../.github/workflows/uptime.yml) running [`.github/scripts/uptime-monitor.mjs`](../../.github/scripts/uptime-monitor.mjs) (plain Node, `--url https://your.host --state-file state.json` prints the alerts as JSON without touching GitHub). Make sure you would notice if the monitor itself stopped: it posts a weekly check-in for that reason.
 - [ ] **An `unclean` restart deserves a look**: `docker inspect <app container> --format '{{.State.OOMKilled}} {{.RestartCount}}'` and the app log before the boot line.
 - [ ] **Watch errors, failed jobs and slow requests too.** Set `ELARA_MONITORING_TOKEN` (`openssl rand -hex 32`) and give the same value to the monitor: it then also alerts on new 5xx responses, failed background jobs (embeddings, extraction, repository sync, live edits that could not be saved to the note file, scheduled backups) and slow endpoints, optionally through `ALERT_WEBHOOK_URL`. No note text is ever part of these reports. See [monitoring.md](monitoring.md).
+
+---
+
+## 6. Git repository freshness
+
+A git repository stays current through its webhook (`POST /repositories/<id>/webhook`, signed with the secret set on the repository) and a polling fallback that never switches off.
+
+- [ ] **`POLL_INTERVAL_MS`** (default `300000`, 5 min): how often the server checks git repositories. An unchanged remote costs one `git ls-remote`, not a clone.
+- [ ] **`WEBHOOK_STALE_THRESHOLD_MS`** (default `600000`, 10 min): a repository whose webhook delivered within this window is left to the webhook. Once no delivery has arrived for longer (the hook was deleted, disabled or cannot reach your host), or when the last sync failed, the repository is polled on every interval again. So a broken hook delays updates by at most the threshold plus one poll interval; keep the threshold at least twice the poll interval so a working hook is not polled needlessly.
+- [ ] **A quiet webhook is not an error**: a repository nobody pushes to gets no deliveries, so it falls back to polling after the threshold. `lastWebhookAt` (MCP `list_repositories`, REST repository list) shows when the last signed delivery arrived; `syncStatus`/`lastSyncError` show whether the last sync worked.
