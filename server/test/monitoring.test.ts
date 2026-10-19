@@ -14,6 +14,8 @@ import { flushEmbeddings, scheduleEmbedding } from '../src/search/embedding-queu
 import { syncGitRepository } from '../src/repositories/git-sync.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
 // #705: server errors and failed background jobs are reported (the
@@ -273,15 +275,33 @@ describe('error and job reports carry no note text (#705)', () => {
     expect(failing.errors.filter((e) => e.seq > before.lastSeq && e.subjectId === git!.id)).toHaveLength(1)
 
     // A manual retry (the HTTP route claims the row as `syncing` first) is a
-    // repeat too; MCP `sync_repository` claims it the same way.
+    // repeat too.
     const ownerCookie = await loginCookie(app, owner.email)
+    const syncStatus = async () => (await db.select().from(repositories).where(eq(repositories.id, git!.id)))[0]!.syncStatus
     const retry = await app.inject({ method: 'POST', url: `/api/repositories/${git!.id}/sync`, headers: { cookie: ownerCookie } })
     expect(retry.statusCode).toBe(200)
     // The route answers once the row is claimed; the sync writes `error` after reporting.
-    await waitFor(async () => (await db.select().from(repositories).where(eq(repositories.id, git!.id)))[0]!.syncStatus === 'error')
+    await waitFor(async () => (await syncStatus()) === 'error')
     const retried = (await snapshot()).body
     expect(retried.totals.jobFailures).toBe(before.totals.jobFailures + 1)
     expect(retried.jobs.sync).toMatchObject({ failed: before.jobs.sync!.failed + 1, repeated: before.jobs.sync!.repeated + 4 })
+
+    // So is one through MCP `sync_repository`, which claims the row the same way.
+    const { token } = (
+      await app.inject({ method: 'POST', url: '/api/mcp-connections', headers: { cookie: ownerCookie }, body: { name: 'monitoring-retry', scope: 'account' } })
+    ).json() as { token: string }
+    const client = new Client({ name: 'monitoring-retry', version: '0.0.0' })
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }))
+    try {
+      const result = await client.callTool({ name: 'sync_repository', arguments: { repositoryId: git!.id } })
+      expect(result.isError).toBeFalsy()
+      await waitFor(async () => (await syncStatus()) === 'error')
+    } finally {
+      await client.close()
+    }
+    const mcpRetried = (await snapshot()).body
+    expect(mcpRetried.totals.jobFailures).toBe(before.totals.jobFailures + 1)
+    expect(mcpRetried.jobs.sync).toMatchObject({ failed: before.jobs.sync!.failed + 1, repeated: before.jobs.sync!.repeated + 5 })
 
     // Out of `error` (a sync that worked) and failing again is a new failure.
     await db.update(repositories).set({ syncStatus: 'idle' }).where(eq(repositories.id, git!.id))

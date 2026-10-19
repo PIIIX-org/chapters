@@ -472,7 +472,7 @@ describe('stepMetrics', () => {
     assert.deepEqual(r.state, { bootId: A, serverErrors: 4, jobFailures: 0, lastSeq: 0, slow: [], failedReads: 0, streaks: EMPTY_STREAKS, resetHeld: NO_RESET })
   })
   it('is kept in the uptime state through restarts and outages', () => {
-    const streak = { since: T1, lastAt: T1, alertedAt: T1, held: 3, keys: ['sync'] }
+    const streak = { since: T1, lastAt: T1, alertedAt: T1, held: 3, keys: ['sync'], pending: [] }
     const saved = {
       ...emptyState(),
       bootId: A,
@@ -506,7 +506,7 @@ describe('stepMetrics: one alert per streak, not one per run', () => {
     assert.deepEqual(kindsOf(rs), [[], ['errors'], [], [], [], []])
     assert.equal(comments(rs), 1)
   })
-  it('alerts at once for a new failure condition inside a streak: another job kind or another route', () => {
+  it('alerts at once for a new job kind inside a streak (new routes: see "many failing routes")', () => {
     const jobs = runMetrics(
       [metrics(), failingSync(1), failingSync(2), failingSync(3, [jobRecord(10, 'embedding')]), failingSync(4, [jobRecord(10, 'embedding')])],
       METRICS_DEFAULTS,
@@ -515,9 +515,8 @@ describe('stepMetrics: one alert per streak, not one per run', () => {
     )
     assert.deepEqual(kindsOf(jobs), [[], ['jobs'], [], ['jobs'], []])
     assert.deepEqual(jobs[3].alerts[0].recent.map((e) => e.job), ['sync', 'embedding'])
-    const other = metrics({ serverErrors: 5, errors: [...[1, 2, 3, 4].map((s) => reqRecord(s, { route: 'GET /api/vaults/:id/graph' })), reqRecord(5)] })
-    const errors = runMetrics([metrics(), failingRoute(2), failingRoute(4), other], METRICS_DEFAULTS, null, times)
-    assert.deepEqual(kindsOf(errors), [[], ['errors'], [], ['errors']])
+    assert.deepEqual(jobs[3].alerts[0].streak.newKeys, ['embedding'])
+    assert.match(formatComment(jobs[3].alerts, URL), /New in this streak since then \(1 job kind\): `embedding`\./)
   })
   it(`alerts again after ${REALERT_MS / 3_600_000} h while it keeps failing, with the count held back meanwhile`, () => {
     const runs = 146 // 24 h 10 min of runs every 10 minutes
@@ -525,7 +524,7 @@ describe('stepMetrics: one alert per streak, not one per run', () => {
     const alerted = rs.flatMap((r, i) => (r.alerts.length ? [i] : []))
     const realert = 1 + REALERT_MS / (10 * 60_000)
     assert.deepEqual(alerted, [1, realert])
-    assert.deepEqual(rs[realert].alerts[0].streak, { since: times[1], held: realert - 2, lastAlertAt: times[1] })
+    assert.deepEqual(rs[realert].alerts[0].streak, { since: times[1], held: realert - 2, lastAlertAt: times[1], newKeys: [] })
     const md = formatComment(rs[realert].alerts, URL)
     assert.match(md, new RegExp(`Still happening since ${times[1]}: ${realert - 2} more failed jobs since the last comment`))
   })
@@ -581,8 +580,7 @@ describe('stepMetrics: one alert per streak, not one per run', () => {
 // Review round 2 of #764: a streak remembered only 50 routes, so a 51st
 // route that kept failing was "new" on every run.
 describe('stepMetrics: many failing routes', () => {
-  const times = Array.from({ length: 40 }, (_, i) => every10(i))
-  const comments = (rs) => rs.filter((r) => r.alerts.length > 0).length
+  const times = Array.from({ length: 60 }, (_, i) => every10(i))
   /** Runs where each listed route answers one 500 before the run (the records the monitor has not seen yet). */
   function failingRoutes(runs) {
     let seq = 0
@@ -594,22 +592,36 @@ describe('stepMetrics: many failing routes', () => {
   }
   const range = (from, n) => Array.from({ length: n }, (_, i) => from + i)
 
-  it('alerts each new route once: 50 routes fail together, then routes 50..59 one per run for 18 runs', () => {
+  const alertRuns = (rs) => rs.flatMap((r, i) => (r.alerts.length ? [i] : []))
+
+  it('lists new routes together, at most one comment an hour: 50 routes fail together, then routes 50..59 one per run for 18 runs', () => {
     const rs = runMetrics([metrics(), ...failingRoutes([range(0, 50), ...range(0, 18).map((i) => [50 + (i % 10)])])], METRICS_DEFAULTS, null, times)
-    assert.deepEqual(
-      rs.flatMap((r, i) => (r.alerts.length ? [i] : [])),
-      range(1, 11),
-      'the first 50, then routes 50..59 once each; the repeats of 50..59 are held',
-    )
-    assert.equal(comments(rs), 11)
+    assert.deepEqual(alertRuns(rs), [1, 7, 13], 'the first 50; an hour later routes 50..55; an hour after that 56..59; the repeats are held')
+    assert.deepEqual(rs[7].alerts[0].streak.newKeys, range(50, 6).map((r) => `GET /api/r${r}`))
+    assert.deepEqual(rs[13].alerts[0].streak.newKeys, range(56, 4).map((r) => `GET /api/r${r}`))
+    assert.match(formatComment(rs[7].alerts, URL), /New in this streak since then \(6 routes\): `GET \/api\/r50`, .*`GET \/api\/r55`\./)
+  })
+  it('a broken hook failing 400 routes in turn, 10 per run for 6 h: one comment an hour, not one per run', () => {
+    const rs = runMetrics([metrics(), ...failingRoutes(range(0, 36).map((i) => range((i * 10) % 400, 10)))], METRICS_DEFAULTS, null, times)
+    assert.deepEqual(alertRuns(rs), [1, 7, 13, 19, 25, 31])
   })
   it(`holds unknown routes once the streak remembers ${STREAK_KEYS}, so more failing routes than that cannot alert every run`, () => {
     const full = range(0, 4).map((i) => range(i * 100, 100)) // 400 routes in 4 runs: the streak keeps the first STREAK_KEYS
     const beyond = range(0, 12).map((i) => [STREAK_KEYS + (i % 3), 1000 + i]) // routes it does not remember, old and brand new
     const rs = runMetrics([metrics(), ...failingRoutes([...full, ...beyond])], METRICS_DEFAULTS, null, times)
-    assert.equal(rs[4].state.streaks.errors.keys.length, STREAK_KEYS)
-    assert.equal(comments(rs), 4, 'one per batch of new routes while there was room, then none')
-    assert.equal(rs.at(-1).state.streaks.errors.held, 12 * 2, 'every 500 after the cap is held, none lost')
+    const s4 = rs[4].state.streaks.errors
+    assert.equal(s4.keys.length + s4.pending.length, STREAK_KEYS)
+    assert.deepEqual(alertRuns(rs), [1, 7], 'the first 100 routes; an hour later the other 220 it has room for; then none')
+    assert.equal(rs[7].alerts[0].streak.newKeys.length, STREAK_KEYS - 100)
+    assert.match(formatComment(rs[7].alerts, URL), /New in this streak since then \(220 routes\): .* and 200 more\./)
+    assert.equal(rs.at(-1).state.streaks.errors.held, 9 * 2, 'every 500 after that comment is held, none lost')
+  })
+  it('names new routes that were never commented in the closing note when the streak ends', () => {
+    const [first, second] = failingRoutes([[0], [1]])
+    const rs = runMetrics([metrics(), first, second, ...Array.from({ length: 6 }, () => second)], METRICS_DEFAULTS, null, times)
+    assert.deepEqual(alertRuns(rs), [1, 8])
+    assert.deepEqual(rs[8].alerts.map((a) => [a.kind, a.held, a.pending]), [['settled', 1, ['GET /api/r1']]])
+    assert.match(formatComment(rs[8].alerts, URL), /Routes new in this streak and not commented yet: `GET \/api\/r1`\./)
   })
 })
 
