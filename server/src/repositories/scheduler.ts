@@ -10,22 +10,26 @@ import { syncRepositoryFiles, type FileUpdate } from './store.js'
 import { recordJob } from '../monitoring/metrics.js'
 
 /**
- * Pure decision function (unit-tested directly — the interval loop
- * around it isn't): poll unless a webhook has been seen recently
- * enough that the repository is already staying current on its own.
+ * Pure decision function (unit-tested directly): poll unless a webhook
+ * arrived within `thresholdMs` (WEBHOOK_STALE_THRESHOLD_MS) and the sync it
+ * triggered did not fail. A repository without a webhook, with a stale one,
+ * or in `error` is polled every tick, so a hook that stops delivering never
+ * stops the repository updating for longer than the threshold plus one poll
+ * interval (#410).
+ *
+ * `lastSyncedAt` deliberately plays no part: the webhook route writes
+ * `lastWebhookAt` before its sync and the sync writes `lastSyncedAt` after,
+ * so "synced since the last webhook" holds after every successful webhook
+ * sync and once disabled polling for good.
  */
 export function shouldPoll(
   lastWebhookAt: Date | null,
-  lastSyncedAt: Date | null,
+  syncStatus: RepositorySyncStatus,
   now: Date,
   thresholdMs: number,
 ): boolean {
-  if (!lastWebhookAt) return true
-  const webhookIsStale = now.getTime() - lastWebhookAt.getTime() > thresholdMs
-  if (!webhookIsStale) return false
-  // A stale webhook doesn't matter if something else (a manual/agent
-  // sync) already caught the repository up more recently than that.
-  return !lastSyncedAt || lastSyncedAt < lastWebhookAt
+  if (!lastWebhookAt || syncStatus === 'error') return true
+  return now.getTime() - lastWebhookAt.getTime() > thresholdMs
 }
 
 /**
@@ -86,7 +90,7 @@ async function tick(thresholdMs: number): Promise<void> {
 
   const now = new Date()
   for (const repo of candidates) {
-    if (!shouldPoll(repo.lastWebhookAt, repo.lastSyncedAt, now, thresholdMs)) continue
+    if (!shouldPoll(repo.lastWebhookAt, repo.syncStatus, now, thresholdMs)) continue
     try {
       await syncGitRepository(repo.id)
     } catch (err) {
