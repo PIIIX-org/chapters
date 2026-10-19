@@ -143,7 +143,7 @@ Invokes one of the 20 first-class Elara MCP engineering prompts (e.g. `active_pr
 Performs operations on notes:
 - `/elara-note read <vault-id> <path>`: Read note content and frontmatter.
 - `/elara-note create <vault-id> <path> [body]`: Create a new OKF note (`create_note` with `frontmatter` and `body`).
-- `/elara-note edit <vault-id> <path> <body>`: Replace the note body (and/or its whole frontmatter) via `edit_note`.
+- `/elara-note edit <vault-id> <path> <body>`: Replace the note body (and/or merge frontmatter keys) via `edit_note`.
 - `/elara-note rename <vault-id> <from> <to>`: `rename_note` with `from` and `toName`; `toName` is a slug (rename in place) or a full path (move). Full-path links in other notes are rewritten; bare-name links are not.
 - `/elara-note delete <vault-id> <path>`: Move note to trash.
 - `/elara-note history <vault-id> <path>`: View revision history and attribution.
