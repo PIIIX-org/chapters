@@ -305,7 +305,8 @@ Tunables via env (set in the workflow step if needed): `LAB_TESTS`,
 ## Gotchas
 
 - Notes: `type` in frontmatter must equal the first path segment; segments
-  `^[a-z0-9][a-z0-9-]*$`; `edit_note` frontmatter replaces the whole map.
+  `^[a-z0-9][a-z0-9-]*$`; `edit_note` frontmatter merges per key
+  (`replace: true` replaces the whole map, `removeKeys` deletes keys; #438).
 - `note_history` returns every revision with its full body (#411): fine on
   lab notes, never on big ones.
 - The image runs `NODE_ENV=production`: session cookies are `Secure`;

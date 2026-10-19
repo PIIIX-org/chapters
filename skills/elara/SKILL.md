@@ -66,7 +66,7 @@ When creating or editing notes via `create_note` or `edit_note`:
   }
   ```
 - Write `[[...]]` links bare. Links inside backticks or code blocks are ignored by the graph and the audit.
-- `edit_note`: `frontmatter` **replaces the whole map** (send every key you want to keep) and `body` **replaces the whole body**; omit a field to leave it unchanged. The edit streams into the live collaboration document and is recorded as a revision. Text a person is typing in the same note at that moment can be lost.
+- `edit_note`: `frontmatter` **merges per top-level key** (keys you send are set, keys you leave out are kept; `null` is stored as a value), `replace: true` replaces the whole map instead, `removeKeys` deletes keys, and `body` **replaces the whole body**; omit a field to leave it unchanged. The merged frontmatter is validated before anything is written. The edit streams into the live collaboration document and is recorded as a revision. Text a person is typing in the same note at that moment can be lost.
 - Run `audit_okf_conformance` to check structure (frontmatter, datetimes, link targets, indexes, orphans). It does not check whether the content is correct.
 
 ### 3. Post-Task Note Evaluation Protocol
@@ -225,7 +225,7 @@ Elara exposes 57 tools across 7 functional domains. **Capability** is the token 
 | :--- | :--- | :--- | :--- |
 | `read_note` | Vault/Account | `read` | Read a note's `path`, `frontmatter`, and `body`. |
 | `create_note` | Vault/Account | `write` | Create a note from `path` (or `type` + `name`), a `frontmatter` object, and a `body`. |
-| `edit_note` | Vault/Account | `write` | Replace a note's whole `frontmatter` map and/or whole `body`, streamed through live collaboration. |
+| `edit_note` | Vault/Account | `write` | Merge `frontmatter` keys (or `replace: true` the whole map, `removeKeys` to delete) and/or replace the whole `body`, streamed through live collaboration. |
 | `rename_note` | Vault/Account | `write` | Rename (`toName` slug) or move (`toName` full path) a note; full-path links in the vault are rewritten. |
 | `delete_note` | Vault/Account | `write` | Soft-delete a note to the vault trash. |
 | `list_trash` | Vault/Account | `read` | List soft-deleted notes in the vault trash. |

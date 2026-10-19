@@ -275,7 +275,7 @@ The other 34 findings (#714–#719, #721–#727, #729–#733, #735–#740, #743�
 - **Clean room:** never copy code or prompt text from MiroFish, OASIS, CAMEL, Graphiti, Zep or the landscape projects.
 - **Local machine:** no Docker or pnpm (the sandbox blocks symlinks); CI and the lab are the test runners. All files stay under `D:/taha`; point Bun/npm caches at `D:/taha/tools/cache`.
 - **Commits:** author and committer `Taha-Mahmoodi <Taha-Mahmoodi@users.noreply.github.com>` plus the trailer `Co-Authored-By: Claude Opus <noreply@anthropic.com>` (the `attribution` check).
-- **Elara `edit_note` frontmatter** replaces the whole map; never put `---` inside a frontmatter value.
+- **Elara `edit_note` frontmatter** merges per key since #438 (`replace: true` replaces the whole map, `removeKeys` deletes keys); never put `---` inside a frontmatter value.
 - **GitHub closing keywords:** never write "fix #N", "fixes #N" or "closes #N" in a PR body unless the PR really closes it, not even in "does not fix #N". #661 closed #496 that way; it was reopened, and the lab gate fails while a baseline entry points at a closed issue.
 - **Flaky lab checks:** if two full runs on the same commit disagree on a known-defect check, mark that entry `intermittent` with the measured reason (as in #661) rather than re-running until green.
 
