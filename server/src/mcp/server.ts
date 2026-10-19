@@ -159,13 +159,21 @@ function toolErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/** note_history's cursor: where the previous page ended (store RevisionPosition), base64url JSON. */
+/**
+ * note_history's cursor: where the previous page ended (store RevisionPosition), base64url JSON.
+ * `at` must be a real UTC time Postgres stores (years 0001-9999): the
+ * millisecond part must survive a Date round trip, which rejects rolled-over
+ * dates such as 2026-02-30 that Date.parse accepts.
+ */
 const RevisionCursor = z
   .object({
     at: z
       .string()
-      .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
-      .refine((at) => !Number.isNaN(Date.parse(`${at.slice(0, 23)}Z`))),
+      .regex(/^(?!0000)\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
+      .refine((at) => {
+        const ms = new Date(`${at.slice(0, 23)}Z`)
+        return !Number.isNaN(ms.getTime()) && ms.toISOString().slice(0, 23) === at.slice(0, 23)
+      }),
     id: z.string().uuid(),
   })
   .strict()
@@ -1195,8 +1203,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       { vaultId: target },
     ) => {
       await requireAccess(target, 'edit')
+      // Read the path the way note_history and revert_note do (trimmed, `\` as `/`, no `.md`).
+      const notePath = path === undefined ? undefined : resolveNotePath(path).fullPath
       const revision = await getRevision(target, revisionId)
-      if (!revision || (path !== undefined && revision.path !== path) || (noteId !== undefined && revision.noteId !== noteId)) {
+      if (!revision || (notePath !== undefined && revision.path !== notePath) || (noteId !== undefined && revision.noteId !== noteId)) {
         throw new McpToolError('revision not found')
       }
       return revision

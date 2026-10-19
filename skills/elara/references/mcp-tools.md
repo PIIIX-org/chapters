@@ -239,8 +239,9 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `revisionId` (uuid, required): an `id` from `note_history`.
-  - `path` (string, optional), `noteId` (uuid, optional): when given, the revision must belong to that note.
+  - `path` (string, optional), `noteId` (uuid, optional): when given, the revision must belong to that note. `path` is read like every note path (trimmed, `\` as `/`, a trailing `.md` dropped).
 - **Returns**: `{ id, noteId, path, actorType, actorId, action, frontmatter, body, createdAt }`: the note as it was at that revision (`path` is the note's current path). A revision that is not in the vault, or not of the named note, is `revision not found`.
+- Unlike `note_history`, which answers `note not found` for a note in the trash, `get_revision` still returns the revisions of a trashed note (as the REST revision route does); it needs the same edit access.
 
 ### `revert_note`
 - **Scope**: vault. Edit access.
