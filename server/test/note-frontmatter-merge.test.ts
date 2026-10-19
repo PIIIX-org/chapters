@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { checkNoteFiles } from '../src/notes/integrity.js'
-import { listRevisions, readNote } from '../src/notes/store.js'
+import { getRevision, listRevisionMeta, readNote, type RevisionRow } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -88,6 +88,12 @@ async function stored(path: string): Promise<{ frontmatter: Record<string, unkno
   return { frontmatter: note.frontmatter, body: note.body }
 }
 
+/** Every revision of the note with its content, newest first. */
+async function revisionsOf(path: string): Promise<RevisionRow[]> {
+  const meta = (await listRevisionMeta(vaultId, path, 200, 0))!
+  return (await Promise.all(meta.map((r) => getRevision(vaultId, r.id)))).map((r) => r!)
+}
+
 /**
  * The shared cases. `open` holds the note's live document open, like a person
  * with the note open (a no-op without the relay); `live` is its document.
@@ -110,12 +116,12 @@ function cases(live: () => Y.Doc | undefined, open: (path: string) => Promise<vo
   it('records the merged frontmatter in a revision credited to the agent, and REST to the user', async () => {
     const path = await freshNote()
     await open(path)
-    const before = (await listRevisions(vaultId, path))!.length
+    const before = (await revisionsOf(path)).length
     expect((await editNote({ path, frontmatter: { description: 'Merged.' } })).isError).toBe(false)
     // Through the relay its store of the document lands first, credited to
     // `collab` (#403); the agent's write of the same state must still be
     // recorded, credited to the connection.
-    const revisions = (await listRevisions(vaultId, path))!
+    const revisions = await revisionsOf(path)
     const added = revisions.slice(0, revisions.length - before)
     expect(added.map((r) => r.actorType)).toEqual(live() ? ['mcp', 'collab'] : ['mcp'])
     expect(added[0]).toMatchObject({ action: 'update', actorType: 'mcp', actorId: connectionId })
@@ -130,7 +136,7 @@ function cases(live: () => Y.Doc | undefined, open: (path: string) => Promise<vo
       body: { frontmatter: { status: 'active' } },
     })
     expect(put.statusCode).toBe(200)
-    expect((await listRevisions(vaultId, path))![0]).toMatchObject({ action: 'update', actorType: 'user', actorId: ownerId })
+    expect((await revisionsOf(path))[0]).toMatchObject({ action: 'update', actorType: 'user', actorId: ownerId })
   })
 
   it('replace: true replaces the whole map (type is kept)', async () => {
@@ -169,14 +175,14 @@ function cases(live: () => Y.Doc | undefined, open: (path: string) => Promise<vo
     const path = await freshNote()
     await open(path)
     const before = await stored(path)
-    const revisions = (await listRevisions(vaultId, path))!.length
+    const revisions = (await revisionsOf(path)).length
     for (const frontmatter of [{ status: 'not-a-status' }, { title: null }, { tags: 'one' }]) {
       const edit = await editNote({ path, frontmatter, body: 'Must not land.' })
       expect(edit.isError).toBe(true)
       expect(edit.text).toMatch(/must be/)
     }
     expect(await stored(path)).toEqual(before)
-    expect((await listRevisions(vaultId, path))!.length).toBe(revisions)
+    expect((await revisionsOf(path)).length).toBe(revisions)
     if (live()) {
       expect(liveFrontmatter()).toMatchObject({ title: TITLE, tags: TAGS })
       expect(liveFrontmatter()).not.toHaveProperty('status')

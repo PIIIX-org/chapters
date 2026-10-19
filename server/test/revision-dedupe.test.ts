@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
-import { createNote, listRevisions, readNote, updateNote, type Actor } from '../src/notes/store.js'
+import { createNote, getRevision, listRevisionMeta, readNote, updateNote, type Actor } from '../src/notes/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // #480: a repeat of the note's current state must not record a revision. The
@@ -51,8 +51,13 @@ async function freshNote(): Promise<{ path: string; frontmatter: Record<string, 
   return { path: row.path, frontmatter: row.frontmatter as Record<string, unknown> }
 }
 
+/** The note's revisions without content, newest first. */
+async function revisionMeta(path: string) {
+  return (await listRevisionMeta(vaultId, path, 200, 0))!
+}
+
 async function revisionCount(path: string): Promise<number> {
-  return (await listRevisions(vaultId, path))!.length
+  return (await revisionMeta(path)).length
 }
 
 /** The same object with its keys, and those of nested objects, in reverse order. */
@@ -105,7 +110,7 @@ describe('revision dedupe (#480)', () => {
     expect(await revisionCount(path)).toBe(++expected)
     await updateNote(vaultId, path, { body: 'Another body.' }, author)
     expect(await revisionCount(path)).toBe(++expected)
-    const latest = (await listRevisions(vaultId, path))![0]!
+    const latest = (await getRevision(vaultId, (await revisionMeta(path))[0]!.id))!
     expect(latest.frontmatter).toMatchObject({ tags: ['beta', 'alpha'], properties: { limits: { cpu: 4 } } })
   })
 
@@ -121,7 +126,7 @@ describe('revision dedupe (#480)', () => {
     // Another connection writing the same state is a different author.
     const other: Actor = { type: 'mcp', id: randomUUID() }
     await updateNote(vaultId, path, { frontmatter: { ...frontmatter, status: 'draft' } }, other)
-    const added = (await listRevisions(vaultId, path))!.slice(0, (await revisionCount(path)) - before)
+    const added = (await revisionMeta(path)).slice(0, (await revisionCount(path)) - before)
     expect(added.map((r) => [r.actorType, r.actorId])).toEqual([
       ['mcp', other.id],
       ['mcp', agent.id],

@@ -23,13 +23,17 @@ runs:
         key=$(openssl rand -hex 32)
         setup=$(openssl rand -hex 24)
         pg=$(openssl rand -hex 16)
+        # Reads /api/admin/monitoring (#705, lab/tests/monitoring-alerts.test.ts).
+        monitoring=$(openssl rand -hex 32)
         echo "::add-mask::$key"
         echo "::add-mask::$setup"
         echo "::add-mask::$pg"
+        echo "::add-mask::$monitoring"
         {
           echo "CREDENTIALS_ENCRYPTION_KEY=$key"
           echo "SETUP_TOKEN=$setup"
           echo "POSTGRES_PASSWORD=$pg"
+          echo "ELARA_MONITORING_TOKEN=$monitoring"
           echo "MCP_RATE_LIMIT=$RATE_LIMIT"
           echo "ELARA_VERSION=$ELARA_VERSION"
         } > .env

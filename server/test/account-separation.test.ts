@@ -175,7 +175,7 @@ beforeAll(async () => {
   await must(acctA, 'create_note', { vaultId: VA, type: 'docs', name: 'a-trashed', body: MARK_A })
   await must(acctA, 'delete_note', { vaultId: VA, path: 'docs/a-trashed' })
   const trash = await must<Array<{ id: string; path: string }>>(acctA, 'list_trash', { vaultId: VA })
-  const revisions = await must<Array<{ id: string }>>(acctA, 'note_history', { vaultId: VA, path: PATH.A })
+  const { revisions } = await must<{ revisions: Array<{ id: string }> }>(acctA, 'note_history', { vaultId: VA, path: PATH.A })
   await must(acctA, 'share_vault', { vaultId: VA, granteeType: 'user', granteeId: c.id, permission: 'read' })
   const vaultShares = await must<Array<{ id: string }>>(acctA, 'list_vault_shares', { vaultId: VA })
   const vaultPerspective = await must<{ id: string }>(acctA, 'save_graph_perspective', { vaultId: VA, name: `sep ${MARK_A}` })
@@ -263,7 +263,7 @@ function normalized(text: string, id: string): string {
 
 /** Arguments for `tool`: the overrides, then defaults for every required argument. */
 function argsFor(tool: Tool, side: 'A' | 'B', overrides: Args): Args {
-  const props = (tool.inputSchema.properties ?? {}) as Record<string, { type?: string; enum?: unknown[] }>
+  const props = (tool.inputSchema.properties ?? {}) as Record<string, { type?: string; format?: string; enum?: unknown[] }>
   const required = new Set(tool.inputSchema.required ?? [])
   const repoTool = 'repositoryId' in props && !('vaultId' in props)
   const named: Args = {
@@ -290,6 +290,8 @@ function argsFor(tool: Tool, side: 'A' | 'B', overrides: Args): Args {
     if (key in named) args[key] = named[key]
     else if (schema.enum?.length) args[key] = schema.enum[0]
     else if (schema.type === 'number' || schema.type === 'integer') args[key] = 1
+    // A second id argument (get_revision's revisionId beside a probed noteId): one that exists nowhere.
+    else if (schema.format === 'uuid') args[key] = randomUUID()
     else if (schema.type === 'boolean') args[key] = false
     else if (schema.type === 'array') args[key] = []
     else if (schema.type === 'object') args[key] = {}

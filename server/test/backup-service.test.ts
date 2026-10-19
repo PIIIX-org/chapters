@@ -1,5 +1,6 @@
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import AdmZip from 'adm-zip'
 import type { FastifyInstance } from 'fastify'
@@ -7,11 +8,13 @@ import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 import { signS3Request, uploadS3Object, listS3Objects, deleteS3Object } from '../src/export/s3.js'
+import { metricsSnapshot } from '../src/monitoring/metrics.js'
 import {
   executeBackup,
   getBackupStatus,
   pruneLocalBackups,
   pruneS3Backups,
+  startBackupScheduler,
 } from '../src/export/backup-service.js'
 
 let app: FastifyInstance
@@ -244,4 +247,71 @@ describe('executeBackup & backup routes', () => {
     expect(body.success).toBe(true)
     expect(body.result.filename).toMatch(/^(?:elara|chapters)-backup-.*\.zip$/)
   })
+})
+
+describe('scheduled backup failures in the monitoring metrics (#705)', () => {
+  type Counts = { succeeded: number; failed: number; repeated: number }
+  /**
+   * Runs `steps` against the real scheduler (intervalHours = 1, fake clock)
+   * with a destination that `block`/`unblock` breaks and fixes. The schedule
+   * is pinned by an on-demand backup that succeeds: the last run is now, no
+   * earlier failure, the next scheduled run is due in an hour.
+   */
+  async function withScheduler(
+    steps: (ctl: { block: () => void; unblock: () => void; nextRun: (expected: Counts) => Promise<void> }) => Promise<void>,
+  ): Promise<void> {
+    // A file where the backup directory should be: mkdir fails on every run.
+    const blocked = join(testBackupDir, 'blocked')
+    await writeFile(blocked, 'not a directory')
+    const localPath = vi.spyOn(config.backup, 'localPath', 'get').mockReturnValue(testBackupDir)
+    vi.spyOn(config.backup, 'intervalHours', 'get').mockReturnValue(1)
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    const backups = () => metricsSnapshot().jobs.backup
+    const stop = startBackupScheduler()
+    try {
+      await executeBackup()
+      const start = backups()
+      await steps({
+        block: () => localPath.mockReturnValue(join(blocked, 'backups')),
+        unblock: () => localPath.mockReturnValue(testBackupDir),
+        // One scheduled run an hour later; waits for it to finish, then compares the counts since `start`.
+        nextRun: async (expected) => {
+          const before = JSON.stringify(backups())
+          await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+          for (let i = 0; i < 200 && JSON.stringify(backups()) === before; i++) await sleep(25)
+          const b = backups()
+          expect({ succeeded: b.succeeded - start.succeeded, failed: b.failed - start.failed, repeated: b.repeated - start.repeated }).toEqual(expected)
+        },
+      })
+    } finally {
+      stop()
+      vi.useRealTimers()
+    }
+  }
+
+  it('reports a scheduled backup that fails right after a failed one as a repeat, not a new failure', async () => {
+    await withScheduler(async ({ block, unblock, nextRun }) => {
+      block()
+      await nextRun({ succeeded: 0, failed: 1, repeated: 0 })
+      await nextRun({ succeeded: 0, failed: 1, repeated: 1 })
+      await nextRun({ succeeded: 0, failed: 1, repeated: 2 })
+      // A scheduled success ends the streak; the next failure is new again.
+      unblock()
+      await nextRun({ succeeded: 1, failed: 1, repeated: 2 })
+      block()
+      await nextRun({ succeeded: 1, failed: 2, repeated: 2 })
+    })
+  }, 30_000)
+
+  it('counts a scheduled failure as new after an on-demand backup succeeded (the operator checked a fix)', async () => {
+    await withScheduler(async ({ block, unblock, nextRun }) => {
+      block()
+      await nextRun({ succeeded: 0, failed: 1, repeated: 0 })
+      // Fixed and checked with the admin "run backup now" (POST /api/admin/backup/run).
+      unblock()
+      await executeBackup()
+      block()
+      await nextRun({ succeeded: 0, failed: 2, repeated: 0 })
+    })
+  }, 30_000)
 })

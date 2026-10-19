@@ -2045,7 +2045,7 @@ put('/repositories/:id/graph-preference', ({ params, body }) => {
 // Mirrors listMcpTools() on the server: [name, scope, capability], plus the
 // permission on a pinned vault or repository each tool needs (pinPermission).
 const MCP_PIN_OWNER = ['update_vault', 'delete_vault', 'list_vault_shares', 'share_vault', 'revoke_vault_share', 'purge_note', 'purge_revision', 'update_repository', 'delete_repository', 'list_repository_shares', 'share_repository', 'revoke_repository_share']
-const MCP_PIN_EDIT = ['create_note', 'edit_note', 'rename_note', 'delete_note', 'list_trash', 'restore_note', 'note_history', 'revert_note', 'export_vault', 'save_graph_perspective', 'delete_graph_perspective']
+const MCP_PIN_EDIT = ['create_note', 'edit_note', 'rename_note', 'delete_note', 'list_trash', 'restore_note', 'note_history', 'get_revision', 'revert_note', 'export_vault', 'save_graph_perspective', 'delete_graph_perspective']
 const MCP_TOOLS = [
   ['list_vaults', 'account', 'read'], ['create_vault', 'account', 'write'], ['browse_vault', 'vault', 'read'],
   ['update_vault', 'vault', 'admin'], ['get_vault_graph_preference', 'vault', 'read'],
@@ -2056,7 +2056,7 @@ const MCP_TOOLS = [
   ['create_note', 'vault', 'write'], ['edit_note', 'vault', 'write'], ['rename_note', 'vault', 'write'],
   ['delete_note', 'vault', 'write'], ['list_trash', 'vault', 'read'], ['restore_note', 'vault', 'write'],
   ['purge_note', 'vault', 'admin'], ['note_history', 'vault', 'read'], ['revert_note', 'vault', 'write'],
-  ['purge_revision', 'vault', 'admin'], ['list_repositories', 'account', 'read'],
+  ['get_revision', 'vault', 'read'], ['purge_revision', 'vault', 'admin'], ['list_repositories', 'account', 'read'],
   ['connect_repository', 'account', 'admin'], ['browse_repository', 'repository', 'read'],
   ['read_file', 'repository', 'read'], ['repository_status', 'repository', 'read'],
   ['sync_repository', 'repository', 'write'], ['update_repository', 'repository', 'admin'],

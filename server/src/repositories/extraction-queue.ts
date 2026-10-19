@@ -5,6 +5,7 @@ import { embedder } from '../search/embeddings.js'
 import { recomputeSemanticEdges } from '../search/semantic-edges.js'
 import { extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import { resolveImportPath } from './import-resolution.js'
+import { recordJob } from '../monitoring/metrics.js'
 
 // ponytail: in-process serial queue; move to a job table if multi-process
 const queue: string[] = []
@@ -139,8 +140,10 @@ async function drain(): Promise<void> {
       const fileId = queue[head++]!
       try {
         await processFile(fileId)
+        recordJob('extraction', 'ok', fileId)
       } catch (err) {
         console.error(`extraction failed for repository file ${fileId}:`, err)
+        recordJob('extraction', { error: err }, fileId)
       }
       // ponytail: O(1) amortized compaction to avoid O(N^2) array shifting (INGEST-02).
       if (head > 1000 && head > queue.length / 2) {

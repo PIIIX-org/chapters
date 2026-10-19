@@ -38,9 +38,12 @@ deactivation and hashing, the MCP rate limit and its 429, two-account
 separation, note text in prompts; #552), `smoke`, `concurrency`,
 `scoped-tokens`, `collab-duplication` (without the eight-kill S17 sweep),
 `fix-attribution`, `fix-crash-catchup`, `fix-frontmatter`,
-`fix-import-edges` (without the chapters repo), `uptime-monitor`
-(`.github/scripts/uptime-monitor.mjs` against the instance through a
-graceful restart, a SIGKILL, a stop and a start; #583),
+`fix-import-edges` (without the chapters repo), `monitoring-alerts`
+(the uptime monitor with the lab's `ELARA_MONITORING_TOKEN` and
+`ALERT_WEBHOOK_URL` on a stub sink: an injected 500 and a failing git sync
+each produce an alert, with no note text or secret in it; #705),
+`uptime-monitor` (`.github/scripts/uptime-monitor.mjs` against the
+instance through a graceful restart, a SIGKILL, a stop and a start; #583),
 `zz-fix-minified-bundle`.
 Full tier adds `attachments`, `backup-restore`, `big-notes`, `browser`
 (Playwright/Chromium), `crash-write`, `export-roundtrip`,
@@ -307,18 +310,13 @@ Tunables via env (set in the workflow step if needed): `LAB_TESTS`,
 - Notes: `type` in frontmatter must equal the first path segment; segments
   `^[a-z0-9][a-z0-9-]*$`; `edit_note` frontmatter merges per key
   (`replace: true` replaces the whole map, `removeKeys` deletes keys; #438).
-- `note_history` returns every revision with its full body (#411): fine on
-  lab notes, never on big ones.
+- `note_history` returns one page of metadata, no bodies (#411): read the
+  content with `get_revision`. `McpClient.revisionsSince()` (`lib/mcp.ts`)
+  does both for tests that check what a revision holds.
 - The image runs `NODE_ENV=production`: session cookies are `Secure`;
   `RestSession` carries them by hand over http.
 - `EMBEDDINGS=local`: the first embedding downloads the ONNX model (~130 MB)
   inside the container; the first search or extraction is slower.
-- `big-notes` deliberately drives the app into a V8 heap OOM (#411; peak
-  about 6 GB in the container) and waits for Docker to restart it. The app
-  service has no memory limit, so this relies on the 16 GB `ubuntu-latest`
-  runner: on a smaller runner the kernel OOM killer could take Postgres or
-  the runner instead. Do not move the lab to a smaller runner while #411
-  stands.
 - No secrets of its own: the workflow generates `.env` per run
   (`CREDENTIALS_ENCRYPTION_KEY`, `SETUP_TOKEN`, `POSTGRES_PASSWORD`), masks
   it in the job log and redacts it from the artifact; `MCP_RATE_LIMIT` is

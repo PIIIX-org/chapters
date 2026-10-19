@@ -27,7 +27,7 @@ Elara is a team knowledge base and codebase mapping platform built on four found
    - `semantic`: nearest neighbours by embedding similarity.
    - Louvain communities are computed on every call. `find_graph_path` finds the shortest path (breadth-first). Saved graph perspectives are stored for the UI; the `graph` tool cannot apply them. There is no PageRank or centrality score.
 3. **Synced Code Repositories**: Read-only ingestion of git repositories (clone with polling or webhook), a local path under the server's repos root, or agent push. Files are indexed with Tree-sitter for TypeScript, JavaScript, Python, and Go (imports and top-level functions, classes, interfaces, types), and embedded for semantic search (`find_symbols`).
-4. **MCP Server & Prompts**: A stateless, permission-scoped MCP server over Streamable HTTP (`POST /mcp` or `POST /elara/mcp`; there is no stdio transport) with **57 tools** and **20 prompts**.
+4. **MCP Server & Prompts**: A stateless, permission-scoped MCP server over Streamable HTTP (`POST /mcp` or `POST /elara/mcp`; there is no stdio transport) with **58 tools** and **20 prompts**.
 
 ---
 
@@ -199,9 +199,9 @@ Exports a vault zip archive or single note markdown file.
 
 ---
 
-## Elara MCP Tool Reference (57 Tools)
+## Elara MCP Tool Reference (58 Tools)
 
-Elara exposes 57 tools across 7 functional domains. **Capability** is the token access level a tool needs: a token is `read`, `write` or `admin` (ordered), chosen when it is minted, and may also carry a tool allow-list and an expiry. Through the API, account tokens default to `admin`; vault- and repository-pinned tokens default to `write`, so they cannot share, update, trash or purge their pin or erase history unless the owner minted them with `admin`. A pinned token never gets more than its user's permission on the pin: with a read-only vault share the token is `read` (asking for more is refused). The Settings and vault forms start at `write`, or at `read` for a read-only vault member. `tools/list` shows a token only the tools it can call (allow-list, access level, scope; on a pinned token also the user's current permission on the pin, so owner-only tools such as `list_vault_shares` appear only to the owner, and tools that need edit access such as `list_trash` or `note_history` only to an editor). A refusal names the missing capability (`<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`); ask the user for a token with that capability instead of retrying.
+Elara exposes 58 tools across 7 functional domains. **Capability** is the token access level a tool needs: a token is `read`, `write` or `admin` (ordered), chosen when it is minted, and may also carry a tool allow-list and an expiry. Through the API, account tokens default to `admin`; vault- and repository-pinned tokens default to `write`, so they cannot share, update, trash or purge their pin or erase history unless the owner minted them with `admin`. A pinned token never gets more than its user's permission on the pin: with a read-only vault share the token is `read` (asking for more is refused). The Settings and vault forms start at `write`, or at `read` for a read-only vault member. `tools/list` shows a token only the tools it can call (allow-list, access level, scope; on a pinned token also the user's current permission on the pin, so owner-only tools such as `list_vault_shares` appear only to the owner, and tools that need edit access such as `list_trash` or `note_history` only to an editor). A refusal names the missing capability (`<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`); ask the user for a token with that capability instead of retrying.
 
 ### 1. Vault Management (14 tools)
 | Tool | Scope | Capability | Description |
@@ -221,7 +221,7 @@ Elara exposes 57 tools across 7 functional domains. **Capability** is the token 
 | `share_vault` | Vault/Account | `admin` | Grant read or edit access to a user or team. |
 | `revoke_vault_share` | Vault/Account | `admin` | Revoke a user or team share from a vault. |
 
-### 2. Note Operations & OKF Conformance (12 tools)
+### 2. Note Operations & OKF Conformance (13 tools)
 | Tool | Scope | Capability | Description |
 | :--- | :--- | :--- | :--- |
 | `read_note` | Vault/Account | `read` | Read a note's `path`, `frontmatter`, and `body`. |
@@ -232,7 +232,8 @@ Elara exposes 57 tools across 7 functional domains. **Capability** is the token 
 | `list_trash` | Vault/Account | `read` | List soft-deleted notes in the vault trash. |
 | `restore_note` | Vault/Account | `write` | Restore a trashed note by `noteId`. |
 | `purge_note` | Vault/Account | `admin` | Permanently delete a trashed note by `noteId` (owner only). |
-| `note_history` | Vault/Account | `read` | View revision history with the actor type (`user`, `mcp`, `collab`). Full content per revision, unpaginated. |
+| `note_history` | Vault/Account | `read` | One page of revision metadata, newest first (actor type `user`, `mcp` or `collab`, action, time, body size); `limit` (default 20, max 100) and `cursor` page through it. No content. |
+| `get_revision` | Vault/Account | `read` | One revision's `frontmatter` and `body` by `revisionId` (from `note_history`). |
 | `revert_note` | Vault/Account | `write` | Revert a note to a prior revision without losing history. |
 | `purge_revision` | Vault/Account | `admin` | Permanently erase a recorded revision (owner only). |
 | `audit_okf_conformance` | Vault/Account | `read` | Structural audit: frontmatter validity, datetime offsets, broken wikilinks and repo links, missing indexes, orphan notes. On a vault-scoped token every repo link is reported as broken (repositories are outside the pin). |
