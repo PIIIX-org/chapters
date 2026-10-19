@@ -28,10 +28,13 @@ name: Production uptime
 #     collab-store, backup)
 #   - slow: a route newly at p95 >= ALERT_SLOW_MS (default 2000) over
 #     >= ALERT_SLOW_MIN_COUNT (default 5) requests in 15 minutes
-#   - metrics-unavailable: the endpoint refuses while /health is up
-# Secret unset: these are skipped and the run still passes. The token is
-# only sent to production, never to a dispatched `url`. Optional secret
-# ALERT_WEBHOOK_URL: every comment is also POSTed there as JSON.
+#   - metrics-unavailable: the endpoint fails 2 reads in a row while
+#     /health is up
+# errors and jobs comment once per streak, not every run (again for a new
+# route or job kind, or after 24 h). Secret unset: these are skipped and the
+# run still passes. The token and the optional ALERT_WEBHOOK_URL secret
+# (every comment is also POSTed there as JSON) are only passed for
+# production, never for a dispatched `url`.
 #
 # Scheduled runs use the default branch's copy (`dev`). By hand:
 #   gh workflow run uptime.yml -R PIIIX-org/chapters                       # production
@@ -83,9 +86,9 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           URL: ${{ inputs.url || 'https://chapters.piiix.org' }}
           DRY_RUN: ${{ inputs.dry_run == true }}
-          # Production only: a dispatch with another url must not receive it.
+          # Production only: a dispatch with another url must receive neither.
           ELARA_MONITORING_TOKEN: ${{ (inputs.url || 'https://chapters.piiix.org') == 'https://chapters.piiix.org' && secrets.ELARA_MONITORING_TOKEN || '' }}
-          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          ALERT_WEBHOOK_URL: ${{ (inputs.url || 'https://chapters.piiix.org') == 'https://chapters.piiix.org' && secrets.ALERT_WEBHOOK_URL || '' }}
           ALERT_ERROR_THRESHOLD: ${{ vars.ALERT_ERROR_THRESHOLD }}
           ALERT_SLOW_MS: ${{ vars.ALERT_SLOW_MS }}
           ALERT_SLOW_MIN_COUNT: ${{ vars.ALERT_SLOW_MIN_COUNT }}

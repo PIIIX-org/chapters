@@ -33,7 +33,7 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       .update(repositories)
       .set({ syncStatus: 'error', lastSyncError: 'Invalid or forbidden git clone URL' })
       .where(eq(repositories.id, repositoryId))
-    recordJob('sync', { error: { name: 'UnsafeGitUrl' } }, repositoryId)
+    recordJob('sync', { error: { name: 'UnsafeGitUrl' }, repeat: repo.syncStatus === 'error' }, repositoryId)
     return
   }
 
@@ -117,7 +117,10 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       .where(eq(repositories.id, repositoryId))
     recordJob('sync', 'ok', repositoryId)
   } catch (err) {
-    recordJob('sync', { error: err }, repositoryId)
+    // A repository that was already in `error` (the poller retries it every
+    // POLL_INTERVAL_MS) failing again is not a new failure: one report on
+    // the transition into `error`, not one alert per poll (#705).
+    recordJob('sync', { error: err, repeat: repo.syncStatus === 'error' }, repositoryId)
     // The raw message can carry the authenticated clone URL, and lastSyncError
     // is served to every viewer: store and rethrow only the redacted text (#383).
     const raw = err instanceof Error ? err.message : String(err)

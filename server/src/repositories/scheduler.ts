@@ -146,7 +146,8 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
       .where(eq(repositories.id, repositoryId))
     recordJob('sync', 'ok', repositoryId)
   } catch (err) {
-    recordJob('sync', { error: err }, repositoryId)
+    // Already in `error`: a repeat, not a new failure (git-sync.ts, #705).
+    recordJob('sync', { error: err, repeat: repo.syncStatus === 'error' }, repositoryId)
     const errorMsg = (err as Error).message.replace(/\0/g, '')
     await db
       .update(repositories)

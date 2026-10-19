@@ -77,9 +77,9 @@ const slots: Slot[] = []
 const errors: ErrorRecord[] = []
 let seq = 0
 const totals = { requests: 0, serverErrors: 0, jobFailures: 0 }
-const jobs = Object.fromEntries(JOB_KINDS.map((k) => [k, { succeeded: 0, failed: 0 }])) as Record<
+const jobs = Object.fromEntries(JOB_KINDS.map((k) => [k, { succeeded: 0, failed: 0, repeated: 0 }])) as Record<
   JobKind,
-  { succeeded: number; failed: number }
+  { succeeded: number; failed: number; repeated: number }
 >
 
 /** `{name, code}` of a thrown value, each kept only when it looks like an identifier (never the message). */
@@ -182,10 +182,23 @@ export function recordRequest(sample: RequestSample, now = Date.now()): void {
  * One background job outcome: `'ok'`, or the thrown value for a failure
  * (counted, kept in the error ring, logged). `subjectId` is the note, file,
  * repository or vault the job was about; anything but a UUID is dropped.
+ * `repeat: true` marks a failure of a subject that was already failing (a
+ * repository in `error` whose poll fails again): only `repeated` counts it,
+ * so a failure that keeps happening is reported once, not on every retry, and
+ * cannot push other records out of the ring.
  */
-export function recordJob(kind: JobKind, outcome: 'ok' | { error: unknown }, subjectId: string | null = null, now = Date.now()): void {
+export function recordJob(
+  kind: JobKind,
+  outcome: 'ok' | { error: unknown; repeat?: boolean },
+  subjectId: string | null = null,
+  now = Date.now(),
+): void {
   if (outcome === 'ok') {
     jobs[kind].succeeded++
+    return
+  }
+  if (outcome.repeat) {
+    jobs[kind].repeated++
     return
   }
   jobs[kind].failed++
@@ -254,7 +267,7 @@ export function metricsSnapshot(now = Date.now()) {
     now: new Date(now).toISOString(),
     windowMinutes: WINDOW_MINUTES,
     totals: { ...totals },
-    jobs: Object.fromEntries(JOB_KINDS.map((k) => [k, { ...jobs[k] }])) as Record<JobKind, { succeeded: number; failed: number }>,
+    jobs: Object.fromEntries(JOB_KINDS.map((k) => [k, { ...jobs[k] }])) as Record<JobKind, { succeeded: number; failed: number; repeated: number }>,
     routes,
     errors: errors.map((e) => ({ ...e })),
     lastSeq: seq,
@@ -269,5 +282,5 @@ export function resetMetrics(): void {
   totals.requests = 0
   totals.serverErrors = 0
   totals.jobFailures = 0
-  for (const k of JOB_KINDS) jobs[k] = { succeeded: 0, failed: 0 }
+  for (const k of JOB_KINDS) jobs[k] = { succeeded: 0, failed: 0, repeated: 0 }
 }

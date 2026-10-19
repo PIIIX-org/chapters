@@ -15,18 +15,26 @@
 //     since the last check (the server's counters are cumulative since boot,
 //     so a late check loses nothing; a new bootId counts from zero)
 //   - jobs: any new failed background job (embedding, extraction, sync,
-//     collab-store, backup)
+//     collab-store, backup; a repository that keeps failing counts once, on
+//     its way into `error`)
 //   - slow: a route that newly has p95 >= ALERT_SLOW_MS (default 2000) over
 //     at least ALERT_SLOW_MIN_COUNT (default 5) requests in the server's
 //     15-minute window (once until it is fast again)
-//   - metrics-unavailable: the endpoint fails while `/health` is up (once
-//     per streak: a wrong or rotated token)
+//   - metrics-unavailable: the endpoint fails DOWN_AFTER reads in a row while
+//     `/health` is up (once per streak: a wrong or rotated token)
+// `errors` and `jobs` alert once per streak, not on every run: while new ones
+// keep coming, the next comment is for a route or job kind the streak has not
+// had yet, or after REALERT_MS (24 h) with the count held back meanwhile; a
+// streak ends after QUIET_MS (1 h) without a new one, with a closing note when
+// something was held back.
 // The server's reports carry no note text and no error message (route
 // template, status, error class and code, request id, actor kind, job kind);
 // subject ids are left out here too, because comments and the Actions log
 // are public. Unset token = none of this, and nothing fails.
 // ALERT_WEBHOOK_URL (optional, for self-hosters running this from cron):
 // every comment is also POSTed there as JSON `{text, content, url, alerts}`.
+// In issue mode a malformed value is reported and ignored (the comment is the
+// alert of record); in file mode, where it is the only sink, it stops the run.
 // A payload without `bootId` (an image older than #583) is unknown: it is
 // recorded, never compared, so it cannot alert in a loop. Every value that
 // ends up in a comment is format-checked first: from `/health` (a
@@ -71,6 +79,12 @@ export const JOB_KINDS = ['embedding', 'extraction', 'sync', 'collab-store', 'ba
 export const METRICS_DEFAULTS = { errorThreshold: 1, slowMs: 2000, slowMinCount: 5 }
 /** Error records listed per alert (the newest). */
 export const RECENT_ERRORS = 10
+/** While `errors` or `jobs` keep coming, the same alert again after this long (with the count held back). */
+export const REALERT_MS = 24 * 60 * 60 * 1000
+/** A streak of `errors` or `jobs` ends after this long without a new one. */
+export const QUIET_MS = 60 * 60 * 1000
+/** Routes or job kinds a streak remembers (a new one alerts at once). */
+const STREAK_KEYS = 50
 const ROUTE = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|OTHER) (\/[\w/:*.-]{0,200}|\(other\))$/
 const IDENT = /^[A-Za-z][\w.-]{0,63}$/
 const ERROR_CODE = /^[\w.-]{1,64}$/
@@ -98,6 +112,11 @@ const isoTime = (v) => {
   const s = valid(v, ISO)
   return s && Number.isFinite(Date.parse(s)) ? s : null
 }
+/** A timestamp the monitor wrote in an earlier run: valid and not later than `now`, else null. */
+const pastTime = (v, now) => {
+  const t = isoTime(v)
+  return t && Date.parse(t) <= Date.parse(now) ? t : null
+}
 /** Error text for a comment: plain characters only, bounded. */
 const plain = (v) => String(v).replace(/[^\w .:/()-]/g, '?').slice(0, 160)
 
@@ -105,26 +124,22 @@ const plain = (v) => String(v).replace(/[^\w .:/()-]/g, '?').slice(0, 160)
  * A saved state (`readStates`, the state file) with the same format checks as
  * `/health` values: the issue body can be edited by hand, and these values go
  * into comments. Anything else is reset to its empty value. The monitor's own
- * timestamps (`firstFailureAt`, `heartbeatAt`) were written by an earlier run,
- * so one later than `now` is reset too: a future `heartbeatAt` would otherwise
- * stop the weekly check-in for good.
+ * timestamps (`firstFailureAt`, `heartbeatAt`, the metrics streaks) were
+ * written by an earlier run, so one later than `now` is reset too: a future
+ * `heartbeatAt` would otherwise stop the weekly check-in for good.
  */
 function checkedState(saved, now) {
   const s = saved && typeof saved === 'object' ? saved : {}
-  const past = (v) => {
-    const t = isoTime(v)
-    return t && Date.parse(t) <= Date.parse(now) ? t : null
-  }
   return {
     bootId: valid(s.bootId, UUID),
     startedAt: isoTime(s.startedAt),
     version: valid(s.version, SHA),
     lastShutdown: SHUTDOWN_KINDS.has(s.lastShutdown) ? s.lastShutdown : null,
     failures: Number.isInteger(s.failures) && s.failures >= 0 ? Math.min(s.failures, DOWN_AFTER) : 0,
-    firstFailureAt: past(s.firstFailureAt),
+    firstFailureAt: pastTime(s.firstFailureAt, now),
     down: s.down === true,
-    heartbeatAt: past(s.heartbeatAt),
-    metrics: checkedMetricsState(s.metrics),
+    heartbeatAt: pastTime(s.heartbeatAt, now),
+    metrics: checkedMetricsState(s.metrics, now),
   }
 }
 
@@ -216,16 +231,32 @@ export function step(prev, obs) {
 /** A count: a non-negative integer, else 0. */
 const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0)
 
-/** The saved metrics state, format-checked like the rest (null = never read). */
-function checkedMetricsState(s) {
+/** A saved `errors`/`jobs` streak (see streakStep), or null when any field is off. */
+function checkedStreak(s, keyOk, now) {
   if (!s || typeof s !== 'object') return null
+  const since = pastTime(s.since, now)
+  const lastAt = pastTime(s.lastAt, now)
+  const alertedAt = pastTime(s.alertedAt, now)
+  if (!since || !lastAt || !alertedAt) return null
+  const keys = Array.isArray(s.keys) ? [...new Set(s.keys.filter(keyOk))].slice(0, STREAK_KEYS) : []
+  return { since, lastAt, alertedAt, held: count(s.held), keys }
+}
+
+/** The saved metrics state, format-checked like the rest (null = never read). */
+function checkedMetricsState(s, now) {
+  if (!s || typeof s !== 'object') return null
+  const streaks = s.streaks && typeof s.streaks === 'object' ? s.streaks : {}
   return {
     bootId: valid(s.bootId, UUID),
     serverErrors: count(s.serverErrors),
     jobFailures: count(s.jobFailures),
     lastSeq: count(s.lastSeq),
     slow: Array.isArray(s.slow) ? s.slow.filter((r) => valid(r, ROUTE)).slice(0, 50) : [],
-    unavailable: s.unavailable === true,
+    failedReads: Math.min(count(s.failedReads), DOWN_AFTER),
+    streaks: {
+      errors: checkedStreak(streaks.errors, (k) => valid(k, ROUTE) !== null, now),
+      jobs: checkedStreak(streaks.jobs, (k) => JOB_KINDS.includes(k), now),
+    },
   }
 }
 
@@ -284,20 +315,56 @@ export function metricsOptions(env = process.env) {
 }
 
 /**
+ * One `errors` or `jobs` streak -> next streak + whether this run alerts.
+ * `n` is this run's new count (0 when below the threshold), `keys` the routes
+ * or job kinds of this run's new records. No streak (or QUIET_MS since the
+ * last new one): a new streak, alert. In a streak: alert for a key the streak
+ * has not had (a new failure condition) or REALERT_MS after the last alert,
+ * with the count held back since; otherwise hold the count back. A quiet
+ * QUIET_MS ends the streak, with a closing note when something was held back
+ * (so no count goes unreported).
+ */
+function streakStep(s, n, keys, at) {
+  const t = Date.parse(at)
+  const quiet = s !== null && t - Date.parse(s.lastAt) >= QUIET_MS
+  if (n === 0) {
+    if (!quiet) return { streak: s, alert: null, ended: null }
+    return { streak: null, alert: null, ended: s.held > 0 ? s : null }
+  }
+  const ended = quiet && s.held > 0 ? s : null
+  if (s === null || quiet) {
+    return { streak: { since: at, lastAt: at, alertedAt: at, held: 0, keys: keys.slice(0, STREAK_KEYS) }, alert: { since: at, held: 0, lastAlertAt: null }, ended }
+  }
+  const merged = [...new Set([...s.keys, ...keys])].slice(0, STREAK_KEYS)
+  const newKey = keys.some((k) => !s.keys.includes(k))
+  if (!newKey && t - Date.parse(s.alertedAt) < REALERT_MS) {
+    return { streak: { ...s, lastAt: at, held: s.held + n, keys: merged }, alert: null, ended: null }
+  }
+  return {
+    streak: { ...s, lastAt: at, alertedAt: at, held: 0, keys: merged },
+    alert: { since: s.since, held: s.held, lastAlertAt: s.alertedAt },
+    ended: null,
+  }
+}
+
+/**
  * Saved metrics state + observation -> next state + alerts. The first read
  * (no saved bootId) is a baseline. Counters are cumulative since boot: the
  * same bootId compares with the saved counts, a new one counts from zero
  * (everything since the restart is new). A spike below the threshold is not
- * carried over to the next check. A slow route alerts once until it drops
- * out of the slow set; an unreadable endpoint once per streak.
+ * carried over to the next check. `errors` and `jobs` alert once per streak
+ * (streakStep), a slow route once until it drops out of the slow set, an
+ * unreadable endpoint once per streak of DOWN_AFTER failed reads.
  */
 export function stepMetrics(prev, mobs, opts = METRICS_DEFAULTS, at = new Date().toISOString()) {
-  const p = checkedMetricsState(prev)
+  const p = checkedMetricsState(prev, at)
+  const streaks = p?.streaks ?? { errors: null, jobs: null }
   if (!mobs.ok) {
-    const base = p ?? { bootId: null, serverErrors: 0, jobFailures: 0, lastSeq: 0, slow: [], unavailable: false }
+    const base = p ?? { bootId: null, serverErrors: 0, jobFailures: 0, lastSeq: 0, slow: [], failedReads: 0, streaks }
+    const failedReads = Math.min(base.failedReads + 1, DOWN_AFTER)
     return {
-      state: { ...base, unavailable: true },
-      alerts: base.unavailable ? [] : [{ kind: 'metrics-unavailable', at, error: mobs.error }],
+      state: { ...base, failedReads },
+      alerts: base.failedReads + 1 === DOWN_AFTER ? [{ kind: 'metrics-unavailable', at, reads: DOWN_AFTER, error: mobs.error }] : [],
     }
   }
   const slowNow = mobs.routes.filter((r) => r.count >= opts.slowMinCount && r.p95Ms >= opts.slowMs)
@@ -307,7 +374,8 @@ export function stepMetrics(prev, mobs, opts = METRICS_DEFAULTS, at = new Date()
     jobFailures: mobs.jobFailures,
     lastSeq: mobs.lastSeq,
     slow: slowNow.map((r) => r.route),
-    unavailable: false,
+    failedReads: 0,
+    streaks,
   }
   if (!p?.bootId) return { state, alerts: [] }
   const restarted = p.bootId !== mobs.bootId
@@ -316,25 +384,41 @@ export function stepMetrics(prev, mobs, opts = METRICS_DEFAULTS, at = new Date()
   const newFailures = since(mobs.jobFailures, p.jobFailures)
   const fromSeq = restarted || mobs.lastSeq < p.lastSeq ? 0 : p.lastSeq
   const fresh = mobs.errors.filter((e) => e.seq > fromSeq)
+  const requests = fresh.filter((e) => e.type === 'request')
+  const failedJobs = fresh.filter((e) => e.type === 'job')
   const alerts = []
-  if (newErrors >= opts.errorThreshold) {
+
+  const errs = streakStep(
+    streaks.errors,
+    newErrors >= opts.errorThreshold ? newErrors : 0,
+    [...new Set(requests.map((e) => e.route).filter(Boolean))],
+    at,
+  )
+  const jobs = streakStep(streaks.jobs, newFailures, [...new Set(failedJobs.map((e) => e.job))], at)
+  state.streaks = { errors: errs.streak, jobs: jobs.streak }
+  for (const [of, r] of [['errors', errs], ['jobs', jobs]]) {
+    if (r.ended) alerts.push({ kind: 'settled', of, at, since: r.ended.since, lastAt: r.ended.lastAt, alertedAt: r.ended.alertedAt, held: r.ended.held })
+  }
+  if (errs.alert) {
     alerts.push({
       kind: 'errors',
       at,
       count: newErrors,
       threshold: opts.errorThreshold,
       restarted,
-      recent: fresh.filter((e) => e.type === 'request').slice(-RECENT_ERRORS),
+      streak: errs.alert,
+      recent: requests.slice(-RECENT_ERRORS),
     })
   }
-  if (newFailures > 0) {
+  if (jobs.alert) {
     alerts.push({
       kind: 'jobs',
       at,
       count: newFailures,
       restarted,
+      streak: jobs.alert,
       failedSinceBoot: mobs.jobs,
-      recent: fresh.filter((e) => e.type === 'job').slice(-RECENT_ERRORS),
+      recent: failedJobs.slice(-RECENT_ERRORS),
     })
   }
   const newlySlow = slowNow.filter((r) => !p.slow.includes(r.route))
@@ -369,6 +453,19 @@ const errorText = (e) => (e?.name || e?.code ? code([e.name, e.code].filter(Bool
 function minutes(from, to) {
   const ms = Date.parse(to) - Date.parse(from)
   return Number.isFinite(ms) ? `${Math.max(0, Math.round(ms / 60_000))} min` : 'unknown'
+}
+
+const STREAK_WORDS = {
+  errors: { title: 'Server errors', items: '5xx responses', key: 'route' },
+  jobs: { title: 'Failed background jobs', items: 'failed jobs', key: 'job kind' },
+}
+
+/** The lines of an `errors`/`jobs` alert about its streak (stepMetrics: once per streak, not every run). */
+function streakText(s, w) {
+  if (!s) return []
+  const next = `Until they stop for ${QUIET_MS / 60_000} min, more ${w.items} get a comment only for a ${w.key} not seen in this streak, or after ${REALERT_MS / 3_600_000} h.`
+  if (!s.lastAlertAt) return ['', next]
+  return ['', `Still happening since ${s.since}: ${s.held} more ${w.items} since the last comment (${s.lastAlertAt}) were held back. ${next}`]
 }
 
 /** Markdown for one comment holding every alert of a run. */
@@ -428,6 +525,7 @@ export function formatComment(alerts, url) {
           : []),
         '',
         'Reports carry the error class and code only, never its message or the note it touched: the full error is in the server log under the request id (`docker compose logs app | grep <request id>`).',
+        ...streakText(a.streak, STREAK_WORDS.errors),
       )
     } else if (a.kind === 'jobs') {
       const sinceBoot = Object.entries(a.failedSinceBoot).filter(([, n]) => n > 0)
@@ -440,6 +538,7 @@ export function formatComment(alerts, url) {
           : []),
         '',
         `Failed since the process started: ${sinceBoot.length ? sinceBoot.map(([k, n]) => `${code(k)} ${n}`).join(', ') : '_none_'}. The note, file, repository or vault each one was about is on \`${METRICS_PATH}\` (admin session) and in the server log's \`job_failure\` lines. A failed \`collab-store\` means a live edit was not written to the note file.`,
+        ...streakText(a.streak, STREAK_WORDS.jobs),
       )
     } else if (a.kind === 'slow') {
       parts.push(
@@ -451,11 +550,18 @@ export function formatComment(alerts, url) {
         '|---|---|---|---|',
         ...a.routes.map((r) => `| ${code(r.route)} | ${r.p95Ms} | ${r.maxMs} | ${r.count} |`),
       )
+    } else if (a.kind === 'settled') {
+      const w = STREAK_WORDS[a.of]
+      parts.push(
+        `### ${w.title} stopped: ${url}`,
+        '',
+        `No new ${w.items} since ${a.lastAt}; this streak began at ${a.since}. ${a.held} more after the last comment (${a.alertedAt}) were held back, not commented one by one.`,
+      )
     } else if (a.kind === 'metrics-unavailable') {
       parts.push(
         `### Metrics unavailable: ${url}`,
         '',
-        `\`/health\` is up but \`${METRICS_PATH}\` failed (${code(a.error)}), so error, job and latency alerts are paused. Check \`ELARA_MONITORING_TOKEN\` on the server and the repository secret of the same name (they must match). One comment per streak.`,
+        `\`/health\` is up but \`${METRICS_PATH}\` failed ${a.reads ?? DOWN_AFTER} reads in a row (last: ${code(a.error)}), so error, job and latency alerts are paused. Check \`ELARA_MONITORING_TOKEN\` on the server and the repository secret of the same name (they must match). One comment per streak.`,
       )
     }
     parts.push('')
@@ -597,6 +703,21 @@ export function webhookTarget(raw) {
   return u.href
 }
 
+/**
+ * ALERT_WEBHOOK_URL for this run -> `{ target, warning }`. In file mode the
+ * webhook is the only sink, so a malformed value stops the run. In issue mode
+ * the comment is the alert of record: a malformed optional secret must not
+ * stop the restart and down alerts, so it is a warning and no webhook.
+ */
+export function webhookConfig(raw, fileMode) {
+  if (fileMode) return { target: webhookTarget(raw), warning: null }
+  try {
+    return { target: webhookTarget(raw), warning: null }
+  } catch (err) {
+    return { target: null, warning: `${err.message}; ignored` }
+  }
+}
+
 /** The webhook body: `text` (Slack and most chat webhooks), `content` (Discord, 2000 chars), and the alerts as data. */
 export function webhookPayload(alerts, url, comment) {
   return { text: comment, content: comment.length > 2000 ? `${comment.slice(0, 1990)}\n…` : comment, url, alerts }
@@ -656,7 +777,8 @@ function summary(markdown) {
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   const token = process.env.ELARA_MONITORING_TOKEN || ''
-  const hook = webhookTarget(process.env.ALERT_WEBHOOK_URL)
+  const { target: hook, warning: hookWarning } = webhookConfig(process.env.ALERT_WEBHOOK_URL, Boolean(args.stateFile))
+  if (hookWarning) console.warn(`webhook not used: ${hookWarning}`)
   const opts = metricsOptions()
   const obs = await probe(args.url)
   const out = { url: args.url, observation: obs }
@@ -686,7 +808,7 @@ async function main() {
   const alerts = [...health.alerts, ...m.alerts]
   const labels = labelsFor(alerts)
   const comment = alerts.length ? formatComment(alerts, args.url) : null
-  let webhook = null
+  let webhook = hookWarning
   Object.assign(out, { issue: issue.html_url, metrics: m.summary, alerts, labels, comment, state, dryRun: args.dryRun })
   if (!args.dryRun) {
     const r = `/repos/${repo}/issues/${issue.number}`

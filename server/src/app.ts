@@ -48,7 +48,7 @@ export async function buildApp(
   // reported with the error's class name and code, never its message
   // (monitoring/metrics.ts, #705). The error handler hands the error over.
   const serverErrors = new WeakMap<object, unknown>()
-  app.addHook('onResponse', async (req, reply) => {
+  app.addHook('onResponse', (req, reply, done) => {
     recordRequest({
       method: req.method,
       template: req.routeOptions.url,
@@ -58,6 +58,7 @@ export async function buildApp(
       actor: req.user ? 'user' : /^Bearer /i.test(req.headers.authorization ?? '') ? 'token' : 'anonymous',
       error: serverErrors.get(req),
     })
+    done()
   })
 
   app.setErrorHandler((error: FastifyError, req, reply) => {
