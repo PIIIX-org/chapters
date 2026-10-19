@@ -8,6 +8,8 @@ import {
   HEARTBEAT_MS,
   METRICS_DEFAULTS,
   METRICS_PATH,
+  QUIET_MS,
+  REALERT_MS,
   UNCLEAN_LABEL,
   emptyState,
   formatComment,
@@ -20,6 +22,7 @@ import {
   readStates,
   step,
   stepMetrics,
+  webhookConfig,
   webhookPayload,
   webhookTarget,
   writeStates,
@@ -372,15 +375,18 @@ const metrics = ({ bootId = A, serverErrors = 0, jobFailures = 0, routes = [], e
       lastSeq: errors.at(-1)?.seq ?? 0,
     },
   })
-/** Runs metrics observations through stepMetrics() in order. */
-function runMetrics(observations, opts = METRICS_DEFAULTS, state = null) {
-  return observations.map((m) => {
-    const r = stepMetrics(state, m, opts, T2)
+/** Runs metrics observations through stepMetrics() in order (`times[i]` is run i's time, T2 by default). */
+function runMetrics(observations, opts = METRICS_DEFAULTS, state = null, times = []) {
+  return observations.map((m, i) => {
+    const r = stepMetrics(state, m, opts, times[i] ?? T2)
     state = r.state
     return r
   })
 }
 const kindsOf = (rs) => rs.map((r) => r.alerts.map((a) => a.kind))
+/** Run i of a monitor scheduled every 10 minutes from T1. */
+const every10 = (i) => new Date(Date.parse(T1) + i * 10 * 60_000).toISOString()
+const EMPTY_STREAKS = { errors: null, jobs: null }
 
 describe('observeMetrics', () => {
   it('keeps format-checked records and drops the subject id (comments and the Actions log are public)', () => {
@@ -447,22 +453,111 @@ describe('stepMetrics', () => {
     assert.deepEqual(rs[1].alerts[0].routes, [slow])
     assert.equal(rs[1].alerts[0].slowMs, 2000)
   })
-  it('alerts once per streak when the endpoint stops answering, and keeps the counts to compare after', () => {
+  it(`alerts once per streak of ${DOWN_AFTER} failed reads while /health is up, and keeps the counts to compare after`, () => {
     const refused = observeMetrics({ status: 401 })
-    const rs = runMetrics([metrics({ serverErrors: 1 }), refused, refused, metrics({ serverErrors: 1 }), metrics({ serverErrors: 2 })])
-    assert.deepEqual(kindsOf(rs), [[], ['metrics-unavailable'], [], [], ['errors']])
-    assert.equal(rs[1].alerts[0].error, 'HTTP 401')
+    const rs = runMetrics([metrics({ serverErrors: 1 }), refused, refused, refused, metrics({ serverErrors: 1 }), metrics({ serverErrors: 2 })])
+    assert.deepEqual(kindsOf(rs), [[], [], ['metrics-unavailable'], [], [], ['errors']])
+    assert.equal(rs[2].alerts[0].error, 'HTTP 401')
+  })
+  it('does not alert on a single failed read between good ones (one timeout is not an outage)', () => {
+    const timeout = observeMetrics({ error: 'TimeoutError' })
+    const rs = runMetrics([metrics(), timeout, metrics(), timeout, metrics()])
+    assert.deepEqual(kindsOf(rs), [[], [], [], [], []])
   })
   it('re-checks a hand-edited saved state', () => {
     const r = stepMetrics({ bootId: '@owner', serverErrors: 'x', slow: ['`evil`'] }, metrics({ serverErrors: 4 }), METRICS_DEFAULTS, T2)
     assert.deepEqual(r.alerts, [], 'no valid saved bootId: a baseline')
-    assert.deepEqual(r.state, { bootId: A, serverErrors: 4, jobFailures: 0, lastSeq: 0, slow: [], unavailable: false })
+    assert.deepEqual(r.state, { bootId: A, serverErrors: 4, jobFailures: 0, lastSeq: 0, slow: [], failedReads: 0, streaks: EMPTY_STREAKS })
   })
   it('is kept in the uptime state through restarts and outages', () => {
-    const saved = { ...emptyState(), bootId: A, metrics: { bootId: A, serverErrors: 2, jobFailures: 0, lastSeq: 2, slow: [], unavailable: false } }
+    const streak = { since: T1, lastAt: T1, alertedAt: T1, held: 3, keys: ['sync'] }
+    const saved = {
+      ...emptyState(),
+      bootId: A,
+      metrics: { bootId: A, serverErrors: 2, jobFailures: 0, lastSeq: 2, slow: [], failedReads: 0, streaks: { errors: null, jobs: streak } },
+    }
     assert.deepEqual(step(saved, up(A)).state.metrics, saved.metrics)
     assert.deepEqual(step(saved, up(B)).state.metrics, saved.metrics)
     assert.deepEqual(step(saved, fail()).state.metrics, saved.metrics)
+  })
+})
+
+// Review of #764: a failure that keeps happening (a repository with a dead
+// remote, re-polled every 5 minutes; one endpoint that keeps answering 500)
+// got a comment on every scheduled run, about 144 a day.
+describe('stepMetrics: one alert per streak, not one per run', () => {
+  /** A sync that fails again before every run: counters and records grow by one each time. */
+  const failingSync = (n, extra = []) =>
+    metrics({ jobFailures: n + extra.length, errors: [...Array.from({ length: n }, (_, i) => jobRecord(i + 1)), ...extra], jobs: { sync: { failed: n } } })
+  const failingRoute = (n, route = 'GET /api/vaults/:id/graph') =>
+    metrics({ serverErrors: n, errors: Array.from({ length: n }, (_, i) => reqRecord(i + 1, { route })) })
+  const comments = (rs) => rs.filter((r) => r.alerts.length > 0).length
+  const times = Array.from({ length: 200 }, (_, i) => every10(i))
+
+  it('posts one jobs comment over 6 runs of a sync that fails before every run', () => {
+    const rs = runMetrics([metrics(), failingSync(1), failingSync(2), failingSync(3), failingSync(4), failingSync(5)], METRICS_DEFAULTS, null, times)
+    assert.deepEqual(kindsOf(rs), [[], ['jobs'], [], [], [], []])
+    assert.equal(comments(rs), 1)
+  })
+  it('posts one errors comment over 6 runs of one route that keeps answering 500', () => {
+    const rs = runMetrics([metrics(), failingRoute(2), failingRoute(4), failingRoute(6), failingRoute(8), failingRoute(10)], METRICS_DEFAULTS, null, times)
+    assert.deepEqual(kindsOf(rs), [[], ['errors'], [], [], [], []])
+    assert.equal(comments(rs), 1)
+  })
+  it('alerts at once for a new failure condition inside a streak: another job kind or another route', () => {
+    const jobs = runMetrics(
+      [metrics(), failingSync(1), failingSync(2), failingSync(3, [jobRecord(10, 'embedding')]), failingSync(4, [jobRecord(10, 'embedding')])],
+      METRICS_DEFAULTS,
+      null,
+      times,
+    )
+    assert.deepEqual(kindsOf(jobs), [[], ['jobs'], [], ['jobs'], []])
+    assert.deepEqual(jobs[3].alerts[0].recent.map((e) => e.job), ['sync', 'embedding'])
+    const other = metrics({ serverErrors: 5, errors: [...[1, 2, 3, 4].map((s) => reqRecord(s, { route: 'GET /api/vaults/:id/graph' })), reqRecord(5)] })
+    const errors = runMetrics([metrics(), failingRoute(2), failingRoute(4), other], METRICS_DEFAULTS, null, times)
+    assert.deepEqual(kindsOf(errors), [[], ['errors'], [], ['errors']])
+  })
+  it(`alerts again after ${REALERT_MS / 3_600_000} h while it keeps failing, with the count held back meanwhile`, () => {
+    const runs = 146 // 24 h 10 min of runs every 10 minutes
+    const rs = runMetrics([metrics(), ...Array.from({ length: runs - 1 }, (_, i) => failingSync(i + 1))], METRICS_DEFAULTS, null, times)
+    const alerted = rs.flatMap((r, i) => (r.alerts.length ? [i] : []))
+    const realert = 1 + REALERT_MS / (10 * 60_000)
+    assert.deepEqual(alerted, [1, realert])
+    assert.deepEqual(rs[realert].alerts[0].streak, { since: times[1], held: realert - 2, lastAlertAt: times[1] })
+    const md = formatComment(rs[realert].alerts, URL)
+    assert.match(md, new RegExp(`Still happening since ${times[1]}: ${realert - 2} more failed jobs since the last comment`))
+  })
+  it(`ends the streak after ${QUIET_MS / 60_000} min without a new one: a closing note with the held count, then a new streak alerts again`, () => {
+    const quiet = Array.from({ length: QUIET_MS / (10 * 60_000) }, () => failingSync(3))
+    const rs = runMetrics([metrics(), failingSync(1), failingSync(2), failingSync(3), ...quiet, failingSync(4)], METRICS_DEFAULTS, null, times)
+    const end = 3 + quiet.length
+    assert.deepEqual(
+      kindsOf(rs).map((k, i) => (k.length ? `${i}:${k}` : null)).filter(Boolean),
+      [`1:jobs`, `${end}:settled`, `${end + 1}:jobs`],
+    )
+    const settled = rs[end].alerts[0]
+    assert.deepEqual({ of: settled.of, held: settled.held, since: settled.since, lastAt: settled.lastAt }, { of: 'jobs', held: 2, since: times[1], lastAt: times[3] })
+    assert.match(formatComment([settled], URL), /### Failed background jobs stopped: [\s\S]*2 more after the last comment/)
+    assert.equal(rs[end].state.streaks.jobs, null)
+  })
+  it('posts no closing note when nothing was held back (one failure, one comment)', () => {
+    const rs = runMetrics([metrics(), failingSync(1), ...Array.from({ length: 8 }, () => failingSync(1)), failingSync(2)], METRICS_DEFAULTS, null, times)
+    assert.deepEqual(kindsOf(rs).map((k) => k.join()), ['', 'jobs', '', '', '', '', '', '', '', '', 'jobs'])
+  })
+  it('keeps the streak through a restart and a failed read (a dead remote still fails after the restart)', () => {
+    const rs = runMetrics(
+      [metrics(), failingSync(1), observeMetrics({ status: 502 }), metrics({ bootId: B, jobFailures: 1, errors: [jobRecord(1)] })],
+      METRICS_DEFAULTS,
+      null,
+      times,
+    )
+    assert.deepEqual(kindsOf(rs), [[], ['jobs'], [], []])
+  })
+  it('drops a hand-edited streak (a future alertedAt must not mute alerts for good)', () => {
+    const future = '2099-01-01T00:00:00.000Z'
+    const saved = { bootId: A, serverErrors: 0, jobFailures: 0, lastSeq: 0, slow: [], streaks: { jobs: { since: future, lastAt: future, alertedAt: future, held: 0, keys: ['sync'] } } }
+    const r = stepMetrics(saved, failingSync(1), METRICS_DEFAULTS, T2)
+    assert.deepEqual(kindsOf([r]), [['jobs']])
   })
 })
 
@@ -494,8 +589,12 @@ describe('formatComment: monitoring alerts', () => {
   it('formats slow endpoints and an unavailable endpoint', () => {
     const [, slow] = runMetrics([metrics(), metrics({ routes: [{ route: 'GET /api/search', count: 6, p95Ms: 2500, maxMs: 4000 }] })])
     assert.match(formatComment(slow.alerts, URL), /### Slow endpoints: .*\n\n.*2000 ms over at least 5 requests[\s\S]*\| `GET \/api\/search` \| 2500 \| 4000 \| 6 \|/)
-    const [, gone] = runMetrics([metrics(), observeMetrics({ status: 401 })])
-    assert.match(formatComment(gone.alerts, URL), new RegExp(`### Metrics unavailable: .*\\n\\n\`/health\` is up but \`${METRICS_PATH}\` failed \\(\`HTTP 401\`\\)`))
+    const refused = observeMetrics({ status: 401 })
+    const [, , gone] = runMetrics([metrics(), refused, refused])
+    assert.match(
+      formatComment(gone.alerts, URL),
+      new RegExp(`### Metrics unavailable: .*\\n\\n\`/health\` is up but \`${METRICS_PATH}\` failed ${DOWN_AFTER} reads in a row \\(last: \`HTTP 401\`\\)`),
+    )
   })
 })
 
@@ -506,6 +605,15 @@ describe('webhook', () => {
     assert.equal(webhookTarget('https://hooks.example/T0/B0/secret'), 'https://hooks.example/T0/B0/secret')
     assert.throws(() => webhookTarget('ftp://hooks.example/secret'), (err) => !err.message.includes('secret'))
     assert.throws(() => webhookTarget('not a url secret'), (err) => !err.message.includes('secret'))
+  })
+  it('in issue mode ignores a malformed value with a warning (restart and down alerts still go out); in file mode stops the run', () => {
+    assert.deepEqual(webhookConfig('https://hooks.example/x', false), { target: 'https://hooks.example/x', warning: null })
+    assert.deepEqual(webhookConfig(undefined, false), { target: null, warning: null })
+    const bad = webhookConfig('not a url secret', false)
+    assert.equal(bad.target, null)
+    assert.match(bad.warning, /ALERT_WEBHOOK_URL is not a URL; ignored/)
+    assert.doesNotMatch(bad.warning, /secret/)
+    assert.throws(() => webhookConfig('not a url secret', true), /ALERT_WEBHOOK_URL is not a URL/)
   })
   it('carries the comment as text (Slack) and content (Discord, at most 2000 chars) and the alerts', () => {
     const alerts = [{ kind: 'jobs', at: T2, count: 1, restarted: false, failedSinceBoot: {}, recent: [] }]

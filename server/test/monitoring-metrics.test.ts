@@ -85,12 +85,23 @@ describe('monitoring metrics (#705)', () => {
     recordJob('sync', 'ok', '019a1c00-0000-7000-8000-000000000001', T0)
     recordJob('sync', { error: new Error('clone https://x-access-token:ghp_x@host/repo failed') }, 'docs/my note', T0)
     const snap = metricsSnapshot(T0)
-    expect(snap.jobs.sync).toEqual({ succeeded: 1, failed: 1 })
+    expect(snap.jobs.sync).toEqual({ succeeded: 1, failed: 1, repeated: 0 })
     expect(snap.totals.jobFailures).toBe(1)
     expect(snap.errors).toEqual([
       { seq: 1, at: new Date(T0).toISOString(), type: 'job', job: 'sync', subjectId: null, error: { name: 'Error', code: null } },
     ])
     expect(JSON.parse(String(errorSpy.mock.calls[0]![0]))).toMatchObject({ event: 'job_failure', job: 'sync' })
+  })
+
+  it('counts a repeat failure (a subject already failing) only as repeated: no total, no record, no log line', () => {
+    recordJob('sync', { error: new Error('x') }, null, T0)
+    recordJob('sync', { error: new Error('x'), repeat: true }, null, T0)
+    recordJob('sync', { error: new Error('x'), repeat: true }, null, T0)
+    const snap = metricsSnapshot(T0)
+    expect(snap.jobs.sync).toEqual({ succeeded: 0, failed: 1, repeated: 2 })
+    expect(snap.totals.jobFailures).toBe(1)
+    expect(snap.errors).toHaveLength(1)
+    expect(errorSpy).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the last MAX_ERRORS records and at most MAX_ROUTES route keys', () => {

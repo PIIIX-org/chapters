@@ -57,7 +57,7 @@ interface Report {
 interface Snapshot {
   bootId: string
   totals: { requests: number; serverErrors: number; jobFailures: number }
-  jobs: Record<string, { succeeded: number; failed: number }>
+  jobs: Record<string, { succeeded: number; failed: number; repeated: number }>
   routes: Array<{ route: string; count: number; serverErrors: number; p95Ms: number; maxMs: number }>
   errors: Array<Report & { seq: number; at: string }>
   lastSeq: number
@@ -256,6 +256,28 @@ describe('error and job reports carry no note text (#705)', () => {
     )
     expectClean(raw)
     for (const r of reportLines()) expectClean(JSON.stringify(r))
+  }, 20_000)
+
+  it('reports a repository that keeps failing once, on the transition into error, not on every poll', async () => {
+    const owner = await createActiveUser()
+    const [git] = await db
+      .insert(repositories)
+      .values({ name: 'monitoring-repeat', ownerId: owner.id, ingestionMethod: 'git', gitUrl: `file:///nonexistent/${MARKER}/again.git` })
+      .returning()
+    const before = (await snapshot()).body
+    // What the polling scheduler does to a dead remote every POLL_INTERVAL_MS.
+    for (let i = 0; i < 4; i++) await expect(syncGitRepository(git!.id)).rejects.toThrow()
+    const failing = (await snapshot()).body
+    expect(failing.totals.jobFailures).toBe(before.totals.jobFailures + 1)
+    expect(failing.jobs.sync).toMatchObject({ failed: before.jobs.sync!.failed + 1, repeated: before.jobs.sync!.repeated + 3 })
+    expect(failing.errors.filter((e) => e.seq > before.lastSeq && e.subjectId === git!.id)).toHaveLength(1)
+
+    // Out of `error` (a sync that worked) and failing again is a new failure.
+    await db.update(repositories).set({ syncStatus: 'idle' }).where(eq(repositories.id, git!.id))
+    await expect(syncGitRepository(git!.id)).rejects.toThrow()
+    const again = (await snapshot()).body
+    expect(again.totals.jobFailures).toBe(before.totals.jobFailures + 2)
+    expect(again.errors.filter((e) => e.seq > before.lastSeq && e.subjectId === git!.id)).toHaveLength(2)
   }, 20_000)
 
   it('reports a rejected collab store (the file keeps its last version) by vault id', async () => {
