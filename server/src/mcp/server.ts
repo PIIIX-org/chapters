@@ -1349,7 +1349,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         .where(claimFilter)
         .returning()
       if (!claimed) throw new McpToolError('a sync is already running')
-      startSync(claimed)
+      startSync(claimed, repo.syncStatus)
       return { status: 'syncing', id: target }
     },
   )

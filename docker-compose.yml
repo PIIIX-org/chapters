@@ -93,6 +93,10 @@ services:
       - CORS_ORIGIN
       # 'true' leaves the build commit (`version`) out of /health.
       - ELARA_HEALTH_HIDE_VERSION
+      # Bearer token for GET /api/admin/monitoring (errors, failed jobs,
+      # latency; read by the uptime monitor). `openssl rand -hex 32`.
+      # Unset = only an admin session reads it. docs/self-hosting/monitoring.md
+      - ELARA_MONITORING_TOKEN
     volumes:
       # THE NOTES LIVE HERE. Vault content is markdown FILES ON DISK
       # (plus local-path repository clones), not rows in Postgres — a

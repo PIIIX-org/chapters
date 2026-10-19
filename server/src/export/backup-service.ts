@@ -4,6 +4,7 @@ import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { buildInstanceBackup } from './archive.js'
 import { deleteS3Object, listS3Objects, uploadS3Object, type S3Config } from './s3.js'
+import { recordJob } from '../monitoring/metrics.js'
 
 export type BackupDestination = 'local' | 's3'
 
@@ -35,6 +36,13 @@ let lastStatus: 'idle' | 'success' | 'error' = 'idle'
 let lastError: string | null = null
 let lastFilename: string | null = null
 let lastSizeBytes: number | null = null
+/**
+ * The last backup, scheduled or on demand, failed (#705). A scheduled backup
+ * that fails while this is set is a repeat for the monitoring metrics, not a
+ * new failure; any success clears it, so a backup that breaks again after an
+ * operator fixed and checked it alerts again. Process-local.
+ */
+let backupFailing = false
 
 export function getResolvedDestinations(): {
   destinations: BackupDestination[]
@@ -151,6 +159,7 @@ export async function executeBackup(options?: { actorUserId?: string }): Promise
     lastError = null
     lastFilename = filename
     lastSizeBytes = sizeBytes
+    backupFailing = false
 
     await logSecurityEvent({
       type: 'instance_backup_created',
@@ -174,6 +183,7 @@ export async function executeBackup(options?: { actorUserId?: string }): Promise
     lastRunAt = new Date().toISOString()
     lastStatus = 'error'
     lastError = err instanceof Error ? err.message : String(err)
+    backupFailing = true
     throw err
   }
 }
@@ -214,9 +224,20 @@ export function startBackupScheduler(): () => void {
     const now = Date.now()
     const lastRunTime = lastRunAt ? new Date(lastRunAt).getTime() : 0
     if (now - lastRunTime >= intervalMs) {
-      executeBackup().catch((err) => {
-        console.error('[backup-scheduler] automated backup failed:', err)
-      })
+      // Scheduled runs only: an on-demand backup that fails is a 5xx, which
+      // is reported as a server error already (#705). A failure after a
+      // failed backup is a repeat (`backupFailing`): with intervalHours = 1 a
+      // broken destination would otherwise be a new alert every hour.
+      const wasFailing = backupFailing
+      executeBackup().then(
+        () => recordJob('backup', 'ok'),
+        (err) => {
+          console.error('[backup-scheduler] automated backup failed:', err)
+          recordJob('backup', { error: err, repeat: wasFailing })
+          // Also when building the archive failed before executeBackup's own bookkeeping.
+          backupFailing = true
+        },
+      )
     }
   }, checkIntervalMs)
 

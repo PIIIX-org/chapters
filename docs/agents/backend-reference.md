@@ -118,6 +118,7 @@ chapters/
 │   │   ├── app.ts                  # Fastify assembly: plugin/route registration order
 │   │   ├── index.ts                # entry point — boots HTTP API + collab relay
 │   │   ├── config.ts               # single source for all env-derived config
+│   │   ├── monitoring/             # in-process request/job metrics + error reports, GET /api/admin/monitoring
 │   │   ├── lifecycle.ts            # process identity for /health; DATA_DIR/lifecycle.json shutdown marker
 │   │   ├── db/                     # Drizzle schema + migrations + client
 │   │   ├── auth/                   # sessions, passwords, lockout, MFA, admin, bootstrap
@@ -979,6 +980,72 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
   - The production monitor that reads these fields is
     `.github/workflows/uptime.yml` (`github-workflow.md`, Production uptime
     monitor).
+- **Error reports and metrics** (#705, `server/src/monitoring/`;
+  operator guide `docs/self-hosting/monitoring.md`):
+  - `metrics.ts` is an in-process, bounded store. `app.ts` adds one
+    `onResponse` hook that calls `recordRequest` for every finished
+    request with the route template (`req.routeOptions.url`, never the
+    URL; unmatched requests are `METHOD (other)`), status,
+    `reply.elapsedTime`, `req.id` and the actor kind (`user` with a
+    session, `token` with a `Bearer` header, else `anonymous`). The error
+    handler hands a 5xx's error to it through a `WeakMap`. Per route it
+    keeps request count, 5xx count, max and a latency histogram (fixed
+    bucket bounds, `LATENCY_BUCKETS_MS`) in 15 one-minute slots; at most
+    300 route keys in the window, then `METHOD (other)`. Totals since boot
+    (requests, 5xx, job failures, per job kind succeeded/failed/repeated)
+    and a ring of the last 50 error reports with a monotonic `seq`.
+  - Jobs report through `recordJob(kind, 'ok' | { error, repeat? }, subjectId)`:
+    `embedding` (`embedding-queue.ts`: success, or the third failed
+    attempt), `extraction` (`extraction-queue.ts`, per file), `sync`
+    (`syncGitRepository` and `syncLocalRepository` themselves, so every
+    caller is covered, including an unsafe stored URL), `collab-store`
+    (`collab-server.ts` `onStoreDocument`: a rejected `updateNote` or CRDT
+    save; the file keeps its last valid version), `backup` (the scheduled
+    run in `startBackupScheduler`; an on-demand one is a 500).
+    `repeat: true` only increments `jobs[kind].repeated`: no total, no
+    ring record, no log line, so a dead remote, an expired credential or a
+    broken backup destination is one report, not one per retry. Set for a
+    sync of a repository whose `syncStatus` was already `error` (the
+    poller in `scheduler.ts` retries those every `POLL_INTERVAL_MS`; the
+    manual sync route and MCP `sync_repository` claim the row as
+    `syncing` first, so they pass the status they read before the claim
+    through `startSync(repo, previousStatus)` to
+    `syncGitRepository`/`syncLocalRepository`), and for a scheduled backup
+    that fails after the previous backup, scheduled or on demand, also
+    failed (module flag `backupFailing` in `backup-service.ts`: set on any
+    failure, cleared by any success).
+  - A report holds route template, status, `durationMs`, `reqId`, actor
+    (requests) or job kind and a UUID subject (note, file, repository,
+    vault; anything else dropped), plus `error: {name, code}`, each
+    format-checked. **Never the error message**: messages quote note text,
+    note paths and URLs, and the credential redaction (`redactGitSecrets`,
+    PRs #592/#643) recognises credentials, not note text; with no free text
+    in a report there is nothing left for it to redact. Each report is also
+    logged as one JSON line, `{"event":"server_error",...}` or
+    `{"event":"job_failure",...}` (`console.error`). The existing
+    `req.log.error(error)` and per-job `console.error` lines (full error,
+    for debugging on the host) are unchanged.
+  - **`GET /api/admin/monitoring`** (`routes.ts`): `metricsSnapshot()`:
+    `{ bootId, startedAt, now, windowMinutes, totals, jobs, routes: [{route,
+    count, serverErrors, p50Ms, p95Ms, p99Ms, maxMs}], errors, lastSeq }`.
+    Percentiles are bucket upper bounds capped at `maxMs`. Access:
+    `Authorization: Bearer $ELARA_MONITORING_TOKEN` (`config.monitoringToken`,
+    a getter; at least 32 characters, else ignored with a boot warning;
+    compared in constant time over SHA-256 digests, no session or database
+    read), or an admin session (`requireAdmin`). Any `Authorization` header
+    other than the token is `401`; no header and no admin session is
+    `401`/`403`. `/health` is unchanged.
+  - The uptime monitor reads it and alerts on new 5xx, failed jobs, slow
+    routes and an endpoint that stops answering (`github-workflow.md`,
+    Production uptime monitor); 5xx and failed jobs once per streak, not
+    per run. Single-process, like the queues (§9); lost on restart, which
+    `/health` reports.
+  - Tests: `monitoring.test.ts` (a route error, an embedding, extraction,
+    git sync and collab store failure each carrying a marker and a
+    `ghp_` secret: reported with the right fields, neither in the endpoint
+    nor the log lines; a repository that keeps failing reported once;
+    access rules), `monitoring-metrics.test.ts` (bounds, percentiles,
+    format checks, repeats); lab `monitoring-alerts`.
 - **`server/.env.example`**: every environment variable, documented, in
   one place. For compose, copy it to `.env` at the **repo root** (that is
   the file compose interpolates); for a direct run, `server/.env` with
@@ -1001,7 +1068,8 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     passes a variable through only when it is actually set, instead of
     `${SETUP_TOKEN:-}`, which would always set it to the empty string.
   - Others: `DATABASE_URL`, `PORT`, `CLIENT_DIST`, `EMBEDDINGS`,
-    `CORS_ORIGIN`, `LOCAL_REPOS_ROOT`.
+    `CORS_ORIGIN`, `LOCAL_REPOS_ROOT`, `ELARA_MONITORING_TOKEN` (Error
+    reports and metrics, above).
 - **Migrations**: `drizzle-kit generate` produces SQL under
   `server/drizzle/`; a few migrations were hand-edited afterward for
   things Drizzle can't express directly (pgvector extension + HNSW

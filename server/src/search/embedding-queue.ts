@@ -3,6 +3,7 @@ import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { embedder } from './embeddings.js'
 import { recomputeSemanticEdges } from './semantic-edges.js'
+import { recordJob } from '../monitoring/metrics.js'
 
 interface QueueEntry {
   noteId: string
@@ -45,6 +46,7 @@ async function drain(): Promise<void> {
       const item = queue[head++]!
       try {
         await processNote(item.noteId)
+        recordJob('embedding', 'ok', item.noteId)
       } catch (err) {
         const nextAttempt = item.attempts + 1
         if (nextAttempt < MAX_ATTEMPTS) {
@@ -58,6 +60,7 @@ async function drain(): Promise<void> {
             `[embedding-queue] embedding permanently failed for note ${item.noteId} after ${MAX_ATTEMPTS} attempts:`,
             err,
           )
+          recordJob('embedding', { error: err }, item.noteId)
         }
       }
       // ponytail: O(1) amortized compaction to avoid O(N^2) array shifting (INGEST-02).

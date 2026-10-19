@@ -15,6 +15,9 @@ export function readHealthHidesVersion(raw: string | undefined): boolean {
   return false
 }
 
+/** Shortest ELARA_MONITORING_TOKEN accepted (`openssl rand -hex 32` gives 64). */
+export const MIN_MONITORING_TOKEN_LENGTH = 32
+
 export const config = {
   nodeEnv: env.NODE_ENV ?? 'development',
   isProd: env.NODE_ENV === 'production',
@@ -31,6 +34,16 @@ export const config = {
    * shown. The boot log line keeps it either way.
    */
   healthHidesVersion: readHealthHidesVersion(env.ELARA_HEALTH_HIDE_VERSION),
+  /**
+   * `ELARA_MONITORING_TOKEN` (#705): the bearer token that reads
+   * GET /api/admin/monitoring without a session (the uptime monitor). Unset,
+   * or shorter than MIN_MONITORING_TOKEN_LENGTH: only an admin session
+   * reads it. A getter so tests can set it after the config loads.
+   */
+  get monitoringToken(): string | null {
+    const token = env.ELARA_MONITORING_TOKEN
+    return token && token.length >= MIN_MONITORING_TOKEN_LENGTH ? token : null
+  },
   port: Number(env.ELARA_PORT ?? env.CHAPTERS_PORT ?? env.PORT ?? 3000),
   /** Base public application URL for external callbacks (OIDC, emails, etc.). */
   appUrl: env.ELARA_APP_URL ?? env.CHAPTERS_APP_URL ?? env.APP_URL ?? env.BASE_URL ?? null,
