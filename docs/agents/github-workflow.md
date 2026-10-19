@@ -574,8 +574,9 @@ not testing) and compares the process identity it reports (`bootId`,
     **errors** (at least `ALERT_ERROR_THRESHOLD`, default 1, new 5xx since
     the last check; route template, status, error class and code, request
     id, actor), **jobs** (any new failed `embedding`, `extraction`, `sync`,
-    `collab-store` or `backup` job; a repository that keeps failing counts
-    once, on its way into `error`), **slow** (a route newly at p95 >=
+    `collab-store` or `backup` job; a repository that keeps failing, polled
+    or retried by hand, counts once, on its way into `error`, and a
+    scheduled backup once per run of failures), **slow** (a route newly at p95 >=
     `ALERT_SLOW_MS`, default 2000, over >= `ALERT_SLOW_MIN_COUNT`, default
     5, requests in the server's 15-minute window; once until it is fast
     again) and **metrics unavailable** (the endpoint fails 2 reads in a

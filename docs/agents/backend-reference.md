@@ -1002,11 +1002,17 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     (`collab-server.ts` `onStoreDocument`: a rejected `updateNote` or CRDT
     save; the file keeps its last valid version), `backup` (the scheduled
     run in `startBackupScheduler`; an on-demand one is a 500).
-    `repeat: true` (a sync of a repository whose `syncStatus` was already
-    `error`: the poller in `scheduler.ts` retries those every
-    `POLL_INTERVAL_MS`) only increments `jobs[kind].repeated`: no total, no
-    ring record, no log line, so a dead remote or expired credential is one
-    report on the transition into `error`, not one per poll.
+    `repeat: true` only increments `jobs[kind].repeated`: no total, no
+    ring record, no log line, so a dead remote, an expired credential or a
+    broken backup destination is one report, not one per retry. Set for a
+    sync of a repository whose `syncStatus` was already `error` (the
+    poller in `scheduler.ts` retries those every `POLL_INTERVAL_MS`; the
+    manual sync route and MCP `sync_repository` claim the row as
+    `syncing` first, so they pass the status they read before the claim
+    through `startSync(repo, previousStatus)` to
+    `syncGitRepository`/`syncLocalRepository`), and for a scheduled backup
+    that fails right after a failed scheduled one (a flag in
+    `startBackupScheduler`).
   - A report holds route template, status, `durationMs`, `reqId`, actor
     (requests) or job kind and a UUID subject (note, file, repository,
     vault; anything else dropped), plus `error: {name, code}`, each

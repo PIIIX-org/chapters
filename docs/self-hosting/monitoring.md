@@ -21,9 +21,11 @@ What counts as a failed job:
 
 - `embedding`: a note's embedding failed 3 attempts in a row (search will not find it by meaning);
 - `extraction`: a repository file's code extraction or embedding failed;
-- `sync`: a git or local-folder repository sync failed (also shown on the repository card). Counted once, when the repository goes into `error`: the poller retries a failing git repository every `POLL_INTERVAL_MS`, and each retry that fails again only adds to `repeated`, not to `failed` (no new report, no log line, no alert);
+- `sync`: a git or local-folder repository sync failed (also shown on the repository card). Counted once, when the repository goes into `error`: the poller retries a failing git repository every `POLL_INTERVAL_MS`, and a user or agent may retry it by hand; each retry that fails again only adds to `repeated`, not to `failed` (no new report, no log line, no alert). A new error on a repository already in `error` (say, an expired credential, then a deleted remote) is only on its card;
 - `collab-store`: a live (collaborative) edit could not be saved to the note file, for example because its frontmatter was invalid. **The file keeps its last valid version while the editors keep seeing their edit**: look at it;
-- `backup`: a scheduled backup failed (an on-demand one that fails is a 500 instead).
+- `backup`: a scheduled backup failed (an on-demand one that fails is a 500 instead). A scheduled backup that fails right after a failed one only adds to `repeated`, so `ELARA_BACKUP_INTERVAL_HOURS=1` with a broken destination is one alert, not one an hour (the count restarts with the process).
+
+`repeated` per job kind is on the endpoint and in the jobs alert's "since the process started" line.
 
 Metrics are per process and in memory: per route, request count, 5xx count, and p50/p95/p99 and max latency over the **last 15 minutes**; totals since the process started; the last 50 error reports. A restart resets them (the restart itself is what `/health` reports). Percentiles are the upper bound of a latency bucket (…, 1000, 1500, 2000, 2500, 3000, … ms), capped at the slowest request seen, so they can read up to one bucket high.
 
@@ -63,7 +65,7 @@ Anyone else gets `401` (or `403` for a signed-in non-admin). `/health` does not 
 
 plus the restart, down, recovered and weekly check-in alerts of the uptime monitor. The server's counters are cumulative, so a check that runs late misses nothing; after a restart everything since the restart counts as new. The threshold is per check: with `ALERT_ERROR_THRESHOLD=5` and checks every 10 minutes, 5 errors within one interval alert, 1 per interval never does.
 
-**errors** and **jobs** alert once per streak, not on every check: while new ones keep coming (one endpoint that keeps failing, a job that fails on every edit), the next alert is for a route or job kind the streak has not had yet, or 24 hours after the last one, with the number held back in between. A streak ends after an hour without a new one; if something was held back, a short "stopped" alert says how many.
+**errors** and **jobs** alert once per streak, not on every check: while new ones keep coming (one endpoint that keeps failing, a job that fails on every edit), the next alert is for a route or job kind the streak has not had yet, or 24 hours after the last one, with the number held back in between. A streak ends after an hour without a new one; if something was held back, a short "stopped" alert says how many. So a second subject failing the same job kind during a streak (a second repository going into `error` while the first still fails) is held: it shows only in that "stopped" count or the 24-hour alert, not as its own alert; the endpoint and the `job_failure` log lines have it. A streak remembers up to 320 routes (more than the server ever reports); past that, unknown routes are held too.
 
 Run it from cron on any machine that can reach your instance (not the same host: it should notice when the host is down):
 
