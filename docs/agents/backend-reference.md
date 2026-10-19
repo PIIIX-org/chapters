@@ -687,8 +687,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   Ids are the archive's — a true restore, not an import. Rows are
   inserted as stored, not re-validated through the OKF write path.
   Restored MCP and sync tokens keep working (their hashes are
-  restored). Restored repositories get `last_synced_at` and
-  `last_synced_commit` cleared so the next sync re-indexes them. A
+  restored). Restored repositories get `last_synced_at`,
+  `last_synced_commit` and `last_webhook_at` cleared so the next poll
+  re-indexes git repositories. A
   format-1 archive (`account-dump.json`) still restores: notes get ids
   derived from vault and path, tokens pinned to a repository are left
   out with a warning.

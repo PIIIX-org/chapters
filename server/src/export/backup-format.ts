@@ -74,9 +74,17 @@ export const BACKUP_TABLES: BackupTable[] = [
   {
     name: 'repositories',
     table: repositories,
-    // The file index is not in the archive: without these the next sync
-    // would see an unchanged remote commit and skip re-indexing.
-    onRestore: (row) => ({ ...row, syncStatus: 'idle', lastSyncedAt: null, lastSyncedCommit: null, lastSyncError: null }),
+    // The file index is not in the archive. Without a last sync the next
+    // git sync can't skip an unchanged remote commit, and without a webhook
+    // time the poller picks the repository up at once (shouldPoll).
+    onRestore: (row) => ({
+      ...row,
+      syncStatus: 'idle',
+      lastSyncedAt: null,
+      lastSyncedCommit: null,
+      lastSyncError: null,
+      lastWebhookAt: null,
+    }),
   },
   {
     name: 'repository_shares',
