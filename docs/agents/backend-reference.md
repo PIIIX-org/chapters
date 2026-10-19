@@ -1011,8 +1011,9 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     `syncing` first, so they pass the status they read before the claim
     through `startSync(repo, previousStatus)` to
     `syncGitRepository`/`syncLocalRepository`), and for a scheduled backup
-    that fails right after a failed scheduled one (a flag in
-    `startBackupScheduler`).
+    that fails after the previous backup, scheduled or on demand, also
+    failed (module flag `backupFailing` in `backup-service.ts`: set on any
+    failure, cleared by any success).
   - A report holds route template, status, `durationMs`, `reqId`, actor
     (requests) or job kind and a UUID subject (note, file, repository,
     vault; anything else dropped), plus `error: {name, code}`, each

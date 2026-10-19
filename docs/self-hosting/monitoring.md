@@ -23,7 +23,7 @@ What counts as a failed job:
 - `extraction`: a repository file's code extraction or embedding failed;
 - `sync`: a git or local-folder repository sync failed (also shown on the repository card). Counted once, when the repository goes into `error`: the poller retries a failing git repository every `POLL_INTERVAL_MS`, and a user or agent may retry it by hand; each retry that fails again only adds to `repeated`, not to `failed` (no new report, no log line, no alert). A new error on a repository already in `error` (say, an expired credential, then a deleted remote) is only on its card;
 - `collab-store`: a live (collaborative) edit could not be saved to the note file, for example because its frontmatter was invalid. **The file keeps its last valid version while the editors keep seeing their edit**: look at it;
-- `backup`: a scheduled backup failed (an on-demand one that fails is a 500 instead). A scheduled backup that fails right after a failed one only adds to `repeated`, so `ELARA_BACKUP_INTERVAL_HOURS=1` with a broken destination is one alert, not one an hour (the count restarts with the process).
+- `backup`: a scheduled backup failed (an on-demand one that fails is a 500 instead). A scheduled backup that fails after the previous backup (scheduled or on demand) also failed only adds to `repeated`, so `ELARA_BACKUP_INTERVAL_HOURS=1` with a broken destination is one alert, not one an hour. Any backup that succeeds, including "run backup now" after a fix, ends that: the next scheduled failure alerts again (the state restarts with the process).
 
 `repeated` per job kind is on the endpoint and in the jobs alert's "since the process started" line.
 
