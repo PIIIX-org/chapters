@@ -31,7 +31,7 @@ function parseDocName(name: string): { vaultId: string; path: string } {
 interface ConnectionContext {
   userId: string
   accessVerifiedAt?: number
-  /** A server-side write through a direct connection (crdt-write.ts), whose caller already ran the quarantine check. */
+  /** A server-side body write through a direct connection (crdt-write.ts), whose caller already ran the quarantine check. */
   directWrite?: boolean
 }
 

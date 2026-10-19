@@ -509,8 +509,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `.crdt` state is saved as for every rejected store (on the next load
   the file text wins over it), and a `collab-store` job failure is
   reported; the next store without the repeat is written normally. A
-  store caused by a server write through a direct connection
-  (`writeThroughCollab`, context `directWrite`) is not checked again.
+  store caused by a server body write through a direct connection
+  (`writeThroughCollab`, context `directWrite`; its caller ran the check
+  or passed `allowGrowth`) is not checked again.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
   Every share/team/deactivation mutation calls `emitPermissionChange()`;
   the collab server and the SSE viewer hub both subscribe and actively

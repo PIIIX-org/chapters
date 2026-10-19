@@ -42,9 +42,10 @@ async function noteFileDamaged(vaultId: string, path: string): Promise<boolean> 
  * `options.quarantine` (MCP edit_note, REST PUT without `allowGrowth`) checks
  * the body against the stored one before it reaches the live document: a
  * suspicious write (#492) is recorded as a quarantine revision and thrown,
- * and editors never see it. The relay's own store of the document this edit
- * produces is not checked again (`directWrite` in its context): the caller
- * here decided.
+ * and editors never see it. When this edit replaces the body, the relay's
+ * own store of the document it produces is not checked again (`directWrite`
+ * in its context): the caller here decided. A frontmatter-only edit leaves
+ * the body to the relay's check.
  */
 export async function writeThroughCollab(
   vaultId: string,
@@ -64,7 +65,7 @@ export async function writeThroughCollab(
       try {
         connection = await collab.openDirectConnection(docName, {
           userId: actor.type === 'user' ? actor.id : 'mcp',
-          directWrite: true,
+          directWrite: input.body !== undefined,
         })
       } catch (err) {
         // Loading the collab document parses the note's file. When the file is
