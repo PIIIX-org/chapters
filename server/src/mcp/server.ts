@@ -63,6 +63,7 @@ import { logSecurityEvent } from '../auth/security-events.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 import { requestedEdit, writeThroughCollab } from './crdt-write.js'
 import { registerMcpPrompts } from './prompts.js'
+import { strictArgs } from './strict-input.js'
 
 class McpToolError extends Error {}
 
@@ -395,7 +396,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
    * result. A tool the connection can never call is left out of tools/list;
    * so, for a pinned connection, is a tool whose `pinPermission` (the
    * permission on the target its handler requires, default `read`) is above
-   * the user's live permission on the pin.
+   * the user's live permission on the pin. `inputSchema` is strict: the SDK
+   * refuses a call with an undeclared argument before anything runs, naming
+   * it and the tool's parameters, and tools/list advertises
+   * `additionalProperties: false` (#437).
    */
   function tool<S extends ToolScope, A extends Record<string, unknown> = Record<string, unknown>>(
     name: string,
@@ -416,7 +420,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       throw new Error(`MCP tool ${name} has no valid capability declaration`)
     }
     const resolve: ScopeResolvers[S] = scopeResolvers[def.scope]
-    const inputSchema: z.ZodRawShape = def.inputSchema ?? {}
+    const inputSchema = strictArgs(name, def.inputSchema ?? {})
     const pinPermission = def.pinPermission ?? 'read'
     tools.push({ name, scope: def.scope, capability: def.capability, pinPermission })
     if (!callable(name, def.scope, def.capability)) hiddenTools.add(name)
@@ -1985,14 +1989,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: {
         name: z.string().min(1).describe('Perspective name'),
         vaultId: z.string().uuid().optional().describe('Optional vault ID constraint'),
-        filters: z
-          .object({
-            types: z.array(z.string()).optional(),
-            tags: z.array(z.string()).optional(),
-            since: z.string().optional(),
-            until: z.string().optional(),
-            colorMode: z.string().optional(),
-          })
+        filters: strictArgs('save_graph_perspective filters', {
+          types: z.array(z.string()).optional(),
+          tags: z.array(z.string()).optional(),
+          since: z.string().optional(),
+          until: z.string().optional(),
+          colorMode: z.string().optional(),
+        })
           .optional()
           .describe('Filter preset values'),
         isShared: z

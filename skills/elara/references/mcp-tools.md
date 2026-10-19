@@ -19,7 +19,7 @@ Parameters, scopes, capabilities, and return shapes for the 57 Elara MCP tools a
   - An optional expiry: after it, every request is refused with HTTP 401 (`invalid, revoked or expired MCP token`).
   - `tools/list` shows only the tools the token can call: those in its allow-list, within its access level, and of a scope its own scope reaches (no account-only tools on a pinned token, no vault tools on a repository token, no repository tools on a vault token). On a pinned token it also leaves out tools that need more than the user's current permission on the pin: the owner-only tools below unless the user owns it, and the tools that need edit access on the vault (note writes, `list_trash`, `note_history`, `export_vault`, saving and deleting perspectives) unless the user can edit it. A tool missing from the list can still be called by name; the call is refused with a message naming what is missing: `<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`, a scope refusal such as `<tool> requires an account-scoped connection`, or `owner permission required` / `not found` for missing permission on the pin.
 - **Response**: the result is returned as JSON text (`content[0].text`). Errors come back as `Error: <message>` with `isError: true`. A filesystem or network error is reported only by its code (`internal storage error (ENOENT)`); the full error goes to the server log.
-- **Unknown arguments are silently dropped.** The schemas strip keys they don't declare, so a misspelled or outdated argument (for example `content` instead of `body` on `create_note`) is ignored without an error.
+- **Unknown arguments are refused.** Every input schema is strict, and `tools/list` says so with `additionalProperties: false` (also on the nested `filters` object of `save_graph_perspective`). A call with a key the tool does not declare fails before the tool runs, with `isError: true` and a message that names the key, suggests the parameter it probably meant, and lists the tool's parameters: `MCP error -32602: Input validation error: Invalid arguments for tool create_note: unknown argument "content" (did you mean "body"?); create_note takes: vaultId, path, type, name, frontmatter, body`. Free-form maps (`frontmatter`, the `update_vault_preferences` maps) still accept any key.
 - IDs (`vaultId`, `repositoryId`, `noteId`, `revisionId`, `shareId`, `teamId`, `userId`, `notificationId`, perspective `id`) must be UUIDs.
 - Note paths are slug paths such as `domains/auth/tokens`. A trailing `.md` is accepted and stripped.
 
@@ -165,7 +165,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `frontmatter` (object, optional): the YAML frontmatter as a JSON object. If `type` is omitted it is set to the first path segment; if given it must match. `timestamp` defaults to now.
   - `body` (string, optional, default `""`): the markdown body, **without** a frontmatter block.
 - **Returns**: the created note row (`id`, `vaultId`, `type`, `name`, `path`, `frontmatter`, `body`, timestamps, ...).
-- There is no `content` argument. Passing one (or any other unknown key) is silently dropped and creates a note with an empty body.
+- There is no `content` argument. Passing one (or any other undeclared key) is refused with the parameter list, and no note is created.
 
 ### `edit_note`
 - **Scope**: vault. Edit access.
