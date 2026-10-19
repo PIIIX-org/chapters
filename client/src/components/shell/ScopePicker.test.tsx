@@ -110,8 +110,14 @@ describe('ScopePicker', () => {
     const trigger = await screen.findByRole('button', { name: 'All vaults' })
     await waitFor(() => expect(trigger).not.toBeDisabled())
     fireEvent.click(trigger)
-
+    // The open list is portalled to <body>, outside render()'s container:
+    // check the portalled panel as well as the trigger's container.
+    const panel = screen.getByRole('dialog', { name: 'Choose scope' })
+    expect(trigger).toHaveAttribute('aria-controls', panel.id)
+    expect(panel).toContainElement(screen.getByRole('listbox', { name: 'Scope' }))
+    expect(container.contains(panel)).toBe(false)
     await expectNoA11yViolations(container)
+    await expectNoA11yViolations(panel)
   })
 
   it('shows owner row actions for the selected vault, without repeating its name in the option list', async () => {
@@ -229,7 +235,7 @@ describe('ScopePicker', () => {
     await user.keyboard('{Escape}')
 
     // The modal is gone...
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /vault settings/i })).not.toBeInTheDocument())
     // ...but one Escape must not also collapse the dropdown behind it: the
     // trigger stays expanded and the "Vault settings" button — the exact
     // element Radix restores focus to on unmount — is still in the DOM and
