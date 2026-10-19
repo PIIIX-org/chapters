@@ -16,7 +16,7 @@
 //     so a late check loses nothing; a new bootId counts from zero)
 //   - jobs: any new failed background job (embedding, extraction, sync,
 //     collab-store, backup; a repository that keeps failing counts once, on
-//     its way into `error`, a scheduled backup once per run of failures; the
+//     its way into `error`, a scheduled backup once until a backup succeeds; the
 //     server's `repeated` count of the rest is listed in the comment)
 //   - slow: a route that newly has p95 >= ALERT_SLOW_MS (default 2000) over
 //     at least ALERT_SLOW_MIN_COUNT (default 5) requests in the server's
@@ -245,7 +245,10 @@ function checkedStreak(s, keyOk, now) {
   const alertedAt = pastTime(s.alertedAt, now)
   if (!since || !lastAt || !alertedAt) return null
   const keys = Array.isArray(s.keys) ? [...new Set(s.keys.filter(keyOk))].slice(0, STREAK_KEYS) : []
-  return { since, lastAt, alertedAt, held: count(s.held), keys }
+  const pending = Array.isArray(s.pending)
+    ? [...new Set(s.pending.filter((k) => keyOk(k) && !keys.includes(k)))].slice(0, STREAK_KEYS - keys.length)
+    : []
+  return { since, lastAt, alertedAt, held: count(s.held), keys, pending }
 }
 
 /** The saved metrics state, format-checked like the rest (null = never read). */
@@ -334,32 +337,45 @@ export function metricsOptions(env = process.env) {
  * One `errors` or `jobs` streak -> next streak + whether this run alerts.
  * `n` is this run's new count (0 when below the threshold), `keys` the routes
  * or job kinds of this run's new records. No streak (or QUIET_MS since the
- * last new one): a new streak, alert. In a streak: alert for a key the streak
- * has not had (a new failure condition; only while it has room for
- * STREAK_KEYS) or REALERT_MS after the last alert, with the count held back
- * since; otherwise hold the count back. A quiet QUIET_MS ends the streak,
- * with a closing note when something was held back (so no count goes
+ * last new one): a new streak, alert. In a streak: alert for keys the streak
+ * has not had (a new failure condition), at most one such alert per
+ * `newKeyGapMs` (new keys wait in `pending` and are listed together), or
+ * REALERT_MS after the last alert; otherwise hold the count back. A streak
+ * remembers STREAK_KEYS keys (`keys` + `pending`): past that, an unknown key
+ * is held like a known one. A quiet QUIET_MS ends the streak, with a closing
+ * note when something was held back or is still pending (so nothing goes
  * unreported).
  */
-function streakStep(s, n, keys, at) {
+function streakStep(s, n, keys, at, newKeyGapMs) {
   const t = Date.parse(at)
   const quiet = s !== null && t - Date.parse(s.lastAt) >= QUIET_MS
+  // A streak that ends still owes a note for counts held back or keys not commented yet.
+  const ended = quiet && (s.held > 0 || s.pending.length > 0) ? s : null
   if (n === 0) {
     if (!quiet) return { streak: s, alert: null, ended: null }
-    return { streak: null, alert: null, ended: s.held > 0 ? s : null }
+    return { streak: null, alert: null, ended }
   }
-  const ended = quiet && s.held > 0 ? s : null
   if (s === null || quiet) {
-    return { streak: { since: at, lastAt: at, alertedAt: at, held: 0, keys: keys.slice(0, STREAK_KEYS) }, alert: { since: at, held: 0, lastAlertAt: null }, ended }
+    return {
+      streak: { since: at, lastAt: at, alertedAt: at, held: 0, keys: keys.slice(0, STREAK_KEYS), pending: [] },
+      alert: { since: at, held: 0, lastAlertAt: null, newKeys: [] },
+      ended,
+    }
   }
-  const merged = [...new Set([...s.keys, ...keys])].slice(0, STREAK_KEYS)
-  const newKey = s.keys.length < STREAK_KEYS && keys.some((k) => !s.keys.includes(k))
-  if (!newKey && t - Date.parse(s.alertedAt) < REALERT_MS) {
-    return { streak: { ...s, lastAt: at, held: s.held + n, keys: merged }, alert: null, ended: null }
+  const known = new Set([...s.keys, ...s.pending])
+  const waiting = [...s.pending]
+  for (const k of keys) {
+    if (known.has(k) || known.size >= STREAK_KEYS) continue
+    known.add(k)
+    waiting.push(k)
+  }
+  const sinceAlert = t - Date.parse(s.alertedAt)
+  if (!(waiting.length > 0 && sinceAlert >= newKeyGapMs) && sinceAlert < REALERT_MS) {
+    return { streak: { ...s, lastAt: at, held: s.held + n, pending: waiting }, alert: null, ended: null }
   }
   return {
-    streak: { ...s, lastAt: at, alertedAt: at, held: 0, keys: merged },
-    alert: { since: s.since, held: s.held, lastAlertAt: s.alertedAt },
+    streak: { ...s, lastAt: at, alertedAt: at, held: 0, keys: [...s.keys, ...waiting], pending: [] },
+    alert: { since: s.since, held: s.held, lastAlertAt: s.alertedAt, newKeys: waiting },
     ended: null,
   }
 }
@@ -407,18 +423,23 @@ export function stepMetrics(prev, mobs, opts = METRICS_DEFAULTS, at = new Date()
   const failedJobs = fresh.filter((e) => e.type === 'job')
   const alerts = []
 
+  // New routes in a streak: at most one comment per QUIET_MS (a broken hook
+  // can fail many routes in turn). A new job kind alerts at once (5 kinds).
   const errs = streakStep(
     streaks.errors,
     newErrors >= opts.errorThreshold ? newErrors : 0,
     [...new Set(requests.map((e) => e.route).filter(Boolean))],
     at,
+    QUIET_MS,
   )
-  const jobs = streakStep(streaks.jobs, newFailures, [...new Set(failedJobs.map((e) => e.job))], at)
+  const jobs = streakStep(streaks.jobs, newFailures, [...new Set(failedJobs.map((e) => e.job))], at, 0)
   state.streaks = { errors: errs.streak, jobs: jobs.streak }
   state.resetHeld = { errors: 0, jobs: 0 }
   for (const [of, r] of [['errors', errs], ['jobs', jobs]]) {
     if (resetHeld[of] > 0) alerts.push({ kind: 'settled', of, at, reset: true, held: resetHeld[of] })
-    if (r.ended) alerts.push({ kind: 'settled', of, at, since: r.ended.since, lastAt: r.ended.lastAt, alertedAt: r.ended.alertedAt, held: r.ended.held })
+    if (r.ended) {
+      alerts.push({ kind: 'settled', of, at, since: r.ended.since, lastAt: r.ended.lastAt, alertedAt: r.ended.alertedAt, held: r.ended.held, pending: r.ended.pending })
+    }
   }
   if (errs.alert) {
     alerts.push({
@@ -478,16 +499,23 @@ function minutes(from, to) {
 }
 
 const STREAK_WORDS = {
-  errors: { title: 'Server errors', items: '5xx responses', key: 'route' },
-  jobs: { title: 'Failed background jobs', items: 'failed jobs', key: 'job kind' },
+  errors: { title: 'Server errors', items: '5xx responses', key: 'route', keys: 'routes', limit: ` (at most one such comment per ${QUIET_MS / 60_000} min)` },
+  jobs: { title: 'Failed background jobs', items: 'failed jobs', key: 'job kind', keys: 'job kinds', limit: '' },
+}
+
+/** Routes or job kinds for a comment: format-checked already; the first 20, then a count. */
+function keyList(keys) {
+  const shown = keys.slice(0, 20).map(code).join(', ')
+  return keys.length > 20 ? `${shown} and ${keys.length - 20} more` : shown
 }
 
 /** The lines of an `errors`/`jobs` alert about its streak (stepMetrics: once per streak, not every run). */
 function streakText(s, w) {
   if (!s) return []
-  const next = `Until they stop for ${QUIET_MS / 60_000} min, more ${w.items} get a comment only for a ${w.key} not seen in this streak, or after ${REALERT_MS / 3_600_000} h.`
+  const next = `Until they stop for ${QUIET_MS / 60_000} min, more ${w.items} get a comment only for a ${w.key} not seen in this streak${w.limit}, or after ${REALERT_MS / 3_600_000} h.`
   if (!s.lastAlertAt) return ['', next]
-  return ['', `Still happening since ${s.since}: ${s.held} more ${w.items} since the last comment (${s.lastAlertAt}) were held back. ${next}`]
+  const fresh = s.newKeys?.length ? ` New in this streak since then (${s.newKeys.length} ${s.newKeys.length === 1 ? w.key : w.keys}): ${keyList(s.newKeys)}.` : ''
+  return ['', `Still happening since ${s.since}: ${s.held} more ${w.items} since the last comment (${s.lastAlertAt}) were held back.${fresh} ${next}`]
 }
 
 /** Markdown for one comment holding every alert of a run. */
@@ -585,7 +613,7 @@ export function formatComment(alerts, url) {
           : [
               `### ${w.title} stopped: ${url}`,
               '',
-              `No new ${w.items} since ${a.lastAt}; this streak began at ${a.since}. ${a.held} more after the last comment (${a.alertedAt}) were held back, not commented one by one.`,
+              `No new ${w.items} since ${a.lastAt}; this streak began at ${a.since}. ${a.held} more after the last comment (${a.alertedAt}) were held back, not commented one by one.${a.pending?.length ? ` ${w.keys[0].toUpperCase()}${w.keys.slice(1)} new in this streak and not commented yet: ${keyList(a.pending)}.` : ''}`,
             ]),
       )
     } else if (a.kind === 'metrics-unavailable') {
