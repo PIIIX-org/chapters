@@ -12,6 +12,7 @@ import { publishNoteState } from './viewers.js'
 import { consumeTicket } from './tickets.js'
 import { COLLAB_PATH } from './routes.js'
 import { loadCrdtState, saveCrdtState } from './crdt-store.js'
+import { recordJob } from '../monitoring/metrics.js'
 
 export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
@@ -176,17 +177,25 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     async onStoreDocument({ documentName, document }) {
       const { vaultId, path } = parseDocName(documentName)
       const state = docState(document)
+      // A rejected store is a failed job (#705): the file keeps its last valid
+      // version while editors see their edit, so the owner must hear of it.
+      let failed = false
       try {
         await updateNote(vaultId, path, state)
       } catch (err) {
         // Invalid collab state (e.g. bad frontmatter): keep last valid file.
         console.error(`collab store rejected for ${documentName}:`, err)
+        recordJob('collab-store', { error: err }, vaultId)
+        failed = true
       }
       try {
         await saveCrdtState(vaultId, path, Y.encodeStateAsUpdate(document))
       } catch (err) {
         console.error(`crdt state save rejected for ${documentName}:`, err)
+        recordJob('collab-store', { error: err }, vaultId)
+        failed = true
       }
+      if (!failed) recordJob('collab-store', 'ok', vaultId)
     },
 
     async onChange({ documentName, document }) {

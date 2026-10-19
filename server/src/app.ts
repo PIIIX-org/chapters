@@ -29,6 +29,8 @@ import { repositoryRoutes } from './repositories/routes.js'
 import { repositoryPushRoutes } from './repositories/push-routes.js'
 import { repositoryWebhookRoutes } from './repositories/git-webhook-routes.js'
 import { repositoryFileContentRoutes } from './repositories/file-content-routes.js'
+import { recordRequest } from './monitoring/metrics.js'
+import { monitoringRoutes } from './monitoring/routes.js'
 
 export async function buildApp(
   opts: { clientDist?: string; logger?: FastifyServerOptions['logger'] } = {},
@@ -42,12 +44,29 @@ export async function buildApp(
           : { level: config.isProd ? 'info' : 'debug' },
   })
 
+  // Every finished request is counted per route template, and a 5xx is
+  // reported with the error's class name and code, never its message
+  // (monitoring/metrics.ts, #705). The error handler hands the error over.
+  const serverErrors = new WeakMap<object, unknown>()
+  app.addHook('onResponse', async (req, reply) => {
+    recordRequest({
+      method: req.method,
+      template: req.routeOptions.url,
+      status: reply.statusCode,
+      durationMs: reply.elapsedTime,
+      reqId: req.id,
+      actor: req.user ? 'user' : /^Bearer /i.test(req.headers.authorization ?? '') ? 'token' : 'anonymous',
+      error: serverErrors.get(req),
+    })
+  })
+
   app.setErrorHandler((error: FastifyError, req, reply) => {
     if ((error as { code?: string }).code === '22P02') {
       return reply.code(404).send({ error: 'not found' })
     }
     const statusCode = error.statusCode ?? 500
     if (statusCode >= 500) {
+      serverErrors.set(req, error)
       req.log.error(error)
     } else {
       req.log.info({ err: error }, error.message)
@@ -144,6 +163,7 @@ export async function buildApp(
       await api.register(async (a) => mcpConnectionRoutes(a))
       await api.register(async (a) => adminRoutes(a), { prefix: '/admin' })
       await api.register(async (a) => adminDashboardRoutes(a), { prefix: '/admin' })
+      await api.register(async (a) => monitoringRoutes(a), { prefix: '/admin' })
     },
     { prefix: '/api' },
   )

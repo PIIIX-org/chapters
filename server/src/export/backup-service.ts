@@ -4,6 +4,7 @@ import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { buildInstanceBackup } from './archive.js'
 import { deleteS3Object, listS3Objects, uploadS3Object, type S3Config } from './s3.js'
+import { recordJob } from '../monitoring/metrics.js'
 
 export type BackupDestination = 'local' | 's3'
 
@@ -214,9 +215,15 @@ export function startBackupScheduler(): () => void {
     const now = Date.now()
     const lastRunTime = lastRunAt ? new Date(lastRunAt).getTime() : 0
     if (now - lastRunTime >= intervalMs) {
-      executeBackup().catch((err) => {
-        console.error('[backup-scheduler] automated backup failed:', err)
-      })
+      // Scheduled runs only: an on-demand backup that fails is a 5xx, which
+      // is reported as a server error already (#705).
+      executeBackup().then(
+        () => recordJob('backup', 'ok'),
+        (err) => {
+          console.error('[backup-scheduler] automated backup failed:', err)
+          recordJob('backup', { error: err })
+        },
+      )
     }
   }, checkIntervalMs)
 

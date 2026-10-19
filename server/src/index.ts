@@ -7,7 +7,7 @@ import { startLocalWatchers, startPollingScheduler, reconcileOrphanedSyncs } fro
 import { backfillUnresolvedImports, scheduleMissingExtractions } from './repositories/extraction-queue.js'
 import { scrubStoredGitCredentials } from './repositories/git-remote.js'
 import { startBackupScheduler } from './export/backup-service.js'
-import { config } from './config.js'
+import { config, MIN_MONITORING_TOKEN_LENGTH } from './config.js'
 import { sql } from './db/client.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
@@ -17,6 +17,9 @@ import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 // does a SIGTERM that arrives before the handlers below are installed
 // (during migrations and catch-ups): Node's default exit writes nothing.
 console.log(bootLogLine(recordBoot()))
+if (process.env.ELARA_MONITORING_TOKEN && !config.monitoringToken) {
+  console.warn(`ELARA_MONITORING_TOKEN is shorter than ${MIN_MONITORING_TOKEN_LENGTH} characters and is ignored: /api/admin/monitoring needs an admin session`)
+}
 
 const app = await buildApp()
 

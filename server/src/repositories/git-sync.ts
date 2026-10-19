@@ -11,6 +11,7 @@ import { listFilesRecursive } from './fs-scan.js'
 import { authenticatedUrl, redactGitSecrets, splitGitUrlCredential } from './git-remote.js'
 import { isSafeGitUrl } from './permissions.js'
 import { syncRepositoryFiles, type FileUpdate } from './store.js'
+import { recordJob } from '../monitoring/metrics.js'
 
 const IGNORED = /(^|\/)(\.git|node_modules|\.next|dist|build|\.turbo)(\/|$)/
 const MAX_FILE_BYTES = 1_048_576 // 1MB per file limit to prevent heap exhaustion
@@ -32,6 +33,7 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       .update(repositories)
       .set({ syncStatus: 'error', lastSyncError: 'Invalid or forbidden git clone URL' })
       .where(eq(repositories.id, repositoryId))
+    recordJob('sync', { error: { name: 'UnsafeGitUrl' } }, repositoryId)
     return
   }
 
@@ -64,6 +66,7 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
             lastSyncError: null,
           })
           .where(eq(repositories.id, repositoryId))
+        recordJob('sync', 'ok', repositoryId)
         return
       }
     } catch (lsErr) {
@@ -112,7 +115,9 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
         lastSyncedCommit: headCommit,
       })
       .where(eq(repositories.id, repositoryId))
+    recordJob('sync', 'ok', repositoryId)
   } catch (err) {
+    recordJob('sync', { error: err }, repositoryId)
     // The raw message can carry the authenticated clone URL, and lastSyncError
     // is served to every viewer: store and rethrow only the redacted text (#383).
     const raw = err instanceof Error ? err.message : String(err)

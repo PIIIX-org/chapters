@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import { db } from '../src/db/client.js'
@@ -97,9 +98,7 @@ async function waitFor(check: () => Promise<boolean> | boolean, ms = 8000): Prom
   const start = Date.now()
   while (!(await check())) {
     if (Date.now() - start > ms) throw new Error('waitFor timed out')
-    const { promise, resolve } = Promise.withResolvers<void>()
-    setTimeout(resolve, 50)
-    await promise
+    await sleep(50)
   }
 }
 

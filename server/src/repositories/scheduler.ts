@@ -7,6 +7,7 @@ import { syncGitRepository } from './git-sync.js'
 import { listFilesRecursive } from './fs-scan.js'
 import { IGNORED, startWatching } from './local-watch.js'
 import { syncRepositoryFiles, type FileUpdate } from './store.js'
+import { recordJob } from '../monitoring/metrics.js'
 
 /**
  * Pure decision function (unit-tested directly — the interval loop
@@ -143,7 +144,9 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
       .update(repositories)
       .set({ syncStatus: 'idle', lastSyncedAt: new Date(), lastSyncError: null })
       .where(eq(repositories.id, repositoryId))
+    recordJob('sync', 'ok', repositoryId)
   } catch (err) {
+    recordJob('sync', { error: err }, repositoryId)
     const errorMsg = (err as Error).message.replace(/\0/g, '')
     await db
       .update(repositories)
