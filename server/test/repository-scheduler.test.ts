@@ -11,30 +11,36 @@ const THRESHOLD = 10 * 60 * 1000
 const now = new Date('2026-07-18T12:00:00Z')
 
 describe('shouldPoll', () => {
+  const recent = new Date(now.getTime() - 60_000)
+  const stale = new Date(now.getTime() - 20 * 60 * 1000)
+
   it('polls when no webhook has ever been seen', () => {
-    expect(shouldPoll(null, null, now, THRESHOLD)).toBe(true)
+    expect(shouldPoll(null, 'idle', now, THRESHOLD)).toBe(true)
+    expect(shouldPoll(null, 'error', now, THRESHOLD)).toBe(true)
   })
 
-  it('does not poll when a webhook was seen recently', () => {
-    const recent = new Date(now.getTime() - 60_000)
-    expect(shouldPoll(recent, null, now, THRESHOLD)).toBe(false)
+  it('does not poll when a webhook was seen recently and its sync did not fail', () => {
+    expect(shouldPoll(recent, 'idle', now, THRESHOLD)).toBe(false)
   })
 
-  it('polls when the last webhook is stale and nothing has synced since', () => {
-    const stale = new Date(now.getTime() - 20 * 60 * 1000)
-    expect(shouldPoll(stale, null, now, THRESHOLD)).toBe(true)
+  // #410: the webhook route writes lastWebhookAt before its sync and the sync
+  // writes lastSyncedAt after, so every successful webhook sync leaves
+  // lastSyncedAt > lastWebhookAt. A stale webhook must still bring polling back.
+  it('polls when the last webhook is stale, even after that webhook synced successfully', () => {
+    expect(shouldPoll(stale, 'idle', now, THRESHOLD)).toBe(true)
   })
 
-  it('does not poll when a sync already happened more recently than the stale webhook', () => {
-    const stale = new Date(now.getTime() - 20 * 60 * 1000)
-    const recentSync = new Date(now.getTime() - 60_000)
-    expect(shouldPoll(stale, recentSync, now, THRESHOLD)).toBe(false)
+  it('polls when a recent webhook was followed by a failed sync', () => {
+    expect(shouldPoll(recent, 'error', now, THRESHOLD)).toBe(true)
   })
 
-  it('polls when the last sync predates the stale webhook', () => {
-    const stale = new Date(now.getTime() - 20 * 60 * 1000)
-    const oldSync = new Date(now.getTime() - 30 * 60 * 1000)
-    expect(shouldPoll(stale, oldSync, now, THRESHOLD)).toBe(true)
+  it('polls when the last webhook is stale and its sync failed', () => {
+    expect(shouldPoll(stale, 'error', now, THRESHOLD)).toBe(true)
+  })
+
+  it('treats a webhook exactly at the threshold as still fresh', () => {
+    const edge = new Date(now.getTime() - THRESHOLD)
+    expect(shouldPoll(edge, 'idle', now, THRESHOLD)).toBe(false)
   })
 })
 
