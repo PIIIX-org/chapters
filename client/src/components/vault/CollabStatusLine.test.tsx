@@ -54,7 +54,29 @@ describe('CollabStatusLine', () => {
     unmount()
 
     render(<CollabStatusLine status="reconnecting" synced={false} syncedAt={AT} />)
-    expect(screen.getByRole('status').textContent).toMatch(/^Reconnecting/)
+    expect(screen.getByRole('status').textContent).toMatch(/^Offline/)
+  })
+
+  it('a dropped socket says "Offline — not saved yet" with the last sync time, never "Syncing…" (#720)', () => {
+    render(<CollabStatusLine status="reconnecting" synced={false} syncedAt={AT} />)
+
+    const line = screen.getByRole('status')
+    expect(line).toHaveTextContent(/^Offline/)
+    expect(line).toHaveTextContent(/not saved yet/)
+    expect(line.textContent).not.toMatch(/syncing|reconnecting/i)
+    // "Last synced 10:04": what the server holds is the text as of then.
+    const time = line.querySelector('time')!
+    expect(time.getAttribute('datetime')).toBe(AT.toISOString())
+    expect(line).toHaveTextContent(
+      `last synced ${AT.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+    )
+  })
+
+  it('a drop before any sync says offline without inventing a time', () => {
+    render(<CollabStatusLine status="reconnecting" synced={false} syncedAt={null} />)
+    const line = screen.getByRole('status')
+    expect(line).toHaveTextContent(/not saved yet/)
+    expect(line.querySelector('time')).toBeNull()
   })
 
   it('whispers in semantic status tones, never the AI accent', () => {
