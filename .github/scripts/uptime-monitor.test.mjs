@@ -344,7 +344,6 @@ describe('parseArgs / normalizeUrl', () => {
 })
 
 // #705: errors, failed jobs and slow endpoints from the authenticated metrics endpoint.
-const N1 = '019a1c30-0000-7000-8000-000000000004'
 const NOTE = '019a1c40-0000-7000-8000-000000000005'
 const reqRecord = (seq, over = {}) => ({
   seq,
