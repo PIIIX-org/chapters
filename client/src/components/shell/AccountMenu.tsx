@@ -14,7 +14,6 @@ import {
 import { SESSION_QUERY_KEY, useSession } from '../../hooks/useSession.js'
 import { useTheme } from '../../hooks/useTheme.js'
 import { logout } from '../../api/auth.js'
-import { clearCollabStashes } from '../../lib/collabStash.js'
 import { isThemePreference } from '../../lib/theme.js'
 import { cn } from '../../lib/utils.js'
 
@@ -38,8 +37,14 @@ export function AccountMenu({
     await logout()
     // Text kept in this browser for unsynced notes is this user's; the next
     // person to log in here must not get it back (#720). Only after the server
-    // took the logout: a logout that failed offline keeps it.
-    if (session.data) await clearCollabStashes(session.data.id).catch(() => undefined)
+    // took the logout: a logout that failed offline keeps it. Loaded here, not
+    // imported: it pulls in yjs, which stays out of the initial shell.
+    const userId = session.data?.id
+    if (userId) {
+      await import('../../lib/collabStash.js')
+        .then(({ clearCollabStashes }) => clearCollabStashes(userId))
+        .catch(() => undefined)
+    }
     await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
     navigate('/login')
   }

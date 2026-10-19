@@ -7,7 +7,9 @@ import { ApiError } from '../lib/api.js'
 import {
   closeCollabStash,
   collabStashName,
+  discardCollabStash,
   hasCollabStash,
+  holdCollabStash,
   openCollabStash,
   releaseCollabStash,
 } from '../lib/collabStash.js'
@@ -20,9 +22,10 @@ export type CollabStatus =
   | 'connecting'
   /** Live. Edits merge as they are typed. */
   | 'connected'
-  /** The socket dropped mid-session (or the browser says it is offline): the
-   *  provider is retrying, edits keep merging locally and are kept in this
-   *  browser until the relay acknowledges them. */
+  /** The socket dropped mid-session (or the browser says it is offline, or a
+   *  copy restored from this browser cannot reach the relay): the provider is
+   *  retrying, edits keep merging locally and are kept in this browser until
+   *  the relay acknowledges them. */
   | 'reconnecting'
   /** Access was pulled. The relay kicked us and will not take us back. */
   | 'revoked'
@@ -136,6 +139,15 @@ const RELEASE_MS = 1_000
 const RESTORE_ORIGIN = Symbol('collab-restore')
 
 /**
+ * True if the two documents share any Yjs client, i.e. one history. Two
+ * unrelated documents with the same text merge into the text twice.
+ */
+function sharesHistory(a: Y.Doc, b: Y.Doc): boolean {
+  for (const client of a.store.clients.keys()) if (b.store.clients.has(client)) return true
+  return false
+}
+
+/**
  * Joins the note's Yjs document on the Hocuspocus relay
  * (`server/src/sync/collab-server.ts`). Editors only.
  *
@@ -189,9 +201,10 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     userRef.current = user
   })
 
-  // The copy that could not be merged, open until the person discards it or
-  // leaves. While it sits in the store the live document keeps no copy there:
-  // the two do not share history, and one store must never hold both.
+  // The copy that could not be merged, open until the person discards it (in
+  // any tab) or leaves. While it sits in the store the live document keeps no
+  // copy there: the two do not share history, and one store must never hold
+  // both.
   const unmergedRef = useRef<{ stash: CollabStash; doc: Y.Doc; afterDiscard: () => void } | null>(null)
 
   useEffect(() => {
@@ -210,14 +223,21 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     let browserOffline = navigator.onLine === false
     // Something typed here that the relay has not acknowledged.
     let dirty = false
+    // A connection attempt failed since the socket last opened.
+    let attemptFailed = false
 
     const stashName = userRef.current.id ? collabStashName(userRef.current.id, docName) : null
     // This browser's copy of the live document, kept while something is unsent.
-    let local: CollabStash | null = null
+    // The store is open on `mirror`, never on the live document: y-indexeddb
+    // loads whatever is stored into the doc it keeps, unchecked, and anything
+    // loaded into the live document goes to the relay. The live document's
+    // updates are copied into `mirror`; nothing flows back except through
+    // `adopt`'s history check.
+    let local: { stash: CollabStash; mirror: Y.Doc; stop: () => void } | null = null
+    let opening = false
     // A copy left by an earlier session, shown until the relay's state arrives.
     let restore: { doc: Y.Doc; stash: CollabStash } | null = null
-    // Until the store has been checked for such a copy, opening it for the live
-    // document would load the copy into it unchecked (see `merge`).
+    // Until the store has been checked for such a copy, nothing else opens it.
     let restoring = stashName !== null
     let release: number | undefined
 
@@ -226,49 +246,109 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
       release = undefined
     }
 
+    /** Stops keeping the live document: keeps the store if something is unsent, empties it otherwise. */
+    const drop = (unsent: boolean) => {
+      if (!local) return
+      const { stash, mirror, stop } = local
+      local = null
+      stop()
+      void (unsent ? closeCollabStash(stash) : releaseCollabStash(stash)).finally(() => mirror.destroy())
+    }
+
+    /**
+     * The text could not be merged: the person gets it in a notice, and the
+     * copy stays in the store, never written back by any tab, until they
+     * discard it here or in another tab.
+     */
+    const offer = (stash: CollabStash, copy: Y.Doc) => {
+      if (cancelled) {
+        void closeCollabStash(stash)
+        copy.destroy()
+        return
+      }
+      const afterDiscard = () => {
+        if (!cancelled && dirty) keep()
+      }
+      unmergedRef.current = { stash, doc: copy, afterDiscard }
+      holdCollabStash(stash, () => {
+        if (unmergedRef.current?.stash !== stash) return
+        unmergedRef.current = null
+        setUnmerged(null)
+        copy.destroy()
+        void closeCollabStash(stash).then(afterDiscard)
+      })
+      setUnmerged(copy.getText('body').toString())
+    }
+
+    /**
+     * `copy` holds what the store holds; from here on it is the live
+     * document's mirror in the store. Same history as the live document (any
+     * Yjs client in common), or nothing stored: Yjs merges by item id, so
+     * whatever the live document already has is not applied twice and only
+     * the rest (an earlier session's unsent typing) is merged and sent. No
+     * history in common means the relay's document was rebuilt from the
+     * note's text (purged and re-created, or its CRDT state lost); merging
+     * then appends a second copy of the note, so the text goes to the person
+     * instead.
+     */
+    const adopt = (stash: CollabStash, copy: Y.Doc) => {
+      if (copy.store.clients.size > 0 && !sharesHistory(copy, ydoc)) {
+        offer(stash, copy)
+        return
+      }
+      const forward = (update: Uint8Array) => Y.applyUpdate(copy, update)
+      ydoc.on('update', forward)
+      local = { stash, mirror: copy, stop: () => ydoc.off('update', forward) }
+      Y.applyUpdate(copy, Y.encodeStateAsUpdate(ydoc, Y.encodeStateVector(copy)))
+      Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(copy, Y.encodeStateVector(ydoc)), RESTORE_ORIGIN)
+      if (cancelled) drop(dirty)
+    }
+
     const keep = () => {
       holdRelease()
-      if (local || !stashName || restoring || restore || unmergedRef.current) return
-      local = openCollabStash(stashName, ydoc)
+      if (local || opening || !stashName || restoring || restore || unmergedRef.current) return
+      const mirror = new Y.Doc()
+      const stash = openCollabStash(stashName, mirror)
+      if (!stash) {
+        mirror.destroy()
+        return
+      }
+      opening = true
+      void stash.loaded.then(
+        () => {
+          opening = false
+          adopt(stash, mirror)
+          if (!cancelled) settle()
+        },
+        () => {
+          // IndexedDB refused (private mode, quota): nothing kept here.
+          opening = false
+          void closeCollabStash(stash)
+          mirror.destroy()
+        },
+      )
     }
 
     const acked = () => handshake && !browserOffline && !provider?.hasUnsyncedChanges
 
+    // Not live and known to be out of reach: the socket dropped, or a copy
+    // restored from this browser is waiting while connecting fails.
+    const away = () => everConnected || (restore !== null && (attemptFailed || browserOffline))
+
     /**
-     * The copy from an earlier session meets the relay's document. Same
-     * history (any Yjs client in common): Yjs merges by item id, so whatever
-     * the relay already has is not applied twice and only the rest is sent.
-     * No history in common means the relay's document was rebuilt from the
-     * note's text (purged and re-created, or its CRDT state lost); merging then
-     * appends a second copy of the note, so the text goes to the person instead.
+     * The copy from an earlier session meets the relay's document, through
+     * the same history check as any other stored copy (`adopt`).
      */
     const merge = () => {
       if (!restore) return
       const { doc: copy, stash } = restore
       restore = null
       setRestoredDoc(null)
-      const relay = Y.decodeStateVector(Y.encodeStateVector(ydoc))
-      const shared = [...Y.decodeStateVector(Y.encodeStateVector(copy)).keys()].some((client) => relay.has(client))
-      if (!shared) {
-        unmergedRef.current = {
-          stash,
-          doc: copy,
-          afterDiscard: () => {
-            if (!cancelled && dirty) keep()
-          },
-        }
-        setUnmerged(copy.getText('body').toString())
-        return
-      }
-      Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(copy, Y.encodeStateVector(ydoc)), RESTORE_ORIGIN)
+      // Unsent until the relay acknowledges the merge. The editor is still
+      // bound to the copy until the next render swaps in the live document.
       dirty = true
       setUnsynced(true)
-      // The live document's own copy now holds everything; the old one is
-      // emptied with it once the relay has acknowledged the merge. The copy
-      // doc itself is left to the GC: the editor is still bound to it until
-      // the next render swaps in the live document.
-      keep()
-      void closeCollabStash(stash)
+      adopt(stash, copy)
     }
 
     /** Re-reads where the document stands after anything that can move it. */
@@ -285,10 +365,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
       if (local && !release) {
         release = window.setTimeout(() => {
           release = undefined
-          if (!local || !acked()) return
-          const copy = local
-          local = null
-          void releaseCollabStash(copy)
+          if (acked()) drop(false)
         }, RELEASE_MS)
       }
     }
@@ -304,7 +381,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
 
     const wentOffline = () => {
       browserOffline = true
-      if (!revoked && everConnected) setStatus('reconnecting')
+      if (!revoked && provider && away()) setStatus('reconnecting')
       settle()
     }
     const cameOnline = () => {
@@ -335,14 +412,13 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           if (stash) void closeCollabStash(stash)
           if (restore?.doc !== copy) copy.destroy()
           restoring = false
-          if (!cancelled && restore) settle()
-          else if (!cancelled && dirty) keep()
-          else if (cancelled && dirty && !restore) {
-            // Typed while the store was being checked, and unmounted before
-            // it was: write it down once anyway, it is still unsent.
-            const last = openCollabStash(stashName, ydoc)
-            if (last) void closeCollabStash(last)
+          if (!cancelled && restore) {
+            if (!revoked && provider && !socketOpen && away()) setStatus('reconnecting')
+            settle()
           }
+          // Typed while the store was being checked (even if unmounted since:
+          // `adopt` writes it down once, it is still unsent).
+          else if (dirty && !restore) keep()
         }
       })()
     }
@@ -429,11 +505,13 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           if (socketStatus === WebSocketStatus.Connected) {
             everConnected = true
             socketOpen = true
+            attemptFailed = false
             setStatus(browserOffline ? 'reconnecting' : 'connected')
           } else {
+            if (socketStatus === WebSocketStatus.Disconnected) attemptFailed = true
             socketOpen = false
             handshake = false
-            setStatus(everConnected ? 'reconnecting' : 'connecting')
+            setStatus(away() ? 'reconnecting' : 'connecting')
             settle()
           }
         },
@@ -470,7 +548,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
       window.removeEventListener('offline', wentOffline)
       window.removeEventListener('online', cameOnline)
       // Unsent: keep the copy for the next visit. Otherwise it can go.
-      if (local) void (dirty ? closeCollabStash(local) : releaseCollabStash(local))
+      drop(dirty)
       if (restore) {
         void closeCollabStash(restore.stash)
         restore.doc.destroy()
@@ -530,7 +608,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     unmergedRef.current = null
     setUnmerged(null)
     pending.doc.destroy()
-    void releaseCollabStash(pending.stash).then(pending.afterDiscard)
+    void discardCollabStash(pending.stash).then(pending.afterDiscard)
   }, [])
 
   return {

@@ -797,8 +797,16 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     const promptsBefore = beforeUnloadPrompts.length
     await page.reload()
     relayDown.promptedOnReload = beforeUnloadPrompts.length > promptsBefore
+    relayDown.prompts = beforeUnloadPrompts.length - promptsBefore
     relayDown.restoredInMs = await waitEditorIncludes(page, ' k05', 15_000)
+    // The restored copy is unsent: the status must not read "Connecting…"
+    // while every socket is refused. Polled: it follows the first refusal.
+    const statusSince = performance.now()
     relayDown.statusAfterReload = (await readChrome(page)).status
+    while (!/not saved yet/i.test((relayDown.statusAfterReload as string[]).join(' ')) && performance.now() - statusSince < 10_000) {
+      await Bun.sleep(250)
+      relayDown.statusAfterReload = (await readChrome(page)).status
+    }
     evaluate(await settle(page, 'S8c-reloaded-relay-down', { expectConverged: false }), false, ['editor'])
     partition = false
     evaluate(await settle(page, 'S8c-relay-back', { waitFor: t, timeoutMs: 60_000 }))
@@ -1116,6 +1124,23 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     expected: 'a beforeunload prompt on the reload (#720)',
     actual: relayDown.promptedOnReload ? 'prompted' : `no prompt (${beforeUnloadPrompts.length} prompts in the whole run)`,
     ok: relayDown.promptedOnReload === true,
+    severity: 'medium',
+  })
+  const restoredStatus = (relayDown.statusAfterReload as string[]).join(' | ')
+  checks.push({
+    name: 'S8c: restored copy says it is not saved while the relay is unreachable',
+    expected: 'status shows "Offline" and "not saved yet", not "Connecting…" (#720)',
+    actual: restoredStatus || '(no status text)',
+    ok: /offline/i.test(restoredStatus) && /not saved yet/i.test(restoredStatus),
+    severity: 'medium',
+  })
+  // Every other step navigates or reloads with everything acknowledged (S6a,
+  // S6b, S7, mobile): a prompt there nags on a synced note.
+  checks.push({
+    name: 'S8c is the only leave-page prompt in the run',
+    expected: 'exactly 1 beforeunload prompt, on the S8c reload (#720)',
+    actual: `${beforeUnloadPrompts.length} prompt(s), ${relayDown.prompts ?? 0} on the S8c reload: ${beforeUnloadPrompts.map((p) => `${p.page} ${p.at}`).join(', ') || 'none'}`,
+    ok: beforeUnloadPrompts.length === 1 && relayDown.prompts === 1,
     severity: 'medium',
   })
   checks.push(...mobileChecks)

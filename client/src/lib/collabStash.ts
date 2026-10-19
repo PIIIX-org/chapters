@@ -9,7 +9,7 @@ import { IndexeddbPersistence, storeState } from 'y-indexeddb'
  * One IndexedDB database per user + note (`<prefix>/<userId>/<vaultId>/<path>`):
  * the user id keeps one account's text out of another's session on a shared
  * browser, and logout deletes every database of that user
- * ({@link clearCollabStashes}).
+ * ({@link clearCollabStashes}). Their names are also kept in localStorage.
  *
  * A store holds a full document state (y-indexeddb writes the whole doc when it
  * opens, then every update), so it can be shown on its own after a reload with
@@ -82,6 +82,8 @@ export interface CollabStash {
 class Handle implements CollabStash {
   persistence: Persistence | null = null
   closed = false
+  /** Set while the copy is held for the "not merged" notice: see {@link holdCollabStash}. */
+  onDiscarded: (() => void) | null = null
   readonly loaded: Promise<void>
 
   constructor(
@@ -89,6 +91,7 @@ class Handle implements CollabStash {
     readonly doc: Y.Doc,
   ) {
     live.add(this)
+    remember(name)
     // Opens even if closed before its turn came: closing right after a
     // keystroke (unmount) must still write that keystroke down first.
     this.loaded = serial(name, async () => {
@@ -99,8 +102,17 @@ class Handle implements CollabStash {
     })
   }
 
-  /** Another tab emptied the store: write this tab's whole document back. */
-  rewrite(): void {
+  /**
+   * Another copy emptied the store. An unsent copy writes its whole document
+   * back. A copy held for the notice never does: it shares no history with the
+   * note, and back in the store it would reach a live document and put the
+   * note in twice. A discard ends the notice everywhere.
+   */
+  emptied(discarded: boolean): void {
+    if (this.onDiscarded) {
+      if (discarded) this.onDiscarded()
+      return
+    }
     void serial(this.name, async () => {
       if (!this.closed && this.persistence?.db) await storeState(this.persistence, true)
     })
@@ -109,14 +121,66 @@ class Handle implements CollabStash {
 
 const live = new Set<Handle>()
 
+interface Emptied {
+  name: string
+  discarded: boolean
+}
+
+function emptied({ name, discarded }: Emptied): void {
+  for (const handle of [...live]) if (handle.name === name) handle.emptied(discarded)
+}
+
 const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(PREFIX)
 if (channel) {
   channel.onmessage = (event: MessageEvent<unknown>) => {
-    for (const handle of live) if (handle.name === event.data) handle.rewrite()
+    const data = event.data as Partial<Emptied> | null
+    if (typeof data?.name === 'string') emptied({ name: data.name, discarded: data.discarded === true })
   }
 }
 
-/** Starts keeping `doc` in this browser: loads what is stored into it, then stores every update. */
+/**
+ * The names of the stores this browser has opened, in localStorage: logout
+ * and {@link hasCollabStash} need them, and `indexedDB.databases()` is missing
+ * on older engines (Firefox before 126). Best effort: storage may be refused.
+ */
+const INDEX_KEY = `${PREFIX}/index`
+
+function readIndex(): string[] | null {
+  try {
+    const raw = localStorage.getItem(INDEX_KEY)
+    const names: unknown = raw === null ? [] : JSON.parse(raw)
+    return Array.isArray(names) ? names.filter((n): n is string => typeof n === 'string') : []
+  } catch {
+    return null
+  }
+}
+
+function writeIndex(names: string[]): void {
+  try {
+    localStorage.setItem(INDEX_KEY, JSON.stringify(names))
+  } catch {
+    // Storage refused: the databases are still there, only harder to find.
+  }
+}
+
+function remember(name: string): void {
+  const names = readIndex()
+  if (names && !names.includes(name)) writeIndex([...names, name])
+}
+
+function forget(names: string[]): void {
+  const index = readIndex()
+  if (index) writeIndex(index.filter((n) => !names.includes(n)))
+}
+
+/**
+ * Starts keeping `doc` in this browser: loads what is stored into it (now and
+ * whenever the store is compacted or rewritten), then stores every update.
+ * Never open it on a document the relay syncs: what is stored can come from
+ * another history, and loaded unchecked it goes to the relay (see
+ * `useCollabDoc`, which opens it on a separate doc and merges only after a
+ * history check).
+ */
 export function openCollabStash(name: string, doc: Y.Doc): CollabStash | null {
   if (!supported()) return null
   return new Handle(name, doc)
@@ -125,12 +189,20 @@ export function openCollabStash(name: string, doc: Y.Doc): CollabStash | null {
 /** True if a database for `name` may exist. Avoids creating one per note opened. */
 export async function hasCollabStash(name: string): Promise<boolean> {
   if (!supported()) return false
-  if (typeof indexedDB.databases !== 'function') return true
+  if (typeof indexedDB.databases !== 'function') return readIndex()?.includes(name) ?? true
   try {
     return (await indexedDB.databases()).some((db) => db.name === name)
   } catch {
     return true
   }
+}
+
+/**
+ * Holds a copy for the "not merged" notice: it is never written back into the
+ * store, and `onDiscarded` runs when the person discards it in another tab.
+ */
+export function holdCollabStash(stash: CollabStash, onDiscarded: () => void): void {
+  ;(stash as Handle).onDiscarded = onDiscarded
 }
 
 /** Stops writing and keeps what is stored: something in it is still unsent. */
@@ -144,12 +216,7 @@ export function closeCollabStash(stash: CollabStash): Promise<void> {
   })
 }
 
-/**
- * The relay has acknowledged everything: empty the store and stop writing.
- * Any other copy of the same note still open (another tab) writes its whole
- * document back, so emptying never drops text that tab has not sent.
- */
-export function releaseCollabStash(stash: CollabStash): Promise<void> {
+function empty(stash: CollabStash, discarded: boolean): Promise<void> {
   const handle = stash as Handle
   if (handle.closed) return Promise.resolve()
   handle.closed = true
@@ -165,9 +232,24 @@ export function releaseCollabStash(stash: CollabStash): Promise<void> {
       tx.onabort = () => reject(tx.error ?? new Error('IndexedDB clear aborted'))
     })
     await persistence.destroy()
-    for (const other of live) if (other.name === handle.name) other.rewrite()
-    channel?.postMessage(handle.name)
+    const message: Emptied = { name: handle.name, discarded }
+    emptied(message)
+    channel?.postMessage(message)
   })
+}
+
+/**
+ * The relay has acknowledged everything: empty the store and stop writing.
+ * Any other unsent copy of the same note still open (another tab) writes its
+ * whole document back, so emptying never drops text that tab has not sent.
+ */
+export function releaseCollabStash(stash: CollabStash): Promise<void> {
+  return empty(stash, false)
+}
+
+/** The person discarded the copy behind the notice: empty the store, end the notice in every tab. */
+export function discardCollabStash(stash: CollabStash): Promise<void> {
+  return empty(stash, true)
 }
 
 function deleteDatabase(name: string): Promise<void> {
@@ -183,16 +265,18 @@ function deleteDatabase(name: string): Promise<void> {
 
 /**
  * Logout: nothing one user typed may be restored into anyone else's session
- * on this browser. Deletes every database of `userId`. Needs
- * `indexedDB.databases()` to find them (every current engine has it).
+ * on this browser. Deletes every database of `userId` that
+ * `indexedDB.databases()` or the localStorage index knows about.
  */
 export async function clearCollabStashes(userId: string): Promise<void> {
   if (!supported()) return
   const prefix = collabStashName(userId, '')
   await Promise.all([...live].filter((h) => h.name.startsWith(prefix)).map((h) => closeCollabStash(h)))
-  if (typeof indexedDB.databases !== 'function') return
-  const names = (await indexedDB.databases())
-    .map((db) => db.name)
-    .filter((name): name is string => typeof name === 'string' && name.startsWith(prefix))
+  const found = new Set(readIndex() ?? [])
+  if (typeof indexedDB.databases === 'function') {
+    for (const db of await indexedDB.databases().catch(() => [])) if (db.name) found.add(db.name)
+  }
+  const names = [...found].filter((name) => name.startsWith(prefix))
   await Promise.all(names.map((name) => serial(name, () => deleteDatabase(name))))
+  forget(names)
 }
