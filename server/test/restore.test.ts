@@ -133,7 +133,7 @@ describe('restoreBackup: format-1 archives (account-dump.json)', () => {
     expect((await db.select().from(instanceState))[0]?.setupCompletedAt).toBeInstanceOf(Date)
   })
 
-  it('gives notes the same ids on a re-run, so nothing is duplicated', async () => {
+  it('gives notes the same ids on every restore of the archive, and a re-run writes nothing', async () => {
     const userId = randomUUID()
     const vaultId = randomUUID()
     const archive = legacyArchive(
@@ -146,10 +146,12 @@ describe('restoreBackup: format-1 archives (account-dump.json)', () => {
     await restoreBackup(archive)
     const first = await db.select({ id: notes.id }).from(notes)
     const again = await restoreBackup(archive)
-    expect(again.rerun).toBe(true)
-    expect(again.tables.every((t) => t.toRestore === 0)).toBe(true)
-    expect(await db.select({ id: notes.id }).from(notes)).toEqual(first)
+    expect(again.alreadyRestored).toEqual(expect.any(String))
+    expect(again.tables).toEqual([])
     expect(await db.select().from(noteRevisions)).toHaveLength(1)
+    await wipeInstance()
+    await restoreBackup(archive)
+    expect(await db.select({ id: notes.id }).from(notes)).toEqual(first)
   })
 
   it("restores a pre-0019 dump with account tokens at admin and pinned tokens at write, and keeps a newer dump's capabilities", async () => {

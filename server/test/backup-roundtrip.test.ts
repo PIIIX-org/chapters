@@ -1,9 +1,9 @@
 // Instance backup -> wipe -> restore round trip (#409). Every test here wipes
 // the whole test database and DATA_DIR/vaults first: a restore only runs on an
 // empty instance, and the comparison covers every row of every backed-up table.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
-import { readdir, readFile, unlink } from 'node:fs/promises'
+import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import AdmZip from 'adm-zip'
 import * as OTPAuth from 'otpauth'
@@ -38,7 +38,8 @@ import {
 } from '../src/db/schema.js'
 import { buildInstanceBackup } from '../src/export/archive.js'
 import { restoreBackup } from '../src/export/restore.js'
-import { createNote, saveAsset, softDeleteNote, updateNote } from '../src/notes/store.js'
+import { issueBackupCodes } from '../src/auth/mfa.js'
+import { createNote, readNote, saveAsset, softDeleteNote, trashFile, updateNote } from '../src/notes/store.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createSyncToken, resolveSyncToken } from '../src/repositories/sync-tokens.js'
 import { createActiveUser, loginCookie, TEST_PASSWORD, uniqueEmail, wipeInstance } from './helpers.js'
@@ -148,6 +149,9 @@ interface Fixture {
   mfaEmail: string
   mfaSecret: string
   mfaBackupCode: string
+  /** A second backup code, kept unused for the rotation check. */
+  mfaSpareCode: string
+  mfaUserId: string
 }
 
 /** A realistic instance: trash, revisions, attachments, repositories, pinned tokens, MFA. */
@@ -253,6 +257,8 @@ async function buildFixture(): Promise<Fixture> {
     mfaEmail: mfaUser.email,
     mfaSecret,
     mfaBackupCode: backupCodes[0],
+    mfaSpareCode: String(backupCodes[1]),
+    mfaUserId: mfaUser.id,
   }
 }
 
@@ -349,25 +355,42 @@ describe('instance backup round trip (#409)', () => {
     const before = await snapshotDb()
     const beforeFiles = await snapshotFiles()
     const beforeEvents = await securityEventRows()
-    await restoreBackup(archive)
+    const plan = await restoreBackup(archive)
+    expect(plan.alreadyRestored).toEqual(expect.any(String))
     expect(await snapshotDb()).toEqual(before)
     expect(await snapshotFiles()).toEqual(beforeFiles)
     expect(await securityEventRows()).toEqual(beforeEvents)
   })
 
-  it('fills in only what is missing when some rows and files are already there', async () => {
-    const before = await snapshotDb()
-    const beforeFiles = await snapshotFiles()
+  it('brings nothing back on a re-run after rows and files were deleted', async () => {
     const [revision] = await db.select().from(noteRevisions).limit(1)
     await db.delete(noteRevisions).where(eq(noteRevisions.id, revision!.id))
     await db
       .delete(vaultShares)
       .where(and(eq(vaultShares.vaultId, fixture.vaultId), eq(vaultShares.granteeType, 'team')))
     await unlink(join(config.dataDir, 'vaults', fixture.vaultId, 'assets', fixture.assetName))
+    // Rotating the backup codes deletes the old ones: a re-run must not revive them.
+    await issueBackupCodes(fixture.mfaUserId)
+    const before = await snapshotDb()
+    const beforeFiles = await snapshotFiles()
 
     await restoreBackup(archive)
     expect(await snapshotDb()).toEqual(before)
     expect(await snapshotFiles()).toEqual(beforeFiles)
+    const oldCode = await app.inject({
+      method: 'POST',
+      url: '/api/login',
+      body: { email: fixture.mfaEmail, password: TEST_PASSWORD, totp: fixture.mfaSpareCode },
+    })
+    expect(oldCode.statusCode).toBe(401)
+  })
+
+  it('rebuilds an index.md a crash after the commit left missing, and nothing else', async () => {
+    const index = join(config.dataDir, 'vaults', fixture.vaultId, 'concepts', 'index.md')
+    const before = await snapshotFiles()
+    await unlink(index)
+    await restoreBackup(archive)
+    expect(await snapshotFiles()).toEqual(before)
   })
 
   it('refuses an instance that holds data from somewhere else, writing nothing', async () => {
@@ -413,5 +436,46 @@ describe('instance backup round trip (#409)', () => {
       expect(await userCount(), label).toBe(0)
       expect(await snapshotFiles(), label).toEqual({})
     }
+  })
+
+  it('keeps a note saved while the backup reads files at its snapshot version', async () => {
+    await wipeInstance()
+    const owner = await createActiveUser()
+    const [vault] = await db.insert(vaults).values({ name: 'Racing', ownerId: owner.id }).returning()
+    const vaultId = vault!.id
+    await createNote(vaultId, { path: 'concepts/racing', frontmatter: { type: 'concepts' }, body: 'v1\n' })
+    // The save lands after the snapshot transaction, before the files are read.
+    const transaction = db.transaction.bind(db)
+    const afterSnapshot = async (...args: Parameters<typeof db.transaction>) => {
+      const out = await transaction(...args)
+      await updateNote(vaultId, 'concepts/racing', { body: 'v2 written during the backup\n' })
+      return out
+    }
+    // The spy has the generic overload's type, which a wrapper can't name.
+    vi.spyOn(db, 'transaction').mockImplementationOnce(afterSnapshot as typeof db.transaction)
+    const raced = await buildInstanceBackup()
+    expect(new AdmZip(raced).getEntry(`vaults/${vaultId}/notes/concepts/racing.md`)).toBeNull()
+    // The saves queued embedding updates: let them land before the truncate.
+    await flushEmbeddings()
+
+    await wipeInstance()
+    await restoreBackup(raced)
+    const note = await readNote(vaultId, 'concepts/racing')
+    expect({ file: note?.body, row: note?.row.body }).toEqual({ file: 'v1\n', row: 'v1\n' })
+    await updateNote(vaultId, 'concepts/racing', { frontmatter: { type: 'concepts', title: 'Racing' } })
+    expect((await readNote(vaultId, 'concepts/racing'))?.body).toBe('v1\n')
+    await flushEmbeddings()
+  })
+
+  it('removes the files it wrote when the apply fails', async () => {
+    await wipeInstance()
+    // A non-empty directory where the trashed note's file goes: that write fails.
+    const blocker = trashFile(fixture.vaultId, fixture.trashedNoteId)
+    await mkdir(blocker, { recursive: true })
+    await writeFile(join(blocker, 'keep'), 'x')
+    await expect(restoreBackup(archive)).rejects.toThrow()
+    expect(await userCount()).toBe(0)
+    expect(Object.keys(await snapshotFiles())).toEqual([`${fixture.vaultId}/.trash/${fixture.trashedNoteId}.md/keep`])
+    await wipeInstance()
   })
 })
