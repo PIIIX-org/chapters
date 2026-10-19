@@ -49,7 +49,7 @@ When exploring a project or answering questions about architecture, concepts, or
 
 ### 2. Note Creation & Editing (OKF Standard)
 When creating or editing notes via `create_note` or `edit_note`:
-- `create_note` takes `path` (or `type` + `name`), a `frontmatter` **object**, and a markdown `body` **without** a frontmatter block. There is no `content` argument; unknown arguments are silently dropped.
+- `create_note` takes `path` (or `type` + `name`), a `frontmatter` **object**, and a markdown `body` **without** a frontmatter block. There is no `content` argument: every tool refuses an argument it does not declare, and the error lists its real parameters.
 - The frontmatter `type` must equal the first path segment, and every path segment must match `^[a-z0-9][a-z0-9-]*$` (so `decisions/adr-001-crdt-relay`, not `decisions/ADR-001`). `timestamp` defaults to now; datetimes need `Z` or an offset. Example `create_note` arguments:
   ```json
   {

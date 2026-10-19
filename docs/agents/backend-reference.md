@@ -594,9 +594,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - *Prompts*: 20, registered in `prompts.ts`.
   *(Security invariant: MCP connections cannot create new MCP connections or mint tokens).*
   Every handler is wrapped so thrown errors become a structured `isError`
-  result instead of an uncaught exception. Input schemas are zod object
-  shapes, which strip undeclared keys: an unknown or misspelled argument
-  (e.g. `content` on `create_note`) is dropped silently, not rejected.
+  result instead of an uncaught exception. Input schemas are strict
+  (#437): `tool()` wraps each zod shape with `strictArgs()`
+  (`strict-input.ts`), so the SDK refuses an undeclared argument before
+  anything runs, with a message that names it, suggests the parameter it
+  probably meant (`content` → `body`, `vault_id` → `vaultId`) and lists the
+  tool's parameters; tools/list advertises `additionalProperties: false`.
+  A nested object field uses `strictArgs()` too (`save_graph_perspective`
+  `filters`); free-form maps (`frontmatter`, the preference maps) are
+  `z.record` and accept any key. `test/mcp-strict-args.test.ts` loops
+  over every tool.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.

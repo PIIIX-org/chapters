@@ -121,7 +121,7 @@ For each domain, define:
 
 ### Phase 3: Structured OKF Note Synthesis
 
-Create notes with `create_note`. Pass the path, the frontmatter as a JSON object (`frontmatter`), and the markdown below the frontmatter as `body`. There is no `content` argument; unknown arguments are silently dropped. The templates are shown as files (frontmatter block plus body) for readability.
+Create notes with `create_note`. Pass the path, the frontmatter as a JSON object (`frontmatter`), and the markdown below the frontmatter as `body`. There is no `content` argument; an argument the tool does not declare is refused with the list of its real parameters. The templates are shown as files (frontmatter block plus body) for readability.
 
 Replace `<repo>` with the repository's name or id as connected in Elara, and `YYYY-MM-DDTHH:MM:SSZ` with a real UTC time.
 
