@@ -197,10 +197,10 @@ describe('executeBackup & backup routes', () => {
     const files = await readdir(testBackupDir)
     expect(files).toContain(result.filename)
 
-    // Verify it is a valid zip containing account dump
+    // Verify it is a valid instance backup zip
     const zip = new AdmZip(join(testBackupDir, result.filename))
     const entryNames = zip.getEntries().map((e) => e.entryName)
-    expect(entryNames).toContain('account-dump.json')
+    expect(entryNames).toEqual(expect.arrayContaining(['backup.json', 'db/users.jsonl']))
 
     const status = getBackupStatus()
     expect(status.configured).toBe(true)

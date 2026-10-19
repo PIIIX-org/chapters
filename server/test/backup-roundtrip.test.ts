@@ -3,7 +3,7 @@
 // empty instance, and the comparison covers every row of every backed-up table.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
-import { readdir, readFile, rm, unlink } from 'node:fs/promises'
+import { readdir, readFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import AdmZip from 'adm-zip'
 import * as OTPAuth from 'otpauth'
@@ -14,7 +14,7 @@ import { and, eq, sql as dsql } from 'drizzle-orm'
 import type { PgTable } from 'drizzle-orm/pg-core'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
-import { db, sql } from '../src/db/client.js'
+import { db } from '../src/db/client.js'
 import {
   graphPerspectives,
   mcpConnections,
@@ -41,7 +41,7 @@ import { restoreBackup } from '../src/export/restore.js'
 import { createNote, saveAsset, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createSyncToken, resolveSyncToken } from '../src/repositories/sync-tokens.js'
-import { createActiveUser, loginCookie, TEST_PASSWORD, uniqueEmail } from './helpers.js'
+import { createActiveUser, loginCookie, TEST_PASSWORD, uniqueEmail, wipeInstance } from './helpers.js'
 
 /** Every backed-up table, compared row for row (derived columns left out). */
 const TABLES: Record<string, PgTable> = {
@@ -70,14 +70,9 @@ type Snapshot = Record<string, string[]>
 async function snapshotDb(): Promise<Snapshot> {
   const out: Snapshot = {}
   for (const [name, table] of Object.entries(TABLES)) {
-    const rows = (await db.select().from(table)) as Array<Record<string, unknown>>
-    out[name] = rows
-      .map((row) => {
-        // Embeddings are derived and rebuilt after a restore.
-        const { embedding: _embedding, ...rest } = row
-        return JSON.stringify(rest)
-      })
-      .sort()
+    const rows = await db.select().from(table)
+    // Embeddings are derived and rebuilt after a restore.
+    out[name] = rows.map((row) => JSON.stringify(row, (key, value: unknown) => (key === 'embedding' ? undefined : value))).sort()
   }
   return out
 }
@@ -109,12 +104,6 @@ async function snapshotFiles(): Promise<Record<string, string>> {
   }
   await walk(root)
   return out
-}
-
-async function wipeInstance(): Promise<void> {
-  const tables = await sql<Array<{ tablename: string }>>`select tablename from pg_tables where schemaname = 'public'`
-  await sql.unsafe(`truncate ${tables.map((t) => `"${t.tablename}"`).join(', ')} cascade`)
-  await rm(join(config.dataDir, 'vaults'), { recursive: true, force: true })
 }
 
 async function userCount(): Promise<number> {
@@ -292,6 +281,15 @@ describe('instance backup round trip (#409)', () => {
     source = await snapshotDb()
     sourceFiles = await snapshotFiles()
     sourceEvents = await securityEventRows()
+    expect(Object.keys(sourceFiles)).toEqual(
+      expect.arrayContaining([
+        `${fixture.vaultId}/assets/${fixture.assetName}`,
+        `${fixture.vaultId}/.trash/${fixture.trashedNoteId}.md`,
+        `${fixture.vaultId}/concepts/deep/a/b/leaf.md`,
+        `${fixture.vaultId}/concepts/index.md`,
+        `${fixture.trashedVaultId}/concepts/inside.md`,
+      ]),
+    )
     archive = await buildInstanceBackup()
 
     await wipeInstance()
