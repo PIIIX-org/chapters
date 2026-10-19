@@ -10,8 +10,8 @@
 // (never the raw URL, so no path segment or query string), status, duration,
 // request id, actor kind, job kind, a subject UUID, and the error's class name
 // and code, each format-checked. Never the error message: messages quote note
-// text, note paths (= titles) and URLs, and the credential redaction of
-// #577/#593 (`redactGitSecrets`) recognises credentials, not note text.
+// text, note paths (= titles) and URLs, and the credential redaction of PRs
+// #592/#643 (`redactGitSecrets`) recognises credentials, not note text.
 // Single-process, like the rest of the server (backend-reference.md §9).
 
 import { bootInfo } from '../lifecycle.js'

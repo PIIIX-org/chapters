@@ -38,9 +38,12 @@ deactivation and hashing, the MCP rate limit and its 429, two-account
 separation, note text in prompts; #552), `smoke`, `concurrency`,
 `scoped-tokens`, `collab-duplication` (without the eight-kill S17 sweep),
 `fix-attribution`, `fix-crash-catchup`, `fix-frontmatter`,
-`fix-import-edges` (without the chapters repo), `uptime-monitor`
-(`.github/scripts/uptime-monitor.mjs` against the instance through a
-graceful restart, a SIGKILL, a stop and a start; #583),
+`fix-import-edges` (without the chapters repo), `monitoring-alerts`
+(the uptime monitor with the lab's `ELARA_MONITORING_TOKEN` and
+`ALERT_WEBHOOK_URL` on a stub sink: an injected 500 and a failing git sync
+each produce an alert, with no note text or secret in it; #705),
+`uptime-monitor` (`.github/scripts/uptime-monitor.mjs` against the
+instance through a graceful restart, a SIGKILL, a stop and a start; #583),
 `zz-fix-minified-bundle`.
 Full tier adds `attachments`, `backup-restore`, `big-notes`, `browser`
 (Playwright/Chromium), `crash-write`, `export-roundtrip`,

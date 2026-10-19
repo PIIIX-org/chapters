@@ -1,0 +1,80 @@
+# Monitoring errors, failed jobs and slow requests
+
+`GET /health` tells you the app is up and whether it restarted ([checklist](checklist.md), section 5). It does not tell you that requests are failing, that a background job (embeddings, code extraction, repository sync, saving a live edit to the note file, a scheduled backup) failed, or that an endpoint got slow. Elara keeps those numbers in memory and serves them on an authenticated endpoint, and the uptime monitor script turns them into alerts.
+
+## What the server records
+
+Every finished request is counted per **route template** (`PUT /api/vaults/:id/notes/*`, never the URL itself: no note path, no query string). Every 5xx response and every failed background job becomes an **error report**:
+
+| field | request (5xx) | job failure |
+|---|---|---|
+| `seq`, `at` | number since the process started, time | same |
+| `route`, `status`, `durationMs` | route template, HTTP status, time taken | |
+| `reqId` | Fastify's request id: find the full error in the log with it | |
+| `actor` | `user` (session), `token` (bearer token), `anonymous` | |
+| `job`, `subjectId` | | `embedding`, `extraction`, `sync`, `collab-store` or `backup`; the note, file, repository or vault id |
+| `error` | `{name, code}`: the error's class and code (`Error`, `EACCES`, `PostgresError 23505`) | same |
+
+**No error message, no note text, no path, no query string, no credential** is ever part of a report: an error message can quote a note's text, its path (its title) or a URL with a token in it, so it is left out entirely rather than filtered. The full error still goes to the app's log (`docker compose logs app`) as before, on your own host; each report also adds one JSON line there, `{"event":"server_error",...}` or `{"event":"job_failure",...}`, with exactly the fields above.
+
+What counts as a failed job:
+
+- `embedding`: a note's embedding failed 3 attempts in a row (search will not find it by meaning);
+- `extraction`: a repository file's code extraction or embedding failed;
+- `sync`: a git or local-folder repository sync failed (also shown on the repository card);
+- `collab-store`: a live (collaborative) edit could not be saved to the note file, for example because its frontmatter was invalid. **The file keeps its last valid version while the editors keep seeing their edit**: look at it;
+- `backup`: a scheduled backup failed (an on-demand one that fails is a 500 instead).
+
+Metrics are per process and in memory: per route, request count, 5xx count, and p50/p95/p99 and max latency over the **last 15 minutes**; totals since the process started; the last 50 error reports. A restart resets them (the restart itself is what `/health` reports). Percentiles are the upper bound of a latency bucket (…, 1000, 1500, 2000, 2500, 3000, … ms), capped at the slowest request seen, so they can read up to one bucket high.
+
+## The endpoint
+
+`GET /api/admin/monitoring` answers either
+
+- an **admin session** (signed in as an admin in the browser), or
+- `Authorization: Bearer <ELARA_MONITORING_TOKEN>`, the value of the `ELARA_MONITORING_TOKEN` environment variable (at least 32 characters; a shorter one is ignored with a warning at start). Generate it with `openssl rand -hex 32` and put it in `.env`; `docker-compose.yml` passes it through.
+
+Anyone else gets `401` (or `403` for a signed-in non-admin). `/health` does not change: it shows nothing of this.
+
+```json
+{
+  "bootId": "0199ec5a-8a2e-7c41-9d3b-5f0e2a7c1b44",
+  "startedAt": "2026-10-19T09:12:03.118Z",
+  "now": "2026-10-19T12:40:00.000Z",
+  "windowMinutes": 15,
+  "totals": { "requests": 18234, "serverErrors": 2, "jobFailures": 1 },
+  "jobs": { "embedding": { "succeeded": 410, "failed": 0 }, "extraction": { "succeeded": 0, "failed": 0 }, "sync": { "succeeded": 12, "failed": 1 }, "collab-store": { "succeeded": 88, "failed": 0 }, "backup": { "succeeded": 1, "failed": 0 } },
+  "routes": [{ "route": "POST /mcp", "count": 312, "serverErrors": 0, "p50Ms": 25, "p95Ms": 150, "p99Ms": 400, "maxMs": 612 }],
+  "errors": [{ "seq": 3, "at": "2026-10-19T12:31:07.004Z", "type": "job", "job": "sync", "subjectId": "0199…", "error": { "name": "Error", "code": null } }],
+  "lastSeq": 3
+}
+```
+
+## Alerts
+
+[`.github/scripts/uptime-monitor.mjs`](../../.github/scripts/uptime-monitor.mjs) (plain Node 24, no dependencies) reads `/health` and, when `ELARA_MONITORING_TOKEN` is set in its environment and `/health` is up, the endpoint above. It alerts on:
+
+| alert | when | setting (environment) |
+|---|---|---|
+| **errors** | at least N new 5xx responses since the last check | `ALERT_ERROR_THRESHOLD`, default `1` |
+| **jobs** | any new failed background job | |
+| **slow** | a route newly has p95 ≥ M ms over at least K requests in the last 15 minutes (once, until it is fast again) | `ALERT_SLOW_MS`, default `2000`; `ALERT_SLOW_MIN_COUNT`, default `5` |
+| **metrics unavailable** | `/health` is up but the endpoint refuses (wrong or rotated token); once per streak | |
+
+plus the restart, down, recovered and weekly check-in alerts of the uptime monitor. The server's counters are cumulative, so a check that runs late misses nothing; after a restart everything since the restart counts as new. The threshold is per check: with `ALERT_ERROR_THRESHOLD=5` and checks every 10 minutes, 5 errors within one interval alert, 1 per interval never does.
+
+Run it from cron on any machine that can reach your instance (not the same host: it should notice when the host is down):
+
+```bash
+# every 10 minutes
+ELARA_MONITORING_TOKEN=... ALERT_WEBHOOK_URL=https://hooks.slack.com/services/... \
+  node uptime-monitor.mjs --url https://elara.example.org --state-file /var/lib/elara-monitor/state.json
+```
+
+- `--state-file` keeps what it saw last (so each event alerts once) and posts nothing to GitHub.
+- `ALERT_WEBHOOK_URL` (optional): every alert is POSTed there as JSON, `{ "text": "<markdown>", "content": "<the same, at most 2000 characters>", "url": "...", "alerts": [...] }`; `text` suits Slack and most chat webhooks, `content` Discord. A failed POST makes the run exit non-zero without saving the state, so the next run tries again.
+- Each run prints one JSON line (what it saw, the alerts and the message). Without `ELARA_MONITORING_TOKEN` it only checks `/health`, and still exits 0.
+
+Alerts carry route templates, statuses, error classes and codes, request ids and job kinds, not the subject ids (they may end up in a public place, like the Elara project's own alert issue). To see which note, file or repository a failed job was about, read the endpoint with an admin session or grep the log for `job_failure`.
+
+The Elara project runs the same script from a scheduled GitHub Actions workflow ([`.github/workflows/uptime.yml`](../../.github/workflows/uptime.yml)) that comments on an issue; see `docs/agents/github-workflow.md` (Production uptime monitor).
