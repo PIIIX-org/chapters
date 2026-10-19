@@ -643,10 +643,11 @@ const test: LabTest = {
       // adds one security event (instance_restored) and writes instance_state itself.
       const archiveCounts = Object.entries(manifest.tables ?? {}).filter(([t]) => /^[a-z_]+$/.test(t) && t !== 'instance_state')
       const restoredCounts = archiveCounts.length
-        ? await rq<{ t: string; n: number }>(archiveCounts.map(([t]) => `select '${t}' as t, count(*)::int as n from ${t}`).join(' union all '))
+        ? // Not `t`: psqlRowsDb wraps the query as `json_agg(t) from (...) t`, and a column named t would shadow the row.
+          await rq<{ tbl: string; n: number }>(archiveCounts.map(([t]) => `select '${t}' as tbl, count(*)::int as n from ${t}`).join(' union all '))
         : []
       const countMismatches = archiveCounts
-        .map(([t, n]) => ({ t, expected: t === 'security_events' ? n + 1 : n, got: restoredCounts.find((r) => r.t === t)?.n }))
+        .map(([t, n]) => ({ t, expected: t === 'security_events' ? n + 1 : n, got: restoredCounts.find((r) => r.tbl === t)?.n }))
         .filter((c) => c.got !== c.expected)
       checks.push({
         name: 'restored row count of every table matches backup.json (#493)',
