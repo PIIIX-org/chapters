@@ -15,7 +15,8 @@ Chapters stores its state across two locations:
 Run the following commands on your host where `docker-compose.yml` is running:
 
 ```bash
-# 1. Create a timestamped backup directory
+# 1. Create a timestamped backup directory, readable by you only (the dump holds password and token hashes)
+umask 077
 BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
 mkdir -p ./backups/${BACKUP_DATE}
 
@@ -69,7 +70,7 @@ Elara also writes a single-zip instance backup that restores onto another machin
 
 ### What the archive holds
 
-Format 2 (since #409): `backup.json` (format version, time, row count per table), one `db/<table>.jsonl` per table (one row per line, as stored), and the files under `vaults/<vault id>/`: `notes/<path>.md` (live notes, as on disk), `trash/<note id>.md` (trashed notes) and `assets/<file>` (attachments; they have no database rows). All tables are read in one database snapshot.
+Format 2 (since #409): `backup.json` (format version, time, row count per table, and since #493 the SHA-256 and size of every other entry under `parts`), one `db/<table>.jsonl` per table (one row per line, as stored), and the files under `vaults/<vault id>/`: `notes/<path>.md` (live notes, as on disk), `trash/<note id>.md` (trashed notes) and `assets/<file>` (attachments; they have no database rows). All tables are read in one database snapshot.
 
 | In the archive | Left out, and how it comes back |
 | :--- | :--- |
@@ -80,6 +81,8 @@ Format 2 (since #409): `backup.json` (format version, time, row count per table)
 | MCP tokens (hashed, with access level, allow-list, expiry, revocation), security events, notifications, the instance's MFA mandate | embeddings and semantic edges: computed on boot; collab (CRDT) state: rebuilt from the note when it is opened |
 
 > The archive holds password hashes, token hashes, TOTP secrets and every note in plain text. Treat it like the database itself. Restoring repositories needs the same `CREDENTIALS_ENCRYPTION_KEY` (keep it with the backup, section 1 step 4).
+
+Scheduled backups (`BACKUP_LOCAL_PATH`) are written with mode `600` in a directory with mode `700`, whatever the server's umask (#493): only the user the server runs as (`node` in the image) can read them. Each file is written to a temporary name with that mode first and renamed when complete, so a crash never leaves a half-written `elara-backup-*.zip`. If the directory already exists and the server can't change its mode (a mount owned by another user), the backup still runs and the server logs a warning; the files themselves are still `600`. Copying them elsewhere (`docker cp`, rsync) is up to you to keep private. The download from the admin page is unchanged: it is saved wherever your browser puts it.
 
 ### Restoring via CLI
 
@@ -92,7 +95,7 @@ docker compose exec app pnpm restore-backup /path/to/backup.zip
 
 The restore runs in three steps and writes nothing unless all of them pass:
 
-1. **Validate**: a readable zip, a format this version knows, every table file present with the row count `backup.json` names, well-formed rows, and every row's parent (vault of a note, note of a revision, repository of a pinned token, ...) in the archive. A damaged or incomplete archive is refused with the reason.
+1. **Validate**: a readable zip, a format this version knows, every entry with the SHA-256 and size `backup.json` lists for it (nothing missing, nothing added), every table file present with the row count `backup.json` names, well-formed rows, and every row's parent (vault of a note, note of a revision, repository of a pinned token, ...) in the archive. A damaged, truncated, incomplete or modified archive is refused with the reason and the entry, e.g. `Refusing to restore: vaults/<id>/notes/ideas/x.md does not match its SHA-256 in backup.json: the archive was changed or damaged after the backup`. The digests catch damage and accidental edits, not a deliberate forgery: whoever can rewrite the archive can rewrite `backup.json` too, so keep the archive where only you can write it. An archive made before #493 has no digests: it restores, with a warning in the plan that only the zip's own checksums were checked.
 2. **Plan**: per table, how many rows are in the archive, how many will be restored and how many are already there (by id); the same for note, trash and attachment files. It prints counts and messages only, never a secret, hash or note.
 3. **Apply**: every row in one transaction; files are written atomically inside it, so a file that can't be written rolls the rows back.
 
@@ -102,7 +105,7 @@ After the restore, start the server. It computes the embeddings in the backgroun
 
 ### Older archives (format 1)
 
-Archives written before #409 (an `account-dump.json`, no `backup.json`) still restore, with what they have: users, teams, vaults, shares, MCP tokens, security events, notifications, live notes and attachments. They never held the trash, revision history, repositories or TOTP secrets, so after such a restore:
+Archives written before #409 (an `account-dump.json`, no `backup.json`) still restore, with what they have: users, teams, vaults, shares, MCP tokens, security events, notifications, live notes and attachments. They have no SHA-256 digests (the plan warns). They never held the trash, revision history, repositories or TOTP secrets, so after such a restore:
 
 - each note has one `create` revision and a new id (the same id on every restore of that archive);
 - tokens pinned to a repository are left out (the plan says how many);
