@@ -26,9 +26,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return {
     ...actual,
     rename: async (...args: Parameters<typeof actual.rename>) => {
-      const { promise, resolve } = Promise.withResolvers<void>()
-      setTimeout(resolve, 15)
-      await promise
+      await new Promise((resolve) => setTimeout(resolve, 15))
       return actual.rename(...args)
     },
   }
