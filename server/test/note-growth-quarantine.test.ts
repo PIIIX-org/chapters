@@ -1,0 +1,295 @@
+// #492: a stale reload doubled a whole note (#488) and every write path
+// stored it as an ordinary edit. A write that doubles a note (grows it to
+// ≥ 1.9× a previous body of ≥ 2 KiB) or repeats a block of it (copies of
+// text already in the note adding up to ≥ 1 KiB and half the note) is now
+// quarantined: the row and the file keep the previous body, the refused body
+// is kept as a `quarantine` revision, and the caller is told how to override
+// (edit_note / REST PUT `allowGrowth: true`). The collab relay keeps the live
+// document, does not store the duplicated body and reports it (#705).
+import { readFile } from 'node:fs/promises'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import type { FastifyInstance } from 'fastify'
+import { and, desc, eq } from 'drizzle-orm'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { HocuspocusProvider } from '@hocuspocus/provider'
+import * as Y from 'yjs'
+import { buildApp } from '../src/app.js'
+import { db } from '../src/db/client.js'
+import { noteRevisions } from '../src/db/schema.js'
+import { resetRateLimits } from '../src/mcp/rate-limit.js'
+import { metricsSnapshot } from '../src/monitoring/metrics.js'
+import { parseNote } from '../src/notes/okf.js'
+import { getLiveNote, noteFile } from '../src/notes/store.js'
+import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
+import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+
+type Args = Record<string, unknown>
+
+let app: FastifyInstance
+let collab: CollabRelay
+let baseUrl: string
+let ownerCookie: string
+let ownerToken: string
+let vaultId: string
+let mcp: Client
+const providers: HocuspocusProvider[] = []
+
+/** `n` distinct paragraphs (no paragraph repeats another), about 120 bytes each. */
+function paragraphs(tag: string, n: number): string {
+  const out: string[] = []
+  for (let i = 0; i < n; i++) {
+    out.push(`${tag} paragraph ${i}: the ${i * 7}th observation about item ${i * 13 + 5} notes that value ${i * 31 + 2} changed after run ${i}.`)
+  }
+  return out.join('\n\n')
+}
+
+async function call(name: string, args: Args): Promise<{ isError: boolean; text: string }> {
+  resetRateLimits()
+  const result = await mcp.callTool({ name, arguments: args })
+  const content = result.content as Array<{ type: string; text?: string }>
+  return { isError: result.isError === true, text: content.map((c) => c.text ?? '').join('') }
+}
+
+async function must<T>(name: string, args: Args): Promise<T> {
+  const r = await call(name, args)
+  if (r.isError) throw new Error(`${name} failed: ${r.text}`)
+  return JSON.parse(r.text) as T
+}
+
+async function fileBody(path: string): Promise<string> {
+  return parseNote(await readFile(noteFile(vaultId, path), 'utf8')).body
+}
+
+async function rowBody(path: string): Promise<string | undefined> {
+  return (await getLiveNote(vaultId, path))?.body
+}
+
+async function quarantined(noteId: string) {
+  return db
+    .select()
+    .from(noteRevisions)
+    .where(and(eq(noteRevisions.noteId, noteId), eq(noteRevisions.action, 'quarantine')))
+    .orderBy(desc(noteRevisions.createdAt))
+}
+
+/** Polls `check`: the relay stores on a debounce, and there is no event to await for a store's outcome. */
+async function waitFor(check: () => boolean | Promise<boolean>, ms = 8000): Promise<void> {
+  const start = Date.now()
+  while (!(await check())) {
+    if (Date.now() - start > ms) throw new Error('waitFor timed out')
+    await sleep(50)
+  }
+}
+
+beforeAll(async () => {
+  app = await buildApp()
+  await app.listen({ port: 0, host: '127.0.0.1' })
+  const address = app.server.address()
+  const port = typeof address === 'object' && address ? address.port : 0
+  baseUrl = `http://127.0.0.1:${port}`
+  collab = startCollabServer(app.server)
+  const owner = await createActiveUser()
+  ownerCookie = await loginCookie(app, owner.email)
+  ownerToken = await loginToken(app, owner.email)
+  const vault = await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie: ownerCookie }, body: { name: 'Growth quarantine' } })
+  vaultId = vault.json<{ id: string }>().id
+  const minted = await app.inject({
+    method: 'POST',
+    url: '/api/mcp-connections',
+    headers: { cookie: ownerCookie },
+    body: { name: 'growth-quarantine', scope: 'account' },
+  })
+  const { token } = minted.json<{ token: string }>()
+  mcp = new Client({ name: 'growth-quarantine-test', version: '0.0.0' })
+  await mcp.connect(
+    new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }),
+  )
+})
+
+afterAll(async () => {
+  providers.forEach((p) => p.destroy())
+  await mcp.close()
+  await collab.destroy()
+  await app.close()
+})
+
+describe('MCP edit_note', () => {
+  const path = 'docs/doubled-by-agent'
+  const body = paragraphs('agent', 40) // ~5 KiB
+  let noteId: string
+
+  beforeAll(async () => {
+    noteId = (await must<{ id: string }>('create_note', { vaultId, path, body })).id
+  })
+
+  it('quarantines an edit that doubles the note: row and file unchanged, clear error, refused body kept', async () => {
+    const doubled = `${body}\n\n${body}`
+    const r = await call('edit_note', { vaultId, path, body: doubled })
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/quarantine/i)
+    expect(r.text).toContain('allowGrowth')
+    expect(await rowBody(path)).toBe(body)
+    expect(await fileBody(path)).toBe(body)
+
+    const [q] = await quarantined(noteId)
+    expect(q?.body).toBe(doubled)
+    expect(q?.actorType).toBe('mcp')
+    expect(r.text).toContain(q!.id)
+    // Retrievable the documented way: note_history lists it, get_revision returns it.
+    const history = await must<{ revisions: Array<{ id: string; action: string }> }>('note_history', { vaultId, path })
+    expect(history.revisions[0]).toMatchObject({ id: q!.id, action: 'quarantine' })
+    const revision = await must<{ body: string; action: string }>('get_revision', { vaultId, path, revisionId: q!.id })
+    expect(revision).toMatchObject({ body: doubled, action: 'quarantine' })
+  })
+
+  it('quarantines an edit that only repeats a large block of the note', async () => {
+    const r = await call('edit_note', { vaultId, path, body: `${body}\n\nadded line\n\n${body.slice(0, Math.ceil(body.length * 0.6))}` })
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/repeated/i)
+    expect(await rowBody(path)).toBe(body)
+  })
+
+  it('allowGrowth: true writes the doubled body, recorded as an ordinary update', async () => {
+    const doubled = `${body}\n\n${body}`
+    const r = await call('edit_note', { vaultId, path, body: doubled, allowGrowth: true })
+    expect(r.isError, r.text).toBe(false)
+    expect(await rowBody(path)).toBe(doubled)
+    expect(await fileBody(path)).toBe(doubled)
+    const [newest] = await db
+      .select()
+      .from(noteRevisions)
+      .where(eq(noteRevisions.noteId, noteId))
+      .orderBy(desc(noteRevisions.createdAt))
+      .limit(1)
+    expect(newest).toMatchObject({ action: 'update', body: doubled })
+  })
+
+  it('revert_note restores a quarantined revision', async () => {
+    const p = 'docs/revert-quarantined'
+    const base = paragraphs('revert', 30)
+    const id = (await must<{ id: string }>('create_note', { vaultId, path: p, body: base })).id
+    const tripled = `${base}\n\n${base}\n\n${base}`
+    expect((await call('edit_note', { vaultId, path: p, body: tripled })).isError).toBe(true)
+    const [q] = await quarantined(id)
+    const r = await call('revert_note', { vaultId, path: p, revisionId: q!.id })
+    expect(r.isError, r.text).toBe(false)
+    expect(await rowBody(p)).toBe(tripled)
+  })
+})
+
+describe('REST PUT', () => {
+  it('answers 409 naming the quarantine and the override, and allowGrowth writes', async () => {
+    const path = 'docs/doubled-by-rest'
+    const body = paragraphs('rest', 30)
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes`,
+      headers: { cookie: ownerCookie },
+      body: { type: 'docs', name: 'doubled-by-rest', body },
+    })
+    expect(created.statusCode).toBe(200)
+    const doubled = `${body}\n${body}`
+    const refused = await app.inject({ method: 'PUT', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie: ownerCookie }, body: { body: doubled } })
+    expect(refused.statusCode).toBe(409)
+    expect(refused.body).toMatch(/quarantine/i)
+    expect(refused.body).toContain('allowGrowth')
+    expect(await rowBody(path)).toBe(body)
+    expect(await fileBody(path)).toBe(body)
+
+    const allowed = await app.inject({
+      method: 'PUT',
+      url: `/api/vaults/${vaultId}/notes/${path}`,
+      headers: { cookie: ownerCookie },
+      body: { body: doubled, allowGrowth: true },
+    })
+    expect(allowed.statusCode).toBe(200)
+    expect(await rowBody(path)).toBe(doubled)
+  })
+})
+
+describe('collab relay store', () => {
+  it('does not persist a doubled live document, records and reports it, and stores the next legitimate state', async () => {
+    const path = 'docs/doubled-by-relay'
+    const body = paragraphs('relay', 25) // ~3 KiB
+    const noteId = (await must<{ id: string }>('create_note', { vaultId, path, body })).id
+    const before = metricsSnapshot().jobs['collab-store']
+
+    const provider = new HocuspocusProvider({ url: `${baseUrl.replace('http', 'ws')}/collab`, name: `${vaultId}/${path}`, token: ownerToken, document: new Y.Doc() })
+    providers.push(provider)
+    const text = provider.document.getText('body')
+    await waitFor(() => text.toString() === body)
+
+    // What a stale reload produces: the same text twice in the live document.
+    text.insert(text.length, `\n\n${body}`)
+    await waitFor(async () => (await quarantined(noteId)).length > 0)
+    expect(await rowBody(path)).toBe(body)
+    expect(await fileBody(path)).toBe(body)
+    const [q] = await quarantined(noteId)
+    expect(q).toMatchObject({ actorType: 'collab', body: `${body}\n\n${body}` })
+    const reported = metricsSnapshot()
+    expect(reported.jobs['collab-store'].failed).toBe(before.failed + 1)
+    expect(reported.errors.at(-1)).toMatchObject({ type: 'job', job: 'collab-store', subjectId: vaultId, error: { name: 'NoteWriteQuarantinedError' } })
+    // The editor keeps what it shows: nothing is reverted under the user.
+    expect(text.toString()).toBe(`${body}\n\n${body}`)
+
+    // Typing on while the document is still doubled updates the one quarantined revision; it is reported once.
+    text.insert(text.length, ' typed-while-doubled')
+    await waitFor(async () => ((await quarantined(noteId))[0]?.body ?? '').endsWith(' typed-while-doubled'))
+    expect(await quarantined(noteId)).toHaveLength(1)
+    expect(await rowBody(path)).toBe(body)
+    const repeated = metricsSnapshot().jobs['collab-store']
+    expect(repeated.failed).toBe(before.failed + 1)
+    expect(repeated.repeated).toBeGreaterThan(before.repeated)
+
+    // The user removes the duplicate and goes on: that store is written.
+    provider.document.transact(() => {
+      text.delete(body.length, text.length - body.length)
+      text.insert(text.length, '\n\nlegit addition')
+    })
+    await waitFor(async () => (await rowBody(path)) === `${body}\n\nlegit addition`)
+    expect(await fileBody(path)).toBe(`${body}\n\nlegit addition`)
+  }, 20_000)
+})
+
+describe('writes that are not quarantined', () => {
+  it('a stub filled in, ordinary growth and a large first write pass', async () => {
+    const stub = 'docs/stub-then-filled'
+    await must('create_note', { vaultId, path: stub, body: 'TODO' })
+    const filled = paragraphs('filled', 90) // ~11 KiB from 4 bytes
+    expect((await call('edit_note', { vaultId, path: stub, body: filled })).isError).toBe(false)
+    expect(await rowBody(stub)).toBe(filled)
+
+    const grown = `${filled}\n\n${paragraphs('more', 50)}` // +~6 KiB on ~11 KiB: 1.5x
+    const r = await call('edit_note', { vaultId, path: stub, body: grown })
+    expect(r.isError, r.text).toBe(false)
+    expect(await rowBody(stub)).toBe(grown)
+
+    const big = paragraphs('big', 5000) // ~600 KiB first write
+    const created = await call('create_note', { vaultId, path: 'docs/large-first-write', body: big })
+    expect(created.isError, created.text).toBe(false)
+    expect(await rowBody('docs/large-first-write')).toBe(big)
+  })
+
+  it('checks a ~1 MiB edit through MCP quickly', async () => {
+    // ~640 KiB note, ~960 KiB edit: the largest repeat that fits under the 1 MiB request limit.
+    const path = 'docs/one-mib'
+    const body = paragraphs('mib', 6000).slice(0, 640 * 1024)
+    await must('create_note', { vaultId, path, body })
+    // Half of it repeated: quarantined, quickly.
+    const repeated = `${body}\n\n${body.slice(0, 320 * 1024)}`
+    let t = performance.now()
+    const refused = await call('edit_note', { vaultId, path, body: repeated })
+    const refusedMs = performance.now() - t
+    expect(refused.isError).toBe(true)
+    expect(refused.text).toMatch(/quarantine/i)
+    // An ordinary edit of the same note passes, also quickly.
+    t = performance.now()
+    const edited = await call('edit_note', { vaultId, path, body: `${body.slice(0, 1000)}EDITED${body.slice(1000)}` })
+    const editedMs = performance.now() - t
+    expect(edited.isError, edited.text).toBe(false)
+    expect(refusedMs).toBeLessThan(5000)
+    expect(editedMs).toBeLessThan(5000)
+  }, 30_000)
+})
