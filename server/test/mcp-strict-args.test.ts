@@ -148,17 +148,18 @@ describe('MCP tools reject unknown arguments (#437)', () => {
     expect((await call(account, 'list_graph_perspectives', { vaultId })).text).toBe('[]')
     expect((await call(account, 'save_graph_perspective', { vaultId, name: 'p', filters: { types: ['concepts'] } })).isError).toBe(false)
 
-    const frontmatter = { type: 'concepts', custom: { nested: { deep: [1, 'two'] } }, 'any-key': true }
+    // Frontmatter keys are the author's own: the schema accepts any (values are checked by the note store).
+    const frontmatter = { type: 'concepts', 'custom-key': 'x', anything_else: [1, 'two'] }
     const created = await call(account, 'create_note', { vaultId, path: 'concepts/free-form', frontmatter, body: 'hello' })
     expect(created.isError, created.text).toBe(false)
     const edited = await call(account, 'edit_note', {
       vaultId,
       path: 'concepts/free-form',
-      frontmatter: { ...frontmatter, another: { x: 1 } },
+      frontmatter: { ...frontmatter, another: true },
     })
     expect(edited.isError, edited.text).toBe(false)
     const read = JSON.parse((await call(account, 'read_note', { vaultId, path: 'concepts/free-form' })).text) as Args
-    expect(read.frontmatter).toMatchObject({ custom: { nested: { deep: [1, 'two'] } }, 'any-key': true, another: { x: 1 } })
+    expect(read.frontmatter).toMatchObject({ 'custom-key': 'x', anything_else: [1, 'two'], another: true })
     expect(read.body).toContain('hello')
   })
 
