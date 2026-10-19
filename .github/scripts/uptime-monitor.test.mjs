@@ -6,15 +6,22 @@ import { describe, it } from 'node:test'
 import {
   DOWN_AFTER,
   HEARTBEAT_MS,
+  METRICS_DEFAULTS,
+  METRICS_PATH,
   UNCLEAN_LABEL,
   emptyState,
   formatComment,
   labelsFor,
+  metricsOptions,
   normalizeUrl,
   observe,
+  observeMetrics,
   parseArgs,
   readStates,
   step,
+  stepMetrics,
+  webhookPayload,
+  webhookTarget,
   writeStates,
 } from './uptime-monitor.mjs'
 
@@ -333,5 +340,181 @@ describe('parseArgs / normalizeUrl', () => {
     assert.throws(() => normalizeUrl('https://example.org/?q=`@owner`'), /plain http/)
     assert.throws(() => normalizeUrl('https://example.org/#x'), /plain http/)
     assert.throws(() => parseArgs(['--bogus']), /unknown argument/)
+  })
+})
+
+// #705: errors, failed jobs and slow endpoints from the authenticated metrics endpoint.
+const N1 = '019a1c30-0000-7000-8000-000000000004'
+const NOTE = '019a1c40-0000-7000-8000-000000000005'
+const reqRecord = (seq, over = {}) => ({
+  seq,
+  at: T1,
+  type: 'request',
+  reqId: `req-${seq}`,
+  route: 'PUT /api/vaults/:id/notes/*',
+  status: 500,
+  durationMs: 12,
+  actor: 'user',
+  error: { name: 'Error', code: 'EACCES' },
+  ...over,
+})
+const jobRecord = (seq, job = 'sync') => ({ seq, at: T1, type: 'job', job, subjectId: NOTE, error: { name: 'Error', code: null } })
+/** An endpoint response (server/src/monitoring/metrics.ts metricsSnapshot) -> observeMetrics(). */
+const metrics = ({ bootId = A, serverErrors = 0, jobFailures = 0, routes = [], errors = [], jobs = {} } = {}) =>
+  observeMetrics({
+    status: 200,
+    body: {
+      bootId,
+      startedAt: T1,
+      totals: { requests: 100, serverErrors, jobFailures },
+      jobs: { embedding: { succeeded: 1, failed: 0 }, sync: { succeeded: 0, failed: 0 }, ...jobs },
+      routes,
+      errors,
+      lastSeq: errors.at(-1)?.seq ?? 0,
+    },
+  })
+/** Runs metrics observations through stepMetrics() in order. */
+function runMetrics(observations, opts = METRICS_DEFAULTS, state = null) {
+  return observations.map((m) => {
+    const r = stepMetrics(state, m, opts, T2)
+    state = r.state
+    return r
+  })
+}
+const kindsOf = (rs) => rs.map((r) => r.alerts.map((a) => a.kind))
+
+describe('observeMetrics', () => {
+  it('keeps format-checked records and drops the subject id (comments and the Actions log are public)', () => {
+    const m = metrics({ serverErrors: 1, errors: [reqRecord(1), jobRecord(2)] })
+    assert.equal(m.ok, true)
+    assert.deepEqual(m.errors[0], { seq: 1, at: T1, error: { name: 'Error', code: 'EACCES' }, type: 'request', reqId: 'req-1', route: 'PUT /api/vaults/:id/notes/*', status: 500, durationMs: 12, actor: 'user' })
+    assert.deepEqual(m.errors[1], { seq: 2, at: T1, error: { name: 'Error', code: null }, type: 'job', job: 'sync' })
+    assert.doesNotMatch(JSON.stringify(m), new RegExp(NOTE))
+  })
+  it('drops values that could write Markdown, links or mentions into a comment', () => {
+    const m = metrics({
+      errors: [reqRecord(1, { route: 'GET /x` @owner [x](https://evil)', reqId: '`@owner`', actor: 'admin', error: { name: 'a b', code: '<img>' } }), { seq: 2, type: 'job', job: 'evil' }],
+      routes: [{ route: 'GET /ok', count: 3, p95Ms: 10, maxMs: 11 }, { route: '@owner', count: 3, p95Ms: 10, maxMs: 10 }],
+    })
+    assert.deepEqual(m.errors, [{ seq: 1, at: T1, error: { name: null, code: null }, type: 'request', reqId: null, route: null, status: 500, durationMs: 12, actor: null }])
+    assert.deepEqual(m.routes, [{ route: 'GET /ok', count: 3, p95Ms: 10, maxMs: 11 }])
+  })
+  it('is unavailable on a refusal, a network error or a body that is not the endpoint', () => {
+    assert.deepEqual(observeMetrics({ status: 401, body: { error: 'invalid monitoring token' } }), { ok: false, error: 'HTTP 401' })
+    assert.deepEqual(observeMetrics({ error: 'ECONNREFUSED' }), { ok: false, error: 'ECONNREFUSED' })
+    assert.deepEqual(observeMetrics({ status: 200, body: { status: 'ok' } }), { ok: false, error: 'unexpected response' })
+  })
+})
+
+describe('stepMetrics', () => {
+  it('takes the first read as a baseline, then alerts on new 5xx responses and failed jobs once', () => {
+    const rs = runMetrics([
+      metrics({ serverErrors: 3, jobFailures: 1, errors: [reqRecord(1), jobRecord(2)] }),
+      metrics({ serverErrors: 3, jobFailures: 1, errors: [reqRecord(1), jobRecord(2)] }),
+      metrics({ serverErrors: 5, jobFailures: 2, errors: [reqRecord(1), jobRecord(2), reqRecord(3), reqRecord(4), jobRecord(5, 'embedding')], jobs: { embedding: { failed: 1 } } }),
+      metrics({ serverErrors: 5, jobFailures: 2, errors: [reqRecord(1), jobRecord(2), reqRecord(3), reqRecord(4), jobRecord(5, 'embedding')] }),
+    ])
+    assert.deepEqual(kindsOf(rs), [[], [], ['errors', 'jobs'], []])
+    const [errors, jobs] = rs[2].alerts
+    assert.equal(errors.count, 2)
+    assert.deepEqual(errors.recent.map((e) => e.seq), [3, 4], 'only the records since the last check')
+    assert.equal(jobs.count, 1)
+    assert.deepEqual(jobs.recent.map((e) => e.job), ['embedding'])
+    assert.equal(jobs.failedSinceBoot.embedding, 1)
+  })
+  it('needs ALERT_ERROR_THRESHOLD new 5xx in one interval (a spike), and does not carry a smaller count over', () => {
+    const opts = { ...METRICS_DEFAULTS, errorThreshold: 3 }
+    const rs = runMetrics([metrics(), metrics({ serverErrors: 2 }), metrics({ serverErrors: 4 }), metrics({ serverErrors: 7 })], opts)
+    assert.deepEqual(kindsOf(rs), [[], [], [], ['errors']])
+    assert.equal(rs[3].alerts[0].count, 3)
+  })
+  it('counts everything since a restart as new (cumulative counters reset with the bootId)', () => {
+    const rs = runMetrics([metrics({ serverErrors: 9, jobFailures: 4 }), metrics({ bootId: B, serverErrors: 1, jobFailures: 0, errors: [reqRecord(1)] })])
+    assert.deepEqual(kindsOf(rs), [[], ['errors']])
+    assert.equal(rs[1].alerts[0].count, 1)
+    assert.equal(rs[1].alerts[0].restarted, true)
+    assert.deepEqual(rs[1].alerts[0].recent.map((e) => e.seq), [1])
+  })
+  it('alerts a slow route once while it stays slow, again after it recovered, and never below the request minimum', () => {
+    const slow = { route: 'GET /api/search', count: 6, p95Ms: 2500, maxMs: 4000 }
+    const rs = runMetrics([
+      metrics(),
+      metrics({ routes: [slow, { route: 'GET /api/rare', count: 2, p95Ms: 9000, maxMs: 9000 }] }),
+      metrics({ routes: [slow] }),
+      metrics({ routes: [{ ...slow, p95Ms: 100 }] }),
+      metrics({ routes: [slow] }),
+    ])
+    assert.deepEqual(kindsOf(rs), [[], ['slow'], [], [], ['slow']])
+    assert.deepEqual(rs[1].alerts[0].routes, [slow])
+    assert.equal(rs[1].alerts[0].slowMs, 2000)
+  })
+  it('alerts once per streak when the endpoint stops answering, and keeps the counts to compare after', () => {
+    const refused = observeMetrics({ status: 401 })
+    const rs = runMetrics([metrics({ serverErrors: 1 }), refused, refused, metrics({ serverErrors: 1 }), metrics({ serverErrors: 2 })])
+    assert.deepEqual(kindsOf(rs), [[], ['metrics-unavailable'], [], [], ['errors']])
+    assert.equal(rs[1].alerts[0].error, 'HTTP 401')
+  })
+  it('re-checks a hand-edited saved state', () => {
+    const r = stepMetrics({ bootId: '@owner', serverErrors: 'x', slow: ['`evil`'] }, metrics({ serverErrors: 4 }), METRICS_DEFAULTS, T2)
+    assert.deepEqual(r.alerts, [], 'no valid saved bootId: a baseline')
+    assert.deepEqual(r.state, { bootId: A, serverErrors: 4, jobFailures: 0, lastSeq: 0, slow: [], unavailable: false })
+  })
+  it('is kept in the uptime state through restarts and outages', () => {
+    const saved = { ...emptyState(), bootId: A, metrics: { bootId: A, serverErrors: 2, jobFailures: 0, lastSeq: 2, slow: [], unavailable: false } }
+    assert.deepEqual(step(saved, up(A)).state.metrics, saved.metrics)
+    assert.deepEqual(step(saved, up(B)).state.metrics, saved.metrics)
+    assert.deepEqual(step(saved, fail()).state.metrics, saved.metrics)
+  })
+})
+
+describe('metricsOptions', () => {
+  it('reads positive integers from ALERT_* and keeps the default otherwise', () => {
+    assert.deepEqual(metricsOptions({}), METRICS_DEFAULTS)
+    assert.deepEqual(metricsOptions({ ALERT_ERROR_THRESHOLD: '5', ALERT_SLOW_MS: '1500', ALERT_SLOW_MIN_COUNT: '20' }), { errorThreshold: 5, slowMs: 1500, slowMinCount: 20 })
+    assert.deepEqual(metricsOptions({ ALERT_ERROR_THRESHOLD: '0', ALERT_SLOW_MS: '-1', ALERT_SLOW_MIN_COUNT: 'many' }), METRICS_DEFAULTS)
+  })
+})
+
+describe('formatComment: monitoring alerts', () => {
+  it('lists server errors with route, status, error class and request id, and says where the message is', () => {
+    const [, r] = runMetrics([metrics(), metrics({ serverErrors: 1, errors: [reqRecord(1)] })])
+    const md = formatComment(r.alerts, URL)
+    assert.match(md, /### Server errors: https:\/\/chapters\.piiix\.org/)
+    assert.match(md, /1 new 5xx response since the last check \(alert threshold 1\)/)
+    assert.match(md, /\| `2026-10-16T09:00:00.000Z` \| `PUT \/api\/vaults\/:id\/notes\/\*` \| 500 \| `Error EACCES` \| `req-1` \| `user` \| 12 \|/)
+    assert.match(md, /never its message or the note it touched/)
+  })
+  it('lists failed jobs by kind and totals since boot', () => {
+    const [, r] = runMetrics([metrics(), metrics({ jobFailures: 1, errors: [jobRecord(1, 'collab-store')], jobs: { 'collab-store': { failed: 1 } } })])
+    const md = formatComment(r.alerts, URL)
+    assert.match(md, /### Failed background jobs: /)
+    assert.match(md, /\| `2026-10-16T09:00:00.000Z` \| `collab-store` \| `Error` \|/)
+    assert.match(md, /Failed since the process started: `collab-store` 1\./)
+    assert.doesNotMatch(md, new RegExp(NOTE))
+  })
+  it('formats slow endpoints and an unavailable endpoint', () => {
+    const [, slow] = runMetrics([metrics(), metrics({ routes: [{ route: 'GET /api/search', count: 6, p95Ms: 2500, maxMs: 4000 }] })])
+    assert.match(formatComment(slow.alerts, URL), /### Slow endpoints: .*\n\n.*2000 ms over at least 5 requests[\s\S]*\| `GET \/api\/search` \| 2500 \| 4000 \| 6 \|/)
+    const [, gone] = runMetrics([metrics(), observeMetrics({ status: 401 })])
+    assert.match(formatComment(gone.alerts, URL), new RegExp(`### Metrics unavailable: .*\\n\\n\`/health\` is up but \`${METRICS_PATH}\` failed \\(\`HTTP 401\`\\)`))
+  })
+})
+
+describe('webhook', () => {
+  it('takes an http(s) URL or nothing, and never echoes the value', () => {
+    assert.equal(webhookTarget(undefined), null)
+    assert.equal(webhookTarget(''), null)
+    assert.equal(webhookTarget('https://hooks.example/T0/B0/secret'), 'https://hooks.example/T0/B0/secret')
+    assert.throws(() => webhookTarget('ftp://hooks.example/secret'), (err) => !err.message.includes('secret'))
+    assert.throws(() => webhookTarget('not a url secret'), (err) => !err.message.includes('secret'))
+  })
+  it('carries the comment as text (Slack) and content (Discord, at most 2000 chars) and the alerts', () => {
+    const alerts = [{ kind: 'jobs', at: T2, count: 1, restarted: false, failedSinceBoot: {}, recent: [] }]
+    const p = webhookPayload(alerts, URL, 'x'.repeat(2500))
+    assert.equal(p.text.length, 2500)
+    assert.ok(p.content.length <= 2000)
+    assert.equal(p.url, URL)
+    assert.deepEqual(p.alerts, alerts)
+    assert.equal(webhookPayload(alerts, URL, 'short').content, 'short')
   })
 })
