@@ -25,9 +25,10 @@
 //     `/health` is up (once per streak: a wrong or rotated token)
 // `errors` and `jobs` alert once per streak, not on every run: while new ones
 // keep coming, the next comment is for a route or job kind the streak has not
-// had yet, or after REALERT_MS (24 h) with the count held back meanwhile; a
-// streak ends after QUIET_MS (1 h) without a new one, with a closing note when
-// something was held back.
+// had yet (new routes at most once per QUIET_MS, listed together), or after
+// REALERT_MS (24 h) with the count held back meanwhile; a streak ends after
+// QUIET_MS (1 h) without a new one, with a closing note when something was
+// held back or not commented yet.
 // The server's reports carry no note text and no error message (route
 // template, status, error class and code, request id, actor kind, job kind);
 // subject ids are left out here too, because comments and the Actions log

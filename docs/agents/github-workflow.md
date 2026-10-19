@@ -582,10 +582,11 @@ not testing) and compares the process identity it reports (`bootId`,
     again) and **metrics unavailable** (the endpoint fails 2 reads in a
     row while `/health` is up; once per streak). **errors** and **jobs**
     comment once per streak, not every run: while new ones keep coming,
-    the next comment is for a route or job kind the streak has not had,
-    or 24 h after the last one with the count held back; an hour without
-    a new one ends the streak, with a short "stopped" comment when
-    something was held back. The thresholds are optional
+    the next comment is for a route or job kind the streak has not had
+    (new routes at most once an hour, listed together; a new job kind at
+    once), or 24 h after the last one with the count held back; an hour
+    without a new one ends the streak, with a short "stopped" comment when
+    something was held back or not commented yet. The thresholds are optional
     repository variables. The server's counters are cumulative since boot
     and compared with the last read (kept in the same state block, with
     the streaks); a new `bootId` counts from zero. Without the secret this
