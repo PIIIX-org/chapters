@@ -223,7 +223,7 @@ describe('collab relay store', () => {
 
     // What a stale reload produces: the same text twice in the live document.
     text.insert(text.length, `\n\n${body}`)
-    await waitFor(async () => (await quarantined(noteId)).length > 0)
+    await waitFor(async () => (await quarantined(noteId)).length > 0 && metricsSnapshot().jobs['collab-store'].failed > before.failed)
     expect(await rowBody(path)).toBe(body)
     expect(await fileBody(path)).toBe(body)
     const [q] = await quarantined(noteId)
@@ -236,7 +236,11 @@ describe('collab relay store', () => {
 
     // Typing on while the document is still doubled updates the one quarantined revision; it is reported once.
     text.insert(text.length, ' typed-while-doubled')
-    await waitFor(async () => ((await quarantined(noteId))[0]?.body ?? '').endsWith(' typed-while-doubled'))
+    await waitFor(
+      async () =>
+        ((await quarantined(noteId))[0]?.body ?? '').endsWith(' typed-while-doubled') &&
+        metricsSnapshot().jobs['collab-store'].repeated > before.repeated,
+    )
     expect(await quarantined(noteId)).toHaveLength(1)
     expect(await rowBody(path)).toBe(body)
     const repeated = metricsSnapshot().jobs['collab-store']
@@ -248,8 +252,9 @@ describe('collab relay store', () => {
       text.delete(body.length, text.length - body.length)
       text.insert(text.length, '\n\nlegit addition')
     })
-    await waitFor(async () => (await rowBody(path)) === `${body}\n\nlegit addition`)
-    expect(await fileBody(path)).toBe(`${body}\n\nlegit addition`)
+    // The row is written before the file: wait for both.
+    const legit = `${body}\n\nlegit addition`
+    await waitFor(async () => (await rowBody(path)) === legit && (await fileBody(path)) === legit)
   }, 20_000)
 })
 
