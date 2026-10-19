@@ -15,19 +15,23 @@ interface CollabStatusLineProps {
  * The word for each state a keystroke can be in. Two of these are easy to
  * confuse and must never read alike:
  *
- * - `offline` — we could not reach the relay. Nothing was taken away; the text
- *   is simply sitting in this tab.
+ * - `offline` / `reconnecting` — we cannot reach the relay. Nothing was taken
+ *   away; the text is sitting in this browser, not on the server.
  * - `revoked` — access was pulled. Coming back will not help.
  *
  * Saying "disconnected" for both is what makes a person close the tab on a
  * revocation and lose what they typed.
+ *
+ * A dropped socket says "Offline — not saved yet" from the moment it drops
+ * (#720): "Syncing…" over a dead connection reads as progress, and the
+ * person keeps typing into text that is going nowhere.
  */
 const WHISPER: Record<
   Exclude<CollabStatus, 'connected'>,
   { tone: PillTone; label: string; detail: string | null }
 > = {
   connecting: { tone: 'idle', label: 'Connecting…', detail: null },
-  reconnecting: { tone: 'idle', label: 'Reconnecting', detail: 'edits keep merging in this tab' },
+  reconnecting: { tone: 'error', label: 'Offline', detail: 'not saved yet' },
   offline: { tone: 'error', label: 'Offline', detail: 'your edits are staying in this tab' },
   revoked: { tone: 'error', label: 'Access removed', detail: 'this note stopped syncing' },
 }
@@ -82,7 +86,18 @@ export function CollabStatusLine({ status, synced, syncedAt }: CollabStatusLineP
         {whisper.label}
       </Pill>
       {whisper.detail && (
-        <span className="truncate font-mono text-xs tabular-nums text-muted-foreground">{whisper.detail}</span>
+        <span className="truncate font-mono text-xs tabular-nums text-muted-foreground">
+          {whisper.detail}
+          {/* What the server holds is the text as of the last sync. */}
+          {status === 'reconnecting' && syncedAt && (
+            <>
+              {' · last synced '}
+              <time dateTime={syncedAt.toISOString()}>
+                {syncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </time>
+            </>
+          )}
+        </span>
       )}
     </span>
   )
