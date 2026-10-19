@@ -256,7 +256,10 @@ function readLegacyFormat(entries: Map<string, Buffer>, archive: string): Backup
   tables.set('mcp_connections', connections.filter((c) => c.repositoryId == null))
   const mfaLost = tables.get('users')!.filter((u) => u.mfaEnabledAt != null && u.totpSecret == null).length
   if (mfaLost > 0) {
-    warnings.push(`${mfaLost} user(s) have MFA on but a format-1 archive has no TOTP secrets: they can't sign in until an admin resets their MFA`)
+    warnings.push(
+      `${mfaLost} user(s) have MFA on but a format-1 archive has no TOTP secrets: they can't sign in ` +
+        'until their MFA is cleared in the database (docs/self-hosting/backup.md)',
+    )
   }
 
   const owners = new Map(tables.get('vaults')!.map((v) => [String(v.id), v.ownerId]))

@@ -649,19 +649,38 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   vault with a **new** owner and new IDs, re-validates every note
   through the normal OKF write path, best-effort per note (an invalid
   note is skipped and reported, not fatal).
-- **Instance backup** (`GET /api/admin/backup`, admin-only): a full
-  dump of every account-layer table plus a copy of every live note
-  file.
+- **Instance backup** (`GET /api/admin/backup`, admin-only; the
+  scheduled run in `backup-service.ts` writes the same zip):
+  `buildInstanceBackup()` in `archive.ts`, format 2
+  (`backup-format.ts`, #409). `backup.json` (format, time, row count per
+  table) plus one `db/<table>.jsonl` per table in `BACKUP_TABLES`, read
+  in one repeatable-read snapshot, rows as stored (TOTP secrets
+  included, embeddings left out), plus `vaults/<id>/notes/<path>.md`,
+  `trash/<note id>.md` and `assets/<file>`. Not backed up: sessions,
+  email tokens, export links, note links, semantic edges, embeddings,
+  the repository file index, CRDT state (each rebuilt or reissued; the
+  table is in `docs/self-hosting/backup.md`).
 - **Restore** (`server/src/export/restore.ts` +
   `server/src/scripts/restore-backup.ts`): **CLI only**
-  (`pnpm restore-backup <zip>`), deliberately **not** an HTTP endpoint —
-  restoring over a live instance isn't a button. Hard-refuses to run
-  against a non-empty instance, no override flag. Preserves the
-  dump's original IDs — a true restore, not an import — account-layer
-  tables restore inside one transaction, then notes are recreated
-  per-file through `createNote`. Restored MCP connections are metadata
-  only; raw tokens were never recoverable (only hashes were ever
-  stored) and must be reissued.
+  (`pnpm restore-backup [--dry-run] <zip>`), deliberately **not** an
+  HTTP endpoint — restoring over a live instance isn't a button.
+  `restoreBackup()` validates (format, every table file, row counts,
+  columns, references inside the archive, note paths, attachment names;
+  `BackupInvalidError`), plans (per-table and per-file counts, conflicts;
+  `RestoreRefusedError`), then applies: rows in one transaction with
+  `on conflict (primary key) do nothing`, files written atomically
+  inside it, `instance_restored` security event with the archive's
+  SHA-256. Runs on an empty instance or again on one restored from the
+  same archive (then only what is missing; a re-run after a complete
+  restore changes nothing); anything else is refused, no override flag.
+  Ids are the archive's — a true restore, not an import. Rows are
+  inserted as stored, not re-validated through the OKF write path.
+  Restored MCP and sync tokens keep working (their hashes are
+  restored). Restored repositories get `last_synced_at` and
+  `last_synced_commit` cleared so the next sync re-indexes them. A
+  format-1 archive (`account-dump.json`) still restores: notes get ids
+  derived from vault and path, tokens pinned to a repository are left
+  out with a warning.
 
 ### 5.10 Repository ingestion & codebase mapping (`server/src/repositories/`)
 
@@ -807,7 +826,7 @@ the count as `filesPendingExtraction`.
 - **Mermaid preview XSS defense**: Initialized with `securityLevel: 'strict'`, `htmlLabels: false`, and SVG sanitized with `DOMPurify.sanitize(..., { USE_PROFILES: { svg: true, svgFilters: true } })`.
 - **MFA setup protection**: `POST /api/mfa/setup` forbids re-setup when MFA is already enabled, requiring explicit verification before modifying second-factor state.
 - **Mass assignment guards**: Fastify schema validation (`additionalProperties: false`) and explicit field destructuring on vault and repository update routes.
-- **Credential redaction in backups**: Sensitive 2FA seeds (`totpSecret`) and password hashes scrubbed from exported archive dumps.
+- **Secrets in backups**: the instance backup keeps password hashes, token hashes and TOTP secrets as stored (#409: stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The restore CLI prints counts only. File mode and digests: #493.
 - **OIDC host-header sanitization**: Validated against `APP_URL` and injection characters to protect authorization code callbacks.
 - **Admin role hierarchy**: Strict `ROLE_RANK` enforcement preventing self-promotion or subordinate demotion of superadmins and instance owners.
 - **Ingestion bounds**: Git clone ingestion capped to 1MB per file and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`).
@@ -1127,9 +1146,10 @@ structural) in the same PR.
 needs something Drizzle can't express (see §8), commit both the schema
 change and the migration file together.
 
-**Restore a backup**: `pnpm -C server restore-backup <path-to-zip>`
-against a **fresh, empty** instance only — it hard-refuses otherwise,
-by design. There is no HTTP restore path and no override flag.
+**Restore a backup**: `pnpm -C server restore-backup [--dry-run] <path-to-zip>`
+against an **empty** instance, or again on one restored from the same
+archive — it refuses otherwise, by design (§5.9). There is no HTTP
+restore path and no override flag.
 
 **Check note files**: `pnpm -C server check-notes` (or
 `-- --vault <uuid>`) after a restore, a disk incident, or a deploy that
