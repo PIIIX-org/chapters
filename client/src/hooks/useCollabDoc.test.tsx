@@ -13,6 +13,7 @@ interface ProviderOptions {
   token: () => Promise<string>
   onStatus: (data: { status: string }) => void
   onAuthenticationFailed: (data: { reason: string }) => void
+  onClose: (data: { event: { code: number; reason: string } }) => void
   onSynced: (data: { state: boolean }) => void
   onUnsyncedChanges: (data: { number: number }) => void
   onAwarenessChange: (data: {
@@ -33,6 +34,7 @@ const stub = vi.hoisted(() => ({
     hasUnsyncedChanges: boolean
     awarenessFields: Record<string, unknown>
     disconnected: boolean
+    reconnects: number
     destroyed: boolean
     flushedPendingUpdates: boolean
     listeners: Map<string, ((...args: unknown[]) => void)[]>
@@ -48,6 +50,7 @@ vi.mock('@hocuspocus/provider', () => {
     hasUnsyncedChanges = false
     awarenessFields: Record<string, unknown> = {}
     disconnected = false
+    reconnects = 0
     destroyed = false
     flushedPendingUpdates = false
     listeners = new Map<string, ((...args: unknown[]) => void)[]>()
@@ -63,6 +66,11 @@ vi.mock('@hocuspocus/provider', () => {
 
     disconnect() {
       this.disconnected = true
+    }
+
+    connect() {
+      this.disconnected = false
+      this.reconnects += 1
     }
 
     destroy() {
@@ -100,7 +108,7 @@ vi.mock('../api/collab.js', async (importOriginal) => ({
 const ticket = vi.mocked(getCollabTicket)
 
 function ticketNamed(token: string) {
-  return { token, url: 'ws://relay.test:3001', expiresAt: '2026-08-25T10:00:60.000Z' }
+  return { token, url: 'ws://relay.test:3001', expiresAt: '2026-08-25T10:00:60.000Z', maxNoteBytes: 1048576 }
 }
 
 function mount(overrides: Partial<Parameters<typeof useCollabDoc>[0]> = {}) {
@@ -203,6 +211,74 @@ describe('useCollabDoc', () => {
     act(() => provider.options.onStatus({ status: 'connected' }))
 
     expect(view.result.current.status).toBe('revoked')
+  })
+
+  describe('a change the relay refuses as too large (#491)', () => {
+    const LIMIT = 1048576
+
+    /** Connected, with a local paste that takes the body `over` bytes past the cap. */
+    async function overTheCap(over: number) {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      act(() => {
+        // Two bytes a character: the cap is in UTF-8 bytes, not characters.
+        view.result.current.ydoc.getText('body').insert(0, 'é'.repeat(LIMIT / 2) + 'x'.repeat(over))
+      })
+      return { view, provider }
+    }
+
+    it('stops reconnecting, keeps the text writable on screen and says how much to cut', async () => {
+      const { view, provider } = await overTheCap(10)
+
+      act(() => provider.options.onClose({ event: { code: 1000, reason: 'note-too-large' } }))
+
+      expect(view.result.current.status).toBe('too-large')
+      expect(provider.disconnected).toBe(true)
+      expect(view.result.current.tooLarge).toEqual({ limitBytes: LIMIT, bodyBytes: LIMIT + 10 })
+      // Writable, so the person can cut it down; nothing is dropped.
+      expect(view.result.current.writable).toBe(true)
+      expect(view.result.current.unsynced).toBe(true)
+      expect(view.result.current.ydoc.getText('body').length).toBe(LIMIT / 2 + 10)
+
+      // The socket teardown that follows is not a reconnect.
+      act(() => provider.options.onStatus({ status: 'disconnected' }))
+      expect(view.result.current.status).toBe('too-large')
+    })
+
+    it('reconnects by itself once the note fits again, not before', async () => {
+      const { view, provider } = await overTheCap(10)
+      act(() => provider.options.onClose({ event: { code: 1000, reason: 'note-too-large' } }))
+
+      act(() => view.result.current.ydoc.getText('body').delete(0, 2))
+      expect(view.result.current.tooLarge).toEqual({ limitBytes: LIMIT, bodyBytes: LIMIT + 6 })
+      expect(provider.reconnects).toBe(0)
+
+      act(() => view.result.current.ydoc.getText('body').delete(0, 3))
+      expect(view.result.current.tooLarge).toBeNull()
+      expect(view.result.current.status).toBe('reconnecting')
+      expect(provider.reconnects).toBe(1)
+
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      expect(view.result.current.status).toBe('connected')
+    })
+
+    it('a frame the relay closed for its size (1009) is the same refusal', async () => {
+      const { view, provider } = await overTheCap(5)
+
+      act(() => provider.options.onClose({ event: { code: 1009, reason: '' } }))
+
+      expect(view.result.current.status).toBe('too-large')
+      expect(provider.disconnected).toBe(true)
+    })
+
+    it('any other close is not', async () => {
+      const { view, provider } = await overTheCap(5)
+
+      act(() => provider.options.onClose({ event: { code: 1000, reason: 'provider_initiated' } }))
+
+      expect(view.result.current.status).toBe('connected')
+      expect(view.result.current.tooLarge).toBeNull()
+    })
   })
 
   it('broadcasts the local identity in its own hashed ink', async () => {

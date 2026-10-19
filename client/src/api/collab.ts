@@ -24,6 +24,9 @@ export interface CollabTicket {
   url: string
   /** ISO timestamp; a ticket is useless after it, so never cache one. */
   expiresAt: string
+  /** The largest note body the relay stores, in UTF-8 bytes (server
+   *  ELARA_NOTE_MAX_BYTES, #491): how much a refused note has to lose. */
+  maxNoteBytes: number
 }
 
 export function getCollabTicket(): Promise<CollabTicket> {

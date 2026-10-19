@@ -25,6 +25,11 @@ export type CollabStatus =
   /** We never got a ticket and it was not a refusal — the API or the relay is
    *  down. Not a revocation, but nothing typed here is going anywhere either. */
   | 'offline'
+  /** The relay refused a change because it would make the note larger than
+   *  the server's size cap (#491). Nothing typed since is on the server; it is
+   *  kept in this browser, the editor stays writable so the person can cut,
+   *  and the hook reconnects by itself once the note fits again. */
+  | 'too-large'
 
 export interface CollabPeer {
   /** Yjs awareness client id — unique per tab, not per user. */
@@ -69,6 +74,9 @@ export interface CollabSession {
   unmerged: string | null
   /** Deletes the copy behind `unmerged` from this browser. */
   discardUnmerged: () => void
+  /** Set while `status` is `too-large`: the server's cap and the note's size
+   *  here, both in UTF-8 bytes as the server measures them. */
+  tooLarge: { limitBytes: number; bodyBytes: number } | null
 }
 
 export interface UseCollabDocOptions {
@@ -149,6 +157,25 @@ function sharesHistory(a: Y.Doc, b: Y.Doc): boolean {
 }
 
 /**
+ * UTF-8 bytes of `text`, which is how the relay measures a note body against
+ * its cap (server/src/notes/size-cap.ts), counted without encoding a copy.
+ */
+function utf8Length(text: string): number {
+  let bytes = 0
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i)
+    if (unit < 0x80) bytes += 1
+    else if (unit < 0x800) bytes += 2
+    else if (unit >= 0xd800 && unit < 0xdc00 && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      // A surrogate pair: one 4-byte character.
+      bytes += 4
+      i++
+    } else bytes += 3
+  }
+  return bytes
+}
+
+/**
  * Joins the note's Yjs document on the Hocuspocus relay
  * (`server/src/sync/collab-server.ts`). Editors only.
  *
@@ -168,6 +195,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
   const [restoredDoc, setRestoredDoc] = useState<Y.Doc | null>(null)
   const [unmerged, setUnmerged] = useState<string | null>(null)
   const [peers, setPeers] = useState<CollabPeer[]>([])
+  const [tooLarge, setTooLarge] = useState<CollabSession['tooLarge']>(null)
   // The document is keyed on the note, not on the mount: the connect effect
   // re-runs on a docName change, and reconnecting the OLD doc under the NEW
   // name uploads note A's body into note B. React's adjust-state-during-render
@@ -190,6 +218,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     setRestoredDoc(null)
     setUnmerged(null)
     setPeers([])
+    setTooLarge(null)
   } else if (doc.enabled !== enabled) {
     setDoc({ ...doc, enabled })
   }
@@ -224,6 +253,11 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     let dirty = false
     // A connection attempt failed since the socket last opened.
     let attemptFailed = false
+    // The relay refused a change as too large; no reconnect until the body fits.
+    let refused = false
+    // The relay's body size cap, from the latest ticket (the provider only
+    // exists once the first ticket is in).
+    let maxNoteBytes = 0
 
     const stashName = userRef.current.id ? collabStashName(userRef.current.id, docName) : null
     // This browser's copy of the live document, kept while something is unsent.
@@ -314,23 +348,37 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
       }
     }
 
+    /** Shows the note's size against the cap; true when it fits again. */
+    const measureTooLarge = () => {
+      const bodyBytes = utf8Length(ydoc.getText('body').toString())
+      setTooLarge({ limitBytes: maxNoteBytes, bodyBytes })
+      return bodyBytes <= maxNoteBytes
+    }
+
     const onUpdate = (_update: Uint8Array, origin: unknown) => {
       // The relay's updates carry the provider as origin; anything else was done here.
       if (provider !== undefined && origin === provider) return
       dirty = true
       setUnsynced(true)
       keep()
+      // Cut down to size: send it again. The relay checks it the same way.
+      if (refused && measureTooLarge()) {
+        refused = false
+        setTooLarge(null)
+        setStatus('reconnecting')
+        void provider?.connect()
+      }
     }
     ydoc.on('update', onUpdate)
 
     const wentOffline = () => {
       browserOffline = true
-      if (!revoked && provider && away()) setStatus('reconnecting')
+      if (!revoked && !refused && provider && away()) setStatus('reconnecting')
       settle()
     }
     const cameOnline = () => {
       browserOffline = false
-      if (!revoked && socketOpen) setStatus('connected')
+      if (!revoked && !refused && socketOpen) setStatus('connected')
       settle()
     }
     window.addEventListener('offline', wentOffline)
@@ -369,6 +417,23 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     }
 
     /**
+     * The relay refused a change as too large (#491). Reconnecting would only
+     * send the same change again, so stop until the person has cut the note
+     * down; the document (and this browser's copy of it) keeps every keystroke.
+     */
+    const refuse = () => {
+      if (refused || revoked) return
+      refused = true
+      handshake = false
+      socketOpen = false
+      setStatus('too-large')
+      setPeers([])
+      measureTooLarge()
+      provider?.disconnect()
+      settle()
+    }
+
+    /**
      * A 403 from the ticket endpoint is what a revoked share looks like from
      * here, and retrying it would only fail again — that is terminal.
      *
@@ -404,6 +469,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
       let first: CollabTicket
       try {
         first = await getCollabTicket()
+        maxNoteBytes = first.maxNoteBytes
       } catch (error) {
         // Without this catch the status whispers "connecting…" forever over a
         // writable editor — the one combination that loses a person's work.
@@ -427,7 +493,9 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
             return token
           }
           try {
-            return (await getCollabTicket()).token
+            const ticket = await getCollabTicket()
+            maxNoteBytes = ticket.maxNoteBytes
+            return ticket.token
           } catch (error) {
             // A reconnect ticket that 403s is the same revocation the relay
             // would have reported; swallowed here it reads as "reconnecting".
@@ -436,7 +504,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           }
         },
         onStatus: ({ status: socketStatus }) => {
-          if (revoked) return
+          if (revoked || refused) return
           if (socketStatus === WebSocketStatus.Connected) {
             everConnected = true
             socketOpen = true
@@ -451,6 +519,12 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           }
         },
         onAuthenticationFailed: kicked,
+        // The relay closes the document with reason `note-too-large` for a
+        // change over the cap (server/src/sync/collab-server.ts), and ws closes
+        // the socket with 1009 for a frame over its transport limit.
+        onClose: ({ event }) => {
+          if (event.reason === 'note-too-large' || event.code === 1009) refuse()
+        },
         onSynced: () => {
           handshake = true
           settle()
@@ -556,5 +630,6 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     restored: restoredDoc !== null,
     unmerged,
     discardUnmerged,
+    tooLarge,
   }
 }
