@@ -279,18 +279,30 @@ const test: LabTest = {
     // Content of the archive.
     const b64 = await appExec(ctx, `base64 -w0 /data/backups/${file}`)
     const zip = readZip(new Uint8Array(Buffer.from(b64.stdout.trim(), 'base64')))
+    // Format 2 (#409): one db/<table>.jsonl per table. Format 1: account-dump.json (camelCase keys).
+    const text = (data: Uint8Array) => new TextDecoder().decode(data)
     const dumpEntry = zip.find((e) => e.name === 'account-dump.json')
-    const dump = dumpEntry ? (JSON.parse(new TextDecoder().decode(dumpEntry.data)) as Record<string, Array<Record<string, unknown>>>) : {}
+    const legacyDump = dumpEntry ? (JSON.parse(text(dumpEntry.data)) as Record<string, Array<Record<string, unknown>>>) : {}
+    const dump: Record<string, Array<Record<string, unknown>>> = {
+      ...Object.fromEntries(Object.entries(legacyDump).map(([k, v]) => [k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`), v])),
+      ...Object.fromEntries(
+        zip
+          .filter((e) => /^db\/[a-z_]+\.jsonl$/.test(e.name))
+          .map((e) => [e.name.slice(3, -'.jsonl'.length), text(e.data).split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)]),
+      ),
+    }
     const archiveSummary = {
       entries: zip.length,
+      format: zip.some((e) => e.name === 'backup.json') ? 2 : 1,
       notes: zip.filter((e) => /^vaults\/[^/]+\/.+\.md$/.test(e.name)).length,
       assets: zip.filter((e) => /^vaults\/[^/]+\/assets\//.test(e.name)).length,
       dumpTables: Object.fromEntries(Object.entries(dump).map(([k, v]) => [k, Array.isArray(v) ? v.length : typeof v])),
       hasPasswordHashes: (dump.users ?? []).some((u) => typeof u.passwordHash === 'string' && u.passwordHash.length > 0),
-      mfaUserTotpInDump: (dump.users ?? []).find((u) => u.email === mfaEmail)?.totpSecret ?? null,
+      // Presence only: the secret itself never goes into the results.
+      mfaUserHasTotpInDump: Boolean((dump.users ?? []).find((u) => u.email === mfaEmail)?.totpSecret),
       mfaUserMfaEnabledAtInDump: (dump.users ?? []).find((u) => u.email === mfaEmail)?.mfaEnabledAt ?? null,
       missingTables: ['repositories', 'note_revisions', 'note_links', 'mfa_backup_codes', 'sessions', 'repository_shares', 'graph_perspectives', 'user_vault_preferences', 'export_links'].filter(
-        (t) => !(t.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase()) in dump),
+        (t) => !(t in dump),
       ),
     }
     const download = await getRaw(base, '/api/admin/backup', admin.cookie)
@@ -520,9 +532,9 @@ const test: LabTest = {
       checks.push({ name: 'restored live notes: frontmatter + body identical', expected: `${row('notes (live)').source}`, actual: `${row('notes (live)').restored} restored, ${row('notes (live)').missingOrChanged} missing/changed`, ok: row('notes (live)').missingOrChanged === 0, severity: 'critical', detail: noteDiff })
       checks.push({ name: 'restored trash', expected: `${row('notes (trash)').source} trashed notes`, actual: `${row('notes (trash)').restored}`, ok: same('notes (trash)'), severity: 'medium' })
       checks.push({ name: 'restored revision history', expected: `${row('note_revisions').source} revisions`, actual: `${row('note_revisions').restored}`, ok: row('note_revisions').missingOrChanged === 0, severity: 'high' })
-      checks.push({ name: 'restored attachments', expected: `${srcAssetFiles.length} files`, actual: `${restoredAssetFiles.length} files (restore.ts walks only vaults/<id>/*.md)`, ok: same('attachments (files on disk)'), severity: 'high' })
+      checks.push({ name: 'restored attachments', expected: `${srcAssetFiles.length} files`, actual: `${restoredAssetFiles.length} files`, ok: same('attachments (files on disk)'), severity: 'high' })
       checks.push({ name: 'restored repositories (repo: links, pinned tokens)', expected: `${row('repositories').source}`, actual: `${row('repositories').restored}`, ok: same('repositories'), severity: 'medium' })
-      checks.push({ name: 'restored MFA state usable (secret + backup codes)', expected: 'mfa users keep a TOTP secret', actual: JSON.stringify({ src: row('mfa_backup_codes'), dumpTotp: archiveSummary.mfaUserTotpInDump === null ? 'null (archive.ts:97-100 strips totpSecret)' : 'present' }), ok: archiveSummary.mfaUserTotpInDump !== null, severity: 'high' })
+      checks.push({ name: 'restored MFA state usable (secret + backup codes)', expected: 'mfa users keep a TOTP secret', actual: JSON.stringify({ src: row('mfa_backup_codes'), restored: restoredTables.mfa_backup_codes, dumpTotp: archiveSummary.mfaUserHasTotpInDump ? 'present' : 'missing (the backup strips totpSecret)' }), ok: archiveSummary.mfaUserHasTotpInDump && same('mfa_backup_codes'), severity: 'high' })
 
       // ------------------------------- boot the restored instance
       await ctx.docker.exec(['docker', 'rm', '-f', 'lab-restored'])
