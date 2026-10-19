@@ -22,7 +22,7 @@ import { encryptCredential } from '../src/repositories/credentials.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { syncGitRepository } from '../src/repositories/git-sync.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
-import { listRevisions, softDeleteNote, updateNote } from '../src/notes/store.js'
+import { listRevisionMeta, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { TEST_PASSWORD, createActiveUser, loginCookie } from './helpers.js'
 
@@ -267,7 +267,7 @@ function idOf(result: unknown): string {
 }
 
 async function revisionIds(path: string): Promise<string[]> {
-  const revisions = await listRevisions(fx.vaultId, path)
+  const revisions = await listRevisionMeta(fx.vaultId, path, 200, 0)
   if (!revisions || revisions.length === 0) throw new Error(`no revisions for ${path}`)
   return revisions.map((r) => r.id)
 }
@@ -505,7 +505,16 @@ const readSteps: Step[] = [
   { tool: 'get_vault_preferences', args: () => ({}) },
   { tool: 'list_vault_shares', args: () => ({ vaultId: fx.vaultId }) },
   { tool: 'read_note', args: () => ({ vaultId: fx.vaultId, path: 'docs/credentials' }), contains: 'wiki login' },
-  { tool: 'note_history', args: () => ({ vaultId: fx.vaultId, path: 'docs/credentials' }) },
+  { tool: 'note_history', args: () => ({ vaultId: fx.vaultId, path: 'docs/credentials' }), contains: '"bodyBytes"' },
+  {
+    tool: 'get_revision',
+    args: async () => ({
+      vaultId: fx.vaultId,
+      path: 'docs/credentials',
+      revisionId: (await revisionIds('docs/credentials')).at(-1),
+    }),
+    contains: 'wiki login',
+  },
   { tool: 'list_trash', args: () => ({ vaultId: fx.vaultId }), contains: 'docs/scratch' },
   { tool: 'export_vault', args: () => ({ vaultId: fx.vaultId }), contains: 'UEsDB' },
   { tool: 'export_note', args: () => ({ vaultId: fx.vaultId, path: 'docs/credentials' }) },

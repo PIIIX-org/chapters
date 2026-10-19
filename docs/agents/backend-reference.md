@@ -567,9 +567,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   above the user's live permission on the pin (#649): `owner` for the
   12 tools whose handler calls `requireVaultOwner` /
   `requireRepositoryOwner` (share listing, share, revoke, update,
-  delete, both purges), `edit` for the 11 whose handler calls
+  delete, both purges), `edit` for the 12 whose handler calls
   `requireAccess(…, 'edit')` (note writes, `list_trash`,
-  `note_history`, `export_vault`, saving and deleting perspectives),
+  `note_history`, `get_revision`, `export_vault`, saving and deleting perspectives),
   `read` (any access) for the rest; a repository viewer meets `edit`.
   The permission is read with one `resolveAccess` /
   `resolveRepositoryAccess` per `tools/list` (skipped for an account
@@ -584,10 +584,21 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   handler checks owner or edit permission must declare `pinPermission`),
   `test/mcp-capabilities.test.ts` covers each rule and
   `test/mcp-tool-visibility.test.ts` the filtered `tools/list`.
-- **Tools** (57, all registered in `server.ts`; parameters and return
+- **Tools** (58, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):
   - *Vaults* (14): `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `get_vault_graph_preference`, `set_vault_graph_preference`, `get_vault_preferences`, `update_vault_preferences`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.
-  - *Notes* (12): `read_note`, `create_note`, `edit_note`, `rename_note`, `delete_note`, `list_trash`, `restore_note`, `purge_note`, `note_history`, `revert_note`, `purge_revision`, `audit_okf_conformance`.
+  - *Notes* (13): `read_note`, `create_note`, `edit_note`, `rename_note`, `delete_note`, `list_trash`, `restore_note`, `purge_note`, `note_history`, `get_revision`, `revert_note`, `purge_revision`, `audit_okf_conformance`.
+  `note_history` is metadata only and paged (#411): `listRevisionPage()`
+  selects id, actor, action, `created_at` and `octet_length(body)`
+  (read from the stored value's header, the body is never loaded),
+  keyset on `(created_at, id)` descending over
+  `note_revisions_note_idx (note_id, created_at)`, `limit` default 20,
+  max 100, one extra row to set `hasMore`. The opaque `cursor` is
+  base64url JSON of the last row's microsecond `created_at` text and id
+  (a JS `Date` would truncate to milliseconds), so a revision recorded
+  while a caller pages shifts nothing. `get_revision` returns one
+  revision's frontmatter and body (`getRevision()`, the same query as
+  the REST revision route), gated like `note_history`.
   - *Repositories* (13): `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `get_repository_graph_preference`, `set_repository_graph_preference`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
   - *Teams & Users* (7): `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
   - *Export & Notifications* (4): `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`.
@@ -633,7 +644,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 - **Agent skills**: `skills/elara/` (current) and `skills/chapters/`
   (legacy copy, kept consistent) give AI assistants navigation rules
   (Elara for cross-repo and natural-language questions, grep for exact
-  strings in one repo), the 57-tool catalog (`references/mcp-tools.md`), slash
+  strings in one repo), the 58-tool catalog (`references/mcp-tools.md`), slash
   commands (`/elara-*`, with `/chapters-*` aliases), the OKF rules
   (`references/okf-format.md`), the `/elara-map` protocol, and an
   always-active rule file (`rules/elara.md`).
@@ -699,9 +710,16 @@ is the history record, not Chapters).
    scratch temp dir on every sync, discarded after reading; no
    persistent working copy. Triggered by a webhook
    (`git-webhook-routes.ts`, HMAC-SHA256-verified,
-   `POST /repositories/:id/webhook`, unprefixed) or a polling fallback
-   (`scheduler.ts`) that only kicks in once the webhook signal goes
-   stale — `shouldPoll()` is a pure function, unit-tested on its own.
+   `POST /repositories/:id/webhook`, unprefixed) or the polling fallback
+   (`scheduler.ts`, every `POLL_INTERVAL_MS`, default 5 min).
+   `shouldPoll()` (a pure function, unit-tested on its own) skips a
+   repository only while its last webhook delivery is younger than
+   `WEBHOOK_STALE_THRESHOLD_MS` (default 10 min, 2× the poll interval)
+   and its `syncStatus` is not `error`; a repository with no webhook, a
+   stale one or a failed sync is polled every tick. `lastSyncedAt` takes
+   no part: every successful webhook sync ends after its delivery, so
+   "synced since the last webhook" once disabled polling for good (#410).
+   An unchanged remote costs one `ls-remote`, not a clone.
 2. **local_path** (`local-watch.ts`) — `chokidar`, debounced 300ms,
    real-time. The path must resolve under `LOCAL_REPOS_ROOT`, checked
    at repository-creation time.

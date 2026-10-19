@@ -62,33 +62,8 @@
     },
     {
       "test": "big-notes",
-      "check": "note_history keeps working as history grows",
-      "issue": 411
-    },
-    {
-      "test": "big-notes",
-      "check": "note_history response stays under 50 MB",
-      "issue": 411
-    },
-    {
-      "test": "big-notes",
       "check": "one size limit on every write path",
       "issue": 491
-    },
-    {
-      "test": "big-notes",
-      "check": "parallel note_history on a 900 KiB x 300 note answers within 30 s",
-      "issue": 411
-    },
-    {
-      "test": "big-notes",
-      "check": "parallel note_history on a 900 KiB x 300 note does not restart the app",
-      "issue": 411
-    },
-    {
-      "test": "big-notes",
-      "check": "single note_history call answers within 30 s",
-      "issue": 411
     },
     {
       "test": "browser",
