@@ -90,7 +90,9 @@ describe('ScopePicker inside GraphCanvas (#712)', () => {
     // containers.
     const listbox = screen.getByRole('listbox', { name: 'Scope' })
     expect(canvas.contains(listbox)).toBe(false)
-    expect(trigger).toHaveAttribute('aria-controls', listbox.id)
+    const panel = screen.getByRole('dialog', { name: 'Choose scope' })
+    expect(trigger).toHaveAttribute('aria-controls', panel.id)
+    expect(panel).toContainElement(listbox)
   })
 
   it('choosing a vault from the list sets the vault scope and closes the list', async () => {

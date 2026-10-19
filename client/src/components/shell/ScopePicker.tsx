@@ -56,13 +56,14 @@ export function ScopePicker() {
   // an in-place dropdown to the toolbar's height (#712). Radix also owns
   // dismissal: outside pointer/focus and Escape (top layer only, so Escape in
   // the settings modal closes just the modal), with focus returned to the
-  // trigger on close.
+  // trigger on close. The panel keeps Radix's non-modal role="dialog" (with
+  // the trigger's aria-haspopup="dialog"/aria-controls pointing at it): it
+  // holds a listbox plus buttons and forms, and a portalled panel outside any
+  // landmark needs a dialog role to be announced as its own region.
   return (
     <Popover.Root open={open} onOpenChange={onOpenChange}>
       <Popover.Trigger
         type="button"
-        aria-haspopup="listbox"
-        aria-controls="scope-list"
         disabled={vaults.isPending}
         className="flex h-9 items-center gap-2 rounded-[var(--radius-md,4px)] border border-border bg-card/95 backdrop-blur-xs px-3 text-sm font-medium text-foreground hover:bg-muted hover:border-input shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40 active:scale-95 transition-all cursor-pointer disabled:opacity-100"
       >
@@ -75,9 +76,7 @@ export function ScopePicker() {
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
-          // Not a dialog: the panel is a listbox plus actions, announced
-          // through the trigger's aria-haspopup/aria-controls as before.
-          role={undefined}
+          aria-label="Choose scope"
           side="bottom"
           align="start"
           sideOffset={6}
