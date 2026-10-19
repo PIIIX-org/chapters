@@ -17,7 +17,7 @@
 // the payload, the endpoint or the report log lines.
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { poll } from '../lib/portability.ts'
@@ -49,9 +49,15 @@ function monitoringToken(): string {
   return token
 }
 
-/** One monitor run in file mode; `env` is the whole environment (no GITHUB_TOKEN: nothing can reach GitHub). */
+/**
+ * One monitor run in file mode; `env` is the whole environment (no
+ * GITHUB_TOKEN: nothing can reach GitHub). Run from the state file's
+ * directory: bun loads `.env` from its working directory, and the repo
+ * root's holds this instance's ELARA_MONITORING_TOKEN.
+ */
 async function monitor(ctx: LabContext, stateFile: string, env: Record<string, string>): Promise<MonitorRun> {
   const proc = Bun.spawn([process.execPath, MONITOR, '--url', ctx.baseUrl, '--state-file', stateFile], {
+    cwd: dirname(stateFile),
     env: { PATH: process.env.PATH ?? '', ...env },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -93,7 +99,7 @@ const test: LabTest = {
     let noteDir: string | null = null
     try {
       // The workflow without the secret: metrics are skipped, the run passes.
-      const unset = await monitor(ctx, join(dir, 'unset.json'), {})
+      const unset = await monitor(ctx, join(dir, 'unset.json'), { ELARA_MONITORING_TOKEN: '' })
       checks.push({
         name: 'without ELARA_MONITORING_TOKEN the monitor skips metrics and passes',
         expected: 'exit 0, metrics skipped, alerts [none]',

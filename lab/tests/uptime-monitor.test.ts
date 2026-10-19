@@ -37,7 +37,11 @@ interface MonitorRun {
 }
 
 async function monitor(ctx: LabContext, stateFile: string): Promise<MonitorRun> {
-  const r = await ctx.docker.exec([process.execPath, MONITOR, '--url', ctx.baseUrl, '--state-file', stateFile])
+  // Restart and outage alerts only: the lab's ELARA_MONITORING_TOKEN (in the
+  // runner's environment and in the `.env` bun loads) would add the error and
+  // job alerts of #705, which lab/tests/monitoring-alerts.test.ts covers. An
+  // empty value is set, so bun's `.env` loading does not fill it in.
+  const r = await ctx.docker.exec(['env', 'ELARA_MONITORING_TOKEN=', process.execPath, MONITOR, '--url', ctx.baseUrl, '--state-file', stateFile])
   if (r.code !== 0) throw new Error(`uptime-monitor exited ${r.code}: ${r.stderr.slice(0, 1000)}`)
   const last = r.stdout.trim().split('\n').at(-1) ?? ''
   return JSON.parse(last) as MonitorRun
