@@ -126,16 +126,6 @@
       "issue": 409
     },
     {
-      "test": "big-notes",
-      "check": "an agent can append to a note that collab grew past 1 MiB",
-      "issue": 491
-    },
-    {
-      "test": "big-notes",
-      "check": "one size limit on every write path",
-      "issue": 491
-    },
-    {
       "test": "browser",
       "check": "agent visible in presence while it writes (edit_note says \"attributed to this connection\")",
       "issue": 481

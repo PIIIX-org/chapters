@@ -7,17 +7,21 @@
 //   one page of metadata (default 20 revisions, no bodies; get_revision reads
 //   one revision), so its size and latency must stay flat as history grows.
 // - edit_note / create_note return the whole row (body included).
-// - REST and MCP bodies are capped by Fastify's default 1 MiB bodyLimit (no
-//   bodyLimit is configured in app.ts), but the collab relay is a `ws`
-//   WebSocketServer with the default 100 MiB maxPayload
-//   (sync/collab-server.ts:199) and updateNote has no size check.
+// - One size limit on every write path (#491): ELARA_NOTE_MAX_BYTES (default
+//   1 MiB of UTF-8 body; the collab ticket reports it as maxNoteBytes). REST
+//   answers 413, MCP a tool error, and the collab relay refuses an update
+//   that would pass it before applying it (close reason `note-too-large`) and
+//   a frame over 4 x the limit + 64 KiB at the socket (ws maxPayload, close
+//   1009). Before #491 only Fastify's 1 MiB request limit stopped REST/MCP,
+//   and the relay stored up to ws's 100 MiB default (60 MiB froze the app).
 //
 // Method: notes of 100/500/900 KiB, 5 edits each, read_note + note_history
 // sizes/latencies with app-container memory sampled (cgroup + docker stats)
 // during note_history; then grow the 900 KiB note's history to ~570
 // revisions (where the unbounded response passed V8's string limit), checking
 // note_history for 50 MB / 30 s / restarts, then parallel note_history
-// fan-out; then push >1 MiB bodies through a Hocuspocus client.
+// fan-out; then push >1 MiB bodies through a Hocuspocus client, and a body
+// just under the limit, which must sync and take an agent's append.
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { CollabClient, Y, type CollabEvent } from '../lib/collab.ts'
 import { stringField } from '../lib/mcp.ts'
@@ -83,6 +87,8 @@ interface CollabRec {
   restarted: boolean
   closes: CollabEvent[]
   status: string
+  /** The relay refused it: close `note-too-large`, or 1009 at the socket. */
+  refused: boolean
 }
 
 interface FanoutRec {
@@ -275,7 +281,7 @@ const test: LabTest = {
       severity: 'high',
     })
 
-    // ---------------------------------------------------------------- 4. > 1 MiB: REST/MCP vs collab
+    // ---------------------------------------------------------------- 4. the size limit: REST/MCP vs collab (#491)
     const cPath = 'big/collab'
     await call('create_note', { path: cPath, body: 'small start\n' })
     const over = genBody(Math.round(1.5 * MB), 77)
@@ -290,15 +296,21 @@ const test: LabTest = {
     })
     checks.push({
       name: 'MCP edit_note rejects a 1.5 MiB body',
-      expected: 'HTTP 413',
-      actual: `HTTP ${mcpOver.httpStatus} ${mcpOver.textHead.slice(0, 100)}`,
-      ok: mcpOver.httpStatus === 413 ? true : null,
+      expected: 'a tool error naming the limit (HTTP 413 before #491)',
+      actual: `HTTP ${mcpOver.httpStatus} isError ${mcpOver.isError} ${mcpOver.textHead.slice(0, 120)}`,
+      ok: mcpOver.httpStatus === 413 || (mcpOver.isError && mcpOver.textHead.includes('limit')) ? true : null,
       severity: 'info',
     })
 
     const admin = ctx.env.users.admin
     const sess = await RestSession.login(ctx.baseUrl, admin.email, admin.password)
+    // The instance's limit (ELARA_NOTE_MAX_BYTES), as the editor learns it.
+    const ticket = await sess.request<{ maxNoteBytes?: number }>('POST', '/api/collab/ticket')
+    const limit = ticket.json?.maxNoteBytes ?? MB
     const client = new CollabClient(ctx.baseUrl, `${vault.id}/${cPath}`, sess)
+    /** A close the relay sends for a body over the limit, among the client's events since `from`. */
+    const refusedSince = (from: number) =>
+      client.events.slice(from).some((e) => e.kind === 'close' && /note-too-large|^1009\b/.test(e.detail ?? ''))
     const collab: CollabRec[] = []
     let collabHistory: { bytes: number; ms: number; revs: number | null; peak: number | null | undefined } | null = null
     const connected = await client.connect()
@@ -310,18 +322,27 @@ const test: LabTest = {
         const before = await ctx.docker.app.state()
         const mem = await startMemSampler()
         const health = startHealthSampler(ctx.baseUrl)
+        const eventsFrom = client.events.length
         const t0 = performance.now()
         client.ydoc.transact(() => {
           const t = client.ydoc.getText('body')
           t.delete(0, t.length)
           t.insert(0, body)
         })
-        const acked = await client.waitAcked(overLimit ? 60_000 : 180_000)
+        // Acked, or refused: a refused body is never acked, so stop at the close.
+        let acked = false
+        while (performance.now() - t0 < (overLimit ? 60_000 : 180_000) && !refusedSince(eventsFrom)) {
+          if (await client.waitAcked(250)) {
+            acked = true
+            break
+          }
+        }
+        const refused = refusedSince(eventsFrom)
         const ackMs = performance.now() - t0
-        // Wait for the debounced store to land in the notes row.
+        // Wait for the debounced store to land in the notes row (a refused body has none to wait for).
         let dbLen = -1
         const tStore = performance.now()
-        while (performance.now() - tStore < (overLimit ? 20_000 : 180_000)) {
+        while (performance.now() - tStore < (refused ? 5_000 : overLimit ? 20_000 : 180_000)) {
           dbLen = (await dbNotes(ctx, vault.id)).find((n) => n.path === cPath)?.body_len ?? -1
           if (dbLen === target) break
           await Bun.sleep(1000)
@@ -334,29 +355,29 @@ const test: LabTest = {
         const read = await call('read_note', { path: cPath }, { parse: true })
         const readLen = stringField(read.json, 'body')?.length ?? -1
         const closes = client.events.filter((e) => e.kind === 'close').slice(-3)
-        const rec: CollabRec = { mib, target, acked, ackMs: Math.round(ackMs), storedInDb: dbLen === target, dbLen, storedMs: Math.round(storedMs), readNoteBytes: read.bytes, readNoteMs: Math.round(read.ms), readLen, peakCurrent: m.peakCurrent, peakAnon: m.peakAnon, health: h, restarted, closes, status: client.status }
+        const rec: CollabRec = { mib, target, acked, ackMs: Math.round(ackMs), storedInDb: dbLen === target, dbLen, storedMs: Math.round(storedMs), readNoteBytes: read.bytes, readNoteMs: Math.round(read.ms), readLen, peakCurrent: m.peakCurrent, peakAnon: m.peakAnon, health: h, restarted, closes, status: client.status, refused }
         collab.push(rec)
         ctx.log(`collab ${mib} MiB: ${JSON.stringify({ ...rec, closes: closes.length })}`)
-        if (overLimit || !client.synced || client.status !== 'connected') {
-          // An over-limit frame closes the socket and the provider would resend it on every
+        if (refused || overLimit || !client.synced || client.status !== 'connected') {
+          // A refused body stays in this doc and the provider would resend it on every
           // reconnect; drop this doc and continue with a fresh one.
           client.destroy()
           client.ydoc = new Y.Doc()
           await client.connect()
         }
       }
-      const accepted = collab.filter((c) => c.storedInDb && c.mib > 1)
+      const accepted = collab.filter((c) => c.storedInDb && c.target > limit)
       checks.push({
         name: 'one size limit on every write path',
-        expected: 'collab refuses bodies REST/MCP refuse (> 1 MiB)',
-        actual: accepted.length ? `collab stored ${accepted.map((c) => `${c.mib} MiB`).join(', ')} while REST/MCP answer 413 for 1.5 MiB` : 'collab refused > 1 MiB too',
+        expected: `collab refuses bodies REST/MCP refuse (> ${limit} bytes)`,
+        actual: accepted.length ? `collab stored ${accepted.map((c) => `${c.mib} MiB`).join(', ')} while REST answers ${rest.status} for 1.5 MiB` : `collab refused ${collab.map((c) => `${c.mib} MiB`).join(', ')} too`,
         ok: accepted.length === 0,
         severity: 'medium',
       })
       const overRec = collab.find((c) => c.mib === OVER_WS_MIB)
       checks.push({
         name: `${OVER_WS_MIB} MiB collab update is refused without harming the app`,
-        expected: 'socket closed (ws maxPayload 100 MiB), app keeps running',
+        expected: 'socket closed (ws maxPayload), app keeps running',
         actual: overRec ? `stored ${overRec.storedInDb}; restarted ${overRec.restarted}; closes ${JSON.stringify(overRec.closes)}` : 'not run',
         ok: overRec ? !overRec.restarted && !overRec.storedInDb : null,
         severity: 'high',
@@ -369,19 +390,31 @@ const test: LabTest = {
         ok: stall.length === 0,
         severity: 'medium',
       })
-      // Round trip: an agent reads the collab-grown note and appends one line.
-      if (accepted.length > 0) {
-        const cur = await call('read_note', { path: cPath }, { parse: true })
-        const curBody = stringField(cur.json, 'body') ?? ''
-        const rt = await call('edit_note', { path: cPath, body: `${curBody}\nappended by agent` })
-        checks.push({
-          name: 'an agent can append to a note that collab grew past 1 MiB',
-          expected: 'edit_note ok',
-          actual: `body ${fmtMB(curBody.length)}: HTTP ${rt.httpStatus} ${rt.ok ? 'ok' : rt.textHead.slice(0, 80)}`,
-          ok: rt.ok,
-          severity: 'medium',
-        })
+      // Round trip at the limit: collab stores a body just under it, and an agent reads it and appends a line.
+      const fits = genBody(limit - 4096, 4242)
+      client.ydoc.transact(() => {
+        const t = client.ydoc.getText('body')
+        t.delete(0, t.length)
+        t.insert(0, fits)
+      })
+      const fitsAcked = await client.waitAcked(60_000)
+      let fitsDbLen = -1
+      const tFits = performance.now()
+      while (performance.now() - tFits < 60_000) {
+        fitsDbLen = (await dbNotes(ctx, vault.id)).find((n) => n.path === cPath)?.body_len ?? -1
+        if (fitsDbLen === fits.length) break
+        await Bun.sleep(1000)
       }
+      const cur = await call('read_note', { path: cPath }, { parse: true })
+      const curBody = stringField(cur.json, 'body') ?? ''
+      const rt = await call('edit_note', { path: cPath, body: `${curBody}\nappended by agent` })
+      checks.push({
+        name: 'a note just under the size limit syncs through collab and an agent can append to it',
+        expected: `collab acked and stored ${fits.length} bytes; read_note returns them; edit_note ok`,
+        actual: `acked ${fitsAcked}, stored ${fitsDbLen}, read ${curBody.length}; edit_note HTTP ${rt.httpStatus} ${rt.ok ? 'ok' : rt.textHead.slice(0, 80)}`,
+        ok: fitsAcked && fitsDbLen === fits.length && curBody === fits && rt.ok,
+        severity: 'medium',
+      })
       const hist = await measured('collab', 0, 'note_history', await revCount(cPath), () => call('note_history', { path: cPath }, { timeoutMs: 900_000 }))
       collabHistory = { bytes: hist.bytes, ms: hist.ms, revs: hist.revs, peak: hist.mem?.peakCurrent }
     } else {
