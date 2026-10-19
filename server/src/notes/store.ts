@@ -25,6 +25,7 @@ import {
 } from './okf/paths.js'
 import { atomicWrite } from './atomic-write.js'
 import { withKeyLock } from './key-lock.js'
+import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from './growth-guard.js'
 
 export { splitPath, resolveNotePath, type ResolvedNotePath }
 
@@ -39,8 +40,12 @@ export interface Actor {
 
 const SYSTEM_ACTOR: Actor = { type: 'collab' }
 
+/** The `note_revisions.action` of a write kept out of the note (#492, notes/growth-guard.ts). */
+export const QUARANTINE_ACTION = 'quarantine'
+
 /** Records a revision unless identical to the note's latest one (dedupes
- * the MCP-immediate + collab-debounced double-write of the same state). */
+ * the MCP-immediate + collab-debounced double-write of the same state).
+ * Quarantined writes are not the note's state, so they are not compared. */
 async function recordRevision(
   noteId: string,
   action: string,
@@ -52,7 +57,7 @@ async function recordRevision(
     await db
       .select({ frontmatter: noteRevisions.frontmatter, body: noteRevisions.body })
       .from(noteRevisions)
-      .where(eq(noteRevisions.noteId, noteId))
+      .where(and(eq(noteRevisions.noteId, noteId), ne(noteRevisions.action, QUARANTINE_ACTION)))
       .orderBy(desc(noteRevisions.createdAt))
       .limit(1)
   )[0]
@@ -67,6 +72,55 @@ async function recordRevision(
     frontmatter: frontmatter as Record<string, unknown>,
     body,
   })
+}
+
+/**
+ * Keeps a suspicious write out of the note (#492): when `input.body` breaks
+ * one of `rules` against the stored body, the write is recorded as a
+ * `quarantine` revision (the row and the file are not touched) and a
+ * NoteWriteQuarantinedError is thrown. A write that continues the
+ * quarantine recorded last, by the same actor (a live document that stays
+ * doubled while someone types, or an identical retry), replaces that
+ * revision instead of adding one per attempt.
+ */
+export async function refuseSuspiciousWrite(
+  row: NoteRow,
+  input: { frontmatter?: Record<string, unknown>; body?: string },
+  actor: Actor,
+  rules: QuarantineRules,
+): Promise<void> {
+  if (input.body === undefined) return
+  const finding = suspiciousWrite(row.body, input.body, rules)
+  if (!finding) return
+  const frontmatter = { ...(input.frontmatter ?? (row.frontmatter as Frontmatter)), type: row.type }
+  const newest = (
+    await db
+      .select()
+      .from(noteRevisions)
+      .where(eq(noteRevisions.noteId, row.id))
+      .orderBy(desc(noteRevisions.createdAt))
+      .limit(1)
+  )[0]
+  const continues =
+    newest?.action === QUARANTINE_ACTION &&
+    newest.actorType === actor.type &&
+    newest.actorId === (actor.id ?? null) &&
+    (actor.type === 'collab' || newest.body === input.body)
+  let revisionId: string
+  if (continues) {
+    await db
+      .update(noteRevisions)
+      .set({ frontmatter, body: input.body, createdAt: new Date() })
+      .where(eq(noteRevisions.id, newest.id))
+    revisionId = newest.id
+  } else {
+    const [inserted] = await db
+      .insert(noteRevisions)
+      .values({ noteId: row.id, actorType: actor.type, actorId: actor.id, action: QUARANTINE_ACTION, frontmatter, body: input.body })
+      .returning({ id: noteRevisions.id })
+    revisionId = inserted!.id
+  }
+  throw new NoteWriteQuarantinedError(row.path, finding, revisionId, continues)
 }
 
 export function vaultDir(vaultId: string): string {
@@ -309,13 +363,15 @@ export async function readNote(
  * Read-modify-write of one note's row, file, links and revision. Writes to the
  * same note are serialized (one at a time, in call order): run concurrently,
  * the row could end at one write and the file at another, and revisions could
- * be skipped or out of order.
+ * be skipped or out of order. `options.quarantine` checks the body against
+ * the stored one first (refuseSuspiciousWrite; the collab relay's store).
  */
 export async function updateNote(
   vaultId: string,
   path: string,
   input: { frontmatter?: Record<string, unknown>; body?: string },
   actor: Actor = SYSTEM_ACTOR,
+  options: { quarantine?: QuarantineRules } = {},
 ): Promise<NoteRow | null> {
   const resolved = resolveNotePath(path)
   return withKeyLock(`note:${vaultId}/${resolved.fullPath}`, async () => {
@@ -327,6 +383,7 @@ export async function updateNote(
     }
     const body = input.body ?? row.body
     validateNote(row.type, row.name, frontmatter, body)
+    if (options.quarantine) await refuseSuspiciousWrite(row, input, actor, options.quarantine)
     const [updated] = await db
       .update(notes)
       .set({ frontmatter, body, updatedAt: new Date() })
@@ -1050,7 +1107,7 @@ export async function revertNote(
       await db
         .select({ id: noteRevisions.id })
         .from(noteRevisions)
-        .where(eq(noteRevisions.noteId, row.id))
+        .where(and(eq(noteRevisions.noteId, row.id), ne(noteRevisions.action, QUARANTINE_ACTION)))
         .orderBy(desc(noteRevisions.createdAt))
         .limit(1)
     )[0]

@@ -1,7 +1,8 @@
 import type { DirectConnection } from '@hocuspocus/server'
 import { YAMLParseError } from 'yaml'
 import { getCollab } from './collab-server.js'
-import { getLiveNote, readNote, resolveNotePath, updateNote, type Actor, type NoteRow } from '../notes/store.js'
+import { getLiveNote, readNote, refuseSuspiciousWrite, resolveNotePath, updateNote, type Actor, type NoteRow } from '../notes/store.js'
+import type { QuarantineRules } from '../notes/growth-guard.js'
 import { OkfValidationError } from '../notes/okf.js'
 import { withKeyLock } from '../notes/key-lock.js'
 
@@ -37,23 +38,33 @@ async function noteFileDamaged(vaultId: string, path: string): Promise<boolean> 
  * relay's store of it and the attributed store write form one unit, so a
  * concurrent write can neither interleave its document edit nor land its store
  * write in between. (The store write takes its own, separate note lock.)
+ *
+ * `options.quarantine` (MCP edit_note, REST PUT without `allowGrowth`) checks
+ * the body against the stored one before it reaches the live document: a
+ * suspicious write (#492) is recorded as a quarantine revision and thrown,
+ * and editors never see it. The relay's own store of the document this edit
+ * produces is not checked again (`directWrite` in its context): the caller
+ * here decided.
  */
 export async function writeThroughCollab(
   vaultId: string,
   path: string,
   input: { frontmatter?: Record<string, unknown>; body?: string },
   actor: Actor,
+  options: { quarantine?: QuarantineRules } = {},
 ): Promise<NoteRow | null> {
   return withKeyLock(`collab:${vaultId}/${resolveNotePath(path).fullPath}`, async () => {
+    const existing = await getLiveNote(vaultId, path)
+    if (!existing) return null
+    if (options.quarantine) await refuseSuspiciousWrite(existing, input, actor, options.quarantine)
     const collab = getCollab()
     const docName = `${vaultId}/${path}`
     if (collab) {
-      const existing = await getLiveNote(vaultId, path)
-      if (!existing) return null
       let connection: DirectConnection
       try {
         connection = await collab.openDirectConnection(docName, {
           userId: actor.type === 'user' ? actor.id : 'mcp',
+          directWrite: true,
         })
       } catch (err) {
         // Loading the collab document parses the note's file. When the file is
