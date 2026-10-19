@@ -9,6 +9,7 @@ import {
   clearCollabStashes,
   closeCollabStash,
   collabStashName,
+  hasCollabStash,
   openCollabStash,
 } from '../lib/collabStash.js'
 import { useCollabDoc } from './useCollabDoc.js'
@@ -135,6 +136,7 @@ function count(text: string, needle: string): number {
 beforeEach(() => {
   stub.providers.length = 0
   globalThis.indexedDB = new IDBFactory()
+  localStorage.clear()
   let n = 0
   vi.mocked(getCollabTicket).mockImplementation(() => {
     n += 1
@@ -285,6 +287,123 @@ describe('useCollabDoc offline copy (#720)', () => {
     expect(await stored(STASH)).toContain('from-B')
     tabA.unmount()
     tabB.unmount()
+  })
+
+  /** The copy left by a session on the note's old document; the relay rebuilt it from the text. */
+  async function unrelatedCopy(): Promise<Y.Doc> {
+    const old = new Y.Doc()
+    old.getText('body').insert(0, 'BASE line\nwritten offline\n')
+    const stash = openCollabStash(STASH, old)!
+    await stash.loaded
+    await closeCollabStash(stash)
+    const relay = new Y.Doc()
+    relay.getText('body').insert(0, 'BASE line\n')
+    return relay
+  }
+
+  it('two tabs show the notice: discarding in one and typing in the other never duplicates the note', async () => {
+    const relay = await unrelatedCopy()
+    const tabA = mount()
+    await waitFor(() => expect(tabA.result.current.restored).toBe(true))
+    const pA = await nthProvider(0)
+    const tabB = mount()
+    await waitFor(() => expect(tabB.result.current.restored).toBe(true))
+    const pB = await nthProvider(1)
+    sync(pA, relay)
+    sync(pB, relay)
+    expect(tabA.result.current.unmerged).toBe('BASE line\nwritten offline\n')
+    expect(tabB.result.current.unmerged).toBe('BASE line\nwritten offline\n')
+
+    // B discards the copy, then types.
+    act(() => tabB.result.current.discardUnmerged())
+    pB.hasUnsyncedChanges = true
+    act(() => tabB.result.current.ydoc.getText('body').insert(10, 'typed-in-B '))
+    await waitFor(async () => expect(await stored(STASH)).toContain('typed-in-B'))
+    push(pB, relay)
+
+    // Had the copy reached B's live document, this would be the note twice:
+    // "BASE line\nwritten offline\nBASE line\ntyped-in-B ".
+    expect(tabB.result.current.ydoc.getText('body').toString()).toBe('BASE line\ntyped-in-B ')
+    expect(relay.getText('body').toString()).toBe('BASE line\ntyped-in-B ')
+    // No tab put the discarded copy back, and the other tab stopped offering it.
+    expect(await stored(STASH)).toBe('BASE line\ntyped-in-B ')
+    await waitFor(() => expect(tabA.result.current.unmerged).toBeNull())
+    tabA.unmount()
+    tabB.unmount()
+  })
+
+  it('never loads a copy without shared history into the live document when it starts keeping one', async () => {
+    const relay = new Y.Doc()
+    relay.getText('body').insert(0, 'BASE line\n')
+    const view = mount()
+    const provider = await nthProvider(0)
+    sync(provider, relay)
+    expect(view.result.current.restored).toBe(false)
+    // The store gets a copy of the note's old document after this tab looked.
+    const old = new Y.Doc()
+    old.getText('body').insert(0, 'BASE line\nwritten offline\n')
+    const stash = openCollabStash(STASH, old)!
+    await stash.loaded
+    await closeCollabStash(stash)
+
+    provider.hasUnsyncedChanges = true
+    act(() => view.result.current.ydoc.getText('body').insert(10, 'typed '))
+    await waitFor(() => expect(view.result.current.unmerged).toBe('BASE line\nwritten offline\n'))
+    push(provider, relay)
+
+    expect(view.result.current.ydoc.getText('body').toString()).toBe('BASE line\ntyped ')
+    expect(relay.getText('body').toString()).toBe('BASE line\ntyped ')
+    // The old copy stays as it was until the person discards it.
+    expect(await stored(STASH)).toBe('BASE line\nwritten offline\n')
+
+    act(() => view.result.current.discardUnmerged())
+    // Then the live document is kept, on its own.
+    await waitFor(async () => expect(await stored(STASH)).toBe('BASE line\ntyped '))
+    view.unmount()
+  })
+
+  it('a restored copy says Offline, not Connecting, while the relay refuses the socket', async () => {
+    const old = new Y.Doc()
+    old.getText('body').insert(0, 'BASE line\nwritten offline\n')
+    const stash = openCollabStash(STASH, old)!
+    await stash.loaded
+    await closeCollabStash(stash)
+
+    const view = mount()
+    const provider = await nthProvider(0)
+    // The provider retries: every attempt is "connecting", then "disconnected".
+    act(() => provider.options.onStatus({ status: 'connecting' }))
+    act(() => provider.options.onStatus({ status: 'disconnected' }))
+    act(() => provider.options.onStatus({ status: 'connecting' }))
+    await waitFor(() => expect(view.result.current.restored).toBe(true))
+    expect(view.result.current.status).toBe('reconnecting')
+    expect(view.result.current.unsynced).toBe(true)
+    view.unmount()
+  })
+
+  it('finds the copies without indexedDB.databases() (Firefox < 126)', async () => {
+    const other = collabStashName('u-jane', `${NOTE.vaultId}/${NOTE.path}`)
+    for (const name of [STASH, other]) {
+      const doc = new Y.Doc()
+      doc.getText('body').insert(0, `kept for ${name}`)
+      const stash = openCollabStash(name, doc)!
+      await stash.loaded
+      await closeCollabStash(stash)
+    }
+    const databases = indexedDB.databases.bind(indexedDB)
+    Object.defineProperty(indexedDB, 'databases', { value: undefined, configurable: true })
+    try {
+      // A note never kept here is not opened (which would create a database).
+      expect(await hasCollabStash(collabStashName(USER.id, 'v-1/never-opened.md'))).toBe(false)
+      expect(await hasCollabStash(STASH)).toBe(true)
+      await clearCollabStashes(USER.id)
+      expect(await hasCollabStash(STASH)).toBe(false)
+    } finally {
+      Object.defineProperty(indexedDB, 'databases', { value: databases, configurable: true })
+    }
+    const names = (await indexedDB.databases()).map((db) => db.name)
+    expect(names).not.toContain(STASH)
+    expect(names).toContain(other)
   })
 
   it('logout deletes that user\'s copies and nobody else\'s', async () => {
