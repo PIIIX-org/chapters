@@ -1,5 +1,6 @@
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import AdmZip from 'adm-zip'
 import type { FastifyInstance } from 'fastify'
@@ -7,11 +8,13 @@ import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 import { signS3Request, uploadS3Object, listS3Objects, deleteS3Object } from '../src/export/s3.js'
+import { metricsSnapshot } from '../src/monitoring/metrics.js'
 import {
   executeBackup,
   getBackupStatus,
   pruneLocalBackups,
   pruneS3Backups,
+  startBackupScheduler,
 } from '../src/export/backup-service.js'
 
 let app: FastifyInstance
@@ -244,4 +247,42 @@ describe('executeBackup & backup routes', () => {
     expect(body.success).toBe(true)
     expect(body.result.filename).toMatch(/^(?:elara|chapters)-backup-.*\.zip$/)
   })
+})
+
+describe('scheduled backup failures in the monitoring metrics (#705)', () => {
+  it('reports a scheduled backup that fails right after a failed one as a repeat, not a new failure', async () => {
+    // A file where the backup directory should be: mkdir fails on every run.
+    const blocked = join(testBackupDir, 'blocked')
+    await writeFile(blocked, 'not a directory')
+    const localPath = vi.spyOn(config.backup, 'localPath', 'get').mockReturnValue(join(blocked, 'backups'))
+    vi.spyOn(config.backup, 'intervalHours', 'get').mockReturnValue(1)
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    const backups = () => metricsSnapshot().jobs.backup
+    const stop = startBackupScheduler()
+    try {
+      // Pin the schedule: the last run is now, the next one is due in an hour.
+      await expect(executeBackup()).rejects.toThrow()
+      const start = backups()
+      /** One scheduled run an hour later; waits for it to finish, then compares the counts since `start`. */
+      const nextRun = async (expected: { succeeded: number; failed: number; repeated: number }) => {
+        const before = JSON.stringify(backups())
+        await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+        for (let i = 0; i < 200 && JSON.stringify(backups()) === before; i++) await sleep(25)
+        const b = backups()
+        expect({ succeeded: b.succeeded - start.succeeded, failed: b.failed - start.failed, repeated: b.repeated - start.repeated }).toEqual(expected)
+      }
+
+      await nextRun({ succeeded: 0, failed: 1, repeated: 0 })
+      await nextRun({ succeeded: 0, failed: 1, repeated: 1 })
+      await nextRun({ succeeded: 0, failed: 1, repeated: 2 })
+      // A success ends the streak; the next failure is new again.
+      localPath.mockReturnValue(testBackupDir)
+      await nextRun({ succeeded: 1, failed: 1, repeated: 2 })
+      localPath.mockReturnValue(join(blocked, 'backups'))
+      await nextRun({ succeeded: 1, failed: 2, repeated: 2 })
+    } finally {
+      stop()
+      vi.useRealTimers()
+    }
+  }, 30_000)
 })

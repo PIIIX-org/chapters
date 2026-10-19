@@ -10,6 +10,7 @@ import {
   METRICS_PATH,
   QUIET_MS,
   REALERT_MS,
+  STREAK_KEYS,
   UNCLEAN_LABEL,
   emptyState,
   formatComment,
@@ -387,6 +388,7 @@ const kindsOf = (rs) => rs.map((r) => r.alerts.map((a) => a.kind))
 /** Run i of a monitor scheduled every 10 minutes from T1. */
 const every10 = (i) => new Date(Date.parse(T1) + i * 10 * 60_000).toISOString()
 const EMPTY_STREAKS = { errors: null, jobs: null }
+const NO_RESET = { errors: 0, jobs: 0 }
 
 describe('observeMetrics', () => {
   it('keeps format-checked records and drops the subject id (comments and the Actions log are public)', () => {
@@ -467,14 +469,14 @@ describe('stepMetrics', () => {
   it('re-checks a hand-edited saved state', () => {
     const r = stepMetrics({ bootId: '@owner', serverErrors: 'x', slow: ['`evil`'] }, metrics({ serverErrors: 4 }), METRICS_DEFAULTS, T2)
     assert.deepEqual(r.alerts, [], 'no valid saved bootId: a baseline')
-    assert.deepEqual(r.state, { bootId: A, serverErrors: 4, jobFailures: 0, lastSeq: 0, slow: [], failedReads: 0, streaks: EMPTY_STREAKS })
+    assert.deepEqual(r.state, { bootId: A, serverErrors: 4, jobFailures: 0, lastSeq: 0, slow: [], failedReads: 0, streaks: EMPTY_STREAKS, resetHeld: NO_RESET })
   })
   it('is kept in the uptime state through restarts and outages', () => {
     const streak = { since: T1, lastAt: T1, alertedAt: T1, held: 3, keys: ['sync'] }
     const saved = {
       ...emptyState(),
       bootId: A,
-      metrics: { bootId: A, serverErrors: 2, jobFailures: 0, lastSeq: 2, slow: [], failedReads: 0, streaks: { errors: null, jobs: streak } },
+      metrics: { bootId: A, serverErrors: 2, jobFailures: 0, lastSeq: 2, slow: [], failedReads: 0, streaks: { errors: null, jobs: streak }, resetHeld: NO_RESET },
     }
     assert.deepEqual(step(saved, up(A)).state.metrics, saved.metrics)
     assert.deepEqual(step(saved, up(B)).state.metrics, saved.metrics)
@@ -559,6 +561,56 @@ describe('stepMetrics: one alert per streak, not one per run', () => {
     const r = stepMetrics(saved, failingSync(1), METRICS_DEFAULTS, T2)
     assert.deepEqual(kindsOf([r]), [['jobs']])
   })
+  it('still reports the held count of a streak dropped for a future time, also after a failed read and through the uptime state', () => {
+    const future = '2099-01-01T00:00:00.000Z'
+    const saved = {
+      ...emptyState(),
+      bootId: A,
+      metrics: { bootId: A, serverErrors: 0, jobFailures: 0, lastSeq: 0, slow: [], streaks: { jobs: { since: T1, lastAt: future, alertedAt: T1, held: 5, keys: ['sync'] } } },
+    }
+    const kept = step(saved, up(A)).state.metrics
+    assert.deepEqual([kept.streaks.jobs, kept.resetHeld], [null, { errors: 0, jobs: 5 }])
+    const [refused, read, next] = runMetrics([observeMetrics({ status: 502 }), metrics(), metrics()], METRICS_DEFAULTS, kept, [every10(0), every10(1), every10(2)])
+    assert.deepEqual(refused.state.resetHeld, { errors: 0, jobs: 5 })
+    assert.deepEqual(read.alerts, [{ kind: 'settled', of: 'jobs', at: every10(1), reset: true, held: 5 }])
+    assert.match(formatComment(read.alerts, URL), /### Failed background jobs streak reset: [\s\S]*5 failed jobs held back in it/)
+    assert.deepEqual(kindsOf([next]), [[]], 'reported once')
+  })
+})
+
+// Review round 2 of #764: a streak remembered only 50 routes, so a 51st
+// route that kept failing was "new" on every run.
+describe('stepMetrics: many failing routes', () => {
+  const times = Array.from({ length: 40 }, (_, i) => every10(i))
+  const comments = (rs) => rs.filter((r) => r.alerts.length > 0).length
+  /** Runs where each listed route answers one 500 before the run (the records the monitor has not seen yet). */
+  function failingRoutes(runs) {
+    let seq = 0
+    let total = 0
+    return runs.map((routes) => {
+      total += routes.length
+      return metrics({ serverErrors: total, errors: routes.map((r) => reqRecord(++seq, { route: `GET /api/r${r}` })) })
+    })
+  }
+  const range = (from, n) => Array.from({ length: n }, (_, i) => from + i)
+
+  it('alerts each new route once: 50 routes fail together, then routes 50..59 one per run for 18 runs', () => {
+    const rs = runMetrics([metrics(), ...failingRoutes([range(0, 50), ...range(0, 18).map((i) => [50 + (i % 10)])])], METRICS_DEFAULTS, null, times)
+    assert.deepEqual(
+      rs.flatMap((r, i) => (r.alerts.length ? [i] : [])),
+      range(1, 11),
+      'the first 50, then routes 50..59 once each; the repeats of 50..59 are held',
+    )
+    assert.equal(comments(rs), 11)
+  })
+  it(`holds unknown routes once the streak remembers ${STREAK_KEYS}, so more failing routes than that cannot alert every run`, () => {
+    const full = range(0, 4).map((i) => range(i * 100, 100)) // 400 routes in 4 runs: the streak keeps the first STREAK_KEYS
+    const beyond = range(0, 12).map((i) => [STREAK_KEYS + (i % 3), 1000 + i]) // routes it does not remember, old and brand new
+    const rs = runMetrics([metrics(), ...failingRoutes([...full, ...beyond])], METRICS_DEFAULTS, null, times)
+    assert.equal(rs[4].state.streaks.errors.keys.length, STREAK_KEYS)
+    assert.equal(comments(rs), 4, 'one per batch of new routes while there was room, then none')
+    assert.equal(rs.at(-1).state.streaks.errors.held, 12 * 2, 'every 500 after the cap is held, none lost')
+  })
 })
 
 describe('metricsOptions', () => {
@@ -584,6 +636,14 @@ describe('formatComment: monitoring alerts', () => {
     assert.match(md, /### Failed background jobs: /)
     assert.match(md, /\| `2026-10-16T09:00:00.000Z` \| `collab-store` \| `Error` \|/)
     assert.match(md, /Failed since the process started: `collab-store` 1\./)
+    assert.doesNotMatch(md, /Failed again while already failing/)
+    assert.doesNotMatch(md, new RegExp(NOTE))
+  })
+  it('lists the repeats (a subject already failing that failed again) next to the totals', () => {
+    const [, r] = runMetrics([metrics(), metrics({ jobFailures: 1, errors: [jobRecord(1)], jobs: { sync: { failed: 1, repeated: 30 } } })])
+    assert.deepEqual(r.alerts[0].repeatedSinceBoot, { embedding: 0, extraction: 0, sync: 30, 'collab-store': 0, backup: 0 })
+    const md = formatComment(r.alerts, URL)
+    assert.match(md, /Failed since the process started: `sync` 1\. Failed again while already failing \([^)]*\): `sync` 30\./)
     assert.doesNotMatch(md, new RegExp(NOTE))
   })
   it('formats slow endpoints and an unavailable endpoint', () => {

@@ -258,7 +258,7 @@ describe('error and job reports carry no note text (#705)', () => {
     for (const r of reportLines()) expectClean(JSON.stringify(r))
   }, 20_000)
 
-  it('reports a repository that keeps failing once, on the transition into error, not on every poll', async () => {
+  it('reports a repository that keeps failing once, on the transition into error, not on every poll or manual retry', async () => {
     const owner = await createActiveUser()
     const [git] = await db
       .insert(repositories)
@@ -271,6 +271,17 @@ describe('error and job reports carry no note text (#705)', () => {
     expect(failing.totals.jobFailures).toBe(before.totals.jobFailures + 1)
     expect(failing.jobs.sync).toMatchObject({ failed: before.jobs.sync!.failed + 1, repeated: before.jobs.sync!.repeated + 3 })
     expect(failing.errors.filter((e) => e.seq > before.lastSeq && e.subjectId === git!.id)).toHaveLength(1)
+
+    // A manual retry (the HTTP route claims the row as `syncing` first) is a
+    // repeat too; MCP `sync_repository` claims it the same way.
+    const ownerCookie = await loginCookie(app, owner.email)
+    const retry = await app.inject({ method: 'POST', url: `/api/repositories/${git!.id}/sync`, headers: { cookie: ownerCookie } })
+    expect(retry.statusCode).toBe(200)
+    // The route answers once the row is claimed; the sync writes `error` after reporting.
+    await waitFor(async () => (await db.select().from(repositories).where(eq(repositories.id, git!.id)))[0]!.syncStatus === 'error')
+    const retried = (await snapshot()).body
+    expect(retried.totals.jobFailures).toBe(before.totals.jobFailures + 1)
+    expect(retried.jobs.sync).toMatchObject({ failed: before.jobs.sync!.failed + 1, repeated: before.jobs.sync!.repeated + 4 })
 
     // Out of `error` (a sync that worked) and failing again is a new failure.
     await db.update(repositories).set({ syncStatus: 'idle' }).where(eq(repositories.id, git!.id))
