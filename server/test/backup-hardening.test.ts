@@ -115,8 +115,11 @@ describe('backup manifest digests (#493)', () => {
     }
   })
 
-  it('refuses a part changed after the backup (its zip CRC still valid), writing nothing', async () => {
-    const bad = altered((zip) => zip.updateFile(noteEntryName(), Buffer.from('---\ntype: concepts\n---\nan edited body\n')))
+  it('refuses a part changed after the backup (same size, its zip CRC still valid), writing nothing', async () => {
+    const bad = altered((zip) => {
+      const original = zip.getEntry(noteEntryName())!.getData().toString('utf8')
+      zip.updateFile(noteEntryName(), Buffer.from(original.replace('original', 'tampered')))
+    })
     await expectRefused(bad, /vaults\/.+\/notes\/concepts\/kept\.md .*SHA-256/)
   })
 

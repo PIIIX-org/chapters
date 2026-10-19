@@ -31,6 +31,7 @@ import {
   backupColumns,
   foreignKeysOf,
   noteEntry,
+  partOf,
   primaryKeyOf,
   tableEntry,
   timestampKeysOf,
@@ -147,6 +148,40 @@ function noteContent(row: Row): string {
   return serializeNote({ frontmatter: { ...frontmatter, type: String(frontmatter.type ?? row.type) }, body: String(row.body) })
 }
 
+const NO_DIGESTS = 'has no SHA-256 digests (made before #493): only the zip checksums were checked'
+
+/**
+ * Every entry against `backup.json`'s `parts` (#493): each listed part is
+ * present with its size and SHA-256, and nothing unlisted was added. The zip's
+ * CRCs miss a part rewritten (or cut short) in a valid zip, and a missing note
+ * file would otherwise fall back to the row's copy without a word.
+ */
+function verifyParts(entries: Map<string, Buffer>, parts: unknown, warnings: string[]): void {
+  if (parts === undefined) {
+    warnings.push(`${BACKUP_MANIFEST} ${NO_DIGESTS}`)
+    return
+  }
+  if (!isObject(parts)) throw new BackupInvalidError(`${BACKUP_MANIFEST}: "parts" is not an object`)
+  for (const [name, part] of Object.entries(parts)) {
+    if (!isObject(part) || typeof part.sha256 !== 'string' || typeof part.size !== 'number') {
+      throw new BackupInvalidError(`${BACKUP_MANIFEST}: the entry for ${name} is malformed`)
+    }
+    const data = entries.get(name)
+    if (!data) throw new BackupInvalidError(`${name} is listed in ${BACKUP_MANIFEST} but missing: the archive is incomplete`)
+    if (data.length !== part.size) {
+      throw new BackupInvalidError(`${name} is ${data.length} bytes, ${BACKUP_MANIFEST} says ${part.size}: the archive is truncated or damaged`)
+    }
+    if (partOf(data).sha256 !== part.sha256) {
+      throw new BackupInvalidError(`${name} does not match its SHA-256 in ${BACKUP_MANIFEST}: the archive was changed or damaged after the backup`)
+    }
+  }
+  for (const name of entries.keys()) {
+    if (name !== BACKUP_MANIFEST && !Object.hasOwn(parts, name)) {
+      throw new BackupInvalidError(`${name} is not listed in ${BACKUP_MANIFEST}: the archive was changed after the backup`)
+    }
+  }
+}
+
 /** Format 2: `backup.json` + `db/<table>.jsonl` + files under `vaults/<id>/`. */
 function readCurrentFormat(entries: Map<string, Buffer>, archive: string): BackupContents {
   const manifest = parseJson(entries.get(BACKUP_MANIFEST)!, BACKUP_MANIFEST)
@@ -162,6 +197,7 @@ function readCurrentFormat(entries: Map<string, Buffer>, archive: string): Backu
   const counts = isObject(manifest.tables) ? manifest.tables : {}
 
   const warnings: string[] = []
+  verifyParts(entries, manifest.parts, warnings)
   const tables = new Map<string, Row[]>()
   for (const spec of [...BACKUP_TABLES, INSTANCE_STATE]) {
     const entry = tableEntry(spec.name)
@@ -234,7 +270,7 @@ function derivedUuid(name: string): string {
 function readLegacyFormat(entries: Map<string, Buffer>, archive: string): BackupContents {
   const dump = parseJson(entries.get(LEGACY_DUMP)!, LEGACY_DUMP)
   if (!isObject(dump)) throw new BackupInvalidError(`${LEGACY_DUMP} is not a JSON object`)
-  const warnings: string[] = []
+  const warnings: string[] = [`${LEGACY_DUMP} (format 1) ${NO_DIGESTS}`]
   const tables = new Map<string, Row[]>()
   for (const spec of BACKUP_TABLES) {
     const raw = spec.legacyKey ? dump[spec.legacyKey] : []
