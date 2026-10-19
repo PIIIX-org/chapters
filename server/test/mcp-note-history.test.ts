@@ -216,6 +216,28 @@ describe('note_history is metadata only and paginated (#411)', () => {
       expect(r.text).toMatch(/invalid cursor/)
     }
   })
+
+  it('refuses a well-formed cursor with an impossible time before it reaches the database', async () => {
+    const id = randomUUID()
+    for (const at of [
+      '2026-02-30T00:00:00.000000Z',
+      '0000-01-01T00:00:00.000000Z',
+      '2026-13-01T00:00:00.000000Z',
+      '2026-01-01T24:00:00.000000Z',
+    ]) {
+      const cursor = Buffer.from(JSON.stringify({ at, id })).toString('base64url')
+      const r = await call(owner, 'note_history', { vaultId, path: PATH, cursor })
+      expect(r.isError, at).toBe(true)
+      expect(r.text, at).toMatch(/invalid cursor/)
+      expect(r.text, at).not.toMatch(/Failed query|select/i)
+    }
+    // The earliest and latest times the cursor format can carry are accepted.
+    for (const at of ['0001-01-01T00:00:00.000000Z', '9999-12-31T23:59:59.999999Z']) {
+      const cursor = Buffer.from(JSON.stringify({ at, id })).toString('base64url')
+      const r = await call(owner, 'note_history', { vaultId, path: PATH, cursor })
+      expect(r.isError, `${at}: ${r.text.slice(0, 200)}`).toBe(false)
+    }
+  })
 })
 
 describe('get_revision returns one revision with its content (#411)', () => {
@@ -235,6 +257,12 @@ describe('get_revision returns one revision with its content (#411)', () => {
     // Naming the note by path or id narrows the lookup; it must match.
     expect((await must<{ body: string }>(owner, 'get_revision', { vaultId, path: PATH, revisionId: created.id })).body).toBe(bodyOf(0))
     expect((await must<{ body: string }>(owner, 'get_revision', { vaultId, noteId, revisionId: created.id })).body).toBe(bodyOf(0))
+    // The path is read like every note tool reads it: trimmed, `\` as `/`, a trailing `.md` dropped.
+    for (const path of [`${PATH}.md`, ` ${PATH} `, PATH.replace('/', '\\')]) {
+      const r = await call(owner, 'get_revision', { vaultId, path, revisionId: created.id })
+      expect(r.isError, `${JSON.stringify(path)}: ${r.text.slice(0, 200)}`).toBe(false)
+      expect((await call(owner, 'note_history', { vaultId, path, limit: 1 })).isError, JSON.stringify(path)).toBe(false)
+    }
     for (const args of [
       { vaultId, path: 'docs/some-other-note', revisionId: created.id },
       { vaultId, noteId: randomUUID(), revisionId: created.id },
