@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import type { KeyboardEvent } from 'react'
+import { lazy, Suspense, useState } from 'react'
+import { Popover } from 'radix-ui'
 import { useNavigate, useSearchParams } from 'react-router'
 import { BookOpen, Check, ChevronDown, Plus, Settings, Waypoints } from 'lucide-react'
 import { useVaults } from '../../hooks/useVaults.js'
@@ -20,21 +20,7 @@ export function ScopePicker() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [searchParams, setSearchParams] = useSearchParams()
   const vaults = useVaults()
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const wrapperRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
-
-  useEffect(() => {
-    if (!open) return
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as HTMLElement | null
-      if (!target) return
-      if (wrapperRef.current?.contains(target) || target.closest('[data-radix-popper-content-wrapper]') || target.closest('[role="dialog"]')) return
-      close()
-    }
-    window.addEventListener('pointerdown', onPointerDown)
-    return () => window.removeEventListener('pointerdown', onPointerDown)
-  }, [open])
 
   const vaultId = searchParams.get('vault')
   const activeVault = vaultId ? vaults.data?.find((v) => v.id === vaultId) : undefined
@@ -55,8 +41,8 @@ export function ScopePicker() {
     setCreating(false)
   }
 
-  function toggle() {
-    setOpen((o) => !o)
+  function onOpenChange(next: boolean) {
+    setOpen(next)
     setCreating(false)
   }
 
@@ -65,24 +51,19 @@ export function ScopePicker() {
     navigate(`/vaults/${vault.id}`)
   }
 
-  function onKeyDown(e: KeyboardEvent) {
-    if (settingsOpen) return
-    if (e.key === 'Escape') {
-      close()
-      triggerRef.current?.focus()
-    }
-  }
-
+  // The list is portalled (Popover.Portal) because the Graph page mounts this
+  // picker inside its horizontally scrolling toolbar, whose overflow clipped
+  // an in-place dropdown to the toolbar's height (#712). Radix also owns
+  // dismissal: outside pointer/focus and Escape (top layer only, so Escape in
+  // the settings modal closes just the modal), with focus returned to the
+  // trigger on close.
   return (
-    <div ref={wrapperRef} className="relative inline-block" onKeyDown={onKeyDown}>
-      <button
-        ref={triggerRef}
+    <Popover.Root open={open} onOpenChange={onOpenChange}>
+      <Popover.Trigger
         type="button"
         aria-haspopup="listbox"
-        aria-expanded={open}
         aria-controls="scope-list"
         disabled={vaults.isPending}
-        onClick={toggle}
         className="flex h-9 items-center gap-2 rounded-[var(--radius-md,4px)] border border-border bg-card/95 backdrop-blur-xs px-3 text-sm font-medium text-foreground hover:bg-muted hover:border-input shadow-floating focus-visible:ring-2 focus-visible:ring-ring/40 active:scale-95 transition-all cursor-pointer disabled:opacity-100"
       >
         <Waypoints className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
@@ -91,9 +72,23 @@ export function ScopePicker() {
           className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-150', open && 'rotate-180')}
           aria-hidden="true"
         />
-      </button>
-      {open && (
-        <div className="absolute left-0 top-full z-50 mt-1.5 min-w-[16rem] max-w-[calc(100vw-1.5rem)] sm:max-w-sm rounded-[var(--radius-lg,8px)] border border-border bg-popover text-popover-foreground py-1 shadow-2xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-100">
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          // Not a dialog: the panel is a listbox plus actions, announced
+          // through the trigger's aria-haspopup/aria-controls as before.
+          role={undefined}
+          side="bottom"
+          align="start"
+          sideOffset={6}
+          collisionPadding={12}
+          // Opening Vault settings moves focus into its modal, outside this
+          // layer; keep the list open behind the modal as before.
+          onInteractOutside={(e) => {
+            if (settingsOpen) e.preventDefault()
+          }}
+          className="z-50 min-w-[16rem] max-w-[calc(100vw-1.5rem)] sm:max-w-sm rounded-[var(--radius-lg,8px)] border border-border bg-popover text-popover-foreground py-1 shadow-2xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-100"
+        >
           <ul id="scope-list" role="listbox" aria-label="Scope" className="max-h-64 overflow-y-auto overscroll-contain py-0.5 divide-y divide-border/20">
             <li role="presentation">
               <button
@@ -167,13 +162,13 @@ export function ScopePicker() {
               </button>
             )}
           </div>
-        </div>
-      )}
+        </Popover.Content>
+      </Popover.Portal>
       {settingsOpen && activeVault?.access === 'owner' && (
         <Suspense fallback={null}>
           <VaultSettingsModal vault={activeVault} open={settingsOpen} onOpenChange={setSettingsOpen} />
         </Suspense>
       )}
-    </div>
+    </Popover.Root>
   )
 }

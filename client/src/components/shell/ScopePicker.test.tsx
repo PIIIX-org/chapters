@@ -110,8 +110,12 @@ describe('ScopePicker', () => {
     const trigger = await screen.findByRole('button', { name: 'All vaults' })
     await waitFor(() => expect(trigger).not.toBeDisabled())
     fireEvent.click(trigger)
-
+    // The open list is portalled to <body>, outside render()'s container:
+    // check the portalled panel as well as the trigger's container.
+    const panel = screen.getByRole('listbox', { name: 'Scope' }).parentElement!
+    expect(container.contains(panel)).toBe(false)
     await expectNoA11yViolations(container)
+    await expectNoA11yViolations(panel)
   })
 
   it('shows owner row actions for the selected vault, without repeating its name in the option list', async () => {
