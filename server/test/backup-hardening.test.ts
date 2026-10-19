@@ -3,7 +3,7 @@
 // before it writes anything.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { chmod, mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { chmod, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import AdmZip from 'adm-zip'
 import { sql as dsql } from 'drizzle-orm'
@@ -13,8 +13,9 @@ import { users, vaults } from '../src/db/schema.js'
 import { buildInstanceBackup } from '../src/export/archive.js'
 import { executeBackup } from '../src/export/backup-service.js'
 import { BackupInvalidError, restoreBackup } from '../src/export/restore.js'
-import { createNote, saveAsset } from '../src/notes/store.js'
-import { createActiveUser, wipeInstance } from './helpers.js'
+import { buildApp } from '../src/app.js'
+import { createNote, noteFile, saveAsset } from '../src/notes/store.js'
+import { createActiveUser, loginCookie, wipeInstance } from './helpers.js'
 
 const root = join(process.cwd(), 'scratch/backup-hardening')
 
@@ -57,6 +58,18 @@ describe('backup files on disk (#493)', () => {
     const result = await executeBackup()
     expect((await modeOf(join(dir, result.filename))).toString(8)).toBe('600')
     expect((await modeOf(dir)).toString(8)).toBe('700')
+  })
+
+  it('tightens backups written world-readable before #493 when the next backup runs', async () => {
+    const dir = join(root, 'older')
+    const older = join(dir, 'elara-backup-2020-01-01T00-00-00-000Z.zip')
+    await mkdir(dir, { recursive: true })
+    await writeFile(older, 'old backup')
+    await chmod(older, 0o644)
+    vi.spyOn(config.backup, 'localPath', 'get').mockReturnValue(dir)
+    vi.spyOn(config.backup, 'retentionCount', 'get').mockReturnValue(5)
+    await executeBackup()
+    expect((await modeOf(older)).toString(8)).toBe('600')
   })
 })
 
@@ -152,5 +165,55 @@ describe('backup manifest digests (#493)', () => {
     const plan = await restoreBackup(legacy)
     expect(plan.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/no SHA-256 digests/)]))
     expect(await userCount()).toBe(1)
+  })
+})
+
+describe('download headers and restore warnings (#493)', () => {
+  async function fixture(): Promise<{ vaultId: string; email: string }> {
+    await wipeInstance()
+    const owner = await createActiveUser({ role: 'admin' })
+    const [vault] = await db.insert(vaults).values({ name: 'Warnings', ownerId: owner.id }).returning()
+    await createNote(vault!.id, { path: 'concepts/kept', frontmatter: { type: 'concepts' }, body: 'as in the row\n' }, { type: 'user', id: owner.id })
+    return { vaultId: vault!.id, email: owner.email }
+  }
+
+  afterAll(async () => {
+    await wipeInstance()
+  })
+
+  it('serves the admin download with cache-control: no-store', async () => {
+    const { email } = await fixture()
+    const app = await buildApp()
+    try {
+      await app.ready()
+      const res = await app.inject({ method: 'GET', url: '/api/admin/backup', headers: { cookie: await loginCookie(app, email) } })
+      expect(res.statusCode).toBe(200)
+      expect(res.headers['cache-control']).toBe('no-store')
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('records notes whose file differed from the snapshot row, and the restore says so', async () => {
+    const { vaultId } = await fixture()
+    // A save after the snapshot: the file no longer matches the row.
+    await writeFile(noteFile(vaultId, 'concepts/kept'), '---\ntype: concepts\n---\nnewer than the row\n')
+    const archive = await buildInstanceBackup()
+    const manifest = JSON.parse(new AdmZip(archive).getEntry('backup.json')!.getData().toString('utf8')) as { notesFromRow?: number }
+    expect(manifest.notesFromRow).toBe(1)
+    await wipeInstance()
+    const plan = await restoreBackup(archive)
+    expect(plan.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/^1 note\(s\) were saved while the backup ran/)]))
+  })
+
+  it('warns before replacing a note file already on disk with other content (kept data volume)', async () => {
+    const { vaultId } = await fixture()
+    const archive = await buildInstanceBackup()
+    await wipeInstance()
+    const file = noteFile(vaultId, 'concepts/kept')
+    await mkdir(join(file, '..'), { recursive: true })
+    await writeFile(file, '---\ntype: concepts\n---\nleft on the volume\n')
+    const plan = await restoreBackup(archive)
+    expect(plan.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/^1 note or trash file\(s\) already on disk differ from the archive: replaced/)]))
   })
 })

@@ -156,12 +156,16 @@ export async function buildInstanceBackup(): Promise<Buffer> {
     // One buffer per row: a single JSON string of every revision could pass V8's string limit.
     add(tableEntry(name), Buffer.concat(rows.map((row) => Buffer.from(`${JSON.stringify(row)}\n`, 'utf8'))))
   }
+  // Notes whose file no longer matched their snapshot row (saved while the backup ran): left out, restored from the row.
+  let notesFromRow = 0
   for (const note of tables.get('notes') ?? []) {
     const vaultId = String(note.vaultId)
     const noteId = String(note.id)
     const trashed = note.deletedAt != null
     const data = await readIfPresent(trashed ? trashFile(vaultId, noteId) : noteFile(vaultId, String(note.path)))
-    if (data && fileMatchesRow(data, note)) add(trashed ? trashEntry(vaultId, noteId) : noteEntry(vaultId, String(note.path)), data)
+    if (!data) continue
+    if (fileMatchesRow(data, note)) add(trashed ? trashEntry(vaultId, noteId) : noteEntry(vaultId, String(note.path)), data)
+    else notesFromRow += 1
   }
   for (const vault of tables.get('vaults') ?? []) {
     const vaultId = String(vault.id)
@@ -170,7 +174,7 @@ export async function buildInstanceBackup(): Promise<Buffer> {
       if (data) add(assetEntry(vaultId, asset.fileName), data.buffer)
     }
   }
-  const manifest = { format: BACKUP_FORMAT, createdAt: new Date().toISOString(), tables: counts, parts }
+  const manifest = { format: BACKUP_FORMAT, createdAt: new Date().toISOString(), tables: counts, parts, notesFromRow }
   zip.addFile(BACKUP_MANIFEST, Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'))
   return zip.toBuffer()
 }

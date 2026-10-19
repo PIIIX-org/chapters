@@ -671,15 +671,17 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `trash/<note id>.md` and `assets/<file>`. Files are read after the
   snapshot: a note file that no longer matches its snapshot row (body,
   frontmatter key by key) is left out, and the restore writes it from
-  the row. Not backed up: sessions,
+  the row; `backup.json` `notesFromRow` counts them and the restore plan
+  warns. Not backed up: sessions,
   email tokens, export links, note links, semantic edges, embeddings,
   the repository file index, CRDT state (each rebuilt or reissued; the
   table is in `docs/self-hosting/backup.md`). `executeBackup` writes
   local backups (`BACKUP_LOCAL_PATH`) with `atomicWrite(..., { mode: 0o600 })`
   (temp file created and chmodded 600 before the content goes in, then
-  renamed) in a directory made and chmodded 700, whatever the umask
-  (#409, #493; a chmod the server can't do on an existing directory is a
-  warning, not a failed backup). The download is unchanged.
+  renamed) in a directory made and chmodded 700, and chmods the backups
+  already there to 600, whatever the umask (#409, #493; a chmod the
+  server can't do is a warning, not a failed backup). The download
+  (`GET /api/admin/backup`) is sent with `cache-control: no-store`.
 - **Restore** (`server/src/export/restore.ts` +
   `server/src/scripts/restore-backup.ts`): **CLI only**
   (`pnpm restore-backup [--dry-run] <zip>`), deliberately **not** an
@@ -690,6 +692,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   warning —, every table file, row counts,
   columns, references inside the archive, note paths, attachment names;
   `BackupInvalidError`), plans (per-table and per-file counts, conflicts;
+  warnings for attachments on disk that differ, kept, and for note or
+  trash files on disk that differ, replaced by the archive's version;
   `RestoreRefusedError`), then applies: rows in one transaction with
   `on conflict (primary key) do nothing`, files written atomically
   inside it (the files it created are removed if the transaction

@@ -234,6 +234,8 @@ export function exportRoutes(app: FastifyInstance) {
       return reply
         .header('content-type', 'application/zip')
         .header('content-disposition', 'attachment; filename="elara-backup.zip"')
+        // Password and token hashes, TOTP secrets: never kept by a browser or proxy cache (#493).
+        .header('cache-control', 'no-store')
         .send(zip)
     })
 

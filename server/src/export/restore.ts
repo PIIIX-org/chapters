@@ -205,6 +205,11 @@ function readCurrentFormat(entries: Map<string, Buffer>, archive: string): Backu
 
   const warnings: string[] = []
   verifyParts(entries, manifest.parts, warnings)
+  if (typeof manifest.notesFromRow === 'number' && manifest.notesFromRow > 0) {
+    warnings.push(
+      `${manifest.notesFromRow} note(s) were saved while the backup ran: their newer file was left out, they are restored as of the backup's snapshot`,
+    )
+  }
   const tables = new Map<string, Row[]>()
   for (const spec of [...BACKUP_TABLES, INSTANCE_STATE]) {
     const entry = tableEntry(spec.name)
@@ -480,12 +485,18 @@ async function planRestore(contents: BackupContents): Promise<PreparedRestore> {
   const writes: BackupFile[] = []
   const files: FilePlan[] = (['notes', 'trash', 'attachments'] as const).map((kind) => ({ kind, inArchive: 0, toWrite: 0, present: 0 }))
   let differing = 0
+  // Notes whose file is already on disk with other content (a kept data volume): the archive's version replaces it.
+  let replacedNotes = 0
   for (const file of contents.files) {
     const plan = files.find((f) => f.kind === file.kind)!
     plan.inArchive += 1
     let write: boolean
     if (file.kind !== 'attachments') {
       write = newNotes.has(file.noteId!)
+      if (write) {
+        const onDisk = await readFile(fileTarget(file)).catch(() => null)
+        if (onDisk && !onDisk.equals(Buffer.from(file.data))) replacedNotes += 1
+      }
     } else {
       const onDisk = await readFile(fileTarget(file)).catch(() => null)
       write = onDisk === null
@@ -499,6 +510,9 @@ async function planRestore(contents: BackupContents): Promise<PreparedRestore> {
     }
   }
   if (differing > 0) warnings.push(`${differing} attachment(s) already on disk differ from the archive: kept as they are`)
+  if (replacedNotes > 0) {
+    warnings.push(`${replacedNotes} note or trash file(s) already on disk differ from the archive: replaced by the archive's version`)
+  }
 
   return {
     plan: { format: contents.format, archive: contents.archive, alreadyRestored: null, tables, files, warnings, conflicts },

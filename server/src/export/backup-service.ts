@@ -13,18 +13,26 @@ import { atomicWrite } from '../notes/atomic-write.js'
  */
 const BACKUP_FILE_MODE = 0o600
 const BACKUP_DIR_MODE = 0o700
+const BACKUP_NAME = /^(?:elara|chapters)-backup-.*\.zip$/
 
 /**
- * Creates the backup directory 0700 and tightens it if it already existed.
- * A directory the server does not own (a mount) can't be chmodded: that is a
- * warning, not a failed backup; the files in it are 0600 either way.
+ * Creates the backup directory 0700 and tightens it if it already existed,
+ * along with the backups already in it (written 0644 before #493).
+ * Something the server does not own (a mount) can't be chmodded: that is a
+ * warning, not a failed backup; the new file is 0600 either way.
  */
 async function preparePrivateDir(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true, mode: BACKUP_DIR_MODE })
-  try {
-    await chmod(dir, BACKUP_DIR_MODE)
-  } catch (err) {
-    console.warn(`[backup] could not make ${dir} private (mode 700): ${err instanceof Error ? err.message : String(err)}`)
+  const tighten = async (path: string, mode: number) => {
+    try {
+      await chmod(path, mode)
+    } catch (err) {
+      console.warn(`[backup] could not make ${path} private (mode ${mode.toString(8)}): ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  await tighten(dir, BACKUP_DIR_MODE)
+  for (const name of await readdir(dir)) {
+    if (BACKUP_NAME.test(name)) await tighten(join(dir, name), BACKUP_FILE_MODE)
   }
 }
 
@@ -106,7 +114,7 @@ export async function pruneLocalBackups(dir: string, retentionCount: number): Pr
   try {
     const entries = await readdir(dir)
     const backupFiles = entries
-      .filter((name) => /^(?:elara|chapters)-backup-.*\.zip$/.test(name))
+      .filter((name) => BACKUP_NAME.test(name))
       .sort()
       .reverse()
 
