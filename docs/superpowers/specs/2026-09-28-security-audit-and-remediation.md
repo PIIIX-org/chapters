@@ -71,10 +71,10 @@ All 12 discovered vulnerabilities have been systematically remediated at root ca
 
 ### SEC-06: Sensitive 2FA Secrets & Hashes in Backup Archives
 - **Vulnerability**: Full-instance export dumped user database rows directly into `account-dump.json` without scrubbing `totpSecret`.
-- **Root-Cause Fix**:
-  - Explicitly mapped exported user objects to enforce `totpSecret: null`.
-- **Files**: `server/src/export/archive.ts`
-- **Tests**: `server/test/export.test.ts` (6 tests).
+- **Root-Cause Fix** (original): Explicitly mapped exported user objects to enforce `totpSecret: null`.
+- **Superseded by #409**: stripping the secret locked every MFA user out after a restore. The backup now keeps `totpSecret` as stored (with the password and token hashes it already held), and the scheduled local backup file is written with mode `0600` whatever the umask (`server/src/export/backup-service.ts`). The archive is as sensitive as the database: keep it owner-only. Manifest digests and the CI restore check: #493.
+- **Files**: `server/src/export/archive.ts`, `server/src/export/backup-service.ts`
+- **Tests**: `server/test/export.test.ts`, `server/test/backup-service.test.ts` (file mode), `server/test/backup-roundtrip.test.ts`.
 
 ### SEC-07: Host Header Injection in OIDC Callback URL
 - **Vulnerability**: `callbackUrl(req)` constructed the OIDC redirect URI using untrusted `req.headers.host`.

@@ -51,11 +51,6 @@
       "issue": 560
     },
     {
-      "test": "backup-restore",
-      "check": "backup file (holds password + token hashes) is not world-readable",
-      "issue": 493
-    },
-    {
       "test": "big-notes",
       "check": "an agent can append to a note that collab grew past 1 MiB",
       "issue": 491
