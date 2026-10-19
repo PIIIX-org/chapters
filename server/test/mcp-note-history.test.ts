@@ -222,7 +222,7 @@ describe('get_revision returns one revision with its content (#411)', () => {
   it('returns the body and frontmatter of the revision note_history names', async () => {
     const pages = await allPages(owner, 100)
     const all = pages.flatMap((p) => p.revisions)
-    const created = all.at(-1)!
+    const created = all.find((rev) => rev.action === 'create')!
     const rev = await must<Record<string, unknown>>(owner, 'get_revision', { vaultId, revisionId: created.id })
     expect(rev).toMatchObject({
       id: created.id,

@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify'
 import * as Y from 'yjs'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
-import { listRevisions, readNote, updateNote } from '../src/notes/store.js'
+import { getRevision, listRevisionMeta, readNote, updateNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
@@ -38,8 +38,9 @@ const bodies = (label: string) => Array.from({ length: WRITES }, (_, i) => `${la
 
 /** Revision bodies oldest first, with back-to-back repeats collapsed. */
 async function revisionBodies(path: string): Promise<string[]> {
-  const revisions = (await listRevisions(vaultId, path))!.filter((r) => r.action === 'update').reverse()
-  return revisions.map((r) => r.body).filter((body, i, all) => body !== all[i - 1])
+  const updates = (await listRevisionMeta(vaultId, path, 200, 0))!.filter((r) => r.action === 'update').reverse()
+  const revisions = await Promise.all(updates.map((r) => getRevision(vaultId, r.id)))
+  return revisions.map((r) => r!.body).filter((body, i, all) => body !== all[i - 1])
 }
 
 beforeAll(async () => {

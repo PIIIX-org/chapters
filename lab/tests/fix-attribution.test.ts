@@ -7,17 +7,9 @@
 // as an anonymous 'collab' revision. This test removes concurrency entirely:
 // one connection, sequential edits, one note — who does note_history credit?
 import type { Check, LabTest } from '../lib/context.ts'
+import type { RevisionContent } from '../lib/mcp.ts'
 
 const EDITS = 5
-
-interface Revision {
-  id: string
-  actorType: string
-  actorId: string | null
-  action: string
-  body: string
-  createdAt: string
-}
 
 const test: LabTest = {
   name: 'fix-attribution',
@@ -31,12 +23,11 @@ const test: LabTest = {
     const path = 'concepts/attributed'
     await acct.must('create_note', { vaultId: vault.id, path, frontmatter: { type: 'concepts', title: 'a' }, body: 'v0' })
 
-    const perEdit: Array<{ i: number; ok: boolean; newest?: Pick<Revision, 'actorType' | 'actorId' | 'action'>; credited: boolean; anonymous: boolean }> = []
+    const perEdit: Array<{ i: number; ok: boolean; newest?: Pick<RevisionContent, 'actorType' | 'actorId' | 'action'>; credited: boolean; anonymous: boolean }> = []
     for (let i = 1; i <= EDITS; i++) {
       const marker = `edit-${i}-${ctx.uniq('m')}`
       const r = await acct.call('edit_note', { vaultId: vault.id, path, body: marker })
-      const h = await acct.call('note_history', { vaultId: vault.id, path })
-      const revs = Array.isArray(h.json) ? (h.json as Revision[]) : []
+      const revs = await acct.revisionsSince(vault.id, path).catch((): RevisionContent[] => [])
       const withMarker = revs.filter((rev) => rev.body.includes(marker))
       const credited = withMarker.some((rev) => rev.actorType === 'mcp' && rev.actorId === connId)
       const newest = revs[0]
@@ -48,8 +39,7 @@ const test: LabTest = {
         anonymous: !credited && withMarker.some((rev) => rev.actorType !== 'mcp'),
       })
     }
-    const history = await acct.call('note_history', { vaultId: vault.id, path })
-    const all = Array.isArray(history.json) ? (history.json as Revision[]) : []
+    const all = await acct.revisionsSince(vault.id, path).catch((): RevisionContent[] => [])
     const byActorType = all.reduce<Record<string, number>>((m, r) => ((m[r.actorType] = (m[r.actorType] ?? 0) + 1), m), {})
     const credited = perEdit.filter((e) => e.credited).length
     const anonymous = perEdit.filter((e) => e.anonymous).length

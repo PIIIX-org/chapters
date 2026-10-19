@@ -226,7 +226,7 @@
   <a href="#overview"><img src="assets/badges/badge-okf.svg" alt="Format: OKF v0.2 ISO 8601"/></a>
   <a href="#system-architecture"><img src="assets/badges/badge-crdt.svg" alt="Collab: Yjs CRDT 0.09ms p95"/></a>
   <a href="docs/benchmarks/README.md"><img src="assets/badges/badge-vector.svg" alt="Vector Engine: pgvector 17 10.87 QPS"/></a>
-  <a href="#model-context-protocol-mcp-interface"><img src="assets/badges/badge-mcp.svg" alt="AI MCP: 57 Tools and 20 Prompts"/></a>
+  <a href="#model-context-protocol-mcp-interface"><img src="assets/badges/badge-mcp.svg" alt="AI MCP: 58 Tools and 20 Prompts"/></a>
   <br/>
   <a href="#codebase-architecture"><img src="assets/badges/badge-ast.svg" alt="AST Engine: Tree-sitter 92k LOC/s"/></a>
   <a href="docs/benchmarks/03-enterprise-security-penetration-matrix.md"><img src="assets/badges/badge-security.svg" alt="Security: 21 of 21 Vectors Blocked"/></a>
@@ -246,7 +246,7 @@
 <p>How Chapters compares against existing tools across core architectural dimensions:</p>
 <p><img src="assets/charts/competitive-matrix.svg" alt="Architectural Comparison Matrix: Chapters vs Alternatives" /></p>
 <h3 id="key-architectural-differentiators">Key Architectural Differentiators</h3>
-<div class="table-wrapper"><table><thead><tr><th>Capability</th><th>Chapters (Elara)</th><th>Obsidian</th><th>Swimm</th><th>Graphify</th><th>Outline</th><th>Notion</th></tr></thead><tbody><tr><td><strong>License & Hosting</strong></td><td><strong>MIT Open-Source · Self-Host</strong></td><td>Proprietary Local App</td><td>Closed Commercial SaaS</td><td>Open-Source CLI</td><td>AGPLv3 Self-Host</td><td>Closed Commercial Cloud</td></tr><tr><td><strong>Storage Architecture</strong></td><td><strong>Plain OKF v0.2 MD on Disk</strong></td><td>Unstructured Local MD</td><td>Cloud Markdown Sync</td><td>InMemory AST Cache</td><td>PostgreSQL Database</td><td>Proprietary Block DB</td></tr><tr><td><strong>Multiplayer Engine</strong></td><td><strong>Yjs CRDT Relay (<0.1ms)</strong></td><td>Manual Git Merge Conflicts</td><td>Git Pull-Request Flow</td><td>Single User CLI</td><td>Operational Transform</td><td>Proprietary Cloud OT</td></tr><tr><td><strong>Code AST Ingestion</strong></td><td><strong>Tree-sitter WASM Engine</strong></td><td>None</td><td>IDE Extension Snippets</td><td>Headless AST Graph</td><td>None</td><td>Static Code Blocks</td></tr><tr><td><strong>Unified Graph</strong></td><td><strong>Notes + Code (Louvain/Dijkstra)</strong></td><td>Notes Only Graph</td><td>Code Documentation Only</td><td>Code Syntax Only</td><td>Document Tree Only</td><td>Relational Tables Only</td></tr><tr><td><strong>AI Interface</strong></td><td><strong>Native 57-Tool MCP Server</strong></td><td>Community REST Hacks</td><td>Webhook Ingestion</td><td>Stdout CLI Piping</td><td>REST API</td><td>Proprietary Cloud Copilot</td></tr><tr><td><strong>Vector Indexing</strong></td><td><strong>pgvector 17 + ChromaDB</strong></td><td>Third-party Plugins</td><td>Cloud Embedding API</td><td>Local Vector Store</td><td>None</td><td>Closed Embedding Service</td></tr></tbody></table></div>
+<div class="table-wrapper"><table><thead><tr><th>Capability</th><th>Chapters (Elara)</th><th>Obsidian</th><th>Swimm</th><th>Graphify</th><th>Outline</th><th>Notion</th></tr></thead><tbody><tr><td><strong>License & Hosting</strong></td><td><strong>MIT Open-Source · Self-Host</strong></td><td>Proprietary Local App</td><td>Closed Commercial SaaS</td><td>Open-Source CLI</td><td>AGPLv3 Self-Host</td><td>Closed Commercial Cloud</td></tr><tr><td><strong>Storage Architecture</strong></td><td><strong>Plain OKF v0.2 MD on Disk</strong></td><td>Unstructured Local MD</td><td>Cloud Markdown Sync</td><td>InMemory AST Cache</td><td>PostgreSQL Database</td><td>Proprietary Block DB</td></tr><tr><td><strong>Multiplayer Engine</strong></td><td><strong>Yjs CRDT Relay (<0.1ms)</strong></td><td>Manual Git Merge Conflicts</td><td>Git Pull-Request Flow</td><td>Single User CLI</td><td>Operational Transform</td><td>Proprietary Cloud OT</td></tr><tr><td><strong>Code AST Ingestion</strong></td><td><strong>Tree-sitter WASM Engine</strong></td><td>None</td><td>IDE Extension Snippets</td><td>Headless AST Graph</td><td>None</td><td>Static Code Blocks</td></tr><tr><td><strong>Unified Graph</strong></td><td><strong>Notes + Code (Louvain/Dijkstra)</strong></td><td>Notes Only Graph</td><td>Code Documentation Only</td><td>Code Syntax Only</td><td>Document Tree Only</td><td>Relational Tables Only</td></tr><tr><td><strong>AI Interface</strong></td><td><strong>Native 58-Tool MCP Server</strong></td><td>Community REST Hacks</td><td>Webhook Ingestion</td><td>Stdout CLI Piping</td><td>REST API</td><td>Proprietary Cloud Copilot</td></tr><tr><td><strong>Vector Indexing</strong></td><td><strong>pgvector 17 + ChromaDB</strong></td><td>Third-party Plugins</td><td>Cloud Embedding API</td><td>Local Vector Store</td><td>None</td><td>Closed Embedding Service</td></tr></tbody></table></div>
 <hr />
 <h2 id="system-architecture">System Architecture</h2>
 <p>Chapters utilizes a dual-index architecture that links plain Markdown notes and polyglot Git repositories into a unified knowledge graph:</p>
@@ -270,7 +270,7 @@ flowchart TD
   end
 
   subgraph Consumers ["Consumption & Agent Layer"]
-    MCP["Model Context Protocol (MCP)\n57 Tools · 20 Prompts"]
+    MCP["Model Context Protocol (MCP)\n58 Tools · 20 Prompts"]
     UI["Fastify + React Client\nDark Observatory Shell"]
     AGENTS["Autonomous AI Swarms\nCursor · Claude · Antigravity"]
     HUMANS["Engineering Teams\nReal-Time Collaborative Editing"]
@@ -319,7 +319,7 @@ flowchart TD
 }</code></pre>
 <h3 id="key-mcp-capabilities">Key MCP Capabilities</h3>
 <ul>
-<li><strong>57 First-Class Tools</strong>:</li>
+<li><strong>58 First-Class Tools</strong>:</li>
 <li><code>list_vaults</code>, <code>browse_vault</code>, <code>read_note</code>, <code>create_note</code>, <code>edit_note</code>, <code>delete_note</code></li>
 <li><code>list_repositories</code>, <code>browse_repository</code>, <code>read_file</code>, <code>find_symbols</code>, <code>repository_status</code></li>
 <li><code>search</code> (hybrid BM25 + 384d semantic vector search with permission scoping)</li>
@@ -347,7 +347,7 @@ flowchart TD
 │   ├── src/auth/               # OIDC, session handling, and MFA verification
 │   ├── src/crdt/               # Hocuspocus WebSocket relay for live Yjs sync
 │   ├── src/graph/              # Louvain community clustering &amp; Dijkstra routing
-│   ├── src/mcp/                # Model Context Protocol server (57 tools, 20 prompts)
+│   ├── src/mcp/                # Model Context Protocol server (58 tools, 20 prompts)
 │   ├── src/notes/              # OKF v0.2 Markdown parser and disk storage engine
 │   ├── src/repositories/       # Git shallow-clone manager &amp; filesystem watchers
 │   ├── src/search/             # Hybrid search (PostgreSQL pgvector + BM25)

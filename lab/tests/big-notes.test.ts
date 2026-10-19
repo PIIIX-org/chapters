@@ -1,10 +1,11 @@
 // How do big notes behave on the read/write/history paths, and where are
 // the limits?
 //
-// - note_history (mcp/server.ts:798-811) returns listRevisions()
-//   (notes/store.ts:566-577): every revision with its full body, no limit,
-//   JSON.stringify'd once by wrap() (mcp/server.ts:139) and again by the MCP
-//   transport. Response size ~ note size x revisions.
+// - note_history (mcp/server.ts) returned every revision with its full body,
+//   no limit, until #411: the response was ~ note size x revisions, and the
+//   history phases below drove the app into a V8 heap OOM. It now returns
+//   one page of metadata (default 20 revisions, no bodies; get_revision reads
+//   one revision), so its size and latency must stay flat as history grows.
 // - edit_note / create_note return the whole row (body included).
 // - REST and MCP bodies are capped by Fastify's default 1 MiB bodyLimit (no
 //   bodyLimit is configured in app.ts), but the collab relay is a `ws`
@@ -13,9 +14,10 @@
 //
 // Method: notes of 100/500/900 KiB, 5 edits each, read_note + note_history
 // sizes/latencies with app-container memory sampled (cgroup + docker stats)
-// during note_history; then grow the 900 KiB note's history until
-// note_history passes 50 MB / 30 s / restarts the app, then parallel
-// note_history fan-out; then push >1 MiB bodies through a Hocuspocus client.
+// during note_history; then grow the 900 KiB note's history to ~570
+// revisions (where the unbounded response passed V8's string limit), checking
+// note_history for 50 MB / 30 s / restarts, then parallel note_history
+// fan-out; then push >1 MiB bodies through a Hocuspocus client.
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { CollabClient, Y, type CollabEvent } from '../lib/collab.ts'
 import { stringField } from '../lib/mcp.ts'
@@ -39,7 +41,7 @@ const KiB = 1024
 const SIZES = (process.env.LAB_BIG_SIZES_KIB ?? '100,500,900').split(',').map((s) => Number(s) * KiB)
 const EDITS = 5
 const CHECKPOINTS = (process.env.LAB_BIG_CHECKPOINTS ?? '15,30,45,60,90,120,160,220,300').split(',').map(Number)
-/** After the fan-out: towards V8's max string length (~2^29 chars), where JSON.stringify of the history must fail. */
+/** After the fan-out: up to ~570 revisions, where the unbounded history before #411 passed V8's max string length (~2^29 chars). */
 const CHECKPOINTS_LATE = (process.env.LAB_BIG_CHECKPOINTS_LATE ?? '400,500,540,555,570').split(',').map(Number)
 const FANOUT = (process.env.LAB_BIG_FANOUT ?? '2,4,8,12,16').split(',').map(Number)
 const COLLAB_MIB = (process.env.LAB_BIG_COLLAB_MIB ?? '1.5,5,20,60').split(',').map(Number)

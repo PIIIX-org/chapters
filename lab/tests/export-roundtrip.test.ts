@@ -20,6 +20,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Check, LabTest } from '../lib/context.ts'
+import type { HistoryPage } from '../lib/mcp.ts'
 import {
   assetRefs,
   assetSnapshot,
@@ -341,14 +342,12 @@ const test: LabTest = {
     })
     await mcp.call('edit_note', { vaultId: V, path: 'concepts/revised', body: 'v4 final\n' })
     // Collab writes record revisions asynchronously: wait for create + 4 edits.
-    type Rev = { id: string; body: string; action: string }
-    let revs: Rev[] = []
     await poll(async () => {
-      const h = await mcp.call('note_history', { vaultId: V, path: 'concepts/revised' })
-      // Shape: listRevisions rows (store.ts:566).
-      revs = (Array.isArray(h.json) ? h.json : []) as Rev[]
-      return revs.length >= 5 ? true : undefined
+      const page = await mcp.must<HistoryPage>('note_history', { vaultId: V, path: 'concepts/revised', limit: 100 }).catch(() => undefined)
+      return page && page.revisions.length >= 5 ? true : undefined
     }, 20_000)
+    // note_history is metadata only (#411): the bodies come from get_revision.
+    const revs = await mcp.revisionsSince(V, 'concepts/revised')
     const v2 = revs.find((r) => r.body === 'v2\n')
     const revert = v2 ? await mcp.call('revert_note', { vaultId: V, path: 'concepts/revised', revisionId: v2.id }) : undefined
     await mcp.call('delete_note', { vaultId: V, path: 'concepts/trashed-one' })
