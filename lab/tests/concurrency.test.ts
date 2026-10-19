@@ -13,23 +13,13 @@
 //                     regenerates the folder's index.md files)
 //   create-same-folder create_note of N new notes in one new folder at once
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
-import { McpClient, stringField, type ToolResult } from '../lib/mcp.ts'
+import { McpClient, stringField, type HistoryPage, type RevisionContent, type ToolResult } from '../lib/mcp.ts'
 
 interface Writer {
   i: number
   connId: string
   user: 'admin' | 'member'
   mcp: McpClient
-}
-
-interface Revision {
-  id: string
-  actorType: string
-  actorId: string | null
-  action: string
-  body: string
-  frontmatter: Record<string, unknown>
-  createdAt: string
 }
 
 interface WriteOutcome {
@@ -68,14 +58,9 @@ async function timed(fn: () => Promise<ToolResult>, writer: number): Promise<Wri
   return { writer, ok: r.ok, error: r.ok ? undefined : r.text, ms: r.ms }
 }
 
-/** Revisions created after `sinceIso`, oldest first, via the MCP note_history tool. */
+/** Revisions created after `sinceIso`, oldest first, with their bodies (note_history + get_revision). */
 async function historySince(admin: McpClient, vaultId: string, path: string, sinceIso: string) {
-  const r = await admin.call('note_history', { vaultId, path })
-  if (!r.ok) throw new Error(`note_history ${path}: ${r.text.slice(0, 300)}`)
-  if (!Array.isArray(r.json)) throw new Error(`note_history ${path}: not an array`)
-  // Rows of note_revisions as server/src/notes/store.ts listRevisions returns them.
-  const revs: Revision[] = r.json
-  return revs.filter((rev) => rev.createdAt > sinceIso).reverse()
+  return (await admin.revisionsSince(vaultId, path, sinceIso)).reverse()
 }
 
 /**
@@ -83,7 +68,7 @@ async function historySince(admin: McpClient, vaultId: string, path: string, sin
  * connection that contains their marker? For every mcp revision: does the
  * body contain a marker of the connection it is attributed to?
  */
-function attribution(revs: Revision[], writers: Writer[], okWriters: number[], marker: (i: number) => string) {
+function attribution(revs: RevisionContent[], writers: Writer[], okWriters: number[], marker: (i: number) => string) {
   const byConn = new Map(writers.map((w) => [w.connId, w]))
   const missing = okWriters.filter(
     (i) => !revs.some((r) => r.actorId === writers[i]!.connId && r.body.includes(marker(i))),
@@ -151,7 +136,8 @@ const test: LabTest = {
         const reset = await admin.must<{ updatedAt: string }>('edit_note', { vaultId: vault.id, path: shared, body: `# A${N}\n` })
         // Real time on purpose: revision createdAt is a server timestamp; keep the reset strictly before the burst.
         await Bun.sleep(50)
-        const since = (await historySince(admin, vault.id, shared, '0')).at(-1)?.createdAt ?? reset.updatedAt
+        const newest = await admin.must<HistoryPage>('note_history', { vaultId: vault.id, path: shared, limit: 1 })
+        const since = newest.revisions[0]?.createdAt ?? reset.updatedAt
         const line = (i: number) => `- A${N} w${i} `
         const outcomes = await Promise.all(
           ws.map((w) =>
@@ -183,8 +169,8 @@ const test: LabTest = {
 
       // ---- replace-same
       {
-        const before = await historySince(admin, vault.id, shared, '0')
-        const since = before.at(-1)!.createdAt
+        const newest = await admin.must<HistoryPage>('note_history', { vaultId: vault.id, path: shared, limit: 1 })
+        const since = newest.revisions[0]!.createdAt
         const marker = (i: number) => `R${N} w${i}.`
         const outcomes = await Promise.all(
           ws.map((w) =>

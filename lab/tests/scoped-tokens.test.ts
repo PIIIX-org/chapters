@@ -20,7 +20,7 @@
 // control proving the arguments are valid. Last, the capabilities set at mint
 // time (#548): a read-only token, a tool allow-list and an expired token.
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
-import { McpClient, type JsonSchema, type ToolInfo, type ToolResult } from '../lib/mcp.ts'
+import { McpClient, type HistoryPage, type JsonSchema, type ToolInfo, type ToolResult } from '../lib/mcp.ts'
 
 const OTHER_REPO_URL = process.env.LAB_SCOPE_OTHER_REPO_URL ?? 'https://github.com/PIIIX-org/git-a-profile'
 const PINNED_REPO_URL = process.env.LAB_SCOPE_PINNED_REPO_URL ?? 'https://github.com/PIIIX-org/portfolio.me'
@@ -130,6 +130,7 @@ function argsFor(tool: string, fx: Fixtures, v: VaultFixture | undefined, r: Rep
     restore_note: () => ({ vaultId, noteId: v?.trashId ?? crypto.randomUUID() }),
     purge_note: () => ({ vaultId, noteId: v?.purgeId ?? crypto.randomUUID() }),
     note_history: () => ({ vaultId, path: v?.probe ?? 'concepts/lab-scope-probe' }),
+    get_revision: () => ({ vaultId, revisionId: v?.revisionId ?? crypto.randomUUID() }),
     revert_note: () => ({ vaultId, path: v?.probe ?? 'concepts/lab-scope-probe', revisionId: v?.revisionId ?? crypto.randomUUID() }),
     purge_revision: () => ({ vaultId, revisionId: v?.revisionId ?? crypto.randomUUID() }),
     export_vault: () => ({ vaultId }),
@@ -285,7 +286,7 @@ async function prepare(c: Case, acct: McpClient, fx: Fixtures, memberId: string)
   if (v && (c.tool === 'restore_note' || c.tool === 'purge_note')) args.noteId = await trashedNoteId(v.id)
   if (v && c.tool === 'purge_revision') {
     const path = await freshNote(v.id)
-    args.revisionId = (await acct.must<Array<{ id: string }>>('note_history', { vaultId: v.id, path }))[0]!.id
+    args.revisionId = (await acct.must<HistoryPage>('note_history', { vaultId: v.id, path })).revisions[0]!.id
   }
   if (v && c.tool === 'revoke_vault_share') {
     await acct.must('share_vault', { vaultId: v.id, granteeType: 'user', granteeId: memberId, permission: 'read' })
@@ -328,7 +329,7 @@ async function vaultFixture(acct: McpClient, id: string, name: string, marker: s
   await acct.must('delete_note', { vaultId: id, path: 'concepts/lab-trash-probe' })
   await acct.must('delete_note', { vaultId: id, path: 'concepts/lab-purge-probe' })
   const trash = await acct.must<Array<{ id: string; path: string }>>('list_trash', { vaultId: id })
-  const history = await acct.must<Array<{ id: string }>>('note_history', { vaultId: id, path: 'concepts/lab-scope-probe' })
+  const history = (await acct.must<HistoryPage>('note_history', { vaultId: id, path: 'concepts/lab-scope-probe' })).revisions
   return {
     id,
     name,

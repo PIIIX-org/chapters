@@ -51,6 +51,7 @@ const EDIT_TOOLS = [
   'delete_note',
   'edit_note',
   'export_vault',
+  'get_revision',
   'list_trash',
   'note_history',
   'rename_note',
@@ -73,7 +74,7 @@ describe('MCP tool capabilities', () => {
     for (const t of tools) expect(['read', 'write', 'admin'], t.name).toContain(t.capability)
     expect(tools.filter((t) => t.capability === 'admin').map((t) => t.name).sort()).toEqual(ADMIN_TOOLS)
     // Reading tools never need more than read.
-    for (const name of ['read_note', 'search', 'browse_vault', 'read_file', 'find_symbols', 'graph', 'note_history']) {
+    for (const name of ['read_note', 'search', 'browse_vault', 'read_file', 'find_symbols', 'graph', 'note_history', 'get_revision']) {
       expect(tools.find((t) => t.name === name)?.capability, name).toBe('read')
     }
   })
