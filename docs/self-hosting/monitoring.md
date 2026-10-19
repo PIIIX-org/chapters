@@ -21,7 +21,7 @@ What counts as a failed job:
 
 - `embedding`: a note's embedding failed 3 attempts in a row (search will not find it by meaning);
 - `extraction`: a repository file's code extraction or embedding failed;
-- `sync`: a git or local-folder repository sync failed (also shown on the repository card);
+- `sync`: a git or local-folder repository sync failed (also shown on the repository card). Counted once, when the repository goes into `error`: the poller retries a failing git repository every `POLL_INTERVAL_MS`, and each retry that fails again only adds to `repeated`, not to `failed` (no new report, no log line, no alert);
 - `collab-store`: a live (collaborative) edit could not be saved to the note file, for example because its frontmatter was invalid. **The file keeps its last valid version while the editors keep seeing their edit**: look at it;
 - `backup`: a scheduled backup failed (an on-demand one that fails is a 500 instead).
 
@@ -43,7 +43,7 @@ Anyone else gets `401` (or `403` for a signed-in non-admin). `/health` does not 
   "now": "2026-10-19T12:40:00.000Z",
   "windowMinutes": 15,
   "totals": { "requests": 18234, "serverErrors": 2, "jobFailures": 1 },
-  "jobs": { "embedding": { "succeeded": 410, "failed": 0 }, "extraction": { "succeeded": 0, "failed": 0 }, "sync": { "succeeded": 12, "failed": 1 }, "collab-store": { "succeeded": 88, "failed": 0 }, "backup": { "succeeded": 1, "failed": 0 } },
+  "jobs": { "embedding": { "succeeded": 410, "failed": 0, "repeated": 0 }, "extraction": { "succeeded": 0, "failed": 0, "repeated": 0 }, "sync": { "succeeded": 12, "failed": 1, "repeated": 30 }, "collab-store": { "succeeded": 88, "failed": 0, "repeated": 0 }, "backup": { "succeeded": 1, "failed": 0, "repeated": 0 } },
   "routes": [{ "route": "POST /mcp", "count": 312, "serverErrors": 0, "p50Ms": 25, "p95Ms": 150, "p99Ms": 400, "maxMs": 612 }],
   "errors": [{ "seq": 3, "at": "2026-10-19T12:31:07.004Z", "type": "job", "job": "sync", "subjectId": "0199…", "error": { "name": "Error", "code": null } }],
   "lastSeq": 3
@@ -59,9 +59,11 @@ Anyone else gets `401` (or `403` for a signed-in non-admin). `/health` does not 
 | **errors** | at least N new 5xx responses since the last check | `ALERT_ERROR_THRESHOLD`, default `1` |
 | **jobs** | any new failed background job | |
 | **slow** | a route newly has p95 ≥ M ms over at least K requests in the last 15 minutes (once, until it is fast again) | `ALERT_SLOW_MS`, default `2000`; `ALERT_SLOW_MIN_COUNT`, default `5` |
-| **metrics unavailable** | `/health` is up but the endpoint refuses (wrong or rotated token); once per streak | |
+| **metrics unavailable** | `/health` is up but the endpoint failed 2 reads in a row (wrong or rotated token); once per streak | |
 
 plus the restart, down, recovered and weekly check-in alerts of the uptime monitor. The server's counters are cumulative, so a check that runs late misses nothing; after a restart everything since the restart counts as new. The threshold is per check: with `ALERT_ERROR_THRESHOLD=5` and checks every 10 minutes, 5 errors within one interval alert, 1 per interval never does.
+
+**errors** and **jobs** alert once per streak, not on every check: while new ones keep coming (one endpoint that keeps failing, a job that fails on every edit), the next alert is for a route or job kind the streak has not had yet, or 24 hours after the last one, with the number held back in between. A streak ends after an hour without a new one; if something was held back, a short "stopped" alert says how many.
 
 Run it from cron on any machine that can reach your instance (not the same host: it should notice when the host is down):
 
@@ -72,7 +74,7 @@ ELARA_MONITORING_TOKEN=... ALERT_WEBHOOK_URL=https://hooks.slack.com/services/..
 ```
 
 - `--state-file` keeps what it saw last (so each event alerts once) and posts nothing to GitHub.
-- `ALERT_WEBHOOK_URL` (optional): every alert is POSTed there as JSON, `{ "text": "<markdown>", "content": "<the same, at most 2000 characters>", "url": "...", "alerts": [...] }`; `text` suits Slack and most chat webhooks, `content` Discord. A failed POST makes the run exit non-zero without saving the state, so the next run tries again.
+- `ALERT_WEBHOOK_URL` (optional): every alert is POSTed there as JSON, `{ "text": "<markdown>", "content": "<the same, at most 2000 characters>", "url": "...", "alerts": [...] }`; `text` suits Slack and most chat webhooks, `content` Discord. A failed POST makes the run exit non-zero without saving the state, so the next run tries again. With `--state-file` the webhook is the only place alerts go, so a value that is not an http(s) URL stops the run.
 - Each run prints one JSON line (what it saw, the alerts and the message). Without `ELARA_MONITORING_TOKEN` it only checks `/health`, and still exits 0.
 
 Alerts carry route templates, statuses, error classes and codes, request ids and job kinds, not the subject ids (they may end up in a public place, like the Elara project's own alert issue). To see which note, file or repository a failed job was about, read the endpoint with an admin session or grep the log for `job_failure`.

@@ -574,21 +574,29 @@ not testing) and compares the process identity it reports (`bootId`,
     **errors** (at least `ALERT_ERROR_THRESHOLD`, default 1, new 5xx since
     the last check; route template, status, error class and code, request
     id, actor), **jobs** (any new failed `embedding`, `extraction`, `sync`,
-    `collab-store` or `backup` job), **slow** (a route newly at p95 >=
+    `collab-store` or `backup` job; a repository that keeps failing counts
+    once, on its way into `error`), **slow** (a route newly at p95 >=
     `ALERT_SLOW_MS`, default 2000, over >= `ALERT_SLOW_MIN_COUNT`, default
     5, requests in the server's 15-minute window; once until it is fast
-    again) and **metrics unavailable** (the endpoint refuses while
-    `/health` is up; once per streak). The thresholds are optional
+    again) and **metrics unavailable** (the endpoint fails 2 reads in a
+    row while `/health` is up; once per streak). **errors** and **jobs**
+    comment once per streak, not every run: while new ones keep coming,
+    the next comment is for a route or job kind the streak has not had,
+    or 24 h after the last one with the count held back; an hour without
+    a new one ends the streak, with a short "stopped" comment when
+    something was held back. The thresholds are optional
     repository variables. The server's counters are cumulative since boot
-    and compared with the last read (kept in the same state block); a new
-    `bootId` counts from zero. Without the secret this part is skipped and
-    the run passes. The token is passed only when the URL is production
-    (never to a dispatched `url`). Reports hold no note text and no error
-    message; the comment also leaves out subject ids (the issue and the
-    Actions log are public). Optional secret **`ALERT_WEBHOOK_URL`**:
-    every comment is also POSTed there as JSON (`{text, content, url,
-    alerts}`); a failed POST is reported in the job summary and not
-    retried, since the comment already went out.
+    and compared with the last read (kept in the same state block, with
+    the streaks); a new `bootId` counts from zero. Without the secret this
+    part is skipped and the run passes. The token is passed only when the
+    URL is production (never to a dispatched `url`). Reports hold no note
+    text and no error message; the comment also leaves out subject ids
+    (the issue and the Actions log are public). Optional secret
+    **`ALERT_WEBHOOK_URL`**, also production only: every comment is also
+    POSTed there as JSON (`{text, content, url, alerts}`); a failed POST
+    is reported in the job summary and not retried, since the comment
+    already went out, and a malformed value is reported there and ignored
+    (it must not stop the restart and down alerts).
     Decision (#705, comment on the issue): this path and issue #636 rather
     than the server pushing alerts itself (it cannot report its own
     downtime), a dedicated issue (splits notifications; `ISSUE_TITLE`), a

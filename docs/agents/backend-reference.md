@@ -985,9 +985,9 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     keeps request count, 5xx count, max and a latency histogram (fixed
     bucket bounds, `LATENCY_BUCKETS_MS`) in 15 one-minute slots; at most
     300 route keys in the window, then `METHOD (other)`. Totals since boot
-    (requests, 5xx, job failures, per job kind succeeded/failed) and a ring
-    of the last 50 error reports with a monotonic `seq`.
-  - Jobs report through `recordJob(kind, 'ok' | { error }, subjectId)`:
+    (requests, 5xx, job failures, per job kind succeeded/failed/repeated)
+    and a ring of the last 50 error reports with a monotonic `seq`.
+  - Jobs report through `recordJob(kind, 'ok' | { error, repeat? }, subjectId)`:
     `embedding` (`embedding-queue.ts`: success, or the third failed
     attempt), `extraction` (`extraction-queue.ts`, per file), `sync`
     (`syncGitRepository` and `syncLocalRepository` themselves, so every
@@ -995,6 +995,11 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     (`collab-server.ts` `onStoreDocument`: a rejected `updateNote` or CRDT
     save; the file keeps its last valid version), `backup` (the scheduled
     run in `startBackupScheduler`; an on-demand one is a 500).
+    `repeat: true` (a sync of a repository whose `syncStatus` was already
+    `error`: the poller in `scheduler.ts` retries those every
+    `POLL_INTERVAL_MS`) only increments `jobs[kind].repeated`: no total, no
+    ring record, no log line, so a dead remote or expired credential is one
+    report on the transition into `error`, not one per poll.
   - A report holds route template, status, `durationMs`, `reqId`, actor
     (requests) or job kind and a UUID subject (note, file, repository,
     vault; anything else dropped), plus `error: {name, code}`, each
@@ -1018,13 +1023,15 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     `401`/`403`. `/health` is unchanged.
   - The uptime monitor reads it and alerts on new 5xx, failed jobs, slow
     routes and an endpoint that stops answering (`github-workflow.md`,
-    Production uptime monitor). Single-process, like the queues (§9);
-    lost on restart, which `/health` reports.
+    Production uptime monitor); 5xx and failed jobs once per streak, not
+    per run. Single-process, like the queues (§9); lost on restart, which
+    `/health` reports.
   - Tests: `monitoring.test.ts` (a route error, an embedding, extraction,
     git sync and collab store failure each carrying a marker and a
     `ghp_` secret: reported with the right fields, neither in the endpoint
-    nor the log lines; access rules), `monitoring-metrics.test.ts`
-    (bounds, percentiles, format checks); lab `monitoring-alerts`.
+    nor the log lines; a repository that keeps failing reported once;
+    access rules), `monitoring-metrics.test.ts` (bounds, percentiles,
+    format checks, repeats); lab `monitoring-alerts`.
 - **`server/.env.example`**: every environment variable, documented, in
   one place. For compose, copy it to `.env` at the **repo root** (that is
   the file compose interpolates); for a direct run, `server/.env` with
