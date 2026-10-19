@@ -540,5 +540,90 @@ describe('useCollabDoc', () => {
     expect(view.result.current.ydoc).toBe(originalDoc)
     expect(view.result.current.ydoc.getText('body').toString()).toBe('preserved content')
   })
+
+  describe('offline (#720)', () => {
+    it('a dropped socket is a drop at once, and the copy stops being synced', async () => {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      act(() => provider.options.onSynced({ state: true }))
+      expect(view.result.current.synced).toBe(true)
+
+      act(() => provider.options.onStatus({ status: 'disconnected' }))
+
+      expect(view.result.current.status).toBe('reconnecting')
+      // "Synced 10:04" over a dead socket is the lie the audit screenshot shows.
+      expect(view.result.current.synced).toBe(false)
+      expect(view.result.current.writable).toBe(true)
+    })
+
+    it('the browser going offline is a drop even while the socket still looks open', async () => {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      act(() => provider.options.onSynced({ state: true }))
+
+      // Dead Wi-Fi or Chromium's offline emulation: no close frame, so the
+      // provider keeps reporting Connected until its 30 s message timeout.
+      act(() => {
+        window.dispatchEvent(new Event('offline'))
+      })
+      expect(view.result.current.status).toBe('reconnecting')
+      expect(view.result.current.synced).toBe(false)
+
+      act(() => {
+        window.dispatchEvent(new Event('online'))
+      })
+      expect(view.result.current.status).toBe('connected')
+      expect(view.result.current.synced).toBe(true)
+    })
+
+    it('asks before unload only while something typed is unacknowledged', async () => {
+      const add = vi.spyOn(window, 'addEventListener')
+      const remove = vi.spyOn(window, 'removeEventListener')
+      const beforeUnload = (spy: typeof add) => spy.mock.calls.filter(([type]) => type === 'beforeunload')
+      try {
+        const { view, provider } = await connected()
+        act(() => provider.options.onStatus({ status: 'connected' }))
+        act(() => provider.options.onSynced({ state: true }))
+        // An idle note never nags.
+        expect(beforeUnload(add)).toHaveLength(0)
+        expect(view.result.current.unsynced).toBe(false)
+
+        act(() => provider.options.onStatus({ status: 'disconnected' }))
+        act(() => {
+          view.result.current.ydoc.getText('body').insert(0, 'typed with the socket down')
+        })
+        expect(view.result.current.unsynced).toBe(true)
+        expect(beforeUnload(add)).toHaveLength(1)
+        const warn = beforeUnload(add)[0]![1] as (event: Event) => void
+        const event = new Event('beforeunload', { cancelable: true })
+        warn(event)
+        expect(event.defaultPrevented).toBe(true)
+
+        // Back, and the relay acknowledged everything: nothing left to lose.
+        provider.hasUnsyncedChanges = false
+        act(() => provider.options.onStatus({ status: 'connected' }))
+        act(() => provider.options.onSynced({ state: true }))
+        expect(view.result.current.unsynced).toBe(false)
+        expect(beforeUnload(remove).map(([, fn]) => fn)).toContain(warn)
+      } finally {
+        add.mockRestore()
+        remove.mockRestore()
+      }
+    })
+
+    it('never claims acknowledged while the provider still has unsent changes', async () => {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      act(() => provider.options.onSynced({ state: true }))
+      act(() => {
+        view.result.current.ydoc.getText('body').insert(0, 'in flight')
+      })
+      provider.hasUnsyncedChanges = true
+      act(() => provider.options.onUnsyncedChanges({ number: 1 }))
+
+      expect(view.result.current.unsynced).toBe(true)
+      expect(view.result.current.synced).toBe(false)
+    })
+  })
 })
 

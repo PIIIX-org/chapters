@@ -26,6 +26,9 @@
 //       notices; back online
 //   S8b real socket drop (routeWebSocket closes both sides, refuses
 //       reconnects, HTTP offline): type + agent append, back online
+//   S8c relay unreachable (collab sockets refused, HTTP up): type, reload
+//       (beforeunload prompt accepted), the typing is restored from the
+//       browser's IndexedDB copy, relay back, typing on disk once (#720)
 // "(typing on disk)" = the agent waits for the relay's store, so its read is
 // fresh and the step isolates the transition from the S1 race.
 // Mobile (iPhone 13 emulation on Chromium): login, home, vaults, vault, note,
@@ -249,11 +252,23 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
   const browser = await chromium.launch()
   const browserVersion = browser.version()
   const consoleErrors: string[] = []
+  // "Leave site?" prompts (#720: shown while typed text is unacknowledged).
+  // Playwright dismisses dialogs nobody handles, and a dismissed beforeunload
+  // cancels the reload or navigation, so they are accepted and recorded.
+  const beforeUnloadPrompts: Array<{ page: string; at: string }> = []
   const watch = (page: Page, label: string) => {
     page.on('console', (m) => {
       if (m.type() === 'error') consoleErrors.push(redact(`[${label}] ${m.text()}`).slice(0, 400))
     })
     page.on('pageerror', (e) => consoleErrors.push(redact(`[${label}] pageerror ${e.message}`).slice(0, 400)))
+    page.on('dialog', (d) => {
+      if (d.type() === 'beforeunload') {
+        beforeUnloadPrompts.push({ page: label, at: new Date().toISOString() })
+        void d.accept().catch(() => {})
+      } else {
+        void d.dismiss().catch(() => {})
+      }
+    })
   }
 
   const uiLogin = async (page: Page): Promise<number> => {
@@ -749,6 +764,56 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {})
   }
 
+  // S8c (#720): the relay unreachable (collab sockets refused, HTTP up), type,
+  // reload. The browser asks before the reload (the typing is unacknowledged),
+  // the typing comes back from this browser's copy, and once the relay is
+  // back it reaches disk and the DB exactly once.
+  const relayDown: Record<string, unknown> = {}
+  {
+    const pairs: Array<{ page: WebSocketRoute; server: WebSocketRoute }> = []
+    let partition = false
+    let refused = 0
+    await page.routeWebSocket(/\/collab/, (ws) => {
+      if (partition) {
+        refused++
+        void ws.close({ code: 1001, reason: 'lab partition' })
+        return
+      }
+      pairs.push({ page: ws, server: ws.connectToServer() })
+    })
+    await page.reload()
+    await waitReady(page)
+    partition = true
+    for (const p of pairs.splice(0)) {
+      await p.server.close().catch(() => {})
+      await p.page.close({ code: 1001, reason: 'lab partition' }).catch(() => {})
+    }
+    await Bun.sleep(1500)
+    const t = tokens('k', 5)
+    await typeAtEnd(page, typedText(t))
+    exp.user.push(...t)
+    await Bun.sleep(1500)
+    relayDown.statusBeforeReload = (await readChrome(page)).status
+    const promptsBefore = beforeUnloadPrompts.length
+    await page.reload()
+    relayDown.promptedOnReload = beforeUnloadPrompts.length > promptsBefore
+    relayDown.prompts = beforeUnloadPrompts.length - promptsBefore
+    relayDown.restoredInMs = await waitEditorIncludes(page, ' k05', 15_000)
+    // The restored copy is unsent: the status must not read "Connecting…"
+    // while every socket is refused. Polled: it follows the first refusal.
+    const statusSince = performance.now()
+    relayDown.statusAfterReload = (await readChrome(page)).status
+    while (!/not saved yet/i.test((relayDown.statusAfterReload as string[]).join(' ')) && performance.now() - statusSince < 10_000) {
+      await Bun.sleep(250)
+      relayDown.statusAfterReload = (await readChrome(page)).status
+    }
+    evaluate(await settle(page, 'S8c-reloaded-relay-down', { expectConverged: false }), false, ['editor'])
+    partition = false
+    evaluate(await settle(page, 'S8c-relay-back', { waitFor: t, timeoutMs: 60_000 }))
+    relayDown.refused = refused
+    await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {})
+  }
+
   const desktopVideo = page.video()
   await desktop.close()
   if (desktopVideo) {
@@ -1046,6 +1111,38 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     ok: /reconnect|offline/i.test(partitionStatus),
     severity: 'medium',
   })
+  const relayDownStatus = (relayDown.statusBeforeReload as string[]).join(' | ')
+  checks.push({
+    name: 'S8c: status says the typing is not saved while the relay is unreachable',
+    expected: 'status shows "Offline" and "not saved yet" (#720)',
+    actual: relayDownStatus || '(no status text)',
+    ok: /offline/i.test(relayDownStatus) && /not saved yet/i.test(relayDownStatus),
+    severity: 'medium',
+  })
+  checks.push({
+    name: 'S8c: reload with unacknowledged typing asks before leaving',
+    expected: 'a beforeunload prompt on the reload (#720)',
+    actual: relayDown.promptedOnReload ? 'prompted' : `no prompt (${beforeUnloadPrompts.length} prompts in the whole run)`,
+    ok: relayDown.promptedOnReload === true,
+    severity: 'medium',
+  })
+  const restoredStatus = (relayDown.statusAfterReload as string[]).join(' | ')
+  checks.push({
+    name: 'S8c: restored copy says it is not saved while the relay is unreachable',
+    expected: 'status shows "Offline" and "not saved yet", not "Connecting…" (#720)',
+    actual: restoredStatus || '(no status text)',
+    ok: /offline/i.test(restoredStatus) && /not saved yet/i.test(restoredStatus),
+    severity: 'medium',
+  })
+  // Every other step navigates or reloads with everything acknowledged (S6a,
+  // S6b, S7, mobile): a prompt there nags on a synced note.
+  checks.push({
+    name: 'S8c is the only leave-page prompt in the run',
+    expected: 'exactly 1 beforeunload prompt, on the S8c reload (#720)',
+    actual: `${beforeUnloadPrompts.length} prompt(s), ${relayDown.prompts ?? 0} on the S8c reload: ${beforeUnloadPrompts.map((p) => `${p.page} ${p.at}`).join(', ') || 'none'}`,
+    ok: beforeUnloadPrompts.length === 1 && relayDown.prompts === 1,
+    severity: 'medium',
+  })
   checks.push(...mobileChecks)
   checks.push({
     name: 'no page errors in the browser console',
@@ -1080,6 +1177,8 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
       reload,
       logout,
       offline,
+      relayDown,
+      beforeUnloadPrompts,
       mobile: mobileData,
       attribution,
       lost: exp.gone,

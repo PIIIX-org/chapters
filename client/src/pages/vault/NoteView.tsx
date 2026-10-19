@@ -18,6 +18,7 @@ import { CollabStatusLine, collabShellStatus } from '../../components/vault/Coll
 import { CollaboratorAvatars } from '../../components/vault/CollaboratorAvatars.js'
 import { NoteActions } from '../../components/vault/NoteActions.js'
 import { RevokedNotice } from '../../components/vault/RevokedNotice.js'
+import { UnmergedNotice } from '../../components/vault/UnmergedNotice.js'
 import { BacklinksPanel } from '../../components/vault/BacklinksPanel.js'
 import { LocalGraphPanel } from '../../components/vault/LocalGraphPanel.js'
 import { RevisionHistory } from '../../components/vault/RevisionHistory.js'
@@ -849,7 +850,10 @@ function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: Colla
   // Y.Text: doing that would merge a local copy into the shared document on
   // eventual connect and duplicate the whole note. `writable` is already false
   // while offline, so nothing can be typed into this and lost on the swap.
-  const strandedOffline = collab.status === 'offline' && !collab.synced
+  //
+  // A copy restored from this browser (#720) is the better text when there is
+  // one: it is what the person typed, and the REST body is missing exactly that.
+  const strandedOffline = collab.status === 'offline' && !collab.synced && !collab.restored
 
   const [direction, setDirection] = useNoteDirection(vaultId, path, initialBody)
   const [editorView, setEditorView] = useState<EditorView | null>(null)
@@ -928,7 +932,13 @@ function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: Colla
           )}
         </>
       }
-      notice={revoked ? <RevokedNotice /> : null}
+      notice={
+        revoked ? (
+          <RevokedNotice />
+        ) : collab.unmerged !== null ? (
+          <UnmergedNotice text={collab.unmerged} onDiscard={collab.discardUnmerged} />
+        ) : null
+      }
       inspector={
         <NoteInspector
           properties={propertiesNode}
