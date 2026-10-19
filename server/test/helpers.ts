@@ -1,6 +1,8 @@
-import { writeFile } from 'node:fs/promises'
+import { rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { db } from '../src/db/client.js'
+import { config } from '../src/config.js'
+import { db, sql } from '../src/db/client.js'
 import { users } from '../src/db/schema.js'
 import { hashPassword } from '../src/auth/passwords.js'
 import { serializeNote, type Frontmatter } from '../src/notes/okf.js'
@@ -70,4 +72,15 @@ export async function rewriteNoteFileFromRow(vaultId: string, path: string): Pro
   if (!row) throw new Error(`no live note at ${path}`)
   const note = { frontmatter: row.frontmatter as Frontmatter, body: row.body }
   await writeFile(noteFile(vaultId, row.path), serializeNote(note), 'utf8')
+}
+
+/**
+ * Empties every table and DATA_DIR/vaults: for restore tests, which run only
+ * on an empty instance. Other test files never depend on rows they did not
+ * create, so wiping the shared test database between files is safe.
+ */
+export async function wipeInstance(): Promise<void> {
+  const tables = await sql<Array<{ tablename: string }>>`select tablename from pg_tables where schemaname = 'public'`
+  await sql.unsafe(`truncate ${tables.map((t) => `"${t.tablename}"`).join(', ')} cascade`)
+  await rm(join(config.dataDir, 'vaults'), { recursive: true, force: true })
 }

@@ -1,49 +1,81 @@
 /**
- * Restores a full-instance backup zip onto a fresh instance.
- * Usage: pnpm restore-backup <path-to-backup.zip>
+ * Restores a full-instance backup zip.
+ * Usage: pnpm restore-backup [--dry-run] <path-to-backup.zip>
  *
  * Deliberately a CLI, not an HTTP endpoint — restoring over a live
- * instance is not a button (spec 7's implementation plan). Refuses to
- * run against anything but a genuinely empty instance; no override.
+ * instance is not a button (spec 7's implementation plan). Validates the
+ * archive, plans, applies, then prints the plan. Runs only on an empty
+ * instance; no override. On an instance already restored from this
+ * archive it writes nothing. `--dry-run` stops after the plan.
+ * The output is counts and messages only: never a secret, hash or note.
  */
 import { readFile } from 'node:fs/promises'
 import { runMigrations } from '../db/migrate.js'
 import { sql } from '../db/client.js'
-import { isInstanceEmpty, restoreBackup } from '../export/restore.js'
+import {
+  BackupInvalidError,
+  RestoreRefusedError,
+  restoreBackup,
+  type RestorePlan,
+} from '../export/restore.js'
 
-const path = process.argv[2]
+const args = process.argv.slice(2)
+const dryRun = args.includes('--dry-run')
+const path = args.find((arg) => arg !== '--dry-run')
 if (!path) {
-  console.error('Usage: pnpm restore-backup <path-to-backup.zip>')
+  console.error('Usage: pnpm restore-backup [--dry-run] <path-to-backup.zip>')
   process.exit(1)
+}
+
+function printPlan(plan: RestorePlan): void {
+  console.log(`Archive: format ${plan.format}, sha256 ${plan.archive}`)
+  console.log('Rows (in archive / to restore / already here):')
+  for (const t of plan.tables) console.log(`  ${t.table}: ${t.inArchive} / ${t.toRestore} / ${t.present}`)
+  console.log('Files (in archive / to write / already here):')
+  for (const f of plan.files) console.log(`  ${f.kind}: ${f.inArchive} / ${f.toWrite} / ${f.present}`)
+  for (const warning of plan.warnings) console.log(`  warning: ${warning}`)
+}
+
+/**
+ * The driver's message and code only. A drizzle error's message carries the
+ * query parameters, and a Postgres error's detail the failing row: both can
+ * hold password hashes and TOTP secrets.
+ */
+function describeError(err: unknown): string {
+  for (let current = err; current instanceof Error; current = current.cause) {
+    if ('code' in current && typeof current.code === 'string') return `${current.message} (${current.code})`
+  }
+  return err instanceof Error && err.name !== 'DrizzleQueryError' ? err.message : 'a database query failed'
 }
 
 await runMigrations()
 
-if (!(await isInstanceEmpty())) {
-  console.error(
-    'Refusing to restore: this instance already has users. ' +
-      'Restore only runs against a fresh, empty instance.',
-  )
-  await sql.end()
-  process.exit(1)
-}
-
-const buffer = await readFile(path)
-const result = await restoreBackup(buffer)
-
-console.log('Restore complete:')
-console.log(`  users: ${result.users}`)
-console.log(`  teams: ${result.teams}`)
-console.log(`  team memberships: ${result.teamMemberships}`)
-console.log(`  vaults: ${result.vaults}`)
-console.log(`  vault shares: ${result.vaultShares}`)
-console.log(`  MCP connections (metadata only, tokens unusable): ${result.mcpConnections}`)
-console.log(`  security events: ${result.securityEvents}`)
-console.log(`  notifications: ${result.notifications}`)
-console.log(`  notes imported: ${result.notesImported}`)
-if (result.notesSkipped.length > 0) {
-  console.log(`  notes skipped (${result.notesSkipped.length}):`)
-  for (const skip of result.notesSkipped) console.log(`    - ${skip}`)
+let exitCode = 0
+try {
+  const plan = await restoreBackup(await readFile(path), { dryRun })
+  if (plan.alreadyRestored) {
+    console.log(`Archive: format ${plan.format}, sha256 ${plan.archive}`)
+    console.log(`Already restored from this archive at ${plan.alreadyRestored}: nothing to do, nothing written.`)
+  } else {
+    printPlan(plan)
+    console.log(
+      dryRun
+        ? 'Dry run: nothing written.'
+        : 'Restore complete. Sessions are not restored: everyone signs in again. ' +
+            'Restart the server: it computes the embeddings when it starts, and repository indexes are rebuilt by the next sync.',
+    )
+  }
+} catch (err) {
+  if (err instanceof RestoreRefusedError) {
+    printPlan(err.plan)
+    console.error(err.message)
+  } else if (err instanceof BackupInvalidError) {
+    console.error(`Refusing to restore: ${err.message}`)
+  } else {
+    console.error(`Restore failed: ${describeError(err)}`)
+  }
+  exitCode = 1
 }
 
 await sql.end()
+process.exit(exitCode)
