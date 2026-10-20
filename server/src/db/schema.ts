@@ -1,6 +1,10 @@
 import { sql } from 'drizzle-orm'
 import {
+  bigint,
+  bigserial,
   boolean,
+  customType,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -303,7 +307,12 @@ export const notifications = pgTable(
   (t) => [index('notifications_recipient_idx').on(t.recipientId, t.readAt)],
 )
 
-/** Single-row table tracking one-time instance setup. */
+/**
+ * Single-row table tracking one-time instance setup. Migration 0021 also adds
+ * the ADR-003 backfill markers `store_migrated_at` (S2a) and
+ * `collab_migrated_at` (S2b); they stay out of this model until S2a reads them
+ * (see `notes` below).
+ */
 export const instanceState = pgTable('instance_state', {
   id: text('id').primaryKey().default('singleton'),
   setupTokenHash: text('setup_token_hash'),
@@ -315,6 +324,12 @@ export const instanceState = pgTable('instance_state', {
 /**
  * Derived index of the OKF files on disk (canonical source is the file
  * tree). Rebuildable; search and graph attach to this table.
+ *
+ * Migration 0021 (ADR-003 §4) also adds `seq bigint NOT NULL DEFAULT 1`
+ * (bumped by the `notes_bump_seq` trigger on any change of body, frontmatter,
+ * path or deleted_at) and `frontmatter_src json`. They are deliberately not
+ * in this model yet: rows are returned whole by REST and MCP, so declaring
+ * them would add fields to responses. S2a declares them when it uses them.
  */
 export const notes = pgTable(
   'notes',
@@ -372,7 +387,8 @@ export const actorType = pgEnum('actor_type', ['user', 'mcp', 'collab'])
 /**
  * Audit trail (spec 6): every write records its actor and the resulting
  * state — enough to attribute and to revert. Rows are only removed by
- * explicit hard purge.
+ * explicit hard purge. Migration 0021 also adds `seq`, `idempotency_key` and
+ * `actor_detail` (unused until S2a, kept out of this model like `notes.seq`).
  */
 export const noteRevisions = pgTable(
   'note_revisions',
@@ -391,6 +407,116 @@ export const noteRevisions = pgTable(
       .defaultNow(),
   },
   (t) => [index('note_revisions_note_idx').on(t.noteId, t.createdAt)],
+)
+
+const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
+  dataType: () => 'bytea',
+})
+
+// ADR-003 §4 (migration 0021): the store's CRDT, update-log, projection and
+// job tables. Nothing reads or writes them before S2a/S2b. 0021 is hand-written
+// SQL, so primary, unique and foreign keys carry Postgres's default names
+// (`<table>_pkey`, `<table>_<col>_key`, `<table>_<col>_fkey`); the model names
+// them the same way so `drizzle-kit generate` finds nothing to change.
+
+/** Yjs state per note, keyed by note id (replaces `.crdt/<path>.bin` in S2b). */
+export const noteCrdt = pgTable(
+  'note_crdt',
+  {
+    noteId: uuid('note_id').primaryKey(),
+    snapshot: bytea('snapshot').notNull(),
+    snapshotThrough: bigint('snapshot_through', { mode: 'number' }).notNull().default(0),
+    foldedThrough: bigint('folded_through', { mode: 'number' }).notNull().default(0),
+    foldedSeq: bigint('folded_seq', { mode: 'number' }).notNull(),
+    foldError: text('fold_error'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({ name: 'note_crdt_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete('cascade'),
+  ],
+)
+
+/** Yjs update log tail (collab journal + server updates), compacted into `note_crdt.snapshot`. */
+export const noteUpdates = pgTable(
+  'note_updates',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    noteId: uuid('note_id').notNull(),
+    update: bytea('update').notNull(),
+    actorType: actorType('actor_type').notNull(),
+    actorId: uuid('actor_id'),
+    actorDetail: jsonb('actor_detail'),
+    rejectedAt: timestamp('rejected_at', { withTimezone: true }),
+    rejectReason: text('reject_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({ name: 'note_updates_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete('cascade'),
+    index('note_updates_note_idx').on(t.noteId, t.id),
+  ],
+)
+
+/** Projection state per note ('file' | 'dir_index' | 'embedding'); the projector's work queue. */
+export const noteProjections = pgTable(
+  'note_projections',
+  {
+    noteId: uuid('note_id').notNull(),
+    projection: text('projection').notNull(),
+    targetSeq: bigint('target_seq', { mode: 'number' }).notNull(),
+    appliedSeq: bigint('applied_seq', { mode: 'number' }).notNull().default(0),
+    indexVersion: integer('index_version').notNull().default(0),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    leaseUntil: timestamp('lease_until', { withTimezone: true }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'note_projections_pkey', columns: [t.noteId, t.projection] }),
+    foreignKey({ name: 'note_projections_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete(
+      'cascade',
+    ),
+    index('note_projections_pending')
+      .on(t.projection, t.updatedAt)
+      .where(sql`applied_seq < target_seq`),
+  ],
+)
+
+/** What the projector last wrote at each vault-relative path (path ownership + hash). */
+export const projectedFiles = pgTable(
+  'projected_files',
+  {
+    vaultId: uuid('vault_id').notNull(),
+    path: text('path').notNull(),
+    ownerKind: text('owner_kind').notNull(),
+    ownerId: uuid('owner_id'),
+    appliedHash: text('applied_hash').notNull(),
+    appliedSeq: bigint('applied_seq', { mode: 'number' }),
+    writtenAt: timestamp('written_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'projected_files_pkey', columns: [t.vaultId, t.path] }),
+    foreignKey({ name: 'projected_files_vault_id_fkey', columns: [t.vaultId], foreignColumns: [vaults.id] }).onDelete(
+      'cascade',
+    ),
+    index('projected_files_owner_idx').on(t.ownerId),
+  ],
+)
+
+/** Outbox for work that outlives a note row or spans notes (rename refactor, file removal, #494). */
+export const jobs = pgTable(
+  'jobs',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    kind: text('kind').notNull(),
+    payload: jsonb('payload').notNull(),
+    idempotencyKey: text('idempotency_key').unique('jobs_idempotency_key_key'),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    leaseUntil: timestamp('lease_until', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    doneAt: timestamp('done_at', { withTimezone: true }),
+  },
+  (t) => [index('jobs_pending').on(t.kind, t.createdAt).where(sql`done_at is null`)],
 )
 
 /** EXTRACTED edges: wikilink targets per note, replaced on every save. */

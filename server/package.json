@@ -11,7 +11,8 @@
     "reindex": "tsx src/scripts/reindex.ts",
     "check-notes": "tsx src/scripts/check-notes.ts",
     "profile-graph": "tsx src/scripts/profile-graph.ts",
-    "restore-backup": "tsx src/scripts/restore-backup.ts"
+    "restore-backup": "tsx src/scripts/restore-backup.ts",
+    "migrate-store": "tsx src/scripts/migrate-store.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
