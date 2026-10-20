@@ -34,8 +34,9 @@ interface Row {
 
 export interface CollabCopy {
   readonly doc: Y.Doc
-  /** Resolves once everything in `doc` so far is stored. */
-  flushed(): Promise<void>
+  /** Resolves once everything in `doc` so far is written: true if it is
+   *  stored, false if the last write failed (storage full, say). */
+  flushed(): Promise<boolean>
   /** Stops writing and keeps what is stored: something in it is still unsent. */
   close(): Promise<void>
   /** Stops writing and deletes the copy: it was sent, merged or discarded. */
@@ -118,6 +119,8 @@ class Copy implements CollabCopy {
   private queue: Promise<void> = Promise.resolve()
   private pending: Uint8Array[] = []
   private scheduled = false
+  /** False while the last write failed: part of `doc` is not stored. */
+  private stored = true
   /** This copy's records, oldest first; `base` is its latest whole-state record. */
   private keys: IDBValidKey[]
   private base: IDBValidKey | null
@@ -150,9 +153,15 @@ class Copy implements CollabCopy {
   private schedule(): void {
     if (this.scheduled) return
     this.scheduled = true
-    void this.run(() => {
+    void this.run(async () => {
       this.scheduled = false
-      return this.write()
+      try {
+        await this.write()
+        this.stored = true
+      } catch (error) {
+        this.stored = false
+        throw error
+      }
     })
   }
 
@@ -230,8 +239,8 @@ class Copy implements CollabCopy {
     this.unlock = null
   }
 
-  flushed(): Promise<void> {
-    return this.queue
+  flushed(): Promise<boolean> {
+    return this.queue.then(() => this.stored)
   }
 
   close(): Promise<void> {

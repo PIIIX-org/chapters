@@ -132,7 +132,7 @@ chapters/
 │   │   ├── export/                 # backup/restore, vault export, share links, import
 │   │   ├── repositories/           # codebase ingestion (git/local/agent-push), extraction
 │   │   ├── email/                  # nodemailer wrapper
-│   │   └── scripts/                # CLI entry points (reindex, restore-backup, check-notes)
+│   │   └── scripts/                # CLI entry points (reindex, restore-backup, check-notes, migrate-store)
 │   └── test/                       # one file per subsystem, Vitest
 ├── shared/                         # types shared server ↔ client (UI phase, not started)
 └── client/                         # React + Vite (UI phase — do not start yet)
@@ -175,6 +175,31 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`/`delete`/`revert`, or `quarantine` for a write kept out of the note (#492, not the note's content) |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
+
+**ADR-003 store schema (migration 0021, S1: present, not used yet).** The
+schema for the single authoritative store (vault note
+`decision/adr-003-authoritative-store` §4) is in place; no code reads or
+writes it until S2a/S2b, so behaviour is unchanged. It is additive: code
+from before 0021 runs on it with no SQL (no NOT NULL column without a
+lasting default on a table old code writes, nothing dropped or renamed).
+
+| Object | Purpose |
+|---|---|
+| `notes.seq` | `bigint NOT NULL DEFAULT 1`; the `notes_bump_seq` BEFORE UPDATE trigger adds 1 whenever `body`, `frontmatter`, `path` or `deleted_at` changes, so old code bumps it too. Becomes the note's `rev` (#477) |
+| `notes.frontmatter_src` | `json` copy of the frontmatter in its original key order (jsonb reorders keys); for rendering files and answering reads |
+| `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), idempotent writes (`note_revisions_note_idem`, #477), actor detail (#403); null for revisions written by current code |
+| `note_crdt` | Yjs snapshot per note id (replaces `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
+| `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
+| `note_projections` | per note and projection (`file`/`dir_index`/`embedding`): `target_seq`, `applied_seq`, `index_version`, lease and error columns; `note_projections_pending` indexes the work queue |
+| `projected_files` | per `(vault, path)`: owner (`note`/`trash`/`dir_index`), `applied_hash` of the bytes last written, `applied_seq` |
+| `jobs` | outbox for cross-note work (rename refactor, file removal, #494 extraction) with `idempotency_key`, lease and attempts |
+| `instance_state.store_migrated_at` / `collab_migrated_at` | backfill markers for S2a and S2b |
+
+`schema.ts` declares the five new tables. The new columns on `notes`,
+`note_revisions` and `instance_state` stay out of the Drizzle models until
+S2a: REST and MCP return note and revision rows whole, so declaring them
+would add fields to responses. The S1 dry run is
+`pnpm -C server migrate-store --dry-run` (§10).
 
 ### Repositories (codebase mapping)
 
@@ -1336,6 +1361,20 @@ against an **empty** instance only — it refuses otherwise, by design;
 a re-run on an instance already restored from the same archive writes
 nothing (§5.9). There is no HTTP restore path and no override flag.
 Restart the server afterwards so it computes the embeddings.
+
+**Store migration dry run (ADR-003 S1)**: `pnpm -C server migrate-store
+--dry-run [--report <file>] [--vault <uuid>]` reads every note row, `.md`
+file and `.crdt` bin in one `REPEATABLE READ READ ONLY` transaction (only
+pre-0021 columns, so it runs on a production copy before the upgrade) and
+reports what the S2a/S2b backfill will do: per-note classes, the file ≠ row
+conflict list (Q5: the file wins; `row.updated_at` against the file mtime,
+both hashes), files that will change bytes, files with no row, sizes and
+timings. It writes only the `--report` file, which it creates exclusively
+before the walk (an existing file, a symlink or an unwritable directory
+exits 2 at once; a failed run removes the file); without `--report` the
+JSON goes to stdout. Without `--dry-run` it exits 2:
+the backfill ships with S2a. Code: `server/src/notes/migrate-store.ts`.
+Operator guide: `docs/self-hosting/migration.md`.
 
 **Check note files**: `pnpm -C server check-notes` (or
 `-- --vault <uuid>`) after a restore, a disk incident, or a deploy that
