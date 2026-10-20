@@ -281,4 +281,68 @@ describe('useCollabDoc copies across tabs (#720)', () => {
     expect(relay.getText('body').toString()).toBe('BASE line\noffline late ')
     await close(R)
   })
+
+  it('a tab already open restores the unsent typing of a tab that closes later, once (#766)', async () => {
+    const relay = new Y.Doc()
+    relay.getText('body').insert(0, 'BASE line\n')
+    const A = await newTab()
+    sync(A, relay)
+    goOffline(A)
+    type(A, 10, 'A-offline ')
+    await act(() => sleep(100))
+
+    // B and C open the note while A still holds its copy: not theirs to take.
+    const B = await newTab()
+    sync(B, relay)
+    const C = await newTab()
+    sync(C, relay)
+    expect(B.now().ydoc.getText('body').toString()).toBe('BASE line\n')
+    expect(C.now().ydoc.getText('body').toString()).toBe('BASE line\n')
+
+    // A closes with the text unsent: an open tab picks it up, no reload.
+    await close(A)
+    const bodies = () => [B, C].map((tab) => tab.now().ydoc.getText('body').toString())
+    await waitFor(() => expect(bodies()).toContain('BASE line\nA-offline '))
+    await act(() => sleep(200))
+    // One tab took it (the lock lets one at a time); the other found it gone.
+    expect(bodies().filter((text) => text.includes('A-offline'))).toHaveLength(1)
+    expect(B.now().unmerged).toBeNull()
+    expect(C.now().unmerged).toBeNull()
+    push(B, relay)
+    push(C, relay)
+    expect(relay.getText('body').toString()).toBe('BASE line\nA-offline ')
+    await close(B, C)
+
+    // Nothing left to offer or merge again.
+    const later = await newTab()
+    expect(later.now().restored).toBe(false)
+    sync(later, relay)
+    push(later, relay)
+    expect(later.now().unmerged).toBeNull()
+    expect(relay.getText('body').toString()).toBe('BASE line\nA-offline ')
+    await close(later)
+  })
+
+  it('a copy with no history in common, left by a tab that closes later, is offered in the open tab (#766)', async () => {
+    const relay = await unrelatedCopy()
+    const A = await newTab()
+    sync(A, relay)
+    expect(A.now().unmerged).toBe('BASE line\nwritten offline\n')
+    const B = await newTab()
+    sync(B, relay)
+    expect(B.now().unmerged).toBeNull()
+
+    // A leaves without discarding it: B offers it, never merges it.
+    await close(A)
+    await waitFor(() => expect(B.now().unmerged).toBe('BASE line\nwritten offline\n'))
+    push(B, relay)
+    expect(relay.getText('body').toString()).toBe('BASE line\n')
+    act(() => B.now().discardUnmerged())
+    await close(B)
+
+    const later = await newTab()
+    sync(later, relay)
+    expect(later.now().unmerged).toBeNull()
+    await close(later)
+  })
 })
