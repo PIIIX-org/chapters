@@ -208,6 +208,43 @@ describe('extraction queue', () => {
     expect(await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, file.id))).toHaveLength(0)
   })
 
+  it('embeds at most ELARA_EMBED_MAX_SYMBOLS_PER_FILE symbols of a file, keeps every symbol, and records why (#496)', async () => {
+    vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '3')
+    const repo = await makeRepo()
+    // Readable (one declaration per line), so the minified guard does not apply.
+    const content = Array.from({ length: 5 }, (_, i) => `export function f${i}() { return ${i} }`).join('\n')
+    const embedSpy = vi.spyOn(embedder, 'embed')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'src/many.ts', content }], ['src/many.ts'])
+      await flushExtraction()
+      // The file text and the first three symbols: one call, four texts.
+      expect(embedSpy.mock.calls.map(([texts]) => texts.length)).toEqual([4])
+    } finally {
+      embedSpy.mockRestore()
+      warnSpy.mockRestore()
+      vi.unstubAllEnvs()
+    }
+
+    const file = await fileByPath(repo.id, 'src/many.ts')
+    expect(file.embedding).not.toBeNull()
+    const symbols = await db
+      .select()
+      .from(repositoryFileSymbols)
+      .where(eq(repositoryFileSymbols.fileId, file.id))
+      .orderBy(repositoryFileSymbols.startLine)
+    expect(symbols.map((s) => s.name)).toEqual(['f0', 'f1', 'f2', 'f3', 'f4'])
+    expect(symbols.map((s) => s.embedding !== null)).toEqual([true, true, true, false, false])
+    expect(file.embeddingNote).toBe(
+      'symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: 3 of 5 symbols embedded, the rest are keyword-searchable only',
+    )
+
+    // Back under the budget: a re-extraction clears the note.
+    await syncRepositoryFiles(repo.id, [{ path: 'src/many.ts', content: 'export function only() {}' }], ['src/many.ts'])
+    await flushExtraction()
+    expect((await fileByPath(repo.id, 'src/many.ts')).embeddingNote).toBeNull()
+  })
+
   it('one failing file does not stop the files queued after it, and stays counted as pending', async () => {
     const repo = await makeRepo()
     const embedSpy = vi.spyOn(embedder, 'embed').mockRejectedValueOnce(new Error('model crashed'))
