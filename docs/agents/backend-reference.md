@@ -375,9 +375,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   and the file on different writes. The MCP tool wrapper returns only the
   code of a Node system error (`internal storage error (ENOENT)`); the
   full error goes to the server log. Rename, delete and restore do not
-  take the lock. The lock orders writes; it does not merge them: a body
-  write replaces the whole body, so two agents that each read a note and
-  write it back with a line appended still keep only the later one.
+  take the lock. The lock orders writes; it does not merge them: a whole
+  `body` write replaces the body, so two agents that each read a note and
+  write it back with a line appended still keep only the later one (an
+  `append` op resolves against the live text and keeps both, #408).
 - **Edits merge frontmatter per key** (#438): `edit_note` and REST
   `PUT /api/vaults/:id/notes/*` take `frontmatter`, `body`, `replace`
   and `removeKeys`; `requestedEdit()` (`sync/crdt-write.ts`) turns them
@@ -398,6 +399,38 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   default. The `sync_local_docs_to_vault` prompt tells the agent to
   update an existing note with `replace: true`, so the vault mirrors the
   file.
+- **Edits are minimal diffs; `edit_note` takes ops** (#408):
+  `writeThroughCollab` never deletes and re-inserts the whole Y.Text.
+  `applyTextDiff` (`sync/text-diff.ts`) turns the live text into the new
+  body with a minimal character diff (Myers O(ND) with the linear-space
+  middle snake, over code points so no surrogate pair is split) inside
+  the one document transaction; past `DIFF_TIME_LIMIT_MS` (100 ms) it is
+  redone per line and refined per character inside each changed run as
+  far as a second limit allows (ADR-003 §5.2 step 5). Untouched
+  characters keep their Yjs identity, so a person's caret stays put and
+  typing that reaches the relay after the write merges where it was
+  typed (before, it landed at the start of the note). Every body writer
+  (edit_note, REST PUT, revert, rename's link rewrites) gets this.
+  `edit_note` also takes `ops[]` (strict per-op schemas in
+  `mcp/server.ts`; semantics in `sync/edit-ops.ts`): `replace_text`
+  (`expectedCount`, default 1), `insert_before`/`insert_after` (unique
+  `anchor`), `replace_section` (ATX heading outside code fences, by line
+  or text, up to the next heading of the same or a higher level),
+  `append`/`prepend` (whole lines), `delete_block` (unique `find`), and
+  `frontmatter_set`/`frontmatter_add`/`frontmatter_remove`, which apply
+  after #438's merge in `nextFrontmatter`. Body ops resolve against the
+  live text: once when the connection opens, for the size cap (#491) and
+  the quarantine (#492), which run before the document is touched, and
+  again inside the transaction, where the cap is re-checked on the exact
+  result. An op that cannot be resolved throws `NoteEditError` (400) and
+  nothing changes; `ops` with `body` is refused in `requestedEdit`.
+  Without the relay, ops apply to the stored body. `base_rev` is
+  accepted and echoed as `baseRev`; compare-and-set and a three-way merge
+  are #475 (ADR-003's `seq`). REST PUT keeps `body`/`frontmatter` and
+  gets the minimal diff, not `ops`. A whole `body` built from a stale
+  `read_note` (the file lags the editor by the relay's debounce) still
+  removes text typed since; serving `read_note` from the live document is
+  #474.
 - **Revision dedupe** (#480, `recordRevision`): a write that repeats the
   latest revision records nothing. Frontmatter is compared as jsonb
   stores it: deep equality on its JSON form, so object key order (nested
