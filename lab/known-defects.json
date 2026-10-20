@@ -216,11 +216,6 @@
     },
     {
       "test": "export-roundtrip",
-      "check": "crafted archive manifest silently grants another user edit access to the imported vault",
-      "issue": 621
-    },
-    {
-      "test": "export-roundtrip",
       "check": "import a real OKF v0.2 bundle (open-knowledge-format bundles/acme_retail)",
       "issue": 444
     },

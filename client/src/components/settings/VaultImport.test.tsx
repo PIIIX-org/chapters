@@ -8,7 +8,7 @@ import { expectNoA11yViolations } from '../../test/axe.js'
 import type { ImportResult } from '../../api/import.js'
 import { VaultImport } from './VaultImport.js'
 
-// Every field distinct, and unmatchedShares deliberately NON-empty: an empty
+// Every field distinct, and both share lists deliberately NON-empty: an empty
 // list cannot tell a working list from one that was never rendered, and the
 // counts must differ from each other so a swapped imported/skipped still fails.
 const RESULT: ImportResult = {
@@ -21,16 +21,22 @@ const RESULT: ImportResult = {
     'notes/draft.md: frontmatter is missing required key "type"',
     'notes/broken.md: could not parse frontmatter',
   ],
-  unmatchedShares: ['ada@example.com', 'grace@example.org', 'katherine@example.net'],
+  appliedShares: [{ granteeType: 'user', grantee: 'ada@example.com', permission: 'edit' }],
+  skippedShares: [
+    { granteeType: 'user', grantee: 'grace@example.org', permission: 'read', reason: 'no_active_user' },
+    { granteeType: 'team', grantee: 'Analysts', permission: 'read', reason: 'no_team' },
+    { granteeType: 'user', grantee: 'katherine@example.net', permission: 'edit', reason: 'duplicate' },
+  ],
 }
 
 const ARCHIVE = new File(['PK'], 'field-notes.zip', { type: 'application/zip' })
 
 const IMPORT_BUTTON = { name: 'Import as a new vault' }
+const SHARE_BOX = { name: /give the archive's collaborators access again/i }
 
 function stubImport(respond: () => Response) {
   const fetchMock = vi.fn((url: string) => {
-    if (url !== '/api/import') throw new Error(`unstubbed request: ${url}`)
+    if (!url.startsWith('/api/import')) throw new Error(`unstubbed request: ${url}`)
     return Promise.resolve(respond())
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -51,8 +57,9 @@ function renderImport() {
 }
 
 /** Picks the archive and runs the import, leaving the result on screen. */
-async function runImport() {
+async function runImport({ applyShares = false } = {}) {
   await userEvent.upload(screen.getByLabelText('Vault archive (.zip)'), ARCHIVE)
+  if (applyShares) await userEvent.click(screen.getByRole('checkbox', SHARE_BOX))
   await userEvent.click(screen.getByRole('button', IMPORT_BUTTON))
 }
 
@@ -69,7 +76,9 @@ describe('VaultImport', () => {
     // and by the time the result screen loads it is too late to tell them.
     expect(copy).toMatch(/always creates a new vault that you own/i)
     expect(copy).toMatch(/never merges/i)
-    expect(copy).toMatch(/only where their email already has an account on this instance/i)
+    expect(copy).toMatch(/they get access only if you tick the box below/i)
+    // Sharing from the archive is opt-in: the box starts unticked (#621).
+    expect(screen.getByRole('checkbox', SHARE_BOX)).not.toBeChecked()
 
     expect(screen.getByLabelText('Vault archive (.zip)')).toHaveAttribute('accept', '.zip,application/zip')
     // Nothing to import yet, so nothing to press.
@@ -78,7 +87,20 @@ describe('VaultImport', () => {
     await expectNoA11yViolations(container)
   })
 
-  it('reports imported and skipped counts and names every unmatched share', async () => {
+  it('asks the server to apply shares only when the box is ticked', async () => {
+    const fetchMock = stubImport(() => mockJsonResponse(200, RESULT))
+    renderImport()
+
+    await runImport()
+    await screen.findByRole('status')
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/import', expect.anything())
+
+    await runImport({ applyShares: true })
+    await screen.findByRole('status')
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/import?applyShares=true', expect.anything())
+  })
+
+  it('reports imported and skipped counts and names every applied and skipped share', async () => {
     stubImport(() => mockJsonResponse(200, RESULT))
     const { container } = renderImport()
 
@@ -91,12 +113,15 @@ describe('VaultImport', () => {
     // anything says which notes failed or why.
     expect(summary).toHaveTextContent('notes/draft.md')
     expect(summary).toHaveTextContent('could not parse frontmatter')
-    // "23 notes imported" while three people lost access is not a success
-    // message: each of them is named, not counted and hidden.
-    expect(summary).toHaveTextContent(/3 people listed in the archive got no access/i)
-    for (const email of RESULT.unmatchedShares) {
-      expect(within(summary).getByText(email)).toBeInTheDocument()
-    }
+    // Who got access is stated, never implied.
+    expect(summary).toHaveTextContent(/1 collaborator from the archive got access to the new vault/i)
+    expect(within(summary).getByText(/ada@example\.com \(edit\)/)).toBeInTheDocument()
+    // "23 notes imported" while three collaborators got nothing is not a
+    // success message: each of them is named, with the reason.
+    expect(summary).toHaveTextContent(/3 collaborators listed in the archive got no access/i)
+    expect(within(summary).getByText(/grace@example\.org \(read\).*no active account/)).toBeInTheDocument()
+    expect(within(summary).getByText(/team Analysts \(read\).*no team with this name/)).toBeInTheDocument()
+    expect(within(summary).getByText(/katherine@example\.net \(edit\).*listed more than once/)).toBeInTheDocument()
 
     await expectNoA11yViolations(container)
   })
