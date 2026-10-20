@@ -1034,28 +1034,36 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       description:
-        'Update a note. `frontmatter` merges per top-level key: keys you send are set, keys you leave out are kept; `replace: true` replaces the whole map instead, and `removeKeys` deletes keys. `body` replaces the whole body. The edit flows through the live collaboration engine — humans with the note open see it stream in, attributed to this connection.',
+        'Update a note. `frontmatter` merges per top-level key: keys you send are set, keys you leave out are kept; `replace: true` replaces the whole map instead, and `removeKeys` deletes keys. `body` replaces the whole body. The edit flows through the live collaboration engine — humans with the note open see it stream in, attributed to this connection. ' +
+        'A body that doubles the note or repeats a large block of it is quarantined (note unchanged, body kept as a revision); set `allowGrowth: true` if intended.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
         path: z.string(),
         frontmatter: z.record(z.string(), z.unknown()).optional(),
         body: z.string().optional(),
-        replace: z.boolean().optional(),
-        removeKeys: z.array(z.string()).optional(),
+          replace: z.boolean().optional(),
+          removeKeys: z.array(z.string()).optional(),
+          allowGrowth: z.boolean().optional(),
+        },
       },
-    },
-    async (
-      args: {
-        path: string
-        frontmatter?: Record<string, unknown>
-        body?: string
-        replace?: boolean
-        removeKeys?: string[]
-      },
-      { vaultId: target },
-    ) => {
-      await requireAccess(target, 'edit')
-      const updated = await writeThroughCollab(target, args.path, requestedEdit(args), actor)
+      async (
+        {
+          allowGrowth,
+          ...args
+        }: {
+          path: string
+          frontmatter?: Record<string, unknown>
+          body?: string
+          replace?: boolean
+          removeKeys?: string[]
+          allowGrowth?: boolean
+        },
+        { vaultId: target },
+      ) => {
+        await requireAccess(target, 'edit')
+        const updated = await writeThroughCollab(target, args.path, requestedEdit(args), actor, {
+          quarantine: allowGrowth ? undefined : 'all',
+        })
       if (!updated) throw new McpToolError('note not found')
       return updated
     },

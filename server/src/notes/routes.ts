@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { atLeast, listUsersWithAccess, resolveAccess, type Access } from '../vaults/permissions.js'
 import { OkfValidationError } from './okf.js'
+import { NoteWriteQuarantinedError } from './growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
 import { requestedEdit, writeThroughCollab } from '../sync/crdt-write.js'
@@ -42,6 +43,9 @@ export function noteRoutes(app: FastifyInstance) {
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof OkfValidationError) {
       return reply.code(err.message.includes('already exists') ? 409 : 400).send({ error: err.message })
+    }
+    if (err instanceof NoteWriteQuarantinedError) {
+      return reply.code(409).send({ error: err.message, quarantined: { revisionId: err.revisionId, ...err.finding } })
     }
     throw err
   })
@@ -91,7 +95,7 @@ export function noteRoutes(app: FastifyInstance) {
   // map and `removeKeys` deletes keys, as edit_note does (#438).
   app.put<{
     Params: { id: string; '*': string }
-    Body: { frontmatter?: Record<string, unknown>; body?: string; replace?: boolean; removeKeys?: string[] }
+    Body: { frontmatter?: Record<string, unknown>; body?: string; replace?: boolean; removeKeys?: string[]; allowGrowth?: boolean }
   }>(
     '/vaults/:id/notes/*',
     {
@@ -103,6 +107,7 @@ export function noteRoutes(app: FastifyInstance) {
             body: { type: 'string' },
             replace: { type: 'boolean' },
             removeKeys: { type: 'array', items: { type: 'string' } },
+            allowGrowth: { type: 'boolean' },
           },
         },
       },
@@ -110,10 +115,14 @@ export function noteRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!(await guard(req, reply, 'edit'))) return
       splitPath(req.params['*'])
-      const updated = await writeThroughCollab(req.params.id, req.params['*'], requestedEdit(req.body), {
-        type: 'user',
-        id: req.user!.id,
-      })
+      const { allowGrowth, ...edit } = req.body
+      const updated = await writeThroughCollab(
+        req.params.id,
+        req.params['*'],
+        requestedEdit(edit),
+        { type: 'user', id: req.user!.id },
+        { quarantine: allowGrowth ? undefined : 'all' },
+      )
       if (!updated) return reply.code(404).send({ error: 'note not found' })
       return updated
     },

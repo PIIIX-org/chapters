@@ -146,12 +146,7 @@
     },
     {
       "test": "collab-duplication",
-      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): @BASE2@ kept exactly once on disk",
-      "issue": 488
-    },
-    {
-      "test": "collab-duplication",
-      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): @INJSTALE@ kept exactly once on disk",
+      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): disk = DB = .crdt = clients",
       "issue": 488
     },
     {
@@ -161,12 +156,7 @@
     },
     {
       "test": "collab-duplication",
-      "check": "S19b same idle tab reconnects after the doc unloaded: @BASE3@ kept exactly once on disk",
-      "issue": 488
-    },
-    {
-      "test": "collab-duplication",
-      "check": "S19b same idle tab reconnects after the doc unloaded: @IDLE@ kept exactly once on disk",
+      "check": "S19b same idle tab reconnects after the doc unloaded: disk = DB = .crdt = clients",
       "issue": 488
     },
     {
