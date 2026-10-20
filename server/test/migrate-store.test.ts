@@ -256,7 +256,8 @@ describe('planStoreMigration (ADR-003 §8 dry run)', () => {
   })
 })
 
-describe('migrate-store CLI', () => {
+// Each case spawns the CLI (a tsx start of about a second on a CI runner, several per case).
+describe('migrate-store CLI', { timeout: 60_000 }, () => {
   const run = (args: string[]) =>
     promisify(execFile)(process.execPath, ['--import', 'tsx', 'src/scripts/migrate-store.ts', ...args], {
       cwd: join(import.meta.dirname, '..'),
@@ -318,7 +319,7 @@ describe('migrate-store CLI', () => {
   })
 })
 
-describe('migrate-store on a database migrated only through 0020 (a pre-upgrade production copy)', () => {
+describe('migrate-store on a database migrated only through 0020 (a pre-upgrade production copy)', { timeout: 60_000 }, () => {
   const name = `${new URL(config.databaseUrl).pathname.slice(1)}_pre0021`
   const url = Object.assign(new URL(config.databaseUrl), { pathname: `/${name}` }).toString()
   let dataDir: string
@@ -358,7 +359,7 @@ describe('migrate-store on a database migrated only through 0020 (a pre-upgrade 
     } finally {
       await old.end()
     }
-  })
+  }, 60_000)
 
   afterAll(async () => {
     await sql.unsafe(`drop database if exists "${name}" with (force)`)
