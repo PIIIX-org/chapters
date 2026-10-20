@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { DirectConnection } from '@hocuspocus/server'
+import type * as Y from 'yjs'
 import { YAMLParseError } from 'yaml'
 import { getCollab } from './collab-server.js'
 import { getLiveNote, readNote, refuseSuspiciousWrite, resolveNotePath, updateNote, type Actor, type NoteRow } from '../notes/store.js'
@@ -172,11 +173,7 @@ export async function writeThroughCollab(
         } catch (err) {
           throw explainInheritedKeys(err, current, input, (candidate) => validateNote(existing.type, existing.name, candidate, body), nextNote)
         }
-        if (input.body !== undefined) {
-          const text = document.getText('body')
-          text.delete(0, text.length)
-          text.insert(0, input.body)
-        }
+        if (input.body !== undefined) replaceText(document.getText('body'), input.body)
         if (next.frontmatter !== undefined) {
           for (const key of Object.keys(current)) if (!Object.hasOwn(next.frontmatter, key)) fm.delete(key)
           for (const [key, value] of Object.entries(next.frontmatter)) {
@@ -189,6 +186,38 @@ export async function writeThroughCollab(
     }
     return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: input.body }, actor)
   })
+}
+
+/**
+ * Makes `text` read `next` with one change, keeping the longest common start
+ * and end (#483). Text the edit leaves alone keeps its Yjs identity, and that
+ * is what a person's open editor is anchored to: their caret stays on the
+ * characters around it, and Ctrl+Z still finds what they typed. Deleting the
+ * whole body and inserting the new one sent every editor `[delete all,
+ * insert all]`: CodeMirror mapped the caret to position 0, and the person's
+ * own characters, all deleted, left their undo nothing to do.
+ *
+ * The new text goes in before the old is deleted: a caret at the end of the
+ * replaced span lands after the new text, and typing still in flight from an
+ * editor (anchored to a deleted character) joins after it rather than racing
+ * the agent's text for the spot. The kept start and end never split a UTF-16
+ * surrogate pair: Yjs stores half a pair as U+FFFD.
+ */
+function replaceText(text: Y.Text, next: string): void {
+  const current = text.toString()
+  const shorter = Math.min(current.length, next.length)
+  let start = 0
+  while (start < shorter && current.charCodeAt(start) === next.charCodeAt(start)) start++
+  // The kept start must not end on the first half of a pair (U+D800-U+DBFF).
+  if (start > 0 && (current.charCodeAt(start - 1) & 0xfc00) === 0xd800) start--
+  let end = 0
+  while (end < shorter - start && current.charCodeAt(current.length - 1 - end) === next.charCodeAt(next.length - 1 - end)) end++
+  // The kept end must not begin on the second half of a pair (U+DC00-U+DFFF).
+  if (end > 0 && (current.charCodeAt(current.length - end) & 0xfc00) === 0xdc00) end--
+  const inserted = next.slice(start, next.length - end)
+  const removed = current.length - start - end
+  if (inserted.length > 0) text.insert(start, inserted)
+  if (removed > 0) text.delete(start + inserted.length, removed)
 }
 
 /**

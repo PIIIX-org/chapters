@@ -78,7 +78,7 @@
     {
       "test": "browser",
       "check": "S1: caret stays where the user types when the agent writes",
-      "issue": 483
+      "issue": 408
     },
     {
       "test": "browser",
@@ -96,11 +96,6 @@
       "check": "S8b-reconnected: typing done while disconnected stays where it was typed",
       "issue": 485,
       "intermittent": "offline text lands at position 0 in about half the merges, depending on where the agent's insert falls among deleted characters"
-    },
-    {
-      "test": "browser",
-      "check": "undo (Ctrl+Z) removes the user's own last typing after an agent append",
-      "issue": 483
     },
     {
       "test": "collab-duplication",

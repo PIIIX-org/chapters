@@ -419,6 +419,21 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   default. The `sync_local_docs_to_vault` prompt tells the agent to
   update an existing note with `replace: true`, so the vault mirrors the
   file.
+- **A body write reaches open editors as the change alone** (#483):
+  `writeThroughCollab` makes the live document's `body` read the new
+  body with one change (`replaceText`): the longest common start and end
+  are kept, the span between is replaced, new text inserted before the
+  old is deleted, and the span never splits a UTF-16 surrogate pair (Yjs
+  stores half a pair as U+FFFD). Characters the write leaves alone keep
+  their Yjs identity, so a person's caret stays on its text and their
+  Ctrl+Z (a `Y.UndoManager` that tracks only their own edits, never the
+  relay's updates) still finds what they typed. It used to delete the
+  whole body and insert the new one: every open caret mapped to
+  position 0 and the person's undo had nothing left to undo. An agent's
+  edit is not undoable from the editor; note history reverts it. The
+  write still sets the whole body: text a person typed that is not in
+  the agent's body is deleted (#408). The relay's `onLoadDocument` still
+  replaces the whole body when the note's file changed outside it.
 - **Revision dedupe** (#480, `recordRevision`): a write that repeats the
   latest revision records nothing. Frontmatter is compared as jsonb
   stores it: deep equality on its JSON form, so object key order (nested
