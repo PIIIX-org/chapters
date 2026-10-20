@@ -18,6 +18,8 @@ interface CollabStatusLineProps {
  * - `offline` / `reconnecting` — we cannot reach the relay. Nothing was taken
  *   away; the text is sitting in this browser, not on the server.
  * - `revoked` — access was pulled. Coming back will not help.
+ * - `signed-out` — the session ended (logout, possibly in another tab). The
+ *   note stopped syncing until the person logs in again (#498).
  *
  * Saying "disconnected" for both is what makes a person close the tab on a
  * revocation and lose what they typed.
@@ -34,6 +36,7 @@ const WHISPER: Record<
   reconnecting: { tone: 'error', label: 'Offline', detail: 'not saved yet' },
   offline: { tone: 'error', label: 'Offline', detail: 'your edits are staying in this tab' },
   revoked: { tone: 'error', label: 'Access removed', detail: 'this note stopped syncing' },
+  'signed-out': { tone: 'error', label: 'Signed out', detail: 'log in again to keep editing' },
   'too-large': { tone: 'error', label: 'Too large', detail: 'not saved — shorten the note' },
 }
 

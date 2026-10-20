@@ -240,6 +240,10 @@ would add fields to responses. The S1 dry run is
 
 Session-cookie auth (not JWT) — a random token, SHA-256-hashed before
 storage, resolved on every request via a Fastify `onRequest` hook.
+Ending a session (logout, password change for the other devices,
+password reset, deactivation) deletes its row and announces its hash
+(`sessionHashes` on the permission bus, `sessions.ts`); every live
+collab socket and live view it opened closes at once (#498, §5.7).
 
 - **Bootstrap** (`bootstrap.ts`): one-time `/setup` endpoint gated by an
   out-of-band token (`SETUP_TOKEN` env var or a generated/logged one);
@@ -599,7 +603,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `"<vaultId>/<path>"`. `onAuthenticate` requires live `edit` access.
   **`beforeHandleMessage` re-resolves access on every inbound Yjs
   message**, not just at connect time — dropping below `edit` mid-session
-  drops the next message and closes the connection. `onStoreDocument`
+  drops the next message and closes the connection.
+- **A connection ends with its session** (#498). `POST /api/collab/ticket`
+  binds the ticket (`tickets.ts`, single use, 60 s) to the user and the
+  hash of the session asking; `onAuthenticate` refuses a ticket whose
+  session ended or expired since, and keeps the session hash in the
+  connection context (a raw session token, as server callers and tests
+  use, keeps its own). When a session ends (§5.1) the relay closes every
+  document connection opened with it, in every tab, with code 4401 /
+  reason `signed-out`, and refuses any message already queued behind the
+  close; `beforeHandleMessage` also re-checks the session with its 10 s
+  access re-check (expiry, or a delete no event announced). Other
+  sessions of the same user are untouched (a password change spares the
+  session doing it). The editor (`useCollabDoc`) turns a `signed-out`
+  close, or a 401 from the ticket endpoint, into status `signed-out`: it
+  stops reconnecting, the editor turns read-only, the text stays on
+  screen and in this user's browser copy, which a logout in this browser
+  deletes (#720). The SSE live view (`viewers.ts`) ends with its
+  session the same way. `onStoreDocument`
   debounces (default 2s) persistence back through the same OKF write
   path used everywhere else; a write that fails validation is logged
   and the last good file state is kept, never corrupted. A store whose
@@ -642,7 +663,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   history are dropped (the notice says so); the browser's copy moves to
   the new document.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
-  Every share/team/deactivation mutation calls `emitPermissionChange()`;
+  Every share/team/deactivation mutation calls `emitPermissionChange()`,
+  and every session delete announces the ended sessions' hashes on it;
   the collab server and the SSE viewer hub both subscribe and actively
   close any connection that no longer qualifies — this is what makes
   revocation instant instead of "eventually, on reconnect."
