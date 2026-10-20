@@ -135,6 +135,12 @@ function count(text: string, needle: string): number {
   return text.split(needle).length - 1
 }
 
+function pause(ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  setTimeout(resolve, ms)
+  return promise
+}
+
 beforeEach(() => {
   stub.providers.length = 0
   globalThis.indexedDB = new IDBFactory()
@@ -340,6 +346,43 @@ describe('useCollabDoc offline copy (#720)', () => {
     expect(view.result.current.status).toBe('reconnecting')
     expect(view.result.current.unsynced).toBe(true)
     view.unmount()
+  })
+
+  it('keeps a restored copy when the live copy cannot store the merge (#765)', async () => {
+    const relay = new Y.Doc()
+    relay.getText('body').insert(0, 'BASE line\n')
+    const typed = new Y.Doc()
+    Y.applyUpdate(typed, Y.encodeStateAsUpdate(relay))
+    typed.getText('body').insert(10, 'typed offline ')
+    await keepCollabCopy(STASH, typed)!.close()
+
+    // Storage is full from here on: every new record is refused.
+    const add = vi.spyOn(IDBObjectStore.prototype, 'add').mockImplementation(() => {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
+    })
+    try {
+      const first = mount()
+      await waitFor(() => expect(first.result.current.restored).toBe(true))
+      const p1 = await nthProvider(0)
+      // Merged, but the relay never acknowledges it.
+      p1.hasUnsyncedChanges = true
+      sync(p1, relay)
+      expect(first.result.current.ydoc.getText('body').toString()).toBe('BASE line\ntyped offline ')
+      expect(first.result.current.unsynced).toBe(true)
+      // Let the merge's write fail and the copy be closed or released.
+      await pause(100)
+      first.unmount()
+      await pause(100)
+
+      expect(await stored(STASH)).toEqual(['BASE line\ntyped offline '])
+      // The reload offers it again.
+      const second = mount()
+      await waitFor(() => expect(second.result.current.restored).toBe(true))
+      expect(second.result.current.ydoc.getText('body').toString()).toBe('BASE line\ntyped offline ')
+      second.unmount()
+    } finally {
+      add.mockRestore()
+    }
   })
 })
 
