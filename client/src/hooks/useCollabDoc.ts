@@ -25,6 +25,13 @@ export type CollabStatus =
   /** We never got a ticket and it was not a refusal — the API or the relay is
    *  down. Not a revocation, but nothing typed here is going anywhere either. */
   | 'offline'
+  /** The relay refused a change because it would make the note larger than
+   *  the server's size cap (#491). Nothing typed since is on the server; it is
+   *  kept in this browser, the editor stays writable so the person can cut,
+   *  and the hook reconnects by itself once the note fits again (on a new
+   *  document, without the undo history, when the deleted text that history
+   *  keeps would not fit through the relay's frame limit). */
+  | 'too-large'
 
 export interface CollabPeer {
   /** Yjs awareness client id — unique per tab, not per user. */
@@ -69,6 +76,9 @@ export interface CollabSession {
   unmerged: string | null
   /** Deletes the copy behind `unmerged` from this browser. */
   discardUnmerged: () => void
+  /** Set while `status` is `too-large`: the server's cap and the note's size
+   *  here, both in UTF-8 bytes as the server measures them. */
+  tooLarge: { limitBytes: number; bodyBytes: number } | null
 }
 
 export interface UseCollabDocOptions {
@@ -128,6 +138,12 @@ const RETRY_MS = 5_000
  */
 const RELEASE_MS = 1_000
 
+/**
+ * Room for a sync message's envelope (document name, message types, lengths)
+ * around the update it carries, against the relay's frame limit.
+ */
+const FRAME_ENVELOPE_BYTES = 1024
+
 /** Transaction origin of a restored copy merged into the live document. */
 const RESTORE_ORIGIN = Symbol('collab-restore')
 
@@ -146,6 +162,25 @@ const RESTORE_ORIGIN = Symbol('collab-restore')
 function sharesHistory(a: Y.Doc, b: Y.Doc): boolean {
   for (const client of a.store.clients.keys()) if (b.store.clients.has(client)) return true
   return false
+}
+
+/**
+ * UTF-8 bytes of `text`, which is how the relay measures a note body against
+ * its cap (server/src/notes/size-cap.ts), counted without encoding a copy.
+ */
+function utf8Length(text: string): number {
+  let bytes = 0
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i)
+    if (unit < 0x80) bytes += 1
+    else if (unit < 0x800) bytes += 2
+    else if (unit >= 0xd800 && unit < 0xdc00 && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      // A surrogate pair: one 4-byte character.
+      bytes += 4
+      i++
+    } else bytes += 3
+  }
+  return bytes
 }
 
 /**
@@ -168,6 +203,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
   const [restoredDoc, setRestoredDoc] = useState<Y.Doc | null>(null)
   const [unmerged, setUnmerged] = useState<string | null>(null)
   const [peers, setPeers] = useState<CollabPeer[]>([])
+  const [tooLarge, setTooLarge] = useState<CollabSession['tooLarge']>(null)
   // The document is keyed on the note, not on the mount: the connect effect
   // re-runs on a docName change, and reconnecting the OLD doc under the NEW
   // name uploads note A's body into note B. React's adjust-state-during-render
@@ -190,6 +226,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     setRestoredDoc(null)
     setUnmerged(null)
     setPeers([])
+    setTooLarge(null)
   } else if (doc.enabled !== enabled) {
     setDoc({ ...doc, enabled })
   }
@@ -205,6 +242,9 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
   // Copies that could not be merged, kept until the person discards them or
   // leaves. They stay this tab's (no other tab offers them meanwhile).
   const unmergedRef = useRef<CollabCopy[] | null>(null)
+  // A document rebuilt after a refusal (see `rebuild` below) and this
+  // browser's copy of it, for the connect effect it re-runs to adopt.
+  const handoffRef = useRef<{ ydoc: Y.Doc; copy: CollabCopy | null } | null>(null)
 
   useEffect(() => {
     if (!enabled) return
@@ -224,6 +264,14 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     let dirty = false
     // A connection attempt failed since the socket last opened.
     let attemptFailed = false
+    // The relay refused a change as too large; no reconnect until the body fits.
+    let refused = false
+    // The relay's body size cap and frame limit, from the latest ticket (the
+    // provider only exists once the first ticket is in).
+    let maxNoteBytes = 0
+    let maxFrameBytes = 0
+    // This effect's document is being replaced by a rebuilt one (`rebuild`).
+    let handingOff = false
 
     const stashName = userRef.current.id ? collabStashName(userRef.current.id, docName) : null
     // This browser's copy of the live document, kept while something is unsent.
@@ -232,6 +280,16 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     // state arrives and each one is merged or offered.
     let restore: CollabCopy[] | null = null
     let release: number | undefined
+
+    // A document rebuilt after a refusal: everything in it is unsent, and it
+    // already has its copy in this browser.
+    const handed = handoffRef.current
+    if (handed?.ydoc === ydoc) {
+      handoffRef.current = null
+      live = handed.copy
+      dirty = true
+      everConnected = true
+    }
 
     const holdRelease = () => {
       clearTimeout(release)
@@ -314,23 +372,82 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
       }
     }
 
+    /** Shows the note's size against the cap; true when it fits again. */
+    const measureTooLarge = () => {
+      const bodyBytes = utf8Length(ydoc.getText('body').toString())
+      setTooLarge({ limitBytes: maxNoteBytes, bodyBytes })
+      return bodyBytes <= maxNoteBytes
+    }
+
+    /**
+     * Sends the document again on a new provider. Reconnecting the old one
+     * would first replay, one by one, the updates it queued since the
+     * refusal; the relay judges each alone, and on a note already over the
+     * cap a keystroke that adds text is refused even when later cuts make up
+     * for it. A new provider's sync carries all of it in one update.
+     */
+    const restart = () => {
+      const stale = provider
+      provider = undefined
+      setAwareness(null)
+      stale?.destroy()
+      void connect()
+    }
+
+    /**
+     * Replaces the document with a copy holding only what is in it now. The
+     * editor's undo history keeps deleted text in the document, so after a
+     * paste the relay refused for its frame size, cutting or undoing the
+     * paste still leaves it in what a reconnect sends, and the relay closes
+     * the socket again. A new document built from this one's state has the
+     * same history, so it still merges with the relay's, but deleted text is
+     * dropped from it (Yjs garbage-collects deleted content on load), and so
+     * is the undo history. This browser's copy moves to the new document
+     * before the old one's is deleted.
+     */
+    const rebuild = () => {
+      const rebuilt = new Y.Doc()
+      Y.applyUpdate(rebuilt, Y.encodeStateAsUpdate(ydoc))
+      const copy = stashName ? keepCollabCopy(stashName, rebuilt) : null
+      const old = live
+      live = null
+      if (old) {
+        void (copy ? copy.flushed().then(() => old.release(), () => old.close()) : old.close())
+      }
+      handingOff = true
+      handoffRef.current = { ydoc: rebuilt, copy }
+      setDoc((current) => (current.ydoc === ydoc ? { ...current, ydoc: rebuilt } : current))
+    }
+
     const onUpdate = (_update: Uint8Array, origin: unknown) => {
       // The relay's updates carry the provider as origin; anything else was done here.
       if (provider !== undefined && origin === provider) return
       dirty = true
       setUnsynced(true)
       keep()
+      // Cut down to size: send it again. The relay checks it the same way.
+      if (!refused || handingOff || !measureTooLarge()) return
+      setTooLarge(null)
+      setStatus('reconnecting')
+      // The whole state bounds what the sync sends.
+      if (Y.encodeStateAsUpdate(ydoc).length + FRAME_ENVELOPE_BYTES > maxFrameBytes) {
+        // `refused` stays set: this effect's provider is done.
+        rebuild()
+        return
+      }
+      refused = false
+      restart()
     }
     ydoc.on('update', onUpdate)
 
     const wentOffline = () => {
       browserOffline = true
-      if (!revoked && provider && away()) setStatus('reconnecting')
+      if (!revoked && !refused && provider && away()) setStatus('reconnecting')
       settle()
     }
     const cameOnline = () => {
       browserOffline = false
-      if (!revoked && socketOpen) setStatus('connected')
+      if (!revoked && !refused && socketOpen) setStatus('connected')
       settle()
     }
     window.addEventListener('offline', wentOffline)
@@ -369,6 +486,23 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     }
 
     /**
+     * The relay refused a change as too large (#491). Reconnecting would only
+     * send the same change again, so stop until the person has cut the note
+     * down; the document (and this browser's copy of it) keeps every keystroke.
+     */
+    const refuse = () => {
+      if (refused || revoked) return
+      refused = true
+      handshake = false
+      socketOpen = false
+      setStatus('too-large')
+      setPeers([])
+      measureTooLarge()
+      provider?.disconnect()
+      settle()
+    }
+
+    /**
      * A 403 from the ticket endpoint is what a revoked share looks like from
      * here, and retrying it would only fail again — that is terminal.
      *
@@ -404,6 +538,8 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
       let first: CollabTicket
       try {
         first = await getCollabTicket()
+        maxNoteBytes = first.maxNoteBytes
+        maxFrameBytes = first.maxFrameBytes
       } catch (error) {
         // Without this catch the status whispers "connecting…" forever over a
         // writable editor — the one combination that loses a person's work.
@@ -427,7 +563,10 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
             return token
           }
           try {
-            return (await getCollabTicket()).token
+            const ticket = await getCollabTicket()
+            maxNoteBytes = ticket.maxNoteBytes
+            maxFrameBytes = ticket.maxFrameBytes
+            return ticket.token
           } catch (error) {
             // A reconnect ticket that 403s is the same revocation the relay
             // would have reported; swallowed here it reads as "reconnecting".
@@ -436,7 +575,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           }
         },
         onStatus: ({ status: socketStatus }) => {
-          if (revoked) return
+          if (revoked || refused) return
           if (socketStatus === WebSocketStatus.Connected) {
             everConnected = true
             socketOpen = true
@@ -451,6 +590,12 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           }
         },
         onAuthenticationFailed: kicked,
+        // The relay closes the document with reason `note-too-large` for a
+        // change over the cap (server/src/sync/collab-server.ts), and ws closes
+        // the socket with 1009 for a frame over its transport limit.
+        onClose: ({ event }) => {
+          if (event.reason === 'note-too-large' || event.code === 1009) refuse()
+        },
         onSynced: () => {
           handshake = true
           settle()
@@ -485,12 +630,11 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
       // Unsent: keep the copy for the next visit. Otherwise it can go.
       drop(dirty)
       // Copies from earlier sessions not merged or discarded yet: kept for
-      // the next visit.
-      for (const copy of [...(restore ?? []), ...(unmergedRef.current ?? [])]) {
-        void copy.close().then(() => copy.doc.destroy())
-      }
+      // the next visit. A rebuilt document keeps showing the unmerged ones.
+      const leftover = handingOff ? (restore ?? []) : [...(restore ?? []), ...(unmergedRef.current ?? [])]
+      for (const copy of leftover) void copy.close().then(() => copy.doc.destroy())
       restore = null
-      unmergedRef.current = null
+      if (!handingOff) unmergedRef.current = null
       setAwareness(null)
       if (provider) {
         const p = provider as unknown as {
@@ -556,5 +700,6 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     restored: restoredDoc !== null,
     unmerged,
     discardUnmerged,
+    tooLarge,
   }
 }

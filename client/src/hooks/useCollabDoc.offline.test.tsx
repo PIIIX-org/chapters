@@ -142,7 +142,7 @@ beforeEach(() => {
   let n = 0
   vi.mocked(getCollabTicket).mockImplementation(() => {
     n += 1
-    return Promise.resolve({ token: `ticket-${n}`, url: '/collab', expiresAt: '2026-08-25T10:00:60.000Z' })
+    return Promise.resolve({ token: `ticket-${n}`, url: '/collab', expiresAt: '2026-08-25T10:00:60.000Z', maxNoteBytes: 1048576, maxFrameBytes: 6 * 1048576 + 65536 })
   })
 })
 

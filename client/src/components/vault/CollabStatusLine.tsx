@@ -34,6 +34,7 @@ const WHISPER: Record<
   reconnecting: { tone: 'error', label: 'Offline', detail: 'not saved yet' },
   offline: { tone: 'error', label: 'Offline', detail: 'your edits are staying in this tab' },
   revoked: { tone: 'error', label: 'Access removed', detail: 'this note stopped syncing' },
+  'too-large': { tone: 'error', label: 'Too large', detail: 'not saved — shorten the note' },
 }
 
 /**

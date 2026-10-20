@@ -79,6 +79,14 @@ describe('CollabStatusLine', () => {
     expect(line.querySelector('time')).toBeNull()
   })
 
+  it('a change refused as too large says it is not saved, not offline (#491)', () => {
+    render(<CollabStatusLine status="too-large" synced={false} syncedAt={null} />)
+    const line = screen.getByRole('status')
+    expect(line).toHaveTextContent(/too large/i)
+    expect(line).toHaveTextContent(/not saved/i)
+    expect(line).not.toHaveTextContent(/offline/i)
+  })
+
   it('whispers in semantic status tones, never the AI accent', () => {
     render(<CollabStatusLine status="connecting" synced={false} syncedAt={null} />)
     const line = screen.getByRole('status')

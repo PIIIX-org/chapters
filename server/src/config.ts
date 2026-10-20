@@ -18,6 +18,20 @@ export function readHealthHidesVersion(raw: string | undefined): boolean {
 /** Shortest ELARA_MONITORING_TOKEN accepted (`openssl rand -hex 32` gives 64). */
 export const MIN_MONITORING_TOKEN_LENGTH = 32
 
+/** Default ELARA_NOTE_MAX_BYTES: 1 MiB, the size REST and MCP refused at before #491. */
+export const DEFAULT_NOTE_MAX_BYTES = 1024 * 1024
+
+/** `ELARA_NOTE_MAX_BYTES` -> a positive whole number of bytes, or null when it is not one. */
+export function readNoteMaxBytes(raw: string | undefined): number | null {
+  if (raw === undefined || raw === '') return DEFAULT_NOTE_MAX_BYTES
+  const bytes = Number(raw)
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : null
+}
+
+if (readNoteMaxBytes(env.ELARA_NOTE_MAX_BYTES) === null) {
+  console.warn(`ELARA_NOTE_MAX_BYTES=${JSON.stringify(env.ELARA_NOTE_MAX_BYTES)} is not a positive whole number of bytes: using ${DEFAULT_NOTE_MAX_BYTES}`)
+}
+
 export const config = {
   nodeEnv: env.NODE_ENV ?? 'development',
   isProd: env.NODE_ENV === 'production',
@@ -43,6 +57,15 @@ export const config = {
   get monitoringToken(): string | null {
     const token = env.ELARA_MONITORING_TOKEN
     return token && token.length >= MIN_MONITORING_TOKEN_LENGTH ? token : null
+  },
+  /**
+   * `ELARA_NOTE_MAX_BYTES` (#491): the largest note body, in UTF-8 bytes, that
+   * any write path stores (REST, MCP, import, the collab relay); see
+   * notes/size-cap.ts. Default 1 MiB. A getter so tests can change it after
+   * the config loads.
+   */
+  get noteMaxBytes(): number {
+    return readNoteMaxBytes(env.ELARA_NOTE_MAX_BYTES) ?? DEFAULT_NOTE_MAX_BYTES
   },
   port: Number(env.ELARA_PORT ?? env.CHAPTERS_PORT ?? env.PORT ?? 3000),
   /** Base public application URL for external callbacks (OIDC, emails, etc.). */

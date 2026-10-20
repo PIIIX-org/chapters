@@ -206,6 +206,21 @@ describe('restoreBackup: format-1 archives (account-dump.json)', () => {
     expect(plan.warnings.some((w) => w.includes('1/2/3/4/5/6/7/8/9'))).toBe(true)
   })
 
+  it('keeps a backed-up note over the body size cap instead of dropping it (#491)', async () => {
+    const userId = randomUUID()
+    const vaultId = randomUUID()
+    const line = 'Größe — ✓ a line of note text with "quotes"\n'
+    const big = line.repeat(Math.ceil((1024 * 1024 + 1) / Buffer.byteLength(line)))
+    const plan = await restoreBackup(
+      legacyArchive(
+        { users: [user(userId)], vaults: [{ id: vaultId, name: 'Big', ownerId: userId, mergeable: false, createdAt: now }] },
+        { [`vaults/${vaultId}/docs/big.md`]: serializeNote({ frontmatter: { type: 'docs' }, body: big }) },
+      ),
+    )
+    expect(plan.warnings.filter((w) => w.includes('docs/big'))).toEqual([])
+    expect((await readNote(vaultId, 'docs/big'))?.body).toBe(big)
+  })
+
   it('restores nested notes (3-8 segments)', async () => {
     const userId = randomUUID()
     const vaultId = randomUUID()
