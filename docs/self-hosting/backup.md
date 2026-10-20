@@ -65,19 +65,56 @@ docker compose up -d
 
 ## 3. Application-Level Instance Backup & Restore
 
-Chapters also provides an application-level portable export that can be migrated between environments:
+Elara also writes a single-zip instance backup that restores onto another machine with the same ids. Get one from **Admin** → **Instance backup** → **Download backup** (`GET /api/admin/backup`), or from the scheduled backups (`BACKUP_LOCAL_PATH` / S3, **Run backup** for one now).
 
-### Exporting via Admin Dashboard
-1. Log in as an Administrator (`owner` or `admin`).
-2. Navigate to **Admin Settings** -> **Instance Backup**.
-3. Click **Export Full Instance Archive (.zip)**.
+### What the archive holds
+
+Format 2 (since #409): `backup.json` (format version, time, row count per table), one `db/<table>.jsonl` per table (one row per line, as stored), and the files under `vaults/<vault id>/`: `notes/<path>.md` (live notes, as on disk), `trash/<note id>.md` (trashed notes) and `assets/<file>` (attachments; they have no database rows). All tables are read in one database snapshot. A note file that no longer matches its row in that snapshot (a save landed while the backup ran) is left out, and the restore writes that note's file from its row, so every note comes back as of the snapshot.
+
+| In the archive | Left out, and how it comes back |
+| :--- | :--- |
+| users (password hashes; TOTP secrets as stored), MFA backup codes (hashed) | sessions and email verification / reset tokens: everyone signs in again |
+| teams, memberships, vaults (including trashed ones), vault shares, graph preferences, vault preferences, graph perspectives | export links: create a new one |
+| notes (live and trashed, same ids), every revision | note links: rebuilt from the note bodies by the restore |
+| repositories (git credentials and webhook secrets stay encrypted), repository shares, graph preferences, sync tokens (hashed) | the repository file index (files, imports, symbols): the next sync rebuilds it, see below |
+| MCP tokens (hashed, with access level, allow-list, expiry, revocation), security events, notifications, the instance's MFA mandate | embeddings and semantic edges: computed on boot; collab (CRDT) state: rebuilt from the note when it is opened |
+
+> The archive holds password hashes, token hashes, TOTP secrets and every note in plain text. Treat it like the database itself. Scheduled backups in `BACKUP_LOCAL_PATH` are written owner-only (mode `0600`, whatever the umask); keep a downloaded copy the same way. Restoring repositories needs the same `CREDENTIALS_ENCRYPTION_KEY` (keep it with the backup, section 1 step 4).
 
 ### Restoring via CLI
-Restoring an application-level zip archive must be done against a clean instance:
+
+The CLI runs inside the app container, so the server must be running (`docker compose up -d`) on the new, empty database and data volume:
 
 ```bash
+# Check the archive and see the plan, writing nothing:
+docker compose exec app pnpm restore-backup --dry-run /path/to/backup.zip
+# Restore:
 docker compose exec app pnpm restore-backup /path/to/backup.zip
+# Then restart the app: embeddings are only computed when the server starts.
+docker compose restart app
 ```
+
+The restore runs in three steps:
+
+1. **Validate**: a readable zip, a format this version knows, every table file present with the row count `backup.json` names, well-formed rows, and every row's parent (vault of a note, note of a revision, repository of a pinned token, ...) in the archive. A damaged or incomplete archive is refused with the reason, and nothing is written.
+2. **Plan**: per table, how many rows are in the archive, how many will be restored and how many are already there (by id); the same for note, trash and attachment files. Conflicts refuse the restore, and nothing is written. It prints counts and messages only, never a secret, hash or note; an unexpected error prints the database's message and code only.
+3. **Apply**: every row in one transaction; files are written atomically inside it, so a file that can't be written rolls the rows back, and the files this run created are removed again. A file the restore replaced keeps the archive's version.
+
+It runs on an empty instance (no users). Any other instance is refused (`Refusing to restore: this instance already has N user(s) ...`), as is an archive whose rows would clash with different existing rows (same email, same live note path). Run it again on an instance already restored from the same archive and it writes nothing (`Already restored from this archive at ...`): the restore commits completely or not at all, so there is nothing to resume, and writing again would bring back what was deleted since (shares, purged notes, rotated MFA backup codes). The one thing it repairs is a missing generated `index.md`, in case the process stopped right after the commit. After a failed restore the instance is still empty: fix the cause and run it again.
+
+Until the app restarts, semantic search finds nothing; the restart computes the embeddings in the background. Restored repositories come back with an empty file index and no last sync: git repositories are re-indexed by the next poll, local-folder repositories with **Sync** on the repository, agent-push repositories on the agent's next push.
+
+### Older archives (format 1)
+
+Archives written before #409 (an `account-dump.json`, no `backup.json`) still restore, with what they have: users, teams, vaults, shares, MCP tokens, security events, notifications, live notes and attachments. They never held the trash, revision history, repositories or TOTP secrets, so after such a restore:
+
+- each note has one `create` revision and a new id (the same id on every restore of that archive);
+- tokens pinned to a repository are left out (the plan says how many);
+- users who had MFA on can't sign in until it is cleared, after which they set it up again:
+
+  ```bash
+  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "UPDATE users SET mfa_enabled_at = NULL WHERE mfa_enabled_at IS NOT NULL AND totp_secret IS NULL"
+  ```
 
 ---
 

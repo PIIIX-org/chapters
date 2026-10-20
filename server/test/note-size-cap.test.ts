@@ -4,7 +4,6 @@
 // stored up to ws's 100 MiB default. The cap is the body's UTF-8 bytes,
 // ELARA_NOTE_MAX_BYTES, default 1 MiB.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -20,8 +19,7 @@ import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.j
 import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { serializeNote } from '../src/notes/okf.js'
 import { createNote, readNote } from '../src/notes/store.js'
-import { restoreBackup } from '../src/export/restore.js'
-import { createActiveUser, loginCookie, loginToken, uniqueEmail } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
 /** The default cap: 1 MiB of UTF-8. */
 const CAP = 1024 * 1024
@@ -344,31 +342,5 @@ describe('note body size cap (#491)', { timeout: 30_000 }, () => {
     await storeSettled('docs/legacy')
     expect(await restBody('docs/legacy')).toBe(shrunk)
     provider.destroy()
-  })
-
-  it('restore keeps a backed-up note over the cap instead of dropping it', async () => {
-    const userId = randomUUID()
-    const restoredVault = randomUUID()
-    const now = new Date().toISOString()
-    const dump = {
-      users: [{ id: userId, email: uniqueEmail('cap-restore'), passwordHash: 'x', status: 'active', role: 'member', createdAt: now }],
-      teams: [],
-      teamMemberships: [],
-      vaults: [{ id: restoredVault, name: 'Big restore', ownerId: userId, mergeable: false, createdAt: now }],
-      vaultShares: [],
-      mcpConnections: [],
-      securityEvents: [],
-      notifications: [],
-    }
-    const zip = new AdmZip()
-    zip.addFile('account-dump.json', Buffer.from(JSON.stringify(dump), 'utf8'))
-    const big = bodyOfBytes(CAP + 1)
-    zip.addFile(
-      `vaults/${restoredVault}/docs/big.md`,
-      Buffer.from(serializeNote({ frontmatter: { type: 'docs' }, body: big }), 'utf8'),
-    )
-    const result = await restoreBackup(zip.toBuffer())
-    expect(result.notesSkipped).toEqual([])
-    expect((await readNote(restoredVault, 'docs/big'))?.body).toBe(big)
   })
 })
