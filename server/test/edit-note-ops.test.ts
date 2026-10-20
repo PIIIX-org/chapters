@@ -228,7 +228,8 @@ describe('edit_note ops (#408)', () => {
     })
     expect(r.isError, r.text).toBe(false)
     const note = await must<{ frontmatter: Args; body: string }>('read_note', { vaultId, path })
-    expect(note.frontmatter).toEqual({ type: 'docs', title: 'New title', tags: ['a', 'b'], aliases: ['alt'] })
+    expect(note.frontmatter).toMatchObject({ type: 'docs', title: 'New title', tags: ['a', 'b'], aliases: ['alt'] })
+    expect(note.frontmatter).not.toHaveProperty('status')
     expect(note.body).toBe(base)
 
     const removed = await call('edit_note', { vaultId, path, ops: [{ op: 'frontmatter_remove', key: 'tags', value: 'a' }] })

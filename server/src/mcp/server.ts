@@ -66,8 +66,33 @@ import { emitPermissionChange } from '../sync/permission-events.js'
 import { requestedEdit, writeThroughCollab } from './crdt-write.js'
 import { registerMcpPrompts } from './prompts.js'
 import { strictArgs } from './strict-input.js'
+import type { EditOp } from '../sync/edit-ops.js'
 
 class McpToolError extends Error {}
+
+/** One `edit_note` op (#408); each op object takes only its own keys. */
+const editOp = (op: EditOp['op'], shape: z.ZodRawShape) => strictArgs(`edit_note ops[] ${op}`, { op: z.literal(op), ...shape })
+const EDIT_OPS = z.array(
+  z.discriminatedUnion('op', [
+    editOp('replace_text', {
+      find: z.string(),
+      replace: z.string(),
+      expectedCount: z.number().int().min(1).optional().describe('How many times `find` must occur (default 1); all are replaced'),
+    }),
+    editOp('insert_before', { anchor: z.string(), text: z.string() }),
+    editOp('insert_after', { anchor: z.string(), text: z.string() }),
+    editOp('replace_section', {
+      heading: z.string().describe('"## Plan" (the whole heading line) or "Plan" (its text)'),
+      content: z.string(),
+    }),
+    editOp('append', { text: z.string() }),
+    editOp('prepend', { text: z.string() }),
+    editOp('delete_block', { find: z.string() }),
+    editOp('frontmatter_set', { key: z.string(), value: z.unknown() }),
+    editOp('frontmatter_add', { key: z.string(), value: z.unknown().describe('Added to the list at `key`') }),
+    editOp('frontmatter_remove', { key: z.string(), value: z.unknown().optional().describe('Removed from the list at `key`; without it the key is deleted') }),
+  ]),
+)
 
 type ResourceSet = { vaultIds: string[]; repositoryIds: string[] }
 
@@ -1034,28 +1059,34 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       description:
-        'Update a note. `frontmatter` merges per top-level key: keys you send are set, keys you leave out are kept; `replace: true` replaces the whole map instead, and `removeKeys` deletes keys. `body` replaces the whole body. The edit flows through the live collaboration engine — humans with the note open see it stream in, attributed to this connection. ' +
+        'Update a note. Prefer `ops` for local changes: they apply to the live text, so text a person typed since you read the note is kept. `ops` run in order: replace_text {find, replace, expectedCount?}, insert_before/insert_after {anchor, text}, replace_section {heading, content}, append {text}, prepend {text} (each as whole lines), delete_block {find}, frontmatter_set {key, value}, frontmatter_add/frontmatter_remove {key, value} (list items; remove without value deletes the key). A `find`/`anchor` must occur exactly once (replace_text: `expectedCount` times) and a heading once, else the edit fails and nothing changes. ' +
+        '`body` replaces the whole body (not with `ops`); only the characters that differ change. `frontmatter` merges per top-level key: keys you send are set, keys you leave out are kept; `replace: true` replaces the whole map instead, and `removeKeys` deletes keys. `base_rev` is echoed back as `baseRev` and not checked yet. The edit flows through the live collaboration engine — humans with the note open see it stream in, attributed to this connection. ' +
         'A body that doubles the note or repeats a large block of it is quarantined (note unchanged, body kept as a revision); set `allowGrowth: true` if intended.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
         path: z.string(),
         frontmatter: z.record(z.string(), z.unknown()).optional(),
         body: z.string().optional(),
+        ops: EDIT_OPS.optional(),
         replace: z.boolean().optional(),
         removeKeys: z.array(z.string()).optional(),
+        base_rev: z.union([z.string(), z.number().int()]).optional(),
         allowGrowth: z.boolean().optional(),
       },
     },
     async (
       {
         allowGrowth,
+        base_rev: baseRev,
         ...args
       }: {
         path: string
         frontmatter?: Record<string, unknown>
         body?: string
+        ops?: EditOp[]
         replace?: boolean
         removeKeys?: string[]
+        base_rev?: string | number
         allowGrowth?: boolean
       },
       { vaultId: target },
@@ -1065,7 +1096,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         quarantine: allowGrowth ? undefined : 'all',
       })
       if (!updated) throw new McpToolError('note not found')
-      return updated
+      // Compare-and-set against `base_rev` is #475; until then it is only echoed.
+      return baseRev === undefined ? updated : { ...updated, baseRev }
     },
   )
 
