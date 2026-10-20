@@ -74,11 +74,15 @@ function stubGitHub({ pageSize = 100 } = {}) {
     if (method !== 'GET') writes.push({ method, path: p, body })
     let m
     if (method === 'GET' && p === `/repos/${REPO}/issues`) {
-      const labels = (url.searchParams.get('labels') ?? '').split(',').filter(Boolean)
+      const labels = (url.searchParams.get('labels') ?? '')
+        .split(',')
+        .filter(Boolean)
       const state = url.searchParams.get('state') ?? 'open'
       const page = Number(url.searchParams.get('page') ?? 1)
       const all = issues.filter(
-        (i) => (state === 'all' || i.state === state) && labels.every((l) => i.labels.some((x) => x.name === l)),
+        (i) =>
+          (state === 'all' || i.state === state) &&
+          labels.every((l) => i.labels.some((x) => x.name === l)),
       )
       const data = all.slice((page - 1) * pageSize, page * pageSize)
       const more = all.length > page * pageSize
@@ -98,7 +102,10 @@ function stubGitHub({ pageSize = 100 } = {}) {
       issues.push(issue)
       return { data: issue }
     }
-    if ((m = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments$/.exec(p)) && method === 'POST') {
+    if (
+      (m = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments$/.exec(p)) &&
+      method === 'POST'
+    ) {
       const issue = issues.find((i) => i.number === Number(m[1]))
       issue.comments.push(body.body)
       return { data: { id: issue.comments.length } }
@@ -127,7 +134,15 @@ const nightly = (gh, needs, id, extra = {}) =>
 
 describe('mode', () => {
   it('is live only for a scheduled run on dev in the main repository', () => {
-    assert.equal(mode({ event: 'schedule', ref: 'refs/heads/dev', repo: REPO, dryRun: false }), 'live')
+    assert.equal(
+      mode({
+        event: 'schedule',
+        ref: 'refs/heads/dev',
+        repo: REPO,
+        dryRun: false,
+      }),
+      'live',
+    )
   })
   it('never posts for pull requests, dispatches, other branches or forks', () => {
     for (const ctx of [
@@ -138,27 +153,55 @@ describe('mode', () => {
       { event: 'schedule', ref: 'refs/heads/dev', repo: 'someone/chapters' },
     ]) {
       assert.equal(mode({ ...ctx, dryRun: false }), 'skip', JSON.stringify(ctx))
-      assert.equal(mode({ ...ctx, dryRun: true }), 'dry-run', JSON.stringify(ctx))
+      assert.equal(
+        mode({ ...ctx, dryRun: true }),
+        'dry-run',
+        JSON.stringify(ctx),
+      )
     }
   })
   it('a dry run of the nightly itself posts nothing either', () => {
-    assert.equal(mode({ event: 'schedule', ref: 'refs/heads/dev', repo: REPO, dryRun: true }), 'dry-run')
+    assert.equal(
+      mode({
+        event: 'schedule',
+        ref: 'refs/heads/dev',
+        repo: REPO,
+        dryRun: true,
+      }),
+      'dry-run',
+    )
   })
 })
 
 describe('runVerdict', () => {
   it('green when every job succeeded or was skipped (bench off)', () => {
     assert.deepEqual(runVerdict(GREEN_NEEDS), { failed: false, jobs: [] })
-    assert.equal(runVerdict({ ...GREEN_NEEDS, bench: { result: 'skipped' }, 'bench-gate': { result: 'skipped' } }).failed, false)
+    assert.equal(
+      runVerdict({
+        ...GREEN_NEEDS,
+        bench: { result: 'skipped' },
+        'bench-gate': { result: 'skipped' },
+      }).failed,
+      false,
+    )
   })
   it('red on a failed or cancelled job, listing it', () => {
-    assert.deepEqual(runVerdict(RED_NEEDS), { failed: true, jobs: [{ job: 'lab', result: 'failure' }] })
-    assert.deepEqual(runVerdict({ ...GREEN_NEEDS, 'bench-gate': { result: 'cancelled' } }).jobs, [
-      { job: 'bench-gate', result: 'cancelled' },
-    ])
+    assert.deepEqual(runVerdict(RED_NEEDS), {
+      failed: true,
+      jobs: [{ job: 'lab', result: 'failure' }],
+    })
+    assert.deepEqual(
+      runVerdict({ ...GREEN_NEEDS, 'bench-gate': { result: 'cancelled' } })
+        .jobs,
+      [{ job: 'bench-gate', result: 'cancelled' }],
+    )
   })
   it('red when the lab job did not run at all (plan failed, so lab was skipped)', () => {
-    const v = runVerdict({ ...GREEN_NEEDS, plan: { result: 'failure' }, lab: { result: 'skipped' } })
+    const v = runVerdict({
+      ...GREEN_NEEDS,
+      plan: { result: 'failure' },
+      lab: { result: 'skipped' },
+    })
     assert.equal(v.failed, true)
     assert.deepEqual(v.jobs, [
       { job: 'plan', result: 'failure' },
@@ -188,15 +231,32 @@ describe('gateSummary', () => {
 describe('decide', () => {
   const open = [{ number: 5 }]
   it('red + none open -> open; red + open -> update; green + open -> close; green + none -> nothing', () => {
-    assert.deepEqual(decide({ failed: true, open: [] }), { action: 'open', issues: [] })
-    assert.deepEqual(decide({ failed: true, open }), { action: 'update', issues: open })
-    assert.deepEqual(decide({ failed: false, open }), { action: 'close', issues: open })
-    assert.deepEqual(decide({ failed: false, open: [] }), { action: 'none', issues: [] })
+    assert.deepEqual(decide({ failed: true, open: [] }), {
+      action: 'open',
+      issues: [],
+    })
+    assert.deepEqual(decide({ failed: true, open }), {
+      action: 'update',
+      issues: open,
+    })
+    assert.deepEqual(decide({ failed: false, open }), {
+      action: 'close',
+      issues: open,
+    })
+    assert.deepEqual(decide({ failed: false, open: [] }), {
+      action: 'none',
+      issues: [],
+    })
   })
   it('two open issues (one opened by hand): a red run updates the oldest, a green run closes both', () => {
     const two = [{ number: 9 }, { number: 4 }]
-    assert.deepEqual(decide({ failed: true, open: two }).issues, [{ number: 4 }])
-    assert.deepEqual(decide({ failed: false, open: two }).issues.map((i) => i.number), [4, 9])
+    assert.deepEqual(decide({ failed: true, open: two }).issues, [
+      { number: 4 },
+    ])
+    assert.deepEqual(
+      decide({ failed: false, open: two }).issues.map((i) => i.number),
+      [4, 9],
+    )
   })
 })
 
@@ -253,14 +313,30 @@ describe('alert against a stubbed GitHub API', () => {
     assert.equal(gh.writes.length, writes)
     assert.equal((await nightly(gh, RED_NEEDS, 104)).action, 'open')
     assert.equal(gh.issues.length, 2)
-    assert.deepEqual(gh.issues.map((i) => i.state), ['closed', 'open'])
+    assert.deepEqual(
+      gh.issues.map((i) => i.state),
+      ['closed', 'open'],
+    )
   })
 
   it('finds the open issue on a later page of lab-nightly issues', async () => {
     const gh = stubGitHub({ pageSize: 1 })
     gh.issues.push(
-      { number: 1, title: 'something else', state: 'open', labels: [{ name: ISSUE_LABEL }], comments: [] },
-      { number: 2, title: 'a PR', state: 'open', labels: [{ name: ISSUE_LABEL }], comments: [], pull_request: {} },
+      {
+        number: 1,
+        title: 'something else',
+        state: 'open',
+        labels: [{ name: ISSUE_LABEL }],
+        comments: [],
+      },
+      {
+        number: 2,
+        title: 'a PR',
+        state: 'open',
+        labels: [{ name: ISSUE_LABEL }],
+        comments: [],
+        pull_request: {},
+      },
     )
     await nightly(gh, RED_NEEDS, 101)
     assert.equal(gh.issues.length, 3)
@@ -317,10 +393,14 @@ describe('alert against a stubbed GitHub API', () => {
       api: gh.api,
       repo: REPO,
       mode: 'live',
-      verdict: runVerdict({ ...GREEN_NEEDS, 'bench-gate': { result: 'failure' } }),
+      verdict: runVerdict({
+        ...GREEN_NEEDS,
+        'bench-gate': { result: 'failure' },
+      }),
       runUrl: run(8),
       labGate: '# Lab gate: PASS\n\nTier **full**.',
-      benchGate: '# Bench gate: FAIL\n\n| suite | metric |\n|---|---|\n| chapters | tokens regression |',
+      benchGate:
+        '# Bench gate: FAIL\n\n| suite | metric |\n|---|---|\n| chapters | tokens regression |',
     })
     assert.match(gh.issues[0].body, /### Bench gate: FAIL/)
     assert.match(gh.issues[0].body, /tokens regression/)
@@ -331,7 +411,10 @@ describe('alert against a stubbed GitHub API', () => {
     const big = `# Lab gate: FAIL\n\n## Regressions\n\n${'| t | c | failed |\n'.repeat(20000)}`
     await nightly(gh, RED_NEEDS, 9, { labGate: big })
     assert.ok(gh.issues[0].body.length <= MAX_BODY)
-    assert.ok(gh.issues[0].body.includes(run(9)), 'the run link survives the cut')
+    assert.ok(
+      gh.issues[0].body.includes(run(9)),
+      'the run link survives the cut',
+    )
     assert.match(gh.issues[0].body, /cut/)
   })
 })

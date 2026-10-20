@@ -32,6 +32,13 @@ name: Elara lab
 #             start-up/config, the image's dependencies or the benchmark (~9 min)
 #   all       nightly on dev, every PR to prod, and by hand (-f bench=...)
 # Docs: benchmarks/README.md.
+#
+# The nightly-alert job (#706) keeps one issue labelled `lab-nightly` in step
+# with the scheduled run: a red nightly opens it (or comments on it) with the
+# failed jobs, the run link and the gate summary; the next green nightly
+# comments and closes it (.github/scripts/lab-nightly-alert.mjs). It posts
+# only for `schedule` on dev; a dispatch with -f alert_dry_run=true runs it as
+# a dry run (prints what it would post), and no other event runs it.
 on:
   pull_request:
     branches: [dev, prod]
@@ -59,6 +66,10 @@ on:
         description: 'MCP_RATE_LIMIT per connection per minute (production default 120)'
         required: false
         default: '600'
+      alert_dry_run:
+        description: 'Run the nightly-alert job as a dry run (reads the lab-nightly issue, posts nothing)'
+        type: boolean
+        default: false
 
 # The nightly gets its own group, so a dispatch or PR on dev never cancels it.
 concurrency:
@@ -329,3 +340,52 @@ jobs:
           name: bench-gate
           path: bench-gate/
           retention-days: 90
+
+  # #706: a red nightly opens (or comments on) the `lab-nightly` issue, the
+  # next green nightly closes it. Live only for the schedule on dev; a
+  # dispatch with alert_dry_run posts nothing. Never on PRs or pushes.
+  nightly-alert:
+    needs: [plan, lab, bench, bench-gate]
+    if: >-
+      always() && github.repository == 'PIIIX-org/chapters' &&
+      ((github.event_name == 'schedule' && github.ref == 'refs/heads/dev') ||
+      (github.event_name == 'workflow_dispatch' && inputs.alert_dry_run))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # Either may be missing (the job was cancelled, or bench did not run):
+      # the alert then says there is no gate summary.
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: lab-results
+          path: lab-results
+
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: bench-gate
+          path: bench-gate
+
+      - name: Open, update or close the lab-nightly issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NEEDS: ${{ toJSON(needs) }}
+          DRY_RUN: ${{ github.event_name != 'schedule' }}
+        run: |
+          set -euo pipefail
+          args=(--lab-gate lab-results/gate.md --bench-gate bench-gate/gate.md)
+          if [ "$DRY_RUN" = true ]; then args+=(--dry-run); fi
+          node .github/scripts/lab-nightly-alert.mjs "${args[@]}"
