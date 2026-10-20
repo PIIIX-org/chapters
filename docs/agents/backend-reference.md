@@ -399,6 +399,20 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   (sorted when more than one), then `index:`. The keys are paths, not note
   ids (ADR-003 S2a moves to id keys): an editor tab left open at the old
   path after a rename still stores to a path with no note, as before.
+- **Renames of notes that link to each other** (#803): each referrer is
+  looked up again by note id when its links are rewritten
+  (`relinkReferrer`): another rename may have moved it, and before, it was
+  skipped, so two notes linking each other and renamed at once both kept
+  the old links. The rewrite goes to `updateFn` as a function of the body
+  (`BodyEdit`), applied under the referrer's lock to the stored body, or
+  through the relay to the live document's text, so two renames rewriting
+  one note both keep their link. The renamed note's path is read by id
+  too, and again under that path's lock after the write: a rename of the
+  note that looked for referrers before the new link was stored missed it,
+  so a note that has moved gets another round (at most 5, then
+  `[rename] … the notes kept moving` is logged). `syncLinks` replaces a
+  note's link rows in one transaction, so a rename never sees a referrer
+  with no links mid-write.
 - **Edits merge frontmatter per key** (#438): `edit_note` and REST
   `PUT /api/vaults/:id/notes/*` take `frontmatter`, `body`, `replace`
   and `removeKeys`; `requestedEdit()` (`sync/crdt-write.ts`) turns them
