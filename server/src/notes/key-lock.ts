@@ -26,3 +26,16 @@ export async function withKeyLock<T>(key: string, fn: () => Promise<T>): Promise
     if (tails.get(key) === tail) tails.delete(key)
   }
 }
+
+/**
+ * Runs `fn` while holding the locks for every key in `keys`. The keys are
+ * taken one at a time in sorted order, so two callers with overlapping key
+ * sets always queue in the same order and never wait on each other in a
+ * cycle. Duplicate keys are taken once.
+ */
+export async function withKeyLocks<T>(keys: readonly string[], fn: () => Promise<T>): Promise<T> {
+  const sorted = [...new Set(keys)].sort()
+  const hold = (index: number): Promise<T> =>
+    index === sorted.length ? fn() : withKeyLock(sorted[index]!, () => hold(index + 1))
+  return hold(0)
+}
