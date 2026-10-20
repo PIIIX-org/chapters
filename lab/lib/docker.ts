@@ -126,11 +126,16 @@ export const app = {
     const t0 = performance.now()
     const k = await exec(['docker', 'kill', '-s', 'KILL', cid])
     const killMs = performance.now() - t0
+    let injected = 0
     let recovery: Recovery
     try {
       recovery = await recoverAfterKill({
         status: async () => (await containerState(cid))?.status ?? null,
-        start: () => exec([...COMPOSE, 'start', 'app']),
+        // TEMPORARY (#658 after-fix demo): the first start fails, as in the before-fix run 39395967259.
+        start: () =>
+          (injected++ === 0
+            ? exec(['sh', '-c', 'echo "injected: compose start app failed" >&2; exit 1'])
+            : exec([...COMPOSE, 'start', 'app'])),
         probe: () =>
           fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(5_000) })
             .then((r) => r.ok)
