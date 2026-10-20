@@ -322,4 +322,27 @@ describe('useCollabDoc copies across tabs (#720)', () => {
     expect(relay.getText('body').toString()).toBe('BASE line\nA-offline ')
     await close(later)
   })
+
+  it('a copy with no history in common, left by a tab that closes later, is offered in the open tab (#766)', async () => {
+    const relay = await unrelatedCopy()
+    const A = await newTab()
+    sync(A, relay)
+    expect(A.now().unmerged).toBe('BASE line\nwritten offline\n')
+    const B = await newTab()
+    sync(B, relay)
+    expect(B.now().unmerged).toBeNull()
+
+    // A leaves without discarding it: B offers it, never merges it.
+    await close(A)
+    await waitFor(() => expect(B.now().unmerged).toBe('BASE line\nwritten offline\n'))
+    push(B, relay)
+    expect(relay.getText('body').toString()).toBe('BASE line\n')
+    act(() => B.now().discardUnmerged())
+    await close(B)
+
+    const later = await newTab()
+    sync(later, relay)
+    expect(later.now().unmerged).toBeNull()
+    await close(later)
+  })
 })

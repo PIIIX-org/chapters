@@ -358,8 +358,10 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
         void stored.then((ok) => (ok ? copy.release() : copy.close()))
       }
       if (offered.length === 0) return
-      unmergedRef.current = offered
-      setUnmerged(offered.map((copy) => copy.doc.getText('body').toString()).join('\n\n'))
+      // Appended: a copy claimed later (#766) joins the ones already offered.
+      const pending = [...(unmergedRef.current ?? []), ...offered]
+      unmergedRef.current = pending
+      setUnmerged(pending.map((copy) => copy.doc.getText('body').toString()).join('\n\n'))
     }
 
     /** Re-reads where the document stands after anything that can move it. */
@@ -462,11 +464,28 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     window.addEventListener('offline', wentOffline)
     window.addEventListener('online', cameOnline)
 
+    // Copies another tab held when this one looked: claimed as soon as that
+    // tab goes away with something unsent (#766), and met with the relay's
+    // document like the ones found at mount. Not shown in the editor.
+    const watching = new AbortController()
+    const found = (copy: CollabCopy) => {
+      if (cancelled) {
+        void copy.close().then(() => copy.doc.destroy())
+        return
+      }
+      restore = [...(restore ?? []), copy]
+      dirty = true
+      setUnsynced(true)
+      settle()
+    }
+
     if (stashName) {
       void (async () => {
         let copies: CollabCopy[] = []
         try {
-          if (await hasCollabStash(stashName)) copies = await claimLeftoverCopies(stashName)
+          if (await hasCollabStash(stashName)) {
+            copies = await claimLeftoverCopies(stashName, { signal: watching.signal, found })
+          }
         } catch {
           // IndexedDB refused (private mode, quota): no copy to restore.
         }
@@ -475,7 +494,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           for (const copy of copies) void copy.close().then(() => copy.doc.destroy())
           return
         }
-        restore = copies
+        restore = [...copies, ...(restore ?? [])]
         dirty = true
         setUnsynced(true)
         setRestoredDoc(shown.doc)
@@ -648,6 +667,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
 
     return () => {
       cancelled = true
+      watching.abort()
       if (retry) clearTimeout(retry)
       holdRelease()
       ydoc.off('update', onUpdate)
