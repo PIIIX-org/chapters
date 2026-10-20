@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Compartment, EditorState } from '@codemirror/state'
+import { Compartment, EditorSelection, EditorState } from '@codemirror/state'
 import type { Extension } from '@codemirror/state'
 import { EditorView, keymap, drawSelection, dropCursor, tooltips } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
@@ -63,6 +63,12 @@ function lockExtensions(readOnly: boolean): Extension {
   return readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []
 }
 
+/** Where a Yjs relative position lands in `ytext` now, or null if it belongs to another document. */
+function resolveIn(ytext: Y.Text, position: Y.RelativePosition): number | null {
+  const absolute = ytext.doc ? Y.createAbsolutePositionFromRelativePosition(position, ytext.doc) : null
+  return absolute && absolute.type === ytext ? absolute.index : null
+}
+
 function getDirectionExtensions(direction: NoteDirection): Extension {
   return [
     EditorView.theme({
@@ -119,6 +125,9 @@ export function useCodeMirrorEditor({
   useEffect(() => {
     onSelectionChangeRef.current = onSelectionChange
   })
+  // The selection of the editor a document swap retired, as Yjs relative
+  // positions, for the editor built around the next document (see below).
+  const carriedRef = useRef<{ anchor: Y.RelativePosition; head: Y.RelativePosition; focused: boolean } | null>(null)
 
   // Two things change after mount and must not cost a rebuild: the collab
   // binding (awareness arrives once the provider connects) and the lock (a
@@ -130,6 +139,13 @@ export function useCodeMirrorEditor({
   const ytext = collab?.ytext
   const awareness = collab?.awareness ?? null
 
+  // Only what this person did undoes: the binding's own edits (yCollab adds
+  // its origin) and local `null`-origin transactions such as the property
+  // panel's. The relay's updates carry the provider as origin, so another
+  // person's or an agent's edit is never undone from here; it comes back out
+  // through the note's history (#483). The relay applies an agent's edit as
+  // the change alone (`writeThroughCollab`), so what this person typed stays
+  // in the document for undo to find.
   const undoManager = useMemo(() => {
     if (!ytext) return null
     const frontmatterMap = ytext.doc?.getMap('frontmatter')
@@ -148,10 +164,23 @@ export function useCodeMirrorEditor({
   useEffect(() => {
     if (!containerRef.current) return
 
+    // useCollabDoc swaps the document under the editor for another copy of
+    // the same note: a copy restored from this browser is merged into the live
+    // one when the relay's state arrives (#720), a document is rebuilt after a
+    // too-large refusal (#491). Same history, same Yjs ids, so the selection
+    // the old editor held resolves in the new copy; without it the caret
+    // started at the top, out of focus, under the person's typing (#483).
+    const carried = carriedRef.current
+    carriedRef.current = null
+    const anchor = ytext && carried ? resolveIn(ytext, carried.anchor) : null
+    const head = ytext && carried ? resolveIn(ytext, carried.head) : null
+    const selection = anchor !== null && head !== null ? EditorSelection.single(anchor, head) : undefined
+
     const state = EditorState.create({
       // Under collab the Y.Text *is* the document: `doc` is a REST copy fetched
       // before the CRDT loaded, and seeding from it would double the content.
       doc: ytext ? ytext.toString() : doc,
+      selection,
       extensions: [
         // CM6's own history undoes other people's edits in a shared document —
         // a genuine bug, not a nicety. yCollab's Yjs UndoManager undoes only
@@ -233,11 +262,24 @@ export function useCodeMirrorEditor({
       ],
     })
 
-    const view = new EditorView({ state, parent: containerRef.current })
+    const view = new EditorView({
+      state,
+      parent: containerRef.current,
+      scrollTo: selection ? EditorView.scrollIntoView(selection.main.head, { y: 'center' }) : undefined,
+    })
     viewRef.current = view
     onViewRef.current?.(view)
+    if (selection && carried?.focused) view.focus()
 
     return () => {
+      if (ytext) {
+        const { anchor, head } = view.state.selection.main
+        carriedRef.current = {
+          anchor: Y.createRelativePositionFromTypeIndex(ytext, anchor, -1),
+          head: Y.createRelativePositionFromTypeIndex(ytext, head, -1),
+          focused: view.root.activeElement === view.contentDOM,
+        }
+      }
       onViewRef.current?.(null)
       viewRef.current = null
       view.destroy()
