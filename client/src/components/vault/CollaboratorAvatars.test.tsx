@@ -5,10 +5,14 @@ import { expectNoA11yViolations } from '../../test/axe.js'
 import type { CollabPeer } from '../../hooks/useCollabDoc.js'
 import { CollaboratorAvatars } from './CollaboratorAvatars.js'
 
-/** Peers exactly as `useCollabDoc` builds them: ink hashed from the user id.
- *  Every peer here is a person — see the note on the teal test below. */
+/** People exactly as `useCollabDoc` builds them: ink hashed from the user id. */
 function peer(clientId: number, userId: string, name: string): CollabPeer {
-  return { clientId, userId, name, ink: inkFor(userId) }
+  return { kind: 'person', clientId, userId, name, ink: inkFor(userId) }
+}
+
+/** An agent the relay put in presence (#481): always teal. */
+function agent(clientId: number, name: string, activity: 'editing' | 'reading'): CollabPeer {
+  return { kind: 'agent', clientId, name, ink: AI_INK, activity }
 }
 
 // Deliberately uneven: different id shapes, different name shapes (dotted,
@@ -47,12 +51,10 @@ describe('CollaboratorAvatars', () => {
     }
   })
 
-  it('never wears teal, because every peer in this row is a person', () => {
-    // Teal asserts a machine wrote something. MCP edits arrive through a
-    // server-side direct connection that never joins awareness, so there is no
-    // AI peer here to wear it — and the only way one could appear was a
-    // self-declared awareness id, which any co-editor could have forged.
-    // A hashed hue for an id that merely looks like 'mcp' is still a person's.
+  it('never puts teal on a person, even one whose id looks like the MCP', () => {
+    // Teal asserts a machine is at work, and only the relay can say that: a
+    // person's awareness id is self-declared, so a hashed hue for an id that
+    // merely looks like 'mcp' is still a person's.
     render(<CollaboratorAvatars peers={[JANE, TAHA, peer(14, 'mcp', 'Elara MCP')]} />)
     for (const name of ['ada.lovelace', 'taha', 'Elara MCP']) {
       const face = screen.getByLabelText(`${name} is editing this note`)
@@ -60,6 +62,34 @@ describe('CollaboratorAvatars', () => {
       // Teal in either theme, not just the hue this reader happens to be in.
       for (const teal of [AI_INK.light, AI_INK.dark]) expect(face.getAttribute('style')).not.toContain(teal)
     }
+  })
+
+  it('shows agents distinctly: teal, square, a bot mark, and what they are doing (#481)', () => {
+    render(
+      <CollaboratorAvatars peers={[JANE, agent(21, 'Claude Code', 'editing'), agent(22, 'nightly-indexer', 'reading')]} />,
+    )
+    const person = screen.getByLabelText('ada.lovelace is editing this note')
+    const editing = screen.getByLabelText('Claude Code (agent) is editing this note')
+    const reading = screen.getByLabelText('nightly-indexer (agent) is reading this note')
+
+    for (const face of [editing, reading]) {
+      expect(face.style.getPropertyValue('--ink')).toBe(AI_INK.color)
+      expect(face).toHaveAttribute('data-kind', 'agent')
+      expect(face.className).toContain('rounded-md')
+      expect(face.className).not.toContain('rounded-full')
+      expect(face.querySelector('svg')).not.toBeNull() // the bot mark
+    }
+    expect(editing.textContent).toBe('CC')
+    expect(editing).toHaveAttribute('title', 'Claude Code (agent) is editing this note')
+    // Reading is drawn differently from editing, not only said differently.
+    expect(reading.className).toContain('border-dashed')
+    expect(editing.className).not.toContain('border-dashed')
+
+    // The person beside them keeps a round face, their own ink and no mark.
+    expect(person).toHaveAttribute('data-kind', 'person')
+    expect(person.className).toContain('rounded-full')
+    expect(person.style.getPropertyValue('--ink')).not.toBe(AI_INK.color)
+    expect(person.querySelector('svg')).toBeNull()
   })
 
   it('labels every face with a name, because colour on its own is not a label', () => {
@@ -83,14 +113,16 @@ describe('CollaboratorAvatars', () => {
     const crowd = [JANE, TAHA, SOLO, peer(14, 'u4', 'mo'), peer(15, 'u5', 'ren'), peer(16, 'u6', 'kai')]
     render(<CollaboratorAvatars peers={crowd} />)
     expect(screen.getAllByRole('listitem')).toHaveLength(5) // 4 faces + the overflow count
-    expect(screen.getByLabelText('2 more editing this note').textContent).toBe('+2')
+    expect(screen.getByLabelText('2 more in this note').textContent).toBe('+2')
     // 5th and 6th are past the cap; 'mo' is the 4th and must still show.
     expect(screen.getByLabelText('mo is editing this note')).toBeInTheDocument()
     expect(screen.queryByLabelText('ren is editing this note')).toBeNull()
   })
 
   it('has no accessibility violations', async () => {
-    const { container } = render(<CollaboratorAvatars peers={[JANE, TAHA, SOLO]} />)
+    const { container } = render(
+      <CollaboratorAvatars peers={[JANE, TAHA, SOLO, agent(21, 'Claude Code', 'reading')]} />,
+    )
     expect(screen.getByRole('list')).toHaveAccessibleName('In this note now')
     await expectNoA11yViolations(container)
   })

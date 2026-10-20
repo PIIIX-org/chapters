@@ -18,7 +18,7 @@ interface ProviderOptions {
   onSynced: (data: { state: boolean }) => void
   onUnsyncedChanges: (data: { number: number }) => void
   onAwarenessChange: (data: {
-    states: { clientId: number; user?: { id: string; name: string } }[]
+    states: { clientId: number; user?: { id: string; name: string }; agent?: { name?: string; activity?: string } }[]
   }) => void
 }
 
@@ -402,18 +402,21 @@ describe('useCollabDoc', () => {
 
     expect(view.result.current.peers).toEqual([
       {
+        kind: 'person',
         clientId: 11,
         userId: 'u-jane',
         name: 'jane',
         ink: inkFor('u-jane'),
       },
       {
+        kind: 'person',
         clientId: 12,
         userId: 'u-omar',
         name: 'omar',
         ink: inkFor('u-omar'),
       },
       {
+        kind: 'person',
         clientId: 13,
         userId: 'mcp',
         name: 'Chapters MCP',
@@ -423,28 +426,50 @@ describe('useCollabDoc', () => {
     ])
   })
 
-  it('gives teal to no one, because awareness ids are self-declared', async () => {
+  it('gives teal to no person, because awareness ids are self-declared', async () => {
     const { view, provider } = await connected()
 
     act(() =>
       provider.options.onAwarenessChange({
-        // A human on a patched client, broadcasting the AI's id. Awareness is
-        // the peer's own claim about itself, so this is indistinguishable from
-        // the real MCP connection — which is why neither one gets teal.
+        // A human on a patched client, broadcasting the AI's id. A `user` is
+        // the peer's own claim about itself, so it stays a person.
         states: [{ clientId: 21, user: { id: 'mcp', name: 'Chapters MCP' } }],
       }),
     )
 
     const impostor = view.result.current.peers[0]!
-    // There is no isAi flag any more: MCP never joins awareness, so every
-    // peer in this list is a person and nothing here can claim otherwise.
-    expect(impostor).not.toHaveProperty('isAi')
+    expect(impostor.kind).toBe('person')
     expect(impostor.ink.color).not.toBe(AI_INK.color)
     expect(impostor.ink.name).not.toBe('teal')
     // ...and the ink is still the hash of the id it claimed, not a fixed hue:
     // dropping teal must not collapse everyone onto one colour.
     expect(impostor.ink).toEqual(inkFor('mcp'))
     expect(inkFor('mcp').color).not.toBe(inkFor('u-jane').color) // fixture guard
+  })
+
+  it('lists an agent the relay put in presence as an agent, in teal (#481)', async () => {
+    const { view, provider } = await connected()
+
+    act(() =>
+      provider.options.onAwarenessChange({
+        // Only the relay sends `agent` (it strips the field from every
+        // browser's state), under a client id of its own.
+        states: [
+          { clientId: 11, user: { id: 'u-jane', name: 'jane' } },
+          { clientId: 31, agent: { name: 'Claude Code', activity: 'editing' } },
+          { clientId: 32, agent: { name: 'indexer', activity: 'reading' } },
+          // Malformed: not shown at all rather than guessed at.
+          { clientId: 33, agent: { name: 'odd', activity: 'deleting' } },
+          { clientId: 34, agent: { activity: 'editing' } },
+        ],
+      }),
+    )
+
+    expect(view.result.current.peers).toEqual([
+      { kind: 'person', clientId: 11, userId: 'u-jane', name: 'jane', ink: inkFor('u-jane') },
+      { kind: 'agent', clientId: 31, name: 'Claude Code', ink: AI_INK, activity: 'editing' },
+      { kind: 'agent', clientId: 32, name: 'indexer', ink: AI_INK, activity: 'reading' },
+    ])
   })
 
   it('is synced only once the handshake is done with nothing left to send', async () => {

@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react'
+import { Bot } from 'lucide-react'
 import type { CollabPeer } from '../../hooks/useCollabDoc.js'
 
 /** Past this many, the row starts crowding the breadcrumb it sits in. */
@@ -17,6 +18,11 @@ function initials(name: string): string {
   return (first[0]! + second).toUpperCase()
 }
 
+/** What a screen reader and the hover title say about one face. */
+function presenceLabel(peer: CollabPeer): string {
+  return peer.kind === 'agent' ? `${peer.name} (agent) is ${peer.activity} this note` : `${peer.name} is editing this note`
+}
+
 interface CollaboratorAvatarsProps {
   /** Everyone else in this document, from `useCollabDoc`. Never the local user. */
   peers: CollabPeer[]
@@ -28,12 +34,12 @@ interface CollaboratorAvatarsProps {
  * feature and it leaks who is working on what
  * (`docs/superpowers/specs/2026-07-19-ui-design-system.md`).
  *
- * Each avatar wears the peer's own ink, the same hue as their pen nib in the
- * text, so the cursor and the face are recognisably one person. Every face here
- * is a person's: MCP writes through a server-side connection that never joins
- * awareness, so no AI participant can appear in this row at all — and no ink in
- * the human palette is teal. Each is still named in letters as well as hued,
- * because colour alone is not a label.
+ * Each person wears their own ink, the same hue as their pen nib in the text,
+ * so the cursor and the face are recognisably one person. An agent (an MCP
+ * connection that read or wrote this note in the last minute, #481) wears teal,
+ * which no person's ink is, on a square face with a bot mark, solid while it is
+ * editing and dashed while it is only reading. Everyone is still named in
+ * letters as well as hued, because colour alone is not a label.
  */
 export function CollaboratorAvatars({ peers }: CollaboratorAvatarsProps) {
   // Alone in the note is the normal case. It gets no chrome at all.
@@ -47,19 +53,25 @@ export function CollaboratorAvatars({ peers }: CollaboratorAvatarsProps) {
       {shown.map((peer) => (
         <li
           key={peer.clientId}
-          title={peer.name}
-          aria-label={`${peer.name} is editing this note`}
+          title={peer.kind === 'agent' ? presenceLabel(peer) : peer.name}
+          aria-label={presenceLabel(peer)}
+          data-kind={peer.kind}
           // The ink is a theme-resolved variable, so the peer's identity goes in
           // as a custom property and the paint stays in one static class list.
           style={{ '--ink': peer.ink.color, '--ink-wash': peer.ink.colorLight } as CSSProperties}
-          className="flex h-6 w-6 items-center justify-center rounded-full border border-[color:var(--ink)] bg-[color:var(--ink-wash)] text-xs font-medium tracking-wide text-[color:var(--ink)] uppercase ring-1 ring-[color:var(--ink)]/40 ring-offset-1 ring-offset-background"
+          className={`flex h-6 items-center justify-center border border-[color:var(--ink)] bg-[color:var(--ink-wash)] text-xs font-medium tracking-wide text-[color:var(--ink)] uppercase ring-1 ring-[color:var(--ink)]/40 ring-offset-1 ring-offset-background ${
+            peer.kind === 'agent'
+              ? `gap-0.5 rounded-md px-1 ${peer.activity === 'reading' ? 'border-dashed' : ''}`
+              : 'w-6 rounded-full'
+          }`}
         >
+          {peer.kind === 'agent' && <Bot aria-hidden="true" className="h-3.5 w-3.5" />}
           {initials(peer.name)}
         </li>
       ))}
       {hidden > 0 && (
         <li
-          aria-label={`${hidden} more editing this note`}
+          aria-label={`${hidden} more in this note`}
           className="flex h-6 items-center rounded-full border border-border bg-muted px-1.5 font-mono text-xs font-medium text-muted-foreground ring-1 ring-border/40 ring-offset-1 ring-offset-background"
         >
           +{hidden}
