@@ -135,10 +135,9 @@ function count(text: string, needle: string): number {
   return text.split(needle).length - 1
 }
 
+/** The client's TS lib predates `Promise.withResolvers`. */
 function pause(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>()
-  setTimeout(resolve, ms)
-  return promise
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 beforeEach(() => {
