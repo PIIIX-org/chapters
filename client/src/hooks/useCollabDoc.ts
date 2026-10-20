@@ -352,8 +352,10 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
         // The editor stays bound to the shown copy until the next render: a
         // keystroke landing there in between belongs in the live document.
         copy.doc.on('update', (update: Uint8Array) => Y.applyUpdate(ydoc, update, RESTORE_ORIGIN))
-        const stored = live?.flushed()
-        void (stored ? stored.then(() => copy.release()) : copy.close())
+        // Deleted only once the live copy holds it: a failed write (storage
+        // full) keeps it, to be offered again on the next visit.
+        const stored = live ? live.flushed() : Promise.resolve(false)
+        void stored.then((ok) => (ok ? copy.release() : copy.close()))
       }
       if (offered.length === 0) return
       unmergedRef.current = offered
@@ -419,7 +421,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
       const old = live
       live = null
       if (old) {
-        void (copy ? copy.flushed().then(() => old.release(), () => old.close()) : old.close())
+        void (copy ? copy.flushed().then((ok) => (ok ? old.release() : old.close())) : old.close())
       }
       handingOff = true
       handoffRef.current = { ydoc: rebuilt, copy }

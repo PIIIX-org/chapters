@@ -135,7 +135,7 @@ describe('export', () => {
     expect(after.statusCode).toBe(404)
   })
 
-  it('import recreates the vault for the importer, validates notes, reports unmatched shares', async () => {
+  it('import recreates the vault for the importer, validates notes, re-shares only on request', async () => {
     const exportRes = await app.inject({
       method: 'GET',
       url: `/api/vaults/${vaultId}/export`,
@@ -157,7 +157,7 @@ describe('export', () => {
     ])
     const res = await app.inject({
       method: 'POST',
-      url: '/api/import',
+      url: '/api/import?applyShares=true',
       headers: {
         cookie: importerCookie,
         'content-type': `multipart/form-data; boundary=${boundary}`,
@@ -169,11 +169,13 @@ describe('export', () => {
       vaultId: string
       imported: number
       skipped: string[]
-      unmatchedShares: string[]
+      appliedShares: Array<{ grantee: string; permission: string }>
+      skippedShares: Array<{ grantee: string; reason: string }>
     }
     expect(result.imported).toBe(2)
     expect(result.skipped.length).toBe(1)
-    // teammate exists on this instance → re-shared; reader too; importer owns.
+    expect(result.skippedShares).toEqual([])
+    // Asked to: teammate and reader exist on this instance → re-shared; importer owns.
     const access = await app.inject({
       method: 'GET',
       url: `/api/vaults/${result.vaultId}/access`,

@@ -415,7 +415,14 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   and the collab document order keys differently). A directory with a
   live `<dir>/index` **note** is skipped entirely: that file is the
   user's note, and the generated table must never overwrite or unlink
-  it (#384, fixed 2026-10-12).
+  it (#384, fixed 2026-10-12). Each call holds `index:<vault>/<dir>` for
+  every directory it regenerates (`withKeyLocks`, taken in sorted key
+  order) and reads the note list inside the locks, so concurrent writers
+  into one folder write its `index.md` in turn and the last write lists
+  every note committed before it; an older snapshot written last used to
+  leave live notes out (#779). Lock order is `note:` before `index:`
+  (`updateNote` regenerates inside its note lock; nothing takes a `note:`
+  lock while holding an `index:` lock).
 - **`integrity.ts`** / `pnpm check-notes`: parses every live note's file
   from disk the way `readNote` does and compares it with the note's row.
   Each problem has a kind: `missing-file`, `unparseable`,
@@ -839,7 +846,23 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 - **Import** (`POST /api/import`): uploads a zip, creates a **new**
   vault with a **new** owner and new IDs, re-validates every note
   through the normal OKF write path, best-effort per note (an invalid
-  note is skipped and reported, not fatal).
+  note is skipped and reported, not fatal). Shares listed in the
+  archive's `manifest.json` are **never granted by default** (#621):
+  without `?applyShares=true` nothing is looked up or granted and every
+  manifest share comes back in `skippedShares` with reason
+  `not_requested`. With it, a share is granted only to an existing
+  **active** user other than the importer (matched by email) or to the
+  one team with that name, at `read` or `edit` (anything else is
+  `invalid_permission`, so never above the importer's own owner
+  access); each grant notifies the grantee and logs
+  `vault_share_created` (detail `source: 'import'`). The response is
+  `{ vaultId, imported, skipped, appliedShares, skippedShares }`, each
+  share `{ granteeType, grantee, permission, reason? }`, skip reasons
+  `not_requested`, `invalid_entry`, `invalid_permission`,
+  `no_active_user`, `importer`, `no_team`, `ambiguous_team`,
+  `duplicate`. The Settings import form sends the flag only when its
+  "Give the archive's collaborators access again" box is ticked.
+  Instance restore is separate and restores shares as backed up.
 - **Instance backup** (`GET /api/admin/backup`, admin-only; the
   scheduled run in `backup-service.ts` writes the same zip):
   `buildInstanceBackup()` in `archive.ts`, format 2
