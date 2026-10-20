@@ -8,7 +8,15 @@ import { resolveImportPath } from './import-resolution.js'
 import { recordJob } from '../monitoring/metrics.js'
 
 // ponytail: in-process serial queue; move to a job table if multi-process
-const queue: string[] = []
+/**
+ * One FIFO per repository, served round-robin (#497): each turn extracts at
+ * most `EXTRACTION_TURN_FILES` files of one repository, then that repository
+ * goes to the back of the line if it still has work. A large repository's
+ * backlog therefore delays another repository's files by at most one turn,
+ * instead of the whole backlog. Map insertion order is the round-robin order.
+ */
+const EXTRACTION_TURN_FILES = 10
+const queues = new Map<string, { files: string[]; head: number }>()
 let running: Promise<void> | null = null
 
 /**
@@ -52,8 +60,13 @@ async function getRepoSiblings(repositoryId: string) {
 }
 
 /** Enqueue a repository file for extraction + embedding. Never blocks the caller. */
-export function scheduleExtraction(fileId: string): void {
-  queue.push(fileId)
+export function scheduleExtraction(fileId: string, repositoryId: string): void {
+  let pending = queues.get(repositoryId)
+  if (!pending) {
+    pending = { files: [], head: 0 }
+    queues.set(repositoryId, pending)
+  }
+  pending.files.push(fileId)
   running ??= drain()
 }
 
@@ -116,11 +129,11 @@ export async function backfillUnresolvedImports(): Promise<number> {
  */
 export async function scheduleMissingExtractions(): Promise<number> {
   const missing = await db
-    .select({ id: repositoryFiles.id })
+    .select({ id: repositoryFiles.id, repositoryId: repositoryFiles.repositoryId })
     .from(repositoryFiles)
     .where(isNull(repositoryFiles.embedding))
     .orderBy(repositoryFiles.repositoryId)
-  for (const row of missing) scheduleExtraction(row.id)
+  for (const row of missing) scheduleExtraction(row.id, row.repositoryId)
   return missing.length
 }
 
@@ -134,25 +147,35 @@ export async function countPendingExtractions(repositoryId: string): Promise<num
 }
 
 async function drain(): Promise<void> {
-  let head = 0
   try {
-    while (head < queue.length) {
-      const fileId = queue[head++]!
-      try {
-        await processFile(fileId)
-        recordJob('extraction', 'ok', fileId)
-      } catch (err) {
-        console.error(`extraction failed for repository file ${fileId}:`, err)
-        recordJob('extraction', { error: err }, fileId)
+    for (;;) {
+      const next = queues.entries().next()
+      if (next.done) break
+      const [repositoryId, pending] = next.value
+      for (let n = 0; n < EXTRACTION_TURN_FILES && pending.head < pending.files.length; n++) {
+        const fileId = pending.files[pending.head++]!
+        try {
+          await processFile(fileId)
+          recordJob('extraction', 'ok', fileId)
+        } catch (err) {
+          console.error(`extraction failed for repository file ${fileId}:`, err)
+          recordJob('extraction', { error: err }, fileId)
+        }
       }
-      // ponytail: O(1) amortized compaction to avoid O(N^2) array shifting (INGEST-02).
-      if (head > 1000 && head > queue.length / 2) {
-        queue.splice(0, head)
-        head = 0
+      // The entry stays in the map during its turn, so files scheduled for this
+      // repository meanwhile join its queue; re-inserting moves it to the back.
+      queues.delete(repositoryId)
+      if (pending.head < pending.files.length) {
+        // ponytail: O(1) amortized compaction to avoid O(N^2) array shifting (INGEST-02).
+        if (pending.head > 1000 && pending.head > pending.files.length / 2) {
+          pending.files.splice(0, pending.head)
+          pending.head = 0
+        }
+        queues.set(repositoryId, pending)
       }
     }
   } finally {
-    queue.length = 0
+    queues.clear()
     repoSiblingsCache.clear()
     // Cleared here, in the same synchronous step that saw the queue empty: a
     // `.finally()` on the caller's side would run a microtask later, and a file
