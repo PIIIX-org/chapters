@@ -43,6 +43,7 @@ import {
   revertNote,
   softDeleteNote,
   vaultDir,
+  withRestorePoint,
   type Actor,
   type RevisionPosition,
 } from '../notes/store.js'
@@ -1061,9 +1062,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       { vaultId: target },
     ) => {
       await requireAccess(target, 'edit')
-      const updated = await writeThroughCollab(target, args.path, requestedEdit(args), actor, {
-        quarantine: allowGrowth ? undefined : 'all',
-      })
+      const updated = await withRestorePoint(target, args.path, auth.connection.id, () =>
+        writeThroughCollab(target, args.path, requestedEdit(args), actor, { quarantine: allowGrowth ? undefined : 'all' }),
+      )
       if (!updated) throw new McpToolError('note not found')
       return updated
     },
@@ -1085,7 +1086,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async ({ from, toName }: { from: string; toName: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
-      const renamed = await renameNote(target, from, toName, writeThroughCollab)
+      const renamed = await withRestorePoint(target, from, auth.connection.id, () =>
+        renameNote(target, from, toName, writeThroughCollab),
+      )
       if (!renamed) throw new McpToolError('note not found')
       return renamed
     },
@@ -1102,7 +1105,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async ({ path }: { path: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
-      const deleted = await softDeleteNote(target, path, actor)
+      const deleted = await withRestorePoint(target, path, auth.connection.id, () => softDeleteNote(target, path, actor))
       if (!deleted) throw new McpToolError('note not found')
       return { status: 'trashed', id: deleted.id }
     },
@@ -1175,7 +1178,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       pinPermission: 'edit',
       description:
-        'Change history for a note (actor-attributed), newest first, metadata only: id, action, actorType, actorId, createdAt, bodyBytes. One page of `limit` revisions (default 20, max 100); when `hasMore`, pass `nextCursor` as `cursor` for the next page. Read one revision\'s content with get_revision. Requires edit access.',
+        'Change history for a note (actor-attributed), newest first, metadata only: id, action, actorType, actorId, actorName (the MCP connection name), createdAt, bodyBytes. One page of `limit` revisions (default 20, max 100); when `hasMore`, pass `nextCursor` as `cursor` for the next page. Read one revision\'s content with get_revision. A `restore_point` revision is the note as it was before a connection\'s first write in a session; revert_note to it undoes that session. Requires edit access.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
         path: z.string(),
@@ -1244,7 +1247,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async ({ path, revisionId }: { path: string; revisionId: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
-      const reverted = await revertNote(target, path, revisionId, actor, writeThroughCollab)
+      const reverted = await withRestorePoint(target, path, auth.connection.id, () =>
+        revertNote(target, path, revisionId, actor, writeThroughCollab),
+      )
       if (!reverted) throw new McpToolError('note or revision not found')
       return reverted
     },

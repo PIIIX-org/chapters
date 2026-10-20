@@ -83,12 +83,12 @@ async function restorePoints(noteId: string) {
     .orderBy(asc(noteRevisions.createdAt))
 }
 
-/** Moves every revision `connectionId` recorded on the note `minutes` into the past. */
-async function age(noteId: string, connectionId: string, minutes: number): Promise<void> {
+/** Lets `minutes` pass for the note: every revision recorded on it moves that far into the past. */
+async function elapse(noteId: string, minutes: number): Promise<void> {
   await db
     .update(noteRevisions)
     .set({ createdAt: sql`${noteRevisions.createdAt} - make_interval(mins => ${minutes})` })
-    .where(and(eq(noteRevisions.noteId, noteId), eq(noteRevisions.actorId, connectionId)))
+    .where(eq(noteRevisions.noteId, noteId))
 }
 
 beforeAll(async () => {
@@ -127,9 +127,15 @@ describe('restore point before an agent edits a note (#482)', () => {
     expect(points).toHaveLength(1)
     expect(points[0]).toMatchObject({ actorType: 'mcp', actorId: alphaId, body: original })
 
+    // Newest first; the relay's own store of the edit ('collab') may sit beside the agent's update.
     const history = await must<{ revisions: HistoryRow[] }>(alpha, 'note_history', { vaultId, path })
-    expect(history.revisions.map((r) => r.action).slice(0, 3)).toEqual(['update', 'restore_point', 'create'])
-    expect(history.revisions[1]).toMatchObject({ id: points[0]!.id, actorType: 'mcp', actorId: alphaId, actorName: 'agent-alpha' })
+    const own = history.revisions.filter((r) => r.actorType !== 'collab')
+    expect(own.map((r) => [r.action, r.actorType])).toEqual([
+      ['update', 'mcp'],
+      ['restore_point', 'mcp'],
+      ['create', 'user'],
+    ])
+    expect(own[1]).toMatchObject({ id: points[0]!.id, actorId: alphaId, actorName: 'agent-alpha' })
   })
 
   it('adds no second restore point for later edits in the same session', async () => {
@@ -163,7 +169,7 @@ describe('restore point before an agent edits a note (#482)', () => {
   })
 
   it('starts a new session after 30 idle minutes on the note', async () => {
-    await age(noteId, alphaId, 31)
+    await elapse(noteId, 31)
     await must(alpha, 'edit_note', { vaultId, path, body: `${original}\n\nalpha later` })
     const points = await restorePoints(noteId)
     expect(points).toHaveLength(3)
@@ -181,7 +187,7 @@ describe('restore point before an agent edits a note (#482)', () => {
 })
 
 describe('restore point edge cases (#482)', () => {
-  it('a refused first write keeps one restore point, and a retry adds none, even after the idle window', async () => {
+  it('a refused write keeps no restore point; the first write that lands keeps one', async () => {
     const path = 'docs/restore-point-quarantine'
     const body = paragraphs('quarantine', 40)
     const noteId = await personNote(path, body)
@@ -189,15 +195,24 @@ describe('restore point edge cases (#482)', () => {
     const first = await call(alpha, 'edit_note', { vaultId, path, body: doubled })
     expect(first.isError).toBe(true)
     expect(first.text).toMatch(/quarantine/i)
-    expect(await restorePoints(noteId)).toHaveLength(1)
-    expect((await call(alpha, 'edit_note', { vaultId, path, body: doubled })).isError).toBe(true)
-    expect(await restorePoints(noteId)).toHaveLength(1)
-    // Past the idle window the latest state is already this connection's restore point.
-    await age(noteId, alphaId, 31)
+    expect((await call(alpha, 'edit_note', { vaultId, path, body: 'x', frontmatter: { status: 'not-a-status' } })).isError).toBe(true)
+    expect(await restorePoints(noteId)).toHaveLength(0)
     await must(alpha, 'edit_note', { vaultId, path, body: `${body}\n\nshort addition` })
-    const points = await restorePoints(noteId)
-    expect(points).toHaveLength(1)
-    expect(points[0]).toMatchObject({ actorId: alphaId, body })
+    expect(await restorePoints(noteId)).toMatchObject([{ actorId: alphaId, body }])
+  })
+
+  it('a new session keeps a restore point equal to the latest revision, but not twice the same one', async () => {
+    const path = 'docs/restore-point-same-state'
+    const noteId = await personNote(path, 'as found')
+    await must(alpha, 'edit_note', { vaultId, path, body: 'as alpha left it' })
+    await elapse(noteId, 31)
+    // A new session: kept although the latest revision (alpha's own update) holds this state.
+    await must(alpha, 'edit_note', { vaultId, path, body: 'as alpha left it' })
+    expect((await restorePoints(noteId)).map((p) => p.body)).toEqual(['as found', 'as alpha left it'])
+    // That write changed nothing, so the latest revision is that restore point: no second one of the same state.
+    await elapse(noteId, 31)
+    await must(alpha, 'edit_note', { vaultId, path, body: 'as alpha left it' })
+    expect((await restorePoints(noteId)).map((p) => p.body)).toEqual(['as found', 'as alpha left it'])
   })
 
   it('a person editing in between does not end the session; a note the agent created needs none', async () => {
