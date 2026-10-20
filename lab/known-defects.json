@@ -314,12 +314,6 @@
       "test": "multilingual-search",
       "check": "vector retriever ranks Persian answers first as often as English (bge-small-en)",
       "issue": 530
-    },
-    {
-      "test": "zz-fix-pretty-bundle",
-      "check": "app survives indexing the bundle",
-      "issue": 496,
-      "intermittent": "embedding runs on the main thread; on a slower runner each batch blocks the event loop past the 3 s /health probe timeout (33/36 samples down in run 38967768712), on a faster one it never does (0/21 in run 38967769916), both on commit 9fe6f60"
     }
   ]
 }
