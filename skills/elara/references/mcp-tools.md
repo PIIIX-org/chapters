@@ -183,6 +183,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Returns**: the updated note row.
 - The edit goes through the live collaboration document, so people with the note open see it change. Because the body is replaced, not merged, text a person is typing in the same note at that moment can be lost. To append, read the note, then send the full new body. Concurrent writes to one note run one at a time, but they are not merged: if two agents each read the note and write it back with a line appended, only the later write survives.
 - **Quarantine**: a body that looks like accidental duplication is not written. It is quarantined when, compared with the note's stored body, it is at least 1.9 times as large and the stored body is 2 KiB or more (growth), or it repeats text the note already has and the extra copies add up to at least 1 KiB and half of the stored body (repeated block). Sizes are UTF-8 bytes; a short note filled in, ordinary growth and `create_note` are never quarantined. The call fails with `write to <path> quarantined: ...`, naming the rule and the id of the revision that keeps the refused body; the note is left unchanged and nobody with it open sees the body. The revision has action `quarantine` in `note_history`; `get_revision` returns its body and `revert_note` writes it. To write the body anyway, send the same call with `allowGrowth: true`.
+- **Restore point**: before your connection's first write to a note in a session (`edit_note`, `rename_note`, `delete_note`, `revert_note`), the note as it was is kept as a `restore_point` revision attributed to your connection, so a person can undo everything you did to that note with one `revert_note` to it (the History tab shows it as "Before <connection name> edited"). A session is your MCP connection on that note until it has recorded no revision there for 30 minutes; a refused or failed write keeps none. It is recorded even when the latest revision holds the same state, but not twice in a row for the same state. It is the stored note, so text a person typed that the editor has not saved yet is not in it.
 
 ### `rename_note`
 - **Scope**: vault. Edit access.
@@ -236,7 +237,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `path` (string, required).
   - `limit` (integer 1-100, optional, default 20).
   - `cursor` (string, optional): `nextCursor` from the previous page, passed unchanged. Anything else is refused with `invalid cursor`.
-- **Returns**: `{ revisions, hasMore, nextCursor }`. `revisions` is one page, newest first, metadata only: `{ id, actorType: "user" | "mcp" | "collab", actorId, action, createdAt, bodyBytes }` (`bodyBytes` is the UTF-8 size of the body at that revision). `action` is `create`, `update`, `delete`, `revert`, or `quarantine` for a write kept out of the note (see `edit_note`); a `quarantine` revision is not the note's content. `hasMore` says whether older revisions exist; `nextCursor` is the cursor for them, or `null` on the last page. A revision recorded while you page does not shift the pages: each revision comes back exactly once.
+- **Returns**: `{ revisions, hasMore, nextCursor }`. `revisions` is one page, newest first, metadata only: `{ id, actorType: "user" | "mcp" | "collab", actorId, actorName, action, createdAt, bodyBytes }` (`actorName` is the MCP connection's name on a revision a connection recorded, else `null`; `bodyBytes` is the UTF-8 size of the body at that revision). `action` is `create`, `update`, `delete`, `revert`, `restore_point` for the note as it was before a connection's first write in a session (see `edit_note`), or `quarantine` for a write kept out of the note (see `edit_note`); a `quarantine` revision is not the note's content. `hasMore` says whether older revisions exist; `nextCursor` is the cursor for them, or `null` on the last page. A revision recorded while you page does not shift the pages: each revision comes back exactly once.
 - No revision content: read one revision with `get_revision`.
 
 ### `get_revision`
@@ -256,7 +257,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `vaultId` (uuid, optional).
   - `path` (string, required).
   - `revisionId` (uuid, required).
-- **Returns**: the updated note row. The revert is recorded as a new revision. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert.
+- **Returns**: the updated note row. The revert is recorded as a new revision. Reverting to a `restore_point` revision undoes everything that connection did to the note in that session. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert.
 - The same body size limit as `edit_note` applies: reverting to a revision whose body is over the limit and larger than the current body is refused with an error naming the limit.
 
 ### `purge_revision`

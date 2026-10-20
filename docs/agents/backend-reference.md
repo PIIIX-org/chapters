@@ -172,7 +172,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | Table | Purpose |
 |---|---|
 | `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed) |
-| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`/`delete`/`revert`, or `quarantine` for a write kept out of the note (#492, not the note's content) |
+| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`/`delete`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), or `quarantine` for a write kept out of the note (#492, not the note's content) |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
 
@@ -509,6 +509,25 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   by the same actor. `recordRevision`'s
   dedupe and revert's `revert` relabel skip quarantine rows. Restore one
   with `revert_note` / the REST revert route.
+- **Restore points** (`withRestorePoint` in `store.ts`, #482): the MCP
+  write tools (`edit_note`, `rename_note`, `delete_note`, `revert_note`)
+  run through `withRestorePoint(vaultId, path, connectionId, write)`.
+  MCP is stateless Streamable HTTP (no session id), so a session is the
+  connection on that note until it has recorded no non-quarantine
+  revision there for `RESTORE_POINT_IDLE_MINUTES` (30). On the first write
+  of a session it reads the stored row before the write and, only when
+  the write returns a result, inserts a `restore_point` revision of that
+  state attributed to the connection, dated with the database clock at
+  the read (so it sorts before the write's own revisions). It bypasses
+  `recordRevision`'s dedupe (kept even when equal to the latest
+  revision) and is skipped only when the latest non-quarantine revision
+  already is this connection's restore point of the same state. Writes by
+  one connection to one note are serialized (`restore-point:` key lock),
+  so concurrent first writes keep one. Unsaved relay typing is not in it
+  (stored row only). Revert's `revert` relabel never relabels a restore
+  point. History lists (`listRevisionPage`, `listRevisionMeta`) add
+  `actorName` (the MCP connection's name, null otherwise); the History
+  tab labels a restore point "Before <name> edited".
 - Every mutation is attributed (`Actor {type: 'user'|'mcp'|'collab',
   id?}`), which is what makes `noteRevisions` a real audit trail across
   the UI, MCP, and live-collaboration write paths.
@@ -777,7 +796,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - *Notes* (13): `read_note`, `create_note`, `edit_note`, `rename_note`, `delete_note`, `list_trash`, `restore_note`, `purge_note`, `note_history`, `get_revision`, `revert_note`, `purge_revision`, `audit_okf_conformance`.
   `note_history` is metadata only and paged (#411): `listRevisionPage()`
   selects id, actor, action, `created_at` and `octet_length(body)`
-  (read from the stored value's header, the body is never loaded),
+  (read from the stored value's header, the body is never loaded; one
+  more query adds `actorName` for MCP rows, #482),
   keyset on `(created_at, id)` descending over
   `note_revisions_note_idx (note_id, created_at)`, `limit` default 20,
   max 100, one extra row to set `hasMore`. The opaque `cursor` is
