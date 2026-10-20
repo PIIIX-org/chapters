@@ -1085,7 +1085,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async ({ from, toName }: { from: string; toName: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
-      const renamed = await renameNote(target, from, toName, writeThroughCollab)
+      const renamed = await renameNote(target, from, toName, actor, writeThroughCollab)
       if (!renamed) throw new McpToolError('note not found')
       return renamed
     },
@@ -1141,7 +1141,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async ({ noteId }: { noteId: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
-      const restored = await restoreNote(target, noteId)
+      const restored = await restoreNote(target, noteId, actor)
       if (!restored) throw new McpToolError('note not found or not trashed')
       return restored
     },
@@ -1175,7 +1175,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       pinPermission: 'edit',
       description:
-        'Change history for a note (actor-attributed), newest first, metadata only: id, action, actorType, actorId, createdAt, bodyBytes. One page of `limit` revisions (default 20, max 100); when `hasMore`, pass `nextCursor` as `cursor` for the next page. Read one revision\'s content with get_revision. Requires edit access.',
+        'Change history for a note (actor-attributed), newest first, metadata only: id, action, actorType, actorId, createdAt, bodyBytes. Actions: create, update, delete, restore, rename (with fromPath, toPath), revert (with sourceRevisionId, the revision it brought back), quarantine. One page of `limit` revisions (default 20, max 100); when `hasMore`, pass `nextCursor` as `cursor` for the next page. Read one revision\'s content with get_revision. Requires edit access.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
         path: z.string(),

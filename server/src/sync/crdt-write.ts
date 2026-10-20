@@ -116,15 +116,17 @@ async function noteFileDamaged(vaultId: string, path: string): Promise<boolean> 
  * and editors never see it. When this edit replaces the body, the relay's
  * own store of the document it produces is not checked again (`directWrite`
  * in its context): the caller here decided. A frontmatter-only edit leaves
- * the body to the relay's check.
+ * the body to the relay's check. `options.revertOf` (revertNote) records the
+ * attributed store write as a `revert` event naming that revision (#479).
  */
 export async function writeThroughCollab(
   vaultId: string,
   path: string,
   input: NoteEdit,
   actor: Actor,
-  options: { quarantine?: QuarantineRules } = {},
+  options: { quarantine?: QuarantineRules; revertOf?: string } = {},
 ): Promise<NoteRow | null> {
+  const record = { revertOf: options.revertOf }
   return withKeyLock(`collab:${vaultId}/${resolveNotePath(path).fullPath}`, async () => {
     const existing = await getLiveNote(vaultId, path)
     if (!existing) return null
@@ -138,7 +140,7 @@ export async function writeThroughCollab(
     const collab = getCollab()
     if (!collab) {
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
-      return updateNote(vaultId, path, { frontmatter, body: input.body }, actor)
+      return updateNote(vaultId, path, { frontmatter, body: input.body }, actor, record)
     }
     let connection: DirectConnection
     try {
@@ -157,7 +159,7 @@ export async function writeThroughCollab(
       if (!(await noteFileDamaged(vaultId, path))) throw err
       if (input.frontmatter === undefined || input.body === undefined) throw new NoteFileDamagedError(path)
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
-      return updateNote(vaultId, path, { frontmatter, body: input.body }, actor)
+      return updateNote(vaultId, path, { frontmatter, body: input.body }, actor, record)
     }
     const next: { frontmatter?: Frontmatter } = {}
     try {
@@ -187,7 +189,7 @@ export async function writeThroughCollab(
     } finally {
       await connection.disconnect()
     }
-    return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: input.body }, actor)
+    return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: input.body }, actor, record)
   })
 }
 

@@ -96,6 +96,35 @@ async function recordRevision(
 }
 
 /**
+ * What a history event records besides the note's state (#479): a delete or
+ * restore of the note, a rename with its old and new path, a revert with the
+ * revision it brought back.
+ */
+export type HistoryEvent =
+  | { action: 'delete' | 'restore' }
+  | { action: 'rename'; fromPath: string; toPath: string }
+  | { action: 'revert'; sourceRevisionId: string }
+
+/** Records a history event with the note's state. Always a new row: an event
+ * is never a repeat of the state before it, whoever recorded that. */
+async function recordEvent(
+  noteId: string,
+  event: HistoryEvent,
+  frontmatter: unknown,
+  body: string,
+  actor: Actor,
+): Promise<void> {
+  await db.insert(noteRevisions).values({
+    noteId,
+    actorType: actor.type,
+    actorId: actor.id,
+    ...event,
+    frontmatter: frontmatter as Record<string, unknown>,
+    body,
+  })
+}
+
+/**
  * Keeps a suspicious write out of the note (#492): when `input.body` breaks
  * one of `rules` against the stored body, the write is recorded as a
  * `quarantine` revision (the row and the file are not touched) and a
@@ -409,13 +438,15 @@ export async function readNote(
  * be skipped or out of order. `options.quarantine` checks the body against
  * the stored one first (refuseSuspiciousWrite; the collab relay's store, which
  * passes the quarantine revision of the loaded document's episode, if any).
+ * `options.revertOf` names the revision this write brings back (revertNote):
+ * the write is then recorded as its own `revert` event (#479).
  */
 export async function updateNote(
   vaultId: string,
   path: string,
   input: { frontmatter?: Record<string, unknown>; body?: string },
   actor: Actor = SYSTEM_ACTOR,
-  options: { quarantine?: QuarantineRules; episode?: string } = {},
+  options: { quarantine?: QuarantineRules; episode?: string; revertOf?: string } = {},
 ): Promise<NoteRow | null> {
   const resolved = resolveNotePath(path)
   return withKeyLock(`note:${vaultId}/${resolved.fullPath}`, async () => {
@@ -445,7 +476,11 @@ export async function updateNote(
     }
     await syncLinks(row.id, body)
     scheduleEmbedding(row.id)
-    await recordRevision(row.id, 'update', frontmatter, body, actor)
+    if (options.revertOf) {
+      await recordEvent(row.id, { action: 'revert', sourceRevisionId: options.revertOf }, frontmatter, body, actor)
+    } else {
+      await recordRevision(row.id, 'update', frontmatter, body, actor)
+    }
     return updated!
   })
 }
@@ -463,10 +498,13 @@ export function refactorWikilinks(body: string, fromPath: string, toPath: string
   })
 }
 
+/** Moves a note to `toName` (a slug in its folder, or a path), rewriting the
+ * links to it; a move is recorded as a `rename` event by `actor` (#479). */
 export async function renameNote(
   vaultId: string,
   from: string,
   toName: string,
+  actor: Actor = SYSTEM_ACTOR,
   updateFn: (
     vaultId: string,
     path: string,
@@ -557,6 +595,15 @@ export async function renameNote(
   ]
   await regenProgressiveIndices(vaultId, affectedDirs)
   await syncLinks(updated.id, currentBody)
+  if (isMoving) {
+    await recordEvent(
+      updated.id,
+      { action: 'rename', fromPath: fromResolved.fullPath, toPath: toResolved.fullPath },
+      newFrontmatter,
+      currentBody,
+      actor,
+    )
+  }
 
   // Refactor incoming wikilinks across other notes in the vault. Each is
   // re-read: it may have changed since the check above.
@@ -613,11 +660,15 @@ export async function softDeleteNote(
   await mkdir(join(vaultDir(vaultId), '.trash'), { recursive: true })
   await rename(noteFile(vaultId, resolved.fullPath), trashFile(vaultId, row.id))
   await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
-  await recordRevision(row.id, 'delete', row.frontmatter, row.body, actor)
+  await recordEvent(row.id, { action: 'delete' }, row.frontmatter, row.body, actor)
   return updated!
 }
 
-export async function restoreNote(vaultId: string, noteId: string): Promise<NoteRow | null> {
+export async function restoreNote(
+  vaultId: string,
+  noteId: string,
+  actor: Actor = SYSTEM_ACTOR,
+): Promise<NoteRow | null> {
   const rows = await db
     .select()
     .from(notes)
@@ -637,6 +688,7 @@ export async function restoreNote(vaultId: string, noteId: string): Promise<Note
   await rename(trashFile(vaultId, row.id), noteFile(vaultId, resolved.fullPath))
   await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
   scheduleEmbedding(row.id)
+  await recordEvent(row.id, { action: 'restore' }, row.frontmatter, row.body, actor)
   return updated!
 }
 
@@ -680,7 +732,32 @@ export async function listTrash(
     .offset(offset)
 }
 
-export type RevisionMeta = Pick<RevisionRow, 'id' | 'actorType' | 'actorId' | 'action' | 'createdAt'>
+/** The event fields of a revision (#479), present only on the rows that have
+ * them (a revert's source, a rename's paths), so a plain row costs nothing more. */
+export interface RevisionEventDetail {
+  sourceRevisionId?: string
+  fromPath?: string
+  toPath?: string
+}
+
+export type RevisionMeta = Pick<RevisionRow, 'id' | 'actorType' | 'actorId' | 'action' | 'createdAt'> & RevisionEventDetail
+
+/** One recorded revision with its content and the note's current path. */
+export type RevisionDetail = Omit<RevisionRow, keyof RevisionEventDetail> & RevisionEventDetail & { path: string }
+
+const eventColumns = {
+  sourceRevisionId: noteRevisions.sourceRevisionId,
+  fromPath: noteRevisions.fromPath,
+  toPath: noteRevisions.toPath,
+}
+
+function eventDetail(r: { sourceRevisionId: string | null; fromPath: string | null; toPath: string | null }): RevisionEventDetail {
+  return {
+    ...(r.sourceRevisionId === null ? {} : { sourceRevisionId: r.sourceRevisionId }),
+    ...(r.fromPath === null ? {} : { fromPath: r.fromPath }),
+    ...(r.toPath === null ? {} : { toPath: r.toPath }),
+  }
+}
 
 /** One revision in an MCP history page: who changed the note, when, how, and how big the body was. */
 export interface RevisionSummary extends RevisionMeta {
@@ -723,6 +800,7 @@ export async function listRevisionPage(
       action: noteRevisions.action,
       createdAt: noteRevisions.createdAt,
       bodyBytes: sql<number>`octet_length(${noteRevisions.body})`,
+      ...eventColumns,
       at: sql<string>`to_char(${noteRevisions.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
     })
     .from(noteRevisions)
@@ -746,6 +824,7 @@ export async function listRevisionPage(
       action: r.action,
       createdAt: r.createdAt,
       bodyBytes: r.bodyBytes,
+      ...eventDetail(r),
     })),
     next: rows.length > limit && last ? { at: last.at, id: last.id } : null,
   }
@@ -761,26 +840,31 @@ export async function listRevisionMeta(
 ): Promise<RevisionMeta[] | null> {
   const row = await getLiveNote(vaultId, path)
   if (!row) return null
-  return db
+  const rows = await db
     .select({
       id: noteRevisions.id,
       actorType: noteRevisions.actorType,
       actorId: noteRevisions.actorId,
       action: noteRevisions.action,
       createdAt: noteRevisions.createdAt,
+      ...eventColumns,
     })
     .from(noteRevisions)
     .where(eq(noteRevisions.noteId, row.id))
     .orderBy(desc(noteRevisions.createdAt))
     .limit(limit)
     .offset(offset)
+  return rows.map(({ sourceRevisionId, fromPath, toPath, ...meta }) => ({
+    ...meta,
+    ...eventDetail({ sourceRevisionId, fromPath, toPath }),
+  }))
 }
 
 /** Full content of a single recorded revision for preview / diff inspection. */
 export async function getRevision(
   vaultId: string,
   revisionId: string,
-): Promise<(RevisionRow & { path: string }) | null> {
+): Promise<RevisionDetail | null> {
   const rows = await db
     .select({
       id: noteRevisions.id,
@@ -792,6 +876,7 @@ export async function getRevision(
       frontmatter: noteRevisions.frontmatter,
       body: noteRevisions.body,
       createdAt: noteRevisions.createdAt,
+      ...eventColumns,
     })
     .from(noteRevisions)
     .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
@@ -800,7 +885,8 @@ export async function getRevision(
 
   const row = rows[0]
   if (!row) return null
-  return row as RevisionRow & { path: string }
+  const { sourceRevisionId, fromPath, toPath, ...revision } = row
+  return { ...revision, ...eventDetail({ sourceRevisionId, fromPath, toPath }) }
 }
 
 export interface BacklinkItem {
@@ -1132,7 +1218,8 @@ export async function getLocalGraph(
   }
 }
 
-/** Restores a note to a recorded revision (a new attributed write). */
+/** Restores a note to a recorded revision: a new attributed write, recorded
+ * as a `revert` event naming that revision; earlier rows stay as they are (#479). */
 export async function revertNote(
   vaultId: string,
   path: string,
@@ -1143,6 +1230,7 @@ export async function revertNote(
     path: string,
     input: { frontmatter?: Record<string, unknown>; body?: string },
     actor: Actor,
+    options: { revertOf: string },
   ) => Promise<NoteRow | null> = updateNote,
 ): Promise<NoteRow | null> {
   const row = await getLiveNote(vaultId, path)
@@ -1154,29 +1242,13 @@ export async function revertNote(
       .where(and(eq(noteRevisions.id, revisionId), eq(noteRevisions.noteId, row.id)))
   )[0]
   if (!revision) return null
-  const updated = await updateFn(
+  return updateFn(
     vaultId,
     path,
     { frontmatter: revision.frontmatter as Record<string, unknown>, body: revision.body },
     actor,
+    { revertOf: revision.id },
   )
-  if (updated) {
-    const newest = (
-      await db
-        .select({ id: noteRevisions.id })
-        .from(noteRevisions)
-        .where(and(eq(noteRevisions.noteId, row.id), ne(noteRevisions.action, QUARANTINE_ACTION)))
-        .orderBy(desc(noteRevisions.createdAt))
-        .limit(1)
-    )[0]
-    if (newest) {
-      await db
-        .update(noteRevisions)
-        .set({ action: 'revert' })
-        .where(eq(noteRevisions.id, newest.id))
-    }
-  }
-  return updated
 }
 
 /**

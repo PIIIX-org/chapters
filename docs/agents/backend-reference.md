@@ -172,7 +172,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | Table | Purpose |
 |---|---|
 | `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed) |
-| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`/`delete`/`revert`, or `quarantine` for a write kept out of the note (#492, not the note's content) |
+| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, or `quarantine` for a write kept out of the note (#492, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; migration 0022 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; no FK, a purged source leaves it dangling). Revert never relabels an earlier row |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
 
@@ -785,7 +785,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   (a JS `Date` would truncate to milliseconds), so a revision recorded
   while a caller pages shifts nothing. `get_revision` returns one
   revision's frontmatter and body (`getRevision()`, the same query as
-  the REST revision route), gated like `note_history`.
+  the REST revision route), gated like `note_history`. Both, and the
+  REST history list, add `sourceRevisionId` / `fromPath` / `toPath`
+  only on the rows that have them (#479), so a plain row costs no more.
   - *Repositories* (13): `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `get_repository_graph_preference`, `set_repository_graph_preference`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
   - *Teams & Users* (7): `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
   - *Export & Notifications* (4): `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`.

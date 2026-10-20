@@ -149,7 +149,13 @@ export function noteRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!(await guard(req as VaultReq, reply, 'edit'))) return
       splitPath(req.body.from)
-      const renamed = await renameNote(req.params.id, req.body.from, req.body.to, writeThroughCollab)
+      const renamed = await renameNote(
+        req.params.id,
+        req.body.from,
+        req.body.to,
+        { type: 'user', id: req.user!.id },
+        writeThroughCollab,
+      )
       if (!renamed) return reply.code(404).send({ error: 'note not found' })
       return renamed
     },
@@ -192,7 +198,7 @@ export function noteRoutes(app: FastifyInstance) {
     '/vaults/:id/trash/:noteId/restore',
     async (req, reply) => {
       if (!(await guard(req as unknown as VaultReq, reply, 'edit'))) return
-      const restored = await restoreNote(req.params.id, req.params.noteId)
+      const restored = await restoreNote(req.params.id, req.params.noteId, { type: 'user', id: req.user!.id })
       if (!restored) return reply.code(404).send({ error: 'trashed note not found' })
       return restored
     },

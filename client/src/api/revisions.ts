@@ -16,8 +16,14 @@ export interface Revision {
    */
   actorType: 'user' | 'mcp' | 'collab'
   actorId: string | null
+  /** create, update, delete, restore, rename, revert, quarantine (or a newer one: shown as is). */
   action: string
   createdAt: string
+  /** A `revert` row: the revision it brought back (#479). */
+  sourceRevisionId?: string
+  /** A `rename` row: the note's path before and after (#479). */
+  fromPath?: string
+  toPath?: string
 }
 
 /** Newest first. Requires **edit** access, not merely read (audit rule). */
