@@ -4,7 +4,7 @@ import { OkfValidationError } from './okf.js'
 import { NoteWriteQuarantinedError } from './growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
-import { writeThroughCollab } from '../sync/crdt-write.js'
+import { requestedEdit, writeThroughCollab } from '../sync/crdt-write.js'
 import {
   createNote,
   getIncomingLinks,
@@ -91,27 +91,35 @@ export function noteRoutes(app: FastifyInstance) {
     return { path: note.row.path, frontmatter: note.frontmatter, body: note.body, updatedAt: note.row.updatedAt }
   })
 
+  // `frontmatter` merges per top-level key; `replace: true` swaps the whole
+  // map and `removeKeys` deletes keys, as edit_note does (#438).
   app.put<{
     Params: { id: string; '*': string }
-    Body: { frontmatter?: Record<string, unknown>; body?: string; allowGrowth?: boolean }
+    Body: { frontmatter?: Record<string, unknown>; body?: string; replace?: boolean; removeKeys?: string[]; allowGrowth?: boolean }
   }>(
     '/vaults/:id/notes/*',
     {
       schema: {
         body: {
           type: 'object',
-          properties: { frontmatter: { type: 'object' }, body: { type: 'string' }, allowGrowth: { type: 'boolean' } },
+          properties: {
+            frontmatter: { type: 'object' },
+            body: { type: 'string' },
+            replace: { type: 'boolean' },
+            removeKeys: { type: 'array', items: { type: 'string' } },
+            allowGrowth: { type: 'boolean' },
+          },
         },
       },
     },
     async (req, reply) => {
       if (!(await guard(req, reply, 'edit'))) return
       splitPath(req.params['*'])
-      const { allowGrowth, ...input } = req.body
+      const { allowGrowth, ...edit } = req.body
       const updated = await writeThroughCollab(
         req.params.id,
         req.params['*'],
-        input,
+        requestedEdit(edit),
         { type: 'user', id: req.user!.id },
         { quarantine: allowGrowth ? undefined : 'all' },
       )
