@@ -55,6 +55,13 @@ the client's collab code (`client/src/hooks/useCollabDoc*`,
 to the fast tier (`LAB_ALSO=browser`); any other client change is
 exercised in the browser only by the nightly full tier.
 
+A PR that changes backup or restore code (`server/src/export/**`,
+`server/src/scripts/restore-backup.ts`, `server/src/notes/atomic-write.ts`,
+`lab/tests/backup-restore.test.ts`) adds `backup-restore` the same way
+(#493): a backup taken through the API, restored with `pnpm restore-backup`
+into a fresh database, then its counts, `backup.json` digests, file modes
+and content checked, and a tampered copy refused.
+
 By hand (any branch that has this workflow):
 
 ```sh

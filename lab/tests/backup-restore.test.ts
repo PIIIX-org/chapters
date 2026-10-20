@@ -16,6 +16,10 @@
 // time in a COPY of the archive (each patch is recorded) and retried.
 // A second app container is then booted on the restored database (port 3001)
 // to check logins, MFA, MCP tokens and attachments end to end.
+// Since #493 it also checks the file and directory modes (600/700), the
+// SHA-256 and size backup.json records per part, every table's restored
+// row count against backup.json, and that the CLI refuses a tampered copy.
+// PRs that touch backup or restore code add it to the fast tier (LAB_ALSO).
 import { createHmac } from 'node:crypto'
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { waitHealthy, type ExecResult } from '../lib/docker.ts'
@@ -103,6 +107,17 @@ z.updateFile('account-dump.json', Buffer.from(JSON.stringify(d, null, 2), 'utf8'
 require('fs').mkdirSync(require('path').dirname(process.env.DST), { recursive: true })
 z.writeZip(process.env.DST)
 console.log(JSON.stringify(changed))
+`
+
+/** Flips one byte of ENTRY in a copy of SRC: same size, valid zip (AdmZip rewrites the CRC). */
+const TAMPER_JS = `
+const AdmZip = require('adm-zip')
+const z = new AdmZip(process.env.SRC)
+const data = Buffer.from(z.getEntry(process.env.ENTRY).getData())
+data[data.length - 2] ^= 1
+z.updateFile(process.env.ENTRY, data)
+require('fs').mkdirSync(require('path').dirname(process.env.DST), { recursive: true })
+z.writeZip(process.env.DST)
 `
 
 /** Known restore blockers -> the minimal archive patch that gets past each (recorded, never silent). */
@@ -251,6 +266,7 @@ const test: LabTest = {
     const file = lastRun?.result?.filename
     const listing = (await appExec(ctx, 'ls -1 /data/backups 2>/dev/null; true')).stdout.split('\n').filter(Boolean)
     const fileStat = file ? (await appExec(ctx, `stat -c '%a %U %s' /data/backups/${file}`)).stdout.trim() : ''
+    const dirStat = (await appExec(ctx, `stat -c '%a %U' /data/backups`)).stdout.trim()
     const memberRun = await member.post('/api/admin/backup/run', {})
     checks.push({
       name: 'POST /api/admin/backup/run writes a zip to BACKUP_LOCAL_PATH',
@@ -269,9 +285,16 @@ const test: LabTest = {
     checks.push({ name: 'non-admin cannot trigger a backup', expected: '403', actual: String(memberRun.status), ok: memberRun.status === 403, severity: 'high' })
     checks.push({
       name: 'backup file (holds password + token hashes) is not world-readable',
-      expected: 'mode 600/640',
+      expected: 'mode 600',
       actual: fileStat,
-      ok: /^6[04]0 /.test(fileStat),
+      ok: /^600 /.test(fileStat),
+      severity: 'low',
+    })
+    checks.push({
+      name: 'backup directory is private to the server user (#493)',
+      expected: 'mode 700',
+      actual: dirStat,
+      ok: /^700 /.test(dirStat),
       severity: 'low',
     })
     if (!file) throw new Error(`backup run failed: ${JSON.stringify(runs)}`)
@@ -305,6 +328,29 @@ const test: LabTest = {
         (t) => !(t in dump),
       ),
     }
+    // backup.json's per-part digests (#493), recomputed with the lab's own zip reader.
+    const manifestEntry = zip.find((e) => e.name === 'backup.json')
+    const manifest: { tables?: Record<string, number>; parts?: Record<string, { sha256: string; size: number }> } = manifestEntry
+      ? (JSON.parse(text(manifestEntry.data)) as object)
+      : {}
+    const parts = manifest.parts ?? {}
+    const others = zip.filter((e) => e.name !== 'backup.json')
+    const partProblems = [
+      ...others.filter((e) => !parts[e.name]).map((e) => `${e.name} not listed`),
+      ...others
+        .filter((e) => parts[e.name] && (parts[e.name]!.size !== e.data.length || parts[e.name]!.sha256 !== sha256(e.data)))
+        .map((e) => `${e.name} differs`),
+      ...Object.keys(parts)
+        .filter((name) => !others.some((e) => e.name === name))
+        .map((name) => `${name} listed but absent`),
+    ]
+    checks.push({
+      name: 'backup.json lists every part with a matching SHA-256 and size (#493)',
+      expected: `${others.length} parts listed, 0 problems`,
+      actual: `${Object.keys(parts).length} listed, ${partProblems.length} problems${partProblems.length ? `: ${partProblems.slice(0, 3).join('; ')}` : ''}`,
+      ok: others.length > 0 && partProblems.length === 0,
+      severity: 'high',
+    })
     const download = await getRaw(base, '/api/admin/backup', admin.cookie)
     const downloadZip = download.status === 200 ? readZip(download.bytes) : []
     checks.push({
@@ -328,6 +374,64 @@ const test: LabTest = {
       expected: 'non-zero exit, "Refusing to restore", data untouched',
       actual: `exit ${liveRestore.code}; ${(liveRestore.stderr + liveRestore.stdout).trim().slice(-200)}; users ${liveUsersAfter}`,
       ok: liveRestore.code !== 0 && /Refusing to restore/.test(liveRestore.stderr + liveRestore.stdout) && Number(liveUsersAfter) === sourceTables.users.length,
+      severity: 'high',
+    })
+
+    // ------------------- restore 1b: a tampered copy into a fresh DB (#493)
+    // One byte of a live note's file changed: the zip is valid (CRC rewritten), only backup.json's digest can tell.
+    const tamperedPath = '/data/backups-tampered/tampered.zip'
+    const tamperedEntry = `vaults/${V}/notes/concepts/persian.md`
+    const tamper = await ctx.docker.exec([
+      ...ctx.docker.COMPOSE,
+      'exec',
+      '-T',
+      '-e',
+      `SRC=/data/backups/${file}`,
+      '-e',
+      `DST=${tamperedPath}`,
+      '-e',
+      `ENTRY=${tamperedEntry}`,
+      'app',
+      'node',
+      '-e',
+      TAMPER_JS,
+    ])
+    await psqlDb('"$POSTGRES_DB"', `drop database if exists ${RESTORE_DB} with (force);`)
+    await psqlDb('"$POSTGRES_DB"', `create database ${RESTORE_DB};`)
+    await appExec(ctx, `rm -rf ${RESTORE_DIR}`)
+    const tamperedRestore = await runWithDeadline(
+      ctx,
+      'lab-restore-tampered',
+      [
+        ...ctx.docker.COMPOSE,
+        'run',
+        '--rm',
+        '--no-deps',
+        '-T',
+        '--name',
+        'lab-restore-tampered',
+        '-e',
+        `DATA_DIR=${RESTORE_DIR}`,
+        'app',
+        'sh',
+        '-c',
+        `export DATABASE_URL="\${DATABASE_URL%/*}/${RESTORE_DB}" COREPACK_ENABLE_DOWNLOAD_PROMPT=0; pnpm restore-backup ${tamperedPath}`,
+      ],
+      CLI_TIMEOUT_MS,
+    )
+    const tamperedOut = `${tamperedRestore.stderr}\n${tamperedRestore.stdout}`
+    const tamperedUsers = await psqlDb(RESTORE_DB, 'select count(*) from users').catch((err: unknown) => `error: ${String(err).slice(0, 120)}`)
+    const tamperedFiles = (await appExec(ctx, `find ${RESTORE_DIR}/vaults -type f 2>/dev/null | wc -l`)).stdout.trim()
+    checks.push({
+      name: 'restore CLI refuses an archive with a part changed after the backup, writing nothing (#493)',
+      expected: `non-zero exit, "Refusing to restore: ${tamperedEntry} does not match its SHA-256", 0 users, 0 files`,
+      actual: `tamper ${tamper.code} ${tamper.stderr.slice(0, 120)}; exit ${tamperedRestore.code}; ${tamperedOut.split('\n').filter((l) => /Refusing|SHA-256|Error/.test(l)).slice(0, 2).join(' | ').slice(0, 300)}; users ${tamperedUsers}; files ${tamperedFiles}`,
+      ok:
+        tamper.code === 0 &&
+        tamperedRestore.code !== 0 &&
+        /Refusing to restore: .*persian\.md does not match its SHA-256/.test(tamperedOut) &&
+        tamperedUsers === '0' &&
+        tamperedFiles === '0',
       severity: 'high',
     })
 
@@ -535,6 +639,23 @@ const test: LabTest = {
       checks.push({ name: 'restored attachments', expected: `${srcAssetFiles.length} files`, actual: `${restoredAssetFiles.length} files`, ok: same('attachments (files on disk)'), severity: 'high' })
       checks.push({ name: 'restored repositories (repo: links, pinned tokens)', expected: `${row('repositories').source}`, actual: `${row('repositories').restored}`, ok: same('repositories'), severity: 'medium' })
       checks.push({ name: 'restored MFA state usable (secret + backup codes)', expected: 'mfa users keep a TOTP secret', actual: JSON.stringify({ src: row('mfa_backup_codes'), restored: restoredTables.mfa_backup_codes, dumpTotp: archiveSummary.mfaUserHasTotpInDump ? 'present' : 'missing (the backup strips totpSecret)' }), ok: archiveSummary.mfaUserHasTotpInDump && same('mfa_backup_codes'), severity: 'high' })
+      // Every table's row count in the restored database against backup.json (#493). The restore
+      // adds one security event (instance_restored) and writes instance_state itself.
+      const archiveCounts = Object.entries(manifest.tables ?? {}).filter(([t]) => /^[a-z_]+$/.test(t) && t !== 'instance_state')
+      const restoredCounts = archiveCounts.length
+        ? // Not `t`: psqlRowsDb wraps the query as `json_agg(t) from (...) t`, and a column named t would shadow the row.
+          await rq<{ tbl: string; n: number }>(archiveCounts.map(([t]) => `select '${t}' as tbl, count(*)::int as n from ${t}`).join(' union all '))
+        : []
+      const countMismatches = archiveCounts
+        .map(([t, n]) => ({ t, expected: t === 'security_events' ? n + 1 : n, got: restoredCounts.find((r) => r.tbl === t)?.n }))
+        .filter((c) => c.got !== c.expected)
+      checks.push({
+        name: 'restored row count of every table matches backup.json (#493)',
+        expected: `${archiveCounts.length} tables, 0 mismatches`,
+        actual: `${restoredCounts.length} tables counted, ${countMismatches.length} mismatches${countMismatches.length ? `: ${countMismatches.map((c) => `${c.t} ${c.got}/${c.expected}`).join(', ')}` : ''}`,
+        ok: archiveCounts.length > 0 && countMismatches.length === 0,
+        severity: 'high',
+      })
 
       // ------------------------------- boot the restored instance
       await ctx.docker.exec(['docker', 'rm', '-f', 'lab-restored'])

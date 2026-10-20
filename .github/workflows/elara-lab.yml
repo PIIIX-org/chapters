@@ -12,7 +12,9 @@ name: Elara lab
 #         pnpm-workspace.yaml, tsconfig.base.json, Dockerfile, .dockerignore,
 #         docker-compose.yml, this workflow, the gate; pushes to lab/**.
 #         Client collab code (useCollabDoc, useCodeMirrorEditor, api/collab)
-#         adds the browser test to the fast tier.
+#         adds the browser test to the fast tier; backup or restore code
+#         (server/src/export/, the restore CLI, atomic-write, the test itself)
+#         adds backup-restore (#493: restore-and-verify on every such PR).
 #   full  nightly on dev, every PR to prod (promotions), and by hand:
 #         gh workflow run elara-lab.yml --ref <branch> [-f tier=fast] [-f tests=a,b]
 # The gate (.github/scripts/lab-gate.mjs) compares the results with
@@ -106,6 +108,10 @@ jobs:
                 # The browser test is the only one that drives the client's collab code.
                 if grep -Eq '^client/src/(hooks/(useCollabDoc|useCodeMirrorEditor)|api/collab)' "$RUNNER_TEMP/changed.txt"; then
                   also=browser
+                fi
+                # Backup -> restore into a fresh database -> verify counts, digests and content (#493).
+                if grep -Eq '^(server/src/export/|server/src/scripts/restore-backup\.ts$|server/src/notes/atomic-write\.ts$|lab/tests/backup-restore\.test\.ts$)' "$RUNNER_TEMP/changed.txt"; then
+                  also="${also:+$also,}backup-restore"
                 fi
                 # What decides what an agent gets back: search, extraction and
                 # ingestion, MCP responses, the schema, the image's dependencies,

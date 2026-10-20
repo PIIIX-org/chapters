@@ -664,24 +664,36 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   scheduled run in `backup-service.ts` writes the same zip):
   `buildInstanceBackup()` in `archive.ts`, format 2
   (`backup-format.ts`, #409). `backup.json` (format, time, row count per
-  table) plus one `db/<table>.jsonl` per table in `BACKUP_TABLES`, read
+  table, and `parts`: SHA-256 + size of every other entry, #493) plus
+  one `db/<table>.jsonl` per table in `BACKUP_TABLES`, read
   in one repeatable-read snapshot, rows as stored (TOTP secrets
   included, embeddings left out), plus `vaults/<id>/notes/<path>.md`,
   `trash/<note id>.md` and `assets/<file>`. Files are read after the
   snapshot: a note file that no longer matches its snapshot row (body,
   frontmatter key by key) is left out, and the restore writes it from
-  the row. `executeBackup` writes the local file with mode `0600`
-  (open + fchmod, whatever the umask). Not backed up: sessions,
+  the row; `backup.json` `notesFromRow` counts them and the restore plan
+  warns. Not backed up: sessions,
   email tokens, export links, note links, semantic edges, embeddings,
   the repository file index, CRDT state (each rebuilt or reissued; the
-  table is in `docs/self-hosting/backup.md`).
+  table is in `docs/self-hosting/backup.md`). `executeBackup` writes
+  local backups (`BACKUP_LOCAL_PATH`) with `atomicWrite(..., { mode: 0o600 })`
+  (temp file created and chmodded 600 before the content goes in, then
+  renamed) in a directory made and chmodded 700, and chmods the backups
+  already there to 600, whatever the umask (#409, #493; a chmod the
+  server can't do is a warning, not a failed backup). The download
+  (`GET /api/admin/backup`) is sent with `cache-control: no-store`.
 - **Restore** (`server/src/export/restore.ts` +
   `server/src/scripts/restore-backup.ts`): **CLI only**
   (`pnpm restore-backup [--dry-run] <zip>`), deliberately **not** an
   HTTP endpoint — restoring over a live instance isn't a button.
-  `restoreBackup()` validates (format, every table file, row counts,
+  `restoreBackup()` validates (format, every entry against its
+  `backup.json` SHA-256 and size with nothing missing or added — an
+  archive without `parts`, format 1 or pre-#493, restores with a
+  warning —, every table file, row counts,
   columns, references inside the archive, note paths, attachment names;
   `BackupInvalidError`), plans (per-table and per-file counts, conflicts;
+  warnings for attachments on disk that differ, kept, and for note or
+  trash files on disk that differ, replaced by the archive's version;
   `RestoreRefusedError`), then applies: rows in one transaction with
   `on conflict (primary key) do nothing`, files written atomically
   inside it (the files it created are removed if the transaction
@@ -856,7 +868,7 @@ the count as `filesPendingExtraction`.
 - **Mermaid preview XSS defense**: Initialized with `securityLevel: 'strict'`, `htmlLabels: false`, and SVG sanitized with `DOMPurify.sanitize(..., { USE_PROFILES: { svg: true, svgFilters: true } })`.
 - **MFA setup protection**: `POST /api/mfa/setup` forbids re-setup when MFA is already enabled, requiring explicit verification before modifying second-factor state.
 - **Mass assignment guards**: Fastify schema validation (`additionalProperties: false`) and explicit field destructuring on vault and repository update routes.
-- **Secrets in backups** (SEC-06, revised by #409): the instance backup keeps password hashes, token hashes and TOTP secrets as stored (stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The scheduled local backup file is written with mode `0600` whatever the umask. The restore CLI prints counts, and only a driver message and code on errors. Manifest digests and a CI restore check: #493.
+- **Secrets in backups** (SEC-06, revised by #409): the instance backup keeps password hashes, token hashes and TOTP secrets as stored (stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The scheduled local backup file is written with mode `0600` (through a temp file of the same mode) in a `0700` directory, whatever the umask (#493). The restore CLI prints counts, and only a driver message and code on errors. The `backup.json` digests (#493) are integrity checks, not a signature: they catch damage and truncation, not someone who can rewrite the whole archive.
 - **OIDC host-header sanitization**: Validated against `APP_URL` and injection characters to protect authorization code callbacks.
 - **Admin role hierarchy**: Strict `ROLE_RANK` enforcement preventing self-promotion or subordinate demotion of superadmins and instance owners.
 - **Ingestion bounds**: Git clone ingestion capped to 1MB per file and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`).
