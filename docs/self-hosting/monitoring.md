@@ -19,7 +19,7 @@ Every finished request is counted per **route template** (`PUT /api/vaults/:id/n
 
 What counts as a failed job:
 
-- `embedding`: a note's embedding failed 3 attempts in a row (search will not find it by meaning);
+- `embedding`: a note's embedding failed 3 attempts in a row (search will not find it by meaning), or the embedding worker thread died (no `subjectId`; error name `EmbeddingWorkerCrash`; the next batch starts a new worker, and the note or file it was embedding fails or retries as usual);
 - `extraction`: a repository file's code extraction or embedding failed;
 - `sync`: a git or local-folder repository sync failed (also shown on the repository card). Counted once, when the repository goes into `error`: the poller retries a failing git repository every `POLL_INTERVAL_MS`, and a user or agent may retry it by hand; each retry that fails again only adds to `repeated`, not to `failed` (no new report, no log line, no alert). A new error on a repository already in `error` (say, an expired credential, then a deleted remote) is only on its card;
 - `collab-store`: a live (collaborative) edit could not be saved to the note file, for example because its frontmatter was invalid. **The file keeps its last valid version while the editors keep seeing their edit**: look at it;

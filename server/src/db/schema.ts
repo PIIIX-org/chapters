@@ -683,6 +683,11 @@ export const repositoryFiles = pgTable(
     sourceModifiedAt: timestamp('source_modified_at', { withTimezone: true }),
     /** Shared embedding index with notes (spec 9) — one model, one vector space. */
     embedding: vector('embedding', { dimensions: 384 }),
+    /**
+     * Why the last extraction embedded this file only partly (#496: the
+     * per-file symbol budget); null when it embedded everything.
+     */
+    embeddingNote: text('embedding_note'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
