@@ -21,6 +21,7 @@ committed baseline of known defects.
 | `lab/tests/*.test.ts` | the tests |
 | `lab/known-defects.json` | the baseline: every check that fails or is inconclusive today, with its open issue |
 | `.github/scripts/lab-gate.mjs` | the gate; unit tests in `lab-gate.test.mjs` (run by `checks`) |
+| `.github/scripts/lab-nightly-alert.mjs` | the `nightly-alert` job: opens, updates or closes the `lab-nightly` issue after the scheduled run (#706); unit tests in `lab-nightly-alert.test.mjs` (run by `checks`) |
 | `lab/package.json`, `lab/bun.lock` | lab-only dependencies (`@hocuspocus/provider`, `yjs`, `playwright`); not a pnpm workspace package |
 
 ## Tiers and triggers
@@ -79,6 +80,27 @@ its long parts). A newer run on the same ref cancels the older one; the
 nightly has its own concurrency group, so a dispatch or PR on `dev` never
 cancels it. `plan` and `lab` are **required status checks** on `dev` and
 `prod` (#574; `lab` is skipped, which passes, when `plan` picks no tier).
+
+### Nightly alert (`nightly-alert` job, #706)
+
+After the scheduled run on `dev`, the `nightly-alert` job keeps one open
+issue titled "Nightly lab failing", labelled `lab-nightly`, in step with
+the nightly, so a red night notifies the issue's subscribers instead of
+only turning STATE.md's generated block bold:
+
+- **red** (a job failed or was cancelled, or `lab` did not run): with no
+  open issue it opens one, else it comments on it; either way the text has
+  the failed jobs, the run link and the gate summary (`lab-results/gate.md`
+  without its known-defect tables: counts, harness failures, regressions,
+  stale entries; plus `bench-gate/gate.md` when the benchmark failed);
+- **green**: it comments with the run link and closes the open issue.
+
+It posts only for the `schedule` event on `dev` of PIIIX-org/chapters; it
+does not run on PRs or pushes. To see what it would post without posting:
+`gh workflow run elara-lab.yml -R PIIIX-org/chapters --ref <branch> -f alert_dry_run=true [-f tier=fast]`
+(the job summary shows the decision and the text). Fix the cause, or
+update `lab/known-defects.json`, as for any red gate; the issue closes
+itself on the next green nightly.
 
 ## The premise benchmark (`bench` and `bench-gate` jobs)
 
