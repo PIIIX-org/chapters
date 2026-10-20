@@ -76,17 +76,20 @@ afterAll(async () => {
  * timers run in the server under test, across a real socket, so fake timers
  * here would not move them; the idle timeout is shortened instead.
  */
+// Executor form: the server's TypeScript lib predates Promise.withResolvers.
 async function seen(provider: HocuspocusProvider, check: () => boolean, ms = 5000): Promise<void> {
   if (check()) return
   const awareness = provider.awareness!
-  const { promise, resolve } = Promise.withResolvers<void>()
-  const onUpdate = (): void => {
-    if (check()) resolve()
-  }
-  awareness.on('update', onUpdate)
-  const timer = setTimeout(resolve, ms)
+  let onUpdate = (): void => {}
+  let timer: NodeJS.Timeout | undefined
   try {
-    await promise
+    await new Promise<void>((resolve) => {
+      onUpdate = () => {
+        if (check()) resolve()
+      }
+      awareness.on('update', onUpdate)
+      timer = setTimeout(resolve, ms)
+    })
   } finally {
     clearTimeout(timer)
     awareness.off('update', onUpdate)
@@ -107,18 +110,19 @@ async function freshNote(): Promise<string> {
 
 /** A person with the note open, synced with the relay. */
 async function open(path: string, state?: Record<string, unknown>): Promise<HocuspocusProvider> {
-  const synced = Promise.withResolvers<void>()
+  let synced = (): void => {}
+  const handshake = new Promise<void>((resolve) => (synced = resolve))
   const provider = new HocuspocusProvider({
     url: collabUrl,
     name: `${vaultId}/${path}`,
     token: sessionToken,
     document: new Y.Doc(),
-    onSynced: () => synced.resolve(),
+    onSynced: () => synced(),
   })
   providers.push(provider)
   // One update, so a claim cannot arrive after the state it rides on.
   if (state) provider.awareness!.setLocalState(state)
-  await synced.promise
+  await handshake
   return provider
 }
 

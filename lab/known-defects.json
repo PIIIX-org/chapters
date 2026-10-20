@@ -52,11 +52,6 @@
     },
     {
       "test": "browser",
-      "check": "agent visible in presence while it writes (edit_note says \"attributed to this connection\")",
-      "issue": 481
-    },
-    {
-      "test": "browser",
       "check": "lost typing is recoverable from note history (note_revisions)",
       "issue": 408
     },

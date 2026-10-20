@@ -676,6 +676,20 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   when one is open (`mcp/crdt-write.ts`), so a human editing a note
   sees an AI's edit streaming in like any other collaborator, not as a
   silent external change.
+- **`agent-presence.ts`** (#481): agents in the editors' "In this note
+  now" row. After an MCP `read_note` / `export_note` (reading) or
+  `edit_note` / `revert_note` (editing), the relay adds an awareness
+  state `{ agent: { name, activity } }` to that note's document, under
+  a client id of its own per MCP connection, but only when the document
+  is already loaded (a read never loads one). `name` is the MCP
+  connection's label; the token, its hash and the connection id are
+  never broadcast. The state has no `user` and no cursor. It stays
+  `editing` until the idle timeout after the agent's last write, is
+  renewed every 15 s (y-protocols drops remote states after 30 s) and is
+  removed after `COLLAB_AGENT_IDLE_MS` (default 60000) without a read or
+  write. `beforeHandleAwareness` strips `agent` from every state a
+  client sends and drops client updates for an agent's client id, so
+  only the relay can put an agent in presence.
 
 ### 5.8 MCP (`server/src/mcp/`)
 
