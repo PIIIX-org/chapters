@@ -5,37 +5,44 @@ import { z } from 'zod'
  * lower-cased name without `_` or `-`. The first candidate the schema
  * actually has is suggested.
  */
-const COMMON_GUESSES: Record<string, readonly string[]> = {
-  content: ['body'],
-  contents: ['body'],
-  text: ['body', 'query'],
-  markdown: ['body'],
-  md: ['body'],
-  q: ['query'],
-  search: ['query'],
-  term: ['query'],
-  keyword: ['query'],
-  keywords: ['query'],
-  title: ['name'],
-  vault: ['vaultId'],
-  repo: ['repositoryId'],
-  repository: ['repositoryId'],
-  repoid: ['repositoryId'],
-  note: ['path'],
-  notepath: ['path'],
-  file: ['path'],
-  filepath: ['path'],
-  filename: ['path'],
-  newname: ['toName'],
-  newpath: ['toName'],
-  to: ['toName', 'target'],
-  from: ['source'],
-  max: ['limit'],
-  maxresults: ['limit'],
-  k: ['limit'],
-  topk: ['limit'],
-  count: ['limit'],
-}
+const COMMON_GUESSES: ReadonlyMap<string, readonly string[]> = new Map(
+  Object.entries({
+    content: ['body'],
+    contents: ['body'],
+    text: ['body', 'query'],
+    markdown: ['body'],
+    md: ['body'],
+    q: ['query'],
+    search: ['query'],
+    term: ['query'],
+    keyword: ['query'],
+    keywords: ['query'],
+    title: ['name'],
+    vault: ['vaultId'],
+    repo: ['repositoryId'],
+    repository: ['repositoryId'],
+    repoid: ['repositoryId'],
+    note: ['path'],
+    notepath: ['path'],
+    file: ['path'],
+    filepath: ['path'],
+    filename: ['path'],
+    newname: ['toName'],
+    newpath: ['toName'],
+    to: ['toName', 'target'],
+    from: ['source'],
+    max: ['limit'],
+    maxresults: ['limit'],
+    k: ['limit'],
+    topk: ['limit'],
+    count: ['limit'],
+  }),
+)
+
+/** Unknown keys named in a refusal; the rest are counted (#769). */
+const MAX_LISTED_KEYS = 10
+/** Longer unknown key names are cut in a refusal (#769). */
+const MAX_KEY_CHARS = 64
 
 const normalize = (key: string): string => key.toLowerCase().replace(/[-_]/g, '')
 
@@ -57,10 +64,14 @@ function editDistance(a: string, b: string): number {
 
 /** The declared name an unknown key most likely meant, if any is close. */
 function suggestion(key: string, names: readonly string[]): string | undefined {
+  // No parameter or guess comes near this length, so a huge key skips
+  // normalising and comparing (#769).
+  if (key.length > MAX_KEY_CHARS) return undefined
   const wanted = normalize(key)
   const same = names.find((n) => normalize(n) === wanted)
   if (same) return same
-  const guessed = COMMON_GUESSES[wanted]?.find((g) => names.includes(g))
+  // A Map, so a key such as `constructor` is not looked up on Object.prototype (#769).
+  const guessed = COMMON_GUESSES.get(wanted)?.find((g) => names.includes(g))
   if (guessed) return guessed
   const limit = wanted.length <= 4 ? 1 : 2
   let best: { name: string; distance: number } | undefined
@@ -73,10 +84,12 @@ function suggestion(key: string, names: readonly string[]): string | undefined {
 
 /** The refusal for undeclared keys: each key (with a suggestion when one is close) and the declared names. */
 function unknownArgumentsMessage(label: string, keys: readonly string[], names: readonly string[]): string {
-  const listed = keys.map((key) => {
+  const listed = keys.slice(0, MAX_LISTED_KEYS).map((key) => {
     const meant = suggestion(key, names)
-    return meant ? `"${key}" (did you mean "${meant}"?)` : `"${key}"`
+    const shown = key.length > MAX_KEY_CHARS ? `${key.slice(0, MAX_KEY_CHARS)}…` : key
+    return meant ? `"${shown}" (did you mean "${meant}"?)` : `"${shown}"`
   })
+  if (keys.length > MAX_LISTED_KEYS) listed.push(`and ${keys.length - MAX_LISTED_KEYS} more`)
   const declared = names.length > 0 ? `${label} takes: ${names.join(', ')}` : `${label} takes no arguments`
   // No closing period: for a nested object the SDK appends ` at <field>`.
   return `unknown argument${keys.length === 1 ? '' : 's'} ${listed.join(', ')}; ${declared}`
