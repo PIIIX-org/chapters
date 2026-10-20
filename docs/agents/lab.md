@@ -55,6 +55,13 @@ the client's collab code (`client/src/hooks/useCollabDoc*`,
 to the fast tier (`LAB_ALSO=browser`); any other client change is
 exercised in the browser only by the nightly full tier.
 
+A PR that changes backup or restore code (`server/src/export/**`,
+`server/src/scripts/restore-backup.ts`, `server/src/notes/atomic-write.ts`,
+`lab/tests/backup-restore.test.ts`) adds `backup-restore` the same way
+(#493): a backup taken through the API, restored with `pnpm restore-backup`
+into a fresh database, then its counts, `backup.json` digests, file modes
+and content checked, and a tampered copy refused.
+
 By hand (any branch that has this workflow):
 
 ```sh
@@ -308,7 +315,8 @@ Tunables via env (set in the workflow step if needed): `LAB_TESTS`,
 ## Gotchas
 
 - Notes: `type` in frontmatter must equal the first path segment; segments
-  `^[a-z0-9][a-z0-9-]*$`; `edit_note` frontmatter replaces the whole map.
+  `^[a-z0-9][a-z0-9-]*$`; `edit_note` frontmatter merges per key
+  (`replace: true` replaces the whole map, `removeKeys` deletes keys; #438).
 - `note_history` returns one page of metadata, no bodies (#411): read the
   content with `get_revision`. `McpClient.revisionsSince()` (`lib/mcp.ts`)
   does both for tests that check what a revision holds.

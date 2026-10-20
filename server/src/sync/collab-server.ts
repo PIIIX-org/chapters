@@ -6,6 +6,7 @@ import * as Y from 'yjs'
 import { getSessionUser } from '../auth/sessions.js'
 import { atLeast, resolveAccess } from '../vaults/permissions.js'
 import { readNote, updateNote, splitPath } from '../notes/store.js'
+import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { affects, onPermissionChange } from './permission-events.js'
 import { publishNoteState } from './viewers.js'
@@ -17,6 +18,14 @@ import { recordJob } from '../monitoring/metrics.js'
 export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
 const DEBOUNCE_MS = Number(process.env.COLLAB_DEBOUNCE_MS ?? 2000)
+
+/**
+ * The quarantine revision of each loaded document's current episode (#492):
+ * stores that continue it update that revision. A document loaded afresh
+ * (after an unload) has none, so its quarantine never overwrites an earlier
+ * episode's refused body, the only copy of what was typed then.
+ */
+const quarantineEpisodes = new WeakMap<Y.Doc, string>()
 
 function parseDocName(name: string): { vaultId: string; path: string } {
   const slash = name.indexOf('/')
@@ -30,6 +39,8 @@ function parseDocName(name: string): { vaultId: string; path: string } {
 interface ConnectionContext {
   userId: string
   accessVerifiedAt?: number
+  /** A server-side body write through a direct connection (crdt-write.ts), whose caller already ran the quarantine check. */
+  directWrite?: boolean
 }
 
 function docState(document: Y.Doc): { frontmatter: Record<string, unknown>; body: string } {
@@ -174,18 +185,37 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       ctx.accessVerifiedAt = now
     },
 
-    async onStoreDocument({ documentName, document }) {
+    async onStoreDocument({ documentName, document, lastContext }) {
       const { vaultId, path } = parseDocName(documentName)
       const state = docState(document)
+      const context: Partial<ConnectionContext> | undefined = lastContext
       // A rejected store is a failed job (#705): the file keeps its last valid
       // version while editors see their edit, so the owner must hear of it.
       let failed = false
       try {
-        await updateNote(vaultId, path, state)
+        // A document that repeats a block of the stored note (a stale client
+        // merged into a rebuilt document doubles it, #488) is quarantined
+        // (#492): kept as a revision, not stored. Editors keep what they see;
+        // the next store without the repeat is written as usual and ends the episode.
+        await updateNote(
+          vaultId,
+          path,
+          state,
+          undefined,
+          context?.directWrite ? {} : { quarantine: 'repeated-block', episode: quarantineEpisodes.get(document) },
+        )
+        quarantineEpisodes.delete(document)
       } catch (err) {
-        // Invalid collab state (e.g. bad frontmatter): keep last valid file.
-        console.error(`collab store rejected for ${documentName}:`, err)
-        recordJob('collab-store', { error: err }, vaultId)
+        if (err instanceof NoteWriteQuarantinedError) {
+          quarantineEpisodes.set(document, err.revisionId)
+          // One report per episode: stores that continue it count as `repeated`.
+          if (!err.repeat) console.error(`collab store quarantined for ${documentName}: ${err.message}`)
+          recordJob('collab-store', { error: err, repeat: err.repeat }, vaultId)
+        } else {
+          // Invalid collab state (e.g. bad frontmatter): keep last valid file.
+          console.error(`collab store rejected for ${documentName}:`, err)
+          recordJob('collab-store', { error: err }, vaultId)
+        }
         failed = true
       }
       try {

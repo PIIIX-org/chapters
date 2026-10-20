@@ -172,7 +172,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | Table | Purpose |
 |---|---|
 | `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed) |
-| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab` |
+| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`/`delete`/`revert`, or `quarantine` for a write kept out of the note (#492, not the note's content) |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
 
@@ -374,6 +374,37 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   take the lock. The lock orders writes; it does not merge them: a body
   write replaces the whole body, so two agents that each read a note and
   write it back with a line appended still keep only the later one.
+- **Edits merge frontmatter per key** (#438): `edit_note` and REST
+  `PUT /api/vaults/:id/notes/*` take `frontmatter`, `body`, `replace`
+  and `removeKeys`; `requestedEdit()` (`sync/crdt-write.ts`) turns them
+  into a `NoteEdit` and refuses contradictions (`replace: true` without
+  `frontmatter`, a key both set and removed: `NoteEditError`, HTTP 400).
+  `writeThroughCollab` computes the next map from the live document's
+  frontmatter (keys a person set but the relay has not stored yet are
+  kept), or from the row without the relay: shallow per top-level key,
+  `null` is a value, then `removeKeys`, `type` reset to the note's type.
+  The result is validated with `validateNote` inside the document
+  transaction before anything changes, so a refused edit reaches neither
+  the store nor people with the note open; the document gets a per-key
+  diff and `updateNote` the whole map. If a merge fails only because of
+  a key already in the live document (a value a person typed that the
+  relay refused to store), the error names that key and suggests
+  `removeKeys` or `replace: true`. Internal full-state writers (revert,
+  rename, the relay's own store) keep `frontmatterMode: 'replace'`, the
+  default. The `sync_local_docs_to_vault` prompt tells the agent to
+  update an existing note with `replace: true`, so the vault mirrors the
+  file.
+- **Revision dedupe** (#480, `recordRevision`): a write that repeats the
+  latest revision records nothing. Frontmatter is compared as jsonb
+  stores it: deep equality on its JSON form, so object key order (nested
+  too), `undefined` members and Date vs ISO string never count; array
+  order and every value do. It used to compare `JSON.stringify` output.
+  A repeat is the same state from the same actor (kind and id), or from
+  the relay (`collab`), whose store of a recorded state changes nothing.
+  An attributed write (`mcp`, `user`) of the state the relay just stored
+  is recorded, so an edit through the relay leaves the relay's `collab`
+  revision and the attributed one; the `collab` row is never
+  re-attributed, since it may bundle a person's typing (#403).
 - **Progressive indexes** (`regenProgressiveIndices`): run on create,
   rename, delete, restore, and on updates whose frontmatter really
   changed (`isDeepStrictEqual`, so key order alone never counts: `jsonb`
@@ -403,6 +434,36 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   revert always is) is written straight to the store and so repairs the
   file; a partial edit is refused with `NoteFileDamagedError` (409),
   since it would have to merge with content that cannot be read.
+- **Write quarantine** (`growth-guard.ts`, #492): a stale reload once
+  doubled a whole note (#488) and the store wrote it like any edit. A body
+  write is checked against the stored body (UTF-8 bytes, linear time:
+  ~20 ms for a doubled 1 MiB note). *Growth*: the new body is ≥ 1.9× the
+  stored one and the stored one is ≥ 2 KiB (a stub filled in is never
+  flagged). *Repeated block*: both bodies are cut into content-defined
+  chunks (gear rolling hash over the last 32 characters, cuts at ~1 in 64
+  positions, 16..512 characters), so a copy of a passage is cut like the
+  original wherever it starts, newline or not; the extra occurrences of
+  chunks already in the stored body must add up to ≥ 1 KiB and ≥ half of
+  it. MCP `edit_note` and REST `PUT /api/vaults/:id/notes/*` apply both
+  rules in `writeThroughCollab` before the body reaches the live document;
+  `allowGrowth: true` skips them. The collab relay's store applies the
+  repeated-block rule only, inside `updateNote`'s note lock (a human's
+  paste in the editor has no override channel; a doubled document is a
+  repeated block whatever its size). Create, import, restore, rename and
+  revert are not checked (no stored body, a backup, a deliberate restore).
+  A suspicious write is not applied: `refuseSuspiciousWrite` records it as
+  a `quarantine` revision with the full refused frontmatter and body and
+  throws `NoteWriteQuarantinedError` (409 over REST with `quarantined:
+  {revisionId, rule, previousBytes, nextBytes, repeatedBytes}`; an MCP
+  tool error naming the rule, the revision id and `allowGrowth`). A write
+  that continues a quarantine updates that revision instead of adding one:
+  the relay keeps the quarantine revision id per loaded `Y.Doc` (a live
+  document that stays doubled while someone types), so a document loaded
+  afresh after an unload always adds a new revision and a new failure; an
+  MCP/REST write continues only an identical retry of the newest quarantine
+  by the same actor. `recordRevision`'s
+  dedupe and revert's `revert` relabel skip quarantine rows. Restore one
+  with `revert_note` / the REST revert route.
 - Every mutation is attributed (`Actor {type: 'user'|'mcp'|'collab',
   id?}`), which is what makes `noteRevisions` a real audit trail across
   the UI, MCP, and live-collaboration write paths.
@@ -500,7 +561,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   drops the next message and closes the connection. `onStoreDocument`
   debounces (default 2s) persistence back through the same OKF write
   path used everywhere else; a write that fails validation is logged
-  and the last good file state is kept, never corrupted.
+  and the last good file state is kept, never corrupted. A store whose
+  body repeats a block of the stored note is quarantined (§5.3, #492):
+  row and file keep the previous body, the live document and its
+  editors keep the text (nobody is reverted or disconnected), the
+  `.crdt` state is saved as for every rejected store (on the next load
+  the file text wins over it), and a `collab-store` job failure is
+  reported; the next store without the repeat is written normally. A
+  store caused by a server body write through a direct connection
+  (`writeThroughCollab`, context `directWrite`; its caller ran the check
+  or passed `allowGrowth`) is not checked again.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
   Every share/team/deactivation mutation calls `emitPermissionChange()`;
   the collab server and the SSE viewer hub both subscribe and actively
@@ -689,24 +759,36 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   scheduled run in `backup-service.ts` writes the same zip):
   `buildInstanceBackup()` in `archive.ts`, format 2
   (`backup-format.ts`, #409). `backup.json` (format, time, row count per
-  table) plus one `db/<table>.jsonl` per table in `BACKUP_TABLES`, read
+  table, and `parts`: SHA-256 + size of every other entry, #493) plus
+  one `db/<table>.jsonl` per table in `BACKUP_TABLES`, read
   in one repeatable-read snapshot, rows as stored (TOTP secrets
   included, embeddings left out), plus `vaults/<id>/notes/<path>.md`,
   `trash/<note id>.md` and `assets/<file>`. Files are read after the
   snapshot: a note file that no longer matches its snapshot row (body,
   frontmatter key by key) is left out, and the restore writes it from
-  the row. `executeBackup` writes the local file with mode `0600`
-  (open + fchmod, whatever the umask). Not backed up: sessions,
+  the row; `backup.json` `notesFromRow` counts them and the restore plan
+  warns. Not backed up: sessions,
   email tokens, export links, note links, semantic edges, embeddings,
   the repository file index, CRDT state (each rebuilt or reissued; the
-  table is in `docs/self-hosting/backup.md`).
+  table is in `docs/self-hosting/backup.md`). `executeBackup` writes
+  local backups (`BACKUP_LOCAL_PATH`) with `atomicWrite(..., { mode: 0o600 })`
+  (temp file created and chmodded 600 before the content goes in, then
+  renamed) in a directory made and chmodded 700, and chmods the backups
+  already there to 600, whatever the umask (#409, #493; a chmod the
+  server can't do is a warning, not a failed backup). The download
+  (`GET /api/admin/backup`) is sent with `cache-control: no-store`.
 - **Restore** (`server/src/export/restore.ts` +
   `server/src/scripts/restore-backup.ts`): **CLI only**
   (`pnpm restore-backup [--dry-run] <zip>`), deliberately **not** an
   HTTP endpoint — restoring over a live instance isn't a button.
-  `restoreBackup()` validates (format, every table file, row counts,
+  `restoreBackup()` validates (format, every entry against its
+  `backup.json` SHA-256 and size with nothing missing or added — an
+  archive without `parts`, format 1 or pre-#493, restores with a
+  warning —, every table file, row counts,
   columns, references inside the archive, note paths, attachment names;
   `BackupInvalidError`), plans (per-table and per-file counts, conflicts;
+  warnings for attachments on disk that differ, kept, and for note or
+  trash files on disk that differ, replaced by the archive's version;
   `RestoreRefusedError`), then applies: rows in one transaction with
   `on conflict (primary key) do nothing`, files written atomically
   inside it (the files it created are removed if the transaction
@@ -881,7 +963,7 @@ the count as `filesPendingExtraction`.
 - **Mermaid preview XSS defense**: Initialized with `securityLevel: 'strict'`, `htmlLabels: false`, and SVG sanitized with `DOMPurify.sanitize(..., { USE_PROFILES: { svg: true, svgFilters: true } })`.
 - **MFA setup protection**: `POST /api/mfa/setup` forbids re-setup when MFA is already enabled, requiring explicit verification before modifying second-factor state.
 - **Mass assignment guards**: Fastify schema validation (`additionalProperties: false`) and explicit field destructuring on vault and repository update routes.
-- **Secrets in backups** (SEC-06, revised by #409): the instance backup keeps password hashes, token hashes and TOTP secrets as stored (stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The scheduled local backup file is written with mode `0600` whatever the umask. The restore CLI prints counts, and only a driver message and code on errors. Manifest digests and a CI restore check: #493.
+- **Secrets in backups** (SEC-06, revised by #409): the instance backup keeps password hashes, token hashes and TOTP secrets as stored (stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The scheduled local backup file is written with mode `0600` (through a temp file of the same mode) in a `0700` directory, whatever the umask (#493). The restore CLI prints counts, and only a driver message and code on errors. The `backup.json` digests (#493) are integrity checks, not a signature: they catch damage and truncation, not someone who can rewrite the whole archive.
 - **OIDC host-header sanitization**: Validated against `APP_URL` and injection characters to protect authorization code callbacks.
 - **Admin role hierarchy**: Strict `ROLE_RANK` enforcement preventing self-promotion or subordinate demotion of superadmins and instance owners.
 - **Ingestion bounds**: Git clone ingestion capped to 1MB per file and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`).
@@ -1074,8 +1156,10 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     (`syncGitRepository` and `syncLocalRepository` themselves, so every
     caller is covered, including an unsafe stored URL), `collab-store`
     (`collab-server.ts` `onStoreDocument`: a rejected `updateNote` or CRDT
-    save; the file keeps its last valid version), `backup` (the scheduled
-    run in `startBackupScheduler`; an on-demand one is a 500).
+    save; the file keeps its last valid version. A quarantined store
+    (#492) is reported as `NoteWriteQuarantinedError` with the rule as
+    `code`; stores that continue the same quarantine count as `repeated`),
+    `backup` (the scheduled run in `startBackupScheduler`; an on-demand one is a 500).
     `repeat: true` only increments `jobs[kind].repeated`: no total, no
     ring record, no log line, so a dead remote, an expired credential or a
     broken backup destination is one report, not one per retry. Set for a
@@ -1234,6 +1318,17 @@ server, an edit in flight between its row update and its file write also
 shows as a mismatch for a moment: re-run the check (or `-- --vault
 <uuid>`) before acting on a single mismatch, or run it while writes are
 stopped.
+
+**A quarantined write** (#492, §5.3): a `collab-store` report named
+`NoteWriteQuarantinedError` (monitoring, subject = vault id) or an agent's
+`quarantined` error. The note kept its previous body. The admin audit
+trail (`GET /api/admin/audit-trail`) lists the revision with action
+`quarantine` and the note's path; compare it with the note (`get_revision`
+/ `read_note`): if it is real work rather than duplicated text,
+`revert_note` to it (or edit the note with the part to keep); otherwise
+nothing is to be done. A live editor that still shows duplicated text
+keeps having its stores quarantined until the duplicate is deleted in the
+editor.
 
 **Rotate `CREDENTIALS_ENCRYPTION_KEY`**: there is no rotation
 mechanism. Changing it makes every previously stored repository

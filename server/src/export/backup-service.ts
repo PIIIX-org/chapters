@@ -1,10 +1,40 @@
-import { mkdir, open, readdir, unlink } from 'node:fs/promises'
+import { chmod, mkdir, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { buildInstanceBackup } from './archive.js'
 import { deleteS3Object, listS3Objects, uploadS3Object, type S3Config } from './s3.js'
 import { recordJob } from '../monitoring/metrics.js'
+import { atomicWrite } from '../notes/atomic-write.js'
+
+/**
+ * A backup holds password and token hashes, TOTP secrets and every note:
+ * readable by the server's user only, whatever the umask (#409, #493).
+ */
+const BACKUP_FILE_MODE = 0o600
+const BACKUP_DIR_MODE = 0o700
+const BACKUP_NAME = /^(?:elara|chapters)-backup-.*\.zip$/
+
+/**
+ * Creates the backup directory 0700 and tightens it if it already existed,
+ * along with the backups already in it (written 0644 before #493).
+ * Something the server does not own (a mount) can't be chmodded: that is a
+ * warning, not a failed backup; the new file is 0600 either way.
+ */
+async function preparePrivateDir(dir: string): Promise<void> {
+  await mkdir(dir, { recursive: true, mode: BACKUP_DIR_MODE })
+  const tighten = async (path: string, mode: number) => {
+    try {
+      await chmod(path, mode)
+    } catch (err) {
+      console.warn(`[backup] could not make ${path} private (mode ${mode.toString(8)}): ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  await tighten(dir, BACKUP_DIR_MODE)
+  for (const name of await readdir(dir)) {
+    if (BACKUP_NAME.test(name)) await tighten(join(dir, name), BACKUP_FILE_MODE)
+  }
+}
 
 export type BackupDestination = 'local' | 's3'
 
@@ -84,7 +114,7 @@ export async function pruneLocalBackups(dir: string, retentionCount: number): Pr
   try {
     const entries = await readdir(dir)
     const backupFiles = entries
-      .filter((name) => /^(?:elara|chapters)-backup-.*\.zip$/.test(name))
+      .filter((name) => BACKUP_NAME.test(name))
       .sort()
       .reverse()
 
@@ -140,16 +170,10 @@ export async function executeBackup(options?: { actorUserId?: string }): Promise
 
   try {
     if (localPath && destinations.includes('local')) {
-      await mkdir(localPath, { recursive: true })
-      // The archive holds password and token hashes and TOTP secrets (#409):
-      // owner-only, whatever the umask. fchmod also covers a file that existed.
-      const file = await open(join(localPath, filename), 'w', 0o600)
-      try {
-        await file.chmod(0o600)
-        await file.writeFile(zip)
-      } finally {
-        await file.close()
-      }
+      await preparePrivateDir(localPath)
+      // Atomic: a crash mid-write leaves a temp file, never a truncated zip under
+      // a backup name. The temp file is 0600 before the content goes in.
+      await atomicWrite(join(localPath, filename), zip, { mode: BACKUP_FILE_MODE })
       const pruned = await pruneLocalBackups(localPath, config.backup.retentionCount)
       totalPruned += pruned
     }
