@@ -99,7 +99,7 @@ export async function syncRepositoryFiles(
     result.deleted = toDelete.length
   }
 
-  for (const id of toExtract) scheduleExtraction(id)
+  for (const id of toExtract) scheduleExtraction(id, repositoryId)
   checkCodeStaleness(repositoryId).catch(console.error)
 
   return result

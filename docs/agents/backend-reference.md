@@ -1048,8 +1048,13 @@ repositories indexed before #398 gain their import edges without a
 re-sync (unchanged files are never re-extracted).
 
 **Extraction queue** (`extraction-queue.ts`): in-process and serial, like
-the note embedding queue. A file whose extraction throws is logged and
-skipped; the drain goes on. A file with a line longer than 1,000
+the note embedding queue, but fair across repositories (#497): one FIFO
+per repository, served round-robin in turns of at most 10 files
+(`EXTRACTION_TURN_FILES`), so a large repository's backlog delays another
+repository's files by at most one turn per other busy repository, not by
+the whole backlog; a repository's own files keep their order. A file
+whose extraction throws is logged and skipped; the drain goes on. A file
+with a line longer than 1,000
 characters (minified, bundled or generated code) gets its file embedding
 but no symbols or imports. The boot-time scan
 (`scheduleMissingExtractions`) re-enqueues every file with a null
