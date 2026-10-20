@@ -163,7 +163,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `path` (string, optional): full note path, for example `domains/storage/postgres`.
   - `type` (string, optional) and `name` (string, optional): used as `<type>/<name>` when `path` is omitted. You must give either `path` or both `type` and `name`.
   - `frontmatter` (object, optional): the YAML frontmatter as a JSON object. If `type` is omitted it is set to the first path segment; if given it must match. `timestamp` defaults to now.
-  - `body` (string, optional, default `""`): the markdown body, **without** a frontmatter block.
+  - `body` (string, optional, default `""`): the markdown body, **without** a frontmatter block. At most the server's note size limit, in UTF-8 bytes (`ELARA_NOTE_MAX_BYTES`, default 1048576 = 1 MiB); a larger body is refused with `isError: true` and `note body is N bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)`. Split such content across notes. The same limit applies to the editor, REST and import.
 - **Returns**: the created note row (`id`, `vaultId`, `type`, `name`, `path`, `frontmatter`, `body`, timestamps, ...).
 - There is no `content` argument. Passing one (or any other undeclared key) is refused with the parameter list, and no note is created.
 
@@ -176,8 +176,8 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `frontmatter` (object, optional): **merged per top-level key** into the note's frontmatter. Keys you send are set (overwritten if present), keys you leave out are kept. The merge is shallow: a key whose value is a map (`properties`, `generated`, ...) gets the value you send as a whole. `null` is a value like any other (`reviewer: null` stores `null`); it does not delete the key. `type` is always reset to the note's current type.
   - `replace` (boolean, optional, default `false`): `true` makes `frontmatter` **replace the whole map**: keys you leave out are deleted. Needs `frontmatter`.
   - `removeKeys` (string array, optional): top-level frontmatter keys to delete, applied after `frontmatter`. A key that is not there is ignored; a key that is also in `frontmatter` is refused.
-  - `body` (string, optional): **replaces the whole body**.
-  - `allowGrowth` (boolean, optional, default `false`): write a body the quarantine below would keep out. Use it only for a change you mean, such as a large paste into a note.
+  - `body` (string, optional): **replaces the whole body**. Same size limit as `create_note`; a note already over it (stored before the limit) can be edited as long as the new body is no larger.
+  - `allowGrowth` (boolean, optional, default `false`): write a body the quarantine below would keep out. Use it only for a change you mean, such as a large paste into a note. It does not lift the size limit, which is checked first.
   - Omit a field to keep it as it is: a body-only edit leaves the frontmatter untouched.
 - The resulting frontmatter is validated as a whole (the rules at the top of this section) before anything is written; if it is invalid (for example `status: "bogus"` or `title: null`), the call fails and neither the note nor the live document changes. If the invalid value is a key already on the note that you did not send (for example a value a person typed in the editor that the server refused to store), the error names that key: send a valid value for it, list it in `removeKeys`, or pass `replace: true` with the whole map.
 - **Returns**: the updated note row.
@@ -193,6 +193,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `toName` (string, required): either a single slug (renames the note in its current directory) or a full path (moves the note; its `type` is rewritten to the new first segment).
 - **Returns**: the updated note row.
 - Links in other live notes of the same vault that use the old **full path** (`[[domains/auth/tokens]]`) are rewritten. Bare-name links (`[[tokens]]`) are not, and break.
+- A longer path makes those links longer. If the rewrite would take the note itself or any linking note over the body size limit, the rename is refused with an error naming that note, and nothing is renamed or rewritten.
 
 ### `delete_note`
 - **Scope**: vault. Edit access.
@@ -256,6 +257,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `path` (string, required).
   - `revisionId` (uuid, required).
 - **Returns**: the updated note row. The revert is recorded as a new revision. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert.
+- The same body size limit as `edit_note` applies: reverting to a revision whose body is over the limit and larger than the current body is refused with an error naming the limit.
 
 ### `purge_revision`
 - **Scope**: vault. Owner only.

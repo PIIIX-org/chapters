@@ -4,6 +4,7 @@ import { YAMLParseError } from 'yaml'
 import { getCollab } from './collab-server.js'
 import { getLiveNote, readNote, refuseSuspiciousWrite, resolveNotePath, updateNote, type Actor, type NoteRow } from '../notes/store.js'
 import type { QuarantineRules } from '../notes/growth-guard.js'
+import { assertBodyFits } from '../notes/size-cap.js'
 import { OkfValidationError, validateNote, type Frontmatter } from '../notes/okf.js'
 import { withKeyLock } from '../notes/key-lock.js'
 
@@ -127,6 +128,8 @@ export async function writeThroughCollab(
   return withKeyLock(`collab:${vaultId}/${resolveNotePath(path).fullPath}`, async () => {
     const existing = await getLiveNote(vaultId, path)
     if (!existing) return null
+    // Before the document edit: a refused body must never reach the editors (#491).
+    if (input.body !== undefined) assertBodyFits(input.body, existing.body)
     const storedFrontmatter = existing.frontmatter as Record<string, unknown>
     if (options.quarantine) {
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)

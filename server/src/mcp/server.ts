@@ -1041,29 +1041,29 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         path: z.string(),
         frontmatter: z.record(z.string(), z.unknown()).optional(),
         body: z.string().optional(),
-          replace: z.boolean().optional(),
-          removeKeys: z.array(z.string()).optional(),
-          allowGrowth: z.boolean().optional(),
-        },
+        replace: z.boolean().optional(),
+        removeKeys: z.array(z.string()).optional(),
+        allowGrowth: z.boolean().optional(),
       },
-      async (
-        {
-          allowGrowth,
-          ...args
-        }: {
-          path: string
-          frontmatter?: Record<string, unknown>
-          body?: string
-          replace?: boolean
-          removeKeys?: string[]
-          allowGrowth?: boolean
-        },
-        { vaultId: target },
-      ) => {
-        await requireAccess(target, 'edit')
-        const updated = await writeThroughCollab(target, args.path, requestedEdit(args), actor, {
-          quarantine: allowGrowth ? undefined : 'all',
-        })
+    },
+    async (
+      {
+        allowGrowth,
+        ...args
+      }: {
+        path: string
+        frontmatter?: Record<string, unknown>
+        body?: string
+        replace?: boolean
+        removeKeys?: string[]
+        allowGrowth?: boolean
+      },
+      { vaultId: target },
+    ) => {
+      await requireAccess(target, 'edit')
+      const updated = await writeThroughCollab(target, args.path, requestedEdit(args), actor, {
+        quarantine: allowGrowth ? undefined : 'all',
+      })
       if (!updated) throw new McpToolError('note not found')
       return updated
     },

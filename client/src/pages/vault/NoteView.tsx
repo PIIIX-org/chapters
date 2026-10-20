@@ -17,8 +17,7 @@ import { CollabPropertyPanel, LivePropertyPanel } from '../../components/vault/P
 import { CollabStatusLine, collabShellStatus } from '../../components/vault/CollabStatusLine.js'
 import { CollaboratorAvatars } from '../../components/vault/CollaboratorAvatars.js'
 import { NoteActions } from '../../components/vault/NoteActions.js'
-import { RevokedNotice } from '../../components/vault/RevokedNotice.js'
-import { UnmergedNotice } from '../../components/vault/UnmergedNotice.js'
+import { CollabNotices } from '../../components/vault/CollabNotices.js'
 import { BacklinksPanel } from '../../components/vault/BacklinksPanel.js'
 import { LocalGraphPanel } from '../../components/vault/LocalGraphPanel.js'
 import { RevisionHistory } from '../../components/vault/RevisionHistory.js'
@@ -933,11 +932,12 @@ function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: Colla
         </>
       }
       notice={
-        revoked ? (
-          <RevokedNotice />
-        ) : collab.unmerged !== null ? (
-          <UnmergedNotice text={collab.unmerged} onDiscard={collab.discardUnmerged} />
-        ) : null
+        <CollabNotices
+          revoked={revoked}
+          tooLarge={collab.tooLarge}
+          unmerged={collab.unmerged}
+          onDiscard={collab.discardUnmerged}
+        />
       }
       inspector={
         <NoteInspector

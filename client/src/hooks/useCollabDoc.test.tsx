@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
+import * as Y from 'yjs'
 import { getCollabTicket } from '../api/collab.js'
 import { ApiError } from '../lib/api.js'
 import { AI_INK, inkFor } from '../lib/ink.js'
@@ -13,6 +14,7 @@ interface ProviderOptions {
   token: () => Promise<string>
   onStatus: (data: { status: string }) => void
   onAuthenticationFailed: (data: { reason: string }) => void
+  onClose: (data: { event: { code: number; reason: string } }) => void
   onSynced: (data: { state: boolean }) => void
   onUnsyncedChanges: (data: { number: number }) => void
   onAwarenessChange: (data: {
@@ -33,6 +35,7 @@ const stub = vi.hoisted(() => ({
     hasUnsyncedChanges: boolean
     awarenessFields: Record<string, unknown>
     disconnected: boolean
+    reconnects: number
     destroyed: boolean
     flushedPendingUpdates: boolean
     listeners: Map<string, ((...args: unknown[]) => void)[]>
@@ -48,6 +51,7 @@ vi.mock('@hocuspocus/provider', () => {
     hasUnsyncedChanges = false
     awarenessFields: Record<string, unknown> = {}
     disconnected = false
+    reconnects = 0
     destroyed = false
     flushedPendingUpdates = false
     listeners = new Map<string, ((...args: unknown[]) => void)[]>()
@@ -63,6 +67,11 @@ vi.mock('@hocuspocus/provider', () => {
 
     disconnect() {
       this.disconnected = true
+    }
+
+    connect() {
+      this.disconnected = false
+      this.reconnects += 1
     }
 
     destroy() {
@@ -100,7 +109,7 @@ vi.mock('../api/collab.js', async (importOriginal) => ({
 const ticket = vi.mocked(getCollabTicket)
 
 function ticketNamed(token: string) {
-  return { token, url: 'ws://relay.test:3001', expiresAt: '2026-08-25T10:00:60.000Z' }
+  return { token, url: 'ws://relay.test:3001', expiresAt: '2026-08-25T10:00:60.000Z', maxNoteBytes: 1048576, maxFrameBytes: 6 * 1048576 + 65536 }
 }
 
 function mount(overrides: Partial<Parameters<typeof useCollabDoc>[0]> = {}) {
@@ -203,6 +212,112 @@ describe('useCollabDoc', () => {
     act(() => provider.options.onStatus({ status: 'connected' }))
 
     expect(view.result.current.status).toBe('revoked')
+  })
+
+  describe('a change the relay refuses as too large (#491)', () => {
+    const LIMIT = 1048576
+
+    /** Connected, with a local paste that takes the body `over` bytes past the cap. */
+    async function overTheCap(over: number) {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      act(() => {
+        // Two bytes a character: the cap is in UTF-8 bytes, not characters.
+        view.result.current.ydoc.getText('body').insert(0, 'é'.repeat(LIMIT / 2) + 'x'.repeat(over))
+      })
+      return { view, provider }
+    }
+
+    it('stops reconnecting, keeps the text writable on screen and says how much to cut', async () => {
+      const { view, provider } = await overTheCap(10)
+
+      act(() => provider.options.onClose({ event: { code: 1000, reason: 'note-too-large' } }))
+
+      expect(view.result.current.status).toBe('too-large')
+      expect(provider.disconnected).toBe(true)
+      expect(view.result.current.tooLarge).toEqual({ limitBytes: LIMIT, bodyBytes: LIMIT + 10 })
+      // Writable, so the person can cut it down; nothing is dropped.
+      expect(view.result.current.writable).toBe(true)
+      expect(view.result.current.unsynced).toBe(true)
+      expect(view.result.current.ydoc.getText('body').length).toBe(LIMIT / 2 + 10)
+
+      // The socket teardown that follows is not a reconnect.
+      act(() => provider.options.onStatus({ status: 'disconnected' }))
+      expect(view.result.current.status).toBe('too-large')
+    })
+
+    it('reconnects by itself once the note fits again, not before', async () => {
+      const { view, provider } = await overTheCap(10)
+      act(() => provider.options.onClose({ event: { code: 1000, reason: 'note-too-large' } }))
+
+      act(() => view.result.current.ydoc.getText('body').delete(0, 2))
+      expect(view.result.current.tooLarge).toEqual({ limitBytes: LIMIT, bodyBytes: LIMIT + 6 })
+      expect(provider.reconnects).toBe(0)
+
+      const ydoc = view.result.current.ydoc
+      act(() => ydoc.getText('body').delete(0, 3))
+      expect(view.result.current.tooLarge).toBeNull()
+      expect(view.result.current.status).toBe('reconnecting')
+      // A new provider on the same document: its sync sends everything in one
+      // update, not the old one's queue of single keystrokes.
+      expect(provider.destroyed).toBe(true)
+      await waitFor(() => expect(stub.providers).toHaveLength(2))
+      const next = stub.providers[1]!
+      expect(next.options.document).toBe(ydoc)
+      expect(view.result.current.ydoc).toBe(ydoc)
+
+      act(() => next.options.onStatus({ status: 'connected' }))
+      expect(view.result.current.status).toBe('connected')
+    })
+
+    it('a refused paste that was undone is not sent again: the document is rebuilt from what is on screen', async () => {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      act(() => provider.options.onSynced({ state: true }))
+      const first = view.result.current.ydoc
+      act(() => first.getText('body').insert(0, 'kept text'))
+      // The editor's undo history keeps deleted text in the document.
+      const undo = new Y.UndoManager(first.getText('body'))
+      act(() => first.getText('body').insert(0, 'x'.repeat(7 * LIMIT)))
+      act(() => provider.options.onClose({ event: { code: 1009, reason: '' } }))
+      expect(view.result.current.status).toBe('too-large')
+
+      act(() => {
+        undo.undo()
+      })
+      // What a reconnect would send still holds the whole paste, over the relay's frame limit.
+      expect(Y.encodeStateAsUpdate(first).length).toBeGreaterThan(7 * LIMIT)
+      expect(provider.reconnects).toBe(0)
+      await waitFor(() => expect(view.result.current.ydoc).not.toBe(first))
+      const rebuilt = view.result.current.ydoc
+      expect(rebuilt.getText('body').toString()).toBe('kept text')
+      expect(Y.encodeStateAsUpdate(rebuilt).length).toBeLessThan(1024)
+      // Same history as the relay's document, so it merges instead of duplicating.
+      expect([...rebuilt.store.clients.keys()]).toEqual([...first.store.clients.keys()])
+      expect(view.result.current.tooLarge).toBeNull()
+      expect(view.result.current.unsynced).toBe(true)
+      await waitFor(() => expect(stub.providers).toHaveLength(2))
+      expect(stub.providers[1]!.options.document).toBe(rebuilt)
+      expect(view.result.current.status).toBe('reconnecting')
+    })
+
+    it('a frame the relay closed for its size (1009) is the same refusal', async () => {
+      const { view, provider } = await overTheCap(5)
+
+      act(() => provider.options.onClose({ event: { code: 1009, reason: '' } }))
+
+      expect(view.result.current.status).toBe('too-large')
+      expect(provider.disconnected).toBe(true)
+    })
+
+    it('any other close is not', async () => {
+      const { view, provider } = await overTheCap(5)
+
+      act(() => provider.options.onClose({ event: { code: 1000, reason: 'provider_initiated' } }))
+
+      expect(view.result.current.status).toBe('connected')
+      expect(view.result.current.tooLarge).toBeNull()
+    })
   })
 
   it('broadcasts the local identity in its own hashed ink', async () => {

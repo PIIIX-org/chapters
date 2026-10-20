@@ -14,10 +14,31 @@ import { consumeTicket } from './tickets.js'
 import { COLLAB_PATH } from './routes.js'
 import { loadCrdtState, saveCrdtState } from './crdt-store.js'
 import { recordJob } from '../monitoring/metrics.js'
+import { config } from '../config.js'
+import { noteTransportLimit } from '../notes/size-cap.js'
+import { bodyMeasured, updateFits } from './collab-size.js'
 
 export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
 const DEBOUNCE_MS = Number(process.env.COLLAB_DEBOUNCE_MS ?? 2000)
+
+/** y-protocols/sync message types that carry a Yjs update (step 2 of the handshake, and live edits). */
+const SYNC_STEP_2 = 1
+const SYNC_UPDATE = 2
+
+/**
+ * Thrown from `beforeSync` for an update the size cap refuses (#491).
+ * Hocuspocus closes the document connection with this code and reason
+ * before applying anything; the reason reaches the client in the close
+ * message (client/src/hooks/useCollabDoc.ts reads `note-too-large`).
+ */
+class NoteTooLargeRefusal extends Error {
+  readonly code = 4413
+  readonly reason = 'note-too-large'
+  constructor(documentName: string, limit: number) {
+    super(`refused an update to ${documentName}: the note body would pass ${limit} bytes (ELARA_NOTE_MAX_BYTES)`)
+  }
+}
 
 /**
  * The quarantine revision of each loaded document's current episode (#492):
@@ -185,9 +206,21 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       ctx.accessVerifiedAt = now
     },
 
+    /**
+     * The size cap (#491), before an update is applied: the relay never
+     * holds or stores a body over it. See collab-size.ts for how this stays
+     * off the whole document on ordinary keystrokes.
+     */
+    async beforeSync({ type, payload, document, documentName }) {
+      if (type !== SYNC_STEP_2 && type !== SYNC_UPDATE) return
+      const limit = config.noteMaxBytes
+      if (!updateFits(document, payload, limit)) throw new NoteTooLargeRefusal(documentName, limit)
+    },
+
     async onStoreDocument({ documentName, document, lastContext }) {
       const { vaultId, path } = parseDocName(documentName)
       const state = docState(document)
+      bodyMeasured(document, state.body)
       const context: Partial<ConnectionContext> | undefined = lastContext
       // A rejected store is a failed job (#705): the file keeps its last valid
       // version while editors see their edit, so the owner must hear of it.
@@ -235,7 +268,9 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
   })
 
   const hocuspocus = server.hocuspocus
-  const wss = new WebSocketServer({ noServer: true })
+  // Frames past the transport limit are refused by ws before they are read
+  // (close 1009); the default was 100 MiB (#491).
+  const wss = new WebSocketServer({ noServer: true, maxPayload: noteTransportLimit() })
 
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
     // Node destroys upgrade sockets itself only while nothing listens for the

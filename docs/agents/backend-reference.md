@@ -409,6 +409,40 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   revert always is) is written straight to the store and so repairs the
   file; a partial edit is refused with `NoteFileDamagedError` (409),
   since it would have to merge with content that cannot be read.
+- **Body size cap** (#491, `size-cap.ts`): one cap on every write path,
+  `ELARA_NOTE_MAX_BYTES` (`config.noteMaxBytes`, default 1 MiB =
+  1048576), measured as the **UTF-8 bytes of the body** (frontmatter is
+  not counted). `assertBodyFits` runs in `createNote` and `updateNote`
+  (REST, MCP, import, the relay's store) and in `writeThroughCollab`
+  before the live document is edited, so a refused write never reaches
+  editors. A write is refused (`NoteTooLargeError`, an
+  `OkfValidationError`) when the body is over the cap **and** larger than
+  the body it replaces, so a note stored before the cap can still shrink
+  and take frontmatter edits. REST answers 413 `{ error: "note body is N
+  bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)" }`, MCP
+  `create_note`/`edit_note` an `isError` result with the same text,
+  import lists the note in `skipped`; a revert to a revision over the cap
+  (and larger than the current body) is refused the same way. A rename
+  checks every body its link rewrite changes (the note's own self-links,
+  then each referrer's) before it writes anything: one over the cap
+  refuses the whole rename, with the message naming the note (`renaming A
+  to B rewrites its links in C: note body is …`). A referrer that grows
+  past the cap between that check and its rewrite keeps its old link (the
+  rename has happened; logged as `[rename] …`), and the other referrers are
+  still rewritten. Restore of a full-instance backup
+  is exempt (`export/restore.ts` inserts rows directly, not through
+  `createNote`): dropping a backed-up note would lose it. The transport limit
+  (`noteTransportLimit()` = 6 × cap + 64 KiB: a control character is 1
+  byte of UTF-8 and 6 of JSON, the worst escaping; plus frontmatter) is
+  the Fastify `bodyLimit` of the note create/update routes and `/mcp`,
+  and the relay's ws `maxPayload`. In `updateNote` and
+  `writeThroughCollab` the cap runs before the write quarantine (#492,
+  below): an over-cap body is refused, never kept as a quarantine
+  revision (which `revert_note` would then refuse). Before #491, REST
+  and MCP refused only at Fastify's default 1 MiB *request* limit (so a
+  body under 1 MiB with JSON escaping was refused), import took any size
+  and the relay stored up to ws's 100 MiB default (60 MiB froze the
+  server ~20 s in the lab).
 - **Write quarantine** (`growth-guard.ts`, #492): a stale reload once
   doubled a whole note (#488) and the store wrote it like any edit. A body
   write is checked against the stored body (UTF-8 bytes, linear time:
@@ -546,6 +580,35 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   store caused by a server body write through a direct connection
   (`writeThroughCollab`, context `directWrite`; its caller ran the check
   or passed `allowGrowth`) is not checked again.
+- **Size cap on the relay** (#491, `collab-size.ts`): ws refuses a frame
+  over `noteTransportLimit()` before reading it (close 1009).
+  `beforeSync` refuses a sync-step-2 or update message whose Yjs update
+  would leave the body over `ELARA_NOTE_MAX_BYTES` and larger than now
+  *before* it is applied: Hocuspocus closes that document connection with
+  reason `note-too-large` (code 4413), so the relay never holds or stores
+  it. The check does not serialize the note per keystroke: each document
+  keeps the body's bytes at the last exact measure (load, each store)
+  plus the lengths of every update applied since, an upper bound because
+  an update carries its inserted text as UTF-8; only when bound + update
+  + Yjs's pending structs passes the cap does it measure exactly, and
+  only when still over does it apply the update to a scratch copy (work
+  bounded by the larger of the cap and the body). Updates that insert no
+  text always pass; a body already over the cap may take an update that
+  adds text as long as the result is no larger (an editor's reconnect
+  sends its typing and its cuts in one update). The collab ticket returns
+  `maxNoteBytes` and `maxFrameBytes` (= `noteTransportLimit()`); the
+  editor (`useCollabDoc`) turns a `note-too-large` or 1009 close into
+  status `too-large`: it stops reconnecting, keeps the text (on screen
+  and in the browser's copy), shows how much to cut (`TooLargeNotice`,
+  beside `UnmergedNotice` when both apply) and, once the body fits,
+  syncs again on a new provider (the old one would replay its queued
+  keystrokes one by one, and on a note over the cap the first that adds
+  text is refused alone). When the whole document state would not fit
+  through `maxFrameBytes` (the editor's undo history keeps deleted text,
+  e.g. an undone paste), it first rebuilds the document from its own
+  state: same history, so it still merges, but deleted text and the undo
+  history are dropped (the notice says so); the browser's copy moves to
+  the new document.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
   Every share/team/deactivation mutation calls `emitPermissionChange()`;
   the collab server and the SSE viewer hub both subscribe and actively
@@ -1202,7 +1265,8 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     `${SETUP_TOKEN:-}`, which would always set it to the empty string.
   - Others: `DATABASE_URL`, `PORT`, `CLIENT_DIST`, `EMBEDDINGS`,
     `CORS_ORIGIN`, `LOCAL_REPOS_ROOT`, `ELARA_MONITORING_TOKEN` (Error
-    reports and metrics, above).
+    reports and metrics, above), `ELARA_NOTE_MAX_BYTES` (note body size
+    cap, §5.3; a reverse proxy must pass bodies up to 6 × it + 64 KiB).
 - **Migrations**: `drizzle-kit generate` produces SQL under
   `server/drizzle/`; a few migrations were hand-edited afterward for
   things Drizzle can't express directly (pgvector extension + HNSW
