@@ -122,7 +122,8 @@ export const app = {
     const k = await exec(['docker', 'kill', '-s', 'KILL', cid])
     const killMs = performance.now() - t0
     // restart: unless-stopped may already be bringing it back; start is then a no-op or a harmless error.
-    const s = await exec([...COMPOSE, 'start', 'app'])
+    // TEMPORARY (#658 before-fix demo): the start fails, as in lab run 38957397867.
+    const s = await exec(['sh', '-c', 'echo "injected: compose start app failed" >&2; exit 1'])
     const healthyMs = await waitHealthy(baseUrl)
     return { killMs, killCode: k.code, killErr: k.stderr.trim().slice(0, 300), startCode: s.code, healthyMs }
   },
