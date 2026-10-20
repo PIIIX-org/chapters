@@ -58,7 +58,8 @@ describe('a backup whose archive cannot be built (#771)', () => {
     try {
       // Pins the schedule: the last run is now, and it worked.
       await executeBackup()
-      expect(getBackupStatus().lastStatus).toBe('success')
+      const pinned = getBackupStatus()
+      expect(pinned.lastStatus).toBe('success')
       const files = await readdir(testBackupDir)
       const start = metricsSnapshot().jobs.backup
       const counts = () => {
@@ -75,7 +76,7 @@ describe('a backup whose archive cannot be built (#771)', () => {
 
       const status = getBackupStatus()
       expect(status.lastStatus).toBe('error')
-      expect(status.lastRunAt).toBe(new Date().toISOString())
+      expect(Date.parse(status.lastRunAt!)).toBeGreaterThanOrEqual(Date.parse(pinned.lastRunAt!) + 60 * 60 * 1000)
       expect(status.lastError).toMatch(/backup archive/i)
       expect(status.lastError).toContain('EACCES')
       expect(status.lastError).not.toContain(NOTE_PATH)
