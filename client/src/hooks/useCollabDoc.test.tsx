@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
+import * as Y from 'yjs'
 import { getCollabTicket } from '../api/collab.js'
 import { ApiError } from '../lib/api.js'
 import { AI_INK, inkFor } from '../lib/ink.js'
@@ -108,7 +109,7 @@ vi.mock('../api/collab.js', async (importOriginal) => ({
 const ticket = vi.mocked(getCollabTicket)
 
 function ticketNamed(token: string) {
-  return { token, url: 'ws://relay.test:3001', expiresAt: '2026-08-25T10:00:60.000Z', maxNoteBytes: 1048576 }
+  return { token, url: 'ws://relay.test:3001', expiresAt: '2026-08-25T10:00:60.000Z', maxNoteBytes: 1048576, maxFrameBytes: 6 * 1048576 + 65536 }
 }
 
 function mount(overrides: Partial<Parameters<typeof useCollabDoc>[0]> = {}) {
@@ -253,13 +254,51 @@ describe('useCollabDoc', () => {
       expect(view.result.current.tooLarge).toEqual({ limitBytes: LIMIT, bodyBytes: LIMIT + 6 })
       expect(provider.reconnects).toBe(0)
 
-      act(() => view.result.current.ydoc.getText('body').delete(0, 3))
+      const ydoc = view.result.current.ydoc
+      act(() => ydoc.getText('body').delete(0, 3))
       expect(view.result.current.tooLarge).toBeNull()
       expect(view.result.current.status).toBe('reconnecting')
-      expect(provider.reconnects).toBe(1)
+      // A new provider on the same document: its sync sends everything in one
+      // update, not the old one's queue of single keystrokes.
+      expect(provider.destroyed).toBe(true)
+      await waitFor(() => expect(stub.providers).toHaveLength(2))
+      const next = stub.providers[1]!
+      expect(next.options.document).toBe(ydoc)
+      expect(view.result.current.ydoc).toBe(ydoc)
 
-      act(() => provider.options.onStatus({ status: 'connected' }))
+      act(() => next.options.onStatus({ status: 'connected' }))
       expect(view.result.current.status).toBe('connected')
+    })
+
+    it('a refused paste that was undone is not sent again: the document is rebuilt from what is on screen', async () => {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      act(() => provider.options.onSynced({ state: true }))
+      const first = view.result.current.ydoc
+      act(() => first.getText('body').insert(0, 'kept text'))
+      // The editor's undo history keeps deleted text in the document.
+      const undo = new Y.UndoManager(first.getText('body'))
+      act(() => first.getText('body').insert(0, 'x'.repeat(7 * LIMIT)))
+      act(() => provider.options.onClose({ event: { code: 1009, reason: '' } }))
+      expect(view.result.current.status).toBe('too-large')
+
+      act(() => {
+        undo.undo()
+      })
+      // What a reconnect would send still holds the whole paste, over the relay's frame limit.
+      expect(Y.encodeStateAsUpdate(first).length).toBeGreaterThan(7 * LIMIT)
+      expect(provider.reconnects).toBe(0)
+      await waitFor(() => expect(view.result.current.ydoc).not.toBe(first))
+      const rebuilt = view.result.current.ydoc
+      expect(rebuilt.getText('body').toString()).toBe('kept text')
+      expect(Y.encodeStateAsUpdate(rebuilt).length).toBeLessThan(1024)
+      // Same history as the relay's document, so it merges instead of duplicating.
+      expect([...rebuilt.store.clients.keys()]).toEqual([...first.store.clients.keys()])
+      expect(view.result.current.tooLarge).toBeNull()
+      expect(view.result.current.unsynced).toBe(true)
+      await waitFor(() => expect(stub.providers).toHaveLength(2))
+      expect(stub.providers[1]!.options.document).toBe(rebuilt)
+      expect(view.result.current.status).toBe('reconnecting')
     })
 
     it('a frame the relay closed for its size (1009) is the same refusal', async () => {

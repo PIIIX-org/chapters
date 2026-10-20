@@ -191,6 +191,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `toName` (string, required): either a single slug (renames the note in its current directory) or a full path (moves the note; its `type` is rewritten to the new first segment).
 - **Returns**: the updated note row.
 - Links in other live notes of the same vault that use the old **full path** (`[[domains/auth/tokens]]`) are rewritten. Bare-name links (`[[tokens]]`) are not, and break.
+- A longer path makes those links longer. If the rewrite would take the note itself or any linking note over the body size limit, the rename is refused with an error naming that note, and nothing is renamed or rewritten.
 
 ### `delete_note`
 - **Scope**: vault. Edit access.

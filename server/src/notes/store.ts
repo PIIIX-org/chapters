@@ -25,7 +25,7 @@ import {
 } from './okf/paths.js'
 import { atomicWrite } from './atomic-write.js'
 import { withKeyLock } from './key-lock.js'
-import { assertBodyFits } from './size-cap.js'
+import { assertBodyFits, NoteTooLargeError } from './size-cap.js'
 
 export { splitPath, resolveNotePath, type ResolvedNotePath }
 
@@ -424,6 +424,18 @@ export async function renameNote(
     type: toResolved.type,
   }
   validateNote(toResolved.type, toResolved.name, newFrontmatter, currentBody)
+  // #491: rewriting links can grow a body past the size cap. Every rewritten
+  // body (the note's own, then each referrer's) is checked before anything is
+  // written, so a refused rename leaves the vault as it was.
+  const renaming = `renaming ${fromResolved.fullPath} to ${toResolved.fullPath}`
+  assertBodyFits(currentBody, rawBody, `${renaming} rewrites its own links`)
+  const referrers = isMoving ? await linkReferrers(vaultId, row.id, fromResolved.fullPath) : []
+  for (const path of referrers) {
+    const referrer = await readNote(vaultId, path)
+    if (!referrer) continue
+    const rewritten = refactorWikilinks(referrer.body, fromResolved.fullPath, toResolved.fullPath)
+    assertBodyFits(rewritten, referrer.body, `${renaming} rewrites its links in ${path}`)
+  }
 
   const fromFile = noteFile(vaultId, fromResolved.fullPath)
   const toFile = noteFile(vaultId, toResolved.fullPath)
@@ -466,41 +478,41 @@ export async function renameNote(
   await regenProgressiveIndices(vaultId, affectedDirs)
   await syncLinks(updated.id, currentBody)
 
-  // Refactor incoming wikilinks across other notes in the vault
-  if (isMoving) {
-    const referringRows = await db
-      .select({
-        sourceNoteId: noteLinks.sourceNoteId,
-        sourceNotePath: notes.path,
-      })
-      .from(noteLinks)
-      .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
-      .where(
-        and(
-          eq(notes.vaultId, vaultId),
-          ne(notes.id, row.id),
-          isNull(notes.deletedAt),
-          or(
-            eq(noteLinks.targetPath, fromResolved.fullPath),
-            eq(noteLinks.targetPath, `${fromResolved.fullPath}.md`),
-          ),
-        ),
-      )
-
-    const seenNotes = new Set<string>()
-    for (const ref of referringRows) {
-      if (seenNotes.has(ref.sourceNoteId)) continue
-      seenNotes.add(ref.sourceNoteId)
-      const targetNote = await readNote(vaultId, ref.sourceNotePath)
-      if (!targetNote) continue
-      const refactored = refactorWikilinks(targetNote.body, fromResolved.fullPath, toResolved.fullPath)
-      if (refactored !== targetNote.body) {
-        await updateFn(vaultId, ref.sourceNotePath, { body: refactored }, SYSTEM_ACTOR)
-      }
+  // Refactor incoming wikilinks across other notes in the vault. Each is
+  // re-read: it may have changed since the check above.
+  for (const path of referrers) {
+    const targetNote = await readNote(vaultId, path)
+    if (!targetNote) continue
+    const refactored = refactorWikilinks(targetNote.body, fromResolved.fullPath, toResolved.fullPath)
+    if (refactored === targetNote.body) continue
+    try {
+      await updateFn(vaultId, path, { body: refactored }, SYSTEM_ACTOR)
+    } catch (err) {
+      // Grown past the cap since the check: the rename is done, so the other
+      // referrers still get their links; this one keeps the old link.
+      if (!(err instanceof NoteTooLargeError)) throw err
+      console.warn(`[rename] ${renaming}: links in ${path} not rewritten: ${err.message}`)
     }
   }
 
   return updated
+}
+
+/** Paths of the live notes, other than `noteId`, that link to `path`. */
+async function linkReferrers(vaultId: string, noteId: string, path: string): Promise<string[]> {
+  const rows = await db
+    .select({ sourceNotePath: notes.path })
+    .from(noteLinks)
+    .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
+    .where(
+      and(
+        eq(notes.vaultId, vaultId),
+        ne(notes.id, noteId),
+        isNull(notes.deletedAt),
+        or(eq(noteLinks.targetPath, path), eq(noteLinks.targetPath, `${path}.md`)),
+      ),
+    )
+  return [...new Set(rows.map((r) => r.sourceNotePath))]
 }
 
 

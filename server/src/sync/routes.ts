@@ -4,6 +4,7 @@ import { readNote, splitPath } from '../notes/store.js'
 import { addViewer } from './viewers.js'
 import { issueTicket } from './tickets.js'
 import { config } from '../config.js'
+import { noteTransportLimit } from '../notes/size-cap.js'
 
 /**
  * Where the browser should connect to the relay: **the page's own origin, at
@@ -55,11 +56,19 @@ export function syncRoutes(app: FastifyInstance) {
    * against this shape). Authentication only — no vault is named here, and a
    * ticket confers no permission: the relay still resolves live access on
    * connect and on every inbound message. `maxNoteBytes` is the body size cap
-   * the relay enforces (#491), so the editor can say what to cut.
+   * the relay enforces (#491), so the editor can say what to cut;
+   * `maxFrameBytes` the largest websocket frame it reads, so the editor knows
+   * when what it would send cannot arrive.
    */
   app.post('/collab/ticket', async (req) => {
     const { token, expiresAt } = issueTicket(req.user!.id)
-    return { token, url: COLLAB_PATH, expiresAt: expiresAt.toISOString(), maxNoteBytes: config.noteMaxBytes }
+    return {
+      token,
+      url: COLLAB_PATH,
+      expiresAt: expiresAt.toISOString(),
+      maxNoteBytes: config.noteMaxBytes,
+      maxFrameBytes: noteTransportLimit(),
+    }
   })
 
   app.get<{ Params: { id: string; '*': string } }>(

@@ -11,7 +11,7 @@
 //   1 MiB of UTF-8 body; the collab ticket reports it as maxNoteBytes). REST
 //   answers 413, MCP a tool error, and the collab relay refuses an update
 //   that would pass it before applying it (close reason `note-too-large`) and
-//   a frame over 4 x the limit + 64 KiB at the socket (ws maxPayload, close
+//   a frame over 6 x the limit + 64 KiB at the socket (ws maxPayload, close
 //   1009). Before #491 only Fastify's 1 MiB request limit stopped REST/MCP,
 //   and the relay stored up to ws's 100 MiB default (60 MiB froze the app).
 //

@@ -78,11 +78,37 @@ describe('collab size guard (#491)', () => {
 
   it('lets a note already over the cap shrink and take frontmatter, but not new text', () => {
     const { server, client } = pair('x'.repeat(LIMIT + 50))
-    expect(updateFits(server, updateFrom(client, (t) => t.delete(0, 10)), LIMIT)).toBe(true)
+    const shrink = updateFrom(client, (t) => t.delete(0, 10))
+    expect(updateFits(server, shrink, LIMIT)).toBe(true)
+    Y.applyUpdate(server, shrink)
     const before = Y.encodeStateVector(client)
     client.getMap('frontmatter').set('title', 'Still big')
-    expect(updateFits(server, Y.encodeStateAsUpdate(client, before), LIMIT)).toBe(true)
+    const frontmatter = Y.encodeStateAsUpdate(client, before)
+    expect(updateFits(server, frontmatter, LIMIT)).toBe(true)
+    Y.applyUpdate(server, frontmatter)
     expect(updateFits(server, updateFrom(client, (t) => t.insert(0, 'more')), LIMIT)).toBe(false)
+  })
+
+  it('lets a note over the cap take new text when the same update cuts more than it adds', () => {
+    const { server, client } = pair('x'.repeat(LIMIT + 50))
+    const update = updateFrom(client, (t) => {
+      t.insert(0, 'new')
+      t.delete(10, 20)
+    })
+    expect(updateFits(server, update, LIMIT)).toBe(true)
+    Y.applyUpdate(server, update)
+    // Adding as much as it cuts leaves it no larger: also allowed.
+    const level = updateFrom(client, (t) => {
+      t.insert(0, 'abcde')
+      t.delete(10, 5)
+    })
+    expect(updateFits(server, level, LIMIT)).toBe(true)
+    Y.applyUpdate(server, level)
+    const grows = updateFrom(client, (t) => {
+      t.insert(0, 'abcdef')
+      t.delete(10, 5)
+    })
+    expect(updateFits(server, grows, LIMIT)).toBe(false)
   })
 
   it('counts text held pending that an update would unblock', () => {

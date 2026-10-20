@@ -17,6 +17,7 @@ describe('TooLargeNotice', () => {
     expect(text).toContain('1.29 MB')
     expect(text).toContain('remove about 300.0 KB')
     expect(text).toMatch(/sync again/i)
+    expect(text).toMatch(/undo history for this note is cleared/i)
   })
 
   it('still says what to do when this tab measures the note under the limit', () => {

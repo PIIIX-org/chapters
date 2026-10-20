@@ -63,12 +63,12 @@ interface Closed {
   reason: string
 }
 
-function connect(name: string, closes: Closed[] = []): HocuspocusProvider {
+function connect(name: string, closes: Closed[] = [], document = new Y.Doc()): HocuspocusProvider {
   const provider = new HocuspocusProvider({
     url: collabUrl,
     name: `${vaultId}/${name}`,
     token: ownerToken,
-    document: new Y.Doc(),
+    document,
     onClose: ({ event }) => closes.push({ code: event.code, reason: event.reason }),
   })
   providers.push(provider)
@@ -251,7 +251,7 @@ describe('note body size cap (#491)', { timeout: 30_000 }, () => {
     const provider = connect('docs/collab-frame', closes)
     await waitFor(() => provider.isSynced)
 
-    provider.document.getText('body').insert(0, `HUGE-FRAME-MARKER ${'x'.repeat(6 * CAP)}`)
+    provider.document.getText('body').insert(0, `HUGE-FRAME-MARKER ${'x'.repeat(7 * CAP)}`)
     await waitFor(() => closes.some((c) => c.code === 1009))
     provider.destroy()
     await storeSettled('docs/collab-frame')
@@ -304,6 +304,66 @@ describe('note body size cap (#491)', { timeout: 30_000 }, () => {
     provider.destroy()
   })
 
+  it('the transport takes a body at the cap in its worst JSON escaping (control characters, 6 bytes each)', async () => {
+    // Under the cap, so it must be stored, not refused by the request limit.
+    const body = '\u0001'.repeat(CAP - 10)
+    expect(JSON.stringify(body).length).toBeGreaterThan(5 * CAP)
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes`,
+      headers: { cookie: ownerCookie },
+      body: { type: 'docs', name: 'escaped', body },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(await restBody('docs/escaped')).toBe(body)
+  })
+
+  it('a rename whose self-link rewrite would take the note past the cap is refused before anything moves', async () => {
+    const link = '[[docs/self]] '
+    const body = link.repeat(Math.floor(CAP / Buffer.byteLength(link)))
+    await newNote('self', body)
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes-rename`,
+      headers: { cookie: ownerCookie },
+      body: { from: 'docs/self', to: 's'.repeat(60) },
+    })
+    expect(res.statusCode).toBe(413)
+    expect((res.json() as { error: string }).error).toContain(String(CAP))
+    expect(await restBody('docs/self')).toBe(body)
+    expect(await readNote(vaultId, `docs/${'s'.repeat(60)}`)).toBeNull()
+  })
+
+  it('a rename whose link rewrite would take a referrer past the cap is refused before anything moves, naming it', async () => {
+    const link = '[[docs/target]]'
+    const nearCap = `${bodyOfBytes(CAP - Buffer.byteLength(link))}${link}`
+    await newNote('target', 'the target')
+    await newNote('referrer-one', nearCap)
+    await newNote('referrer-two', `see ${link}`)
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes-rename`,
+      headers: { cookie: ownerCookie },
+      body: { from: 'docs/target', to: 'target-renamed' },
+    })
+    expect(res.statusCode).toBe(413)
+    expect((res.json() as { error: string }).error).toContain('docs/referrer-one')
+    expect(await readNote(vaultId, 'docs/target')).not.toBeNull()
+    expect(await readNote(vaultId, 'docs/target-renamed')).toBeNull()
+    expect(await restBody('docs/referrer-one')).toBe(nearCap)
+    expect(await restBody('docs/referrer-two')).toBe(`see ${link}`)
+
+    // MCP rename_note goes through the same check.
+    const client = await mcpClient()
+    const renamed = await client.callTool({
+      name: 'rename_note',
+      arguments: { vaultId, from: 'docs/target', toName: 'target-renamed' },
+    })
+    expect(renamed.isError).toBe(true)
+    expect(textOf(renamed)).toContain('docs/referrer-one')
+    expect(await readNote(vaultId, 'docs/target')).not.toBeNull()
+  })
+
   it('a note stored before the cap can shrink and take frontmatter edits, but not grow', async () => {
     process.env.ELARA_NOTE_MAX_BYTES = String(2 * CAP)
     try {
@@ -341,6 +401,33 @@ describe('note body size cap (#491)', { timeout: 30_000 }, () => {
     await waitFor(() => closes.some((c) => c.reason === 'note-too-large'))
     await storeSettled('docs/legacy')
     expect(await restBody('docs/legacy')).toBe(shrunk)
+    provider.destroy()
+  })
+  it('an editor reconnecting to a note over the cap with cuts and new text is accepted when the note ends up smaller', async () => {
+    process.env.ELARA_NOTE_MAX_BYTES = String(2 * CAP)
+    try {
+      await createNote(vaultId, { path: 'docs/legacy-resync', body: bodyOfBytes(CAP + 5000) })
+    } finally {
+      delete process.env.ELARA_NOTE_MAX_BYTES
+    }
+    const first = connect('docs/legacy-resync')
+    await waitFor(() => first.isSynced)
+    const document = first.document
+    first.destroy()
+
+    // Offline: one line typed, more than that cut. A new connection's sync carries both in one update.
+    const text = document.getText('body')
+    text.insert(0, 'NEW LINE\n')
+    text.delete(text.length - 2000, 2000)
+    const local = text.toString()
+    expect(Buffer.byteLength(local)).toBeGreaterThan(CAP)
+
+    const closes: Closed[] = []
+    const provider = connect('docs/legacy-resync', closes, document)
+    const refused = () => closes.some((c) => c.reason === 'note-too-large')
+    await waitFor(async () => refused() || (await restBody('docs/legacy-resync')) === local)
+    expect(refused()).toBe(false)
+    expect(await restBody('docs/legacy-resync')).toBe(local)
     provider.destroy()
   })
 })

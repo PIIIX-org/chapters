@@ -60,7 +60,7 @@ vi.mock('../api/collab.js', async (importOriginal) => ({
   ...(await importOriginal<typeof CollabApi>()),
   getCollabTicket: () => {
     stub.tickets += 1
-    return Promise.resolve({ token: `ticket-${stub.tickets}`, url: '/collab', expiresAt: '2026-08-25T10:00:60.000Z', maxNoteBytes: 1048576 })
+    return Promise.resolve({ token: `ticket-${stub.tickets}`, url: '/collab', expiresAt: '2026-08-25T10:00:60.000Z', maxNoteBytes: 1048576, maxFrameBytes: 6 * 1048576 + 65536 })
   },
 }))
 

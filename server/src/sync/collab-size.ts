@@ -16,10 +16,12 @@ import * as Y from 'yjs'
  * 2. An update that inserts no text (deletions, frontmatter) cannot grow the
  *    body.
  * 3. Exact: measure the body now; the bound restarts from it.
- * 4. A body already over the cap (a note stored before it) takes no inserted
- *    text, only deletions, so it can shrink.
- * 5. Otherwise apply the update to a scratch copy and measure: at most the
- *    cap plus one frame of work.
+ * 4. Otherwise apply the update to a scratch copy and measure: at most the
+ *    larger of the cap and the current body, plus one frame of work. The
+ *    update fits if the body ends up within the cap or no larger than now, so
+ *    a note already over the cap (stored before it) can shrink, even in an
+ *    update that also adds text (an editor's reconnect sends its typing and
+ *    its cuts together), as assertBodyFits allows.
  */
 interface Meter {
   /** Body UTF-8 bytes at the last exact measure. */
@@ -67,12 +69,12 @@ export function updateFits(doc: Y.Doc, update: Uint8Array, limit: number): boole
   meter.bytes = Buffer.byteLength(doc.getText('body').toString())
   meter.since = 0
   if (meter.bytes + update.length + pendingBytes <= limit) return true
-  if (meter.bytes > limit) return false
   const scratch = new Y.Doc()
   try {
     Y.applyUpdate(scratch, Y.encodeStateAsUpdate(doc))
     Y.applyUpdate(scratch, update)
-    return Buffer.byteLength(scratch.getText('body').toString()) <= limit
+    const after = Buffer.byteLength(scratch.getText('body').toString())
+    return after <= limit || after <= meter.bytes
   } finally {
     scratch.destroy()
   }

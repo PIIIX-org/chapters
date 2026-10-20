@@ -244,6 +244,7 @@ beforeEach(() => {
     url: 'ws://relay.test:3001',
     expiresAt: '2026-08-25T10:00:60.000Z',
     maxNoteBytes: 1048576,
+    maxFrameBytes: 6 * 1048576 + 65536,
   })
 })
 
@@ -430,7 +431,7 @@ describe('NoteView — a session that cannot write is locked', () => {
     expect(screen.getByPlaceholderText(/ISO date/)).toBeDisabled()
 
     // Same tab, different cause.
-    ticket.mockResolvedValue({ token: 't-2', url: 'ws://relay.test:3001', expiresAt: '2026-08-25T10:00:60.000Z', maxNoteBytes: 1048576 })
+    ticket.mockResolvedValue({ token: 't-2', url: 'ws://relay.test:3001', expiresAt: '2026-08-25T10:00:60.000Z', maxNoteBytes: 1048576, maxFrameBytes: 6 * 1048576 + 65536 })
     renderNote(EDIT_VAULT, '/vaults/v1/notes/people/jane')
     const doc = await relay()
     doc.kick()

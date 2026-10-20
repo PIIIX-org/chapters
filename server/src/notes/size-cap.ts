@@ -20,29 +20,34 @@ import { OkfValidationError } from './okf.js'
  */
 export class NoteTooLargeError extends OkfValidationError {
   readonly statusCode = 413
-  constructor(bytes: number, limit: number) {
-    super(`note body is ${bytes} bytes (UTF-8); the limit is ${limit} bytes (ELARA_NOTE_MAX_BYTES)`)
+  constructor(bytes: number, limit: number, context?: string) {
+    super(`${context ? `${context}: ` : ''}note body is ${bytes} bytes (UTF-8); the limit is ${limit} bytes (ELARA_NOTE_MAX_BYTES)`)
   }
 }
 
-/** Throws NoteTooLargeError unless `body` may replace `current` (absent for a new note). */
-export function assertBodyFits(body: string, current?: string): void {
+/**
+ * Throws NoteTooLargeError unless `body` may replace `current` (absent for a
+ * new note). `context` leads the message when the body is not the one the
+ * caller sent (a rename's link rewrite).
+ */
+export function assertBodyFits(body: string, current?: string, context?: string): void {
   const limit = config.noteMaxBytes
   // UTF-8 takes at most 3 bytes per UTF-16 unit: most bodies need no count.
   if (body.length * 3 <= limit) return
   const bytes = Buffer.byteLength(body, 'utf8')
   if (bytes <= limit) return
   if (current !== undefined && bytes <= Buffer.byteLength(current, 'utf8')) return
-  throw new NoteTooLargeError(bytes, limit)
+  throw new NoteTooLargeError(bytes, limit, context)
 }
 
 /**
  * Largest request body (REST note writes, MCP) and collab websocket frame
  * accepted before it is read. Above the cap so a body at the cap still
- * arrives: JSON escaping grows text (`\n` doubles a byte, a `\u`-escaped
- * character takes up to 12 bytes for 4), and frontmatter rides along. The
- * exact check is assertBodyFits.
+ * arrives in its worst JSON escaping: a control character is one byte of
+ * UTF-8 and six of JSON (`\u0001`), more than any other character (`\n` takes
+ * two bytes for one, a 3-byte character at most 6 escaped); 64 KiB more for
+ * frontmatter and the envelope. The exact check is assertBodyFits.
  */
 export function noteTransportLimit(): number {
-  return 4 * config.noteMaxBytes + 64 * 1024
+  return 6 * config.noteMaxBytes + 64 * 1024
 }

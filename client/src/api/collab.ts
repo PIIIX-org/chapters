@@ -27,6 +27,9 @@ export interface CollabTicket {
   /** The largest note body the relay stores, in UTF-8 bytes (server
    *  ELARA_NOTE_MAX_BYTES, #491): how much a refused note has to lose. */
   maxNoteBytes: number
+  /** The largest websocket frame the relay reads, in bytes: a sync bigger
+   *  than this is closed (1009) before the size cap is even checked. */
+  maxFrameBytes: number
 }
 
 export function getCollabTicket(): Promise<CollabTicket> {

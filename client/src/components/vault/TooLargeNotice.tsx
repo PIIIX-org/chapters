@@ -29,7 +29,8 @@ export function TooLargeNotice({ limitBytes, bodyBytes }: TooLargeNoticeProps) {
         one larger, so it was not saved — nor is anything typed since. It is all still here and kept
         in this browser.{' '}
         {over > 0 ? `The note is ${formatBytes(bodyBytes)}: remove about ${formatBytes(over)}` : 'Remove some text'}, or
-        move part of it into another note, and it will sync again.
+        move part of it into another note, and it will sync again. If what you cut is very large, undo
+        history for this note is cleared when it does.
       </p>
     </div>
   )
