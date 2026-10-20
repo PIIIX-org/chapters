@@ -374,10 +374,31 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   other's temp file (raw `ENOENT` naming server paths) and leave the row
   and the file on different writes. The MCP tool wrapper returns only the
   code of a Node system error (`internal storage error (ENOENT)`); the
-  full error goes to the server log. Rename, delete and restore do not
-  take the lock. The lock orders writes; it does not merge them: a body
-  write replaces the whole body, so two agents that each read a note and
-  write it back with a line appended still keep only the later one.
+  full error goes to the server log. The lock orders writes; it does not
+  merge them: a body write replaces the whole body, so two agents that
+  each read a note and write it back with a line appended still keep only
+  the later one.
+- **Rename, delete, restore, purge and create take the note lock too**
+  (#484): `createNote`, `softDeleteNote`, `restoreNote` and `purgeNote`
+  hold `note:<vault>/<path>` (restore and purge read the trashed row's
+  path, lock it, then read the row again); `renameNote` holds the keys of
+  the old and the new path (`withKeyLocks`, sorted) across the target
+  check, the file and CRDT move, the row update, the index regeneration
+  and its own links. An edit queued behind a rename or a delete then finds
+  no note at the old path (`note not found`) instead of writing there, and
+  of two writers making one path live (two renames, a rename and a create
+  or a restore) the second gets `a note already exists`. Before, a rename
+  copied a stale body over an acknowledged edit, an edit's file landed at
+  the path the note had left, the losing rename's rollback unlinked the
+  winner's file, and a restore could report success on a note a purge
+  removed. Links in other notes are rewritten after the rename's locks are
+  released, each through `updateFn` (`writeThroughCollab`) under that
+  note's own lock: no code holding a `note:` lock waits for the relay's
+  store hook (ADR-003 §5.1), and two renames rewriting each other's
+  referrers would otherwise wait on each other. Lock order: `note:` keys
+  (sorted when more than one), then `index:`. The keys are paths, not note
+  ids (ADR-003 S2a moves to id keys): an editor tab left open at the old
+  path after a rename still stores to a path with no note, as before.
 - **Edits merge frontmatter per key** (#438): `edit_note` and REST
   `PUT /api/vaults/:id/notes/*` take `frontmatter`, `body`, `replace`
   and `removeKeys`; `requestedEdit()` (`sync/crdt-write.ts`) turns them
@@ -421,7 +442,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   into one folder write its `index.md` in turn and the last write lists
   every note committed before it; an older snapshot written last used to
   leave live notes out (#779). Lock order is `note:` before `index:`
-  (`updateNote` regenerates inside its note lock; nothing takes a `note:`
+  (every note writer regenerates inside its note locks; nothing takes a `note:`
   lock while holding an `index:` lock).
 - **`integrity.ts`** / `pnpm check-notes`: parses every live note's file
   from disk the way `readNote` does and compares it with the note's row.
