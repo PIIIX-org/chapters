@@ -523,7 +523,7 @@ All team and user tools are **account only**.
 - **Scope**: vault. Edit access.
 - **Capability**: `read`.
 - **Parameters**: `vaultId` (uuid, optional).
-- **Returns**: `{ vaultId, zipBase64, sizeBytes }`. Live notes only; revisions and trash are not included.
+- **Returns**: `{ vaultId, zipBase64, sizeBytes }`. The zip holds the live notes as OKF `.md` files, `assets/`, `manifest.json` (vault id, name, shares) and `.elara/history/<noteId>.json` per note, live or trashed: every revision (action, actor, time, frontmatter, body) and the note's times; trashed notes carry their content there. Importing it (`POST /api/import`) recreates revisions and trash and points attachment links at the new vault.
 
 ### `export_note`
 - **Scope**: vault. Read access.

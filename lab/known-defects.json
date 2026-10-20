@@ -216,26 +216,6 @@
     },
     {
       "test": "export-roundtrip",
-      "check": "import: attachment links in notes resolve within the imported vault",
-      "issue": 499
-    },
-    {
-      "test": "export-roundtrip",
-      "check": "import: attachments keep their file names (so links keep working)",
-      "issue": 499
-    },
-    {
-      "test": "export-roundtrip",
-      "check": "import: revision history preserved",
-      "issue": 499
-    },
-    {
-      "test": "export-roundtrip",
-      "check": "import: trash preserved",
-      "issue": 499
-    },
-    {
-      "test": "export-roundtrip",
       "check": "non-ASCII attachment name kept",
       "issue": 619
     },
@@ -258,16 +238,6 @@
       "test": "export-roundtrip",
       "check": "OKF reference parser (open-knowledge-format document.py) reads every exported note as written",
       "issue": 564
-    },
-    {
-      "test": "export-roundtrip",
-      "check": "revision history travels with the export",
-      "issue": 499
-    },
-    {
-      "test": "export-roundtrip",
-      "check": "trash travels with the export",
-      "issue": 499
     },
     {
       "test": "multilingual-search",

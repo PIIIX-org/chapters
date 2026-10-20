@@ -27,7 +27,10 @@ export interface ShareOutcome {
  */
 export interface ImportResult {
   vaultId: string
+  /** Live notes created. */
   imported: number
+  /** Trashed notes from the archive recreated in the new vault's trash. */
+  trashed: number
   /**
    * One `"<path>: <reason>"` per note the OKF validator rejected — a list, not
    * a count. The reasons are the only place anything says why those notes did

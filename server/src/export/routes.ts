@@ -7,9 +7,9 @@ import { generateToken, hashToken } from '../auth/tokens.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
 import { resolveAccess, atLeast } from '../vaults/permissions.js'
-import { createNote, readNote, saveAsset } from '../notes/store.js'
+import { readNote } from '../notes/store.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
-import { parseNote, serializeNote, OkfValidationError } from '../notes/okf.js'
+import { serializeNote } from '../notes/okf.js'
 import {
   addVaultToZip,
   buildInstanceBackup,
@@ -17,6 +17,7 @@ import {
   type VaultManifest,
 } from './archive.js'
 import { executeBackup, getBackupStatus } from './backup-service.js'
+import { importVaultContent } from './vault-history.js'
 
 const LINK_TTL_MS = Number(process.env.EXPORT_LINK_TTL_HOURS ?? 24) * 60 * 60 * 1000
 
@@ -291,41 +292,13 @@ export function exportRoutes(app: FastifyInstance) {
           })
           .returning()
 
-        const skipped: string[] = []
-        let imported = 0
-        for (const entry of zip.getEntries()) {
-          if (entry.isDirectory) continue
-          if (entry.entryName.startsWith('assets/')) {
-            const assetName = entry.entryName.slice(7)
-            if (assetName && /^[a-zA-Z0-9._-]+$/.test(assetName)) {
-              await saveAsset(vault!.id, assetName, entry.getData())
-            }
-            continue
-          }
-          if (!entry.entryName.endsWith('.md')) continue
-          const path = entry.entryName.replace(/\.md$/, '')
-          if (path === 'index' || path.endsWith('/index')) continue
-          try {
-            const resolved = resolveNotePath(path)
-            const parsed = parseNote(entry.getData().toString('utf8'))
-            // Same shared validation write path as every other write.
-            await createNote(
-              vault!.id,
-              {
-                path: resolved.fullPath,
-                type: resolved.type,
-                name: resolved.name,
-                frontmatter: parsed.frontmatter,
-                body: parsed.body,
-              },
-              { type: 'user', id: req.user!.id },
-            )
-            imported += 1
-          } catch (err) {
-            if (err instanceof OkfValidationError) skipped.push(`${path}: ${err.message}`)
-            else throw err
-          }
-        }
+        // Assets, trash, live notes and their history (#499).
+        const content = await importVaultContent(
+          zip,
+          vault!.id,
+          typeof manifest.vaultId === 'string' ? manifest.vaultId : undefined,
+          { id: req.user!.id, email: req.user!.email },
+        )
 
         const shares = await importManifestShares(
           { id: vault!.id, name: vault!.name },
@@ -333,7 +306,7 @@ export function exportRoutes(app: FastifyInstance) {
           req.user!.id,
           req.query.applyShares,
         )
-        return { vaultId: vault!.id, imported, skipped, ...shares }
+        return { vaultId: vault!.id, ...content, ...shares }
       },
     )
 

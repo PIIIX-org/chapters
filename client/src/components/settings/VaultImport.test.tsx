@@ -14,6 +14,7 @@ import { VaultImport } from './VaultImport.js'
 const RESULT: ImportResult = {
   vaultId: 'v-imported-9',
   imported: 23,
+  trashed: 4,
   // A list of reasons, exactly as the server sends it — not a count. The
   // original fixture used a number, which is why a broken sentence and four
   // discarded explanations passed review.
