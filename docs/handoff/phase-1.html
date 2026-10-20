@@ -318,7 +318,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <li><strong>Clean room:</strong> never copy code or prompt text from MiroFish, OASIS, CAMEL, Graphiti, Zep or the landscape projects.</li>
 <li><strong>Local machine:</strong> no Docker or pnpm (the sandbox blocks symlinks); CI and the lab are the test runners. All files stay under <code>D:/taha</code>; point Bun/npm caches at <code>D:/taha/tools/cache</code>.</li>
 <li><strong>Commits:</strong> author and committer <code>Taha-Mahmoodi &lt;Taha-Mahmoodi@users.noreply.github.com&gt;</code> plus the trailer <code>Co-Authored-By: Claude Opus &lt;noreply@anthropic.com&gt;</code> (the <code>attribution</code> check).</li>
-<li><strong>Elara <code>edit_note</code> frontmatter</strong> replaces the whole map; never put <code>---</code> inside a frontmatter value.</li>
+<li><strong>Elara <code>edit_note</code> frontmatter</strong> merges per key since #438 (<code>replace: true</code> replaces the whole map, <code>removeKeys</code> deletes keys); never put <code>---</code> inside a frontmatter value.</li>
 <li><strong>GitHub closing keywords:</strong> never write &quot;fix #N&quot;, &quot;fixes #N&quot; or &quot;closes #N&quot; in a PR body unless the PR really closes it, not even in &quot;does not fix #N&quot;. #661 closed #496 that way; it was reopened, and the lab gate fails while a baseline entry points at a closed issue.</li>
 <li><strong>Flaky lab checks:</strong> if two full runs on the same commit disagree on a known-defect check, mark that entry <code>intermittent</code> with the measured reason (as in #661) rather than re-running until green.</li>
 </ul>

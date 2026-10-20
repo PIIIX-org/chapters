@@ -173,9 +173,12 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
-  - `frontmatter` (object, optional): **replaces the whole frontmatter map**. Keys you leave out are deleted, so send every key you want to keep. `type` is always reset to the note's current type.
+  - `frontmatter` (object, optional): **merged per top-level key** into the note's frontmatter. Keys you send are set (overwritten if present), keys you leave out are kept. The merge is shallow: a key whose value is a map (`properties`, `generated`, ...) gets the value you send as a whole. `null` is a value like any other (`reviewer: null` stores `null`); it does not delete the key. `type` is always reset to the note's current type.
+  - `replace` (boolean, optional, default `false`): `true` makes `frontmatter` **replace the whole map**: keys you leave out are deleted. Needs `frontmatter`.
+  - `removeKeys` (string array, optional): top-level frontmatter keys to delete, applied after `frontmatter`. A key that is not there is ignored; a key that is also in `frontmatter` is refused.
   - `body` (string, optional): **replaces the whole body**.
-  - Omit a field to keep it as it is.
+  - Omit a field to keep it as it is: a body-only edit leaves the frontmatter untouched.
+- The resulting frontmatter is validated as a whole (the rules at the top of this section) before anything is written; if it is invalid (for example `status: "bogus"` or `title: null`), the call fails and neither the note nor the live document changes. If the invalid value is a key already on the note that you did not send (for example a value a person typed in the editor that the server refused to store), the error names that key: send a valid value for it, list it in `removeKeys`, or pass `replace: true` with the whole map.
 - **Returns**: the updated note row.
 - The edit goes through the live collaboration document, so people with the note open see it change. Because the body is replaced, not merged, text a person is typing in the same note at that moment can be lost. To append, read the note, then send the full new body. Concurrent writes to one note run one at a time, but they are not merged: if two agents each read the note and write it back with a line appended, only the later write survives.
 

@@ -349,6 +349,37 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   take the lock. The lock orders writes; it does not merge them: a body
   write replaces the whole body, so two agents that each read a note and
   write it back with a line appended still keep only the later one.
+- **Edits merge frontmatter per key** (#438): `edit_note` and REST
+  `PUT /api/vaults/:id/notes/*` take `frontmatter`, `body`, `replace`
+  and `removeKeys`; `requestedEdit()` (`sync/crdt-write.ts`) turns them
+  into a `NoteEdit` and refuses contradictions (`replace: true` without
+  `frontmatter`, a key both set and removed: `NoteEditError`, HTTP 400).
+  `writeThroughCollab` computes the next map from the live document's
+  frontmatter (keys a person set but the relay has not stored yet are
+  kept), or from the row without the relay: shallow per top-level key,
+  `null` is a value, then `removeKeys`, `type` reset to the note's type.
+  The result is validated with `validateNote` inside the document
+  transaction before anything changes, so a refused edit reaches neither
+  the store nor people with the note open; the document gets a per-key
+  diff and `updateNote` the whole map. If a merge fails only because of
+  a key already in the live document (a value a person typed that the
+  relay refused to store), the error names that key and suggests
+  `removeKeys` or `replace: true`. Internal full-state writers (revert,
+  rename, the relay's own store) keep `frontmatterMode: 'replace'`, the
+  default. The `sync_local_docs_to_vault` prompt tells the agent to
+  update an existing note with `replace: true`, so the vault mirrors the
+  file.
+- **Revision dedupe** (#480, `recordRevision`): a write that repeats the
+  latest revision records nothing. Frontmatter is compared as jsonb
+  stores it: deep equality on its JSON form, so object key order (nested
+  too), `undefined` members and Date vs ISO string never count; array
+  order and every value do. It used to compare `JSON.stringify` output.
+  A repeat is the same state from the same actor (kind and id), or from
+  the relay (`collab`), whose store of a recorded state changes nothing.
+  An attributed write (`mcp`, `user`) of the state the relay just stored
+  is recorded, so an edit through the relay leaves the relay's `collab`
+  revision and the attributed one; the `collab` row is never
+  re-attributed, since it may bundle a person's typing (#403).
 - **Progressive indexes** (`regenProgressiveIndices`): run on create,
   rename, delete, restore, and on updates whose frontmatter really
   changed (`isDeepStrictEqual`, so key order alone never counts: `jsonb`

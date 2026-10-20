@@ -39,8 +39,17 @@ export interface Actor {
 
 const SYSTEM_ACTOR: Actor = { type: 'collab' }
 
-/** Records a revision unless identical to the note's latest one (dedupes
- * the MCP-immediate + collab-debounced double-write of the same state). */
+/** Records a revision unless it repeats the note's latest one. Frontmatter
+ * is compared as jsonb stores it (#480): deep equality on its JSON form, so
+ * object key order (jsonb uses its own, the collab document and a
+ * frontmatter merge keep theirs), `undefined` members and Date vs ISO string
+ * never count, while array order and every value still do.
+ *
+ * An equal state is a repeat only from the same actor (kind and id), or from
+ * the relay (`collab`), whose store of an already recorded state changes
+ * nothing. An attributed write (`mcp`, `user`) of the state the relay just
+ * stored is recorded: the relay's revision has no author (#403) and may
+ * bundle a person's typing, so it is never re-attributed. */
 async function recordRevision(
   noteId: string,
   action: string,
@@ -50,13 +59,24 @@ async function recordRevision(
 ): Promise<void> {
   const last = (
     await db
-      .select({ frontmatter: noteRevisions.frontmatter, body: noteRevisions.body })
+      .select({
+        frontmatter: noteRevisions.frontmatter,
+        body: noteRevisions.body,
+        actorType: noteRevisions.actorType,
+        actorId: noteRevisions.actorId,
+      })
       .from(noteRevisions)
       .where(eq(noteRevisions.noteId, noteId))
       .orderBy(desc(noteRevisions.createdAt))
       .limit(1)
   )[0]
-  if (last && last.body === body && JSON.stringify(last.frontmatter) === JSON.stringify(frontmatter)) {
+  const repeatsAuthor = actor.type === 'collab' || (last?.actorType === actor.type && last.actorId === (actor.id ?? null))
+  if (
+    last &&
+    repeatsAuthor &&
+    last.body === body &&
+    isDeepStrictEqual(last.frontmatter, JSON.parse(JSON.stringify(frontmatter ?? null)))
+  ) {
     return
   }
   await db.insert(noteRevisions).values({

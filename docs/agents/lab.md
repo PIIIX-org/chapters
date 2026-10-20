@@ -315,7 +315,8 @@ Tunables via env (set in the workflow step if needed): `LAB_TESTS`,
 ## Gotchas
 
 - Notes: `type` in frontmatter must equal the first path segment; segments
-  `^[a-z0-9][a-z0-9-]*$`; `edit_note` frontmatter replaces the whole map.
+  `^[a-z0-9][a-z0-9-]*$`; `edit_note` frontmatter merges per key
+  (`replace: true` replaces the whole map, `removeKeys` deletes keys; #438).
 - `note_history` returns one page of metadata, no bodies (#411): read the
   content with `get_revision`. `McpClient.revisionsSince()` (`lib/mcp.ts`)
   does both for tests that check what a revision holds.
