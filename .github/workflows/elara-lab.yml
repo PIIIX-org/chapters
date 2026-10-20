@@ -365,15 +365,17 @@ jobs:
         with:
           node-version: 24
 
-      # Either may be missing (the job was cancelled, or bench did not run):
-      # the alert then says there is no gate summary.
+      # Either may be missing (the job was cancelled before its upload): the
+      # alert then says there is no gate summary.
       - uses: actions/download-artifact@v8
+        if: needs.lab.result != 'skipped'
         continue-on-error: true
         with:
           name: lab-results
           path: lab-results
 
       - uses: actions/download-artifact@v8
+        if: needs.bench-gate.result != 'skipped'
         continue-on-error: true
         with:
           name: bench-gate

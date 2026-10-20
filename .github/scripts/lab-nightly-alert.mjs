@@ -110,6 +110,7 @@ export function failureText({ verdict, runUrl, labGate, benchGate }) {
     '',
     `Jobs: ${verdict.jobs.map((j) => `\`${j.job}\`: ${j.result}`).join(', ')}.`,
     '',
+    '',
   ].join('\n')
   const lab =
     gateSummary(labGate) ??
@@ -120,6 +121,7 @@ export function failureText({ verdict, runUrl, labGate, benchGate }) {
     ? gateSummary(benchGate)
     : null
   const tail = [
+    '',
     '',
     '---',
     'Posted by the `nightly-alert` job (`.github/scripts/lab-nightly-alert.mjs`, #706). The next green nightly closes this issue. Gate rules: `docs/agents/lab.md`.',

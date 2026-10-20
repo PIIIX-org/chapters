@@ -275,6 +275,10 @@ describe('alert against a stubbed GitHub API', () => {
     assert.match(issue.body, /C3 note survives SIGKILL/)
     assert.match(issue.body, /big-notes/)
     assert.match(issue.body, /Stale baseline entries/)
+    // Blank lines around the gate, so its heading renders and the footer's
+    // `---` is a rule, not a setext heading under the gate's last line.
+    assert.match(issue.body, /\.\n\n### Lab gate: FAIL\n/)
+    assert.match(issue.body, /\n\n---\nPosted by/)
     assert.equal(r.issue, issue.html_url)
   })
 
