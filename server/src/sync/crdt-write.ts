@@ -3,7 +3,7 @@ import type { DirectConnection } from '@hocuspocus/server'
 import type * as Y from 'yjs'
 import { YAMLParseError } from 'yaml'
 import { getCollab } from './collab-server.js'
-import { getLiveNote, readNote, refuseSuspiciousWrite, resolveNotePath, updateNote, type Actor, type NoteRow } from '../notes/store.js'
+import { getLiveNote, readNote, refuseSuspiciousWrite, resolveNotePath, updateNote, type Actor, type BodyEdit, type NoteRow } from '../notes/store.js'
 import type { QuarantineRules } from '../notes/growth-guard.js'
 import { assertBodyFits } from '../notes/size-cap.js'
 import { OkfValidationError, validateNote, type Frontmatter } from '../notes/okf.js'
@@ -27,7 +27,12 @@ export class NoteEditError extends Error {
 /** One write to a note. A field left out keeps its current value. */
 export interface NoteEdit {
   frontmatter?: Record<string, unknown>
-  body?: string
+  /**
+   * The new body, or a function of the current one (a rename's link rewrite,
+   * #803), applied to the live document's text, or by updateNote under the
+   * note's lock when no document is loaded.
+   */
+  body?: BodyEdit
   /**
    * How `frontmatter` applies. `replace` (the default, for writers that hold
    * the note's whole state: revert, rename, the collab store) swaps the whole
@@ -130,11 +135,12 @@ export async function writeThroughCollab(
     const existing = await getLiveNote(vaultId, path)
     if (!existing) return null
     // Before the document edit: a refused body must never reach the editors (#491).
-    if (input.body !== undefined) assertBodyFits(input.body, existing.body)
+    const bodyFromStored = typeof input.body === 'function' ? input.body(existing.body) : input.body
+    if (bodyFromStored !== undefined) assertBodyFits(bodyFromStored, existing.body)
     const storedFrontmatter = existing.frontmatter as Record<string, unknown>
     if (options.quarantine) {
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
-      await refuseSuspiciousWrite(existing, { frontmatter, body: input.body }, actor, options.quarantine)
+      await refuseSuspiciousWrite(existing, { frontmatter, body: bodyFromStored }, actor, options.quarantine)
     }
     const collab = getCollab()
     if (!collab) {
@@ -160,20 +166,28 @@ export async function writeThroughCollab(
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
       return updateNote(vaultId, path, { frontmatter, body: input.body }, actor)
     }
-    const next: { frontmatter?: Frontmatter } = {}
+    const next: { frontmatter?: Frontmatter; body?: string } = {}
     try {
       await connection.transact((document) => {
         const fm = document.getMap('frontmatter')
         const current = fm.toJSON() as Record<string, unknown>
         next.frontmatter = nextFrontmatter(current, input, existing.type)
         const nextNote = next.frontmatter ?? { ...storedFrontmatter, type: existing.type }
-        const body = input.body ?? existing.body
+        const text = document.getText('body')
+        if (typeof input.body === 'function') {
+          // Applied to the live text, which may hold typing not stored yet, and checked against it (#491).
+          next.body = input.body(text.toString())
+          assertBodyFits(next.body, text.toString())
+        } else {
+          next.body = input.body
+        }
+        const body = next.body ?? existing.body
         try {
           validateNote(existing.type, existing.name, nextNote, body)
         } catch (err) {
           throw explainInheritedKeys(err, current, input, (candidate) => validateNote(existing.type, existing.name, candidate, body), nextNote)
         }
-        if (input.body !== undefined) replaceText(document.getText('body'), input.body)
+        if (next.body !== undefined) replaceText(text, next.body)
         if (next.frontmatter !== undefined) {
           for (const key of Object.keys(current)) if (!Object.hasOwn(next.frontmatter, key)) fm.delete(key)
           for (const [key, value] of Object.entries(next.frontmatter)) {
@@ -184,7 +198,7 @@ export async function writeThroughCollab(
     } finally {
       await connection.disconnect()
     }
-    return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: input.body }, actor)
+    return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: next.body }, actor)
   })
 }
 
