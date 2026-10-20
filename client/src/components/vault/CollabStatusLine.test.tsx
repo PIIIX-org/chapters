@@ -48,6 +48,15 @@ describe('CollabStatusLine', () => {
     expect(revoked).not.toMatch(/staying in this tab/i)
   })
 
+  it('says signed out, not access removed, when the session ended (#498)', () => {
+    render(<CollabStatusLine status="signed-out" synced={false} syncedAt={null} />)
+    const line = screen.getByRole('status').textContent!
+
+    expect(line).toMatch(/signed out/i)
+    expect(line).toMatch(/log in again/i)
+    expect(line).not.toMatch(/access removed/i)
+  })
+
   it('distinguishes the first connect from a mid-session drop', () => {
     const { unmount } = render(<CollabStatusLine status="connecting" synced={false} syncedAt={null} />)
     expect(screen.getByRole('status').textContent).toMatch(/^Connecting/)

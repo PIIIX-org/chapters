@@ -6,10 +6,34 @@ import { Label } from '../ui/label.js'
 import { Panel, PanelBody, PanelHeader } from '../ui/panel.js'
 import { FormError } from '../FormError.js'
 import { useImportVault } from '../../hooks/useImportVault.js'
-import type { ImportResult } from '../../api/import.js'
+import type { ImportResult, ShareOutcome, ShareSkipReason } from '../../api/import.js'
 
 function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'}`
+}
+
+const SKIP_REASON: Record<ShareSkipReason, string> = {
+  not_requested: 'not granted: sharing was left off',
+  invalid_entry: 'not granted: the archive entry is malformed',
+  invalid_permission: 'not granted: only read or edit can be granted',
+  no_active_user: 'not granted: no active account with this email here',
+  importer: 'not granted: that is you, and you own the new vault',
+  no_team: 'not granted: no team with this name here',
+  ambiguous_team: 'not granted: more than one team has this name',
+  duplicate: 'not granted: listed more than once',
+}
+
+function ShareList({ shares }: { shares: ShareOutcome[] }) {
+  return (
+    <ul className="flex flex-col gap-0.5">
+      {shares.map((share, i) => (
+        <li key={i} className="font-mono text-xs text-muted-foreground">
+          {share.granteeType === 'team' ? `team ${share.grantee}` : share.grantee} ({share.permission})
+          {share.reason ? ` — ${SKIP_REASON[share.reason]}` : ''}
+        </li>
+      ))}
+    </ul>
+  )
 }
 
 /**
@@ -19,7 +43,7 @@ function plural(count: number, singular: string): string {
  * a merge and has already clicked by then.
  */
 function ImportSummary({ result }: { result: ImportResult }) {
-  const unmatched = result.unmatchedShares
+  const { appliedShares, skippedShares } = result
   return (
     <div role="status" className="flex flex-col gap-2 rounded-md border border-border bg-muted/40 p-3">
       <p className="text-sm text-foreground">
@@ -43,31 +67,28 @@ function ImportSummary({ result }: { result: ImportResult }) {
           </ul>
         </div>
       )}
-      {/* Not a footnote. The server re-grants a share only where the manifest's
-          email already has an account here; everyone else is dropped and NOBODY
-          is told — not them, not the owner. This list is the only notice that
-          ever exists, so it sits at the same weight as the note count. */}
-      {unmatched.length > 0 ? (
+      {/* Not a footnote. Who got access to the new vault, and who the archive
+          named but did not get it, are both stated here: the archive alone never
+          grants access (#621), and this list is the only notice the importer
+          gets of who is still missing. */}
+      {appliedShares.length > 0 && (
         <div className="flex flex-col gap-1">
           <p className="text-sm text-foreground">
-            {unmatched.length} {unmatched.length === 1 ? 'person' : 'people'} listed in the archive
-            got no access. They have no account on this instance, and nothing told them so:
+            {plural(appliedShares.length, 'collaborator')} from the archive got access to the new vault:
           </p>
-          <ul className="flex flex-col gap-0.5">
-            {unmatched.map((email) => (
-              <li key={email} className="font-mono text-xs text-muted-foreground">
-                {email}
-              </li>
-            ))}
-          </ul>
+          <ShareList shares={appliedShares} />
+        </div>
+      )}
+      {skippedShares.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <p className="text-sm text-foreground">
+            {plural(skippedShares.length, 'collaborator')} listed in the archive got no access:
+          </p>
+          <ShareList shares={skippedShares} />
           <p className="text-sm text-muted-foreground">
-            Once they have an account here, share the new vault with them again.
+            Anyone who should still have access can be added from the new vault&apos;s Sharing panel.
           </p>
         </div>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Everyone the archive listed as a collaborator has an account here and got access again.
-        </p>
       )}
       <Link to={`/vaults/${result.vaultId}`} className="w-fit text-primary underline underline-offset-4">
         Open the new vault
@@ -78,6 +99,7 @@ function ImportSummary({ result }: { result: ImportResult }) {
 
 export function VaultImport() {
   const [file, setFile] = useState<File | null>(null)
+  const [applyShares, setApplyShares] = useState(false)
   const importVault = useImportVault()
 
   return (
@@ -90,9 +112,8 @@ export function VaultImport() {
           with two vaults.
         </p>
         <p className="text-sm text-muted-foreground">
-          Collaborators named in the archive get access again only where their email already has an
-          account on this instance. Anyone else is left out silently, so read the list below before you
-          assume the vault came across whole.
+          The new vault is private to you unless you choose otherwise: an archive can list collaborators,
+          and they get access only if you tick the box below.
         </p>
         <div className="flex flex-col gap-1">
           <Label htmlFor="vault-import-archive">Vault archive (.zip)</Label>
@@ -103,11 +124,26 @@ export function VaultImport() {
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
         </div>
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-md px-1.5 py-1 min-h-[44px] touch-manipulation transition-colors duration-100 hover:bg-muted">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 shrink-0 accent-primary touch-manipulation"
+            checked={applyShares}
+            onChange={(e) => setApplyShares(e.target.checked)}
+          />
+          <span className="flex flex-col gap-0.5">
+            <span className="text-sm text-foreground">Give the archive&apos;s collaborators access again</span>
+            <span className="text-xs text-muted-foreground">
+              Only people with an active account here and teams that exist here, at the read or edit
+              level the archive lists. Everyone else is left out and listed after the import.
+            </span>
+          </span>
+        </label>
         <Button
           type="button"
           className="w-full sm:w-fit min-h-[36px] sm:min-h-0 touch-manipulation"
           disabled={file === null || importVault.isPending}
-          onClick={() => file !== null && importVault.mutate(file)}
+          onClick={() => file !== null && importVault.mutate({ file, applyShares })}
         >
           {importVault.isPending ? 'Importing…' : 'Import as a new vault'}
         </Button>

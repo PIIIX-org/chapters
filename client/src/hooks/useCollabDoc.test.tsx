@@ -204,6 +204,53 @@ describe('useCollabDoc', () => {
     expect(view.result.current.ydoc.isDestroyed).toBe(false)
   })
 
+  describe('a session that ended (#498)', () => {
+    it('the relay closing with signed-out stops the editor and keeps the text on screen', async () => {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      act(() => {
+        view.result.current.ydoc.getText('body').insert(0, 'typed just before logout')
+      })
+
+      // Logout here or in another tab of the session: the relay closes the document.
+      act(() => provider.options.onClose({ event: { code: 1000, reason: 'signed-out' } }))
+
+      expect(view.result.current.status).toBe('signed-out')
+      expect(view.result.current.writable).toBe(false)
+      expect(provider.disconnected).toBe(true)
+      expect(view.result.current.ydoc.getText('body').toString()).toBe('typed just before logout')
+      // The refused reconnect that follows does not turn it into a revocation.
+      act(() => provider.options.onAuthenticationFailed({ reason: 'permission-denied' }))
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      expect(view.result.current.status).toBe('signed-out')
+    })
+
+    it('a ticket refused with 401 is signed out: no provider, no retry under a later session', async () => {
+      ticket.mockRejectedValue(new ApiError(401, { error: 'authentication required' }))
+      const view = mount()
+
+      await waitFor(() => expect(view.result.current.status).toBe('signed-out'))
+      expect(view.result.current.writable).toBe(false)
+      expect(stub.providers).toHaveLength(0)
+      expect(ticket).toHaveBeenCalledTimes(1)
+    })
+
+    it('a reconnect ticket refused with 401 is signed out, not revoked', async () => {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      await provider.options.token()
+      ticket.mockRejectedValue(new ApiError(401, { error: 'authentication required' }))
+
+      await act(async () => {
+        await expect(provider.options.token()).rejects.toBeInstanceOf(ApiError)
+      })
+
+      expect(view.result.current.status).toBe('signed-out')
+      expect(view.result.current.writable).toBe(false)
+      expect(provider.disconnected).toBe(true)
+    })
+  })
+
   it('stays revoked when the socket reports itself back up', async () => {
     const { view, provider } = await connected()
     act(() => provider.options.onAuthenticationFailed({ reason: 'permission-denied' }))
