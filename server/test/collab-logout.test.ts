@@ -134,9 +134,8 @@ async function logout(cookie: string): Promise<number> {
  * in the store the control edit triggers.
  */
 async function gap(): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>()
-  setTimeout(resolve, 200)
-  return promise
+  // Promise.withResolvers is past the TypeScript target (ES2023).
+  await new Promise((resolve) => setTimeout(resolve, 200))
 }
 
 beforeAll(async () => {
@@ -298,11 +297,12 @@ describe('a collab socket ends with its session (#498)', () => {
 
     expect(await logout(note.cookie)).toBe(200)
     // A stream that stays open never resolves the read: bound it.
-    const stillOpen = Promise.withResolvers<string>()
-    const timer = setTimeout(() => stillOpen.resolve('still open'), 2000)
+    let timer: ReturnType<typeof setTimeout> | undefined
     const next = await Promise.race([
       reader.read().then((chunk) => (chunk.done ? 'ended' : 'data')),
-      stillOpen.promise,
+      new Promise<string>((resolve) => {
+        timer = setTimeout(() => resolve('still open'), 2000)
+      }),
     ])
     clearTimeout(timer)
     expect(next).toBe('ended')

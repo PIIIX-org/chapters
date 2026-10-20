@@ -6,6 +6,12 @@ export interface PermissionChange {
   vaultIds?: string[]
   /** Users whose access anywhere may have changed (deactivation, membership). */
   userIds?: string[]
+  /**
+   * Hashes of sessions that ended (logout, password change or reset,
+   * deactivation, #498). Every live connection opened with one is closed,
+   * whatever its access: nothing more is taken from that session.
+   */
+  sessionHashes?: string[]
 }
 
 const bus = new EventEmitter()

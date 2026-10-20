@@ -121,11 +121,6 @@
     },
     {
       "test": "collab-duplication",
-      "check": "S11 logout ends the live collab session",
-      "issue": 498
-    },
-    {
-      "test": "collab-duplication",
       "check": "S16 server-acknowledged collab edit survives SIGKILL after the tab closed",
       "issue": 487
     },
