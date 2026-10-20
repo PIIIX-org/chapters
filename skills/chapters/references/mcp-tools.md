@@ -163,7 +163,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `path` (string, optional): full note path, for example `domains/storage/postgres`.
   - `type` (string, optional) and `name` (string, optional): used as `<type>/<name>` when `path` is omitted. You must give either `path` or both `type` and `name`.
   - `frontmatter` (object, optional): the YAML frontmatter as a JSON object. If `type` is omitted it is set to the first path segment; if given it must match. `timestamp` defaults to now.
-  - `body` (string, optional, default `""`): the markdown body, **without** a frontmatter block.
+  - `body` (string, optional, default `""`): the markdown body, **without** a frontmatter block. At most the server's note size limit, in UTF-8 bytes (`ELARA_NOTE_MAX_BYTES`, default 1048576 = 1 MiB); a larger body is refused with `isError: true` and `note body is N bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)`. Split such content across notes. The same limit applies to the editor, REST and import.
 - **Returns**: the created note row (`id`, `vaultId`, `type`, `name`, `path`, `frontmatter`, `body`, timestamps, ...).
 - There is no `content` argument. Passing one (or any other undeclared key) is refused with the parameter list, and no note is created.
 
