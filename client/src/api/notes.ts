@@ -26,9 +26,12 @@ export function getNote(vaultId: string, path: string): Promise<NoteDetail> {
   return apiFetch(`/vaults/${vaultId}/notes/${path}`)
 }
 
+/** `frontmatter` merges per top-level key unless `replace` is true; `removeKeys` deletes keys (#438). */
 export interface UpdateNoteInput {
   frontmatter?: Record<string, unknown>
   body?: string
+  replace?: boolean
+  removeKeys?: string[]
 }
 
 export interface UpdateNoteResult {

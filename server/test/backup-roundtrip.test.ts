@@ -419,7 +419,12 @@ describe('instance backup round trip (#409)', () => {
           const zip = new AdmZip(archive)
           const lines = zip.getEntry('db/note_revisions.jsonl')!.getData().toString('utf8').trim().split('\n')
           const broken = { ...JSON.parse(lines[0]!), noteId: '00000000-0000-4000-8000-000000000000' }
-          zip.updateFile('db/note_revisions.jsonl', Buffer.from([JSON.stringify(broken), ...lines.slice(1)].join('\n') + '\n'))
+          const data = Buffer.from([JSON.stringify(broken), ...lines.slice(1)].join('\n') + '\n')
+          zip.updateFile('db/note_revisions.jsonl', data)
+          // With its digest updated too (#493), so the reference check is what refuses it.
+          const manifest = JSON.parse(zip.getEntry('backup.json')!.getData().toString('utf8'))
+          manifest.parts['db/note_revisions.jsonl'] = { sha256: createHash('sha256').update(data).digest('hex'), size: data.length }
+          zip.updateFile('backup.json', Buffer.from(JSON.stringify(manifest)))
           return zip.toBuffer()
         },
       ],

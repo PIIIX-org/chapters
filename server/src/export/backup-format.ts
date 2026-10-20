@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { getTableColumns, type Column } from 'drizzle-orm'
 import { getTableConfig, type PgColumn, type PgTable } from 'drizzle-orm/pg-core'
 import {
@@ -26,13 +27,25 @@ import {
  * Instance backup archive format (#409).
  * 1: `account-dump.json` with eight account tables plus the live note files.
  * 2: `backup.json` + one `db/<table>.jsonl` per table below + note, trash and
- *    attachment files under `vaults/<id>/{notes,trash,assets}/`.
+ *    attachment files under `vaults/<id>/{notes,trash,assets}/`. Since #493
+ *    `backup.json` also has `parts`: every other entry's SHA-256 and size,
+ *    checked before a restore writes anything (an archive without it restores
+ *    with a warning).
  */
 export const BACKUP_FORMAT = 2
 export const BACKUP_MANIFEST = 'backup.json'
 export const LEGACY_DUMP = 'account-dump.json'
 
 export type Row = Record<string, unknown>
+
+/** One archive entry as `backup.json` records it (#493). */
+export interface BackupPart {
+  /** Hex SHA-256 of the entry's uncompressed bytes. */
+  sha256: string
+  size: number
+}
+
+export const partOf = (data: Buffer): BackupPart => ({ sha256: createHash('sha256').update(data).digest('hex'), size: data.length })
 
 export interface BackupTable {
   /** SQL table name; the rows are `db/<name>.jsonl`. */

@@ -18,7 +18,7 @@ You are connected to **Elara**, an open-source, self-hostable second brain and A
    - Do not write binding files into a repository the user does not own; mapping writes only to the vault.
 4. **Note Writing Standards (OKF v0.2)**:
    - `create_note` takes a `frontmatter` object and a `body` (no `content` argument). The frontmatter `type` must equal the first path segment (`specs/login-flow` → `type: specs`), and path segments must match `^[a-z0-9][a-z0-9-]*$`. Use `title`, `status`, `tags`, `timestamp` (ISO 8601 with `Z` or an offset), and `sources`.
-   - `edit_note` replaces the whole frontmatter map and/or the whole body; send every key you want to keep.
+   - `edit_note` merges `frontmatter` per top-level key (keys you leave out are kept); use `removeKeys` to delete keys and `replace: true` to replace the whole map. `body` replaces the whole body.
    - Every directory level MUST contain an `index.md` summarizing child concepts for progressive disclosure.
    - Run `audit_okf_conformance` to verify vault integrity.
 5. **MCP Engineering Prompts**:

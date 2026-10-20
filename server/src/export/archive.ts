@@ -14,8 +14,10 @@ import {
   assetEntry,
   backupColumns,
   noteEntry,
+  partOf,
   tableEntry,
   trashEntry,
+  type BackupPart,
   type Row,
 } from './backup-format.js'
 
@@ -125,7 +127,8 @@ function fileMatchesRow(data: Buffer, row: Row): boolean {
 /**
  * Full-instance admin backup (format `BACKUP_FORMAT`, see backup-format.ts):
  * every backed-up table as of one database snapshot, plus each note's file
- * (live and trashed, as on disk) and every attachment. Restore: restore.ts.
+ * (live and trashed, as on disk) and every attachment. `backup.json` lists
+ * every other entry with its SHA-256 and size (#493). Restore: restore.ts.
  */
 export async function buildInstanceBackup(): Promise<Buffer> {
   // One snapshot for every table, so a write during the backup can't leave a
@@ -142,27 +145,36 @@ export async function buildInstanceBackup(): Promise<Buffer> {
   )
 
   const zip = new AdmZip()
+  const parts: Record<string, BackupPart> = {}
+  const add = (entry: string, data: Buffer) => {
+    zip.addFile(entry, data)
+    parts[entry] = partOf(data)
+  }
   const counts: Record<string, number> = {}
   for (const [name, rows] of tables) {
     counts[name] = rows.length
     // One buffer per row: a single JSON string of every revision could pass V8's string limit.
-    zip.addFile(tableEntry(name), Buffer.concat(rows.map((row) => Buffer.from(`${JSON.stringify(row)}\n`, 'utf8'))))
+    add(tableEntry(name), Buffer.concat(rows.map((row) => Buffer.from(`${JSON.stringify(row)}\n`, 'utf8'))))
   }
+  // Notes whose file no longer matched their snapshot row (saved while the backup ran): left out, restored from the row.
+  let notesFromRow = 0
   for (const note of tables.get('notes') ?? []) {
     const vaultId = String(note.vaultId)
     const noteId = String(note.id)
     const trashed = note.deletedAt != null
     const data = await readIfPresent(trashed ? trashFile(vaultId, noteId) : noteFile(vaultId, String(note.path)))
-    if (data && fileMatchesRow(data, note)) zip.addFile(trashed ? trashEntry(vaultId, noteId) : noteEntry(vaultId, String(note.path)), data)
+    if (!data) continue
+    if (fileMatchesRow(data, note)) add(trashed ? trashEntry(vaultId, noteId) : noteEntry(vaultId, String(note.path)), data)
+    else notesFromRow += 1
   }
   for (const vault of tables.get('vaults') ?? []) {
     const vaultId = String(vault.id)
     for (const asset of await listAssets(vaultId)) {
       const data = await readAsset(vaultId, asset.fileName)
-      if (data) zip.addFile(assetEntry(vaultId, asset.fileName), data.buffer)
+      if (data) add(assetEntry(vaultId, asset.fileName), data.buffer)
     }
   }
-  const manifest = { format: BACKUP_FORMAT, createdAt: new Date().toISOString(), tables: counts }
+  const manifest = { format: BACKUP_FORMAT, createdAt: new Date().toISOString(), tables: counts, parts, notesFromRow }
   zip.addFile(BACKUP_MANIFEST, Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'))
   return zip.toBuffer()
 }

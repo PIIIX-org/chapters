@@ -1,1 +1,1 @@
-export { writeThroughCollab } from '../sync/crdt-write.js'
+export { requestedEdit, writeThroughCollab } from '../sync/crdt-write.js'

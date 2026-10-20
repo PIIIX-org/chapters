@@ -150,6 +150,8 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
     expect(text).toContain('docs/superpowers/specs')
     expect(text).toContain(vaultId)
     expect(text).toContain('VALIDATE OKF v0.2')
+    // An upsert must mirror the file: edit_note merges frontmatter unless replace is true (#438).
+    expect(text).toContain('`replace: true`')
   })
 
   it('evaluates draft_adr prompt and scaffolds compliant OKF v0.2 ADR template', async () => {
