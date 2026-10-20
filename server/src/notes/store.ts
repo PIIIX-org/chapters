@@ -78,49 +78,58 @@ async function recordRevision(
  * Keeps a suspicious write out of the note (#492): when `input.body` breaks
  * one of `rules` against the stored body, the write is recorded as a
  * `quarantine` revision (the row and the file are not touched) and a
- * NoteWriteQuarantinedError is thrown. A write that continues the
- * quarantine recorded last, by the same actor (a live document that stays
- * doubled while someone types, or an identical retry), replaces that
- * revision instead of adding one per attempt.
+ * NoteWriteQuarantinedError is thrown. A write that continues a quarantine
+ * replaces that revision instead of adding one per attempt: for the collab
+ * relay, the revision `episode` recorded for the same loaded document (which
+ * stays doubled while someone types); for other actors, an identical retry of
+ * the quarantine recorded last. A freshly loaded document has no episode, so
+ * its quarantine is always a new revision.
  */
 export async function refuseSuspiciousWrite(
   row: NoteRow,
   input: { frontmatter?: Record<string, unknown>; body?: string },
   actor: Actor,
   rules: QuarantineRules,
+  episode?: string,
 ): Promise<void> {
   if (input.body === undefined) return
   const finding = suspiciousWrite(row.body, input.body, rules)
   if (!finding) return
   const frontmatter = { ...(input.frontmatter ?? (row.frontmatter as Frontmatter)), type: row.type }
-  const newest = (
-    await db
-      .select()
-      .from(noteRevisions)
-      .where(eq(noteRevisions.noteId, row.id))
-      .orderBy(desc(noteRevisions.createdAt))
-      .limit(1)
-  )[0]
-  const continues =
-    newest?.action === QUARANTINE_ACTION &&
-    newest.actorType === actor.type &&
-    newest.actorId === (actor.id ?? null) &&
-    (actor.type === 'collab' || newest.body === input.body)
-  let revisionId: string
-  if (continues) {
-    await db
-      .update(noteRevisions)
-      .set({ frontmatter, body: input.body, createdAt: new Date() })
-      .where(eq(noteRevisions.id, newest.id))
-    revisionId = newest.id
+  let continued: string | undefined
+  if (actor.type === 'collab') {
+    continued = episode
   } else {
-    const [inserted] = await db
-      .insert(noteRevisions)
-      .values({ noteId: row.id, actorType: actor.type, actorId: actor.id, action: QUARANTINE_ACTION, frontmatter, body: input.body })
-      .returning({ id: noteRevisions.id })
-    revisionId = inserted!.id
+    const newest = (
+      await db
+        .select()
+        .from(noteRevisions)
+        .where(eq(noteRevisions.noteId, row.id))
+        .orderBy(desc(noteRevisions.createdAt))
+        .limit(1)
+    )[0]
+    if (
+      newest?.action === QUARANTINE_ACTION &&
+      newest.actorType === actor.type &&
+      newest.actorId === (actor.id ?? null) &&
+      newest.body === input.body
+    ) {
+      continued = newest.id
+    }
   }
-  throw new NoteWriteQuarantinedError(row.path, finding, revisionId, continues)
+  if (continued) {
+    const updated = await db
+      .update(noteRevisions)
+      .set({ frontmatter, body: input.body, createdAt: sql`now()` })
+      .where(and(eq(noteRevisions.id, continued), eq(noteRevisions.noteId, row.id), eq(noteRevisions.action, QUARANTINE_ACTION)))
+      .returning({ id: noteRevisions.id })
+    if (updated.length > 0) throw new NoteWriteQuarantinedError(row.path, finding, continued, true)
+  }
+  const [inserted] = await db
+    .insert(noteRevisions)
+    .values({ noteId: row.id, actorType: actor.type, actorId: actor.id, action: QUARANTINE_ACTION, frontmatter, body: input.body })
+    .returning({ id: noteRevisions.id })
+  throw new NoteWriteQuarantinedError(row.path, finding, inserted!.id, false)
 }
 
 export function vaultDir(vaultId: string): string {
@@ -364,14 +373,15 @@ export async function readNote(
  * same note are serialized (one at a time, in call order): run concurrently,
  * the row could end at one write and the file at another, and revisions could
  * be skipped or out of order. `options.quarantine` checks the body against
- * the stored one first (refuseSuspiciousWrite; the collab relay's store).
+ * the stored one first (refuseSuspiciousWrite; the collab relay's store, which
+ * passes the quarantine revision of the loaded document's episode, if any).
  */
 export async function updateNote(
   vaultId: string,
   path: string,
   input: { frontmatter?: Record<string, unknown>; body?: string },
   actor: Actor = SYSTEM_ACTOR,
-  options: { quarantine?: QuarantineRules } = {},
+  options: { quarantine?: QuarantineRules; episode?: string } = {},
 ): Promise<NoteRow | null> {
   const resolved = resolveNotePath(path)
   return withKeyLock(`note:${vaultId}/${resolved.fullPath}`, async () => {
@@ -383,7 +393,7 @@ export async function updateNote(
     }
     const body = input.body ?? row.body
     validateNote(row.type, row.name, frontmatter, body)
-    if (options.quarantine) await refuseSuspiciousWrite(row, input, actor, options.quarantine)
+    if (options.quarantine) await refuseSuspiciousWrite(row, input, actor, options.quarantine, options.episode)
     const [updated] = await db
       .update(notes)
       .set({ frontmatter, body, updatedAt: new Date() })

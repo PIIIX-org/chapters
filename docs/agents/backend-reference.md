@@ -400,9 +400,12 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   throws `NoteWriteQuarantinedError` (409 over REST with `quarantined:
   {revisionId, rule, previousBytes, nextBytes, repeatedBytes}`; an MCP
   tool error naming the rule, the revision id and `allowGrowth`). A write
-  by the same actor that continues the newest revision's quarantine (a
-  live document that stays doubled while someone types; an identical MCP
-  retry) updates that revision instead of adding one. `recordRevision`'s
+  that continues a quarantine updates that revision instead of adding one:
+  the relay keeps the quarantine revision id per loaded `Y.Doc` (a live
+  document that stays doubled while someone types), so a document loaded
+  afresh after an unload always adds a new revision and a new failure; an
+  MCP/REST write continues only an identical retry of the newest quarantine
+  by the same actor. `recordRevision`'s
   dedupe and revert's `revert` relabel skip quarantine rows. Restore one
   with `revert_note` / the REST revert route.
 - Every mutation is attributed (`Actor {type: 'user'|'mcp'|'collab',

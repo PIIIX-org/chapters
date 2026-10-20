@@ -256,6 +256,38 @@ describe('collab relay store', () => {
     const legit = `${body}\n\nlegit addition`
     await waitFor(async () => (await rowBody(path)) === legit && (await fileBody(path)) === legit)
   }, 20_000)
+
+  it('a quarantine after the document is unloaded and reloaded is a new revision: the first episode survives', async () => {
+    const path = 'docs/two-episodes'
+    const body = paragraphs('episode', 25)
+    const noteId = (await must<{ id: string }>('create_note', { vaultId, path, body })).id
+    const docName = `${vaultId}/${path}`
+    const before = metricsSnapshot().jobs['collab-store']
+    const open = () => new HocuspocusProvider({ url: `${baseUrl.replace('http', 'ws')}/collab`, name: docName, token: ownerToken, document: new Y.Doc() })
+
+    // Episode 1: doubled, typed into, then the tab closes and the document unloads.
+    const first = open()
+    const text1 = first.document.getText('body')
+    await waitFor(() => text1.toString() === body)
+    text1.insert(text1.length, `\n\n${body}\n\ntyped-in-episode-1`)
+    await waitFor(async () => ((await quarantined(noteId))[0]?.body ?? '').endsWith('typed-in-episode-1'))
+    first.destroy()
+    await waitFor(() => !collab.hocuspocus.documents.has(docName), 15_000)
+
+    // Episode 2: the reloaded document holds the stored body and is doubled again.
+    const second = open()
+    providers.push(second)
+    const text2 = second.document.getText('body')
+    await waitFor(() => text2.toString() === body)
+    text2.insert(text2.length, `\n\n${body}\n\ntyped-in-episode-2`)
+    await waitFor(async () => (await quarantined(noteId)).some((q) => q.body.endsWith('typed-in-episode-2')))
+
+    const bodies = (await quarantined(noteId)).map((q) => q.body).sort()
+    expect(bodies).toEqual([`${body}\n\n${body}\n\ntyped-in-episode-1`, `${body}\n\n${body}\n\ntyped-in-episode-2`])
+    expect(await rowBody(path)).toBe(body)
+    // Each episode is reported as a failure of its own.
+    await waitFor(() => metricsSnapshot().jobs['collab-store'].failed >= before.failed + 2)
+  }, 30_000)
 })
 
 describe('writes that are not quarantined', () => {

@@ -19,6 +19,14 @@ export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
 const DEBOUNCE_MS = Number(process.env.COLLAB_DEBOUNCE_MS ?? 2000)
 
+/**
+ * The quarantine revision of each loaded document's current episode (#492):
+ * stores that continue it update that revision. A document loaded afresh
+ * (after an unload) has none, so its quarantine never overwrites an earlier
+ * episode's refused body, the only copy of what was typed then.
+ */
+const quarantineEpisodes = new WeakMap<Y.Doc, string>()
+
 function parseDocName(name: string): { vaultId: string; path: string } {
   const slash = name.indexOf('/')
   if (slash === -1) throw new Error(`invalid document name: ${name}`)
@@ -188,10 +196,18 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         // A document that repeats a block of the stored note (a stale client
         // merged into a rebuilt document doubles it, #488) is quarantined
         // (#492): kept as a revision, not stored. Editors keep what they see;
-        // the next store without the repeat is written as usual.
-        await updateNote(vaultId, path, state, undefined, context?.directWrite ? {} : { quarantine: 'repeated-block' })
+        // the next store without the repeat is written as usual and ends the episode.
+        await updateNote(
+          vaultId,
+          path,
+          state,
+          undefined,
+          context?.directWrite ? {} : { quarantine: 'repeated-block', episode: quarantineEpisodes.get(document) },
+        )
+        quarantineEpisodes.delete(document)
       } catch (err) {
         if (err instanceof NoteWriteQuarantinedError) {
+          quarantineEpisodes.set(document, err.revisionId)
           // One report per episode: stores that continue it count as `repeated`.
           if (!err.repeat) console.error(`collab store quarantined for ${documentName}: ${err.message}`)
           recordJob('collab-store', { error: err, repeat: err.repeat }, vaultId)
