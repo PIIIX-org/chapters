@@ -196,6 +196,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Returns**: the updated note row.
 - Links in other live notes of the same vault that use the old **full path** (`[[domains/auth/tokens]]`) are rewritten. Bare-name links (`[[tokens]]`) are not, and break.
 - A longer path makes those links longer. If the rewrite would take the note itself or any linking note over the body size limit, the rename is refused with an error naming that note, and nothing is renamed or rewritten.
+- A rename runs one at a time with other writes to the note and to the target path. An edit, delete or rename of the old path sent while the rename runs fails with `note not found` once it is done; of two renames (or a rename and a create) into one path, one succeeds and the other fails with `a note already exists at <path>`. Links in other notes are rewritten right after the move, each as its own write.
 
 ### `delete_note`
 - **Scope**: vault. Edit access.
