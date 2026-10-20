@@ -4,6 +4,8 @@ import { affects, onPermissionChange } from './permission-events.js'
 
 interface Viewer {
   userId: string
+  /** The session the stream was opened with; it ends with it (#498). */
+  sessionHash: string
   vaultId: string
   path: string
   reply: FastifyReply
@@ -18,6 +20,10 @@ const viewers = new Set<Viewer>()
 
 onPermissionChange((change) => {
   for (const viewer of [...viewers]) {
+    if (change.sessionHashes?.includes(viewer.sessionHash)) {
+      dropViewer(viewer)
+      continue
+    }
     if (!affects(change, viewer.userId, viewer.vaultId)) continue
     void resolveAccess(viewer.userId, viewer.vaultId).then((access) => {
       if (!access) dropViewer(viewer)

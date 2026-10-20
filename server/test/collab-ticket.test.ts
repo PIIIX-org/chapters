@@ -5,6 +5,7 @@ import * as Y from 'yjs'
 import { buildApp } from '../src/app.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { issueTicket } from '../src/sync/tickets.js'
+import { hashToken } from '../src/auth/tokens.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -167,7 +168,7 @@ describe('collab ticket', () => {
   })
 
   it('refuses a ticket past its TTL', async () => {
-    const { token } = issueTicket(owner.id, 5)
+    const { token } = issueTicket(owner.id, hashToken(ownerCookie.split('=')[1]!), 5)
     await new Promise((r) => setTimeout(r, 40))
     const late = connect(token)
     await waitFor(() => failures.get(late) === true)

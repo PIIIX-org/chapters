@@ -24,7 +24,7 @@ import {
   splitPath,
 } from './okf/paths.js'
 import { atomicWrite } from './atomic-write.js'
-import { withKeyLock } from './key-lock.js'
+import { withKeyLock, withKeyLocks } from './key-lock.js'
 import { assertBodyFits, NoteTooLargeError } from './size-cap.js'
 import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from './growth-guard.js'
 
@@ -181,6 +181,12 @@ function isUniqueViolation(err: unknown): boolean {
  * If a directory has 0 notes and 0 subdirectories, index.md is unlinked.
  * A directory whose `<dir>/index` is a live note is skipped entirely: that file is the
  * user's note, and the generated table would overwrite or unlink it (#384).
+ *
+ * Each directory's index is read and written under the `index:<vault>/<dir>` lock, and the
+ * note list is read after the locks are held, so concurrent writers into one folder write
+ * index.md in turn and the last write lists every note committed before it (#779). Lock
+ * order: a caller may hold a `note:` lock while calling this (updateNote does); nothing
+ * here takes a `note:` lock, so the two never wait on each other in a cycle.
  */
 export async function regenProgressiveIndices(
   vaultId: string,
@@ -188,7 +194,13 @@ export async function regenProgressiveIndices(
 ): Promise<void> {
   const uniqueDirs = [...new Set(ancestorDirs.filter(Boolean))]
   if (uniqueDirs.length === 0) return
+  await withKeyLocks(
+    uniqueDirs.map((dir) => `index:${vaultId}/${dir}`),
+    () => writeProgressiveIndices(vaultId, uniqueDirs),
+  )
+}
 
+async function writeProgressiveIndices(vaultId: string, uniqueDirs: string[]): Promise<void> {
   const rows = await db
     .select({
       path: notes.path,

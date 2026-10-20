@@ -240,6 +240,10 @@ would add fields to responses. The S1 dry run is
 
 Session-cookie auth (not JWT) — a random token, SHA-256-hashed before
 storage, resolved on every request via a Fastify `onRequest` hook.
+Ending a session (logout, password change for the other devices,
+password reset, deactivation) deletes its row and announces its hash
+(`sessionHashes` on the permission bus, `sessions.ts`); every live
+collab socket and live view it opened closes at once (#498, §5.7).
 
 - **Bootstrap** (`bootstrap.ts`): one-time `/setup` endpoint gated by an
   out-of-band token (`SETUP_TOKEN` env var or a generated/logged one);
@@ -411,7 +415,14 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   and the collab document order keys differently). A directory with a
   live `<dir>/index` **note** is skipped entirely: that file is the
   user's note, and the generated table must never overwrite or unlink
-  it (#384, fixed 2026-10-12).
+  it (#384, fixed 2026-10-12). Each call holds `index:<vault>/<dir>` for
+  every directory it regenerates (`withKeyLocks`, taken in sorted key
+  order) and reads the note list inside the locks, so concurrent writers
+  into one folder write its `index.md` in turn and the last write lists
+  every note committed before it; an older snapshot written last used to
+  leave live notes out (#779). Lock order is `note:` before `index:`
+  (`updateNote` regenerates inside its note lock; nothing takes a `note:`
+  lock while holding an `index:` lock).
 - **`integrity.ts`** / `pnpm check-notes`: parses every live note's file
   from disk the way `readNote` does and compares it with the note's row.
   Each problem has a kind: `missing-file`, `unparseable`,
@@ -592,7 +603,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `"<vaultId>/<path>"`. `onAuthenticate` requires live `edit` access.
   **`beforeHandleMessage` re-resolves access on every inbound Yjs
   message**, not just at connect time — dropping below `edit` mid-session
-  drops the next message and closes the connection. `onStoreDocument`
+  drops the next message and closes the connection.
+- **A connection ends with its session** (#498). `POST /api/collab/ticket`
+  binds the ticket (`tickets.ts`, single use, 60 s) to the user and the
+  hash of the session asking; `onAuthenticate` refuses a ticket whose
+  session ended or expired since, and keeps the session hash in the
+  connection context (a raw session token, as server callers and tests
+  use, keeps its own). When a session ends (§5.1) the relay closes every
+  document connection opened with it, in every tab, with code 4401 /
+  reason `signed-out`, and refuses any message already queued behind the
+  close; `beforeHandleMessage` also re-checks the session with its 10 s
+  access re-check (expiry, or a delete no event announced). Other
+  sessions of the same user are untouched (a password change spares the
+  session doing it). The editor (`useCollabDoc`) turns a `signed-out`
+  close, or a 401 from the ticket endpoint, into status `signed-out`: it
+  stops reconnecting, the editor turns read-only, the text stays on
+  screen and in this user's browser copy, which a logout in this browser
+  deletes (#720). The SSE live view (`viewers.ts`) ends with its
+  session the same way. `onStoreDocument`
   debounces (default 2s) persistence back through the same OKF write
   path used everywhere else; a write that fails validation is logged
   and the last good file state is kept, never corrupted. A store whose
@@ -635,7 +663,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   history are dropped (the notice says so); the browser's copy moves to
   the new document.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
-  Every share/team/deactivation mutation calls `emitPermissionChange()`;
+  Every share/team/deactivation mutation calls `emitPermissionChange()`,
+  and every session delete announces the ended sessions' hashes on it;
   the collab server and the SSE viewer hub both subscribe and actively
   close any connection that no longer qualifies — this is what makes
   revocation instant instead of "eventually, on reconnect."
@@ -817,7 +846,23 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 - **Import** (`POST /api/import`): uploads a zip, creates a **new**
   vault with a **new** owner and new IDs, re-validates every note
   through the normal OKF write path, best-effort per note (an invalid
-  note is skipped and reported, not fatal).
+  note is skipped and reported, not fatal). Shares listed in the
+  archive's `manifest.json` are **never granted by default** (#621):
+  without `?applyShares=true` nothing is looked up or granted and every
+  manifest share comes back in `skippedShares` with reason
+  `not_requested`. With it, a share is granted only to an existing
+  **active** user other than the importer (matched by email) or to the
+  one team with that name, at `read` or `edit` (anything else is
+  `invalid_permission`, so never above the importer's own owner
+  access); each grant notifies the grantee and logs
+  `vault_share_created` (detail `source: 'import'`). The response is
+  `{ vaultId, imported, skipped, appliedShares, skippedShares }`, each
+  share `{ granteeType, grantee, permission, reason? }`, skip reasons
+  `not_requested`, `invalid_entry`, `invalid_permission`,
+  `no_active_user`, `importer`, `no_team`, `ambiguous_team`,
+  `duplicate`. The Settings import form sends the flag only when its
+  "Give the archive's collaborators access again" box is ticked.
+  Instance restore is separate and restores shares as backed up.
 - **Instance backup** (`GET /api/admin/backup`, admin-only; the
   scheduled run in `backup-service.ts` writes the same zip):
   `buildInstanceBackup()` in `archive.ts`, format 2

@@ -6,7 +6,8 @@ import { generateToken, hashToken } from '../auth/tokens.js'
  * The session cookie is `httpOnly`, so browser JS cannot hand a session token
  * to `HocuspocusProvider`'s `token` option the way the Node tests do. A ticket
  * is the credential it can hold: opaque, single-use, seconds long, bound to the
- * user who asked for it. It proves *who* is connecting and nothing else —
+ * user who asked for it and the session they asked with (#498: the socket it
+ * opens ends with that session). It proves *who* is connecting and nothing else —
  * `onAuthenticate`'s `edit` check and `beforeHandleMessage` still decide what
  * that user may do.
  *
@@ -15,8 +16,13 @@ import { generateToken, hashToken } from '../auth/tokens.js'
  */
 const TTL_MS = 60_000
 
-interface StoredTicket {
+/** Who a ticket was minted for: the user, and the hash of the session asking. */
+export interface TicketIdentity {
   userId: string
+  sessionHash: string
+}
+
+interface StoredTicket extends TicketIdentity {
   expiresAt: number
 }
 
@@ -32,26 +38,29 @@ export interface IssuedTicket {
   expiresAt: Date
 }
 
-export function issueTicket(userId: string, ttlMs = TTL_MS): IssuedTicket {
+export function issueTicket(userId: string, sessionHash: string, ttlMs = TTL_MS): IssuedTicket {
   const now = Date.now()
   for (const [hash, ticket] of tickets) {
     if (ticket.expiresAt <= now) tickets.delete(hash)
   }
   const token = generateToken()
   const expiresAt = new Date(now + ttlMs)
-  tickets.set(hashToken(token), { userId, expiresAt: expiresAt.getTime() })
+  tickets.set(hashToken(token), { userId, sessionHash, expiresAt: expiresAt.getTime() })
   return { token, expiresAt }
 }
 
 /**
- * Redeems a ticket, returning the user it was minted for. Single use: the
- * ticket is dropped whether or not it was still valid, so a replay of a
- * still-fresh ticket and a replay of an expired one both fail.
+ * Redeems a ticket, returning who it was minted for. Single use: the ticket
+ * is dropped whether or not it was still valid, so a replay of a still-fresh
+ * ticket and a replay of an expired one both fail. Whether the session behind
+ * it is still alive is the caller's check.
  */
-export function consumeTicket(token: string): string | null {
+export function consumeTicket(token: string): TicketIdentity | null {
   const hash = hashToken(token)
   const ticket = tickets.get(hash)
   if (!ticket) return null
   tickets.delete(hash)
-  return ticket.expiresAt > Date.now() ? ticket.userId : null
+  return ticket.expiresAt > Date.now()
+    ? { userId: ticket.userId, sessionHash: ticket.sessionHash }
+    : null
 }

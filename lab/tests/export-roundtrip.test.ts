@@ -84,7 +84,8 @@ interface ImportResult {
   vaultId: string
   imported: number
   skipped: string[]
-  unmatchedShares: string[]
+  appliedShares: Array<{ granteeType: string; grantee: string; permission: string }>
+  skippedShares: Array<{ granteeType: string; grantee: string; permission: string; reason?: string }>
 }
 
 const enc = new TextEncoder()
@@ -656,8 +657,9 @@ const test: LabTest = {
       ['rest', restExport.bytes],
       ['mcp', mcpZipBytes],
     ] as const) {
-      const r = await postFile(base, '/api/import', admin.cookie, 'vault-export.zip', bytes, 'application/zip')
-      // Shape: export/routes.ts:207.
+      // The round trip opts in to re-sharing (#621), so the manifest share check below measures it.
+      const r = await postFile(base, '/api/import?applyShares=true', admin.cookie, 'vault-export.zip', bytes, 'application/zip')
+      // Shape: export/routes.ts, POST /import.
       imports[label] = r.status === 200 ? (r.json as ImportResult) : `${r.status} ${r.text.slice(0, 300)}`
     }
     const imp = typeof imports.rest === 'object' ? imports.rest : undefined
@@ -753,7 +755,7 @@ const test: LabTest = {
         source: manifest?.shares.length ?? 0,
         imported: impShares.length,
         differences: Math.abs((manifest?.shares.length ?? 0) - impShares.length),
-        detail: { manifest: manifest?.shares, imported: impShares, unmatched: imp.unmatchedShares },
+        detail: { manifest: manifest?.shares, imported: impShares, applied: imp.appliedShares, skipped: imp.skippedShares },
       })
       const vaultRow = await ctx.docker.psqlRows<{ name: string; mergeable: boolean }>(`select name, mergeable from vaults where id = '${imp.vaultId}'`)
       diffRows.push({ aspect: 'vault name', source: src.name, imported: vaultRow[0]?.name, differences: vaultRow[0]?.name === src.name ? 0 : 1 })
@@ -877,11 +879,11 @@ const test: LabTest = {
     })
     checks.push({
       name: 'crafted archive manifest silently grants another user edit access to the imported vault',
-      expected: 'no access granted without that user/owner confirming (or at least reported)',
+      expected: 'no access granted unless the importer opts in (applyShares), and the share reported as skipped',
       actual: `${evilShare.length} share(s) created: ${JSON.stringify(evilShare)}`,
-      ok: evilShare.length === 0,
+      ok: evilShare.length === 0 && evilJson?.skippedShares.some((s) => s.reason === 'not_requested') === true,
       severity: 'low',
-      detail: { code: 'export/routes.ts:184-205 inserts vault_shares for any active user whose email is in manifest.json' },
+      detail: { skippedShares: evilJson?.skippedShares, code: 'export/routes.ts importManifestShares grants manifest shares only with ?applyShares=true (#621)' },
     })
     const notZip = await postFile(base, '/api/import', admin.cookie, 'x.zip', enc.encode('not a zip'), 'application/zip')
     const noManifest = await postFile(base, '/api/import', admin.cookie, 'y.zip', writeZip([{ name: 'concepts/a.md', data: enc.encode('---\ntype: concepts\n---\n') }]), 'application/zip')

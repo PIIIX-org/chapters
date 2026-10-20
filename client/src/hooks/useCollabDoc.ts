@@ -22,6 +22,11 @@ export type CollabStatus =
   | 'reconnecting'
   /** Access was pulled. The relay kicked us and will not take us back. */
   | 'revoked'
+  /** The session ended (#498): logout here or in another tab, a password
+   *  change or reset elsewhere, deactivation, expiry. The relay closed the
+   *  socket and takes nothing more from that session; what was typed stays on
+   *  screen and, until a logout here clears it, in this user's browser copy. */
+  | 'signed-out'
   /** We never got a ticket and it was not a refusal — the API or the relay is
    *  down. Not a revocation, but nothing typed here is going anywhere either. */
   | 'offline'
@@ -91,8 +96,8 @@ export interface UseCollabDocOptions {
   enabled: boolean
 }
 
-/** Dead ends: the two states where a keystroke reaches no one. */
-const DEAD: readonly CollabStatus[] = ['revoked', 'offline']
+/** Dead ends: the states where a keystroke reaches no one. */
+const DEAD: readonly CollabStatus[] = ['revoked', 'signed-out', 'offline']
 
 /**
  * Awareness is whatever a peer chose to broadcast: every field here is that
@@ -188,8 +193,9 @@ function utf8Length(text: string): number {
  * (`server/src/sync/collab-server.ts`). Editors only.
  *
  * Being kicked is a normal outcome, not an error: the relay closes the socket
- * the instant a share is revoked. When that happens this hook stops reconnecting
- * and reports `revoked` — but it never touches `ydoc`, so whatever the user had
+ * the instant a share is revoked, or the session ends (#498). When that happens
+ * this hook stops reconnecting and reports `revoked` or `signed-out` — but it
+ * never touches `ydoc`, so whatever the user had
  * typed is still on screen for them to copy out. Destroying the document on a
  * kick would delete their unsaved work, which is the one thing this must not do.
  */
@@ -251,7 +257,8 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     let provider: HocuspocusProvider | undefined
     let cancelled = false
     let everConnected = false
-    let revoked = false
+    // Revoked or signed out: the relay will not take this tab back.
+    let stopped = false
     let retry: ReturnType<typeof setTimeout> | undefined
     // The relay's state has arrived since the socket last opened.
     let handshake = false
@@ -444,12 +451,12 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
 
     const wentOffline = () => {
       browserOffline = true
-      if (!revoked && !refused && provider && away()) setStatus('reconnecting')
+      if (!stopped && !refused && provider && away()) setStatus('reconnecting')
       settle()
     }
     const cameOnline = () => {
       browserOffline = false
-      if (!revoked && !refused && socketOpen) setStatus('connected')
+      if (!stopped && !refused && socketOpen) setStatus('connected')
       settle()
     }
     window.addEventListener('offline', wentOffline)
@@ -472,20 +479,28 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
         dirty = true
         setUnsynced(true)
         setRestoredDoc(shown.doc)
-        if (!revoked && provider && !socketOpen && away()) setStatus('reconnecting')
+        if (!stopped && provider && !socketOpen && away()) setStatus('reconnecting')
         settle()
       })()
     }
 
-    const kicked = () => {
-      // The relay refused us: the share was revoked, or it was never ours.
-      // Retrying would only fail again, so stop and say so.
-      revoked = true
-      setStatus('revoked')
+    /**
+     * The relay will not take this tab back: stop and say why. The first
+     * reason stands: a signed-out tab's reconnect is refused as well, and
+     * that refusal must not turn it into a revocation.
+     */
+    const stop = (why: 'revoked' | 'signed-out') => {
+      if (stopped) return
+      stopped = true
+      setStatus(why)
       // Nobody is "in the note with you" once you are out of it.
       setPeers([])
       provider?.disconnect()
     }
+
+    // The relay refused us: the share was revoked, or it was never ours.
+    // Retrying would only fail again.
+    const kicked = () => stop('revoked')
 
     /**
      * The relay refused a change as too large (#491). Reconnecting would only
@@ -493,7 +508,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
      * down; the document (and this browser's copy of it) keeps every keystroke.
      */
     const refuse = () => {
-      if (refused || revoked) return
+      if (refused || stopped) return
       refused = true
       handshake = false
       socketOpen = false
@@ -506,7 +521,10 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
 
     /**
      * A 403 from the ticket endpoint is what a revoked share looks like from
-     * here, and retrying it would only fail again — that is terminal.
+     * here, and retrying it would only fail again — that is terminal. A 401
+     * is a session that ended (#498), terminal too: a retry that succeeded
+     * later would be under whatever session this browser holds by then,
+     * possibly someone else's.
      *
      * Anything else is the service being down, which is NOT terminal and must
      * not be treated as one:
@@ -520,6 +538,10 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     const ticketFailed = (error: unknown) => {
       if (error instanceof ApiError && error.status === 403) {
         kicked()
+        return
+      }
+      if (error instanceof ApiError && error.status === 401) {
+        stop('signed-out')
         return
       }
       if (provider) return
@@ -577,7 +599,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           }
         },
         onStatus: ({ status: socketStatus }) => {
-          if (revoked || refused) return
+          if (stopped || refused) return
           if (socketStatus === WebSocketStatus.Connected) {
             everConnected = true
             socketOpen = true
@@ -593,10 +615,12 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
         },
         onAuthenticationFailed: kicked,
         // The relay closes the document with reason `note-too-large` for a
-        // change over the cap (server/src/sync/collab-server.ts), and ws closes
-        // the socket with 1009 for a frame over its transport limit.
+        // change over the cap (server/src/sync/collab-server.ts), ws closes
+        // the socket with 1009 for a frame over its transport limit, and the
+        // relay closes with `signed-out` when the session ended (#498).
         onClose: ({ event }) => {
-          if (event.reason === 'note-too-large' || event.code === 1009) refuse()
+          if (event.reason === 'signed-out') stop('signed-out')
+          else if (event.reason === 'note-too-large' || event.code === 1009) refuse()
         },
         onSynced: () => {
           handshake = true

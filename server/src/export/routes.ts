@@ -2,9 +2,10 @@ import type { FastifyInstance } from 'fastify'
 import AdmZip from 'adm-zip'
 import { and, eq, gt, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { exportLinks, users, vaults, vaultShares } from '../db/schema.js'
+import { exportLinks, teamMemberships, teams, users, vaults, vaultShares } from '../db/schema.js'
 import { generateToken, hashToken } from '../auth/tokens.js'
 import { logSecurityEvent } from '../auth/security-events.js'
+import { notify } from '../notifications/notify.js'
 import { resolveAccess, atLeast } from '../vaults/permissions.js'
 import { createNote, readNote, saveAsset } from '../notes/store.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
@@ -22,6 +23,141 @@ const LINK_TTL_MS = Number(process.env.EXPORT_LINK_TTL_HOURS ?? 24) * 60 * 60 * 
 /** Export requires edit/owner (spec 7): a copy outlives later revocation. */
 async function guardExport(userId: string, vaultId: string): Promise<boolean> {
   return atLeast(await resolveAccess(userId, vaultId), 'edit')
+}
+
+/** Why an import did not grant a share listed in the archive manifest (#621). */
+type ShareSkipReason =
+  | 'not_requested'
+  | 'invalid_entry'
+  | 'invalid_permission'
+  | 'no_active_user'
+  | 'importer'
+  | 'no_team'
+  | 'ambiguous_team'
+  | 'duplicate'
+
+/** One manifest share and what the import did with it. */
+interface ShareOutcome {
+  granteeType: string
+  /** The user's email or the team's name. */
+  grantee: string
+  permission: string
+  reason?: ShareSkipReason
+}
+
+interface ImportedShares {
+  appliedShares: ShareOutcome[]
+  skippedShares: ShareOutcome[]
+}
+
+const text = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+/**
+ * The manifest is whatever the uploader wrote, so it never grants access on
+ * its own (#621): without `apply` nothing is looked up or granted and every
+ * entry comes back as `not_requested`. With it, an entry is granted only to an
+ * existing active user (not the importer) or exactly one team of that name, at
+ * `read` or `edit`: the importer owns the new vault, so neither exceeds their
+ * own access, and ownership never moves. Everything else is reported.
+ */
+async function importManifestShares(
+  vault: { id: string; name: string },
+  shares: unknown,
+  importerId: string,
+  apply: boolean,
+): Promise<ImportedShares> {
+  const appliedShares: ShareOutcome[] = []
+  const skippedShares: ShareOutcome[] = []
+  const granted = new Set<string>()
+  for (const raw of Array.isArray(shares) ? shares : []) {
+    const fields = new Map<string, unknown>(
+      typeof raw === 'object' && raw !== null ? Object.entries(raw) : [],
+    )
+    const granteeType = text(fields.get('granteeType'))
+    const grantee = text(fields.get(granteeType === 'team' ? 'teamName' : 'email'))
+    const permission = text(fields.get('permission'))
+    const skip = (reason: ShareSkipReason) =>
+      skippedShares.push({ granteeType, grantee, permission, reason })
+
+    if (!apply) {
+      skip('not_requested')
+      continue
+    }
+    if ((granteeType !== 'user' && granteeType !== 'team') || !grantee) {
+      skip('invalid_entry')
+      continue
+    }
+    if (permission !== 'read' && permission !== 'edit') {
+      skip('invalid_permission')
+      continue
+    }
+    let granteeId: string
+    let label = grantee
+    if (granteeType === 'user') {
+      const user = (
+        await db
+          .select({ id: users.id, email: users.email, status: users.status })
+          .from(users)
+          .where(eq(users.email, grantee.toLowerCase()))
+      )[0]
+      if (!user || user.status !== 'active') {
+        skip('no_active_user')
+        continue
+      }
+      if (user.id === importerId) {
+        skip('importer')
+        continue
+      }
+      granteeId = user.id
+      label = user.email
+    } else {
+      const matches = await db
+        .select({ id: teams.id })
+        .from(teams)
+        .where(eq(teams.name, grantee))
+        .limit(2)
+      if (matches.length !== 1) {
+        skip(matches.length === 0 ? 'no_team' : 'ambiguous_team')
+        continue
+      }
+      granteeId = matches[0]!.id
+    }
+    const key = `${granteeType}:${granteeId}`
+    if (granted.has(key)) {
+      skip('duplicate')
+      continue
+    }
+    granted.add(key)
+
+    await db.insert(vaultShares).values({ vaultId: vault.id, granteeType, granteeId, permission })
+    // Same notice and audit trail as a share made from the share dialog.
+    const recipients =
+      granteeType === 'user'
+        ? [granteeId]
+        : (
+            await db
+              .select({ userId: teamMemberships.userId })
+              .from(teamMemberships)
+              .where(eq(teamMemberships.teamId, granteeId))
+          ).map((m) => m.userId)
+    for (const recipientId of recipients) {
+      if (recipientId === importerId) continue
+      await notify({
+        recipientId,
+        type: 'vault_shared',
+        entityType: 'vault',
+        entityId: vault.id,
+        message: `Vault "${vault.name}" was shared with you (${permission}).`,
+      })
+    }
+    await logSecurityEvent({
+      type: 'vault_share_created',
+      actorUserId: importerId,
+      detail: { vaultId: vault.id, granteeType, granteeId, permission, source: 'import' },
+    })
+    appliedShares.push({ granteeType, grantee: label, permission })
+  }
+  return { appliedShares, skippedShares }
 }
 
 export function exportRoutes(app: FastifyInstance) {
@@ -122,90 +258,84 @@ export function exportRoutes(app: FastifyInstance) {
       },
     )
 
-    authed.post('/import', async (req, reply) => {
-      const file = await req.file()
-      if (!file) return reply.code(400).send({ error: 'archive file required' })
-      const buffer = await file.toBuffer()
-      let zip: AdmZip
-      try {
-        zip = new AdmZip(buffer)
-      } catch {
-        return reply.code(400).send({ error: 'not a valid zip archive' })
-      }
-      const manifestEntry = zip.getEntry('manifest.json')
-      if (!manifestEntry) return reply.code(400).send({ error: 'manifest.json missing' })
-      const manifest = JSON.parse(manifestEntry.getData().toString('utf8')) as VaultManifest
-
-      const [vault] = await db
-        .insert(vaults)
-        .values({
-          name: manifest.name ?? 'Imported vault',
-          ownerId: req.user!.id,
-          mergeable: Boolean(manifest.mergeable),
-        })
-        .returning()
-
-      const skipped: string[] = []
-      let imported = 0
-      for (const entry of zip.getEntries()) {
-        if (entry.isDirectory) continue
-        if (entry.entryName.startsWith('assets/')) {
-          const assetName = entry.entryName.slice(7)
-          if (assetName && /^[a-zA-Z0-9._-]+$/.test(assetName)) {
-            await saveAsset(vault!.id, assetName, entry.getData())
-          }
-          continue
-        }
-        if (!entry.entryName.endsWith('.md')) continue
-        const path = entry.entryName.replace(/\.md$/, '')
-        if (path === 'index' || path.endsWith('/index')) continue
+    authed.post<{ Querystring: { applyShares: boolean } }>(
+      '/import',
+      {
+        schema: {
+          querystring: {
+            type: 'object',
+            properties: { applyShares: { type: 'boolean', default: false } },
+          },
+        },
+      },
+      async (req, reply) => {
+        const file = await req.file()
+        if (!file) return reply.code(400).send({ error: 'archive file required' })
+        const buffer = await file.toBuffer()
+        let zip: AdmZip
         try {
-          const resolved = resolveNotePath(path)
-          const parsed = parseNote(entry.getData().toString('utf8'))
-          // Same shared validation write path as every other write.
-          await createNote(
-            vault!.id,
-            {
-              path: resolved.fullPath,
-              type: resolved.type,
-              name: resolved.name,
-              frontmatter: parsed.frontmatter,
-              body: parsed.body,
-            },
-            { type: 'user', id: req.user!.id },
-          )
-          imported += 1
-        } catch (err) {
-          if (err instanceof OkfValidationError) skipped.push(`${path}: ${err.message}`)
-          else throw err
+          zip = new AdmZip(buffer)
+        } catch {
+          return reply.code(400).send({ error: 'not a valid zip archive' })
         }
-      }
+        const manifestEntry = zip.getEntry('manifest.json')
+        if (!manifestEntry) return reply.code(400).send({ error: 'manifest.json missing' })
+        const manifest = JSON.parse(manifestEntry.getData().toString('utf8')) as VaultManifest
 
-      const unmatchedShares: string[] = []
-      for (const share of manifest.shares ?? []) {
-        if (share.granteeType === 'user' && share.email) {
-          const grantee = (
-            await db.select().from(users).where(eq(users.email, share.email.toLowerCase()))
-          )[0]
-          if (grantee && grantee.status === 'active' && grantee.id !== req.user!.id) {
-            await db.insert(vaultShares).values({
-              vaultId: vault!.id,
-              granteeType: 'user',
-              granteeId: grantee.id,
-              permission: share.permission,
-            })
+        const [vault] = await db
+          .insert(vaults)
+          .values({
+            name: manifest.name ?? 'Imported vault',
+            ownerId: req.user!.id,
+            mergeable: Boolean(manifest.mergeable),
+          })
+          .returning()
+
+        const skipped: string[] = []
+        let imported = 0
+        for (const entry of zip.getEntries()) {
+          if (entry.isDirectory) continue
+          if (entry.entryName.startsWith('assets/')) {
+            const assetName = entry.entryName.slice(7)
+            if (assetName && /^[a-zA-Z0-9._-]+$/.test(assetName)) {
+              await saveAsset(vault!.id, assetName, entry.getData())
+            }
             continue
           }
+          if (!entry.entryName.endsWith('.md')) continue
+          const path = entry.entryName.replace(/\.md$/, '')
+          if (path === 'index' || path.endsWith('/index')) continue
+          try {
+            const resolved = resolveNotePath(path)
+            const parsed = parseNote(entry.getData().toString('utf8'))
+            // Same shared validation write path as every other write.
+            await createNote(
+              vault!.id,
+              {
+                path: resolved.fullPath,
+                type: resolved.type,
+                name: resolved.name,
+                frontmatter: parsed.frontmatter,
+                body: parsed.body,
+              },
+              { type: 'user', id: req.user!.id },
+            )
+            imported += 1
+          } catch (err) {
+            if (err instanceof OkfValidationError) skipped.push(`${path}: ${err.message}`)
+            else throw err
+          }
         }
-        unmatchedShares.push(
-          share.granteeType === 'user'
-            ? (share.email ?? 'unknown user')
-            : `team: ${share.teamName ?? 'unknown'}`,
-        )
-      }
 
-      return { vaultId: vault!.id, imported, skipped, unmatchedShares }
-    })
+        const shares = await importManifestShares(
+          { id: vault!.id, name: vault!.name },
+          manifest.shares,
+          req.user!.id,
+          req.query.applyShares,
+        )
+        return { vaultId: vault!.id, imported, skipped, ...shares }
+      },
+    )
 
     // Everything the caller *owns*. Vaults merely shared with them belong to
     // someone else's account and are that owner's to export.
