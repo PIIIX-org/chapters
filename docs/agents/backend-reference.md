@@ -386,7 +386,14 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   and the collab document order keys differently). A directory with a
   live `<dir>/index` **note** is skipped entirely: that file is the
   user's note, and the generated table must never overwrite or unlink
-  it (#384, fixed 2026-10-12).
+  it (#384, fixed 2026-10-12). Each call holds `index:<vault>/<dir>` for
+  every directory it regenerates (`withKeyLocks`, taken in sorted key
+  order) and reads the note list inside the locks, so concurrent writers
+  into one folder write its `index.md` in turn and the last write lists
+  every note committed before it; an older snapshot written last used to
+  leave live notes out (#779). Lock order is `note:` before `index:`
+  (`updateNote` regenerates inside its note lock; nothing takes a `note:`
+  lock while holding an `index:` lock).
 - **`integrity.ts`** / `pnpm check-notes`: parses every live note's file
   from disk the way `readNote` does and compares it with the note's row.
   Each problem has a kind: `missing-file`, `unparseable`,
