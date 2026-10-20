@@ -64,6 +64,7 @@ import { notify } from '../notifications/notify.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 import { requestedEdit, writeThroughCollab } from './crdt-write.js'
+import { showAgentPresence } from '../sync/agent-presence.js'
 import { registerMcpPrompts } from './prompts.js'
 import { strictArgs } from './strict-input.js'
 import type { EditOp } from '../sync/edit-ops.js'
@@ -242,6 +243,8 @@ export function listMcpTools(): readonly McpToolInfo[] {
 function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] } {
   const server = new McpServer({ name: 'elara', version: '0.2.0' })
   const actor: Actor = { type: 'mcp', id: auth.connection.id }
+  // Who editors see in "In this note now" (#481): the connection's label only.
+  const presence = { key: auth.connection.id, name: auth.connection.name }
   const tools: McpToolInfo[] = []
 
   // Tools are registered only through tool(), which enforces the scope and
@@ -1013,6 +1016,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireAccess(target, 'read')
       const note = await readNote(target, path)
       if (!note) throw new McpToolError('note not found')
+      showAgentPresence(target, note.row.path, presence, 'reading')
       return { path: note.row.path, frontmatter: note.frontmatter, body: note.body }
     },
   )
@@ -1096,6 +1100,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         quarantine: allowGrowth ? undefined : 'all',
       })
       if (!updated) throw new McpToolError('note not found')
+      showAgentPresence(target, updated.path, presence, 'editing')
       // Compare-and-set against `base_rev` is #475; until then it is only echoed.
       return baseRev === undefined ? updated : { ...updated, baseRev }
     },
@@ -1278,6 +1283,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireAccess(target, 'edit')
       const reverted = await revertNote(target, path, revisionId, actor, writeThroughCollab)
       if (!reverted) throw new McpToolError('note or revision not found')
+      showAgentPresence(target, reverted.path, presence, 'editing')
       return reverted
     },
   )
@@ -1866,6 +1872,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireAccess(target, 'read')
       const note = await readNote(target, path)
       if (!note) throw new McpToolError('note not found')
+      showAgentPresence(target, note.row.path, presence, 'reading')
       return {
         path: note.row.path,
         markdown: serializeNote({ frontmatter: note.frontmatter, body: note.body }),

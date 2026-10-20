@@ -20,7 +20,17 @@ import { collabStashSupported, rememberCollabStash } from './collabStashNames.js
  * acknowledged everything, its tab deletes that copy's records and nobody
  * else's. While its tab is open, the copy holds a Web Lock, so other tabs leave
  * it alone; when the tab closes or crashes the lock goes with it, and the next
- * tab to open the note claims the copy ({@link claimLeftoverCopies}).
+ * tab to open the note claims the copy ({@link claimLeftoverCopies}). Tabs
+ * already open on the note wait for the locks of the copies they saw held, and
+ * the first one to get a lock claims that copy at once (#766).
+ *
+ * Without Web Locks (Safari < 15.4, Firefox < 96, plain-http origins) a tab
+ * only knows its own copies are taken: it can claim another open tab's copy,
+ * and nothing tells open tabs that a copy was left. A copy left by a closed
+ * tab then waits for the next visit to the note, and a copy discarded in one
+ * tab while its old owner is still writing to it can be stored again by that
+ * owner and offered once more on the next visit (never merged twice: copies
+ * meet the relay's document through the same history check).
  */
 const STORE = 'updates'
 const BY_COPY = 'copy'
@@ -76,9 +86,11 @@ const heldHere = new Set<string>()
 /**
  * Takes the lock on a copy if nobody holds it, for as long as this tab keeps
  * the copy. Without Web Locks only this tab's own copies count as taken.
+ * With `waitFor`, waits until the lock is free instead (null once the signal
+ * aborts); without Web Locks there is nothing to wait for and it gives null.
  */
-function claim(lock: string): Promise<(() => void) | null> {
-  if (heldHere.has(lock)) return Promise.resolve(null)
+function claim(lock: string, waitFor?: AbortSignal): Promise<(() => void) | null> {
+  if (!waitFor && heldHere.has(lock)) return Promise.resolve(null)
   const taken = () => {
     heldHere.add(lock)
     return () => {
@@ -86,10 +98,11 @@ function claim(lock: string): Promise<(() => void) | null> {
     }
   }
   const locks = typeof navigator === 'undefined' ? undefined : navigator.locks
-  if (!locks) return Promise.resolve(taken())
+  if (!locks) return Promise.resolve(waitFor ? null : taken())
+  const options: LockOptions = waitFor ? { signal: waitFor } : { ifAvailable: true }
   return new Promise((resolve) => {
     locks
-      .request(lock, { ifAvailable: true }, (granted) => {
+      .request(lock, options, (granted) => {
         if (!granted) {
           resolve(null)
           return undefined
@@ -103,7 +116,8 @@ function claim(lock: string): Promise<(() => void) | null> {
           })
         })
       })
-      .catch(() => resolve(taken()))
+      // Aborted while waiting: nothing taken.
+      .catch(() => resolve(waitFor ? null : taken()))
   })
 }
 
@@ -308,21 +322,8 @@ async function readRows(name: string): Promise<Array<{ key: IDBValidKey; row: Ro
   }
 }
 
-/**
- * Copies of `name` left by tabs that are gone (reloaded, closed, crashed),
- * now this tab's: each one is a doc of its own, the most recently written
- * first, and keeps being stored as it changes. Copies whose tab is still open
- * stay with that tab, which sends them itself.
- */
-export async function claimLeftoverCopies(name: string): Promise<CollabCopy[]> {
-  if (!collabStashSupported()) return []
-  const ids = new Set((await readRows(name)).map(({ row }) => row.copy))
-  const claimed = new Map<string, () => void>()
-  for (const id of ids) {
-    const unlock = await claim(`${name}#${id}`)
-    if (unlock) claimed.set(id, unlock)
-  }
-  if (claimed.size === 0) return []
+/** Reads the claimed copies under their locks: each one a doc, empty ones released. */
+async function openClaimed(name: string, claimed: Map<string, () => void>): Promise<CollabCopy[]> {
   try {
     // Read again under the locks: what a closing tab wrote last is in now.
     const groups = new Map<string, { keys: IDBValidKey[]; updates: Uint8Array[] }>()
@@ -352,4 +353,41 @@ export async function claimLeftoverCopies(name: string): Promise<CollabCopy[]> {
     for (const unlock of claimed.values()) unlock()
     throw error
   }
+}
+
+/** Where copies claimed after the first look go, until `signal` aborts. */
+export interface LateCopies {
+  signal: AbortSignal
+  found: (copy: CollabCopy) => void
+}
+
+/** Waits until the tab holding a copy lets it go, then claims what is left of it. */
+async function claimWhenFree(name: string, id: string, { signal, found }: LateCopies): Promise<void> {
+  const unlock = await claim(`${name}#${id}`, signal)
+  if (!unlock) return
+  // A copy its owner sent or discarded is deleted before its lock goes: nothing found.
+  for (const copy of await openClaimed(name, new Map([[id, unlock]]))) {
+    if (signal.aborted) void copy.close().then(() => copy.doc.destroy())
+    else found(copy)
+  }
+}
+
+/**
+ * Copies of `name` left by tabs that are gone (reloaded, closed, crashed),
+ * now this tab's: each one is a doc of its own, the most recently written
+ * first, and keeps being stored as it changes. Copies whose tab is still open
+ * stay with that tab, which sends them itself. With `later`, this tab also
+ * waits for those copies: when their tab goes away with something unsent, the
+ * first open tab to get the lock claims the copy and hands it to `later.found`.
+ */
+export async function claimLeftoverCopies(name: string, later?: LateCopies): Promise<CollabCopy[]> {
+  if (!collabStashSupported()) return []
+  const ids = new Set((await readRows(name)).map(({ row }) => row.copy))
+  const claimed = new Map<string, () => void>()
+  for (const id of ids) {
+    const unlock = await claim(`${name}#${id}`)
+    if (unlock) claimed.set(id, unlock)
+    else if (later) void claimWhenFree(name, id, later).catch(() => undefined)
+  }
+  return claimed.size === 0 ? [] : openClaimed(name, claimed)
 }

@@ -7,7 +7,7 @@ import { ApiError } from '../lib/api.js'
 import { claimLeftoverCopies, keepCollabCopy } from '../lib/collabStash.js'
 import type { CollabCopy } from '../lib/collabStash.js'
 import { collabStashName, hasCollabStash } from '../lib/collabStashNames.js'
-import { inkFor } from '../lib/ink.js'
+import { AI_INK, inkFor } from '../lib/ink.js'
 import type { Ink } from '../lib/ink.js'
 
 export type CollabStatus =
@@ -38,17 +38,28 @@ export type CollabStatus =
    *  keeps would not fit through the relay's frame limit). */
   | 'too-large'
 
-export interface CollabPeer {
-  /** Yjs awareness client id — unique per tab, not per user. */
-  clientId: number
-  userId: string
-  /** Label under the pen nib. */
-  name: string
-  ink: Ink
-  /** True for the AI/MCP participant, which wears teal and never an ink hue.
-   *  Always false today: see {@link toPeer} — nothing the relay sends can tell
-   *  a real MCP connection from a human client claiming to be one. */
-}
+/** A person editing this note, or an agent (an MCP connection) that read or wrote it. */
+export type CollabPeer =
+  | {
+      kind: 'person'
+      /** Yjs awareness client id — unique per tab, not per user. */
+      clientId: number
+      userId: string
+      /** Label under the pen nib. */
+      name: string
+      ink: Ink
+    }
+  | {
+      kind: 'agent'
+      /** Awareness client id the relay gave this agent on this note. */
+      clientId: number
+      /** The MCP connection's label. */
+      name: string
+      /** Always {@link AI_INK}: teal means an AI is at work. */
+      ink: Ink
+      /** Editing until the relay's idle timeout (60 s) after its last write; reading otherwise. */
+      activity: 'editing' | 'reading'
+    }
 
 export interface CollabSession {
   /** The shared document. `getText('body')` and `getMap('frontmatter')` are the
@@ -100,25 +111,27 @@ export interface UseCollabDocOptions {
 const DEAD: readonly CollabStatus[] = ['revoked', 'signed-out', 'offline']
 
 /**
- * Awareness is whatever a peer chose to broadcast: every field here is that
- * peer's own claim about itself, including `user.id`, so nothing here may
- * assert authorship from it.
+ * Awareness is whatever a peer chose to broadcast: every field of a person's
+ * state is that peer's own claim about itself, including `user.id`, so
+ * nothing here may assert authorship from it.
  *
- * There is also no AI peer to assert: MCP does not join this protocol at all.
- * `writeThroughCollab` (server/src/mcp/crdt-write.ts) edits via Hocuspocus's
- * `openDirectConnection`, a server-side handle onto the document that never
- * broadcasts awareness — so an MCP edit arrives as a change with no cursor and
- * no presence entry, and every peer in this list is a person.
- *
- * If MCP ever does join awareness, identity must come from the relay, which
- * already knows it — `onAuthenticate` returns `{ userId }` as the connection
- * context (server/src/sync/collab-server.ts). The server would have to reject
- * or overwrite an awareness `user` whose id is not that authenticated id.
+ * An agent's state is the exception, because only the relay writes it (#481,
+ * server/src/sync/agent-presence.ts): when an MCP connection reads or writes
+ * a note that is open, the relay adds `{ agent: { name, activity } }` under a
+ * client id of its own, and it strips `agent` from every state a browser
+ * sends. So `agent` is the one field that can earn teal; a `user` claiming to
+ * be the MCP is a person like any other. Agents have no `user` and no cursor,
+ * so the editor draws no caret for them.
  */
 function toPeer(state: { clientId: number; [key: string]: unknown }): CollabPeer | null {
+  const agent = state.agent as { name?: unknown; activity?: unknown } | undefined
+  if (typeof agent?.name === 'string' && (agent.activity === 'editing' || agent.activity === 'reading')) {
+    return { kind: 'agent', clientId: state.clientId, name: agent.name, ink: AI_INK, activity: agent.activity }
+  }
   const user = state.user as { id?: unknown; name?: unknown } | undefined
   if (typeof user?.id !== 'string' || typeof user.name !== 'string') return null
   return {
+    kind: 'person',
     clientId: state.clientId,
     userId: user.id,
     name: user.name,
@@ -358,8 +371,10 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
         void stored.then((ok) => (ok ? copy.release() : copy.close()))
       }
       if (offered.length === 0) return
-      unmergedRef.current = offered
-      setUnmerged(offered.map((copy) => copy.doc.getText('body').toString()).join('\n\n'))
+      // Appended: a copy claimed later (#766) joins the ones already offered.
+      const pending = [...(unmergedRef.current ?? []), ...offered]
+      unmergedRef.current = pending
+      setUnmerged(pending.map((copy) => copy.doc.getText('body').toString()).join('\n\n'))
     }
 
     /** Re-reads where the document stands after anything that can move it. */
@@ -462,11 +477,28 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     window.addEventListener('offline', wentOffline)
     window.addEventListener('online', cameOnline)
 
+    // Copies another tab held when this one looked: claimed as soon as that
+    // tab goes away with something unsent (#766), and met with the relay's
+    // document like the ones found at mount. Not shown in the editor.
+    const watching = new AbortController()
+    const found = (copy: CollabCopy) => {
+      if (cancelled) {
+        void copy.close().then(() => copy.doc.destroy())
+        return
+      }
+      restore = [...(restore ?? []), copy]
+      dirty = true
+      setUnsynced(true)
+      settle()
+    }
+
     if (stashName) {
       void (async () => {
         let copies: CollabCopy[] = []
         try {
-          if (await hasCollabStash(stashName)) copies = await claimLeftoverCopies(stashName)
+          if (await hasCollabStash(stashName)) {
+            copies = await claimLeftoverCopies(stashName, { signal: watching.signal, found })
+          }
         } catch {
           // IndexedDB refused (private mode, quota): no copy to restore.
         }
@@ -475,7 +507,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           for (const copy of copies) void copy.close().then(() => copy.doc.destroy())
           return
         }
-        restore = copies
+        restore = [...copies, ...(restore ?? [])]
         dirty = true
         setUnsynced(true)
         setRestoredDoc(shown.doc)
@@ -648,6 +680,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
 
     return () => {
       cancelled = true
+      watching.abort()
       if (retry) clearTimeout(retry)
       holdRelease()
       ydoc.off('update', onUpdate)

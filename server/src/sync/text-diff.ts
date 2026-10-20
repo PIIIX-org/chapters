@@ -265,13 +265,18 @@ export function diffText(from: string, to: string, timeLimitMs = DIFF_TIME_LIMIT
 /**
  * Turns the live `text` into `next` with the fewest character changes. Call
  * it inside the document transaction that should carry the edit.
+ *
+ * In each change the new text goes in before the old is deleted (#483): a
+ * caret at the end of a replaced span lands after the new text, and typing
+ * still in flight from an editor (anchored to a deleted character) joins
+ * after it rather than racing the new text for the spot.
  */
 export function applyTextDiff(text: Y.Text, next: string, timeLimitMs = DIFF_TIME_LIMIT_MS): void {
   const edits = diffText(text.toString(), next, timeLimitMs)
   // Last change first: each one's offsets refer to the text before any change.
   for (let i = edits.length - 1; i >= 0; i--) {
     const { at, remove, insert } = edits[i]!
-    if (remove > 0) text.delete(at, remove)
     if (insert !== '') text.insert(at, insert)
+    if (remove > 0) text.delete(at + insert.length, remove)
   }
 }
