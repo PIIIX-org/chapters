@@ -18,7 +18,12 @@ import { config } from '../src/config.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { serializeNote } from '../src/notes/okf.js'
-import { createNote, readNote } from '../src/notes/store.js'
+import { createNote, getLiveNote, readNote, updateNote } from '../src/notes/store.js'
+import { NoteTooLargeError } from '../src/notes/size-cap.js'
+import { writeThroughCollab } from '../src/sync/crdt-write.js'
+import { db } from '../src/db/client.js'
+import { noteRevisions } from '../src/db/schema.js'
+import { and, eq } from 'drizzle-orm'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
 /** The default cap: 1 MiB of UTF-8. */
@@ -362,6 +367,23 @@ describe('note body size cap (#491)', { timeout: 30_000 }, () => {
     expect(renamed.isError).toBe(true)
     expect(textOf(renamed)).toContain('docs/referrer-one')
     expect(await readNote(vaultId, 'docs/target')).not.toBeNull()
+  })
+
+  it('the size cap runs before the write quarantine (#492): a doubled body over the cap is refused, never kept as a quarantine revision', async () => {
+    const half = bodyOfBytes(600 * 1024)
+    await newNote('doubled', half)
+    const note = (await getLiveNote(vaultId, 'docs/doubled'))!
+    const quarantined = () =>
+      db.select().from(noteRevisions).where(and(eq(noteRevisions.noteId, note.id), eq(noteRevisions.action, 'quarantine')))
+
+    await expect(updateNote(vaultId, 'docs/doubled', { body: half + half }, undefined, { quarantine: 'all' })).rejects.toBeInstanceOf(
+      NoteTooLargeError,
+    )
+    await expect(
+      writeThroughCollab(vaultId, 'docs/doubled', { body: half + half }, { type: 'mcp' }, { quarantine: 'all' }),
+    ).rejects.toBeInstanceOf(NoteTooLargeError)
+    expect(await quarantined()).toEqual([])
+    expect(await restBody('docs/doubled')).toBe(half)
   })
 
   it('a note stored before the cap can shrink and take frontmatter edits, but not grow', async () => {

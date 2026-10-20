@@ -2,7 +2,8 @@ import { isDeepStrictEqual } from 'node:util'
 import type { DirectConnection } from '@hocuspocus/server'
 import { YAMLParseError } from 'yaml'
 import { getCollab } from './collab-server.js'
-import { getLiveNote, readNote, resolveNotePath, updateNote, type Actor, type NoteRow } from '../notes/store.js'
+import { getLiveNote, readNote, refuseSuspiciousWrite, resolveNotePath, updateNote, type Actor, type NoteRow } from '../notes/store.js'
+import type { QuarantineRules } from '../notes/growth-guard.js'
 import { assertBodyFits } from '../notes/size-cap.js'
 import { OkfValidationError, validateNote, type Frontmatter } from '../notes/okf.js'
 import { withKeyLock } from '../notes/key-lock.js'
@@ -108,12 +109,21 @@ async function noteFileDamaged(vaultId: string, path: string): Promise<boolean> 
  * relay's store of it and the attributed store write form one unit, so a
  * concurrent write can neither interleave its document edit nor land its store
  * write in between. (The store write takes its own, separate note lock.)
+ *
+ * `options.quarantine` (MCP edit_note, REST PUT without `allowGrowth`) checks
+ * the body against the stored one before it reaches the live document: a
+ * suspicious write (#492) is recorded as a quarantine revision and thrown,
+ * and editors never see it. When this edit replaces the body, the relay's
+ * own store of the document it produces is not checked again (`directWrite`
+ * in its context): the caller here decided. A frontmatter-only edit leaves
+ * the body to the relay's check.
  */
 export async function writeThroughCollab(
   vaultId: string,
   path: string,
   input: NoteEdit,
   actor: Actor,
+  options: { quarantine?: QuarantineRules } = {},
 ): Promise<NoteRow | null> {
   return withKeyLock(`collab:${vaultId}/${resolveNotePath(path).fullPath}`, async () => {
     const existing = await getLiveNote(vaultId, path)
@@ -121,6 +131,10 @@ export async function writeThroughCollab(
     // Before the document edit: a refused body must never reach the editors (#491).
     if (input.body !== undefined) assertBodyFits(input.body, existing.body)
     const storedFrontmatter = existing.frontmatter as Record<string, unknown>
+    if (options.quarantine) {
+      const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
+      await refuseSuspiciousWrite(existing, { frontmatter, body: input.body }, actor, options.quarantine)
+    }
     const collab = getCollab()
     if (!collab) {
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
@@ -130,6 +144,7 @@ export async function writeThroughCollab(
     try {
       connection = await collab.openDirectConnection(`${vaultId}/${path}`, {
         userId: actor.type === 'user' ? actor.id : 'mcp',
+        directWrite: input.body !== undefined,
       })
     } catch (err) {
       // Loading the collab document parses the note's file. When the file is

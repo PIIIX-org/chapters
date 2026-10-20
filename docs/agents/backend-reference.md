@@ -172,7 +172,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | Table | Purpose |
 |---|---|
 | `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed) |
-| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab` |
+| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`/`delete`/`revert`, or `quarantine` for a write kept out of the note (#492, not the note's content) |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
 
@@ -433,12 +433,46 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   is exempt (`export/restore.ts` inserts rows directly, not through
   `createNote`): dropping a backed-up note would lose it. The transport limit
   (`noteTransportLimit()` = 6 × cap + 64 KiB: a control character is 1
-  byte of UTF-8 and 6 of JSON, the worst escaping; plus frontmatter) is the Fastify `bodyLimit` of the note create/update
-  routes and `/mcp`, and the relay's ws `maxPayload`. Before #491, REST
+  byte of UTF-8 and 6 of JSON, the worst escaping; plus frontmatter) is
+  the Fastify `bodyLimit` of the note create/update routes and `/mcp`,
+  and the relay's ws `maxPayload`. In `updateNote` and
+  `writeThroughCollab` the cap runs before the write quarantine (#492,
+  below): an over-cap body is refused, never kept as a quarantine
+  revision (which `revert_note` would then refuse). Before #491, REST
   and MCP refused only at Fastify's default 1 MiB *request* limit (so a
   body under 1 MiB with JSON escaping was refused), import took any size
   and the relay stored up to ws's 100 MiB default (60 MiB froze the
   server ~20 s in the lab).
+- **Write quarantine** (`growth-guard.ts`, #492): a stale reload once
+  doubled a whole note (#488) and the store wrote it like any edit. A body
+  write is checked against the stored body (UTF-8 bytes, linear time:
+  ~20 ms for a doubled 1 MiB note). *Growth*: the new body is ≥ 1.9× the
+  stored one and the stored one is ≥ 2 KiB (a stub filled in is never
+  flagged). *Repeated block*: both bodies are cut into content-defined
+  chunks (gear rolling hash over the last 32 characters, cuts at ~1 in 64
+  positions, 16..512 characters), so a copy of a passage is cut like the
+  original wherever it starts, newline or not; the extra occurrences of
+  chunks already in the stored body must add up to ≥ 1 KiB and ≥ half of
+  it. MCP `edit_note` and REST `PUT /api/vaults/:id/notes/*` apply both
+  rules in `writeThroughCollab` before the body reaches the live document;
+  `allowGrowth: true` skips them. The collab relay's store applies the
+  repeated-block rule only, inside `updateNote`'s note lock (a human's
+  paste in the editor has no override channel; a doubled document is a
+  repeated block whatever its size). Create, import, restore, rename and
+  revert are not checked (no stored body, a backup, a deliberate restore).
+  A suspicious write is not applied: `refuseSuspiciousWrite` records it as
+  a `quarantine` revision with the full refused frontmatter and body and
+  throws `NoteWriteQuarantinedError` (409 over REST with `quarantined:
+  {revisionId, rule, previousBytes, nextBytes, repeatedBytes}`; an MCP
+  tool error naming the rule, the revision id and `allowGrowth`). A write
+  that continues a quarantine updates that revision instead of adding one:
+  the relay keeps the quarantine revision id per loaded `Y.Doc` (a live
+  document that stays doubled while someone types), so a document loaded
+  afresh after an unload always adds a new revision and a new failure; an
+  MCP/REST write continues only an identical retry of the newest quarantine
+  by the same actor. `recordRevision`'s
+  dedupe and revert's `revert` relabel skip quarantine rows. Restore one
+  with `revert_note` / the REST revert route.
 - Every mutation is attributed (`Actor {type: 'user'|'mcp'|'collab',
   id?}`), which is what makes `noteRevisions` a real audit trail across
   the UI, MCP, and live-collaboration write paths.
@@ -536,7 +570,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   drops the next message and closes the connection. `onStoreDocument`
   debounces (default 2s) persistence back through the same OKF write
   path used everywhere else; a write that fails validation is logged
-  and the last good file state is kept, never corrupted.
+  and the last good file state is kept, never corrupted. A store whose
+  body repeats a block of the stored note is quarantined (§5.3, #492):
+  row and file keep the previous body, the live document and its
+  editors keep the text (nobody is reverted or disconnected), the
+  `.crdt` state is saved as for every rejected store (on the next load
+  the file text wins over it), and a `collab-store` job failure is
+  reported; the next store without the repeat is written normally. A
+  store caused by a server body write through a direct connection
+  (`writeThroughCollab`, context `directWrite`; its caller ran the check
+  or passed `allowGrowth`) is not checked again.
 - **Size cap on the relay** (#491, `collab-size.ts`): ws refuses a frame
   over `noteTransportLimit()` before reading it (close 1009).
   `beforeSync` refuses a sync-step-2 or update message whose Yjs update
@@ -1151,8 +1194,10 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     (`syncGitRepository` and `syncLocalRepository` themselves, so every
     caller is covered, including an unsafe stored URL), `collab-store`
     (`collab-server.ts` `onStoreDocument`: a rejected `updateNote` or CRDT
-    save; the file keeps its last valid version), `backup` (the scheduled
-    run in `startBackupScheduler`; an on-demand one is a 500).
+    save; the file keeps its last valid version. A quarantined store
+    (#492) is reported as `NoteWriteQuarantinedError` with the rule as
+    `code`; stores that continue the same quarantine count as `repeated`),
+    `backup` (the scheduled run in `startBackupScheduler`; an on-demand one is a 500).
     `repeat: true` only increments `jobs[kind].repeated`: no total, no
     ring record, no log line, so a dead remote, an expired credential or a
     broken backup destination is one report, not one per retry. Set for a
@@ -1300,6 +1345,17 @@ server, an edit in flight between its row update and its file write also
 shows as a mismatch for a moment: re-run the check (or `-- --vault
 <uuid>`) before acting on a single mismatch, or run it while writes are
 stopped.
+
+**A quarantined write** (#492, §5.3): a `collab-store` report named
+`NoteWriteQuarantinedError` (monitoring, subject = vault id) or an agent's
+`quarantined` error. The note kept its previous body. The admin audit
+trail (`GET /api/admin/audit-trail`) lists the revision with action
+`quarantine` and the note's path; compare it with the note (`get_revision`
+/ `read_note`): if it is real work rather than duplicated text,
+`revert_note` to it (or edit the note with the part to keep); otherwise
+nothing is to be done. A live editor that still shows duplicated text
+keeps having its stores quarantined until the duplicate is deleted in the
+editor.
 
 **Rotate `CREDENTIALS_ENCRYPTION_KEY`**: there is no rotation
 mechanism. Changing it makes every previously stored repository
