@@ -7,11 +7,14 @@
  * and S2b backfills would do (classes, the Q5 conflict list, files that change
  * bytes, timings). It runs no migrations and writes nothing but the report
  * file named by `--report` (without it, the report goes to stdout), so it is
- * safe against a production copy. The backfill itself ships with S2a.
+ * safe against a production copy. The report file is created before the run
+ * (exclusively: an existing file or a symlink is refused, exit 2), so a bad
+ * path fails at once instead of after a long walk; a failed run removes it.
+ * The backfill itself ships with S2a.
  */
-import { writeFile } from 'node:fs/promises'
+import { open, rm, type FileHandle } from 'node:fs/promises'
 import { sql } from '../db/client.js'
-import { planStoreMigration } from '../notes/migrate-store.js'
+import { planStoreMigration, type StoreMigrationReport } from '../notes/migrate-store.js'
 
 const USAGE = 'usage: migrate-store --dry-run [--report <file>] [--vault <vault-id>]'
 const args = process.argv.slice(2)
@@ -35,9 +38,35 @@ if (
   process.exit(2)
 }
 
-const report = await planStoreMigration({ vaultId })
-const json = `${JSON.stringify(report, null, 2)}\n`
-const c = report.counts
+let report: FileHandle | undefined
+if (reportPath) {
+  try {
+    report = await open(reportPath, 'wx')
+  } catch (err) {
+    const { code, message } = err as NodeJS.ErrnoException
+    console.error(
+      code === 'EEXIST'
+        ? `--report ${reportPath} already exists (or is a symlink); name a new file`
+        : `cannot create --report ${reportPath}: ${message}`,
+    )
+    await sql.end()
+    process.exit(2)
+  }
+}
+
+let plan: StoreMigrationReport
+try {
+  plan = await planStoreMigration({ vaultId })
+} catch (err) {
+  if (report) {
+    await report.close()
+    await rm(reportPath!, { force: true })
+  }
+  await sql.end()
+  throw err
+}
+const json = `${JSON.stringify(plan, null, 2)}\n`
+const c = plan.counts
 const summary =
   `dry run: ${c.notes} notes (${c.liveNotes} live, ${c.trashedNotes} trashed); ` +
   `file consistent ${c.file.consistent}, differs ${c.file.differs} (conflicts, file wins), ` +
@@ -47,9 +76,10 @@ const summary =
   `mismatch ${c.crdt.mismatch}, undecodable ${c.crdt.undecodable}, missing ${c.crdt.missing}; ` +
   `files without row ${c.filesWithoutRow}, trash files without row ${c.trashFilesWithoutRow}, ` +
   `bins without note ${c.binsWithoutNote}; files that change bytes ${c.filesThatChangeBytes}; ` +
-  `${report.timingsMs.total} ms`
-if (reportPath) {
-  await writeFile(reportPath, json, { flag: 'wx' })
+  `${plan.timingsMs.total} ms`
+if (report) {
+  await report.writeFile(json)
+  await report.close()
   console.log(`${summary}\nreport: ${reportPath}`)
 } else {
   await new Promise<void>((resolve) => process.stdout.write(json, () => resolve()))

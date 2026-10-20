@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
+import { getTableConfig } from 'drizzle-orm/pg-core'
 import { buildApp } from '../src/app.js'
 import { sql } from '../src/db/client.js'
+import { jobs, noteCrdt, noteProjections, noteUpdates, projectedFiles } from '../src/db/schema.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // ADR-003 §4: migration 0021 is additive, so code written before it (every
@@ -125,5 +127,20 @@ describe('migration 0021 (ADR-003 store schema)', () => {
     await sql`insert into projected_files (vault_id, path, owner_kind, applied_hash) values (${vault!.id}, 'x/index.md', 'dir_index', 'h')`
     await sql`delete from vaults where id = ${vault!.id}`
     expect((await sql`select count(*)::int as n from projected_files where vault_id = ${vault!.id}`)[0]!.n).toBe(0)
+  })
+
+  it('names every key in the Drizzle model as 0021 does, so drizzle-kit generate finds no difference', async () => {
+    for (const table of [noteCrdt, noteUpdates, noteProjections, projectedFiles, jobs]) {
+      const config = getTableConfig(table)
+      const modelled = [
+        ...config.primaryKeys.map((pk) => pk.getName()),
+        ...(config.columns.some((c) => c.primary) ? [`${config.name}_pkey`] : []),
+        ...config.foreignKeys.map((fk) => fk.getName()),
+        ...config.columns.filter((c) => c.isUnique).map((c) => c.uniqueName!),
+      ].sort()
+      const actual = await sql<Array<{ conname: string }>>`
+        select conname from pg_constraint where conrelid = ${config.name}::regclass and contype in ('p', 'f', 'u')`
+      expect(modelled, config.name).toEqual(actual.map((r) => r.conname).sort())
+    }
   })
 })

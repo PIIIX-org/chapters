@@ -1298,8 +1298,10 @@ pre-0021 columns, so it runs on a production copy before the upgrade) and
 reports what the S2a/S2b backfill will do: per-note classes, the file ≠ row
 conflict list (Q5: the file wins; `row.updated_at` against the file mtime,
 both hashes), files that will change bytes, files with no row, sizes and
-timings. It writes only the `--report` file (refusing to overwrite one);
-without `--report` the JSON goes to stdout. Without `--dry-run` it exits 2:
+timings. It writes only the `--report` file, which it creates exclusively
+before the walk (an existing file, a symlink or an unwritable directory
+exits 2 at once; a failed run removes the file); without `--report` the
+JSON goes to stdout. Without `--dry-run` it exits 2:
 the backfill ships with S2a. Code: `server/src/notes/migrate-store.ts`.
 Operator guide: `docs/self-hosting/migration.md`.
 

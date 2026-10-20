@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
+import { drizzle } from 'drizzle-orm/postgres-js'
+import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
+import postgres from 'postgres'
 import * as Y from 'yjs'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
@@ -206,6 +209,18 @@ describe('planStoreMigration (ADR-003 §8 dry run)', () => {
     expect(conflicts[ids['file-newer']!]).toMatchObject({ newer: 'file', fileMtime: '2099-01-01T00:00:00.000Z' })
   })
 
+  it('skips a stray file directly under DATA_DIR/vaults when it scans every vault', async () => {
+    const stray = join(config.dataDir, 'vaults', '.DS_Store')
+    await writeFile(stray, 'Finder')
+    try {
+      const all = await planStoreMigration()
+      expect(all.notes.filter((n) => n.vaultId === vaultId)).toHaveLength(NAMES.length)
+      expect(all.missingRows.files).toContainEqual({ vaultId, path: 'guides/stray.md' })
+    } finally {
+      await rm(stray)
+    }
+  })
+
   it('reports files without a row, files that change bytes, counts and timings', () => {
     expect(report.missingRows).toEqual({
       files: [{ vaultId, path: 'guides/stray.md' }],
@@ -261,8 +276,38 @@ describe('migrate-store CLI', () => {
       })
       expect(await readdir(out)).toEqual(['report.json'])
       expect(await snapshot()).toEqual(before)
-      // never overwrites an existing file
-      await expect(run(['--dry-run', '--vault', vaultId, '--report', reportPath])).rejects.toThrow(/EEXIST/)
+    } finally {
+      await rm(out, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses an unusable --report path before the run, and removes the report of a failed run', async () => {
+    const out = await mkdtemp(join(tmpdir(), 'migrate-store-'))
+    try {
+      const existing = join(out, 'existing.json')
+      await writeFile(existing, 'keep me')
+      const link = join(out, 'link.json')
+      const target = join(out, 'target.json')
+      await symlink(target, link)
+      for (const [reportPath, message] of [
+        [existing, /already exists/],
+        [link, /already exists \(or is a symlink\)/],
+        [join(out, 'no-such-dir', 'report.json'), /cannot create --report .*ENOENT/],
+      ] as const) {
+        // exit 2 with no summary on stdout: it failed before walking anything
+        await expect(run(['--dry-run', '--vault', vaultId, '--report', reportPath])).rejects.toMatchObject({
+          code: 2,
+          stdout: '',
+          stderr: expect.stringMatching(message),
+        })
+      }
+      expect(await readFile(existing, 'utf8')).toBe('keep me')
+      expect((await readdir(out)).sort()).toEqual(['existing.json', 'link.json'])
+
+      // a run that fails after the report was created leaves no empty report behind
+      const failed = join(out, 'failed.json')
+      await expect(run(['--dry-run', '--vault', 'not-a-uuid', '--report', failed])).rejects.toMatchObject({ code: 1 })
+      expect((await readdir(out)).sort()).toEqual(['existing.json', 'link.json'])
     } finally {
       await rm(out, { recursive: true, force: true })
     }
@@ -270,5 +315,77 @@ describe('migrate-store CLI', () => {
 
   it('refuses to run without --dry-run (the backfill ships with S2a)', async () => {
     await expect(run(['--vault', vaultId])).rejects.toMatchObject({ code: 2, stderr: expect.stringMatching(/only --dry-run/) })
+  })
+})
+
+describe('migrate-store on a database migrated only through 0020 (a pre-upgrade production copy)', () => {
+  const name = `${new URL(config.databaseUrl).pathname.slice(1)}_pre0021`
+  const url = Object.assign(new URL(config.databaseUrl), { pathname: `/${name}` }).toString()
+  let dataDir: string
+  let migrations: string
+  let seeded: { live: string; trashed: string }
+
+  beforeAll(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'pre0021-data-'))
+    await sql.unsafe(`drop database if exists "${name}" with (force)`)
+    await sql.unsafe(`create database "${name}"`)
+    // Migrations 0000-0020 only: a copy of server/drizzle without 0021.
+    migrations = await mkdtemp(join(tmpdir(), 'pre0021-migrations-'))
+    const source = join(import.meta.dirname, '..', 'drizzle')
+    const journal = JSON.parse(await readFile(join(source, 'meta', '_journal.json'), 'utf8'))
+    journal.entries = journal.entries.filter((e: { idx: number }) => e.idx <= 20)
+    expect(journal.entries.at(-1).tag).toBe('0020_mcp_access_no_default')
+    await mkdir(join(migrations, 'meta'))
+    await writeFile(join(migrations, 'meta', '_journal.json'), JSON.stringify(journal))
+    for (const e of journal.entries) await copyFile(join(source, `${e.tag}.sql`), join(migrations, `${e.tag}.sql`))
+    const old = postgres(url, { max: 1, onnotice: () => {} })
+    try {
+      await migrate(drizzle(old), { migrationsFolder: migrations })
+      const [user] = await old`insert into users (email, password_hash) values ('pre0021@example.com', 'x') returning id`
+      const [vault] = await old`insert into vaults (name, owner_id) values ('pre0021', ${user!.id}) returning id`
+      const fm = { type: 'guides', status: 'draft' }
+      const [live] = await old`insert into notes (vault_id, type, name, path, frontmatter, body)
+        values (${vault!.id}, 'guides', 'live', 'guides/live', ${JSON.stringify(fm)}::jsonb, 'live body') returning id`
+      const [trashed] = await old`insert into notes (vault_id, type, name, path, frontmatter, body, deleted_at)
+        values (${vault!.id}, 'guides', 'gone', 'guides/gone', ${JSON.stringify(fm)}::jsonb, 'gone body', now()) returning id`
+      await old`insert into note_revisions (note_id, actor_type, action, frontmatter, body)
+        values (${live!.id}, 'user', 'create', ${JSON.stringify(fm)}::jsonb, 'live body')`
+      const file = join(dataDir, 'vaults', vault!.id, 'guides', 'live.md')
+      await mkdir(dirname(file), { recursive: true })
+      await writeFile(file, serializeNote({ frontmatter: fm as never, body: 'live body' }))
+      expect((await old`select to_regclass('public.note_projections') as t`)[0]!.t).toBeNull()
+      seeded = { live: live!.id, trashed: trashed!.id }
+    } finally {
+      await old.end()
+    }
+  })
+
+  afterAll(async () => {
+    await sql.unsafe(`drop database if exists "${name}" with (force)`)
+    await rm(migrations, { recursive: true, force: true })
+    await rm(dataDir, { recursive: true, force: true })
+  })
+
+  it('runs read-only, reports 0021 as not applied, classifies the notes and changes nothing', async () => {
+    const { live, trashed } = seeded
+    const reportPath = join(dataDir, 'report.json')
+    await promisify(execFile)(
+      process.execPath,
+      ['--import', 'tsx', 'src/scripts/migrate-store.ts', '--dry-run', '--report', reportPath],
+      { cwd: join(import.meta.dirname, '..'), env: { ...process.env, DATABASE_URL: url, DATA_DIR: dataDir } },
+    )
+    const report: StoreMigrationReport = JSON.parse(await readFile(reportPath, 'utf8'))
+    expect(report.database).toMatchObject({ readOnlyTransaction: true, schema0021Applied: false, storeMigratedAt: null })
+    const byId = Object.fromEntries(report.notes.map((n) => [n.noteId, n]))
+    expect(byId[live]).toMatchObject({ file: 'consistent', revision: 'consistent', crdt: 'missing', projection: 'applied' })
+    expect(byId[trashed]).toMatchObject({ trashed: true, file: 'missing', revision: 'none', projection: 'create' })
+    // still on 0020: the dry run applied no migration
+    const old = postgres(url, { max: 1 })
+    try {
+      expect((await old`select to_regclass('public.note_projections') as t`)[0]!.t).toBeNull()
+      expect((await old`select count(*)::int as n from drizzle.__drizzle_migrations`)[0]!.n).toBe(21)
+    } finally {
+      await old.end()
+    }
   })
 })

@@ -26,21 +26,48 @@ behaves changes yet.
 Run it on a **copy** of production first (the #703 rehearsal), then, if you
 like, on production itself: it is read-only either way.
 
+**Before the upgrade** (the usual case: the instance still runs the previous
+release). Check out the new release and build its image, but do not start
+it: the app applies 0021 when it boots. Run the dry run in a one-off
+container of the new image instead, next to the database that is already
+running:
+
 ```bash
-docker compose exec app pnpm migrate-store --dry-run --report /tmp/migration-dry-run.json
-docker compose cp app:/tmp/migration-dry-run.json ./migration-dry-run.json
+docker compose build app         # builds the new image; the running app is not replaced
+docker compose run --rm --no-deps app pnpm migrate-store --dry-run --report /data/elara/migration-dry-run.json
+```
+
+`run --rm` throws the container's own filesystem away when it exits, so the
+report must go onto the data volume (`/data/elara`, the `DATA_DIR`), not
+`/tmp`. It is then on the host wherever that volume lives (or copy it out of
+any running container that mounts the volume). The file sits next to
+`vaults/`, not inside it, so it does not show up in any vault.
+
+**After the upgrade** (0021 applied, the new app running):
+
+```bash
+docker compose exec app pnpm migrate-store --dry-run --report /data/elara/migration-dry-run.json
 ```
 
 - It reads every note (live and trashed) in one `REPEATABLE READ READ ONLY`
   transaction, in batches of 100, plus each note's `.md` file and `.crdt` bin.
   Postgres refuses any write inside that transaction.
-- It reads only columns that exist before 0021, so it also runs on an
-  instance still on the previous release, or a copy restored from it.
-- It writes one file: the `--report` path. It refuses to overwrite an
-  existing file. Without `--report` the JSON goes to stdout and a one-line
+- It reads only columns that exist before 0021, so it runs against a
+  database still on the previous release (the `run` form above), or a copy
+  restored from it.
+- It writes one file: the `--report` path. It creates that file before it
+  starts and refuses an existing file, a symlink or a directory it cannot
+  write to (exit code 2, nothing read); if the run itself fails, it removes
+  the file again. Without `--report` the JSON goes to stdout and a one-line
   summary to stderr. `--vault <uuid>` limits it to one vault.
 - It runs no migrations. Without `--dry-run` it exits with code 2: the
   migration itself ships with the next slice (S2a).
+- **On a live instance, edits made during the run show up as conflicts.**
+  The database is read from one snapshot taken at the start, but each file
+  is read when the walk reaches it, so a note saved in between looks like
+  `file ≠ row`. That is why the rehearsal runs on a copy. If you run it on
+  production, run it again before acting on a single conflict (the same
+  advice as for `check-notes`, backup.md §4).
 
 ## Reading the report
 

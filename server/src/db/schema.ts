@@ -4,6 +4,7 @@ import {
   bigserial,
   boolean,
   customType,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -413,29 +414,34 @@ const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
 })
 
 // ADR-003 §4 (migration 0021): the store's CRDT, update-log, projection and
-// job tables. Nothing reads or writes them before S2a/S2b.
+// job tables. Nothing reads or writes them before S2a/S2b. 0021 is hand-written
+// SQL, so primary, unique and foreign keys carry Postgres's default names
+// (`<table>_pkey`, `<table>_<col>_key`, `<table>_<col>_fkey`); the model names
+// them the same way so `drizzle-kit generate` finds nothing to change.
 
 /** Yjs state per note, keyed by note id (replaces `.crdt/<path>.bin` in S2b). */
-export const noteCrdt = pgTable('note_crdt', {
-  noteId: uuid('note_id')
-    .primaryKey()
-    .references(() => notes.id, { onDelete: 'cascade' }),
-  snapshot: bytea('snapshot').notNull(),
-  snapshotThrough: bigint('snapshot_through', { mode: 'number' }).notNull().default(0),
-  foldedThrough: bigint('folded_through', { mode: 'number' }).notNull().default(0),
-  foldedSeq: bigint('folded_seq', { mode: 'number' }).notNull(),
-  foldError: text('fold_error'),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-})
+export const noteCrdt = pgTable(
+  'note_crdt',
+  {
+    noteId: uuid('note_id').primaryKey(),
+    snapshot: bytea('snapshot').notNull(),
+    snapshotThrough: bigint('snapshot_through', { mode: 'number' }).notNull().default(0),
+    foldedThrough: bigint('folded_through', { mode: 'number' }).notNull().default(0),
+    foldedSeq: bigint('folded_seq', { mode: 'number' }).notNull(),
+    foldError: text('fold_error'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({ name: 'note_crdt_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete('cascade'),
+  ],
+)
 
 /** Yjs update log tail (collab journal + server updates), compacted into `note_crdt.snapshot`. */
 export const noteUpdates = pgTable(
   'note_updates',
   {
     id: bigserial('id', { mode: 'number' }).primaryKey(),
-    noteId: uuid('note_id')
-      .notNull()
-      .references(() => notes.id, { onDelete: 'cascade' }),
+    noteId: uuid('note_id').notNull(),
     update: bytea('update').notNull(),
     actorType: actorType('actor_type').notNull(),
     actorId: uuid('actor_id'),
@@ -444,16 +450,17 @@ export const noteUpdates = pgTable(
     rejectReason: text('reject_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('note_updates_note_idx').on(t.noteId, t.id)],
+  (t) => [
+    foreignKey({ name: 'note_updates_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete('cascade'),
+    index('note_updates_note_idx').on(t.noteId, t.id),
+  ],
 )
 
 /** Projection state per note ('file' | 'dir_index' | 'embedding'); the projector's work queue. */
 export const noteProjections = pgTable(
   'note_projections',
   {
-    noteId: uuid('note_id')
-      .notNull()
-      .references(() => notes.id, { onDelete: 'cascade' }),
+    noteId: uuid('note_id').notNull(),
     projection: text('projection').notNull(),
     targetSeq: bigint('target_seq', { mode: 'number' }).notNull(),
     appliedSeq: bigint('applied_seq', { mode: 'number' }).notNull().default(0),
@@ -464,7 +471,10 @@ export const noteProjections = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    primaryKey({ columns: [t.noteId, t.projection] }),
+    primaryKey({ name: 'note_projections_pkey', columns: [t.noteId, t.projection] }),
+    foreignKey({ name: 'note_projections_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete(
+      'cascade',
+    ),
     index('note_projections_pending')
       .on(t.projection, t.updatedAt)
       .where(sql`applied_seq < target_seq`),
@@ -475,9 +485,7 @@ export const noteProjections = pgTable(
 export const projectedFiles = pgTable(
   'projected_files',
   {
-    vaultId: uuid('vault_id')
-      .notNull()
-      .references(() => vaults.id, { onDelete: 'cascade' }),
+    vaultId: uuid('vault_id').notNull(),
     path: text('path').notNull(),
     ownerKind: text('owner_kind').notNull(),
     ownerId: uuid('owner_id'),
@@ -485,7 +493,13 @@ export const projectedFiles = pgTable(
     appliedSeq: bigint('applied_seq', { mode: 'number' }),
     writtenAt: timestamp('written_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.vaultId, t.path] }), index('projected_files_owner_idx').on(t.ownerId)],
+  (t) => [
+    primaryKey({ name: 'projected_files_pkey', columns: [t.vaultId, t.path] }),
+    foreignKey({ name: 'projected_files_vault_id_fkey', columns: [t.vaultId], foreignColumns: [vaults.id] }).onDelete(
+      'cascade',
+    ),
+    index('projected_files_owner_idx').on(t.ownerId),
+  ],
 )
 
 /** Outbox for work that outlives a note row or spans notes (rename refactor, file removal, #494). */
@@ -495,7 +509,7 @@ export const jobs = pgTable(
     id: bigserial('id', { mode: 'number' }).primaryKey(),
     kind: text('kind').notNull(),
     payload: jsonb('payload').notNull(),
-    idempotencyKey: text('idempotency_key').unique(),
+    idempotencyKey: text('idempotency_key').unique('jobs_idempotency_key_key'),
     attempts: integer('attempts').notNull().default(0),
     lastError: text('last_error'),
     leaseUntil: timestamp('lease_until', { withTimezone: true }),

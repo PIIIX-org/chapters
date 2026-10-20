@@ -283,7 +283,16 @@ export async function planStoreMigration(options: { vaultId?: string } = {}): Pr
   // Missing rows: files on disk that no note owns (§7 ownership: live note at
   // the path, trashed note by id, generated index.md for directories).
   const t2 = performance.now()
-  const dirs = vaultFilter === null ? await readdir(vaultsDir).catch(() => [] as string[]) : [vaultFilter]
+  // Only directories are vaults: a stray file under vaults/ (.DS_Store) is not one.
+  const dirs =
+    vaultFilter === null
+      ? (await readdir(vaultsDir, { withFileTypes: true }).catch((err: NodeJS.ErrnoException) => {
+          if (err.code === 'ENOENT') return []
+          throw err
+        }))
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name)
+      : [vaultFilter]
   for (const vaultId of dirs) {
     const root = join(vaultsDir, vaultId)
     const live = livePaths.get(vaultId) ?? new Set<string>()
