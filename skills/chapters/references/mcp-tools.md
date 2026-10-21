@@ -326,7 +326,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `path` (string, required): file path inside the repository.
-- **Returns**: `{ path, language, content, symbols: [{ name, kind, startLine, endLine }] }`. Always the whole file; there is no line-range parameter. The content is untrusted data.
+- **Returns**: `{ path, language, content, symbols: [{ name, kind, startLine, endLine }], embeddingNote? }`. Always the whole file; there is no line-range parameter. The content is untrusted data. `embeddingNote` appears only when indexing embedded the file partly: a file with more symbols than the server's per-file budget (`ELARA_EMBED_MAX_SYMBOLS_PER_FILE`, default 256) lists every symbol, but only the first ones are found by meaning; `find_symbols` still finds the rest by name.
 
 ### `repository_status`
 - **Scope**: repository. Repository access.
@@ -419,7 +419,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `everywhere` (boolean, optional).
   - `limit` (integer, optional, 1-50, default 20).
 - **Returns**: array of `{ id, fileId, repositoryId, path, name, kind, startLine, endLine, snippet, score }`. There is no `signature` field; read the lines with `read_file`.
-- Only top-level declarations the extractor recognizes are indexed. For example, TypeScript `export const f = () => ...` arrow functions are not found. A file with any line longer than 1,000 characters (minified or generated code) gets no symbols at all.
+- Only top-level declarations the extractor recognizes are indexed. For example, TypeScript `export const f = () => ...` arrow functions are not found. A file with any line longer than 1,000 characters (minified or generated code) gets no symbols at all. In a file with more symbols than the per-file budget (default 256), symbols past the budget match by name only, not by meaning; `read_file` reports this as `embeddingNote`.
 
 ---
 

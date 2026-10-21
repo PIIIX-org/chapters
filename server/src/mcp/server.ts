@@ -1384,7 +1384,14 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const file = await getRepositoryFile(target, path)
       if (!file) throw new McpToolError('file not found')
       const symbols = await listFileSymbols(file.id)
-      return { path: file.path, language: file.language, content: file.content, symbols }
+      return {
+        path: file.path,
+        language: file.language,
+        content: file.content,
+        symbols,
+        // Only when extraction embedded the file partly (#496 per-file budget).
+        ...(file.embeddingNote ? { embeddingNote: file.embeddingNote } : {}),
+      }
     },
   )
 
