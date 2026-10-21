@@ -53,7 +53,35 @@ Full tier adds `attachments`, `backup-restore`, `big-notes`, `browser`
 a new note at the old path, a pre-S2b tab across the upgrade, a re-seeded
 copy, rename then SIGKILL, a row changed by SQL), `crash-write`,
 `export-roundtrip`, `multilingual-search`, `restart-extraction`,
+`store-failpoints`, `store-migration`, `store-rollback`,
 `zz-fix-pretty-bundle`.
+
+The ADR-003 store tests (`lab/lib/store.ts` helpers):
+
+- `store-failpoints`: for each S2a boundary in `server/src/failpoints.ts`
+  the app is recreated with `ELARA_FAILPOINTS=<name>` (passed through by
+  `lab/docker-compose.lab.yml`; inert when unset), the operation that
+  reaches it runs, the process SIGKILLs itself there, the app is
+  recreated inert, and I1 (the write is in the row exactly when it
+  committed), I2 (a revision at every `seq`), I4 (`check-notes
+  --wait-idle --fail-on-pending`), I5 (no `*.tmp`) and the operation's
+  own effect are checked.
+- `store-migration`: builds the image from before S2a
+  (`LAB_PRE_S2A_REF`, default 87ccfad, the `dev` commit #828 was based on; `git
+  fetch` + `docker build`, cached per runner as `elara-lab-pre-s2a`),
+  runs it with the store bookkeeping reset, makes every damage class
+  (SIGKILL in old-code writes, unparseable file, hand edit, hand-formatted
+  file, row changed by SQL, orphan temp file), then boots the image under
+  test and checks the backfill report and the invariants; a second run
+  with a kill at `migration.mid-batch` must end in the same state.
+- `store-rollback`: `store-export-legacy` refused next to a running app,
+  run with the app stopped, the old image's edits (agent, collab, rename,
+  delete + restore), graceful stop, roll forward: I2, I4 and no new
+  `.conflicts/` entry.
+
+The image switch retags compose's `<project>-app` image and recreates the
+container without a build; each test puts the image under test back
+before it ends, so later tests run on it.
 
 `browser` is the only test that drives the web client. A PR that changes
 the client's collab code (`client/src/hooks/useCollabDoc*`,
@@ -85,6 +113,24 @@ its long parts). A newer run on the same ref cancels the older one; the
 nightly has its own concurrency group, so a dispatch or PR on `dev` never
 cancels it. `plan` and `lab` are **required status checks** on `dev` and
 `prod` (#574; `lab` is skipped, which passes, when `plan` picks no tier).
+
+### Real-model job (`real-model`, #851)
+
+The unit suite never loads the real embedding model. The `real-model` job
+runs `server/test/embedding-worker.test.ts` with `ELARA_REAL_MODEL_TESTS=1`
+on the nightly and on a full-tier dispatch: the bge-small model embeds a
+large file off the main thread and must give the vectors of the
+main-thread pipeline. The model directory is cached with `actions/cache`
+under a key of the model id plus the `pnpm-lock.yaml` hash (falling back
+to the last cache of the same model), and saved only after a run where
+the test passed, so a cut download never becomes the cache.
+A transient download failure (network error, HTTP 408, 429 or 5xx)
+reports the test as skipped with its reason. Anything else fails the job
+and the nightly alert reports it: a 404 or 401/403 (wrong model id or
+missing file, which would break production local embedding too), a
+vector mismatch, a blocked event loop. The rule is
+`server/test/fixtures/model-download.ts`, unit-tested by
+`server/test/model-download.test.ts`.
 
 ### Nightly alert (`nightly-alert` job, #706)
 
