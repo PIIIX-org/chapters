@@ -154,6 +154,31 @@ jobs:
             type=semver,pattern=v{{version}}
             type=sha,format=short
 
+      # Operators run `pnpm <script>` inside the app container
+      # (docs/self-hosting). Build the image first, from the same cache as
+      # the push below (a cached install layer is what made pnpm reinstall
+      # every dependency before a script, #872), and run one script with no
+      # network before anything is pushed. The push build reuses these
+      # layers from the builder.
+      - name: Build the image for the offline script check
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: elara-offline-check:ci
+          cache-from: type=gha
+
+      - name: Operator scripts run offline (#872)
+        run: |
+          set -euo pipefail
+          out=$(docker run --rm --network none elara-offline-check:ci timeout 120 pnpm check-notes --help 2>&1) || true
+          echo "$out"
+          if ! grep -q '^usage: check-notes' <<<"$out"; then
+            echo "::error::'pnpm check-notes --help' did not print its usage within 120 s without a network: pnpm in the image tries to install before running scripts (#872)."
+            exit 1
+          fi
+
       - uses: docker/build-push-action@v7
         with:
           context: .

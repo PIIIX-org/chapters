@@ -79,6 +79,19 @@ ENV NODE_ENV=production
 ENV DATA_DIR=/data/elara
 ENV LOCAL_REPOS_ROOT=/data/elara/local-repos
 
+# Operator commands are `pnpm <script>` (`docker compose exec app pnpm
+# check-notes`, `pnpm migrate-store`, `pnpm restore-backup`, ...). pnpm 11
+# checks the dependencies before every script and, by default, runs a full
+# workspace install first when it thinks they are stale — from the
+# registry, so offline it hangs (#872). Here that check is wrong: when the
+# install layer comes from cache, `COPY server` gives server/package.json a
+# newer mtime than the install recorded, and the closer look that follows
+# fails on the `adm-zip` override (it compares the manifest's `^0.6.1`
+# with the lockfile's overridden `>=0.6.1`). This image's dependencies are
+# fixed when it is built, so nothing may install at run time. `false` is
+# also what pnpm sets for the scripts it runs itself.
+ENV pnpm_config_verify_deps_before_run=false
+
 # The commit this image was built from, reported by `/health` as `version`
 # (#583). publish.yml passes it; a plain `docker compose build` leaves it
 # empty and `/health` says null. Declared after every install and copy so a

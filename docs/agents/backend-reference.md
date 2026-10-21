@@ -1611,6 +1611,17 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     rather than `pnpm start`, so the server is PID 1 and `SIGTERM`
     reaches the shutdown handler in `index.ts` that flushes note edits
     still inside the collab store debounce.
+  - Sets `pnpm_config_verify_deps_before_run=false`, so the operator
+    commands (`pnpm check-notes`, `pnpm migrate-store`,
+    `pnpm restore-backup`, ...) run straight away and offline (#872).
+    pnpm 11's default checks the dependencies before every script and
+    installs the whole workspace from the registry when it thinks they
+    are stale. In an image built on a cached install layer it always
+    did: `COPY server` makes `server/package.json` newer than the
+    install's record, and the closer check then trips over the `adm-zip`
+    override (manifest `^0.6.1`, lockfile `>=0.6.1`). `publish.yml` runs
+    `pnpm check-notes --help` with `--network none` in the freshly built
+    image before it pushes.
   - `HEALTHCHECK` hits `/health` with `node -e` + `fetch` (no curl in
     `node:*-slim`, and an apt layer for it is not worth it).
   - Exposes **`3000` only**. The Yjs relay rides Fastify's own HTTP

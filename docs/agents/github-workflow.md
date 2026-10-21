@@ -181,7 +181,10 @@ passed (#573). The push to `prod` starts **CI**, and CI's `publish` job
 the same run, on the same commit. If `checks` fails, `publish` is skipped
 and the hosted instance stays on the previous image — fix on `dev` and
 promote again. (Before this, publish ran on every `prod` push regardless:
-promotion #334 shipped an image while its CI failed on lint.)
+promotion #334 shipped an image while its CI failed on lint.) Before it
+pushes, `publish` loads the image on the runner and runs
+`pnpm check-notes --help` in it with `--network none`; if pnpm tries to
+install dependencies first (#872), nothing is pushed.
 
 After the promotion, confirm the CI run on `prod` ended with `publish`
 succeeded (`gh run list --workflow ci.yml --branch prod`, then
