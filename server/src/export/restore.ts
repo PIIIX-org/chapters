@@ -521,19 +521,21 @@ async function planRestore(contents: BackupContents): Promise<PreparedRestore> {
 }
 
 /**
- * Revisions keep their archive `ord`, the order they were recorded in (#825).
- * An archive made before `ord` existed has none: its revisions are numbered
- * in (created_at, id) order, the order that code listed them in.
+ * Rows of a sequence-ordered table keep their archive number in `key`, the
+ * order they were recorded in (revisions' `ord`, #825; security events'
+ * `seq`, #858). An archive made before that column existed has none: its rows
+ * are numbered after the archive's highest, in (created_at, id) order, the
+ * order that code listed them in.
  */
-function numberRevisions(rows: Row[]): Row[] {
-  const unnumbered = rows.filter((r) => r.ord == null)
+function numberRows(rows: Row[], key: string): Row[] {
+  const unnumbered = rows.filter((r) => r[key] == null)
   if (unnumbered.length === 0) return rows
-  let next = rows.reduce((top, r) => (r.ord == null ? top : Math.max(top, Number(r.ord))), 0)
+  let next = rows.reduce((top, r) => (r[key] == null ? top : Math.max(top, Number(r[key]))), 0)
   unnumbered.sort((a, b) => {
     const [x, y] = [a.createdAt as Date, b.createdAt as Date]
     return x.getTime() - y.getTime() || (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0)
   })
-  for (const r of unnumbered) r.ord = ++next
+  for (const r of unnumbered) r[key] = ++next
   return rows
 }
 
@@ -573,7 +575,7 @@ async function applyRestore(contents: BackupContents, { inserts, writes }: Prepa
     await db.transaction(async (tx) => {
       for (const spec of BACKUP_TABLES) {
         const restored = inserts.get(spec.name)!.map((row) => (spec.onRestore ? spec.onRestore(row) : row))
-        const rows = spec.name === 'note_revisions' ? numberRevisions(restored) : restored
+        const rows = spec.sequence ? numberRows(restored, spec.sequence) : restored
         if (rows.length === 0) continue
         const columns = backupColumns(spec)
         const target = primaryKeyOf(spec.table).map((k) => columns[k]!)
@@ -586,10 +588,14 @@ async function applyRestore(contents: BackupContents, { inserts, writes }: Prepa
             .onConflictDoNothing({ target })
         }
       }
-      // New revisions are numbered after the restored ones (#825).
-      await tx.execute(
-        sql`select setval(pg_get_serial_sequence('note_revisions', 'ord'), max(ord)) from note_revisions having max(ord) is not null`,
-      )
+      // New rows are numbered after the restored ones (#825, #858), the restore's own event below too.
+      for (const spec of BACKUP_TABLES) {
+        if (!spec.sequence) continue
+        const column = backupColumns(spec)[spec.sequence]!.name
+        await tx.execute(
+          sql`select setval(pg_get_serial_sequence(${spec.name}, ${column}), max(${sql.identifier(column)})) from ${sql.identifier(spec.name)} having max(${sql.identifier(column)}) is not null`,
+        )
+      }
       // Derived from the bodies, as on every save.
       const links = newNotes.flatMap((n) => extractWikilinks(String(n.body)).map((targetPath) => ({ sourceNoteId: String(n.id), targetPath })))
       for (let i = 0; i < links.length; i += 10_000) {

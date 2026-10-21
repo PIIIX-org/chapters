@@ -271,6 +271,11 @@ export const emailTokens = pgTable(
   (t) => [index('email_tokens_user_idx').on(t.userId, t.purpose)],
 )
 
+/**
+ * Migration 0027 (#858): `seq` is the order events were recorded in (a
+ * sequence, not the clock: `created_at` can step back or tie); the admin
+ * security-event log orders by it.
+ */
 export const securityEvents = pgTable(
   'security_events',
   {
@@ -284,8 +289,9 @@ export const securityEvents = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    seq: bigserial('seq', { mode: 'number' }).notNull(),
   },
-  (t) => [index('security_events_created_idx').on(t.createdAt)],
+  (t) => [index('security_events_created_idx').on(t.createdAt), index('security_events_seq_idx').on(t.seq)],
 )
 
 export const notifications = pgTable(

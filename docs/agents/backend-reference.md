@@ -1213,6 +1213,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   error's message carries the query parameters).
   Ids are the archive's — a true restore, not an import. Rows are
   inserted as stored, not re-validated through the OKF write path.
+  Revisions keep their `ord` and security events their `seq` (the
+  order they were recorded in, #825, #858; the admin security-event log
+  lists by `seq`, newest first); an archive from before those columns
+  gets them in (created_at, id) order, and the sequences are advanced
+  past the restored rows before the `instance_restored` event.
   Restored MCP and sync tokens keep working (their hashes are
   restored). Restored repositories get `last_synced_at`,
   `last_synced_commit` and `last_webhook_at` cleared so the next poll

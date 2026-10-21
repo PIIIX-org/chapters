@@ -102,10 +102,14 @@ export function adminDashboardRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
+      // Newest first in the order events were recorded (`seq`, #858):
+      // `created_at` follows the database clock, which steps back and ties,
+      // so it would put older events on top and let offset pages repeat or
+      // skip events.
       return db
         .select()
         .from(securityEvents)
-        .orderBy(desc(securityEvents.createdAt))
+        .orderBy(desc(securityEvents.seq))
         .limit(req.query.limit ?? 50)
         .offset(req.query.offset ?? 0)
     },
