@@ -23,10 +23,14 @@ mkdir -p ./backups/${BACKUP_DATE}
 # 2. Dump the PostgreSQL database
 docker compose exec -T db pg_dump -U ${POSTGRES_USER:-elara} ${POSTGRES_DB:-elara} > ./backups/${BACKUP_DATE}/chapters-db.sql
 
-# 3. Archive the files volume (raw markdown files & vaults)
+# 3. Only if you added roles of your own (e.g. a read-only reporting user): dump the roles too.
+#    The file holds each role's password hash; section 2 step 4 sets the app role's password back to the .env value after loading it.
+docker compose exec -T db pg_dumpall -U ${POSTGRES_USER:-elara} --globals-only > ./backups/${BACKUP_DATE}/globals.sql
+
+# 4. Archive the files volume (raw markdown files & vaults)
 docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/${BACKUP_DATE}:/backup alpine tar czf /backup/chapters-data.tar.gz -C /data .
 
-# 4. Save your encryption key and configuration (DO NOT commit to public repos)
+# 5. Save your encryption key and configuration (DO NOT commit to public repos)
 cp .env ./backups/${BACKUP_DATE}/env-backup
 ```
 
@@ -45,22 +49,36 @@ Add a nightly cron job on your host (`crontab -e`):
 To restore Chapters onto a fresh machine or server:
 
 ```bash
-# 1. Start the database service first
-docker compose up -d db
-docker compose exec db pg_isready
-
-# 2. Restore PostgreSQL database
-docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} < ./backups/<TIMESTAMP>/chapters-db.sql
-
-# 3. Restore the data volume (raw markdown notes)
-docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/<TIMESTAMP>:/backup alpine tar xzf /backup/chapters-data.tar.gz -C /data
-
-# 4. Restore your .env configuration (ensuring CREDENTIALS_ENCRYPTION_KEY matches)
+# 1. Restore your .env configuration first (ensuring CREDENTIALS_ENCRYPTION_KEY matches): the database takes
+#    POSTGRES_USER and POSTGRES_PASSWORD from it when its volume is created, and the app connects with the same values
 cp ./backups/<TIMESTAMP>/env-backup .env
 
-# 5. Start the full application
+# 2. Start the database service first, and wait until it accepts connections
+docker compose up -d --wait db
+docker compose exec db pg_isready
+
+# 3. Only if the backup has a globals.sql (section 1 step 3): load the roles. "role ... already exists" is expected
+docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d postgres < ./backups/<TIMESTAMP>/globals.sql
+
+# 4. Set the app role's password to the POSTGRES_PASSWORD in .env (run it even without a globals.sql)
+docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -v role="$POSTGRES_USER" -v pw="$POSTGRES_PASSWORD"' <<'SQL'
+ALTER ROLE :"role" PASSWORD :'pw';
+SQL
+
+# 5. Restore PostgreSQL database
+docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} < ./backups/<TIMESTAMP>/chapters-db.sql
+
+# 6. Restore the data volume (raw markdown notes)
+docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/<TIMESTAMP>:/backup alpine tar xzf /backup/chapters-data.tar.gz -C /data
+
+# 7. Check that the password in .env works over the network, as the app connects (prints 1)
+docker compose exec -T db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h db -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT 1"'
+
+# 8. Start the full application
 docker compose up -d
 ```
+
+Step 4 is why the app connects on its first boot. A `globals.sql` from `pg_dumpall --globals-only` sets every role's password to the one it had on the backed-up instance (`ALTER ROLE ... PASSWORD`), and a database volume keeps the password it was first created with (a later change to `POSTGRES_PASSWORD` in `.env` is ignored). Either way the role's password can differ from the `.env` the app reads, and the app exits on `password authentication failed` (SQLSTATE `28P01`) while the db reports healthy. Step 4 reads the user and password from the db container's environment, so the password is not typed on the host or kept in your shell history. Roles of your own from `globals.sql` keep the passwords they had. Step 7 connects over the network on purpose: inside the db container, connections to `localhost` are trusted and succeed with any password.
 
 ---
 
