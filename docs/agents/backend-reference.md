@@ -274,14 +274,22 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
 - **Code-only rollback**: `store-export-legacy` (`notes/store-export.ts`)
   with no server running: exclusive lock; refused while the backfill has
   failures (`store_migrated_at` unset: those notes' files must still win);
-  reconciliation; every `file`/`dir_index` projection verified against the
+  reconciliation; every unfolded collab tail folded (boot steps 4-5);
+  every `file`/`dir_index` projection verified against the
   disk (offline, so always: a file an unclean stop truncated is rewritten)
   and every store job (also leased, out of attempts or failed ones) run
   synchronously (the per-note `backfill` marker rows are not projections
-  and are left alone); the CLI loads `store.ts` so the rename refactor
-  runner is registered; a report
+  and are left alone); then `.crdt/<path>.bin` for every live note with CRDT
+  state (`exportCrdtBins`, sync/collab-backfill.ts: `note_crdt` ⊕ the
+  non-rejected tail, atomically, the layout the relay before S2b reads),
+  written only where that state equals the row, so the old relay opens it
+  as it is and never rebuilds; a note whose state differs (a fold that
+  failed, `fold_error`) gets none and is listed in `bins.skipped`; the CLI
+  loads `store.ts` so the rename refactor runner is registered; a report
   `DATA_DIR/store-export-legacy-<utc>.json`; exit 0 only when nothing is
-  pending. Roll-forward is the boot above. Operator procedure:
+  pending and no fold or bin failed. Roll-forward is the boot above (it
+  merges the bins the old relay wrote from the exported ones: shared
+  history). Operator procedure:
   `docs/self-hosting/backup.md` §5.
 - **Failpoints** (`failpoints.ts`): `ELARA_FAILPOINTS=<name>[,…]` SIGKILLs
   the process at that store boundary; inert when unset. The lab's
