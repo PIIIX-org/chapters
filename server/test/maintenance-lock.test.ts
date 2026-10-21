@@ -6,8 +6,10 @@ import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
+import { sql } from 'drizzle-orm'
+import { db } from '../src/db/client.js'
 import { createNote, getLiveNote } from '../src/notes/store.js'
-import { StoreBusyError } from '../src/notes/store-tx.js'
+import { StoreBusyError, setStoreMigrationPending } from '../src/notes/store-tx.js'
 import {
   holdInstanceLock,
   INSTANCE_LOCK_KEY,
@@ -145,6 +147,48 @@ describe('instance maintenance lock (§5.1, §9)', () => {
     await waitFor(() => !writesPaused())
     await waitFor(async () => (await getLiveNote(vaultId, note.path))?.body === 'base typed', 15_000)
     await waitFor(() => !provider.hasUnsyncedChanges)
+  }, 30_000)
+
+  it('while paused, a note the migration has not processed is refused at authentication (permission-denied), never with the pause close', async () => {
+    const migrated = await createNote(vaultId, { type: 'docs', name: 'paused-migrated', body: 'migrated' })
+    const unmigrated = await createNote(vaultId, { type: 'docs', name: 'paused-unmigrated', body: 'unmigrated' })
+    await db.execute(sql`DELETE FROM note_projections WHERE note_id = ${unmigrated.id} AND projection = 'backfill'`)
+    await hold('shared', { backoffMs: 1500 })
+    await dropLockConnection()
+    await waitFor(() => writesPaused())
+    setStoreMigrationPending(true)
+    try {
+      const closes: Record<string, string[]> = { migrated: [], unmigrated: [] }
+      let refused = ''
+      const open = (path: string, key: 'migrated' | 'unmigrated') => {
+        const provider = new HocuspocusProvider({
+          url: `ws://127.0.0.1:${port}/collab`,
+          name: `${vaultId}/${path}`,
+          token,
+          document: new Y.Doc(),
+          onClose: ({ event }) => void closes[key]!.push(event.reason),
+          onAuthenticationFailed: ({ reason }) => {
+            if (key === 'unmigrated') refused = reason
+          },
+        })
+        providers.push(provider)
+        return provider
+      }
+      const blocked = open(unmigrated.path, 'unmigrated')
+      const editor = open(migrated.path, 'migrated')
+      await waitFor(() => refused !== '' && editor.isSynced)
+      expect(refused).toBe('permission-denied')
+      expect(blocked.isSynced).toBe(false)
+      expect(closes.unmigrated).not.toContain('store-paused')
+      // The migrated note authenticates and syncs (reads are not paused); its first update gets the pause close.
+      editor.document.getText('body').insert(0, 'typed ')
+      await waitFor(() => closes.migrated.includes('store-paused'))
+      blocked.destroy()
+    } finally {
+      setStoreMigrationPending(false)
+    }
+    await waitFor(() => !writesPaused())
+    await waitFor(async () => (await getLiveNote(vaultId, migrated.path))?.body === 'typed migrated', 15_000)
   }, 30_000)
 
   it('exits (stays paused) only when an exporter holds the exclusive form', async () => {
