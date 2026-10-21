@@ -317,7 +317,8 @@ export async function appendUpdate(
   actor: UpdateActor,
   detail?: Record<string, unknown>,
 ): Promise<boolean> {
-  if (!updateHasContent(update)) return false
+  // Nothing the state lacks (S3: typing is already logged by the relay; a full delete set alone is not news): nothing stored.
+  if (!updateHasContent(update) || Y.snapshotContainsUpdate(Y.snapshot(crdt.doc), update)) return false
   await tx.insert(noteUpdates).values({
     noteId: crdt.noteId,
     update: Buffer.from(update),

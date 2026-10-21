@@ -2060,7 +2060,7 @@ export async function appendCollabUpdate(vaultId: string, noteId: string, update
 const pendingAppends = new Map<string, number>()
 const MAX_PENDING_APPENDS = 256
 
-/** A logged collab update: its id, and the note's previous non-rejected update id (what an open document's cached state must be at to advance to it). */
+/** A logged collab update: its id, and the note's previous stored id (its last non-rejected update, or `snapshot_through` after a compaction): what an open document's cached state must be at to advance to it. */
 export interface LoggedUpdate {
   id: number
   previous: number
@@ -2076,7 +2076,9 @@ async function appendLogged(vaultId: string, noteId: string, update: Uint8Array,
       if (!note) return null
       const id = await logUpdate(tx, noteId, update, actor, { kind: 'collab' })
       const [prev] = (await tx.execute(sql`
-        SELECT coalesce(max(id), 0) AS id FROM note_updates WHERE note_id = ${noteId} AND id < ${id} AND rejected_at IS NULL`)) as unknown as Array<{
+        SELECT greatest(
+          (SELECT coalesce(max(id), 0) FROM note_updates WHERE note_id = ${noteId} AND id < ${id} AND rejected_at IS NULL),
+          (SELECT coalesce(max(snapshot_through), 0) FROM note_crdt WHERE note_id = ${noteId})) AS id`)) as unknown as Array<{
         id: string | number
       }>
       return { id, previous: Number(prev!.id) }
