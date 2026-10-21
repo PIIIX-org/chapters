@@ -85,7 +85,8 @@ async function deliverWebhook(repositoryId: string): Promise<void> {
 }
 
 const syncJobs = () => metricsSnapshot().jobs.sync
-const recordsFor = (repositoryId: string) => metricsSnapshot().errors.filter((e) => e.subjectId === repositoryId)
+const recordsFor = (repositoryId: string) =>
+  metricsSnapshot().errors.filter((e) => e.type === 'job' && e.subjectId === repositoryId)
 const syncStatus = async (repositoryId: string) =>
   (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]!.syncStatus
 
