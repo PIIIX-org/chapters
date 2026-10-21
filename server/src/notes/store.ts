@@ -704,12 +704,12 @@ export async function readLiveNote(vaultId: string, path: string): Promise<ReadN
   const resolved = resolveNotePath(path)
   const seen = await readStored(vaultId, resolved.fullPath)
   if (!seen) return null
-  if (!liveDocumentOf(seen.id)) return presented(seen)
+  // S3: acked typing is in note_updates even when no editor has the note open (a tab closed before its store, a crash).
+  if (!liveDocumentOf(seen.id) && !(await foldPending(seen.id))) return presented(seen)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const row = await readStored(vaultId, resolved.fullPath)
     if (!row) return null
     const fold = foldSource(row.id)
-    if (!fold) return presented(row)
     try {
       let folded
       try {
@@ -733,6 +733,16 @@ export async function readLiveNote(vaultId: string, path: string): Promise<ReadN
       releaseFold(fold)
     }
   })
+}
+
+/** Whether note `noteId` has CRDT work a read must fold first (§6): an unfolded, non-rejected tail, or a row past `folded_seq`. */
+async function foldPending(noteId: string): Promise<boolean> {
+  const rows = (await db.execute(sql`
+    SELECT 1 FROM note_crdt c JOIN notes n ON n.id = c.note_id
+    WHERE c.note_id = ${noteId}
+      AND (n.seq > c.folded_seq OR EXISTS (SELECT 1 FROM note_updates u
+        WHERE u.note_id = c.note_id AND u.id > c.folded_through AND u.rejected_at IS NULL))`)) as unknown as unknown[]
+  return rows.length > 0
 }
 
 /** readLiveNote could not store the open editors' typing first (the store is busy): nothing was read. HTTP 503. */

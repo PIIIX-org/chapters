@@ -97,11 +97,6 @@
     },
     {
       "test": "collab-duplication",
-      "check": "S16 server-acknowledged collab edit survives SIGKILL after the tab closed",
-      "issue": 487
-    },
-    {
-      "test": "collab-duplication",
       "check": "S18 injected stale .crdt, stale ydoc (tab kept open): no duplicated text",
       "issue": 488
     },
@@ -115,11 +110,6 @@
       "match": "^kill \\S+: \\.crdt bin = file for every note written in the round$",
       "issue": 486,
       "intermittent": "a round only leaves a stale .crdt bin when the SIGKILL lands between the relay's note write and its .crdt write"
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: acked collab edit of a closed tab survives SIGKILL$",
-      "issue": 487
     },
     {
       "test": "crash-write",

@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
 import { FailpointError, setFailpointHandler, type Failpoint } from '../src/failpoints.js'
-import { foldPendingCollab, getLiveNote } from '../src/notes/store.js'
+import { foldPendingCollab, getLiveNote, readLiveNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
@@ -134,6 +134,27 @@ describe('an acknowledged collab edit is in Postgres at the ack (#487)', () => {
     const [revision] = (await db.execute(sql`
       SELECT body FROM note_revisions WHERE note_id = ${note.id} ORDER BY ord DESC LIMIT 1`)) as unknown as Array<{ body: string }>
     expect(count(revision!.body, marker)).toBe(1)
+  }, 30_000)
+
+  it('read_note folds the acked typing of a tab that closed before any store (§6)', async () => {
+    const note = await create('read-after-kill', 'Before the kill.\n')
+    const { provider, text } = await open(note.id)
+    const marker = '@S3-READ-AFTER-KILL@'
+    await typeAcked(provider, text, marker)
+    let foldsCut = 0
+    setFailpointHandler((name) => {
+      if (name !== 'collab.after-ack-before-fold') return
+      foldsCut++
+      throw new FailpointError(name)
+    })
+    provider.destroy()
+    await waitFor(() => foldsCut > 0)
+    setFailpointHandler(null)
+    collab.hocuspocus.documents.delete(`${vaultId}/~${note.id}`)
+    expect(count(await rowBody(note.path), marker)).toBe(0)
+    // No editor has the note open: the read still folds the log first, and serves (and stores) the typing.
+    expect(count((await readLiveNote(vaultId, note.path))?.body, marker)).toBe(1)
+    expect(count(await rowBody(note.path), marker)).toBe(1)
   }, 30_000)
 
   it('a crash after the log commit and before the ack: the client resends, the text lands once', async () => {

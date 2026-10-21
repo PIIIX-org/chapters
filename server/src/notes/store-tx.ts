@@ -310,12 +310,12 @@ export async function applyRowChange(
     return { row: current, changed: false }
   }
   const frontmatterSrc = orderKeys(options.frontmatterOrder ?? current.frontmatterSrc, frontmatter)
-  const [updated] = await tx
-    .update(notes)
-    .set({ frontmatter, body, path, type, name, deletedAt, updatedAt: new Date() })
-    .where(eq(notes.id, current.id))
-    .returning(storedColumns)
-  await tx.execute(sql`UPDATE notes SET frontmatter_src = ${JSON.stringify(frontmatterSrc)}::json WHERE id = ${current.id}`)
+  // One UPDATE: Postgres recomputes the generated `fts` column on every update of the row, which on a big note is most of a write's cost.
+  await tx.execute(sql`
+    UPDATE notes SET frontmatter = ${JSON.stringify(frontmatter)}::jsonb, body = ${body}, path = ${path}, type = ${type}, name = ${name},
+      deleted_at = ${deletedAt ? new Date(deletedAt).toISOString() : null}::timestamptz, updated_at = now(), frontmatter_src = ${JSON.stringify(frontmatterSrc)}::json
+    WHERE id = ${current.id}`)
+  const [updated] = await tx.select(storedColumns).from(notes).where(eq(notes.id, current.id))
   const row = { ...toStored(updated!), frontmatterSrc }
   const changed = row.seq !== current.seq
   await insertRevision(tx, row.id, changed ? row.seq : null, revision, { frontmatter, body })
