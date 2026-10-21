@@ -188,7 +188,7 @@ lasting default on a table old code writes, nothing dropped or renamed).
 | `notes.seq` | `bigint NOT NULL DEFAULT 1`; the `notes_bump_seq` BEFORE UPDATE trigger adds 1 whenever `body`, `frontmatter`, `path` or `deleted_at` changes, so old code bumps it too. Becomes the note's `rev` (#477) |
 | `notes.frontmatter_src` | `json` copy of the frontmatter in its original key order (jsonb reorders keys); for rendering files and answering reads |
 | `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), idempotent writes (`note_revisions_note_idem`, #477), actor detail (#403); null for revisions written by current code |
-| `note_crdt` | Yjs snapshot per note id (replaces `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
+| `note_crdt` | Yjs snapshot per note id (replaced `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
 | `note_projections` | per note and projection (`file`/`dir_index`/`embedding`): `target_seq`, `applied_seq`, `index_version`, lease and error columns; `note_projections_pending` indexes the work queue |
 | `projected_files` | per `(vault, path)`: owner (`note`/`trash`/`dir_index`), `applied_hash` of the bytes last written, `applied_seq` |
@@ -200,6 +200,36 @@ lasting default on a table old code writes, nothing dropped or renamed).
 S2a: REST and MCP return note and revision rows whole, so declaring them
 would add fields to responses. The S1 dry run is
 `pnpm -C server migrate-store --dry-run` (§10).
+
+**S2b: the relay's state is `note_crdt` + `note_updates`**
+(`sync/note-crdt.ts`). A note's document is `snapshot ⊕` its non-rejected
+updates with `id > snapshot_through`. Every store write that changes a note
+with CRDT state appends its change as one Yjs update in the same
+transaction (`folded_seq` follows `notes.seq`); the relay's store appends
+the editors' delta and folds it; unload and `purge_revision` compact
+(snapshot re-encoded, compacted updates deleted). A note with no state is
+seeded on first load deterministically (`seedClientId`: the first 4 bytes of
+`sha256("elara-seed/1\0" ‖ noteId ‖ "\0" ‖ body ‖ "\0" ‖ canonicalJSON(frontmatter))`;
+later changes use the process's own client id), so two seeds of the same input merge. A load,
+store or write that finds `notes.seq > folded_seq` (the row changed outside
+the store) first merges that change into the state three-way against the
+revision at `folded_seq` (by lines; on an overlap the typing stays) and
+never rebuilds the text (#488). There are no `.crdt` bins any more.
+
+**S2b backfill and boot** (`sync/collab-backfill.ts`, `bootCollab` in
+`index.ts` before `listen`, after the S2a backfill): while
+`instance_state.collab_migrated_at` is null, each live note's
+`.crdt/<path>.bin` is attached when its text equals the row, the file or a
+revision (with a diff to the row's text on top) and otherwise moved to
+`vaults/<id>/.migration/<date>/bins/`; one transaction per note, so a rerun
+resumes. The finish sets the marker, renames each vault's `.crdt/` to
+`.crdt.pre-adr-003/` (kept for a code-only rollback) and writes
+`DATA_DIR/collab-migration-report-<time>.json`. Afterwards, a `.crdt/` left by
+older code after a rollback is merged into `note_crdt` as Yjs updates and
+moved to `.crdt.rollback-<time>/`. Every boot then runs ADR §7 steps 4-5:
+merge rows changed outside the store (`notes.seq > folded_seq`), then fold
+every pending tail, each note in its own transaction (a failure sets
+`fold_error` and boot goes on).
 
 ### Repositories (codebase mapping)
 
@@ -822,7 +852,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 ### 5.7 Real-time collaboration (`server/src/sync/`)
 
 - **`collab-server.ts`**: the Hocuspocus relay. Document name is
-  `"<vaultId>/<path>"`. `onAuthenticate` requires live `edit` access.
+  `"<vaultId>/~<noteId>"` (ADR-003 S2b; `~` never occurs in a slug, client
+  `collabDocName`). A path-named connection (`"<vaultId>/<path>"`, sent by a
+  bundle from before S2b) is refused with reason `reload-required` and
+  nothing it sends is stored; the editor shows "Reload to keep editing"
+  and keeps the text (and its #720 browser copy, which it looks up under
+  both the id name and the old path name after the reload). Loading reads
+  the note's state from `note_crdt` + `note_updates` (seeding it when
+  absent), never a file. A rename keeps every editor connected (same id)
+  and moves the note's SSE viewers to the new path (a `moved` event);
+  agent presence is looked up by note id. `onAuthenticate` requires live `edit` access.
   **`beforeHandleMessage` re-resolves access on every inbound Yjs
   message**, not just at connect time — dropping below `edit` mid-session
   drops the next message and closes the connection.
@@ -849,8 +888,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   body repeats a block of the stored note is quarantined (§5.3, #492):
   row and file keep the previous body, the live document and its
   editors keep the text (nobody is reverted or disconnected), the
-  `.crdt` state is saved as for every rejected store (on the next load
-  the file text wins over it), and a `collab-store` job failure is
+  CRDT state keeps the typing (the delta stays in `note_updates` and
+  `fold_error` says why the row did not take it), and a `collab-store` job failure is
   reported; the next store without the repeat is written normally. A
   store caused by a server body write through a direct connection
   (`writeThroughCollab`, context `directWrite`; its caller ran the check
@@ -1747,10 +1786,13 @@ Restart the server afterwards so it computes the embeddings.
 --dry-run [--report <file>] [--vault <uuid>]` reads every note row, `.md`
 file and `.crdt` bin in one `REPEATABLE READ READ ONLY` transaction (only
 pre-0021 columns, so it runs on a production copy before the upgrade) and
-reports what the S2a/S2b backfill will do: per-note classes, the file ≠ row
+reports what the S2a/S2b backfill will do: per-note classes (`crdt`: what
+the bin's text matches; `collab`: what the S2b backfill does with it,
+`attach`/`set-aside`/`seed`/`has-state`), the file ≠ row
 conflict list (Q5: the file wins; `row.updated_at` against the file mtime,
 both hashes), files that will change bytes, files with no row, sizes and
-timings. It writes only the `--report` file, which it creates exclusively
+timings.
+It writes only the `--report` file, which it creates exclusively
 before the walk (an existing file, a symlink or an unwritable directory
 exits 2 at once; a failed run removes the file); without `--report` the
 JSON goes to stdout. Without `--dry-run` it exits 2:
