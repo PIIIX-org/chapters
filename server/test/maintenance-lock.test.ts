@@ -45,12 +45,17 @@ async function waitFor(check: () => boolean | Promise<boolean>, ms = 8000): Prom
   }
 }
 
-/** Backends holding the instance lock in session form (the reserved connections). */
+/**
+ * Backends holding the instance lock in session form (the reserved
+ * connections), in this database only: advisory locks are per database, and
+ * other worktrees' test databases on the same server use the same key.
+ */
 async function lockHolders(): Promise<number[]> {
   const key = INSTANCE_LOCK_KEY
   const rows = await other<Array<{ pid: number }>>`
     SELECT pid FROM pg_locks
     WHERE locktype = 'advisory' AND granted AND objsubid = 1
+      AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
       AND classid = ${Number(key >> 32n)}::bigint::oid AND objid = ${Number(key & 0xffff_ffffn)}::bigint::oid`
   return rows.map((r) => r.pid)
 }
@@ -135,9 +140,10 @@ describe('instance maintenance lock (§5.1, §9)', () => {
       const during = attempts - before
       down = false
       await waitFor(() => !writesPaused())
-      // One loop at 50 ms doubling to 400 ms makes about 6 attempts in 1.5 s; a loop per failed attempt makes dozens.
+      // One loop at 50 ms doubling to 400 ms makes about 6 attempts in 1.5 s (postgres.js may open a refused
+      // connection twice per attempt); a loop per failed attempt makes hundreds (372 before the fix).
       expect(during).toBeGreaterThanOrEqual(2)
-      expect(during).toBeLessThanOrEqual(10)
+      expect(during).toBeLessThanOrEqual(20)
       await new Promise((r) => setTimeout(r, 500))
       expect(live.size).toBe(1)
       // The cut connection's backend ends once Postgres sees its socket close.
