@@ -106,10 +106,15 @@ describe('instance maintenance lock (§5.1, §9)', () => {
     const live = new Set<Socket>()
     let down = false
     let attempts = 0
+    const accepted = new Set<Socket>()
     const proxy: Server = createServer((client) => {
       attempts++
+      accepted.add(client)
+      client.on('close', () => accepted.delete(client))
       if (down) {
-        client.destroy()
+        // Accept, then close cleanly (FIN), as a proxy or load balancer with its upstream down does. postgres.js
+        // reconnects at once when the first query's socket closes cleanly, so this is the case a backoff must hold.
+        client.end()
         return
       }
       const upstream = createConnection({ host: target.hostname, port: Number(target.port || 5432) })
@@ -140,10 +145,10 @@ describe('instance maintenance lock (§5.1, §9)', () => {
       const during = attempts - before
       down = false
       await waitFor(() => !writesPaused())
-      // One loop at 50 ms doubling to 400 ms makes about 6 attempts in 1.5 s (postgres.js may open a refused
-      // connection twice per attempt); a loop per failed attempt makes hundreds (372 before the fix).
+      // One loop at 50 ms doubling to 400 ms makes about 6 attempts in 1.5 s, one connection each; a loop per
+      // failed attempt, or postgres.js's immediate reconnect, makes hundreds (372 and 1172 before the fixes).
       expect(during).toBeGreaterThanOrEqual(2)
-      expect(during).toBeLessThanOrEqual(20)
+      expect(during).toBeLessThanOrEqual(10)
       await new Promise((r) => setTimeout(r, 500))
       expect(live.size).toBe(1)
       // The cut connection's backend ends once Postgres sees its socket close.
@@ -153,7 +158,7 @@ describe('instance maintenance lock (§5.1, §9)', () => {
       await waitFor(() => live.size === 0)
       await waitFor(async () => (await lockHolders()).length === 0)
     } finally {
-      for (const socket of live) socket.destroy()
+      for (const socket of accepted) socket.destroy()
       await new Promise((resolve) => proxy.close(resolve))
     }
   }, 30_000)

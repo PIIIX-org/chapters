@@ -19,6 +19,7 @@ import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.j
 import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { serializeNote } from '../src/notes/okf.js'
 import { createNote, getLiveNote, readNote, updateNote } from '../src/notes/store.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { NoteTooLargeError } from '../src/notes/size-cap.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
 import { db } from '../src/db/client.js'
@@ -244,6 +245,8 @@ describe('note body size cap (#491)', { timeout: 30_000 }, () => {
     const serverDoc = collab.hocuspocus.documents.get(`${vaultId}/docs/collab-over`)
     expect(serverDoc?.getText('body').toString() ?? 'small start').toBe('small start')
     expect(await restBody('docs/collab-over')).toBe('small start')
+    // Files are projections written after commit (ADR-003 §7): wait for the projector before reading one.
+    await flushProjections()
     const file = await readFile(join(config.dataDir, 'vaults', vaultId, 'docs', 'collab-over.md'), 'utf8')
     expect(file).not.toContain('OVER-CAP-MARKER')
     expect(await storedCrdtBody('docs/collab-over')).toBe('small start')

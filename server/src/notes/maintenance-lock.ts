@@ -21,6 +21,7 @@
  * not write. Store transactions also take the shared form transaction-scoped
  * (store-tx.ts), which closes the gap between a drop and the pause.
  */
+import { connect, type Socket } from 'node:net'
 import postgres from 'postgres'
 import { config } from '../config.js'
 
@@ -78,16 +79,53 @@ export function holdsExclusiveLock(): boolean {
 
 type Client = postgres.Sql
 
+const CONNECT_TIMEOUT_MS = 10_000
+
+/** postgres.js's `socket` option (supported by the driver, not in its type declarations): a factory for the connection's socket. */
+interface SocketFactoryOptions {
+  socket: (options: { host: string[]; port: number[]; path?: string | false }) => Promise<Socket>
+}
+
+/**
+ * A reserved client opens exactly one socket (its own TCP or Unix socket to
+ * the DATABASE_URL host and port; postgres.js still negotiates TLS on it).
+ * postgres.js reconnects at once, without its backoff, when a socket closes
+ * while the first query is pending (a Postgres that accepts and closes, a
+ * proxy whose upstream is down): with its own socket factory that refuses a
+ * second socket, the pending query fails instead, so the caller's backoff
+ * decides when the next attempt runs. One attempt = one connection.
+ */
 function reservedClient(databaseUrl: string, onclose: () => void): Client {
-  return postgres(databaseUrl, {
+  let opened = false
+  const options: postgres.Options<Record<string, never>> & SocketFactoryOptions = {
     max: 1,
     idle_timeout: null as unknown as undefined,
     max_lifetime: null,
-    connect_timeout: 10,
+    connect_timeout: CONNECT_TIMEOUT_MS / 1000,
     fetch_types: false,
     onnotice: () => {},
     onclose,
-  })
+    socket: async (target) => {
+      if (opened) throw new Error('the reserved connection closed; the next attempt waits for the backoff')
+      opened = true
+      return new Promise<Socket>((resolve, reject) => {
+        const socket = target.path ? connect(target.path) : connect(target.port[0]!, target.host[0]!)
+        const timer = setTimeout(() => {
+          socket.destroy()
+          reject(new Error(`connecting to Postgres timed out after ${CONNECT_TIMEOUT_MS} ms`))
+        }, CONNECT_TIMEOUT_MS)
+        socket.once('error', (err) => {
+          clearTimeout(timer)
+          reject(err)
+        })
+        socket.once('connect', () => {
+          clearTimeout(timer)
+          resolve(socket)
+        })
+      })
+    },
+  }
+  return postgres(databaseUrl, options)
 }
 
 async function tryLock(client: Client, mode: InstanceLockMode): Promise<boolean> {

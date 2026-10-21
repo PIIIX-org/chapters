@@ -11,7 +11,7 @@ import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
 import { createNote, renameNote } from '../src/notes/store.js'
-import { flushProjections, renderNoteFile, sweepOrphanFiles } from '../src/notes/projector.js'
+import { flushProjections, renderNoteFile, sweepOrphanFiles, verifyAllProjections } from '../src/notes/projector.js'
 import { bootStore } from '../src/notes/store-reconcile.js'
 import { setStoreMigrationPending } from '../src/notes/store-tx.js'
 import { MaintenanceInProgressError, holdInstanceLock } from '../src/notes/maintenance-lock.js'
@@ -117,6 +117,21 @@ describe('boot step 7: verify after an unclean shutdown (§7)', () => {
       await db.execute(sql`DELETE FROM notes WHERE id = ${failing}`)
       await db.execute(sql`UPDATE instance_state SET store_migrated_at = ${state?.store_migrated_at ?? new Date().toISOString()} WHERE id = 'singleton'`)
     }
+  })
+
+  it('keeps an adopted hand-formatted file byte for byte through every later verify (store-migration mid-batch rerun)', async () => {
+    const note = await createNote(vaultId, { type: 'docs', name: 'hand-format', body: 'same content\n', frontmatter: { type: 'docs', title: 'Formatted' } })
+    await flushProjections()
+    // Same content as the row, other YAML formatting: the first verify adopts it (bytes kept, hash recorded).
+    const timestamp = (note.frontmatter as Record<string, unknown>).timestamp
+    const hand = `---\ntitle:   'Formatted'\ntimestamp: ${JSON.stringify(timestamp)}\ntype:    docs\n---\nsame content\n`
+    await writeFile(file('docs/hand-format.md'), hand)
+    for (let round = 0; round < 3; round++) {
+      await verifyAllProjections()
+      await flushProjections()
+      expect(await readFile(file('docs/hand-format.md'), 'utf8'), `round ${round}`).toBe(hand)
+    }
+    expect(await conflictCopiesOf('hand-format')).toHaveLength(0)
   })
 })
 
