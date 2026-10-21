@@ -969,8 +969,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   note live or trashed, `.elara/history/<noteId>.json`
   (`vault-history.ts`, #499): `path`, `createdAt`/`updatedAt`/`deletedAt`
   (microsecond UTC text), a trashed note's `frontmatter` + `body`, and
-  `revisions` oldest first (`action`, `actorType`, `actorId`,
-  `actorEmail` for user actors, `frontmatter`, `body`, `createdAt`).
+  `revisions` oldest first (`id`, `action`, `actorType`, `actorId`,
+  `actorEmail` for user actors, `frontmatter`, `body`, `createdAt`, and
+  on event rows (#479) `fromPath`/`toPath` or `sourceRevisionId`).
   An export (download, export link or MCP `export_vault`) therefore
   carries the vault's full history and trash, including the email of
   every past revision author, also of users who have since lost access.
@@ -983,7 +984,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   keep their archive file names (unsafe names, `.` and `..` are
   dropped); `.md` files under `assets/` stay attachments, never notes. Trashed notes are recreated in
   the trash, then live notes; each note with a history file gets the
-  archive's revisions (new ids, original order and times) and its
+  archive's revisions (new ids, original order and times; a revert's
+  `sourceRevisionId` is pointed at the new id of the archived revision
+  it names, or null when that one is not in the archive, as in archives
+  exported before revision ids were) and its
   original created/updated/deleted times. A revision keeps its author
   only when that author is the importer (user id or email, or an MCP
   connection the importer owns); others keep the actor kind with no id,
