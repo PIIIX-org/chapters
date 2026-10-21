@@ -7,8 +7,12 @@ import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import { applyTextDiff, DIFF_TIME_LIMIT_MS, diffText, type TextEdit } from '../src/sync/text-diff.js'
 
-/** A deterministic markdown note of about `bytes` units: a heading every 12 lines, lines of `words` to twice that many random words. */
-function note(bytes: number, seed: number, words = 8): string {
+/**
+ * A deterministic markdown note of about `bytes` units: lines of `words` to
+ * twice that many random words, with a heading every 12 lines unless
+ * `headings` is false (shared headings anchor a line diff into small runs).
+ */
+function note(bytes: number, seed: number, words = 8, headings = true): string {
   const vocabulary = ['vault', 'note', 'graph', 'index', 'revision', 'collab', 'crash', 'durable', 'atomic', 'rename', 'fsync', 'yjs', 'agent', 'search']
   let s = seed >>> 0
   const random = (): number => {
@@ -18,7 +22,7 @@ function note(bytes: number, seed: number, words = 8): string {
   const out: string[] = []
   let length = 0
   for (let line = 0; length < bytes; line++) {
-    const heading = line % 12 === 0 ? `## Section ${line / 12}\n` : ''
+    const heading = headings && line % 12 === 0 ? `## Section ${line / 12}\n` : ''
     const n = words + Math.floor(random() * words)
     const text = `${heading}${Array.from({ length: n }, () => vocabulary[Math.floor(random() * vocabulary.length)]).join(' ')}.\n`
     out.push(text)
@@ -127,6 +131,26 @@ describe('diffText cost (#833)', () => {
       live.getText('body').insert(0, body)
       live.transact(() => applyTextDiff(live.getText('body'), next))
       expect(Y.encodeStateAsUpdate(live).length).toBeLessThan(1.5 * (body.length + next.length))
+    })
+  }
+
+  // Review round 4: with no shared line to anchor it, a rewrite that changes
+  // the line count is one run, and aligning it tried every shift: 45,000 to
+  // 160,000 lines × shifts at several µs each ran into the time limit, and
+  // then every pair was trimmed to its common ends.
+  for (const [from, to] of [
+    [8, 40],
+    [4, 24],
+  ]) {
+    it(`a rewrite of a 40 KB note from lines of ${from}+ words to lines of ${to}+ words, with no line in common, stays well within the time limit`, () => {
+      const body = note(40_000, 8, from, false)
+      const next = note(40_000, 9, to, false)
+      const [a, b] = [body.split('\n').length, next.split('\n').length]
+      expect((Math.abs(a - b) + 1) * Math.min(a, b)).toBeGreaterThan(2 ** 15)
+      const { ms, result } = fastest(() => diffText(body, next))
+      expect(applied(body, result)).toBe(next)
+      expect(result.length).toBeLessThanOrEqual(2 * Math.min(a, b) + 2)
+      expect(ms).toBeLessThan(DIFF_TIME_LIMIT_MS / 2)
     })
   }
 })

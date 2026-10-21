@@ -448,24 +448,27 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   code-point edit distance, and up to 16,384 units only while the two
   sides are alike: the edit distance is at most a quarter of their
   length, or at most the text one side adds plus a tenth of the shorter
-  side in at most 2 + 1/16 of the shorter side's units separate changes
-  (a sentence added to a paragraph that also had a word changed, but not
-  a short line against a long unrelated one), and at most 1,024 edits
-  (4,096 within one line); the search stops at that many edits, so a
-  failed attempt is cheap. Otherwise the whole lines around it are diffed
-  per line (lines found on one side only, and blank lines, skip the
-  search, so a rewrite of every line is linear and a paragraph added next
-  to an edited one does not take its blank line). A changed run with as
-  many new lines as old ones pairs them in order; another run is diffed
-  per character if at most 16,384 units and alike (never exactly), else
-  paired too: each line of its shorter side pairs with one of the other
-  side's lines, in order, by the alignment with the most likeness (the
-  characters a pair shares at its start and end, plus eight 16-unit
-  stretches of the old line found in the new one, so lines changed at
-  both ends, such as wrapped in `**`, still find their new versions). It
-  is a dynamic programme over lines × shifts; past 2^20 cells, or when the
-  time limit runs out during it, only alignments that put the lines one
-  side has more of in one block are tried. The lines left over between
+  side, when six of eight 16-unit stretches of the shorter side are found
+  in the longer one before the search and the result is at most 2 + 1/16
+  of the shorter side's units separate changes (a sentence added to a
+  paragraph that also had a word changed, but not a short line against a
+  long unrelated one), and at most 1,024 edits (4,096 within one line);
+  the search stops at that many edits, so a failed attempt is cheap.
+  Otherwise the whole lines around it are diffed per line (lines found on
+  one side only, and blank lines, skip the search, so a rewrite of every
+  line is linear and a paragraph added next to an edited one does not
+  take its blank line). A changed run with as many new lines as old ones
+  pairs them in order; another run is diffed per character if at most
+  16,384 units and alike (never exactly), else paired too: each line of
+  its shorter side pairs with one of the other side's lines, in order, by
+  the alignment with the most likeness (the characters a pair shares at
+  its start and end, plus 16 for each of up to eight word triples from the
+  middle of the line found in its candidate, looked up as hashes in a set
+  per line, so lines changed at both ends, such as wrapped in `**`, still
+  find their new versions). It is a dynamic programme over lines ×
+  shifts; past 2^15 cells, or when the time limit runs out during it, only
+  alignments that put the lines one side has more of in one block are
+  tried. The lines left over between
   pairs are inserted or deleted where they stand. Each pair is diffed per
   character if alike, otherwise changed only between its common start
   and end. So a rewrite of every line of a large note (a `- ` before

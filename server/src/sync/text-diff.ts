@@ -26,7 +26,7 @@ import type * as Y from 'yjs'
  * other run is diffed per character if alike (never exactly), and if it is
  * too large or too unlike each line of its shorter side pairs with one of
  * the other's, in order, by the alignment with the most likeness (shared
- * starts, ends and stretches of text). Each pair is diffed per character if
+ * starts, ends and word triples). Each pair is diffed per character if
  * alike, at any length, otherwise changed between its common start and end,
  * so a rewrite of every line (a `- ` before each, a `**` wrap) still keeps
  * each line's unchanged characters. One time limit bounds the
@@ -54,24 +54,32 @@ const REGION_UNITS = 16_384
  * Alike enough for a character diff: at most ALIKE_SHARE of the units (both
  * sides counted) changes, or what one side has more of plus at most
  * KEPT_SHARE of the shorter side (a sentence added to a paragraph that also
- * had a word changed) in at most 2 + 1/16 of the shorter side's units
- * separate changes (else a short line would match a long unrelated one
- * through a scattered common subsequence, hundreds of fragments), and never
- * more than UNLIKE_EDITS (LINE_EDITS for one line of a pair), so a failed
- * attempt costs little: about the square of the cap, since unlike text has
- * short common stretches.
+ * had a word changed). The second needs KEPT_SAMPLES of SAMPLES stretches
+ * of the shorter side found in the longer one before the search, and at
+ * most 2 + 1/16 of the shorter side's units separate changes after it (else
+ * a short line would match a long unrelated one through a scattered common
+ * subsequence, hundreds of fragments). Never more than UNLIKE_EDITS
+ * (LINE_EDITS for one line of a pair), so a failed attempt costs little:
+ * about the square of the cap, since unlike text has short common stretches.
  */
 const ALIKE_SHARE = 0.25
 const KEPT_SHARE = 0.1
+const KEPT_SAMPLES = 6
 const UNLIKE_EDITS = 1_024
 const LINE_EDITS = 4_096
 /**
  * A changed run tries every alignment of its lines while its lines times the
  * shifts to try stay under this and the deadline holds; otherwise only the
- * alignments that put the lines one side has more of in one block.
+ * alignments that put the lines one side has more of in one block. A cell
+ * costs about a pair's common start and end and a few set lookups, so a
+ * rewrite that changes the line count cannot spend the time limit aligning.
  */
-const PAIRING_CELLS = 1 << 20
-/** How many stretches of a line, and how long, alignment looks for in a candidate partner. */
+const PAIRING_CELLS = 1 << 15
+/**
+ * Samples of a line or region, for telling text that is still there from
+ * text that is new: how many, and how long a stretch of characters each is
+ * (also what a word triple found is worth when aligning lines).
+ */
 const SAMPLES = 8
 const SAMPLE_UNITS = 16
 
@@ -344,7 +352,20 @@ function characterEditsWithin(from: string, to: string, start: number, end: numb
   if ((scope !== 'line' && size > REGION_UNITS) || Date.now() > deadline) return false
   const shorter = Math.min(removed, inserted)
   const share = Math.floor(size * ALIKE_SHARE)
-  const alike = Math.max(share, Math.abs(removed - inserted) + Math.floor(2 * shorter * KEPT_SHARE))
+  let alike = share
+  const loose = Math.abs(removed - inserted) + Math.floor(2 * shorter * KEPT_SHARE)
+  if (loose > share) {
+    // What one side adds is free only when the other side's text is still there: a quick
+    // look for stretches of it, before a search that costs the longer side times the edits.
+    const [kept, longer] = removed < inserted ? [from.slice(start, start + removed), to.slice(start, start + inserted)] : [to.slice(start, start + inserted), from.slice(start, start + removed)]
+    const length = Math.min(SAMPLE_UNITS, kept.length >> 2)
+    let found = 0
+    for (let i = 0; i < SAMPLES; i++) {
+      const at = Math.floor(((kept.length - length) * (2 * i + 1)) / (2 * SAMPLES))
+      if (longer.includes(kept.slice(at, at + length))) found++
+    }
+    if (length < 4 || found >= KEPT_SAMPLES) alike = loose
+  }
   const limit = scope === 'text' && size <= EXACT_UNITS ? Infinity : Math.min(alike, scope === 'line' ? LINE_EDITS : UNLIKE_EDITS)
   const a = codePoints(from, start, start + removed)
   const b = codePoints(to, start, start + inserted)
@@ -405,47 +426,82 @@ function characterEdits(from: string, to: string, at: number, deadline: number, 
 }
 
 /**
- * How plainly `b` is `a` changed: the units they share at their start and
- * end, plus SAMPLE_UNITS for each of SAMPLES stretches of `a`'s middle found
- * in `b`, so a line changed at both ends (wrapped in `**`, a `- ` added and
- * its period dropped) still scores against its new version and not against
- * its neighbour's.
+ * The triples of consecutive words of `line` (split at white space and
+ * control characters), each as a 32-bit hash: no strings built, and a rare
+ * collision only nudges an alignment score.
  */
-function likeness(a: string, b: string): number {
-  const [start, end] = commonEnds(a, b)
-  let score = start + end
-  const middle = a.length - start - end
-  const length = Math.min(SAMPLE_UNITS, middle >> 2)
-  if (length < 4) return score
-  for (let i = 0; i < SAMPLES; i++) {
-    const at = start + Math.floor(((middle - length) * (2 * i + 1)) / (2 * SAMPLES))
-    if (b.includes(a.slice(at, at + length))) score += length
+function wordTriples(line: string): number[] {
+  const words: number[] = []
+  let hash = 0
+  let inWord = false
+  for (let i = 0; i <= line.length; i++) {
+    const code = i < line.length ? line.charCodeAt(i) : 32
+    if (code <= 32 || code === 0xa0) {
+      if (inWord) words.push(hash)
+      inWord = false
+      continue
+    }
+    // FNV-1a over the UTF-16 units of the word.
+    if (!inWord) hash = 0x811c9dc5
+    inWord = true
+    hash = Math.imul(hash ^ code, 0x01000193)
   }
-  return score
+  const out: number[] = []
+  for (let i = 0; i + 2 < words.length; i++) out.push(Math.imul(Math.imul(words[i]!, 31) ^ words[i + 1]!, 0x01000193) ^ Math.imul(words[i + 2]!, 0x5bd1e995))
+  return out
 }
 
 /**
  * For each line i of `short`, the shift s (one of `shifts`, ascending) that
  * pairs it with long[i + s]: never decreasing from line to line, and with
- * the most likeness in all; on a tie, the smaller shift. A dynamic programme
- * over lines × shifts; null when the deadline passes first.
+ * the most likeness in all; on a tie, the smaller shift. A pair's likeness
+ * is the units it shares at its start and end, plus SAMPLE_UNITS for each of
+ * up to SAMPLES word triples from the middle of the short line found in the
+ * long one, so a line changed at both ends (wrapped in `**`, a `- ` added and
+ * its period dropped) still scores against its new version and not against
+ * its neighbour's. Triples are looked up in a set per line, so a pair costs
+ * about its common start and end. A dynamic programme over lines × shifts;
+ * null when the deadline passes first.
  */
 function alignedShifts(short: readonly string[], long: readonly string[], shifts: readonly number[], deadline: number): Int32Array | null {
   const n = short.length
   const k = shifts.length
   const aligned = new Int32Array(n).fill(shifts[0]!)
   if (k === 1 || n === 0) return aligned
+  const samples = short.map((line) => {
+    // The first and last triple hold a line's ends, which an edit changes most.
+    const triples = wordTriples(line).slice(1, -1)
+    const count = Math.min(SAMPLES, triples.length)
+    return Array.from({ length: count }, (_, t) => triples[Math.floor(((2 * t + 1) * triples.length) / (2 * count))]!)
+  })
+  const sets = long.map((line) => new Set(wordTriples(line)))
   // The previous line's best state for each (line, state), and the best total so far per state.
   const choice = new Int32Array(n * k)
   let best = new Float64Array(k)
   let next = new Float64Array(k)
   for (let i = 0; i < n; i++) {
+    const a = short[i]!
+    const sampled = samples[i]!
     let prefix = -Infinity
     let arg = 0
     for (let j = 0; j < k; j++) {
       if ((j & 1023) === 0 && Date.now() > deadline) return null
-      if (i > 0 && best[j]! > prefix) [prefix, arg] = [best[j]!, j]
-      next[j] = (i > 0 ? prefix : 0) + likeness(short[i]!, long[i + shifts[j]!]!)
+      if (i > 0 && best[j]! > prefix) {
+        prefix = best[j]!
+        arg = j
+      }
+      const partner = i + shifts[j]!
+      const b = long[partner]!
+      // The common start and end, as in commonEnds (a score only, so pairs may split).
+      const shorter = Math.min(a.length, b.length)
+      let same = 0
+      while (same < shorter && a.charCodeAt(same) === b.charCodeAt(same)) same++
+      let tail = 0
+      while (tail < shorter - same && a.charCodeAt(a.length - 1 - tail) === b.charCodeAt(b.length - 1 - tail)) tail++
+      let likeness = same + tail
+      const set = sets[partner]!
+      for (let t = 0; t < sampled.length; t++) if (set.has(sampled[t]!)) likeness += SAMPLE_UNITS
+      next[j] = (i > 0 ? prefix : 0) + likeness
       choice[i * k + j] = arg
     }
     ;[best, next] = [next, best]

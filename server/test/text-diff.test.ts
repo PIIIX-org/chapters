@@ -22,6 +22,12 @@ function rng(seed: number): () => number {
   }
 }
 
+// A limit no loaded CI runner reaches, for tests about what the diff keeps
+// rather than how fast it is (text-diff-cost.test.ts holds the budgets): under
+// load a pause past the default limit sends a small diff down the coarse path.
+const AMPLE_MS = 10_000
+const limitName = (timeLimitMs: number): string => (timeLimitMs < 0 ? 'limit already past' : 'ample limit')
+
 /** `from` with `edits` (ascending, apart) applied, as plain strings, in one pass. */
 function applied(from: string, edits: readonly TextEdit[]): string {
   const parts: string[] = []
@@ -84,7 +90,7 @@ describe('diffText', () => {
       expect(viaYjs(from, to), JSON.stringify({ from, to })).toBe(to)
       // A limit already past: the line pass gives up too, and every run takes the paired-lines fallback.
       expect(viaYjs(from, to, -1), JSON.stringify({ from, to, timeLimitMs: -1 })).toBe(to)
-      const edits = diffText(from, to)
+      const edits = diffText(from, to, AMPLE_MS)
       // Ascending and separated by unchanged text.
       for (let j = 1; j < edits.length; j++) expect(edits[j]!.at).toBeGreaterThan(edits[j - 1]!.at + edits[j - 1]!.remove)
       const coarse = diffText(from, to, -1)
@@ -118,7 +124,7 @@ describe('diffText', () => {
         }
       }
       const [from, to] = [a.join(''), b.join('')]
-      const edits = diffText(from, to)
+      const edits = diffText(from, to, AMPLE_MS)
       const length = edits.reduce((sum, { at, remove, insert }) => sum + Array.from(from.slice(at, at + remove)).length + Array.from(insert).length, 0)
       if (applied(from, edits) !== to || !keepsPairs(from, edits) || !apart(edits) || length !== distance(a, b)) {
         failures.push({ from, to, edits })
@@ -276,8 +282,8 @@ describe('applyTextDiff on a live document', () => {
 
   // Review round 2 of #833: a new paragraph between two edited ones could
   // line up with only one of them, and the other was replaced.
-  for (const timeLimitMs of [undefined, -1]) {
-    it(`keeps typing in both edited paragraphs a large new one is added between (limit ${timeLimitMs ?? 'default'})`, () => {
+  for (const timeLimitMs of [AMPLE_MS, -1]) {
+    it(`keeps typing in both edited paragraphs a large new one is added between (${limitName(timeLimitMs)})`, () => {
       const paragraph = paragraphs(4)
       const before = Array.from({ length: 30 }, (_, k) => `${paragraph(k, 30)}\n`)
       const after = Array.from({ length: 30 }, (_, k) => `\n${paragraph(k + 100, 30)}`)
@@ -314,8 +320,8 @@ describe('applyTextDiff on a live document', () => {
       const notes = Array.from({ length: 20 }, (_, k) => `${paragraph(k, 30)}\n`)
       const body = [...notes, line, ...notes].join('')
       const next = [...notes, changed, ...notes].join('')
-      expectTypingKept(body, next, [marker])
-      expect(removedUnits(body, next)).toBeLessThan(20)
+      expectTypingKept(body, next, [marker], AMPLE_MS)
+      expect(removedUnits(body, next, AMPLE_MS)).toBeLessThan(20)
     })
   }
 
@@ -331,11 +337,11 @@ describe('applyTextDiff on a live document', () => {
   }
   for (const [shape, change] of Object.entries(shapes)) {
     // Changed at both ends, past the time limit the pairs keep nothing to trim to, as on dev.
-    const limits = shape === 'a `- ` before each' ? [undefined, -1] : [undefined]
+    const limits = shape === 'a `- ` before each' ? [AMPLE_MS, -1] : [AMPLE_MS]
     for (const size of [9_000, 24_000, 50_000]) {
       for (const edit of ['added', 'removed'] as const) {
         for (const timeLimitMs of limits) {
-          it(`keeps typing when every paragraph of a ${size / 1000} KB note changes (${shape}) and one is ${edit} in the middle (limit ${timeLimitMs ?? 'default'})`, () => {
+          it(`keeps typing when every paragraph of a ${size / 1000} KB note changes (${shape}) and one is ${edit} in the middle (${limitName(timeLimitMs)})`, () => {
             const paragraph = paragraphs(size + (edit === 'added' ? 1 : 2))
             const lines: string[] = []
             while (lines.join('').length < size) lines.push(paragraph(lines.length, 30))
@@ -363,8 +369,8 @@ describe('applyTextDiff on a live document', () => {
   // a word changed in it) paired the existing paragraph with the new one and
   // replaced it, so typing in it moved to the end of the new paragraph.
   for (const far of [false, true]) {
-    for (const timeLimitMs of [undefined, -1]) {
-      it(`keeps typing in a paragraph a large new one is added before (${far ? 'with a far change too' : 'one change'}, limit ${timeLimitMs ?? 'default'})`, () => {
+    for (const timeLimitMs of [AMPLE_MS, -1]) {
+      it(`keeps typing in a paragraph a large new one is added before (${far ? 'with a far change too' : 'one change'}, ${limitName(timeLimitMs)})`, () => {
         const random = rng(far ? 2 : 1)
         const words = ['vault', 'note', 'graph', 'index', 'agent', 'search', 'yjs', 'crash']
         const paragraph = (n: number): string => `${Array.from({ length: n }, () => words[Math.floor(random() * words.length)]).join(' ')}.\n`
@@ -395,7 +401,7 @@ describe('applyTextDiff on a live document', () => {
     const characters = [...line]
     for (let i = 0; i < 1_200; i++) characters[50 + i * 80] = '#'
     const next = characters.join('')
-    const edits = diffText(line, next)
+    const edits = diffText(line, next, AMPLE_MS)
     expect(applied(line, edits)).toBe(next)
     expect(edits.reduce((sum, edit) => sum + edit.remove, 0)).toBeLessThanOrEqual(1_200)
   })
@@ -408,13 +414,13 @@ describe('applyTextDiff on a live document', () => {
     const body = `# Title\n\n${long}\nEnd.\n`
     const changed = `X${long.slice(1, -2)}!\n`
     const next = body.replace(long, changed)
-    expect(diffText(body, next)).toEqual([
+    expect(diffText(body, next, AMPLE_MS)).toEqual([
       { at: '# Title\n\n'.length, remove: 1, insert: 'X' },
       { at: '# Title\n\n'.length + long.length - 2, remove: 1, insert: '!' },
     ])
     const middle = '# Title\n\n'.length + Math.floor(long.length / 2)
     const at = body.indexOf(' ', middle) + 1
-    const [server, tab] = concurrent(body, next, [at], 'TYPED ')
+    const [server, tab] = concurrent(body, next, [at], 'TYPED ', AMPLE_MS)
     const expected = next.slice(0, at) + 'TYPED ' + next.slice(at)
     expect(server).toBe(expected)
     expect(tab).toBe(expected)
