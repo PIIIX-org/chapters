@@ -114,6 +114,24 @@ nightly has its own concurrency group, so a dispatch or PR on `dev` never
 cancels it. `plan` and `lab` are **required status checks** on `dev` and
 `prod` (#574; `lab` is skipped, which passes, when `plan` picks no tier).
 
+### Real-model job (`real-model`, #851)
+
+The unit suite never loads the real embedding model. The `real-model` job
+runs `server/test/embedding-worker.test.ts` with `ELARA_REAL_MODEL_TESTS=1`
+on the nightly and on a full-tier dispatch: the bge-small model embeds a
+large file off the main thread and must give the vectors of the
+main-thread pipeline. The model directory is cached with `actions/cache`
+under a key of the model id plus the `pnpm-lock.yaml` hash (falling back
+to the last cache of the same model), and saved only after a run where
+the test passed, so a cut download never becomes the cache.
+A transient download failure (network error, HTTP 408, 429 or 5xx)
+reports the test as skipped with its reason. Anything else fails the job
+and the nightly alert reports it: a 404 or 401/403 (wrong model id or
+missing file, which would break production local embedding too), a
+vector mismatch, a blocked event loop. The rule is
+`server/test/fixtures/model-download.ts`, unit-tested by
+`server/test/model-download.test.ts`.
+
 ### Nightly alert (`nightly-alert` job, #706)
 
 After the scheduled run on `dev`, the `nightly-alert` job keeps one open

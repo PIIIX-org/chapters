@@ -1728,6 +1728,14 @@ pnpm -C server test # vitest run — needs Postgres reachable at DATABASE_URL
   no network/model download) unless `NODE_ENV=production` is forced —
   see §11 for why that distinction matters and was once a real
   verification gap.
+- The unit suite never downloads a model (#851): the #496 event-loop
+  check runs `LocalEmbedder` against `test/fixtures/fake-embedding-worker.ts`
+  (a `busy:<ms>` text blocks the worker thread like an ONNX run). The
+  real-model check, `test/embedding-worker.test.ts`, is opt-in:
+  `ELARA_REAL_MODEL_TESTS=1 pnpm -C server exec vitest run test/embedding-worker.test.ts`;
+  a transient download failure (network error, HTTP 408/429/5xx) reports
+  it as skipped with the reason; a 404 or wrong model id fails it. The
+  lab workflow's `real-model` job runs it nightly (see `lab.md`).
 - Live/e2e verification (booting a real server against a real database
   and exercising it over real HTTP) is a standing project discipline,
   not optional — several real bugs in this codebase (an extraction
