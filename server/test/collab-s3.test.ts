@@ -8,7 +8,7 @@ import { buildApp } from '../src/app.js'
 import { db, sql as pg } from '../src/db/client.js'
 import { FailpointError, setFailpointHandler, type Failpoint } from '../src/failpoints.js'
 import { foldPendingCollab, getLiveNote, noteFile, readLiveNote } from '../src/notes/store.js'
-import { INSTANCE_LOCK_KEY } from '../src/notes/store-tx.js'
+import { INSTANCE_LOCK_KEY } from '../src/notes/maintenance-lock.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
@@ -217,6 +217,10 @@ describe('a busy store across a reconnect (S3)', () => {
         token,
         document,
         onAuthenticationFailed: ({ reason }) => reasons.push(reason),
+        // A store-busy refusal closes the socket too (1013), so it can arrive as the close reason.
+        onClose: ({ event }) => {
+          if (event.reason) reasons.push(event.reason)
+        },
       })
       providers.push(provider)
       return provider
@@ -230,7 +234,8 @@ describe('a busy store across a reconnect (S3)', () => {
       await held`SELECT pg_advisory_lock(${INSTANCE_LOCK_KEY.toString()}::bigint)`
       text.insert(text.length, '@BUSY-STORE@')
       await waitFor(() => reasons.length > 0, 15_000)
-      expect(reasons).toEqual(['store-busy'])
+      expect(reasons[0]).toBe('store-busy')
+      expect(reasons).not.toContain('permission-denied')
       expect(provider.hasUnsyncedChanges).toBe(true)
     } finally {
       await held`SELECT pg_advisory_unlock(${INSTANCE_LOCK_KEY.toString()}::bigint)`

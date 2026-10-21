@@ -26,6 +26,7 @@ import { liveTookUpdate, updateToLog } from './collab-append.js'
 import { advanceStoredState, rejectUpdate, rememberLoadedState } from './note-crdt.js'
 import { failpoint } from '../failpoints.js'
 import { forgetAgentPresence, stripAgentClaims } from './agent-presence.js'
+import { writesPaused } from '../notes/maintenance-lock.js'
 
 export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
@@ -57,6 +58,34 @@ class NoteTooLargeRefusal extends Error {
   constructor(documentName: string, limit: number) {
     super(`refused an update to ${documentName}: the note body would pass ${limit} bytes (ELARA_NOTE_MAX_BYTES)`)
   }
+}
+
+/**
+ * The store is not taking writes for a moment (ADR-003 §5.1: this process's
+ * maintenance-lock connection dropped and writes are paused; or a lock
+ * timeout): reason `store-busy`, one name for every such refusal. Nothing of
+ * the update is applied or stored. Where the relay can, it closes the
+ * socket with 1013 ("try again later"): a document-level close or a
+ * `permission-denied` leaves the provider detached, while a socket close
+ * makes even an older editor reconnect with backoff and resend what the
+ * relay never took. The editor (client/src/hooks/useCollabDoc.ts) treats
+ * `store-busy`, from a close or an authentication failure, as a temporary
+ * drop: it keeps the document and the typing, shows "Saving paused" and
+ * reconnects after a delay.
+ */
+class StoreBusyRefusal extends Error {
+  readonly code = 1013
+  readonly reason = 'store-busy'
+  constructor(documentName: string, cause: string) {
+    super(`refused ${documentName}: the note store is not taking writes (${cause}); retry later`)
+  }
+}
+
+/** Closes `socket` with the store-busy close (see StoreBusyRefusal) and returns the refusal to throw. */
+function refuseStoreBusy(socket: { close(code?: number, reason?: string): void } | undefined, documentName: string, cause: string): StoreBusyRefusal {
+  const refusal = new StoreBusyRefusal(documentName, cause)
+  socket?.close(refusal.code, refusal.reason)
+  return refusal
 }
 
 /**
@@ -105,17 +134,6 @@ class NoteNotMigratedRefusal extends Error {
 }
 
 /**
- * Thrown from `onLoadDocument` when the store is busy (a lock timeout,
- * maintenance, Postgres away; S3, #487). Hocuspocus sends it as a refused
- * authentication with this reason; the editor (`useCollabDoc`) keeps the
- * text, does not show a revocation, and connects again after a pause, which
- * resends whatever is still unsynced.
- */
-class StoreBusyRefusal extends Error {
-  readonly reason = 'store-busy'
-}
-
-/**
  * Thrown from `onAuthenticate` for a document named by path (`<vault>/<path>`),
  * the scheme of bundles from before ADR-003 S2b (§5.4): nothing such a tab
  * sends is stored. The editor (client/src/hooks/useCollabDoc.ts) reads
@@ -149,6 +167,8 @@ interface ConnectionContext {
   directWrite?: boolean
   /** The update this connection's current message logged (§5.4 Append), until the live document is seen to hold it. */
   logged?: { id: number; previous: number; noteId: string; update: Uint8Array }
+  /** The connection's socket (handleConnection's default context): closed when the store is busy (StoreBusyRefusal). */
+  socket?: { close(code?: number, reason?: string): void }
 }
 
 /** The note each loaded document holds (its name says so; kept once the load finished). */
@@ -270,7 +290,9 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         return await authenticate(payload)
       } catch (err) {
         // The store unreachable while a tab reconnects is a pause, not a revocation (S3): the editor retries.
-        if (storeUnavailable(err)) throw new StoreBusyRefusal(err instanceof Error ? err.message : String(err))
+        if (storeUnavailable(err)) {
+          throw refuseStoreBusy((payload.context as Partial<ConnectionContext> | undefined)?.socket, payload.documentName, err instanceof Error ? err.message : String(err))
+        }
         throw err
       }
     },
@@ -283,17 +305,16 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * the text, so a client holding the document's items never sees them
      * twice (#488, #832).
      */
-    async onLoadDocument({ documentName, document }) {
+    async onLoadDocument({ documentName, document, context }) {
       const name = parseDocName(documentName)
       if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
-      let loaded
-      try {
-        loaded = await loadCollabState(name.vaultId, name.noteId)
-      } catch (err) {
-        if (storeUnavailable(err)) throw new StoreBusyRefusal(err instanceof Error ? err.message : String(err))
+      const { state, path, lastId } = await loadCollabState(name.vaultId, name.noteId).catch((err: unknown) => {
+        // Loading is a store transaction (seed, catch-up): a busy or unreachable store refuses it like an update.
+        if (storeUnavailable(err)) {
+          throw refuseStoreBusy((context as Partial<ConnectionContext> | undefined)?.socket, documentName, err instanceof Error ? err.message : String(err))
+        }
         throw err
-      }
-      const { state, path, lastId } = loaded
+      })
       Y.applyUpdate(document, state)
       // The stored state this document holds, so its stores need not materialise it again (§5.4 "Before S3").
       if (lastId !== null) rememberLoadedState(document, name.noteId, lastId)
@@ -336,15 +357,17 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * update (it must decode and apply to an empty document) or one over the
      * size cap (#491) is refused; one the document already holds is not
      * logged again; the rest is committed under the note's locks. A throw
-     * closes the document unacked and nothing is applied. When the log
-     * itself failed (Postgres down, a lock timeout, maintenance) the socket
-     * is closed as well (1013 "try again later"): the provider then
+     * closes the document unacked and nothing is applied. While writes are
+     * paused (the maintenance lock's connection dropped, §5.1), or when the
+     * log itself failed (Postgres down, a lock timeout), the update is
+     * refused as `store-busy` and the socket closed (1013): the provider then
      * reconnects and resends what is still unsynced, and Yjs applies a
      * resend once. A refused note (trashed, purged) is refused again by
      * `onAuthenticate` on that reconnect.
      */
     async beforeSync({ type, payload, document, documentName, context, connection }) {
       if (type !== SYNC_STEP_2 && type !== SYNC_UPDATE) return
+      if (writesPaused()) throw refuseStoreBusy(connection.webSocket, documentName, 'writes paused')
       const toLog = updateToLog(document, payload)
       const limit = config.noteMaxBytes
       if (!updateFits(document, payload, limit)) throw new NoteTooLargeRefusal(documentName, limit)
@@ -357,7 +380,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         logged = noteId ? await appendCollabUpdate(vaultId, noteId, toLog, { type: 'collab', id: ctx.userId }) : null
         if (logged !== null) failpoint('collab.after-log-before-ack')
       } catch (err) {
-        connection.webSocket.close(1013, 'store-unavailable')
+        if (storeUnavailable(err)) throw refuseStoreBusy(connection.webSocket, documentName, err instanceof Error ? err.message : String(err))
+        connection.webSocket.close(1013, 'store-busy')
         throw err
       }
       if (logged === null) throw new Error(`note does not exist: ${documentName}`)
@@ -479,6 +503,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       const name = parseDocName(documentName)
       if ('legacy' in name) return
       forgetLivePath(name.noteId)
+      // Compaction is a store transaction; while writes are paused it waits for the next unload.
+      if (writesPaused()) return
       const fold = compactCollabState(name.vaultId, name.noteId).catch((err) =>
         console.error(`collab compaction of ${documentName} failed:`, err),
       )
@@ -506,7 +532,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       return
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      const connection = hocuspocus.handleConnection(ws, toRequest(req))
+      const connection = hocuspocus.handleConnection(ws, toRequest(req), { socket: ws })
       ws.on('message', (data) => {
         const bytes = toBytes(data)
         const pending = (pendingSocketBytes.get(ws) ?? 0) + bytes.byteLength

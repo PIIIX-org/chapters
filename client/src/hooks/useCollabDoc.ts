@@ -52,6 +52,12 @@ export type CollabStatus =
    *  takes nothing more for it. What was typed stays on screen and in this
    *  browser; after a restore from the trash a reload brings it back. */
   | 'deleted'
+  /** The server's note store is not taking writes for a moment (ADR-003 §5.1,
+   *  reason `store-busy`: the server lost its database lock and paused
+   *  writes, or a lock timed out). Nothing is lost: the document and what was
+   *  typed stay here (and in this browser's copy), and the hook reconnects by
+   *  itself after a few seconds and sends it again. */
+  | 'paused'
 
 /** A person editing this note, or an agent (an MCP connection) that read or wrote it. */
 export type CollabPeer =
@@ -297,8 +303,6 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     // Revoked or signed out: the relay will not take this tab back.
     let stopped = false
     let retry: ReturnType<typeof setTimeout> | undefined
-    /** A reconnect after a busy store or an unreachable server is scheduled: refusals from the old provider are ignored. */
-    let retryPending = false
     // The relay's state has arrived since the socket last opened.
     let handshake = false
     let socketOpen = false
@@ -312,6 +316,10 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     let attemptFailed = false
     // The relay refused a change as too large; no reconnect until the body fits.
     let refused = false
+    // The server's store is busy (`store-busy`): reconnecting after RETRY_MS.
+    let paused = false
+    /** The last reconnect ticket failed with a 5xx or the network: the refusal that follows is a pause, not a revocation (S3). */
+    let ticketUnavailable = false
     // The relay's body size cap and frame limit, from the latest ticket (the
     // provider only exists once the first ticket is in).
     let maxNoteBytes = 0
@@ -573,6 +581,32 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
      * send the same change again, so stop until the person has cut the note
      * down; the document (and this browser's copy of it) keeps every keystroke.
      */
+    /**
+     * The server's store refused for a moment (`store-busy`, from a close or
+     * an authentication failure): not a revocation. Keep the document and
+     * the typing, stop this provider's own retries (a refused load leaves it
+     * detached anyway), and reconnect on a new provider after RETRY_MS with
+     * the same document, so what the relay never took is sent again.
+     */
+    const storeBusy = () => {
+      if (stopped || refused || cancelled) return
+      ticketUnavailable = false
+      paused = true
+      handshake = false
+      socketOpen = false
+      setStatus('paused')
+      setPeers([])
+      provider?.disconnect()
+      settle()
+      clearTimeout(retry)
+      retry = setTimeout(() => {
+        if (cancelled || stopped || refused) return
+        paused = false
+        setStatus('connecting')
+        restart()
+      }, RETRY_MS)
+    }
+
     const refuse = () => {
       if (refused || stopped) return
       refused = true
@@ -622,29 +656,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
       }, RETRY_MS)
     }
 
-    /**
-     * The relay could not load the note because its store is busy
-     * (`store-busy`: a lock timeout, maintenance, Postgres away; S3 also
-     * closes the socket when it cannot log a change). Not a revocation: keep
-     * the text and its unsent changes, and connect again on a new provider
-     * after a pause, which resends them.
-     */
-    const storeBusy = () => {
-      if (stopped || refused || cancelled) return
-      // The old provider's late refusals must not turn this pause into a revocation.
-      retryPending = true
-      setStatus('reconnecting')
-      const busy = provider
-      provider = undefined
-      busy?.destroy()
-      clearTimeout(retry)
-      retry = setTimeout(() => {
-        if (!cancelled && !stopped) void connect()
-      }, RETRY_MS)
-    }
-
     const connect = async () => {
-      retryPending = false
       // The ticket carries both the credential and the relay's URL; the relay
       // listens on its own port and nothing else tells the client where.
       let first: CollabTicket
@@ -676,6 +688,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
           }
           try {
             const ticket = await getCollabTicket()
+            ticketUnavailable = false
             maxNoteBytes = ticket.maxNoteBytes
             maxFrameBytes = ticket.maxFrameBytes
             return ticket.token
@@ -683,14 +696,15 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
             // A reconnect ticket that 403s is the same revocation the relay
             // would have reported; swallowed here it reads as "reconnecting".
             // Anything else (a 5xx, the network) is the service being away:
-            // retried like a busy store, never a revocation (S3).
+            // the provider keeps retrying, and the refusal its failed attempt
+            // reports is treated as store-busy, never a revocation (S3).
             if (error instanceof ApiError && (error.status === 401 || error.status === 403)) ticketFailed(error)
-            else storeBusy()
+            else ticketUnavailable = true
             throw error
           }
         },
         onStatus: ({ status: socketStatus }) => {
-          if (stopped || refused) return
+          if (stopped || refused || paused) return
           if (socketStatus === WebSocketStatus.Connected) {
             everConnected = true
             socketOpen = true
@@ -706,14 +720,15 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
         },
         // `note-not-migrated`: the server's store migration has not processed this note; `reload-required`: the
         // server names documents differently from this bundle (ADR-003 §5.4); `note-deleted`: the note is in the
-        // trash or purged; `store-busy`: the relay could not load the note from its store just now (retried);
-        // anything else is a revocation.
+        // trash or purged; `store-busy`: the server's store is not taking writes or cannot be reached for a moment
+        // (a refused load or session check, reconnect later); anything else is a revocation. While paused, a late
+        // refusal from the old provider (a reconnect ticket that failed with a 5xx) does not turn the pause into one.
         onAuthenticationFailed: ({ reason }) => {
-          if (retryPending) return
-          if (reason === 'note-not-migrated') stop('not-migrated')
+          if (reason === 'store-busy' || ticketUnavailable) storeBusy()
+          else if (paused) return
+          else if (reason === 'note-not-migrated') stop('not-migrated')
           else if (reason === 'reload-required') stop('reload-required')
           else if (reason === 'note-deleted') stop('deleted')
-          else if (reason === 'store-busy') storeBusy()
           else kicked()
         },
         // The relay closes the document with reason `note-too-large` for a
@@ -722,7 +737,8 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
         // relay closes with `signed-out` when the session ended (#498), and
         // with `note-deleted` when the note is deleted or purged.
         onClose: ({ event }) => {
-          if (event.reason === 'signed-out') stop('signed-out')
+          if (event.reason === 'store-busy') storeBusy()
+          else if (event.reason === 'signed-out') stop('signed-out')
           else if (event.reason === 'note-deleted') stop('deleted')
           else if (event.reason === 'note-too-large' || event.code === 1009) refuse()
         },

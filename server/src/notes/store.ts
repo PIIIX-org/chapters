@@ -7,6 +7,7 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or,
 import { db } from '../db/client.js'
 import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { recordJob } from '../monitoring/metrics.js'
+import { INSTANCE_LOCK_KEY, writesPaused } from './maintenance-lock.js'
 import { config } from '../config.js'
 import { kickEmbeddings } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
@@ -55,7 +56,6 @@ import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from
 import { orderKeys, presentedFrontmatter, sameContent } from './frontmatter-order.js'
 import {
   BACKFILL_MARKER,
-  INSTANCE_LOCK_KEY,
   NoteNotMigratedError,
   StoreBusyError,
   applyRowChange,
@@ -2112,6 +2112,8 @@ async function drainAppends(noteId: string, queue: AppendQueue): Promise<void> {
  * one before the batch, and ids are drawn in VALUES order.
  */
 async function commitAppends(noteId: string, batch: PendingAppend[]): Promise<LoggedUpdate[] | null> {
+  // As every store transaction (storeTransaction): nothing is written while this process has lost its maintenance lock.
+  if (writesPaused()) throw new StoreBusyError('maintenance lock connection lost, reconnecting')
   const vaultId = batch[0]!.vaultId
   const values = sql.join(
     batch.map((item, i) => sql`(${i}::int, ${Buffer.from(item.update)}::bytea, ${item.actor.type}::actor_type, ${item.actor.id ?? null}::uuid)`),

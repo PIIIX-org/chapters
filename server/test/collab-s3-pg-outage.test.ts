@@ -81,6 +81,10 @@ describe('Postgres unreachable across a reconnect (S3)', () => {
         token,
         document,
         onAuthenticationFailed: ({ reason }) => reasons.push(reason),
+        // A store-busy refusal closes the socket too (1013), so it can arrive as the close reason.
+        onClose: ({ event }) => {
+          if (event.reason) reasons.push(event.reason)
+        },
       })
       providers.push(provider)
       return provider

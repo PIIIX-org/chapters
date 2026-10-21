@@ -205,6 +205,43 @@ describe('useCollabDoc', () => {
     expect(view.result.current.ydoc.isDestroyed).toBe(false)
   })
 
+  describe('a store that is not taking writes for a moment (store-busy, ADR-003 §5.1)', () => {
+    it('a refused load or a store-busy close is a temporary drop: same document, typing kept, writable, new provider after the delay', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const { view, provider } = await connected()
+        act(() => provider.options.onStatus({ status: 'connected' }))
+        const ydoc = view.result.current.ydoc
+        act(() => ydoc.getText('body').insert(0, 'typed while the server paused writes'))
+        // The relay closes the socket with 1013 store-busy for an update, and refuses the reconnect's load the same way.
+        act(() => provider.options.onClose({ event: { code: 1013, reason: 'store-busy' } }))
+        act(() => provider.options.onAuthenticationFailed({ reason: 'store-busy' }))
+        expect(view.result.current.status).toBe('paused')
+        expect(view.result.current.writable).toBe(true)
+        expect(provider.disconnected).toBe(true)
+        // The provider's own socket status does not turn it into offline or a revocation meanwhile.
+        act(() => provider.options.onStatus({ status: 'disconnected' }))
+        expect(view.result.current.status).toBe('paused')
+        expect(stub.providers).toHaveLength(1)
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000)
+        })
+        await waitFor(() => expect(stub.providers).toHaveLength(2))
+        const next = stub.providers[1]!
+        expect(provider.destroyed).toBe(true)
+        // The same document, so the typing the relay never took is sent again on the new provider's sync.
+        expect(next.options.document).toBe(ydoc)
+        expect(view.result.current.ydoc).toBe(ydoc)
+        expect(ydoc.getText('body').toString()).toBe('typed while the server paused writes')
+        act(() => next.options.onStatus({ status: 'connected' }))
+        expect(view.result.current.status).toBe('connected')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
   it('a note the server has not migrated yet stops the editor with its own state, not a revocation', async () => {
     const { view, provider } = await connected()
     act(() => provider.options.onAuthenticationFailed({ reason: 'note-not-migrated' }))
@@ -231,8 +268,8 @@ describe('useCollabDoc', () => {
       const provider = stub.providers[0]!
       act(() => view.result.current.ydoc.getText('body').insert(0, 'typed while the store was busy'))
       act(() => provider.options.onAuthenticationFailed({ reason: 'store-busy' }))
-      expect(view.result.current.status).toBe('reconnecting')
-      expect(provider.destroyed).toBe(true)
+      expect(view.result.current.status).toBe('paused')
+      expect(provider.disconnected).toBe(true)
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000)
       })
@@ -734,7 +771,7 @@ describe('useCollabDoc', () => {
     expect(view.result.current.writable).toBe(true)
   })
 
-  it('a reconnect ticket that fails with a 5xx is retried on a new provider, and the refusal that follows is not a revocation (S3)', async () => {
+  it('a reconnect ticket that fails with a 5xx pauses and retries on a new provider; the refusal that follows is not a revocation (S3)', async () => {
     vi.useFakeTimers()
     try {
       const view = mount()
@@ -748,10 +785,11 @@ describe('useCollabDoc', () => {
       await act(async () => {
         await expect(provider.options.token()).rejects.toBeInstanceOf(ApiError)
       })
-      // What the provider reports after a token failure.
-      act(() => provider.options.onAuthenticationFailed({ reason: 'permission-denied' }))
+      // The provider keeps retrying; the refusal its failed attempt reports is a pause, not a revocation.
       expect(view.result.current.status).toBe('reconnecting')
-      expect(provider.destroyed).toBe(true)
+      act(() => provider.options.onAuthenticationFailed({ reason: 'permission-denied' }))
+      expect(view.result.current.status).toBe('paused')
+      expect(provider.disconnected).toBe(true)
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000)
       })
