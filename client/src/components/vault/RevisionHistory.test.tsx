@@ -210,6 +210,20 @@ describe('RevisionHistory', () => {
     expect(text[5]).toContain('Reverted to an earlier version')
   })
 
+  it('names a restore point after the agent it was kept for, so one revert undoes that agent (#482)', async () => {
+    const restorePoints = [
+      { id: 'rp-named', actorType: 'mcp', actorId: 'c1', actorName: 'claude-laptop', action: 'restore_point', createdAt: '2026-08-21T10:00:00.000Z' },
+      { id: 'rp-gone', actorType: 'mcp', actorId: 'c2', actorName: null, action: 'restore_point', createdAt: '2026-08-21T09:00:00.000Z' },
+    ]
+    stubFetch((url) => (url.includes('/history/') ? mockJsonResponse(200, [...restorePoints, ...REVISIONS]) : undefined))
+    renderWithClient(<RevisionHistory vaultId="v1" path="notes/one.md" access="edit" />)
+
+    expect(await screen.findByText('Before claude-laptop edited')).toBeTruthy()
+    // A deleted connection has no name left: still says what the row is for.
+    expect(screen.getByText('Before an AI agent edited')).toBeTruthy()
+    expect(screen.queryByText('restore_point')).toBeNull()
+  })
+
   it('opens diff preview modal showing visual additions and deletions comparing revision against current note', async () => {
     stubFetch((url) => {
       if (url.includes('/api/vaults/v1/revisions/rev-user')) {

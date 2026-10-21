@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
+import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
 import { scheduleEmbedding } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
@@ -44,58 +44,11 @@ const SYSTEM_ACTOR: Actor = { type: 'collab' }
 /** The `note_revisions.action` of a write kept out of the note (#492, notes/growth-guard.ts). */
 export const QUARANTINE_ACTION = 'quarantine'
 
-/** Records a revision unless it repeats the note's latest one. Frontmatter
- * is compared as jsonb stores it (#480): deep equality on its JSON form, so
- * object key order (jsonb uses its own, the collab document and a
- * frontmatter merge keep theirs), `undefined` members and Date vs ISO string
- * never count, while array order and every value still do.
- *
- * An equal state is a repeat only from the same actor (kind and id), or from
- * the relay (`collab`), whose store of an already recorded state changes
- * nothing. An attributed write (`mcp`, `user`) of the state the relay just
- * stored is recorded: the relay's revision has no author (#403) and may
- * bundle a person's typing, so it is never re-attributed. Only writes are
- * compared: quarantined writes (#492) are not the note's state, and history
- * events (#479, recordEvent) record something that happened to the note, so
- * a write after one is compared with the write before it. */
-async function recordRevision(
-  noteId: string,
-  action: string,
-  frontmatter: unknown,
-  body: string,
-  actor: Actor,
-): Promise<void> {
-  const last = (
-    await db
-      .select({
-        frontmatter: noteRevisions.frontmatter,
-        body: noteRevisions.body,
-        actorType: noteRevisions.actorType,
-        actorId: noteRevisions.actorId,
-      })
-      .from(noteRevisions)
-      .where(and(eq(noteRevisions.noteId, noteId), notInArray(noteRevisions.action, [QUARANTINE_ACTION, ...EVENT_ACTIONS])))
-      .orderBy(desc(noteRevisions.createdAt))
-      .limit(1)
-  )[0]
-  const repeatsAuthor = actor.type === 'collab' || (last?.actorType === actor.type && last.actorId === (actor.id ?? null))
-  if (
-    last &&
-    repeatsAuthor &&
-    last.body === body &&
-    isDeepStrictEqual(last.frontmatter, JSON.parse(JSON.stringify(frontmatter ?? null)))
-  ) {
-    return
-  }
-  await db.insert(noteRevisions).values({
-    noteId,
-    actorType: actor.type,
-    actorId: actor.id,
-    action,
-    frontmatter: frontmatter as Record<string, unknown>,
-    body,
-  })
-}
+/** The `note_revisions.action` of the state kept before an agent's first write in a session (#482). */
+export const RESTORE_POINT_ACTION = 'restore_point'
+
+/** An MCP connection's session on a note ends after this many minutes without a revision of its own there (#482). */
+export const RESTORE_POINT_IDLE_MINUTES = 30
 
 /**
  * What a history event records besides the note's state (#479): a delete or
@@ -109,6 +62,69 @@ export type HistoryEvent =
 
 /** The `note_revisions.action` of every history event. */
 const EVENT_ACTIONS: HistoryEvent['action'][] = ['delete', 'restore', 'rename', 'revert']
+
+/** The revision actions recordRevision dedupes: content writes. */
+const DEDUPED_ACTIONS: Record<string, true> = { create: true, update: true }
+
+/** Revisions recordRevision never compares a write with: not a write's state (#479, #482, #492). */
+const NOT_A_DEDUPE_BASELINE = [QUARANTINE_ACTION, RESTORE_POINT_ACTION, ...EVENT_ACTIONS]
+
+/** Records a revision unless it repeats the note's latest content. Frontmatter
+ * is compared as jsonb stores it (#480): deep equality on its JSON form, so
+ * object key order (jsonb uses its own, the collab document and a
+ * frontmatter merge keep theirs), `undefined` members and Date vs ISO string
+ * never count, while array order and every value still do.
+ *
+ * An equal state is a repeat only from the same actor (kind and id), or from
+ * the relay (`collab`), whose store of an already recorded state changes
+ * nothing. An attributed write (`mcp`, `user`) of the state the relay just
+ * stored is recorded: the relay's revision has no author (#403) and may
+ * bundle a person's typing, so it is never re-attributed.
+ *
+ * Only content writes (DEDUPED_ACTIONS) are deduped; events (#479) go
+ * through recordEvent and are always recorded. The write is compared with
+ * the newest content revision: quarantined writes (#492), restore points
+ * (#482) and events are not a write's state, so they are never the baseline. */
+async function recordRevision(
+  noteId: string,
+  action: string,
+  frontmatter: unknown,
+  body: string,
+  actor: Actor,
+): Promise<void> {
+  if (DEDUPED_ACTIONS[action]) {
+    const last = (
+      await db
+        .select({
+          frontmatter: noteRevisions.frontmatter,
+          body: noteRevisions.body,
+          actorType: noteRevisions.actorType,
+          actorId: noteRevisions.actorId,
+        })
+        .from(noteRevisions)
+        .where(and(eq(noteRevisions.noteId, noteId), notInArray(noteRevisions.action, NOT_A_DEDUPE_BASELINE)))
+        .orderBy(desc(noteRevisions.createdAt))
+        .limit(1)
+    )[0]
+    const repeatsAuthor = actor.type === 'collab' || (last?.actorType === actor.type && last.actorId === (actor.id ?? null))
+    if (
+      last &&
+      repeatsAuthor &&
+      last.body === body &&
+      isDeepStrictEqual(last.frontmatter, JSON.parse(JSON.stringify(frontmatter ?? null)))
+    ) {
+      return
+    }
+  }
+  await db.insert(noteRevisions).values({
+    noteId,
+    actorType: actor.type,
+    actorId: actor.id,
+    action,
+    frontmatter: frontmatter as Record<string, unknown>,
+    body,
+  })
+}
 
 /** Records a history event with the note's state. Always a new row: an event
  * is never a repeat of the state before it, whoever recorded that. */
@@ -129,6 +145,100 @@ async function recordEvent(
   })
 }
 
+/**
+ * Runs an MCP connection's write to a note and, when it is the connection's
+ * first write to that note in a session (#482), keeps the state the note had
+ * just before it as a `restore_point` revision attributed to the connection:
+ * one revert to it undoes everything that agent did in the session.
+ *
+ * MCP is served as stateless HTTP with no session id, so a session is the
+ * connection on this note until it has recorded no revision there for
+ * RESTORE_POINT_IDLE_MINUTES (quarantined writes do not count: they are not
+ * the note's state). The state is read before the write and recorded, dated
+ * at that read, only when `write` returns a result: a refused or failed write
+ * leaves no restore point. Unlike recordRevision it is kept even when the
+ * latest revision holds the same state (someone else's, or the agent's own
+ * from an earlier session); only not when that latest revision already is
+ * this connection's restore point of this state. The state kept is the stored
+ * note: typing the relay has not stored yet is not in it. Writes by the same
+ * connection to the note (keyed by note id, so whatever path it is reached
+ * by, also across a rename) run one at a time, so concurrent first writes
+ * keep one restore point. A restore point that cannot be stored (the note was
+ * purged in between) is logged, not reported as the write's failure: the
+ * write has landed.
+ */
+export async function withRestorePoint<T>(
+  vaultId: string,
+  path: string,
+  connectionId: string,
+  write: () => Promise<T>,
+): Promise<T> {
+  const found = await getLiveNote(vaultId, path)
+  // No live note: nothing to keep, and the write itself reports the missing note.
+  if (!found) return write()
+  return withKeyLock(`restore-point:${connectionId}:${found.id}`, async () => {
+    const point = await pendingRestorePoint(found.id, connectionId)
+    const result = await write()
+    if (point && result) {
+      try {
+        await db.insert(noteRevisions).values(point)
+      } catch (err) {
+        console.warn(`[restore-point] note ${found.id}: restore point not kept: ${(err as Error).message}`)
+      }
+    }
+    return result
+  })
+}
+
+/** The restore point withRestorePoint records after the write, or null when the session already has one. */
+async function pendingRestorePoint(noteId: string, connectionId: string) {
+  // The database's clock, as text, read before the row: a revision committed
+  // after the read sorts after the restore point. A JS Date would drop the
+  // microseconds that order revisions.
+  const [clock] = await db.execute<{ at: string }>(sql`select clock_timestamp()::text as at`)
+  const row = (await db.select().from(notes).where(and(eq(notes.id, noteId), isNull(notes.deletedAt))))[0]
+  if (!row) return null
+  const active = await db
+    .select({ id: noteRevisions.id })
+    .from(noteRevisions)
+    .where(
+      and(
+        eq(noteRevisions.noteId, row.id),
+        eq(noteRevisions.actorType, 'mcp'),
+        eq(noteRevisions.actorId, connectionId),
+        ne(noteRevisions.action, QUARANTINE_ACTION),
+        sql`${noteRevisions.createdAt} > now() - make_interval(mins => ${RESTORE_POINT_IDLE_MINUTES})`,
+      ),
+    )
+    .limit(1)
+  if (active.length > 0) return null
+  const last = (
+    await db
+      .select()
+      .from(noteRevisions)
+      .where(and(eq(noteRevisions.noteId, row.id), ne(noteRevisions.action, QUARANTINE_ACTION)))
+      .orderBy(desc(noteRevisions.createdAt))
+      .limit(1)
+  )[0]
+  if (
+    last?.action === RESTORE_POINT_ACTION &&
+    last.actorType === 'mcp' &&
+    last.actorId === connectionId &&
+    last.body === row.body &&
+    isDeepStrictEqual(last.frontmatter, row.frontmatter)
+  ) {
+    return null
+  }
+  return {
+    noteId: row.id,
+    actorType: 'mcp' as const,
+    actorId: connectionId,
+    action: RESTORE_POINT_ACTION,
+    frontmatter: row.frontmatter as Record<string, unknown>,
+    body: row.body,
+    createdAt: sql`${clock!.at}::timestamptz`,
+  }
+}
 /**
  * Keeps a suspicious write out of the note (#492): when `input.body` breaks
  * one of `rules` against the stored body, the write is recorded as a
@@ -873,7 +983,11 @@ export interface RevisionEventDetail {
   toPath?: string
 }
 
-export type RevisionMeta = Pick<RevisionRow, 'id' | 'actorType' | 'actorId' | 'action' | 'createdAt'> & RevisionEventDetail
+export type RevisionMeta = Pick<RevisionRow, 'id' | 'actorType' | 'actorId' | 'action' | 'createdAt'> &
+  RevisionEventDetail & {
+    /** The MCP connection's name on a revision an agent recorded; null for other actors or a deleted connection (#482). */
+    actorName: string | null
+  }
 
 /** One recorded revision with its content and the note's current path. */
 export type RevisionDetail = Omit<RevisionRow, keyof RevisionEventDetail> & RevisionEventDetail & { path: string }
@@ -890,6 +1004,22 @@ function eventDetail(r: { sourceRevisionId: string | null; fromPath: string | nu
     ...(r.fromPath === null ? {} : { fromPath: r.fromPath }),
     ...(r.toPath === null ? {} : { toPath: r.toPath }),
   }
+}
+
+/** Adds `actorName` to each revision: the History tab names the agent of a restore point with it (#482). */
+async function withActorNames<T extends Pick<RevisionRow, 'actorType' | 'actorId'>>(
+  rows: T[],
+): Promise<Array<T & { actorName: string | null }>> {
+  const ids = [...new Set(rows.flatMap((r) => (r.actorType === 'mcp' && r.actorId ? [r.actorId] : [])))]
+  const connections =
+    ids.length === 0
+      ? []
+      : await db
+          .select({ id: mcpConnections.id, name: mcpConnections.name })
+          .from(mcpConnections)
+          .where(inArray(mcpConnections.id, ids))
+  const names = new Map(connections.map((c) => [c.id, c.name]))
+  return rows.map((r) => ({ ...r, actorName: (r.actorType === 'mcp' && r.actorId && names.get(r.actorId)) || null }))
 }
 
 /** One revision in an MCP history page: who changed the note, when, how, and how big the body was. */
@@ -950,15 +1080,17 @@ export async function listRevisionPage(
   const page = rows.slice(0, limit)
   const last = page.at(-1)
   return {
-    revisions: page.map((r) => ({
-      id: r.id,
-      actorType: r.actorType,
-      actorId: r.actorId,
-      action: r.action,
-      createdAt: r.createdAt,
-      bodyBytes: r.bodyBytes,
-      ...eventDetail(r),
-    })),
+    revisions: await withActorNames(
+      page.map((r) => ({
+        id: r.id,
+        actorType: r.actorType,
+        actorId: r.actorId,
+        action: r.action,
+        createdAt: r.createdAt,
+        bodyBytes: r.bodyBytes,
+        ...eventDetail(r),
+      })),
+    ),
     next: rows.length > limit && last ? { at: last.at, id: last.id } : null,
   }
 }
@@ -987,10 +1119,12 @@ export async function listRevisionMeta(
     .orderBy(desc(noteRevisions.createdAt))
     .limit(limit)
     .offset(offset)
-  return rows.map(({ sourceRevisionId, fromPath, toPath, ...meta }) => ({
-    ...meta,
-    ...eventDetail({ sourceRevisionId, fromPath, toPath }),
-  }))
+  return withActorNames(
+    rows.map(({ sourceRevisionId, fromPath, toPath, ...meta }) => ({
+      ...meta,
+      ...eventDetail({ sourceRevisionId, fromPath, toPath }),
+    })),
+  )
 }
 
 /** Full content of a single recorded revision for preview / diff inspection. */

@@ -32,6 +32,21 @@ if (readNoteMaxBytes(env.ELARA_NOTE_MAX_BYTES) === null) {
   console.warn(`ELARA_NOTE_MAX_BYTES=${JSON.stringify(env.ELARA_NOTE_MAX_BYTES)} is not a positive whole number of bytes: using ${DEFAULT_NOTE_MAX_BYTES}`)
 }
 
+/** Default ELARA_EMBED_MAX_SYMBOLS_PER_FILE (#496); the largest file in the benchmark's chapters corpus has 43 symbols. */
+export const DEFAULT_EMBED_MAX_SYMBOLS_PER_FILE = 256
+
+/** `ELARA_EMBED_MAX_SYMBOLS_PER_FILE` -> a whole number >= 0, or null when it is not one. */
+export function readEmbedMaxSymbolsPerFile(raw: string | undefined): number | null {
+  if (raw === undefined || raw === '') return DEFAULT_EMBED_MAX_SYMBOLS_PER_FILE
+  if (raw.trim() === '') return null
+  const max = Number(raw)
+  return Number.isSafeInteger(max) && max >= 0 ? max : null
+}
+
+if (readEmbedMaxSymbolsPerFile(env.ELARA_EMBED_MAX_SYMBOLS_PER_FILE) === null) {
+  console.warn(`ELARA_EMBED_MAX_SYMBOLS_PER_FILE=${JSON.stringify(env.ELARA_EMBED_MAX_SYMBOLS_PER_FILE)} is not a whole number >= 0: using ${DEFAULT_EMBED_MAX_SYMBOLS_PER_FILE}`)
+}
+
 export const config = {
   nodeEnv: env.NODE_ENV ?? 'development',
   isProd: env.NODE_ENV === 'production',
@@ -114,6 +129,16 @@ export const config = {
   webhookStaleThresholdMs: Number(env.WEBHOOK_STALE_THRESHOLD_MS ?? 10 * 60 * 1000),
   /** 'local' = ONNX bge-small on CPU; 'fake' = deterministic test embedder. */
   embeddings: env.EMBEDDINGS ?? (env.NODE_ENV === 'production' ? 'local' : 'fake'),
+  /**
+   * Per-file embedding budget (#496): extraction embeds a repository file and
+   * at most this many of its symbols; the rest are stored without a vector
+   * (keyword search and read_file still see them) and the file records why in
+   * `embedding_note`. Each text is cut to 16k characters, so one file costs at
+   * most 1 + this many texts. A getter so tests can set it after the config loads.
+   */
+  get embedMaxSymbolsPerFile(): number {
+    return readEmbedMaxSymbolsPerFile(env.ELARA_EMBED_MAX_SYMBOLS_PER_FILE) ?? DEFAULT_EMBED_MAX_SYMBOLS_PER_FILE
+  },
   semanticThreshold: Number(env.SEMANTIC_THRESHOLD ?? 0.75),
   semanticK: Number(env.SEMANTIC_K ?? 8),
   smtp: (env.ELARA_SMTP_HOST ?? env.CHAPTERS_SMTP_HOST ?? env.SMTP_HOST)

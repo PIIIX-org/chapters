@@ -56,9 +56,12 @@ const ACTION: Record<string, string> = {
 /**
  * The row's action (#479): a rename says where the note moved from and to; a
  * revert names the time of the version it brought back when that version is
- * on this page, and says "an earlier version" when it is older or purged.
+ * on this page, and says "an earlier version" when it is older or purged. A
+ * restore point (#482) is named after the agent it was kept for: reverting to
+ * it undoes that agent's session.
  */
 function describeAction(revision: Revision, onPage: Revision[]): string {
+  if (revision.action === 'restore_point') return `Before ${revision.actorName ?? 'an AI agent'} edited`
   if (revision.action === 'rename' && revision.fromPath && revision.toPath) {
     return `Renamed from ${revision.fromPath} to ${revision.toPath}`
   }

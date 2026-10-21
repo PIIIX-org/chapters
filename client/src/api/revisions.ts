@@ -16,7 +16,13 @@ export interface Revision {
    */
   actorType: 'user' | 'mcp' | 'collab'
   actorId: string | null
-  /** create, update, delete, restore, rename, revert, quarantine (or a newer one: shown as is). */
+  /** History list only: the MCP connection's name when an agent recorded this revision; null otherwise or once the connection is deleted. */
+  actorName?: string | null
+  /**
+   * create, update, delete, restore, rename, revert, quarantine, or
+   * restore_point: the note as it was before an agent's first write in a
+   * session (#482). A newer one is shown as is.
+   */
   action: string
   createdAt: string
   /** A `revert` row: the revision it brought back (#479). */

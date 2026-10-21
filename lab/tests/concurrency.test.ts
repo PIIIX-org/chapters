@@ -66,7 +66,8 @@ async function historySince(admin: McpClient, vaultId: string, path: string, sin
 /**
  * For writers that reported success: is there a revision attributed to their
  * connection that contains their marker? For every mcp revision: does the
- * body contain a marker of the connection it is attributed to?
+ * body contain a marker of the connection it is attributed to? A restore
+ * point (#482) is the note as the connection found it, before its marker.
  */
 function attribution(revs: RevisionContent[], writers: Writer[], okWriters: number[], marker: (i: number) => string) {
   const byConn = new Map(writers.map((w) => [w.connId, w]))
@@ -74,7 +75,7 @@ function attribution(revs: RevisionContent[], writers: Writer[], okWriters: numb
     (i) => !revs.some((r) => r.actorId === writers[i]!.connId && r.body.includes(marker(i))),
   )
   const misattributed = revs.filter((r) => {
-    if (r.actorType !== 'mcp') return false
+    if (r.actorType !== 'mcp' || r.action === 'restore_point') return false
     const w = r.actorId ? byConn.get(r.actorId) : undefined
     return !w || !r.body.includes(marker(w.i))
   })

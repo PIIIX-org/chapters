@@ -157,6 +157,13 @@
       "breakpoints": true
     },
     {
+      "idx": 22,
+      "version": "7",
+      "when": 1791200000000,
+      "tag": "0022_repository_file_embedding_note",
+      "breakpoints": true
+    },
+    {
       "idx": 23,
       "version": "7",
       "when": 1791300000000,

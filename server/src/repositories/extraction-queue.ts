@@ -1,4 +1,5 @@
 import { and, count, eq, isNull } from 'drizzle-orm'
+import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFileSymbols, repositoryFiles } from '../db/schema.js'
 import { embedder } from '../search/embeddings.js'
@@ -237,7 +238,17 @@ async function processFile(fileId: string): Promise<void> {
       })
     }
 
-    const allTexts = [`${row.path}\n${row.content}`, ...symbolPayloads.map((s) => s.embedText)]
+    // Per-file budget (#496): the file and its first N symbols get a vector,
+    // the rest are stored without one, so one file with thousands of
+    // declarations neither holds the queue for minutes nor loses its structure.
+    const budget = config.embedMaxSymbolsPerFile
+    const embedded = symbolPayloads.slice(0, budget)
+    let embeddingNote: string | null = null
+    if (symbolPayloads.length > budget) {
+      embeddingNote = `symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: ${budget} of ${symbolPayloads.length} symbols embedded, the rest are keyword-searchable only`
+      console.warn(`[extraction] ${row.path} (repository file ${fileId}): ${embeddingNote}`)
+    }
+    const allTexts = [`${row.path}\n${row.content}`, ...embedded.map((s) => s.embedText)]
     const allEmbeddings = await embedder.embed(allTexts)
     const fileEmbedding = allEmbeddings[0]!
     const symbolEmbeddings = allEmbeddings.slice(1)
@@ -251,17 +262,20 @@ async function processFile(fileId: string): Promise<void> {
           startLine: s.startLine,
           endLine: s.endLine,
           snippet: s.snippet,
-          embedding: symbolEmbeddings[i],
+          embedding: symbolEmbeddings[i] ?? null,
         })),
       )
     }
 
-    await db.update(repositoryFiles).set({ embedding: fileEmbedding }).where(eq(repositoryFiles.id, fileId))
+    await db
+      .update(repositoryFiles)
+      .set({ embedding: fileEmbedding, embeddingNote })
+      .where(eq(repositoryFiles.id, fileId))
     await recomputeSemanticEdges('code', fileId, fileEmbedding)
     return
   }
 
   const [embedding] = await embedder.embed([`${row.path}\n${row.content}`])
-  await db.update(repositoryFiles).set({ embedding }).where(eq(repositoryFiles.id, fileId))
+  await db.update(repositoryFiles).set({ embedding, embeddingNote: null }).where(eq(repositoryFiles.id, fileId))
   await recomputeSemanticEdges('code', fileId, embedding!)
 }

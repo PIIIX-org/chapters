@@ -171,7 +171,7 @@ describe('note_history is metadata only and paginated (#411)', () => {
     const ids = await revisionIdsInDb()
     expect(page.revisions.map((rev) => rev.id)).toEqual(ids.slice(0, 20))
     const newest = page.revisions[0]!
-    expect(Object.keys(newest).sort()).toEqual(['action', 'actorId', 'actorType', 'bodyBytes', 'createdAt', 'id'])
+    expect(Object.keys(newest).sort()).toEqual(['action', 'actorId', 'actorName', 'actorType', 'bodyBytes', 'createdAt', 'id'])
     expect(newest).toMatchObject({ action: 'update', actorType: 'user', bodyBytes: Buffer.byteLength(bodyOf(EDITS)) })
     const times = page.revisions.map((rev) => Date.parse(rev.createdAt))
     expect(times).toEqual([...times].sort((a, b) => b - a))

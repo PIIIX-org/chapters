@@ -99,6 +99,8 @@ services:
       - ELARA_MONITORING_TOKEN
       # Largest note body in UTF-8 bytes (default 1 MiB), on every write path.
       - ELARA_NOTE_MAX_BYTES
+      # Symbols per repository file that get an embedding (default 256).
+      - ELARA_EMBED_MAX_SYMBOLS_PER_FILE
     volumes:
       # THE NOTES LIVE HERE. Vault content is markdown FILES ON DISK
       # (plus local-path repository clones), not rows in Postgres — a
