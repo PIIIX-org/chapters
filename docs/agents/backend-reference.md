@@ -908,17 +908,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   enough). Sessionless, time-boxed **export links**
   (`EXPORT_LINK_TTL_HOURS`, default 24h) for sharing outside the app.
   Entries: live notes as OKF `<path>.md`, `assets/<name>`,
-  `manifest.json` (`vaultId`, `name`, `mergeable`, `shares`) and, per
+  `manifest.json` (`formatVersion` 1, `vaultId`, `name`, `mergeable`,
+  `shares`) and, per
   note live or trashed, `.elara/history/<noteId>.json`
   (`vault-history.ts`, #499): `path`, `createdAt`/`updatedAt`/`deletedAt`
   (microsecond UTC text), a trashed note's `frontmatter` + `body`, and
   `revisions` oldest first (`action`, `actorType`, `actorId`,
   `actorEmail` for user actors, `frontmatter`, `body`, `createdAt`).
+  An export (download, export link or MCP `export_vault`) therefore
+  carries the vault's full history and trash, including the email of
+  every past revision author, also of users who have since lost access.
 - **Import** (`POST /api/import`): uploads a zip, creates a **new**
   vault with a **new** owner and new IDs, re-validates every note
   through the normal OKF write path, best-effort per note (an invalid
-  note is skipped and reported, not fatal). Assets keep their archive
-  file names (unsafe names are dropped). Trashed notes are recreated in
+  note is skipped and reported, not fatal). Refused with 400 before any
+  vault is created: a manifest `formatVersion` newer than the server's,
+  or a history file with a time that is not a real UTC instant. Assets
+  keep their archive file names (unsafe names, `.` and `..` are
+  dropped); `.md` files under `assets/` stay attachments, never notes. Trashed notes are recreated in
   the trash, then live notes; each note with a history file gets the
   archive's revisions (new ids, original order and times) and its
   original created/updated/deleted times. A revision keeps its author

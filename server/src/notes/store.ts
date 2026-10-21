@@ -1396,9 +1396,9 @@ export async function writeAsset(
   return { fileName, size: buffer.length, mimeType }
 }
 
-/** A bare file name inside a vault's `assets/` directory: no path parts, no traversal. */
+/** A bare file name inside a vault's `assets/` directory: no path parts, no traversal, not the directory itself. */
 export function isSafeAssetName(filename: string): boolean {
-  return Boolean(filename) && !filename.includes('..') && /^[a-zA-Z0-9._-]+$/.test(filename)
+  return Boolean(filename) && filename !== '.' && !filename.includes('..') && /^[a-zA-Z0-9._-]+$/.test(filename)
 }
 
 export async function readAsset(

@@ -14,10 +14,11 @@ import {
   addVaultToZip,
   buildInstanceBackup,
   buildVaultZip,
+  VAULT_ARCHIVE_FORMAT_VERSION,
   type VaultManifest,
 } from './archive.js'
 import { executeBackup, getBackupStatus } from './backup-service.js'
-import { importVaultContent } from './vault-history.js'
+import { ArchiveFormatError, importVaultContent, readArchiveHistory, type ArchiveHistory } from './vault-history.js'
 
 const LINK_TTL_MS = Number(process.env.EXPORT_LINK_TTL_HOURS ?? 24) * 60 * 60 * 1000
 
@@ -281,7 +282,23 @@ export function exportRoutes(app: FastifyInstance) {
         }
         const manifestEntry = zip.getEntry('manifest.json')
         if (!manifestEntry) return reply.code(400).send({ error: 'manifest.json missing' })
-        const manifest = JSON.parse(manifestEntry.getData().toString('utf8')) as VaultManifest
+        const manifest = JSON.parse(manifestEntry.getData().toString('utf8')) as Partial<VaultManifest>
+        if (
+          manifest.formatVersion !== undefined &&
+          !(Number.isInteger(manifest.formatVersion) && manifest.formatVersion <= VAULT_ARCHIVE_FORMAT_VERSION)
+        ) {
+          return reply.code(400).send({
+            error: `unsupported archive format version ${JSON.stringify(manifest.formatVersion)} (this server reads up to ${VAULT_ARCHIVE_FORMAT_VERSION})`,
+          })
+        }
+        // Checked before anything is written, so a refused archive leaves no vault behind.
+        let history: ArchiveHistory
+        try {
+          history = readArchiveHistory(zip)
+        } catch (err) {
+          if (err instanceof ArchiveFormatError) return reply.code(400).send({ error: err.message })
+          throw err
+        }
 
         const [vault] = await db
           .insert(vaults)
@@ -298,6 +315,7 @@ export function exportRoutes(app: FastifyInstance) {
           vault!.id,
           typeof manifest.vaultId === 'string' ? manifest.vaultId : undefined,
           { id: req.user!.id, email: req.user!.email },
+          history,
         )
 
         const shares = await importManifestShares(

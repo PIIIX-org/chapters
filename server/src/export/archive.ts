@@ -29,7 +29,15 @@ export interface ShareManifestEntry {
   permission: 'read' | 'edit'
 }
 
+/**
+ * Version of the vault archive layout. 1: OKF tree, `assets/`, manifest and
+ * `.elara/history/` (#499). Archives without it are older exports; import
+ * refuses a version newer than this one.
+ */
+export const VAULT_ARCHIVE_FORMAT_VERSION = 1
+
 export interface VaultManifest {
+  formatVersion: number
   /** The exported vault's id: import points this vault's attachment links at the new vault (#499). */
   vaultId: string
   name: string
@@ -53,6 +61,7 @@ export async function buildManifest(vaultId: string): Promise<VaultManifest | nu
   const emailById = new Map(userRows.map((u) => [u.id, u.email]))
   const teamNameById = new Map(teamRows.map((t) => [t.id, t.name]))
   return {
+    formatVersion: VAULT_ARCHIVE_FORMAT_VERSION,
     vaultId: vault.id,
     name: vault.name,
     mergeable: vault.mergeable,
