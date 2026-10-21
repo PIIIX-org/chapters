@@ -1,6 +1,7 @@
 // Docker control for tests. Tests run on the runner host, next to the
 // compose project, so they can restart/kill the app and query Postgres
 // directly (ground truth that MCP does not expose).
+import { recoverAfterKill, type Recovery } from './app-recovery.ts'
 
 /** The compose invocation the workflow used; run everything from the repo root. */
 export const COMPOSE = ['docker', 'compose', '-f', 'docker-compose.yml', '-f', 'lab/docker-compose.lab.yml']
@@ -114,17 +115,45 @@ export const app = {
   },
   /**
    * SIGKILL the app (crash) via `docker kill` (lower latency than compose, so
-   * tests can aim the kill), then start it again and wait for health.
+   * tests can aim the kill), then bring it back (lib/app-recovery.ts: wait
+   * for the old process to exit, `compose start` with retries, wait for
+   * /health). Throws, with every start attempt and the last app log lines,
+   * when it does not come back (#658): the caller's later steps never run
+   * against a dead app.
    */
   async crash(baseUrl: string) {
     const cid = await appContainerId()
     const t0 = performance.now()
     const k = await exec(['docker', 'kill', '-s', 'KILL', cid])
     const killMs = performance.now() - t0
-    // restart: unless-stopped may already be bringing it back; start is then a no-op or a harmless error.
-    const s = await exec([...COMPOSE, 'start', 'app'])
-    const healthyMs = await waitHealthy(baseUrl)
-    return { killMs, killCode: k.code, killErr: k.stderr.trim().slice(0, 300), startCode: s.code, healthyMs }
+    let recovery: Recovery
+    try {
+      recovery = await recoverAfterKill({
+        status: async () => (await containerState(cid))?.status ?? null,
+        start: () => exec([...COMPOSE, 'start', 'app']),
+        probe: () =>
+          fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(5_000) })
+            .then((r) => r.ok)
+            .catch(() => false),
+        sleep: (ms) => Bun.sleep(ms),
+        now: () => performance.now(),
+      })
+    } catch (err) {
+      const logs = await exec([...COMPOSE, 'logs', '--no-color', '--tail', '30', 'app'])
+      throw new Error(
+        `${err instanceof Error ? err.message : String(err)} (docker kill exit ${k.code}${k.stderr.trim() ? `: ${k.stderr.trim().slice(0, 300)}` : ''})\nlast app log lines:\n${logs.stdout}${logs.stderr}`,
+      )
+    }
+    const last = recovery.attempts.at(-1)!
+    return {
+      killMs,
+      killCode: k.code,
+      killErr: k.stderr.trim().slice(0, 300),
+      startCode: last.startCode,
+      starts: recovery.attempts.length,
+      exitedMs: recovery.exitedMs,
+      healthyMs: recovery.healthyMs,
+    }
   },
   /** State of the current app container; throws when it cannot be read. */
   async state(): Promise<ContainerState> {

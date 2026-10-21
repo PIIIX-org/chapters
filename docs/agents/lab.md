@@ -17,10 +17,11 @@ committed baseline of known defects.
 | `lab/bootstrap.ts` | setup → signup → verify → approve → login, pinned vault + repo, 4 MCP tokens; writes `lab-env.json` (runner only, holds tokens) |
 | `lab/run.ts` | selects tests by tier or filter, waits for `/health` before each, runs them in file-name order, writes `lab-results/` |
 | `lab/redact.ts` | replaces this run's secrets (`.env` values, bootstrap passwords, cookies, tokens) with `***` in `lab-results/` before upload |
-| `lab/lib/*.ts` | helpers: `context` (types, `ctx`), `mcp`, `rest`, `docker` (compose, psql, app restart/crash/state/exec), `collab` (Hocuspocus client), `datapath` (disk/DB/.crdt ground truth, memory and health samplers), `fixlab` (repo progress, local_path repos), `portability` (zip, fixtures, OKF), `bundle-test` |
+| `lab/lib/*.ts` | helpers: `context` (types, `ctx`), `mcp`, `rest`, `docker` (compose, psql, app restart/crash/state/exec), `app-recovery` (bringing the app back after a SIGKILL), `collab` (Hocuspocus client), `datapath` (disk/DB/.crdt ground truth, memory and health samplers), `fixlab` (repo progress, local_path repos), `file-diff` (file-count comparison text), `git-fixture` (a pinned git repository served to the app over HTTP), `portability` (zip, fixtures, OKF), `bundle-test`; `lab/lib/*.test.ts` are node unit tests of the helpers that need no instance, run by CI `checks` |
 | `lab/tests/*.test.ts` | the tests |
 | `lab/known-defects.json` | the baseline: every check that fails or is inconclusive today, with its open issue |
 | `.github/scripts/lab-gate.mjs` | the gate; unit tests in `lab-gate.test.mjs` (run by `checks`) |
+| `.github/scripts/lab-nightly-alert.mjs` | the `nightly-alert` job: opens, updates or closes the `lab-nightly` issue after the scheduled run (#706); unit tests in `lab-nightly-alert.test.mjs` (run by `checks`) |
 | `lab/package.json`, `lab/bun.lock` | lab-only dependencies (`@hocuspocus/provider`, `yjs`, `playwright`); not a pnpm workspace package |
 
 ## Tiers and triggers
@@ -79,6 +80,27 @@ its long parts). A newer run on the same ref cancels the older one; the
 nightly has its own concurrency group, so a dispatch or PR on `dev` never
 cancels it. `plan` and `lab` are **required status checks** on `dev` and
 `prod` (#574; `lab` is skipped, which passes, when `plan` picks no tier).
+
+### Nightly alert (`nightly-alert` job, #706)
+
+After the scheduled run on `dev`, the `nightly-alert` job keeps one open
+issue titled "Nightly lab failing", labelled `lab-nightly`, in step with
+the nightly, so a red night notifies the issue's subscribers instead of
+only turning STATE.md's generated block bold:
+
+- **red** (a job failed or was cancelled, or `lab` did not run): with no
+  open issue it opens one, else it comments on it; either way the text has
+  the failed jobs, the run link and the gate summary (`lab-results/gate.md`
+  without its known-defect tables: counts, harness failures, regressions,
+  stale entries; plus `bench-gate/gate.md` when the benchmark failed);
+- **green**: it comments with the run link and closes the open issue.
+
+It posts only for the `schedule` event on `dev` of PIIIX-org/chapters; it
+does not run on PRs or pushes. To see what it would post without posting:
+`gh workflow run elara-lab.yml -R PIIIX-org/chapters --ref <branch> -f alert_dry_run=true [-f tier=fast]`
+(the job summary shows the decision and the text). Fix the cause, or
+update `lab/known-defects.json`, as for any red gate; the issue closes
+itself on the next green nightly.
 
 ## The premise benchmark (`bench` and `bench-gate` jobs)
 
@@ -145,8 +167,10 @@ A test reports **checks**: `ok: true` (Elara met the expectation),
 for example a token was refused or the instance did not answer). A test that
 **throws**, times out (`LAB_TEST_TIMEOUT_MS`, default 90 min) or reports no
 checks is a harness crash; so is a test whose instance is not healthy within
-180 s before it starts. After a timeout the remaining tests are not run (the
-timed-out test may still be driving the instance) and count as crashed.
+180 s before it starts. After a timeout, or after the first test that finds
+the instance unhealthy, the remaining tests are not run (the timed-out test
+may still be driving the instance; a dead instance would only crash each of
+them after another 180 s wait, #658) and count as crashed.
 `lab/run.ts` only records; the gate step decides.
 
 `lab/known-defects.json` lists every check that does not pass today:
@@ -271,7 +295,8 @@ Rules:
 - Tests run sequentially in file-name order on **one** instance. Create
   your own vaults, repos and tokens (`ctx.uniq`); do not delete or break the
   bootstrap resources. A test that restarts or kills the app must leave it
-  healthy (`ctx.docker.app.restart/crash` wait for `/health`). Tests that
+  healthy (`ctx.docker.app.restart/crash` wait for `/health`; `crash`
+  throws when the app does not come back, so the test stops there). Tests that
   can take the instance down are named `zz-` so they run last.
 - Never print secrets: credentials and tokens come from `ctx.env`; redact
   them from error text you throw (see `browser.test.ts`). The workflow
@@ -299,7 +324,7 @@ in `pnpm lint`; for types run `tsc --noEmit` with `types: ["bun"]`,
 | `ctx.mintToken(user, name, scope?, options?)` | new MCP connection via `POST /api/mcp-connections` → `{id, token}`; `options`: `vaultId`/`repositoryId` for the pin, `access` (`read`/`write`/`admin`), `allowedTools`, `expiresAt` |
 | `ctx.createVault(user, name)` / `ctx.connectRepo(user, name, gitUrl)` | REST create; repo sync starts immediately (public https URLs only) |
 | `ctx.signupUser(email, password)` | a new active user through signup, the mailpit code, verification, admin approval and login → `{id, session}`; for tests that must deactivate or otherwise spend a user (never the bootstrap ones) |
-| `ctx.docker.app.restart(baseUrl)` / `.crash(baseUrl)` | graceful restart / `docker kill -s KILL` + start, both wait for `/health` |
+| `ctx.docker.app.restart(baseUrl)` / `.crash(baseUrl)` | graceful restart / `docker kill -s KILL`, then (`lib/app-recovery.ts`, #658) wait for the old process to exit, `compose start` up to 3 times (a failed start, or a container that exits again during boot, is retried), wait up to 300 s for `/health`; throws with every attempt and the last app log lines when the app does not come back |
 | `ctx.docker.app.state()` / `.logs(service, n)` / `.stop()` / `.start()` | `docker inspect` (restart count, OOM, start time), log tail, raw control |
 | `ctx.docker.appExec(args, stdin?)` | a command inside the app container |
 | `ctx.docker.psql(sql)` / `ctx.docker.psqlRows<T>(select)` | SQL in the `db` container: ground truth MCP does not show |
@@ -307,10 +332,21 @@ in `pnpm lint`; for types run `tsc --noEmit` with `types: ["bun"]`,
 
 Tunables via env (set in the workflow step if needed): `LAB_TESTS`,
 `LAB_TIER`, `LAB_ALSO`, `LAB_TEST_TIMEOUT_MS`, `LAB_CONCURRENCY_SIZES`
-(`5,10,20`), `LAB_RESTART_REPO_URL`, `LAB_RESTART_AT` (0.25),
+(`5,10,20`), `LAB_RESTART_REPO_URL` (default: none, see below), `LAB_RESTART_AT` (0.25),
 `LAB_RESTART_STALL_MS` (120000), `LAB_SCOPE_OTHER_REPO_URL`,
 `LAB_SCOPE_PINNED_REPO_URL`, `LAB_IMPORTS_REPO_URL`, `LAB_CRASH_EDITS`,
 `LAB_CRASH_CREATES`, `LAB_BIG_SIZES_KIB`, `LAB_BUNDLE_*`.
+
+`restart-extraction` compares several syncs of one repository over about
+20 minutes, so that repository must not move during the run (#767: a merge
+to `dev` mid-run read as lost files). By default it builds a one-commit
+git repository from the tracked tree of the commit under test (`git
+archive HEAD` of the workflow's checkout), serves it from the runner with
+`git http-backend` (`lib/git-fixture.ts`) and connects it as
+`http://host.docker.internal:<port>/chapters.git`; the lab compose
+override maps `host.docker.internal` to the host gateway. Its file counts
+therefore follow the commit under test. `LAB_RESTART_REPO_URL` replaces it
+with a public URL, which may move again.
 
 ## Gotchas
 

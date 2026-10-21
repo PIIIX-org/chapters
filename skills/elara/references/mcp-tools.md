@@ -154,6 +154,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `vaultId` (uuid, optional).
   - `path` (string, required).
 - **Returns**: `{ path, frontmatter, body }`.
+- People who have the note open in the editor see this connection, by its name, in the note's "In this note now" row as an agent that is reading, until 60 s after its last call on the note. Nothing is shown, and nothing is loaded, for a note nobody has open. The same goes for `export_note`.
 
 ### `create_note`
 - **Scope**: vault. Edit access.
@@ -182,6 +183,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - The resulting frontmatter is validated as a whole (the rules at the top of this section) before anything is written; if it is invalid (for example `status: "bogus"` or `title: null`), the call fails and neither the note nor the live document changes. If the invalid value is a key already on the note that you did not send (for example a value a person typed in the editor that the server refused to store), the error names that key: send a valid value for it, list it in `removeKeys`, or pass `replace: true` with the whole map.
 - **Returns**: the updated note row.
 - The edit goes through the live collaboration document, so people with the note open see it change. Because the body is replaced, not merged, text a person is typing in the same note at that moment can be lost. To append, read the note, then send the full new body. Concurrent writes to one note run one at a time, but they are not merged: if two agents each read the note and write it back with a line appended, only the later write survives.
+- While they have it open, they also see this connection, by its name (never its token), in the note's "In this note now" row as an agent that is editing, until 60 s after its last write (`revert_note` counts as a write).
 - **Quarantine**: a body that looks like accidental duplication is not written. It is quarantined when, compared with the note's stored body, it is at least 1.9 times as large and the stored body is 2 KiB or more (growth), or it repeats text the note already has and the extra copies add up to at least 1 KiB and half of the stored body (repeated block). Sizes are UTF-8 bytes; a short note filled in, ordinary growth and `create_note` are never quarantined. The call fails with `write to <path> quarantined: ...`, naming the rule and the id of the revision that keeps the refused body; the note is left unchanged and nobody with it open sees the body. The revision has action `quarantine` in `note_history`; `get_revision` returns its body and `revert_note` writes it. To write the body anyway, send the same call with `allowGrowth: true`.
 
 ### `rename_note`
@@ -194,6 +196,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Returns**: the updated note row.
 - Links in other live notes of the same vault that use the old **full path** (`[[domains/auth/tokens]]`) are rewritten. Bare-name links (`[[tokens]]`) are not, and break.
 - A longer path makes those links longer. If the rewrite would take the note itself or any linking note over the body size limit, the rename is refused with an error naming that note, and nothing is renamed or rewritten.
+- A rename runs one at a time with other writes to the note and to the target path. An edit, delete or rename of the old path sent while the rename runs fails with `note not found` once it is done; of two renames (or a rename and a create) into one path, one succeeds and the other fails with `a note already exists at <path>`. Links in other notes are rewritten right after the move, each as its own write that keeps the note's other changes, to the renamed note's path at that time: notes renamed at the same time that link to each other, or that one note links, all end up linked at their new paths.
 
 ### `delete_note`
 - **Scope**: vault. Edit access.

@@ -107,6 +107,8 @@ The restore runs in three steps:
 
 It runs on an empty instance (no users). Any other instance is refused (`Refusing to restore: this instance already has N user(s) ...`), as is an archive whose rows would clash with different existing rows (same email, same live note path). Run it again on an instance already restored from the same archive and it writes nothing (`Already restored from this archive at ...`): the restore commits completely or not at all, so there is nothing to resume, and writing again would bring back what was deleted since (shares, purged notes, rotated MFA backup codes). The one thing it repairs is a missing generated `index.md`, in case the process stopped right after the commit. After a failed restore the instance is still empty: fix the cause and run it again.
 
+Sessions are not restored: everyone signs in again. MCP tokens are restored with their hashes, so account, vault and repository tokens keep working with the same token string, access level, allow-list, expiry and revocation; the only tokens left out are the ones a plan warning names (repository-pinned tokens in a format-1 archive, below). The CLI's closing message says the same.
+
 Until the app restarts, semantic search finds nothing; the restart computes the embeddings in the background. Restored repositories come back with an empty file index and no last sync: git repositories are re-indexed by the next poll, local-folder repositories with **Sync** on the repository, agent-push repositories on the agent's next push.
 
 ### Older archives (format 1)
@@ -114,7 +116,7 @@ Until the app restarts, semantic search finds nothing; the restart computes the 
 Archives written before #409 (an `account-dump.json`, no `backup.json`) still restore, with what they have: users, teams, vaults, shares, MCP tokens, security events, notifications, live notes and attachments. They have no SHA-256 digests (the plan warns). They never held the trash, revision history, repositories or TOTP secrets, so after such a restore:
 
 - each note has one `create` revision and a new id (the same id on every restore of that archive);
-- tokens pinned to a repository are left out (the plan says how many);
+- tokens pinned to a repository are left out, since the archive has no repositories (the plan warns how many); account and vault tokens keep working;
 - users who had MFA on can't sign in until it is cleared, after which they set it up again:
 
   ```bash

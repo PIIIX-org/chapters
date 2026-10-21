@@ -206,16 +206,20 @@ export function adminRoutes(app: FastifyInstance) {
         .where(eq(users.id, req.params.id))
         .returning()
       if (!deactivated) return null
-      await tx.delete(sessions).where(eq(sessions.userId, deactivated.id))
+      const ended = await tx
+        .delete(sessions)
+        .where(eq(sessions.userId, deactivated.id))
+        .returning({ tokenHash: sessions.tokenHash })
       await tx.delete(teamMemberships).where(eq(teamMemberships.userId, deactivated.id))
       await tx
         .delete(vaultShares)
         .where(and(eq(vaultShares.granteeType, 'user'), eq(vaultShares.granteeId, deactivated.id)))
       await revokeConnectionsAndLog(tx, deactivated.id, actorUserId, 'user_deactivated')
-      return deactivated
+      return { ...deactivated, endedSessions: ended.map((s) => s.tokenHash) }
     })
     if (!user) return reply.code(404).send({ error: 'user not found' })
-    emitPermissionChange({ userIds: [user.id] })
+    // Its sessions ended: every live connection they opened closes (#498).
+    emitPermissionChange({ userIds: [user.id], sessionHashes: user.endedSessions })
     await notify({
       recipientId: user.id,
       type: 'account_status_changed',

@@ -2102,7 +2102,7 @@ post('/mcp-connections/:id/revoke', ({ params }) => {
 })
 
 // --- import -----------------------------------------------------------------
-post('/import', ({ raw }) => {
+post('/import', ({ raw, query }) => {
   if (!raw.length) throw bad('archive required')
   const v = { id: randomUUID(), name: `Imported vault ${vaults.length + 1}`, ownerId: ME.id, mergeable: true, access: 'owner', deletedAt: null }
   vaults.push(v)
@@ -2110,7 +2110,10 @@ post('/import', ({ raw }) => {
     { id: randomUUID(), vaultId: v.id, path: 'notes/welcome', type: 'notes', name: 'welcome', frontmatter: { type: 'notes', tags: ['imported'], timestamp: now() }, body: '# Welcome\n\nImported from an archive. See [[projects/first-project]].\n', updatedAt: now(), deletedAt: null },
     { id: randomUUID(), vaultId: v.id, path: 'projects/first-project', type: 'projects', name: 'first-project', frontmatter: { type: 'projects', tags: ['imported'], timestamp: now() }, body: '# First project\n\n- [ ] Start\n', updatedAt: now(), deletedAt: null },
   ])
-  return { vaultId: v.id, imported: 2, skipped: ['notes/broken: missing frontmatter fence'], unmatchedShares: ['reviewer@external.example'] }
+  // Shares from the archive are granted only on request (#621); the mock has no other accounts to match.
+  const share = { granteeType: 'user', grantee: 'reviewer@external.example', permission: 'read' }
+  const reason = query.get('applyShares') === 'true' ? 'no_active_user' : 'not_requested'
+  return { vaultId: v.id, imported: 2, skipped: ['notes/broken: missing frontmatter fence'], appliedShares: [], skippedShares: [{ ...share, reason }] }
 })
 
 // --- admin ------------------------------------------------------------------

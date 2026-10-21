@@ -7,7 +7,7 @@ import { ApiError } from '../lib/api.js'
 import { claimLeftoverCopies, keepCollabCopy } from '../lib/collabStash.js'
 import type { CollabCopy } from '../lib/collabStash.js'
 import { collabStashName, hasCollabStash } from '../lib/collabStashNames.js'
-import { inkFor } from '../lib/ink.js'
+import { AI_INK, inkFor } from '../lib/ink.js'
 import type { Ink } from '../lib/ink.js'
 
 export type CollabStatus =
@@ -22,6 +22,11 @@ export type CollabStatus =
   | 'reconnecting'
   /** Access was pulled. The relay kicked us and will not take us back. */
   | 'revoked'
+  /** The session ended (#498): logout here or in another tab, a password
+   *  change or reset elsewhere, deactivation, expiry. The relay closed the
+   *  socket and takes nothing more from that session; what was typed stays on
+   *  screen and, until a logout here clears it, in this user's browser copy. */
+  | 'signed-out'
   /** We never got a ticket and it was not a refusal — the API or the relay is
    *  down. Not a revocation, but nothing typed here is going anywhere either. */
   | 'offline'
@@ -33,17 +38,28 @@ export type CollabStatus =
    *  keeps would not fit through the relay's frame limit). */
   | 'too-large'
 
-export interface CollabPeer {
-  /** Yjs awareness client id — unique per tab, not per user. */
-  clientId: number
-  userId: string
-  /** Label under the pen nib. */
-  name: string
-  ink: Ink
-  /** True for the AI/MCP participant, which wears teal and never an ink hue.
-   *  Always false today: see {@link toPeer} — nothing the relay sends can tell
-   *  a real MCP connection from a human client claiming to be one. */
-}
+/** A person editing this note, or an agent (an MCP connection) that read or wrote it. */
+export type CollabPeer =
+  | {
+      kind: 'person'
+      /** Yjs awareness client id — unique per tab, not per user. */
+      clientId: number
+      userId: string
+      /** Label under the pen nib. */
+      name: string
+      ink: Ink
+    }
+  | {
+      kind: 'agent'
+      /** Awareness client id the relay gave this agent on this note. */
+      clientId: number
+      /** The MCP connection's label. */
+      name: string
+      /** Always {@link AI_INK}: teal means an AI is at work. */
+      ink: Ink
+      /** Editing until the relay's idle timeout (60 s) after its last write; reading otherwise. */
+      activity: 'editing' | 'reading'
+    }
 
 export interface CollabSession {
   /** The shared document. `getText('body')` and `getMap('frontmatter')` are the
@@ -91,29 +107,31 @@ export interface UseCollabDocOptions {
   enabled: boolean
 }
 
-/** Dead ends: the two states where a keystroke reaches no one. */
-const DEAD: readonly CollabStatus[] = ['revoked', 'offline']
+/** Dead ends: the states where a keystroke reaches no one. */
+const DEAD: readonly CollabStatus[] = ['revoked', 'signed-out', 'offline']
 
 /**
- * Awareness is whatever a peer chose to broadcast: every field here is that
- * peer's own claim about itself, including `user.id`, so nothing here may
- * assert authorship from it.
+ * Awareness is whatever a peer chose to broadcast: every field of a person's
+ * state is that peer's own claim about itself, including `user.id`, so
+ * nothing here may assert authorship from it.
  *
- * There is also no AI peer to assert: MCP does not join this protocol at all.
- * `writeThroughCollab` (server/src/mcp/crdt-write.ts) edits via Hocuspocus's
- * `openDirectConnection`, a server-side handle onto the document that never
- * broadcasts awareness — so an MCP edit arrives as a change with no cursor and
- * no presence entry, and every peer in this list is a person.
- *
- * If MCP ever does join awareness, identity must come from the relay, which
- * already knows it — `onAuthenticate` returns `{ userId }` as the connection
- * context (server/src/sync/collab-server.ts). The server would have to reject
- * or overwrite an awareness `user` whose id is not that authenticated id.
+ * An agent's state is the exception, because only the relay writes it (#481,
+ * server/src/sync/agent-presence.ts): when an MCP connection reads or writes
+ * a note that is open, the relay adds `{ agent: { name, activity } }` under a
+ * client id of its own, and it strips `agent` from every state a browser
+ * sends. So `agent` is the one field that can earn teal; a `user` claiming to
+ * be the MCP is a person like any other. Agents have no `user` and no cursor,
+ * so the editor draws no caret for them.
  */
 function toPeer(state: { clientId: number; [key: string]: unknown }): CollabPeer | null {
+  const agent = state.agent as { name?: unknown; activity?: unknown } | undefined
+  if (typeof agent?.name === 'string' && (agent.activity === 'editing' || agent.activity === 'reading')) {
+    return { kind: 'agent', clientId: state.clientId, name: agent.name, ink: AI_INK, activity: agent.activity }
+  }
   const user = state.user as { id?: unknown; name?: unknown } | undefined
   if (typeof user?.id !== 'string' || typeof user.name !== 'string') return null
   return {
+    kind: 'person',
     clientId: state.clientId,
     userId: user.id,
     name: user.name,
@@ -188,8 +206,9 @@ function utf8Length(text: string): number {
  * (`server/src/sync/collab-server.ts`). Editors only.
  *
  * Being kicked is a normal outcome, not an error: the relay closes the socket
- * the instant a share is revoked. When that happens this hook stops reconnecting
- * and reports `revoked` — but it never touches `ydoc`, so whatever the user had
+ * the instant a share is revoked, or the session ends (#498). When that happens
+ * this hook stops reconnecting and reports `revoked` or `signed-out` — but it
+ * never touches `ydoc`, so whatever the user had
  * typed is still on screen for them to copy out. Destroying the document on a
  * kick would delete their unsaved work, which is the one thing this must not do.
  */
@@ -251,7 +270,8 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     let provider: HocuspocusProvider | undefined
     let cancelled = false
     let everConnected = false
-    let revoked = false
+    // Revoked or signed out: the relay will not take this tab back.
+    let stopped = false
     let retry: ReturnType<typeof setTimeout> | undefined
     // The relay's state has arrived since the socket last opened.
     let handshake = false
@@ -351,8 +371,10 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
         void stored.then((ok) => (ok ? copy.release() : copy.close()))
       }
       if (offered.length === 0) return
-      unmergedRef.current = offered
-      setUnmerged(offered.map((copy) => copy.doc.getText('body').toString()).join('\n\n'))
+      // Appended: a copy claimed later (#766) joins the ones already offered.
+      const pending = [...(unmergedRef.current ?? []), ...offered]
+      unmergedRef.current = pending
+      setUnmerged(pending.map((copy) => copy.doc.getText('body').toString()).join('\n\n'))
     }
 
     /** Re-reads where the document stands after anything that can move it. */
@@ -444,22 +466,39 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
 
     const wentOffline = () => {
       browserOffline = true
-      if (!revoked && !refused && provider && away()) setStatus('reconnecting')
+      if (!stopped && !refused && provider && away()) setStatus('reconnecting')
       settle()
     }
     const cameOnline = () => {
       browserOffline = false
-      if (!revoked && !refused && socketOpen) setStatus('connected')
+      if (!stopped && !refused && socketOpen) setStatus('connected')
       settle()
     }
     window.addEventListener('offline', wentOffline)
     window.addEventListener('online', cameOnline)
 
+    // Copies another tab held when this one looked: claimed as soon as that
+    // tab goes away with something unsent (#766), and met with the relay's
+    // document like the ones found at mount. Not shown in the editor.
+    const watching = new AbortController()
+    const found = (copy: CollabCopy) => {
+      if (cancelled) {
+        void copy.close().then(() => copy.doc.destroy())
+        return
+      }
+      restore = [...(restore ?? []), copy]
+      dirty = true
+      setUnsynced(true)
+      settle()
+    }
+
     if (stashName) {
       void (async () => {
         let copies: CollabCopy[] = []
         try {
-          if (await hasCollabStash(stashName)) copies = await claimLeftoverCopies(stashName)
+          if (await hasCollabStash(stashName)) {
+            copies = await claimLeftoverCopies(stashName, { signal: watching.signal, found })
+          }
         } catch {
           // IndexedDB refused (private mode, quota): no copy to restore.
         }
@@ -468,24 +507,32 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           for (const copy of copies) void copy.close().then(() => copy.doc.destroy())
           return
         }
-        restore = copies
+        restore = [...copies, ...(restore ?? [])]
         dirty = true
         setUnsynced(true)
         setRestoredDoc(shown.doc)
-        if (!revoked && provider && !socketOpen && away()) setStatus('reconnecting')
+        if (!stopped && provider && !socketOpen && away()) setStatus('reconnecting')
         settle()
       })()
     }
 
-    const kicked = () => {
-      // The relay refused us: the share was revoked, or it was never ours.
-      // Retrying would only fail again, so stop and say so.
-      revoked = true
-      setStatus('revoked')
+    /**
+     * The relay will not take this tab back: stop and say why. The first
+     * reason stands: a signed-out tab's reconnect is refused as well, and
+     * that refusal must not turn it into a revocation.
+     */
+    const stop = (why: 'revoked' | 'signed-out') => {
+      if (stopped) return
+      stopped = true
+      setStatus(why)
       // Nobody is "in the note with you" once you are out of it.
       setPeers([])
       provider?.disconnect()
     }
+
+    // The relay refused us: the share was revoked, or it was never ours.
+    // Retrying would only fail again.
+    const kicked = () => stop('revoked')
 
     /**
      * The relay refused a change as too large (#491). Reconnecting would only
@@ -493,7 +540,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
      * down; the document (and this browser's copy of it) keeps every keystroke.
      */
     const refuse = () => {
-      if (refused || revoked) return
+      if (refused || stopped) return
       refused = true
       handshake = false
       socketOpen = false
@@ -506,7 +553,10 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
 
     /**
      * A 403 from the ticket endpoint is what a revoked share looks like from
-     * here, and retrying it would only fail again — that is terminal.
+     * here, and retrying it would only fail again — that is terminal. A 401
+     * is a session that ended (#498), terminal too: a retry that succeeded
+     * later would be under whatever session this browser holds by then,
+     * possibly someone else's.
      *
      * Anything else is the service being down, which is NOT terminal and must
      * not be treated as one:
@@ -520,6 +570,10 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     const ticketFailed = (error: unknown) => {
       if (error instanceof ApiError && error.status === 403) {
         kicked()
+        return
+      }
+      if (error instanceof ApiError && error.status === 401) {
+        stop('signed-out')
         return
       }
       if (provider) return
@@ -577,7 +631,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
           }
         },
         onStatus: ({ status: socketStatus }) => {
-          if (revoked || refused) return
+          if (stopped || refused) return
           if (socketStatus === WebSocketStatus.Connected) {
             everConnected = true
             socketOpen = true
@@ -593,10 +647,12 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
         },
         onAuthenticationFailed: kicked,
         // The relay closes the document with reason `note-too-large` for a
-        // change over the cap (server/src/sync/collab-server.ts), and ws closes
-        // the socket with 1009 for a frame over its transport limit.
+        // change over the cap (server/src/sync/collab-server.ts), ws closes
+        // the socket with 1009 for a frame over its transport limit, and the
+        // relay closes with `signed-out` when the session ended (#498).
         onClose: ({ event }) => {
-          if (event.reason === 'note-too-large' || event.code === 1009) refuse()
+          if (event.reason === 'signed-out') stop('signed-out')
+          else if (event.reason === 'note-too-large' || event.code === 1009) refuse()
         },
         onSynced: () => {
           handshake = true
@@ -624,6 +680,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
 
     return () => {
       cancelled = true
+      watching.abort()
       if (retry) clearTimeout(retry)
       holdRelease()
       ydoc.off('update', onUpdate)
