@@ -1,11 +1,10 @@
 import AdmZip from 'adm-zip'
-import { readFile } from 'node:fs/promises'
-import { isDeepStrictEqual } from 'node:util'
-import { eq, inArray } from 'drizzle-orm'
+import { eq, inArray, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { teams, users, vaults, vaultShares } from '../db/schema.js'
-import { listAssets, listNotes, noteFile, readAsset, readNote, trashFile } from '../notes/store.js'
-import { parseNote, serializeNote, type Frontmatter } from '../notes/okf.js'
+import { listAssets, listNotes, readAsset, readNote } from '../notes/store.js'
+import { serializeNote, type Frontmatter } from '../notes/okf.js'
+import { renderNoteFile } from '../notes/projector.js'
 import {
   BACKUP_FORMAT,
   BACKUP_MANIFEST,
@@ -107,53 +106,32 @@ export async function buildVaultZip(vaultId: string): Promise<Buffer> {
   return zip.toBuffer()
 }
 
-/** A file's bytes, or null when it is gone (a note whose file was lost keeps its row). */
-async function readIfPresent(file: string): Promise<Buffer | null> {
-  try {
-    return await readFile(file)
-  } catch (err) {
-    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') return null
-    throw err
-  }
-}
-
-/**
- * Whether a note file says what its snapshot row says. Files are read after
- * the snapshot, so a save in between leaves a newer file; it is left out and
- * the restore writes the file from the row, keeping the archive one point in
- * time (#409). jsonb does not keep key order, so frontmatter is compared key
- * by key (as check-notes does).
- */
-function fileMatchesRow(data: Buffer, row: Row): boolean {
-  let parsed
-  try {
-    parsed = parseNote(data.toString('utf8'))
-  } catch {
-    return false
-  }
-  if (parsed.body !== row.body) return false
-  const rowFrontmatter: Record<string, unknown> =
-    typeof row.frontmatter === 'object' && row.frontmatter !== null ? { ...row.frontmatter } : {}
-  const keys = new Set([...Object.keys(parsed.frontmatter), ...Object.keys(rowFrontmatter)])
-  return [...keys].every((key) => isDeepStrictEqual(parsed.frontmatter[key], rowFrontmatter[key]))
-}
-
 /**
  * Full-instance admin backup (format `BACKUP_FORMAT`, see backup-format.ts):
  * every backed-up table as of one database snapshot, plus each note's file
- * (live and trashed, as on disk) and every attachment. `backup.json` lists
- * every other entry with its SHA-256 and size (#493). Restore: restore.ts.
+ * (live and trashed) and every attachment. `backup.json` lists every other
+ * entry with its SHA-256 and size (#493). Restore: restore.ts.
+ *
+ * Note files are rendered from the snapshot rows (ADR-003 §8 "#776
+ * coordination"), with their `frontmatter_src` key order, as the `file`
+ * projection renders them: never read from disk, where a file can lag its
+ * row (projection pending) or hold a hand edit the database does not have.
  */
 export async function buildInstanceBackup(): Promise<Buffer> {
   // One snapshot for every table, so a write during the backup can't leave a
   // revision pointing at a note the archive doesn't have.
-  const tables = await db.transaction(
+  const { tables, keyOrder } = await db.transaction(
     async (tx) => {
       const out = new Map<string, Row[]>()
       for (const spec of [...BACKUP_TABLES, INSTANCE_STATE]) {
         out.set(spec.name, await tx.select(backupColumns(spec)).from(spec.table))
       }
-      return out
+      // `frontmatter_src` is outside the Drizzle model (schema.ts): read in the same snapshot.
+      const order = (await tx.execute(sql`SELECT id, frontmatter_src FROM notes WHERE frontmatter_src IS NOT NULL`)) as unknown as Array<{
+        id: string
+        frontmatter_src: Record<string, unknown>
+      }>
+      return { tables: out, keyOrder: new Map(order.map((row) => [row.id, row.frontmatter_src])) }
     },
     { isolationLevel: 'repeatable read', accessMode: 'read only' },
   )
@@ -170,16 +148,14 @@ export async function buildInstanceBackup(): Promise<Buffer> {
     // One buffer per row: a single JSON string of every revision could pass V8's string limit.
     add(tableEntry(name), Buffer.concat(rows.map((row) => Buffer.from(`${JSON.stringify(row)}\n`, 'utf8'))))
   }
-  // Notes whose file no longer matched their snapshot row (saved while the backup ran): left out, restored from the row.
-  let notesFromRow = 0
   for (const note of tables.get('notes') ?? []) {
     const vaultId = String(note.vaultId)
     const noteId = String(note.id)
-    const trashed = note.deletedAt != null
-    const data = await readIfPresent(trashed ? trashFile(vaultId, noteId) : noteFile(vaultId, String(note.path)))
-    if (!data) continue
-    if (fileMatchesRow(data, note)) add(trashed ? trashEntry(vaultId, noteId) : noteEntry(vaultId, String(note.path)), data)
-    else notesFromRow += 1
+    const data = Buffer.from(
+      renderNoteFile({ frontmatter: note.frontmatter, frontmatterSrc: keyOrder.get(noteId) ?? null, body: String(note.body) }),
+      'utf8',
+    )
+    add(note.deletedAt != null ? trashEntry(vaultId, noteId) : noteEntry(vaultId, String(note.path)), data)
   }
   for (const vault of tables.get('vaults') ?? []) {
     const vaultId = String(vault.id)
@@ -188,7 +164,7 @@ export async function buildInstanceBackup(): Promise<Buffer> {
       if (data) add(assetEntry(vaultId, asset.fileName), data.buffer)
     }
   }
-  const manifest = { format: BACKUP_FORMAT, createdAt: new Date().toISOString(), tables: counts, parts, notesFromRow }
+  const manifest = { format: BACKUP_FORMAT, createdAt: new Date().toISOString(), tables: counts, parts }
   zip.addFile(BACKUP_MANIFEST, Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'))
   return zip.toBuffer()
 }

@@ -53,7 +53,35 @@ Full tier adds `attachments`, `backup-restore`, `big-notes`, `browser`
 a new note at the old path, a pre-S2b tab across the upgrade, a re-seeded
 copy, rename then SIGKILL, a row changed by SQL), `crash-write`,
 `export-roundtrip`, `multilingual-search`, `restart-extraction`,
+`store-failpoints`, `store-migration`, `store-rollback`,
 `zz-fix-pretty-bundle`.
+
+The ADR-003 store tests (`lab/lib/store.ts` helpers):
+
+- `store-failpoints`: for each S2a boundary in `server/src/failpoints.ts`
+  the app is recreated with `ELARA_FAILPOINTS=<name>` (passed through by
+  `lab/docker-compose.lab.yml`; inert when unset), the operation that
+  reaches it runs, the process SIGKILLs itself there, the app is
+  recreated inert, and I1 (the write is in the row exactly when it
+  committed), I2 (a revision at every `seq`), I4 (`check-notes
+  --wait-idle --fail-on-pending`), I5 (no `*.tmp`) and the operation's
+  own effect are checked.
+- `store-migration`: builds the image from before S2a
+  (`LAB_PRE_S2A_REF`, default 87ccfad, the `dev` commit #828 was based on; `git
+  fetch` + `docker build`, cached per runner as `elara-lab-pre-s2a`),
+  runs it with the store bookkeeping reset, makes every damage class
+  (SIGKILL in old-code writes, unparseable file, hand edit, hand-formatted
+  file, row changed by SQL, orphan temp file), then boots the image under
+  test and checks the backfill report and the invariants; a second run
+  with a kill at `migration.mid-batch` must end in the same state.
+- `store-rollback`: `store-export-legacy` refused next to a running app,
+  run with the app stopped, the old image's edits (agent, collab, rename,
+  delete + restore), graceful stop, roll forward: I2, I4 and no new
+  `.conflicts/` entry.
+
+The image switch retags compose's `<project>-app` image and recreates the
+container without a build; each test puts the image under test back
+before it ends, so later tests run on it.
 
 `browser` is the only test that drives the web client. A PR that changes
 the client's collab code (`client/src/hooks/useCollabDoc*`,
