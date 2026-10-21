@@ -504,12 +504,13 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   code-point edit distance, and up to 16,384 units only while the two
   sides are alike: the edit distance is at most a quarter of their
   length, or at most the text one side adds plus a tenth of the shorter
-  side, when six of eight 16-unit stretches of the shorter side are found
-  in the longer one before the search and the result is at most 2 + 1/16
-  of the shorter side's units separate changes (a sentence added to a
-  paragraph that also had a word changed, but not a short line against a
-  long unrelated one), and at most 1,024 edits (4,096 within one line);
-  the search stops at that many edits, so a failed attempt is cheap.
+  side, when four of eight 16-unit stretches of the shorter side are
+  found in the longer one before the search (a sentence added to a
+  paragraph that also had words changed, or a long passage put in front
+  of it). When the shorter side is under 64 units (stretches shorter than 16), the result must
+  also be at most 2 + 1/16 of the shorter side's units separate changes
+  (not a short line against a long unrelated one). The search stops at
+  1,024 edits (4,096 within one line), so a failed attempt is cheap.
   Otherwise the whole lines around it are diffed per line (lines found on
   one side only, and blank lines, skip the search, so a rewrite of every
   line is linear and a paragraph added next to an edited one does not

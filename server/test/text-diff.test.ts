@@ -325,6 +325,34 @@ describe('applyTextDiff on a live document', () => {
     })
   }
 
+  // Review round 5 of #833: a long passage put in front of a paragraph comes
+  // out of Myers as dozens of tie-broken insert fragments (the paragraph's
+  // first characters match inside it), which a change-count rule counted as
+  // unlike, so the paragraph was replaced. Here the passage does not start
+  // like the paragraph, a word past its middle changes, and typing is in its
+  // middle.
+  for (const seed of [11, 12, 13, 14, 15, 16]) {
+    it(`keeps typing in a paragraph a 600+-char passage is put in front of, with a word changed later (seed ${seed})`, () => {
+      const random = rng(seed)
+      const vocabulary = ['the', 'relay', 'stores', 'each', 'note', 'after', 'a', 'debounce', 'and', 'merges', 'typing', 'where', 'it', 'was', 'made']
+      const words = (n: number): string[] => Array.from({ length: n }, () => vocabulary[Math.floor(random() * vocabulary.length)]!)
+      const paragraphWords = words(50)
+      // The person types after the 25th word, marked so it occurs once.
+      paragraphWords[24] = 'MIDDLE'
+      const line = `${paragraphWords.join(' ')}.\n`
+      const passage = `${words(130).join(' ')}.`
+      expect(passage.length).toBeGreaterThanOrEqual(600)
+      const changedWords = [...paragraphWords]
+      changedWords[39] = `${changedWords[39]}s`
+      const changed = `${passage} ${changedWords.join(' ')}.\n`
+      const notes = Array.from({ length: 20 }, () => `${words(30).join(' ')}.\n\n`)
+      const body = [...notes, line, ...notes].join('')
+      const next = [...notes, changed, ...notes].join('')
+      expectTypingKept(body, next, ['MIDDLE '], AMPLE_MS)
+      expect(removedUnits(body, next, AMPLE_MS)).toBe(0)
+    })
+  }
+
   // Review rounds 2 and 3 of #833: every paragraph changed and one added or
   // removed in the middle: nothing anchors the line diff, and one shift
   // across the whole note (round 2), or an alignment scored only by common

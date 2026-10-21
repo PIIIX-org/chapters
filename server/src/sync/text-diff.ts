@@ -54,17 +54,20 @@ const REGION_UNITS = 16_384
  * Alike enough for a character diff: at most ALIKE_SHARE of the units (both
  * sides counted) changes, or what one side has more of plus at most
  * KEPT_SHARE of the shorter side (a sentence added to a paragraph that also
- * had a word changed). The second needs KEPT_SAMPLES of SAMPLES stretches
- * of the shorter side found in the longer one before the search, and at
- * most 2 + 1/16 of the shorter side's units separate changes after it (else
- * a short line would match a long unrelated one through a scattered common
- * subsequence, hundreds of fragments). Never more than UNLIKE_EDITS
+ * had words changed, or a long passage put in front of it). The second
+ * needs KEPT_SAMPLES of SAMPLES stretches of the shorter side found in the
+ * longer one before the search. When the stretches are shorter than
+ * SAMPLE_UNITS (a short side), it also needs at most 2 + 1/16 of the
+ * shorter side's units separate changes after it, else a short line would
+ * match a long unrelated one through a scattered common subsequence,
+ * hundreds of fragments. (With the stretches found, many fragments are a
+ * passage added in front, which Myers splits at ties.) Never more than UNLIKE_EDITS
  * (LINE_EDITS for one line of a pair), so a failed attempt costs little:
  * about the square of the cap, since unlike text has short common stretches.
  */
 const ALIKE_SHARE = 0.25
 const KEPT_SHARE = 0.1
-const KEPT_SAMPLES = 6
+const KEPT_SAMPLES = 4
 const UNLIKE_EDITS = 1_024
 const LINE_EDITS = 4_096
 /**
@@ -353,18 +356,22 @@ function characterEditsWithin(from: string, to: string, start: number, end: numb
   const shorter = Math.min(removed, inserted)
   const share = Math.floor(size * ALIKE_SHARE)
   let alike = share
+  // The shorter side plainly kept: stretches of full length found, so many fragments are a passage
+  // added in front of it (Myers ties), not a scattered match of unrelated text.
+  let kept = false
   const loose = Math.abs(removed - inserted) + Math.floor(2 * shorter * KEPT_SHARE)
   if (loose > share) {
     // What one side adds is free only when the other side's text is still there: a quick
     // look for stretches of it, before a search that costs the longer side times the edits.
-    const [kept, longer] = removed < inserted ? [from.slice(start, start + removed), to.slice(start, start + inserted)] : [to.slice(start, start + inserted), from.slice(start, start + removed)]
-    const length = Math.min(SAMPLE_UNITS, kept.length >> 2)
+    const [rest, longer] = removed < inserted ? [from.slice(start, start + removed), to.slice(start, start + inserted)] : [to.slice(start, start + inserted), from.slice(start, start + removed)]
+    const length = Math.min(SAMPLE_UNITS, rest.length >> 2)
     let found = 0
     for (let i = 0; i < SAMPLES; i++) {
-      const at = Math.floor(((kept.length - length) * (2 * i + 1)) / (2 * SAMPLES))
-      if (longer.includes(kept.slice(at, at + length))) found++
+      const at = Math.floor(((rest.length - length) * (2 * i + 1)) / (2 * SAMPLES))
+      if (longer.includes(rest.slice(at, at + length))) found++
     }
     if (length < 4 || found >= KEPT_SAMPLES) alike = loose
+    kept = length === SAMPLE_UNITS && found >= KEPT_SAMPLES
   }
   const limit = scope === 'text' && size <= EXACT_UNITS ? Infinity : Math.min(alike, scope === 'line' ? LINE_EDITS : UNLIKE_EDITS)
   const a = codePoints(from, start, start + removed)
@@ -380,7 +387,7 @@ function characterEditsWithin(from: string, to: string, start: number, end: numb
       distance += runs[r]!.n
       if (r === 0 || runs[r - 1]!.op === EQUAL) changes++
     }
-    if (distance > share && changes > 2 + Math.floor(shorter / 16)) return false
+    if (distance > share && !kept && changes > 2 + Math.floor(shorter / 16)) return false
   }
   const units = (codes: number[], first: number, n: number): number => {
     let length = 0
