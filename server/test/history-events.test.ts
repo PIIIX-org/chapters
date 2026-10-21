@@ -201,4 +201,17 @@ describe('revert is its own row', () => {
     const detail = await rest('GET', `/revisions/${rows[0]!.id}`)
     expect(detail.json()).toMatchObject({ action: 'revert', sourceRevisionId: create!.id, body: 'REST original.' })
   })
+
+  it('compares a later write with the write before the revert, not with the revert row', async () => {
+    const note = await agentNote('Baseline original.')
+    await must('edit_note', { path: note.path, body: 'Baseline edited.' })
+    const [, create] = await agentHistory(note.path)
+    await must('revert_note', { path: note.path, revisionId: create!.id })
+    // The same agent writes the reverted state: the newest write it repeats
+    // is `Baseline edited.`, so it is a new revision, not a repeat of the event.
+    await must('edit_note', { path: note.path, body: 'Baseline original.' })
+    const rows = await agentHistory(note.path)
+    expect(rows.map((r) => r.action)).toEqual(['update', 'revert', 'update', 'create'])
+    expect(rows[0]).toMatchObject({ actorType: 'mcp' })
+  })
 })

@@ -172,7 +172,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | Table | Purpose |
 |---|---|
 | `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed) |
-| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, or `quarantine` for a write kept out of the note (#492, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; migration 0022 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; no FK, a purged source leaves it dangling). Revert never relabels an earlier row |
+| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, or `quarantine` for a write kept out of the note (#492, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state, and never the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`); migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; no FK, a purged source leaves it dangling). Revert never relabels an earlier row |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
 
@@ -557,7 +557,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   afresh after an unload always adds a new revision and a new failure; an
   MCP/REST write continues only an identical retry of the newest quarantine
   by the same actor. `recordRevision`'s
-  dedupe and revert's `revert` relabel skip quarantine rows. Restore one
+  dedupe skips quarantine rows. Restore one
   with `revert_note` / the REST revert route.
 - Every mutation is attributed (`Actor {type: 'user'|'mcp'|'collab',
   id?}`), which is what makes `noteRevisions` a real audit trail across

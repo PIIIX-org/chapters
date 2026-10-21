@@ -389,7 +389,7 @@ export const actorType = pgEnum('actor_type', ['user', 'mcp', 'collab'])
  * state — enough to attribute and to revert. Rows are only removed by
  * explicit hard purge. Migration 0021 also adds `seq`, `idempotency_key` and
  * `actor_detail` (unused until S2a, kept out of this model like `notes.seq`).
- * Migration 0022 (#479): `sourceRevisionId` is the revision a `revert` row
+ * Migration 0023 (#479): `sourceRevisionId` is the revision a `revert` row
  * brought back; `fromPath` / `toPath` the paths of a `rename` row. Null on
  * every other row.
  */
