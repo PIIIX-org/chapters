@@ -238,6 +238,10 @@ export async function buildGraph(
       })
       .from(notes)
       .where(and(inArray(notes.vaultId, vaultIds), isNull(notes.deletedAt)))
+      // Every query feeding Louvain is ordered (#816): node and edge
+      // insertion order changes its partition, and an unordered query's row
+      // order follows whichever index the planner picks.
+      .orderBy(notes.id)
     for (const r of noteRows) {
       const fm = r.frontmatter as { tags?: string[]; timestamp?: string }
       internalNodes.push({
@@ -264,6 +268,7 @@ export async function buildGraph(
       })
       .from(repositoryFiles)
       .where(inArray(repositoryFiles.repositoryId, repositoryIds))
+      .orderBy(repositoryFiles.id)
     for (const r of fileRows) {
       internalNodes.push({
         id: r.id,
@@ -318,7 +323,11 @@ export async function buildGraph(
     // EXTRACTED: plain wikilinks resolve within the source note's own
     // vault; a `repo:<name>/<path>` link resolves against a repository
     // already in this call's resource set (cross-type — spec 9).
-    const links = await db.select().from(noteLinks).where(inArray(noteLinks.sourceNoteId, noteIds))
+    const links = await db
+      .select()
+      .from(noteLinks)
+      .where(inArray(noteLinks.sourceNoteId, noteIds))
+      .orderBy(noteLinks.sourceNoteId, noteLinks.targetPath)
     for (const link of links) {
       const source = byId.get(link.sourceNoteId)
       if (!source) continue
@@ -362,6 +371,7 @@ export async function buildGraph(
       .select()
       .from(repositoryFileImports)
       .where(inArray(repositoryFileImports.sourceFileId, codeIds))
+      .orderBy(repositoryFileImports.sourceFileId, repositoryFileImports.targetPath)
     for (const imp of imports) {
       if (imp.resolvedTargetFileId && byId.has(imp.resolvedTargetFileId)) {
         addEdge(imp.sourceFileId, imp.resolvedTargetFileId, 'extracted')
@@ -383,6 +393,7 @@ export async function buildGraph(
             .where(
               sql`${semanticEdges.sourceId} = ANY(${pgIds}::uuid[]) OR ${semanticEdges.targetId} = ANY(${pgIds}::uuid[])`,
             )
+            .orderBy(semanticEdges.sourceId, semanticEdges.targetId)
         : []
     for (const edge of sem) {
       if (byId.has(edge.sourceId) && byId.has(edge.targetId)) {

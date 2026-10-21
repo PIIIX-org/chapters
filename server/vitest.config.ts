@@ -11,6 +11,7 @@ const TEST_DATABASE_URL =
 export default defineConfig({
   test: {
     globalSetup: './test/global-setup.ts',
+    setupFiles: ['./test/setup-jobs.ts'],
     fileParallelism: false,
     env: {
       DATABASE_URL: TEST_DATABASE_URL,

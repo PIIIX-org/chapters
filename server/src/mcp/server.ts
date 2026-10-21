@@ -51,7 +51,7 @@ import { serializeNote } from '../notes/okf.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
 import { getRepositoryFile, listFileSymbols, listRepositoryFiles } from '../repositories/store.js'
-import { countPendingExtractions } from '../repositories/extraction-queue.js'
+import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { prepareGitRemote } from '../repositories/git-remote.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
@@ -1438,7 +1438,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'repository',
       capability: 'read',
       description:
-        'Sync freshness for a repository (last synced time, sync state, files whose symbol/embedding extraction has not completed) — check before trusting results if freshness matters.',
+        'Sync freshness for a repository (last synced time, sync state, files whose symbol/embedding extraction is still queued or running, and files whose extraction gave up after its retries with the error) — check before trusting results if freshness matters.',
       inputSchema: { repositoryId: z.string().uuid().optional() },
     },
     async (_args, { repositoryId: target }) => {
@@ -1459,6 +1459,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         lastSyncedAt: row.lastSyncedAt,
         lastSyncError: publicSyncError(row),
         filesPendingExtraction: await countPendingExtractions(target),
+        extractionFailures: await extractionFailures(target),
       }
     },
   )

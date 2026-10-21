@@ -4,75 +4,109 @@ import { notes } from '../db/schema.js'
 import { embedder } from './embeddings.js'
 import { recomputeSemanticEdges } from './semantic-edges.js'
 import { recordJob } from '../monitoring/metrics.js'
+import {
+  MAX_JOB_ATTEMPTS,
+  claimJob,
+  completeJob,
+  erroredJobExists,
+  failCrashedJobs,
+  failJob,
+  jobDrainer,
+  onJobConflict,
+  type JobRerun,
+} from '../jobs/durable.js'
 
-interface QueueEntry {
-  noteId: string
-  attempts: number
+/**
+ * Note embeddings run from durable `jobs` rows (#494; see jobs/durable.ts):
+ * kind `embed_note`, payload `{noteId, seq}`, key `embed_note:<noteId>:<seq>`.
+ * `seq` is the note's version (ADR-003 §4) and never repeats, so a duplicate
+ * enqueue of an unchanged note is a no-op. The job embeds the note as it is
+ * when it runs, so a burst of edits costs at most one embedding per pending job.
+ */
+export const EMBEDDING_JOB = 'embed_note'
+
+/**
+ * Inserts embedding jobs for these live notes at their current `seq` (a
+ * repeated id counts once). `rerun: 'finished'` re-embeds (`pnpm reindex`).
+ */
+export async function enqueueEmbeddings(noteIds: string[], rerun: JobRerun = 'never'): Promise<void> {
+  if (noteIds.length === 0) return
+  const ids = [...new Set(noteIds)]
+  await db.execute(sql`
+    INSERT INTO jobs (kind, payload, idempotency_key)
+    SELECT ${EMBEDDING_JOB}, jsonb_build_object('noteId', n.id::text, 'seq', n.seq),
+      ${EMBEDDING_JOB} || ':' || n.id || ':' || n.seq
+    FROM unnest(${`{${ids.join(',')}}`}::uuid[]) WITH ORDINALITY AS u(id, ord)
+    JOIN notes n ON n.id = u.id
+    WHERE n.deleted_at IS NULL
+    ORDER BY u.ord
+    ${onJobConflict(rerun)}`)
+  embedding.kick()
 }
-
-// ponytail: in-process serial queue; move to a job table if multi-process
-const queue: QueueEntry[] = []
-let running: Promise<void> | null = null
-const MAX_ATTEMPTS = 3
 
 /** Enqueue a note for (re-)embedding. Never blocks the caller (perf rule 2). */
-export function scheduleEmbedding(noteId: string, attempts = 0): void {
-  queue.push({ noteId, attempts })
-  running ??= drain().finally(() => {
-    running = null
-  })
+export function scheduleEmbedding(noteId: string): void {
+  embedding.track(enqueueEmbeddings([noteId]))
 }
 
-/** Awaits until the queue is empty — tests and batch jobs only. */
+/** Awaits until pending enqueues and the drain are finished — tests and batch jobs only. */
 export async function flushEmbeddings(): Promise<void> {
-  while (running) await running
+  await embedding.flush()
 }
 
-/** Boot catch-up: enqueue live notes that never got an embedding. */
+/**
+ * Boot catch-up: enqueue live notes without an embedding or whose job for
+ * their current `seq` failed with an error, and wake the worker. A job that failed with an error runs again; one whose runs ended
+ * with the process (`LeaseExpired`) does not (see scheduleMissingExtractions).
+ */
 export async function scheduleMissingEmbeddings(limit?: number): Promise<number> {
   const query = db
     .select({ id: notes.id })
     .from(notes)
-    .where(and(isNull(notes.deletedAt), sql`${notes.embedding} is null`))
+    .where(
+      and(
+        isNull(notes.deletedAt),
+        // An edited note keeps its previous embedding: a failed job for its current `seq` counts too.
+        sql`(${notes.embedding} is null OR ${erroredJobExists(sql`${EMBEDDING_JOB} || ':' || ${notes.id} || ':' || "notes"."seq"`)})`,
+      ),
+    )
   const missing = limit ? await query.limit(limit) : await query
-  for (const row of missing) scheduleEmbedding(row.id)
+  await enqueueEmbeddings(
+    missing.map((r) => r.id),
+    'errored',
+  )
+  embedding.kick()
   return missing.length
 }
 
-async function drain(): Promise<void> {
-  let head = 0
-  try {
-    while (head < queue.length) {
-      const item = queue[head++]!
-      try {
-        await processNote(item.noteId)
-        recordJob('embedding', 'ok', item.noteId)
-      } catch (err) {
-        const nextAttempt = item.attempts + 1
-        if (nextAttempt < MAX_ATTEMPTS) {
-          console.warn(
-            `[embedding-queue] embedding failed for note ${item.noteId} (attempt ${nextAttempt}/${MAX_ATTEMPTS}), retrying:`,
-            err,
-          )
-          queue.push({ noteId: item.noteId, attempts: nextAttempt })
-        } else {
-          console.error(
-            `[embedding-queue] embedding permanently failed for note ${item.noteId} after ${MAX_ATTEMPTS} attempts:`,
-            err,
-          )
-          recordJob('embedding', { error: err }, item.noteId)
-        }
-      }
-      // ponytail: O(1) amortized compaction to avoid O(N^2) array shifting (INGEST-02).
-      if (head > 1000 && head > queue.length / 2) {
-        queue.splice(0, head)
-        head = 0
+async function drainOnce(): Promise<void> {
+  await failCrashedJobs(EMBEDDING_JOB, 'embedding', 'noteId')
+  for (;;) {
+    const job = await claimJob<{ noteId: string }>(EMBEDDING_JOB)
+    if (!job) return
+    const { noteId } = job.payload
+    try {
+      await processNote(noteId)
+      await completeJob(job.id)
+      recordJob('embedding', 'ok', noteId)
+    } catch (err) {
+      const gaveUp = await failJob(job, err, 'embedding', noteId)
+      if (gaveUp) {
+        console.error(
+          `[embedding-queue] embedding permanently failed for note ${noteId} after ${MAX_JOB_ATTEMPTS} attempts:`,
+          err,
+        )
+      } else {
+        console.warn(
+          `[embedding-queue] embedding failed for note ${noteId} (attempt ${job.attempts}/${MAX_JOB_ATTEMPTS}), retrying:`,
+          err,
+        )
       }
     }
-  } finally {
-    queue.length = 0
   }
 }
+
+const embedding = jobDrainer('embedding', drainOnce)
 
 async function processNote(noteId: string): Promise<void> {
   const row = (await db.select().from(notes).where(eq(notes.id, noteId)))[0]
