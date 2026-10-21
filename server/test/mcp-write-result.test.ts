@@ -11,7 +11,7 @@
 // return the first result and write nothing) and `dry_run` (the result without
 // writing); a write the store refuses as busy answers `status: "retry"`.
 import { setTimeout as sleep } from 'node:timers/promises'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -24,6 +24,7 @@ import { noteRevisions, writeIdempotency } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { getLiveNote } from '../src/notes/store.js'
 import { INSTANCE_LOCK_KEY } from '../src/notes/store-tx.js'
+import { FailpointError, setFailpointHandler } from '../src/failpoints.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
@@ -302,5 +303,51 @@ describe('write results (#477)', () => {
     const retried = await must<WriteResult>('edit_note', { vaultId, path, body: 'changed\n', idempotency_key: 'retry-1' })
     expect(retried).toMatchObject({ status: 'applied', rev: seq + 1 })
     expect(retried.replayed).toBeUndefined()
+  })
+
+  describe('idempotency_key across a crash after COMMIT (ADR-003 §4, §10)', () => {
+    afterEach(() => setFailpointHandler(null))
+
+    it('a write that committed but never answered is replayed by its key, not written again', async () => {
+      const path = 'docs/result-crash'
+      await must('create_note', { vaultId, path, body: BODY })
+      const args = { vaultId, path, text: 'exactly once', idempotency_key: 'crash-1' }
+      // The crash-write lab SIGKILLs here: committed, no answer sent.
+      setFailpointHandler((point) => {
+        if (point === 'edit.after-commit-before-ack') throw new FailpointError(point)
+      })
+      const crashed = await call('append_note', args)
+      expect(crashed.isError).toBe(true)
+      setFailpointHandler(null)
+
+      const retried = await must<WriteResult>('append_note', args)
+      expect(retried).toMatchObject({ status: 'applied', replayed: true, rev: await seqOf(path) })
+      expect((await getLiveNote(vaultId, path))!.body.match(/exactly once/g)).toHaveLength(1)
+    })
+
+    it('a create that committed but never answered is replayed by its key', async () => {
+      const path = 'docs/result-crash-create'
+      setFailpointHandler((point) => {
+        if (point === 'create.after-commit-before-file') throw new FailpointError(point)
+      })
+      const args = { vaultId, path, body: BODY, idempotency_key: 'crash-create-1' }
+      expect((await call('create_note', args)).isError).toBe(true)
+      setFailpointHandler(null)
+      expect(await must<WriteResult>('create_note', args)).toMatchObject({ rev: 1, status: 'applied', replayed: true })
+    })
+  })
+
+  it('keys older than 24 h are pruned, and a purged note takes its keys with it', async () => {
+    const path = 'docs/result-prune'
+    await must('create_note', { vaultId, path, body: BODY })
+    await must('append_note', { vaultId, path, text: 'kept for a day', idempotency_key: 'prune-1' })
+    await sql`UPDATE write_idempotency SET created_at = now() - interval '25 hours' WHERE key = 'prune-1'`
+    await must('append_note', { vaultId, path, text: 'another', idempotency_key: 'prune-2' })
+    expect(await db.select().from(writeIdempotency).where(eq(writeIdempotency.key, 'prune-1'))).toHaveLength(0)
+
+    const { id } = await must<{ id: string }>('delete_note', { vaultId, path })
+    expect(await db.select().from(writeIdempotency).where(eq(writeIdempotency.key, 'prune-2'))).toHaveLength(1)
+    await must('purge_note', { vaultId, noteId: id })
+    expect(await db.select().from(writeIdempotency).where(eq(writeIdempotency.key, 'prune-2'))).toHaveLength(0)
   })
 })
