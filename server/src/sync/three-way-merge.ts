@@ -64,7 +64,11 @@ function sideLines(base: readonly string[], hunks: readonly SideHunk[], mine: bo
  * `base` lines there (ending the last one when it had no newline), else null.
  * A line `theirs` left without a newline (a person typing) gets one before
  * them; appended lines `theirs` already ends with (the same append sent again
- * from the same base) are not added twice.
+ * from the same base) are not added twice. When an appended line that is
+ * not blank is already somewhere else in `theirs`' changed lines (an append
+ * resent from an older base after someone added after it), adding it again
+ * would double it and dropping it may lose a line the author meant twice:
+ * null, a conflict.
  */
 function appendedAtEnd(base: string, theirs: readonly string[], mine: string): string[] | null {
   if (!mine.startsWith(base)) return null
@@ -76,6 +80,9 @@ function appendedAtEnd(base: string, theirs: readonly string[], mine: string): s
   const lines = added.match(/[^\n]*\n|[^\n]+$/g) ?? []
   let held = Math.min(lines.length, theirs.length)
   while (held > 0 && !lines.slice(0, held).every((line, i) => line === theirs[theirs.length - held + i])) held--
+  const content = (line: string) => line.replace(/\n$/, '')
+  const present = new Set(theirs.map(content))
+  if (lines.slice(held).some((line) => content(line).trim() !== '' && present.has(content(line)))) return null
   const out = [...theirs]
   const last = out.at(-1)
   if (held < lines.length && last !== undefined && !last.endsWith('\n')) out[out.length - 1] = `${last}\n`

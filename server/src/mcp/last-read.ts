@@ -3,12 +3,18 @@ import { db } from '../db/client.js'
 import { noteReads } from '../db/schema.js'
 
 /**
- * The `rev` each MCP connection last read of each note (#408, #476).
- * read_note and export_note record it; an edit_note `body` sent without
- * `base_rev` is three-way merged against it as if it were the `base_rev`, so
- * an agent that sends back the whole body it read (plus its change) never
- * removes what a person typed after the read. A whole body applied exactly
- * as sent moves it to the result's `rev`, which is then what the agent knows.
+ * What each MCP connection last had of each note (#408, #476): the `rev` of
+ * its last read_note or export_note, the base an edit_note `body` sent
+ * without `base_rev` is three-way merged from as if it were the `base_rev`,
+ * so an agent that sends back the whole body it read (plus its change)
+ * never removes what a person typed after the read.
+ *
+ * After a whole body of its is written, the base moves to that write's
+ * `rev`, with the body the agent sent when the write was merged with
+ * changes made since (the revision then holds more than the agent has):
+ * the agent's next body is built on what it sent, so its earlier lines are
+ * not its change a second time (a second append would otherwise repeat the
+ * first one after lines others added since).
  *
  * Kept in `note_reads` (migration 0028), so a server restart between the
  * read and the edit keeps it, for READ_WINDOW_HOURS: rows older than that
@@ -25,22 +31,26 @@ export async function rememberRead(connectionId: string, noteId: string, rev: nu
   await db.execute(sql`
     WITH pruned AS (DELETE FROM note_reads WHERE read_at < now() - make_interval(hours => ${READ_WINDOW_HOURS}))
     INSERT INTO note_reads (connection_id, note_id, rev) VALUES (${connectionId}, ${noteId}, ${rev})
-    ON CONFLICT (connection_id, note_id) DO UPDATE SET rev = EXCLUDED.rev, read_at = now()`)
+    ON CONFLICT (connection_id, note_id) DO UPDATE SET rev = EXCLUDED.rev, body = NULL, read_at = now()`)
 }
 
-/** `connectionId` wrote note `noteId` to `rev` exactly as it sent it: its new last read, if it has one in the window. */
-export async function advanceRead(connectionId: string, noteId: string, rev: number): Promise<void> {
+/**
+ * `connectionId` wrote note `noteId` to `rev` with a whole body: its new
+ * base, if it has one in the window. `sent` is the body it sent when the
+ * result differs from it (merged), null when the revision holds it.
+ */
+export async function advanceRead(connectionId: string, noteId: string, rev: number, sent: string | null): Promise<void> {
   await db
     .update(noteReads)
-    .set({ rev, readAt: sql`now()` })
+    .set({ rev, body: sent, readAt: sql`now()` })
     .where(and(eq(noteReads.connectionId, connectionId), eq(noteReads.noteId, noteId), inWindow))
 }
 
-/** The `rev` of `connectionId`'s last read of note `noteId` within the window, if one is on record. */
-export async function lastRead(connectionId: string, noteId: string): Promise<number | undefined> {
+/** `connectionId`'s base of note `noteId` within the window, if one is on record: the `rev`, and the body it sent when that is not the revision's. */
+export async function lastRead(connectionId: string, noteId: string): Promise<{ rev: number; body: string | null } | undefined> {
   const [row] = await db
-    .select({ rev: noteReads.rev })
+    .select({ rev: noteReads.rev, body: noteReads.body })
     .from(noteReads)
     .where(and(eq(noteReads.connectionId, connectionId), eq(noteReads.noteId, noteId), inWindow))
-  return row?.rev
+  return row
 }

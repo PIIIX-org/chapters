@@ -1104,7 +1104,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         'Update a note. Prefer `ops` for local changes: they apply to the live text, so text a person typed since you read the note is kept. `ops` run in order: replace_text {find, replace, expectedCount?}, insert_before/insert_after {anchor, text}, replace_section {heading, content}, append {text}, prepend {text} (each as whole lines), delete_block {find}, frontmatter_set {key, value}, frontmatter_add/frontmatter_remove {key, value} (list items; remove without value deletes the key). A `find`/`anchor` must occur exactly once (replace_text: `expectedCount` times) and a heading once, else the edit fails and nothing changes. ' +
         '`body` replaces the whole body (not with `ops`); only the characters that differ change. `frontmatter` merges per top-level key: keys you send are set, keys you leave out are kept; `replace: true` replaces the whole map instead, and `removeKeys` deletes keys. ' +
         '`base_rev`: the `rev` read_note or edit_note returned for the content you edited (a note_history revision id works too). With it, your `body`/`frontmatter` merge with what changed since: `status` `applied`, `merged` (with `concurrent_changes`), or `conflicted` when you changed lines or keys that also changed (nothing changes; your version is kept as revision `proposalId`). Lines you only added at the end go after text added or typed there since. ' +
-        'A `body` without `base_rev` merges the same way from the `rev` of your last read_note or export_note of the note in the past 24 h (or of your last `body` applied exactly as sent), echoed as `baseRev`, so text typed since your read is kept; only when this connection has not read the note in that time does a `body` replace the live text. ' +
+        'A `body` without `base_rev` merges the same way from this connection\'s last read_note or export_note of the note in the past 24 h, or from the last `body` this connection wrote to it since (its `rev`, echoed as `baseRev`), so text typed since is kept; only when this connection has not read the note in that time does a `body` replace the live text. ' +
         'The edit flows through the live collaboration engine — humans with the note open see it stream in, attributed to this connection. ' +
         'A body that doubles the note or repeats a large block of it is quarantined (note unchanged, body kept as a revision); set `allowGrowth: true` if intended.' +
         WRITE_DOC +
@@ -1149,14 +1149,15 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const callArgs = { ...args, baseRev, allowGrowth }
       return runWrite({ connectionId: auth.connection.id, tool: 'edit_note', target, args: callArgs, key, dryRun }, async (keyed) => {
         const edit = requestedEdit(args)
-        // A whole body without base_rev is made from what this connection last read of the note (#408, #476).
+        // A whole body without base_rev is made from what this connection last had of the note (#408, #476).
         const live = baseRev === undefined && args.body !== undefined ? await getLiveNote(target, args.path) : null
-        const readRev = live ? await lastRead(auth.connection.id, live.id) : undefined
-        const usedRev = baseRev ?? readRev
+        const lastHad = live ? await lastRead(auth.connection.id, live.id) : undefined
+        const usedRev = baseRev ?? lastHad?.rev
         if (usedRev !== undefined) {
           const base = await getBaseRevision(target, args.path, usedRev)
           if (base) {
-            edit.base = { id: base.id, frontmatter: base.frontmatter as Record<string, unknown>, body: base.body }
+            // After a merged write of its, the connection has the body it sent, not the revision.
+            edit.base = { id: base.id, frontmatter: base.frontmatter as Record<string, unknown>, body: lastHad?.body ?? base.body }
           } else if (baseRev !== undefined) {
             if (!(await getLiveNote(target, args.path))) throw new McpToolError('note not found')
             throw new McpToolError(
@@ -1203,7 +1204,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         if (!updated) throw new McpToolError('note not found')
         if (!dryRun) {
           showAgentPresence(target, updated.id, presence, 'editing')
-          if (args.body !== undefined && updated.body === args.body) await advanceRead(auth.connection.id, updated.id, updated.seq)
+          if (args.body !== undefined) await advanceRead(auth.connection.id, updated.id, updated.seq, updated.body === args.body ? null : args.body)
         }
         return answer(updated, dryRun ? false : await noteIndexed(updated.id, updated.seq))
       })
