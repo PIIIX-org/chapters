@@ -2,7 +2,7 @@
 // differ (text-diff.ts), never delete-all + insert-all.
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { applyTextDiff, diffText } from '../src/sync/text-diff.js'
+import { applyTextDiff, diffText, type TextEdit } from '../src/sync/text-diff.js'
 
 /** Applies the diff to a Y.Text holding `from` and returns the result. */
 function viaYjs(from: string, to: string, timeLimitMs?: number): string {
@@ -20,6 +20,30 @@ function rng(seed: number): () => number {
     s = (Math.imul(s, 1664525) + 1013904223) >>> 0
     return s / 2 ** 32
   }
+}
+
+/** `from` with `edits` applied, as plain strings. */
+function applied(from: string, edits: readonly TextEdit[]): string {
+  let text = from
+  for (let i = edits.length - 1; i >= 0; i--) {
+    const { at, remove, insert } = edits[i]!
+    text = text.slice(0, at) + insert + text.slice(at + remove)
+  }
+  return text
+}
+
+/** True when no edit starts or ends inside a surrogate pair of `from`, nor inserts half of one. */
+function keepsPairs(from: string, edits: readonly TextEdit[]): boolean {
+  const low = (text: string, i: number): boolean => (text.charCodeAt(i) & 0xfc00) === 0xdc00
+  const high = (text: string, i: number): boolean => (text.charCodeAt(i) & 0xfc00) === 0xd800
+  return edits.every(
+    ({ at, remove, insert }) => !low(from, at) && !low(from, at + remove) && !low(insert, 0) && !high(insert, insert.length - 1),
+  )
+}
+
+/** In ascending order and separated by unchanged text. */
+function apart(edits: readonly TextEdit[]): boolean {
+  return edits.every((edit, j) => j === 0 || edit.at > edits[j - 1]!.at + edits[j - 1]!.remove)
 }
 
 describe('diffText', () => {
@@ -64,6 +88,71 @@ describe('diffText', () => {
       const coarse = diffText(from, to, -1)
       for (let j = 1; j < coarse.length; j++) expect(coarse[j]!.at).toBeGreaterThanOrEqual(coarse[j - 1]!.at + coarse[j - 1]!.remove)
     }
+  })
+
+  it('30,000 random pairs: the target, no split surrogate pair, and as short as the code-point edit distance', () => {
+    const random = rng(807)
+    const alphabet = ['a', 'b', 'c', ' ', '\n', '😀', '😁', 'é']
+    const pick = (n: number): string[] => Array.from({ length: n }, () => alphabet[Math.floor(random() * alphabet.length)]!)
+    /** Deletions plus insertions turning `a` into `b`: n + m - 2 * LCS. */
+    const distance = (a: readonly string[], b: readonly string[]): number => {
+      let row = new Int32Array(b.length + 1)
+      for (const x of a) {
+        const next = new Int32Array(b.length + 1)
+        for (let j = 0; j < b.length; j++) next[j + 1] = x === b[j] ? row[j]! + 1 : Math.max(row[j + 1]!, next[j]!)
+        row = next
+      }
+      return a.length + b.length - 2 * row[b.length]!
+    }
+    const failures: unknown[] = []
+    for (let i = 0; i < 30_000; i++) {
+      const a = pick(Math.floor(random() * 60))
+      let b = [...a]
+      if (random() < 0.25) b = pick(Math.floor(random() * 60))
+      else {
+        for (let e = 0; e < 1 + Math.floor(random() * 4); e++) {
+          const at = Math.floor(random() * (b.length + 1))
+          b.splice(at, Math.floor(random() * 4), ...pick(Math.floor(random() * 4)))
+        }
+      }
+      const [from, to] = [a.join(''), b.join('')]
+      const edits = diffText(from, to)
+      const length = edits.reduce((sum, { at, remove, insert }) => sum + Array.from(from.slice(at, at + remove)).length + Array.from(insert).length, 0)
+      if (applied(from, edits) !== to || !keepsPairs(from, edits) || !apart(edits) || length !== distance(a, b)) {
+        failures.push({ from, to, edits })
+      }
+    }
+    expect(failures).toEqual([])
+  })
+
+  it('turns large texts into one another through the line pass, within the time limit or past it', () => {
+    const random = rng(833)
+    const words = ['vault', 'note', 'é', '😀', 'graph', 'a', 'index', '', 'yjs']
+    const line = (): string => `${Array.from({ length: Math.floor(random() * 12) }, () => words[Math.floor(random() * words.length)]).join(' ')}\n`
+    const failures: unknown[] = []
+    for (let i = 0; i < 150; i++) {
+      const a = Array.from({ length: 150 + Math.floor(random() * 150) }, line)
+      const b = [...a]
+      const unrelated = random() < 0.2
+      for (let e = 0; e < 1 + Math.floor(random() * 40); e++) {
+        const at = Math.floor(random() * b.length)
+        const kind = random()
+        // A word changed in place, lines inserted or removed, a line replaced, or a `- ` before it.
+        if (kind < 0.3) b[at] = b[at]!.replace(/\S+/, words[Math.floor(random() * words.length)]!)
+        else if (kind < 0.5) b.splice(at, 0, ...Array.from({ length: 1 + Math.floor(random() * 3) }, line))
+        else if (kind < 0.65) b.splice(at, 1 + Math.floor(random() * 3))
+        else if (kind < 0.85) b[at] = line()
+        else b[at] = `- ${b[at]}`
+      }
+      const from = a.join('')
+      // Sometimes without the last newline, so the last line pairs with one that has it.
+      const to = unrelated ? Array.from({ length: a.length }, line).join('') : b.join('').slice(0, random() < 0.2 ? -1 : undefined)
+      for (const timeLimitMs of [undefined, -1]) {
+        const edits = diffText(from, to, timeLimitMs)
+        if (applied(from, edits) !== to || !keepsPairs(from, edits) || !apart(edits)) failures.push({ i, timeLimitMs })
+      }
+    }
+    expect(failures).toEqual([])
   })
 
   it('edits a 1 MiB body with a small change quickly and minimally', () => {
