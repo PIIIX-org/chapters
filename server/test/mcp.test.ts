@@ -2,14 +2,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { eq } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
-import { notes } from '../src/db/schema.js'
 import { checkNoteFiles } from '../src/notes/integrity.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { getLiveNote } from '../src/notes/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -181,7 +181,12 @@ describe('MCP integration', () => {
     expect(textOf(read)).toContain('quantum flux capacitor')
   })
 
-  it('reports a storage failure without the server paths it touched', async () => {
+  // ADR-003 S2a (§5.6): the ack is the commit; the file is a projection. A
+  // disk that refuses the file no longer fails the agent's write or leaves
+  // the row ahead of a "failed" edit (the #486/#489 bug this test pinned):
+  // the projection stays pending with its error and catches up once the disk
+  // accepts it.
+  it('a storage failure of the file projection fails no write, and the file catches up', async () => {
     const created = await app.inject({
       method: 'POST',
       url: `/api/vaults/${vaultId}/notes`,
@@ -189,10 +194,9 @@ describe('MCP integration', () => {
       body: { type: 'docs', name: 'blocked', body: 'Cannot be rewritten.' },
     })
     expect(created.statusCode).toBe(200)
-    // A non-empty directory where the note's file belongs: the write's final
-    // rename fails, and Node's error names both absolute paths.
+    await flushProjections()
+    // A non-empty directory where the note's file belongs: the projector's rename fails.
     const file = join(config.dataDir, 'vaults', vaultId, 'docs', 'blocked.md')
-    const original = await readFile(file, 'utf8')
     await rm(file)
     await mkdir(file)
     await writeFile(join(file, 'occupant'), '')
@@ -202,31 +206,23 @@ describe('MCP integration', () => {
         name: 'edit_note',
         arguments: { vaultId, path: 'docs/blocked', body: 'Rewritten.' },
       })
-      expect(edit.isError).toBe(true)
-      expect(textOf(edit)).toMatch(/^Error: internal storage error \(E[A-Z]+\)$/)
+      expect(edit.isError, textOf(edit)).toBeFalsy()
       expect(textOf(edit)).not.toContain(config.dataDir)
+      await flushProjections()
+      const { pending } = await checkNoteFiles(vaultId)
+      expect(pending.find((p) => p.path === 'docs/blocked' && p.projection === 'file')?.lastError).toBeTruthy()
     } finally {
-      // Put back the file as it was before the damage, not the row.
       await rm(file, { recursive: true, force: true })
-      await writeFile(file, original, 'utf8')
     }
-
-    // KNOWN BUG, pinned on purpose (#486, #489): updateNote commits the row
-    // before it writes the file, so the edit reported as failed above still
-    // moved the row to 'Rewritten.' while the file keeps the old note. When
-    // the write path stops leaving the row ahead of the file, these two
-    // assertions fail: expect no problem for docs/blocked instead, and drop
-    // the exclusion below.
     expect((await getLiveNote(vaultId, 'docs/blocked'))!.body).toBe('Rewritten.')
-    const { problems } = await checkNoteFiles(vaultId)
-    expect(problems.filter((p) => p.path === 'docs/blocked')).toEqual([
-      expect.objectContaining({ problem: 'body-mismatch' }),
-    ])
-    // Excluded from the CI vault-invariant gate (#578) only because of the
-    // bug pinned above: soft-delete the note so the gate skips it, without
-    // making the row and file agree.
+    // The failed projection retries after its backoff.
     const row = (await getLiveNote(vaultId, 'docs/blocked'))!
-    await db.update(notes).set({ deletedAt: new Date() }).where(eq(notes.id, row.id))
+    await db.execute(sql`UPDATE note_projections SET lease_until = NULL WHERE note_id = ${row.id}`)
+    await flushProjections()
+    expect(await readFile(file, 'utf8')).toContain('Rewritten.')
+    const { problems, pending } = await checkNoteFiles(vaultId)
+    expect(problems.filter((p) => p.path === 'docs/blocked')).toEqual([])
+    expect(pending.filter((p) => p.path === 'docs/blocked')).toEqual([])
   })
 
   it('search and graph work through MCP (same functions as the UI)', async () => {

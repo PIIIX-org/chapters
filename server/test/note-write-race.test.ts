@@ -4,7 +4,6 @@ import { readdir } from 'node:fs/promises'
 import type * as FsPromises from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import * as Y from 'yjs'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { createNote, getRevision, listRevisionMeta, readNote, renameNote, updateNote } from '../src/notes/store.js'
@@ -99,9 +98,10 @@ describe('concurrent writes to one note', () => {
     expect(note.body).toBe(writes.at(-1))
     expect(note.row.body).toBe(writes.at(-1))
     expect(await revisionBodies(path)).toEqual(writes)
-    const doc = new Y.Doc()
-    Y.applyUpdate(doc, (await loadCrdtState(vaultId, path))!)
-    expect(doc.getText('body').toString()).toBe(writes.at(-1))
+    // ADR-003 §5.2 (S2a): server writes no longer open a relay document, and a
+    // note no editor ever opened has no CRDT state ("Notes with no bin are
+    // left alone (the relay seeds them on first open)").
+    expect(await loadCrdtState(vaultId, path)).toBeNull()
   }, 15_000)
 })
 
@@ -120,8 +120,7 @@ describe('renames through the live collab engine (#803)', () => {
     const note = (await readNote(vaultId, 'docs/relay-hub'))!
     expect(note.body).toBe(body)
     expect(note.row.body).toBe(body)
-    const doc = new Y.Doc()
-    Y.applyUpdate(doc, (await loadCrdtState(vaultId, 'docs/relay-hub'))!)
-    expect(doc.getText('body').toString()).toBe(body)
+    // ADR-003 §5.2 (S2a): never opened, so no CRDT state; the first open seeds it from the row.
+    expect(await loadCrdtState(vaultId, 'docs/relay-hub')).toBeNull()
   }, 15_000)
 })

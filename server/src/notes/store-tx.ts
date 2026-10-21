@@ -164,13 +164,16 @@ export async function insertRevision(
       return
     }
   }
+  // created_at is the clock after the note's locks, not the transaction start
+  // (`now()`): a transaction that waited for the lock still sorts after the
+  // one it waited for, so revisions list in commit order.
   await tx.execute(sql`
     INSERT INTO note_revisions
-      (note_id, actor_type, actor_id, action, frontmatter, body, seq, actor_detail, source_revision_id, from_path, to_path)
+      (note_id, actor_type, actor_id, action, frontmatter, body, seq, actor_detail, source_revision_id, from_path, to_path, created_at)
     VALUES (${noteId}, ${spec.actor.type}, ${spec.actor.id ?? null}, ${spec.action},
       ${JSON.stringify(state.frontmatter ?? {})}::jsonb, ${state.body}, ${seq},
       ${spec.actorDetail ? JSON.stringify(spec.actorDetail) : null}::jsonb,
-      ${spec.sourceRevisionId ?? null}, ${spec.fromPath ?? null}, ${spec.toPath ?? null})`)
+      ${spec.sourceRevisionId ?? null}, ${spec.fromPath ?? null}, ${spec.toPath ?? null}, clock_timestamp())`)
 }
 
 /** Replaces the note's EXTRACTED link rows from `body`, inside `tx`. */
