@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from 'drizzle-orm'
+import { and, eq, isNull, or, sql } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFileSymbols, repositoryFiles } from '../db/schema.js'
@@ -11,6 +11,7 @@ import {
   MAX_JOB_ATTEMPTS,
   claimJob,
   completeJob,
+  erroredJobExists,
   failCrashedJobs,
   failJob,
   jobDrainer,
@@ -152,7 +153,8 @@ export async function backfillUnresolvedImports(): Promise<number> {
 
 /**
  * Boot catch-up: enqueue every file with a null embedding (its extraction
- * never completed) and wake the worker, which also reclaims jobs whose lease
+ * never completed) or whose job for its current content failed with an
+ * error (an updated file keeps its previous embedding), and wake the worker, which also reclaims jobs whose lease
  * a dead process left. Idempotent: a pending job is left as it is. A job that
  * failed with an error runs again (the outage that failed it may be over, as
  * a restart repaired it before #494); one whose runs ended with the process
@@ -163,7 +165,13 @@ export async function scheduleMissingExtractions(): Promise<number> {
   const missing = await db
     .select({ id: repositoryFiles.id })
     .from(repositoryFiles)
-    .where(isNull(repositoryFiles.embedding))
+    .where(
+      or(
+        isNull(repositoryFiles.embedding),
+        // An updated file keeps its previous embedding: a failed job for its current content counts too.
+        erroredJobExists(sql`${EXTRACTION_JOB} || ':' || ${repositoryFiles.id} || ':' || ${repositoryFiles.contentHash}`),
+      ),
+    )
     .orderBy(repositoryFiles.repositoryId, repositoryFiles.path)
   await enqueueExtractions(
     missing.map((r) => r.id),

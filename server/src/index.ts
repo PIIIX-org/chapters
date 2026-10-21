@@ -32,15 +32,17 @@ try {
   if (scrub.scrubbed > 0) console.log(`moved credentials out of ${scrub.scrubbed} repository git URL(s)`)
   if (scrub.skipped > 0) console.warn(`${scrub.skipped} repository git URL(s) still hold a credential: set CREDENTIALS_ENCRYPTION_KEY`)
   // Embedding and extraction jobs are rows in `jobs` (#494): the worker resumes
-  // pending ones and reclaims those whose lease a dead process left. These
-  // scans only add jobs (idempotently) for work that has no job at all, such
-  // as rows written before the jobs table existed.
+  // pending ones, reclaims those whose lease a dead process left and fails
+  // those whose runs ended with the process 3 times (LeaseExpired). These
+  // scans add jobs (idempotently) for rows without an embedding and no job
+  // (written before the jobs table), and re-run jobs of the current content or
+  // `seq` that failed with an error (an outage that outlasted the retries).
   const pruned = await pruneFinishedJobs([EMBEDDING_JOB, EXTRACTION_JOB])
   if (pruned > 0) console.log(`pruned ${pruned} finished background job(s)`)
   const missing = await scheduleMissingEmbeddings()
-  if (missing > 0) console.log(`embedding catch-up: ${missing} notes without an embedding`)
+  if (missing > 0) console.log(`embedding catch-up: ${missing} notes without an embedding or with a failed job`)
   const missingFiles = await scheduleMissingExtractions()
-  if (missingFiles > 0) console.log(`extraction catch-up: ${missingFiles} repository files without an embedding`)
+  if (missingFiles > 0) console.log(`extraction catch-up: ${missingFiles} repository files without an embedding or with a failed job`)
   startJobPolling()
   const reconciled = await reconcileOrphanedSyncs()
   if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)

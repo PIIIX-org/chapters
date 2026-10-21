@@ -65,6 +65,20 @@ export interface ClaimedJob<P> {
  */
 export type JobRerun = 'never' | 'succeeded' | 'errored' | 'finished'
 
+/** True for a finished job (row alias `job`) that failed with an error, not as `LeaseExpired`. */
+function erroredJob(job: SQL): SQL {
+  return sql`${job}.done_at IS NOT NULL AND ${job}.last_error IS NOT NULL AND ${job}.last_error NOT LIKE ${`${LEASE_EXPIRED}:%`}`
+}
+
+/**
+ * Boot catch-up condition: the job with idempotency key `key` failed with an
+ * error (see `JobRerun` `'errored'`), so the item's current version has no
+ * result yet even when an earlier version left an embedding.
+ */
+export function erroredJobExists(key: SQL): SQL {
+  return sql`EXISTS (SELECT 1 FROM jobs j WHERE j.idempotency_key = ${key} AND ${erroredJob(sql`j`)})`
+}
+
 /**
  * The ON CONFLICT clause of an enqueue. The caller passes each key once:
  * Postgres refuses to update one row twice in a statement. A job run again
@@ -74,7 +88,7 @@ export function onJobConflict(rerun: JobRerun): SQL {
   if (rerun === 'never') return sql`ON CONFLICT (idempotency_key) DO NOTHING`
   const which = {
     succeeded: sql`AND jobs.last_error IS NULL`,
-    errored: sql`AND jobs.last_error IS NOT NULL AND jobs.last_error NOT LIKE ${`${LEASE_EXPIRED}:%`}`,
+    errored: sql`AND ${erroredJob(sql`jobs`)}`,
     finished: sql``,
   }[rerun]
   return sql`ON CONFLICT (idempotency_key) DO UPDATE

@@ -8,6 +8,7 @@ import {
   MAX_JOB_ATTEMPTS,
   claimJob,
   completeJob,
+  erroredJobExists,
   failCrashedJobs,
   failJob,
   jobDrainer,
@@ -54,15 +55,21 @@ export async function flushEmbeddings(): Promise<void> {
 }
 
 /**
- * Boot catch-up: enqueue live notes without an embedding, and wake the
- * worker. A job that failed with an error runs again; one whose runs ended
+ * Boot catch-up: enqueue live notes without an embedding or whose job for
+ * their current `seq` failed with an error, and wake the worker. A job that failed with an error runs again; one whose runs ended
  * with the process (`LeaseExpired`) does not (see scheduleMissingExtractions).
  */
 export async function scheduleMissingEmbeddings(limit?: number): Promise<number> {
   const query = db
     .select({ id: notes.id })
     .from(notes)
-    .where(and(isNull(notes.deletedAt), sql`${notes.embedding} is null`))
+    .where(
+      and(
+        isNull(notes.deletedAt),
+        // An edited note keeps its previous embedding: a failed job for its current `seq` counts too.
+        sql`(${notes.embedding} is null OR ${erroredJobExists(sql`${EMBEDDING_JOB} || ':' || ${notes.id} || ':' || "notes"."seq"`)})`,
+      ),
+    )
   const missing = limit ? await query.limit(limit) : await query
   await enqueueEmbeddings(
     missing.map((r) => r.id),
