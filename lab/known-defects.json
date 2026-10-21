@@ -72,18 +72,6 @@
       "issue": 408
     },
     {
-      "test": "browser",
-      "check": "S8a-back-online: typing done while disconnected stays where it was typed",
-      "issue": 485,
-      "intermittent": "offline text lands at position 0 in about half the merges, depending on where the agent's insert falls among deleted characters"
-    },
-    {
-      "test": "browser",
-      "check": "S8b-reconnected: typing done while disconnected stays where it was typed",
-      "issue": 485,
-      "intermittent": "offline text lands at position 0 in about half the merges, depending on where the agent's insert falls among deleted characters"
-    },
-    {
       "test": "collab-duplication",
       "check": "S16 server-acknowledged collab edit survives SIGKILL after the tab closed",
       "issue": 487

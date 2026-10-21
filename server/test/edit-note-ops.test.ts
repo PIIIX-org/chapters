@@ -166,6 +166,41 @@ describe('edit_note with a person typing in the note (#408)', () => {
   }, 20_000)
 })
 
+describe('edit_note while a tab is offline (#485)', () => {
+  // The lab's browser S8a/S8b: the tab goes offline, the person types at the
+  // end of the note, the agent appends a line from its read (which cannot
+  // hold the offline typing), the tab reconnects. When the agent's write
+  // deleted and re-inserted the whole body, the typing was anchored to a
+  // deleted character and landed at position 0.
+  it('typing at the end of the note while offline stays after the earlier text, not at the top', async () => {
+    const path = 'docs/offline-end'
+    const body = 'Base line.\n\nAGENT-S7 line.\n'
+    await must('create_note', { vaultId, path, body })
+    const other = await open(path)
+    const tab = await open(path)
+    const text = tab.document.getText('body')
+    await waitFor(() => text.toString() === body && other.document.getText('body').toString() === body)
+
+    tab.disconnect()
+    text.insert(text.length, ' i01 i02 i03')
+    const read = await must<{ body: string }>('read_note', { vaultId, path })
+    expect(read.body).not.toContain('i01')
+    const r = await call('edit_note', { vaultId, path, body: `${read.body}AGENT-S8A line.\n` })
+    expect(r.isError, r.text).toBe(false)
+    await tab.connect()
+
+    await waitFor(() => text.toString().includes('AGENT-S8A') && (liveBody(path) ?? '').includes('i01'))
+    const merged = text.toString()
+    expect(merged.startsWith('Base line.\n\nAGENT-S7 line.\n'), merged).toBe(true)
+    expect(merged.indexOf(' i01 i02 i03')).toBeGreaterThan(merged.indexOf('AGENT-S7'))
+    expect(merged.split('i01')).toHaveLength(2)
+    expect(merged.split('AGENT-S8A')).toHaveLength(2)
+    expect(liveBody(path)).toBe(merged)
+    await waitFor(() => other.document.getText('body').toString() === merged)
+    await waitFor(async () => (await rowBody(path)) === merged)
+  }, 20_000)
+})
+
 describe('edit_note ops (#408)', () => {
   const base = '# Title\n\nIntro with foo.\n\n## Plan\n\nOld plan.\n\n### Detail\n\nDetail text.\n\n## Log\n\n- one\n'
   let n = 0
