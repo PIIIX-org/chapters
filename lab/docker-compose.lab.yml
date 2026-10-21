@@ -20,6 +20,9 @@
 #   under test as a git repository from the runner (lab/lib/git-fixture.ts)
 #   and the app clones it from there, so every sync in the test sees the
 #   same files while dev moves (#767).
+# - ELARA_FAILPOINTS: unset (inert) except while store-failpoints and
+#   store-migration recreate the app with a failpoint armed (ADR-003 §11,
+#   server/src/failpoints.ts); lab/lib/store.ts passes it to compose.
 services:
   app:
     build:
@@ -33,6 +36,7 @@ services:
       - MCP_RATE_LIMIT
       - BACKUP_LOCAL_PATH=/data/backups
       - BACKUP_RETENTION_COUNT=3
+      - ELARA_FAILPOINTS
     depends_on:
       mailpit:
         condition: service_started

@@ -9,7 +9,10 @@ import { notes } from '../db/schema.js'
 import { runMigrations } from '../db/migrate.js'
 import { syncNoteLinks } from '../notes/store.js'
 import { enqueueEmbeddings, flushEmbeddings } from '../search/embedding-queue.js'
+import { holdSharedLockOrExit } from '../notes/maintenance-lock.js'
 
+// A writing CLI holds the shared instance lock (ADR-003 §5.1): refused while store-export-legacy runs.
+const instanceLock = await holdSharedLockOrExit()
 await runMigrations()
 const rows = await db
   .select({ id: notes.id, body: notes.body })
@@ -26,4 +29,5 @@ await enqueueEmbeddings(
 )
 await flushEmbeddings()
 console.log('done')
+await instanceLock.release()
 await sql.end()
