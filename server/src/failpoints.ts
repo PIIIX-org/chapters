@@ -22,6 +22,7 @@ export const FAILPOINTS = [
   'projector.after-rename-before-mark',
   'rename.after-commit-before-refactor',
   'purge.after-commit-before-remove',
+  'fold.before-commit',
   'migration.mid-batch',
   'revisions.compact-before-commit',
   'revisions.compact-after-commit',

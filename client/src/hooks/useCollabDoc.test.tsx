@@ -116,6 +116,7 @@ function mount(overrides: Partial<Parameters<typeof useCollabDoc>[0]> = {}) {
   return renderHook(() =>
     useCollabDoc({
       vaultId: 'v-1',
+      noteId: 'n-1',
       path: 'journals/2026-08-25.md',
       user: { id: 'u-taha', name: 'taha' },
       enabled: true,
@@ -149,7 +150,7 @@ describe('useCollabDoc', () => {
     const { view, provider } = await connected()
 
     expect(provider.options.url).toBe('ws://relay.test:3001')
-    expect(provider.options.name).toBe('v-1/journals/2026-08-25.md')
+    expect(provider.options.name).toBe('v-1/~n-1')
     expect(provider.options.document).toBe(view.result.current.ydoc)
     expect(view.result.current.writable).toBe(true)
     await waitFor(() => expect(view.result.current.awareness).toBe(provider.awareness))
@@ -210,6 +211,51 @@ describe('useCollabDoc', () => {
     expect(view.result.current.status).toBe('not-migrated')
     expect(view.result.current.writable).toBe(false)
     expect(provider.disconnected).toBe(true)
+  })
+
+  it('a relay that names documents differently says reload to keep editing, not a revocation, and keeps the text (ADR-003 §5.4)', async () => {
+    const { view, provider } = await connected()
+    act(() => view.result.current.ydoc.getText('body').insert(0, 'typed before the upgrade'))
+    act(() => provider.options.onAuthenticationFailed({ reason: 'reload-required' }))
+    expect(view.result.current.status).toBe('reload-required')
+    expect(view.result.current.writable).toBe(false)
+    expect(provider.disconnected).toBe(true)
+    expect(view.result.current.ydoc.getText('body').toString()).toBe('typed before the upgrade')
+  })
+
+  it('a note deleted while open stops the editor as deleted, not revoked, and keeps the text (close or refusal)', async () => {
+    const { view, provider } = await connected()
+    act(() => provider.options.onStatus({ status: 'connected' }))
+    act(() => view.result.current.ydoc.getText('body').insert(0, 'typed as it was deleted'))
+    act(() => provider.options.onClose({ event: { code: 4410, reason: 'note-deleted' } }))
+    expect(view.result.current.status).toBe('deleted')
+    expect(view.result.current.writable).toBe(false)
+    expect(provider.disconnected).toBe(true)
+    expect(view.result.current.ydoc.getText('body').toString()).toBe('typed as it was deleted')
+    // The refused reconnect that may follow does not turn it into a revocation.
+    act(() => provider.options.onAuthenticationFailed({ reason: 'permission-denied' }))
+    expect(view.result.current.status).toBe('deleted')
+  })
+
+  it('a note in the trash refuses the connection with note-deleted: deleted, not revoked', async () => {
+    const { view, provider } = await connected()
+    act(() => provider.options.onAuthenticationFailed({ reason: 'note-deleted' }))
+    expect(view.result.current.status).toBe('deleted')
+    expect(provider.disconnected).toBe(true)
+  })
+
+  it('names the document by note id, so a rename keeps the same document', async () => {
+    const view = renderHook(
+      ({ path }: { path: string }) =>
+        useCollabDoc({ vaultId: 'v-1', noteId: 'n-1', path, user: { id: 'u-taha', name: 'taha' }, enabled: true }),
+      { initialProps: { path: 'a.md' } },
+    )
+    await waitFor(() => expect(stub.providers).toHaveLength(1))
+    expect(stub.providers[0]!.options.name).toBe('v-1/~n-1')
+    const doc = view.result.current.ydoc
+    view.rerender({ path: 'renamed.md' })
+    expect(view.result.current.ydoc).toBe(doc)
+    expect(stub.providers).toHaveLength(1)
   })
 
   describe('a session that ended (#498)', () => {
@@ -548,9 +594,9 @@ describe('useCollabDoc', () => {
 
   it('switching notes gives the new note its own document, never the old one', async () => {
     const view = renderHook(
-      ({ path }: { path: string }) =>
-        useCollabDoc({ vaultId: 'v-1', path, user: { id: 'u-taha', name: 'taha' }, enabled: true }),
-      { initialProps: { path: 'a.md' } },
+      ({ noteId, path }: { noteId: string; path: string }) =>
+        useCollabDoc({ vaultId: 'v-1', noteId, path, user: { id: 'u-taha', name: 'taha' }, enabled: true }),
+      { initialProps: { noteId: 'n-a', path: 'a.md' } },
     )
     await waitFor(() => expect(stub.providers).toHaveLength(1))
     const first = stub.providers[0]!
@@ -566,11 +612,11 @@ describe('useCollabDoc', () => {
     const docA = view.result.current.ydoc
 
     // The caller is not keyed on the note (task 7's NoteView split is unwritten).
-    view.rerender({ path: 'b.md' })
+    view.rerender({ noteId: 'n-b', path: 'b.md' })
     await waitFor(() => expect(stub.providers).toHaveLength(2))
     const second = stub.providers[1]!
 
-    expect(second.options.name).toBe('v-1/b.md')
+    expect(second.options.name).toBe('v-1/~n-b')
     // The whole finding: B's provider must not be handed A's CRDT, which would
     // upload A's body into B on the first sync step.
     expect(view.result.current.ydoc).not.toBe(docA)
@@ -671,6 +717,7 @@ describe('useCollabDoc', () => {
       ({ enabled }: { enabled: boolean }) =>
         useCollabDoc({
           vaultId: 'v-1',
+          noteId: 'n-1',
           path: 'journals/2026-08-25.md',
           user: { id: 'u-taha', name: 'taha' },
           enabled,
@@ -695,6 +742,7 @@ describe('useCollabDoc', () => {
       ({ user }: { user: { id: string; name: string } }) =>
         useCollabDoc({
           vaultId: 'v-1',
+          noteId: 'n-1',
           path: 'journals/2026-08-25.md',
           user,
           enabled: true,

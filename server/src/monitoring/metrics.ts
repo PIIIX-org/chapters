@@ -81,6 +81,8 @@ const jobs = Object.fromEntries(JOB_KINDS.map((k) => [k, { succeeded: 0, failed:
   JobKind,
   { succeeded: number; failed: number; repeated: number }
 >
+/** Conflict copies (ADR-003 §7, #842): documented behaviour, so counted apart from job failures. */
+const conflicts = { copies: 0, paths: new Set<string>() }
 
 /** `{name, code}` of a thrown value, each kept only when it looks like an identifier (never the message). */
 export function errorInfo(err: unknown): ErrorInfo {
@@ -211,6 +213,17 @@ export function recordJob(
   )
 }
 
+/**
+ * One `.conflicts/` copy the projector made of a file it did not write
+ * (#842). Intended behaviour, not a failure: no error report, no log line, no
+ * `jobs` alert. The endpoint shows the number of copies and of distinct
+ * vault/path pairs, never the path itself.
+ */
+export function recordConflictCopy(vaultId: string, path: string): void {
+  conflicts.copies++
+  conflicts.paths.add(`${vaultId}/${path}`)
+}
+
 function percentile(buckets: number[], count: number, maxMs: number, p: number): number {
   const rank = Math.ceil(count * p)
   let seen = 0
@@ -268,6 +281,7 @@ export function metricsSnapshot(now = Date.now()) {
     windowMinutes: WINDOW_MINUTES,
     totals: { ...totals },
     jobs: Object.fromEntries(JOB_KINDS.map((k) => [k, { ...jobs[k] }])) as Record<JobKind, { succeeded: number; failed: number; repeated: number }>,
+    conflictCopies: { copies: conflicts.copies, paths: conflicts.paths.size },
     routes,
     errors: errors.map((e) => ({ ...e })),
     lastSeq: seq,
@@ -283,4 +297,6 @@ export function resetMetrics(): void {
   totals.serverErrors = 0
   totals.jobFailures = 0
   for (const k of JOB_KINDS) jobs[k] = { succeeded: 0, failed: 0, repeated: 0 }
+  conflicts.copies = 0
+  conflicts.paths.clear()
 }

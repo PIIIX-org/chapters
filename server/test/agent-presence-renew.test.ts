@@ -12,7 +12,7 @@ import { forgetAgentPresence, showAgentPresence } from '../src/sync/agent-presen
 const documents = new Map<string, Document>()
 vi.mock('../src/sync/collab-server.js', () => ({ getCollab: () => ({ documents }) }))
 
-const NAME = 'vault-1/docs/open'
+const NAME = 'vault-1/~note-1'
 const AGENT = { key: 'connection-1', name: 'Claude Code' }
 let document: Document
 
@@ -45,12 +45,12 @@ function renewedThrough(ms: number): void {
 
 describe('agent presence timing (#481)', () => {
   it('is renewed within the 30 s awareness expiry while present, and leaves 60 s after the last call', () => {
-    showAgentPresence('vault-1', 'docs/open', AGENT, 'reading')
+    showAgentPresence('vault-1', 'note-1', AGENT, 'reading')
     expect(agents()).toEqual([{ agent: { name: 'Claude Code', activity: 'reading' } }])
 
     renewedThrough(45_000)
 
-    showAgentPresence('vault-1', 'docs/open', AGENT, 'editing')
+    showAgentPresence('vault-1', 'note-1', AGENT, 'editing')
     renewedThrough(55_000)
     expect(agents()).toEqual([{ agent: { name: 'Claude Code', activity: 'editing' } }])
 
@@ -59,12 +59,12 @@ describe('agent presence timing (#481)', () => {
   })
 
   it('reads after a write keep it editing until the write is a full idle timeout old', () => {
-    showAgentPresence('vault-1', 'docs/open', AGENT, 'editing')
+    showAgentPresence('vault-1', 'note-1', AGENT, 'editing')
     vi.advanceTimersByTime(30_000)
-    showAgentPresence('vault-1', 'docs/open', AGENT, 'reading')
+    showAgentPresence('vault-1', 'note-1', AGENT, 'reading')
     expect(agents()).toEqual([{ agent: { name: 'Claude Code', activity: 'editing' } }])
     vi.advanceTimersByTime(31_000)
-    showAgentPresence('vault-1', 'docs/open', AGENT, 'reading')
+    showAgentPresence('vault-1', 'note-1', AGENT, 'reading')
     expect(agents()).toEqual([{ agent: { name: 'Claude Code', activity: 'reading' } }])
   })
 

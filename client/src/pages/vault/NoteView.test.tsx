@@ -96,6 +96,8 @@ class FakeEventSource {
   onmessage: ((event: { data: string }) => void) | null = null
   onerror: (() => void) | null = null
 
+  addEventListener() {}
+
   constructor(readonly url: string) {
     FakeEventSource.instances.push(this)
   }
@@ -120,6 +122,7 @@ vi.stubGlobal('EventSource', FakeEventSource)
 /* ------------------------------------------------------------------ */
 
 const NOTE = {
+  id: 'n-jane',
   path: 'people/jane',
   frontmatter: { type: 'people', resource: 'https://kintsugi.test/ada' },
   body: 'the REST copy',
@@ -197,7 +200,7 @@ function renderNote(
     <RouterProvider router={router} />
   )
   const utils = render(<QueryClientProvider client={queryClient}>{page}</QueryClientProvider>)
-  return { ...utils, router, reportAccess: (next: Vault | undefined) => act(() => publish.current(next)) }
+  return { ...utils, router, queryClient, reportAccess: (next: Vault | undefined) => act(() => publish.current(next)) }
 }
 
 /** The relay's side of the connection: the Y.Doc it loaded the note into. */
@@ -260,7 +263,7 @@ describe('NoteView — editors take the collab path', () => {
     renderNote(EDIT_VAULT)
 
     const doc = await relay()
-    expect(doc.options.name).toBe('v1/people/jane')
+    expect(doc.options.name).toBe('v1/~n-jane')
     expect(doc.options.url).toBe('ws://relay.test:3001')
     // Editors never open the read-only stream: one transport per person.
     expect(FakeEventSource.instances).toHaveLength(0)
@@ -547,6 +550,36 @@ describe('NoteView', () => {
 
     // The next note starts clean, on the transport this access actually allows.
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+  })
+  it('follows a rename made elsewhere by note id: same editor, new URL, never "Note not found"', async () => {
+    // ADR-003 S2b: the document is named by note id, so the open editor stays
+    // connected through a rename; only the page's REST copy at the old path 404s.
+    let renamed = false
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/me')) return Promise.resolve(mockJsonResponse(200, ME))
+      if (url.endsWith('/tree')) {
+        const people = [{ id: NOTE.id, path: 'people/jane-doe', type: 'people', name: 'jane-doe', frontmatter: {}, updatedAt: '' }]
+        return Promise.resolve(mockJsonResponse(200, renamed ? { people } : {}))
+      }
+      if (url.includes('/backlinks')) return Promise.resolve(mockJsonResponse(200, []))
+      if (url.endsWith('/notes/people/jane') && renamed) return Promise.resolve(mockJsonResponse(404, { error: 'note not found' }))
+      return Promise.resolve(mockJsonResponse(200, NOTE))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { router, queryClient } = renderNote(EDIT_VAULT)
+    const doc = await relay()
+    doc.load('typed here')
+
+    renamed = true
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ['note'] })
+    })
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/vaults/v1/notes/people/jane-doe'))
+    expect(screen.queryByText('Note not found.')).toBeNull()
+    // The same provider and document: nothing remounted, nothing unsent dropped.
+    expect(stub.providers).toHaveLength(1)
+    expect(bodyText()).toContain('typed here')
   })
   it('shows the note instead of a blank editor when the relay cannot be reached', async () => {
     // An editor whose relay is down has an empty Y.Text, so the collab editor

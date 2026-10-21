@@ -3,8 +3,10 @@
 // Postgres, how much memory the app container uses, and raw MCP calls that
 // report the exact HTTP response size.
 import { createHash } from 'node:crypto'
+import { Buffer } from 'node:buffer'
+import * as Y from 'yjs'
 import type { LabContext } from './context.ts'
-import { appContainerId, appExec, COMPOSE, exec } from './docker.ts'
+import { appContainerId, appExec, COMPOSE, exec, psqlRows } from './docker.ts'
 
 export const sha = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex')
 
@@ -53,13 +55,12 @@ const DUMP_SCRIPT = String.raw`
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { createHash } from 'node:crypto'
-import * as Y from 'yjs'
 import { parseNote } from './src/notes/okf.ts'
 const [vaultId, bodiesArg] = process.argv.slice(2)
 const root = join(process.env.DATA_DIR ?? '/data/elara', 'vaults', vaultId)
 const sha = (b) => createHash('sha256').update(b).digest('hex')
 const want = new Set((bodiesArg ?? '').split(',').filter(Boolean))
-const out = { root, exists: true, notes: [], crdt: [], tmp: [], trash: 0, other: [] }
+const out = { root, exists: true, notes: [], crdt: [], crdtBins: [], tmp: [], trash: 0, other: [] }
 async function walk(dir) {
   let entries
   try { entries = await readdir(dir, { withFileTypes: true }) } catch (e) { if (dir === root) { out.exists = false; return } throw e }
@@ -69,20 +70,7 @@ async function walk(dir) {
     const rel = relative(root, full).split('\\').join('/')
     if (rel.endsWith('.tmp')) { const s = await stat(full); out.tmp.push({ file: rel, bytes: s.size, mtime: s.mtime.toISOString() }); continue }
     if (rel.startsWith('.trash/')) { out.trash++; continue }
-    if (rel.startsWith('.crdt/') && rel.endsWith('.bin')) {
-      const buf = await readFile(full)
-      const path = rel.slice(6, -4)
-      const rec = { path, bytes: buf.length }
-      try {
-        const d = new Y.Doc()
-        Y.applyUpdate(d, new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength))
-        const body = d.getText('body').toString()
-        rec.bodySha = sha(body); rec.bodyLen = body.length
-        if (want.has(path)) rec.body = body
-      } catch (err) { rec.decodeError = String(err).slice(0, 300) }
-      out.crdt.push(rec)
-      continue
-    }
+    if (rel.startsWith('.crdt/') && rel.endsWith('.bin')) { out.crdtBins.push(rel); continue }
     if (rel.endsWith('.md')) {
       const raw = await readFile(full, 'utf8')
       const path = rel.slice(0, -3)
@@ -113,8 +101,11 @@ export interface DiskNote {
   bodyLen?: number
   body?: string
 }
+/** A note's CRDT state as the relay would load it: `note_crdt.snapshot` plus the non-rejected `note_updates` tail (ADR-003 S2b). */
 export interface CrdtState {
+  /** The note's path (the row's), so it lines up with the disk dump. */
   path: string
+  noteId: string
   bytes: number
   bodySha?: string
   bodyLen?: number
@@ -125,10 +116,40 @@ export interface VaultDump {
   root: string
   exists: boolean
   notes: DiskNote[]
+  /** From Postgres; a note without a `note_crdt` row has no entry. */
   crdt: CrdtState[]
+  /** Leftover `.crdt/*.bin` files (none expected after S2b's backfill). */
+  crdtBins: string[]
   tmp: { file: string; bytes: number; mtime: string }[]
   trash: number
   other: string[]
+}
+
+/** Every live note's CRDT state in `vaultId`, materialised like server/src/sync/note-crdt.ts readNoteCrdt. */
+export async function dbCrdt(vaultId: string, bodies: string[] = []): Promise<CrdtState[]> {
+  if (!UUID.test(vaultId)) throw new Error(`bad vault id ${vaultId}`)
+  const rows = await psqlRows<{ note_id: string; path: string; snapshot: string; updates: string[] | null }>(`
+    select c.note_id, n.path, encode(c.snapshot, 'hex') as snapshot,
+      (select array_agg(encode(u.update, 'hex') order by u.id) from note_updates u
+        where u.note_id = c.note_id and u.id > c.snapshot_through and u.rejected_at is null) as updates
+    from note_crdt c join notes n on n.id = c.note_id
+    where n.vault_id = '${vaultId}' and n.deleted_at is null order by n.path`)
+  const want = new Set(bodies)
+  return rows.map((r) => {
+    const parts = [r.snapshot, ...(r.updates ?? [])].map((h) => Uint8Array.from(Buffer.from(h, 'hex')))
+    const rec: CrdtState = { path: r.path, noteId: r.note_id, bytes: parts.reduce((s, p) => s + p.byteLength, 0) }
+    try {
+      const d = new Y.Doc()
+      for (const p of parts) Y.applyUpdate(d, p)
+      const body = d.getText('body').toString()
+      rec.bodySha = sha(body)
+      rec.bodyLen = body.length
+      if (want.has(r.path)) rec.body = body
+    } catch (err) {
+      rec.decodeError = String(err).slice(0, 300)
+    }
+    return rec
+  })
 }
 
 let dumpInstalledFor = ''
@@ -143,19 +164,15 @@ export async function dumpVault(vaultId: string, bodies: string[] = []): Promise
   }
   const r = await appExec(['node', '--import', 'tsx', '/app/server/.lab-dump.mts', vaultId, bodies.join(',')])
   if (r.code !== 0) throw new Error(`dump failed (${r.code}): ${r.stderr.slice(0, 1000)}`)
-  return JSON.parse(r.stdout) as VaultDump
+  const dump = JSON.parse(r.stdout) as VaultDump
+  dump.crdt = await dbCrdt(vaultId, bodies)
+  return dump
 }
 
 /** `pnpm check-notes -- --vault <id>` equivalent, run inside the container. */
 export async function checkNotes(vaultId?: string): Promise<{ code: number; stdout: string; stderr: string }> {
   const r = await appExec(['node', '--import', 'tsx', 'src/scripts/check-notes.ts', ...(vaultId ? ['--vault', vaultId] : [])])
   return { code: r.code, stdout: r.stdout.trim().slice(0, 20_000), stderr: r.stderr.trim().slice(0, 4000) }
-}
-
-/** Copies a file inside the app container (e.g. to snapshot / restore a .crdt bin). */
-export async function containerCp(from: string, to: string) {
-  const r = await appExec(['cp', from, to])
-  if (r.code !== 0) throw new Error(`cp ${from} ${to} failed: ${r.stderr}`)
 }
 
 export async function containerLs(path: string) {
@@ -198,6 +215,46 @@ export async function dbBody(ctx: LabContext, noteId: string): Promise<string> {
   if (!UUID.test(noteId)) throw new Error(`bad note id ${noteId}`)
   const rows = await ctx.docker.psqlRows<{ body: string }>(`select body from notes where id = '${noteId}'`)
   return rows[0]?.body ?? ''
+}
+
+/** The live note at `path` in `vaultId` (its collab document is `<vaultId>/~<id>`). */
+export async function dbNoteId(ctx: LabContext, vaultId: string, path: string): Promise<string> {
+  if (!UUID.test(vaultId)) throw new Error(`bad vault id ${vaultId}`)
+  const rows = await ctx.docker.psqlRows<{ id: string }>(
+    `select id from notes where vault_id = '${vaultId}' and path = '${path.replace(/'/g, "''")}' and deleted_at is null`,
+  )
+  if (!rows[0]) throw new Error(`no live note ${path} in ${vaultId}`)
+  return rows[0].id
+}
+
+/**
+ * Saves note `noteId`'s CRDT state (its `note_crdt` row and every
+ * `note_updates` row) into lab tables; `restoreCrdtState` puts exactly that
+ * back. Together they plant a stale CRDT state behind a newer row: the
+ * state a crash between the row and the CRDT write would leave, had they not
+ * shared a transaction (ADR-003 S2b; before it, a stale `.crdt` bin).
+ */
+export async function saveCrdtState(ctx: LabContext, noteId: string): Promise<void> {
+  if (!UUID.test(noteId)) throw new Error(`bad note id ${noteId}`)
+  const t = noteId.replace(/-/g, '')
+  await ctx.docker.psql(`
+    drop table if exists lab_bak_crdt_${t}; drop table if exists lab_bak_upd_${t};
+    create table lab_bak_crdt_${t} as select * from note_crdt where note_id = '${noteId}';
+    create table lab_bak_upd_${t} as select * from note_updates where note_id = '${noteId}';`)
+}
+
+export async function restoreCrdtState(ctx: LabContext, noteId: string): Promise<void> {
+  if (!UUID.test(noteId)) throw new Error(`bad note id ${noteId}`)
+  const t = noteId.replace(/-/g, '')
+  await ctx.docker.psql(`
+    begin;
+    delete from note_updates where note_id = '${noteId}';
+    insert into note_updates select * from lab_bak_upd_${t};
+    update note_crdt c set snapshot = b.snapshot, snapshot_through = b.snapshot_through,
+      folded_through = b.folded_through, folded_seq = b.folded_seq, fold_error = b.fold_error
+      from lab_bak_crdt_${t} b where c.note_id = b.note_id;
+    drop table lab_bak_crdt_${t}; drop table lab_bak_upd_${t};
+    commit;`)
 }
 
 // ---------------------------------------------------------------- container
