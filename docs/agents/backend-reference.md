@@ -444,21 +444,29 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   is left is diffed per character (Myers O(ND) with the linear-space
   middle snake, over code points so no surrogate pair is split): exactly
   when it is at most 256 UTF-16 units, so a small edit is as short as the
-  code-point edit distance, and up to 4,096 units only while the two sides
-  are alike (edit distance at most a quarter of their length). Otherwise
-  the whole lines around it are diffed per line (lines found on one side
-  only skip the search, so a rewrite of every line is linear); a changed
-  run with as many new lines as old ones pairs them in order, another run
-  is diffed per character under the same rule, and a run still left pairs
-  its lines in order too. Each pair is diffed per character if alike,
-  otherwise changed only between its common start and end, so a rewrite
-  of every line of a large note (a `- ` before each) keeps every line's
-  unchanged characters, and an unrelated rewrite is about one change per
-  line rather than thousands of fragments. Past the time limit the rest is
-  linear (pairs trimmed to their common start and end). Pairing is in
-  order: when a large run also adds or removes lines partway through, the
-  lines after that point are paired with their neighbours and keep less.
-  Untouched
+  code-point edit distance, and up to 16,384 units only while the two
+  sides are alike (edit distance at most a quarter of their length, and
+  at most 1,024; the search stops at that many edits, so a failed attempt
+  is cheap). Otherwise the whole lines around it are diffed per line
+  (lines found on one side only, and blank lines, skip the search, so a
+  rewrite of every line is linear and a paragraph added before an edited
+  one does not take its blank line). A changed run with as many new lines
+  as old ones pairs them in order; another run is diffed per character if
+  at most 16,384 units and alike (never exactly), else paired too: the
+  shorter side pairs with the other side's consecutive lines at the shift
+  that keeps the most characters at the pairs' starts and ends (only the
+  first or the last lines when there are more than 4,096 pairings to
+  try), and the lines left over before and after are inserted or deleted.
+  Each pair is diffed per character if alike, at any length (bounded by
+  the edit count), otherwise changed only between its common start and
+  end, so a rewrite of every line of a large note (a `- ` before each)
+  keeps every line's unchanged characters, a long paragraph changed at
+  both ends keeps its middle, and an unrelated rewrite is about one change
+  per line rather than thousands of fragments. Past the time limit the
+  rest is linear (pairs trimmed to their common start and end). A run
+  with the same number of lines that also adds one line and removes
+  another partway through pairs the lines in between with their
+  neighbours and keeps less. Untouched
   characters keep their Yjs identity, so a person's caret stays on its
   text, their Ctrl+Z (a `Y.UndoManager` that tracks only their own edits,
   never the relay's updates) still finds what they typed (#483), and

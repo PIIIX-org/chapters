@@ -16,14 +16,16 @@ import type * as Y from 'yjs'
  * character (code point) with Myers' O(ND) algorithm and its linear-space
  * middle snake: exactly when it is small, so a small edit is as short as the
  * code-point edit distance, and when it is larger only as long as the two
- * sides are alike (an edit distance under a share of their length), since a
- * character diff of unrelated text costs quadratic time and cuts the note
- * into thousands of fragments. Otherwise the whole lines around it are
- * diffed per line (lines found on one side only can never match, so they
- * skip the search). A changed run with as many new lines as old ones pairs
- * them in order; any other run is diffed per character under the same rule,
- * and if it is too large or too unlike its lines are paired in order too.
- * Each pair is diffed per character if alike, otherwise changed between its
+ * sides are alike (an edit distance under a share of their length, the
+ * search stopping there), since a character diff of unrelated text costs
+ * quadratic time and cuts the note into thousands of fragments. Otherwise
+ * the whole lines around it are diffed per line (lines found on one side
+ * only can never match, and blank lines would match the wrong paragraph's,
+ * so both skip the search). A changed run with as many new lines as old
+ * ones pairs them in order; any other run is diffed per character if alike
+ * (never exactly), and if it is too large or too unlike its shorter side
+ * pairs with the other side's lines at the best shift. Each pair is diffed
+ * per character if alike, at any length, otherwise changed between its
  * common start and end, so a rewrite of every line (a `- ` before each)
  * still keeps each line's unchanged characters. One time limit bounds the
  * whole diff (ADR-003 §5.2 step 5); past it the rest is linear work
@@ -44,10 +46,20 @@ export const DIFF_TIME_LIMIT_MS = 100
 
 /** A change to a text no larger than this many UTF-16 units (both sides) is diffed per character exactly (#833). */
 const EXACT_UNITS = 256
-/** Larger changes are diffed per character, if alike enough, up to this many units; past it per line first. */
-const CHARACTER_UNITS = 4_096
-/** Alike enough for a character diff: an edit distance at most this share of both sides' length. */
+/** A change spanning lines is diffed per character, if alike enough, up to this many units; past it per line first. */
+const REGION_UNITS = 16_384
+/**
+ * Alike enough for a character diff: at most this share of the units (both
+ * sides counted) changes, and never more than UNLIKE_EDITS, so a failed
+ * attempt costs little.
+ */
 const ALIKE_SHARE = 0.25
+const UNLIKE_EDITS = 1_024
+/** A changed run pairs its lines at every shift when there are at most this many pairs to try, else at both ends only. */
+const PAIRINGS = 4_096
+
+/** What a character diff covers: the whole change to a text, a changed run of lines, or one line of a pair. */
+type Scope = 'text' | 'run' | 'line'
 
 const EQUAL = 0
 const DELETE = 1
@@ -73,10 +85,10 @@ function middleSnake(a: Tokens, a0: number, a1: number, b: Tokens, b0: number, b
   const n = a1 - a0
   const m = b1 - b0
   const max = Math.ceil((n + m) / 2)
-  // Each side reaches the meeting point within half the edits.
+  // Each side reaches the meeting point within half the edits; no diagonal past that is ever used.
   const last = Math.min(max, Math.ceil(limit / 2))
-  const offset = max + 1
-  const size = 2 * max + 3
+  const offset = last + 1
+  const size = 2 * last + 3
   // Furthest x reached on each diagonal k = x - y, forward from the start and backward from the end.
   const forward = new Int32Array(size).fill(-1)
   const backward = new Int32Array(size).fill(-1)
@@ -160,9 +172,8 @@ function diffTokens(a: Tokens, b: Tokens, deadline: number, limit = Infinity): {
       push(DELETE, x1 - x0)
       push(INSERT, y1 - y0)
     } else {
+      // The parts of a script within the limit are within it too.
       const split = middleSnake(a, x0, x1, b, y0, y1, deadline, limit)
-      // The first split holds the whole script; the parts of an optimal one need no limit.
-      limit = Infinity
       if (split) {
         solve(x0, split[0], y0, split[1])
         solve(split[0], x1, split[1], y1)
@@ -202,11 +213,17 @@ function lineTokens(aLines: readonly string[], bLines: readonly string[]): [Int3
   return [tokenize(aLines), tokenize(bLines)]
 }
 
+/** A line with nothing but white space: too common to anchor two texts' lines to each other. */
+const BLANK = /^\s*$/
+
 /**
  * The line runs turning `aLines` into `bLines`. A line found on one side only
  * can never be kept, so the search runs over the other lines alone and those
  * are deleted or inserted where they stand: a rewrite of every line costs
- * linear time rather than the search's quadratic worst case (#833).
+ * linear time rather than the search's quadratic worst case (#833). Blank
+ * lines are left out of the search too: kept, the blank line after a new
+ * paragraph would stand for the one after the old paragraph it was added
+ * before, pairing the old paragraph with the new one.
  */
 function lineRuns(aLines: readonly string[], bLines: readonly string[], deadline: number): Run[] {
   const [a, b] = lineTokens(aLines, bLines)
@@ -215,11 +232,11 @@ function lineRuns(aLines: readonly string[], bLines: readonly string[], deadline
   for (const id of b) ids = Math.max(ids, id + 1)
   const inA = new Uint8Array(ids)
   const inB = new Uint8Array(ids)
-  for (const id of a) inA[id] = 1
+  for (let i = 0; i < a.length; i++) if (!BLANK.test(aLines[i]!)) inA[a[i]!] = 1
   for (const id of b) inB[id] = 1
   const keptA: number[] = []
   const keptB: number[] = []
-  for (let i = 0; i < a.length; i++) if (inB[a[i]!]) keptA.push(i)
+  for (let i = 0; i < a.length; i++) if (inB[a[i]!] && inA[a[i]!]) keptA.push(i)
   for (let j = 0; j < b.length; j++) if (inA[b[j]!]) keptB.push(j)
   const kept = diffTokens(
     keptA.map((i) => a[i]!),
@@ -279,25 +296,38 @@ function codePoints(text: string, start: number, end: number): number[] {
   return out
 }
 
+/** Adds `edit` to `out`, as part of the last change when the two touch, so changes stay apart. */
+function pushEdit(out: TextEdit[], edit: TextEdit): void {
+  if (edit.remove === 0 && edit.insert === '') return
+  const last = out.at(-1)
+  if (last && last.at + last.remove === edit.at) {
+    last.remove += edit.remove
+    last.insert += edit.insert
+  } else out.push(edit)
+}
+
 /**
  * Character changes turning `from` into `to`, the slices at UTF-16 offset
  * `at` of the old text, added to `out`, where the two share their first
  * `start` and last `end` units (commonEnds). False, adding nothing, when the
- * changed part is too large or too unlike for a character diff (unless
- * `exact` and it is small), or the deadline cut the search short.
+ * changed part is too unlike for a character diff, a change across lines is
+ * over REGION_UNITS, or the deadline cut the search short. A change to a
+ * text of at most EXACT_UNITS is diffed exactly. The search is bounded by its
+ * number of edits, not by size, so a long line with a few changes far apart
+ * still keeps every character between them.
  */
-function characterEditsWithin(from: string, to: string, start: number, end: number, at: number, deadline: number, exact: boolean, out: TextEdit[]): boolean {
+function characterEditsWithin(from: string, to: string, start: number, end: number, at: number, deadline: number, scope: Scope, out: TextEdit[]): boolean {
   const removed = from.length - start - end
   const inserted = to.length - start - end
   if (removed === 0 || inserted === 0) {
-    if (removed > 0 || inserted > 0) out.push({ at: at + start, remove: removed, insert: to.slice(start, start + inserted) })
+    pushEdit(out, { at: at + start, remove: removed, insert: to.slice(start, start + inserted) })
     return true
   }
   const size = removed + inserted
-  if (size > CHARACTER_UNITS || Date.now() > deadline) return false
+  if ((scope !== 'line' && size > REGION_UNITS) || Date.now() > deadline) return false
+  const limit = scope === 'text' && size <= EXACT_UNITS ? Infinity : Math.min(Math.floor(size * ALIKE_SHARE), UNLIKE_EDITS)
   const a = codePoints(from, start, start + removed)
   const b = codePoints(to, start, start + inserted)
-  const limit = exact && size <= EXACT_UNITS ? Infinity : Math.floor(size * ALIKE_SHARE)
   const { runs, complete } = diffTokens(a, b, deadline, limit)
   if (!complete) return false
   const units = (codes: number[], first: number, n: number): number => {
@@ -312,7 +342,7 @@ function characterEditsWithin(from: string, to: string, start: number, end: numb
   let pending: TextEdit | null = null
   for (const run of runs) {
     if (run.op === EQUAL) {
-      if (pending) out.push(pending)
+      if (pending) pushEdit(out, pending)
       pending = null
       aOffset += units(a, ai, run.n)
       bOffset += units(b, bi, run.n)
@@ -333,62 +363,71 @@ function characterEditsWithin(from: string, to: string, start: number, end: numb
       bi += run.n
     }
   }
-  if (pending) out.push(pending)
+  if (pending) pushEdit(out, pending)
   return true
 }
 
-/** characterEditsWithin for any two texts, never exact past the alike share. */
-function characterEdits(from: string, to: string, at: number, deadline: number, out: TextEdit[]): boolean {
+/** characterEditsWithin for any two texts. */
+function characterEdits(from: string, to: string, at: number, deadline: number, scope: Scope, out: TextEdit[]): boolean {
   const [start, end] = commonEnds(from, to)
-  return characterEditsWithin(from, to, start, end, at, deadline, false, out)
-}
-
-/**
- * The one change turning `from` into `to` between their longest common start
- * and end, at UTF-16 offset `at`, or null when they are equal. The kept start
- * and end never split a surrogate pair.
- */
-function trimmedEdit(from: string, to: string, at: number): TextEdit | null {
-  if (from === to) return null
-  const [start, end] = commonEnds(from, to)
-  return { at: at + start, remove: from.length - start - end, insert: to.slice(start, to.length - end) }
+  return characterEditsWithin(from, to, start, end, at, deadline, scope, out)
 }
 
 /**
  * A changed run of lines: the old and new lines paired in order, each pair
  * diffed per character if alike enough, otherwise changed between its common
- * start and end, then the lines one side has left over. It keeps the
- * identity of every character a pair shares at its start and end, and past
- * the deadline it is linear.
+ * start and end. When one side has more lines, the shorter side pairs with
+ * the consecutive lines of the other, at the shift that keeps the most
+ * characters at the pairs' starts and ends (the first or the last lines when
+ * there are too many shifts to try), and the lines left over before and
+ * after are a change each: a paragraph added before an edited one still
+ * pairs the old paragraph with its new version (#833). It keeps the identity
+ * of every character a pair shares at its start and end, and past the
+ * deadline it is linear.
  */
 function pairedLineEdits(from: readonly string[], to: readonly string[], at: number, deadline: number, out: TextEdit[]): void {
   const pairs = Math.min(from.length, to.length)
-  let offset = at
-  for (let i = 0; i < pairs; i++) {
-    if (!characterEdits(from[i]!, to[i]!, offset, deadline, out)) {
-      const edit = trimmedEdit(from[i]!, to[i]!, offset)
-      if (edit) out.push(edit)
+  const spare = Math.max(from.length, to.length) - pairs
+  // The longer side's lines from `shift` on pair with the shorter side's.
+  let shift = 0
+  if (spare > 0) {
+    let best = -1
+    for (let s = 0; s <= spare; s++) {
+      if ((spare + 1) * pairs > PAIRINGS && s > 0 && s < spare) continue
+      let kept = 0
+      for (let i = 0; i < pairs; i++) {
+        const [start, end] = commonEnds(from.length > pairs ? from[s + i]! : from[i]!, to.length > pairs ? to[s + i]! : to[i]!)
+        kept += start + end
+      }
+      if (kept > best) [best, shift] = [kept, s]
     }
-    offset += from[i]!.length
   }
+  const fromFirst = from.length > pairs ? shift : 0
+  const toFirst = to.length > pairs ? shift : 0
+  let offset = at
   let remove = 0
-  for (let i = pairs; i < from.length; i++) remove += from[i]!.length
-  const insert = to.slice(pairs).join('')
-  if (remove === 0 && insert === '') return
-  const last = out.at(-1)
-  // A last pair changed up to its end (a last line without `\n`) touches the lines left over: one change.
-  if (last && last.at + last.remove === offset) {
-    last.remove += remove
-    last.insert += insert
-  } else out.push({ at: offset, remove, insert })
+  for (let i = 0; i < fromFirst; i++) remove += from[i]!.length
+  pushEdit(out, { at: offset, remove, insert: to.slice(0, toFirst).join('') })
+  offset += remove
+  for (let i = 0; i < pairs; i++) {
+    const [old, next] = [from[fromFirst + i]!, to[toFirst + i]!]
+    if (!characterEdits(old, next, offset, deadline, 'line', out)) {
+      // Too unlike, or past the deadline: one change between the pair's common start and end.
+      const [start, end] = commonEnds(old, next)
+      pushEdit(out, { at: offset + start, remove: old.length - start - end, insert: next.slice(start, next.length - end) })
+    }
+    offset += old.length
+  }
+  remove = 0
+  for (let i = fromFirst + pairs; i < from.length; i++) remove += from[i]!.length
+  pushEdit(out, { at: offset, remove, insert: to.slice(toFirst + pairs).join('') })
 }
 
 /**
  * The changes turning `from` into `to`, whole lines at UTF-16 offset `at` of
  * the old text that already failed per character as a whole, per line first.
- * A changed run with as many new lines as old ones pairs them in order; any
- * other run is diffed per character if small and alike enough, otherwise
- * paired too.
+ * Each changed run of lines is diffed per character if small and alike
+ * enough (never exactly), otherwise its lines are paired.
  */
 function lineEdits(from: string, to: string, at: number, deadline: number, out: TextEdit[]): void {
   const aLines = lines(from)
@@ -404,9 +443,10 @@ function lineEdits(from: string, to: string, at: number, deadline: number, out: 
   let bStart = 0
   const flush = (): void => {
     if (ai === a0 && bi === b0) return
-    // The whole text as one run fails per character again.
+    // The whole text as one run fails per character again; a run with as many new lines as old ones pairs them.
     const whole = a0 === 0 && b0 === 0 && ai === aLines.length && bi === bLines.length
-    if (ai - a0 === bi - b0 || whole || !characterEdits(from.slice(aStart, aOffset), to.slice(bStart, bOffset), at + aStart, deadline, out)) {
+    const size = aOffset - aStart + bOffset - bStart
+    if (whole || ai - a0 === bi - b0 || size > REGION_UNITS || !characterEdits(from.slice(aStart, aOffset), to.slice(bStart, bOffset), at + aStart, deadline, 'run', out)) {
       pairedLineEdits(aLines.slice(a0, ai), bLines.slice(b0, bi), at + aStart, deadline, out)
     }
   }
@@ -440,7 +480,7 @@ export function diffText(from: string, to: string, timeLimitMs = DIFF_TIME_LIMIT
   if (from === to) return edits
   const deadline = Date.now() + timeLimitMs
   const [start, end] = commonEnds(from, to)
-  if (characterEditsWithin(from, to, start, end, 0, deadline, true, edits)) return edits
+  if (characterEditsWithin(from, to, start, end, 0, deadline, 'text', edits)) return edits
   // Too large or too unlike per character: the whole lines around the change, per line.
   const lineStart = start === 0 ? 0 : from.lastIndexOf('\n', start - 1) + 1
   const newline = from.indexOf('\n', from.length - end)

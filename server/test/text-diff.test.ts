@@ -22,14 +22,16 @@ function rng(seed: number): () => number {
   }
 }
 
-/** `from` with `edits` applied, as plain strings. */
+/** `from` with `edits` (ascending, apart) applied, as plain strings, in one pass. */
 function applied(from: string, edits: readonly TextEdit[]): string {
-  let text = from
-  for (let i = edits.length - 1; i >= 0; i--) {
-    const { at, remove, insert } = edits[i]!
-    text = text.slice(0, at) + insert + text.slice(at + remove)
+  const parts: string[] = []
+  let last = 0
+  for (const { at, remove, insert } of edits) {
+    parts.push(from.slice(last, at), insert)
+    last = at + remove
   }
-  return text
+  parts.push(from.slice(last))
+  return parts.join('')
 }
 
 /** True when no edit starts or ends inside a surrogate pair of `from`, nor inserts half of one. */
@@ -228,5 +230,66 @@ describe('applyTextDiff on a live document', () => {
     Y.applyUpdate(tab, Y.encodeStateAsUpdate(server))
     expect(server.getText('body').toString()).toBe('Para one.\n\nPara TYPED two.\nAgent line.\n')
     expect(tab.getText('body').toString()).toBe(server.getText('body').toString())
+  })
+
+  /** Applies `next` on the server while a tab, offline, types `typed` at `at`; returns both bodies after they sync. */
+  const concurrent = (body: string, next: string, at: number, typed: string, timeLimitMs?: number): [string, string] => {
+    const server = new Y.Doc()
+    server.getText('body').insert(0, body)
+    const tab = new Y.Doc()
+    Y.applyUpdate(tab, Y.encodeStateAsUpdate(server))
+    tab.getText('body').insert(at, typed)
+    server.transact(() => applyTextDiff(server.getText('body'), next, timeLimitMs))
+    Y.applyUpdate(server, Y.encodeStateAsUpdate(tab))
+    Y.applyUpdate(tab, Y.encodeStateAsUpdate(server))
+    return [server.getText('body').toString(), tab.getText('body').toString()]
+  }
+
+  // Review of #833: a large new paragraph added before an existing one (with
+  // a word changed in it) paired the existing paragraph with the new one and
+  // replaced it, so typing in it moved to the end of the new paragraph.
+  for (const far of [false, true]) {
+    for (const timeLimitMs of [undefined, -1]) {
+      it(`keeps typing in a paragraph a large new one is added before (${far ? 'with a far change too' : 'one change'}, limit ${timeLimitMs ?? 'default'})`, () => {
+        const random = rng(far ? 2 : 1)
+        const words = ['vault', 'note', 'graph', 'index', 'agent', 'search', 'yjs', 'crash']
+        const paragraph = (n: number): string => `${Array.from({ length: n }, () => words[Math.floor(random() * words.length)]).join(' ')}.\n`
+        const before = Array.from({ length: 40 }, () => paragraph(30))
+        const existing = `The existing paragraph holds the words a person is typing into right now, ${paragraph(25)}`
+        // 80 paragraphs after it: with the far change, the changed region is over 16 K units, so the line pass handles it.
+        const after = Array.from({ length: 80 }, () => paragraph(30))
+        const body = [...before, '\n', existing, '\n', ...after].join('')
+        const added = paragraph(80)
+        expect(added.length).toBeGreaterThan(400)
+        const tail = far ? after.map((line, i) => (i === after.length - 1 ? `${line.slice(0, -1)} Appended far away.\n` : line)) : after
+        const next = [...before, '\n', added, '\n', existing.replace('holds the words', 'holds all the words'), '\n', ...tail].join('')
+        const at = body.indexOf('a person is') + 'a person '.length
+        const [server, tab] = concurrent(body, next, at, 'TYPED ', timeLimitMs)
+        const expected = next.replace('a person is', 'a person TYPED is')
+        expect(server).toBe(expected)
+        expect(tab).toBe(expected)
+        expect(diffText(body, next, timeLimitMs).reduce((sum, edit) => sum + edit.remove, 0)).toBeLessThan(10)
+      })
+    }
+  }
+
+  it('keeps typing in the middle of a long paragraph changed only at both ends', () => {
+    const random = rng(3)
+    const words = ['vault', 'note', 'graph', 'index', 'agent', 'search', 'yjs', 'crash']
+    const long = `${Array.from({ length: 480 }, () => words[Math.floor(random() * words.length)]).join(' ')}.\n`
+    expect(long.length).toBeGreaterThan(2_500)
+    const body = `# Title\n\n${long}\nEnd.\n`
+    const changed = `X${long.slice(1, -2)}!\n`
+    const next = body.replace(long, changed)
+    expect(diffText(body, next)).toEqual([
+      { at: '# Title\n\n'.length, remove: 1, insert: 'X' },
+      { at: '# Title\n\n'.length + long.length - 2, remove: 1, insert: '!' },
+    ])
+    const middle = '# Title\n\n'.length + Math.floor(long.length / 2)
+    const at = body.indexOf(' ', middle) + 1
+    const [server, tab] = concurrent(body, next, at, 'TYPED ')
+    const expected = next.slice(0, at) + 'TYPED ' + next.slice(at)
+    expect(server).toBe(expected)
+    expect(tab).toBe(expected)
   })
 })
