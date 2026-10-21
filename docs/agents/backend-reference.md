@@ -375,9 +375,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   and the file on different writes. The MCP tool wrapper returns only the
   code of a Node system error (`internal storage error (ENOENT)`); the
   full error goes to the server log. The lock orders writes; it does not
-  merge them: a body write replaces the whole body, so two agents that
+  merge them: a whole `body` write replaces the body, so two agents that
   each read a note and write it back with a line appended still keep only
-  the later one.
+  the later one (an `append` op resolves against the live text and keeps
+  both, #408).
 - **Rename, delete, restore, purge and create take the note lock too**
   (#484): `createNote`, `softDeleteNote`, `restoreNote` and `purgeNote`
   hold `note:<vault>/<path>` (restore and purge read the trashed row's
@@ -433,21 +434,63 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   default. The `sync_local_docs_to_vault` prompt tells the agent to
   update an existing note with `replace: true`, so the vault mirrors the
   file.
-- **A body write reaches open editors as the change alone** (#483):
-  `writeThroughCollab` makes the live document's `body` read the new
-  body with one change (`replaceText`): the longest common start and end
-  are kept, the span between is replaced, new text inserted before the
-  old is deleted, and the span never splits a UTF-16 surrogate pair (Yjs
-  stores half a pair as U+FFFD). Characters the write leaves alone keep
-  their Yjs identity, so a person's caret stays on its text and their
-  Ctrl+Z (a `Y.UndoManager` that tracks only their own edits, never the
-  relay's updates) still finds what they typed. It used to delete the
-  whole body and insert the new one: every open caret mapped to
-  position 0 and the person's undo had nothing left to undo. An agent's
-  edit is not undoable from the editor; note history reverts it. The
-  write still sets the whole body: text a person typed that is not in
-  the agent's body is deleted (#408). The relay's `onLoadDocument` still
-  replaces the whole body when the note's file changed outside it.
+- **Edits are minimal diffs; `edit_note` takes ops** (#408):
+  `writeThroughCollab` never deletes and re-inserts the whole Y.Text.
+  `applyTextDiff` (`sync/text-diff.ts`) turns the live text into the new
+  body with a minimal character diff (Myers O(ND) with the linear-space
+  middle snake, over code points so no surrogate pair is split) inside
+  the one document transaction; past `DIFF_TIME_LIMIT_MS` (100 ms) it is
+  redone per line and refined per character inside each changed run as
+  far as a second limit allows (ADR-003 §5.2 step 5); a run still left
+  pairs its old and new lines in order and changes each pair only between
+  its common start and end (linear), so a rewrite of every line of a
+  large note (a `- ` before each) keeps every line's unchanged characters
+  rather than replacing the run. Pairing is in order: when such a run also
+  adds or removes lines partway through, the lines after that point are
+  paired with their neighbours and keep less. Untouched
+  characters keep their Yjs identity, so a person's caret stays on its
+  text, their Ctrl+Z (a `Y.UndoManager` that tracks only their own edits,
+  never the relay's updates) still finds what they typed (#483), and
+  typing that reaches the relay after the write merges where it was
+  typed. In each change the new text is inserted before the old is
+  deleted, so a caret at the end of a replaced span lands after the new
+  text and typing in flight joins after it. It used to delete the whole
+  body and insert the new one: every open caret mapped to position 0,
+  the person's undo had nothing left, and late typing landed at the
+  start of the note. Every body writer (edit_note, REST PUT, revert,
+  rename's link rewrites) gets this. An agent's edit is not undoable
+  from the editor; note history reverts it. The relay's
+  `onLoadDocument` still replaces the whole body when the note's file
+  changed outside it.
+  `edit_note` also takes `ops[]` (strict per-op schemas in
+  `mcp/server.ts`; semantics in `sync/edit-ops.ts`): `replace_text`
+  (`expectedCount`, default 1), `insert_before`/`insert_after` (unique
+  `anchor`), `replace_section` (ATX heading outside code fences, by line
+  or text, up to the next heading of the same or a higher level),
+  `append`/`prepend` (whole lines), `delete_block` (unique `find`), and
+  `frontmatter_set`/`frontmatter_add`/`frontmatter_remove`, which apply
+  after #438's merge in `nextFrontmatter`. Overlapping matches count as
+  ambiguous (`aa` occurs twice in `aaa`), a `find`/`anchor` holding half
+  a surrogate pair is refused, and an error's `ops[i]` is the index in
+  the whole `ops` array. Each op's result length is checked against the
+  size cap (`assertLengthFits`, UTF-16 length being a lower bound on UTF-8
+  bytes) before the result is built, so a large `replace` repeated many
+  times is a `NoteTooLargeError`, not a string of hundreds of megabytes
+  or a `RangeError`. Body ops resolve against the
+  live text: once when the connection opens, for the size cap (#491) and
+  the quarantine (#492), which run before the document is touched, and
+  again inside the transaction, where the cap is re-checked on the exact
+  result. An op that cannot be resolved throws `NoteEditError` (400) and
+  nothing changes; `ops` with `body` is refused in `requestedEdit`.
+  Without the relay, ops apply to the stored body. `base_rev` is
+  accepted and echoed as `baseRev`; compare-and-set and a three-way merge
+  are #475 (ADR-003's `seq`). REST PUT keeps `body`/`frontmatter` and
+  gets the minimal diff, not `ops`: the route builds the edit from its
+  named fields only and refuses a body holding `ops` with 400 (its JSON
+  schema does not validate them; edit_note's zod schema does). A whole `body` built from a stale
+  `read_note` (the file lags the editor by the relay's debounce) still
+  removes text typed since; serving `read_note` from the live document is
+  #474.
 - **Revision dedupe** (#480, `recordRevision`): a write that repeats the
   latest revision records nothing. Frontmatter is compared as jsonb
   stores it: deep equality on its JSON form, so object key order (nested
@@ -734,7 +777,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   reported; the next store without the repeat is written normally. A
   store caused by a server body write through a direct connection
   (`writeThroughCollab`, context `directWrite`; its caller ran the check
-  or passed `allowGrowth`) is not checked again.
+  or passed `allowGrowth`) is not checked again. The flag is set at the
+  end of the write's transaction, so a refused write (a check, an op that
+  does not resolve, validation) still gets this check on its connection's
+  disconnect store: a document a person doubled stays out of the row (#408).
 - **Size cap on the relay** (#491, `collab-size.ts`): ws refuses a frame
   over `noteTransportLimit()` before reading it (close 1009).
   `beforeSync` refuses a sync-step-2 or update message whose Yjs update

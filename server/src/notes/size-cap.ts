@@ -20,8 +20,11 @@ import { OkfValidationError } from './okf.js'
  */
 export class NoteTooLargeError extends OkfValidationError {
   readonly statusCode = 413
-  constructor(bytes: number, limit: number, context?: string) {
-    super(`${context ? `${context}: ` : ''}note body is ${bytes} bytes (UTF-8); the limit is ${limit} bytes (ELARA_NOTE_MAX_BYTES)`)
+  /** `atLeast`: `bytes` is a lower bound, for a body refused before it is built. */
+  constructor(bytes: number, limit: number, context?: string, atLeast = false) {
+    super(
+      `${context ? `${context}: ` : ''}note body ${atLeast ? 'would be at least' : 'is'} ${bytes} bytes (UTF-8); the limit is ${limit} bytes (ELARA_NOTE_MAX_BYTES)`,
+    )
   }
 }
 
@@ -38,6 +41,20 @@ export function assertBodyFits(body: string, current?: string, context?: string)
   if (bytes <= limit) return
   if (current !== undefined && bytes <= Buffer.byteLength(current, 'utf8')) return
   throw new NoteTooLargeError(bytes, limit, context)
+}
+
+/**
+ * assertBodyFits for a body of `length` UTF-16 units that is not built yet
+ * (an edit_note op's result, #408), so a refused one never takes the memory.
+ * A UTF-16 unit is at least one UTF-8 byte (a pair is four), so a length
+ * over the cap is a body over it; a length within it is checked again on
+ * the built body.
+ */
+export function assertLengthFits(length: number, current?: string, context?: string): void {
+  const limit = config.noteMaxBytes
+  if (length <= limit) return
+  if (current !== undefined && length <= Buffer.byteLength(current, 'utf8')) return
+  throw new NoteTooLargeError(length, limit, context, true)
 }
 
 /**
