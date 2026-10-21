@@ -4,7 +4,7 @@ import { YAMLParseError } from 'yaml'
 import { getCollab } from './collab-server.js'
 import { applyBodyOps, applyFrontmatterOps, isFrontmatterOp, NoteEditError, type EditOp } from './edit-ops.js'
 import { applyTextDiff } from './text-diff.js'
-import { getLiveNote, readNote, refuseSuspiciousWrite, resolveNotePath, updateNote, type Actor, type NoteRow } from '../notes/store.js'
+import { getLiveNote, readNote, refuseSuspiciousWrite, resolveNotePath, updateNote, type Actor, type BodyEdit, type NoteRow } from '../notes/store.js'
 import type { QuarantineRules } from '../notes/growth-guard.js'
 import { assertBodyFits } from '../notes/size-cap.js'
 import { OkfValidationError, validateNote, type Frontmatter } from '../notes/okf.js'
@@ -23,7 +23,12 @@ export class NoteFileDamagedError extends Error {
 /** One write to a note. A field left out keeps its current value. */
 export interface NoteEdit {
   frontmatter?: Record<string, unknown>
-  body?: string
+  /**
+   * The new body, or a function of the current one (a rename's link rewrite,
+   * #803), applied to the live document's text, or by updateNote under the
+   * note's lock when no document is loaded.
+   */
+  body?: BodyEdit
   /**
    * How `frontmatter` applies. `replace` (the default, for writers that hold
    * the note's whole state: revert, rename, the collab store) swaps the whole
@@ -156,7 +161,8 @@ export async function writeThroughCollab(
       if (!options.quarantine) return
       await refuseSuspiciousWrite(existing, { frontmatter: nextFrontmatter(frontmatter, input, existing.type), body }, actor, options.quarantine)
     }
-    if (input.body !== undefined) await screen(input.body, storedFrontmatter)
+    const bodyFromStored = typeof input.body === 'function' ? input.body(existing.body) : input.body
+    if (bodyFromStored !== undefined) await screen(bodyFromStored, storedFrontmatter)
     const collab = getCollab()
     if (!collab) {
       let body = input.body
@@ -199,8 +205,16 @@ export async function writeThroughCollab(
         next.frontmatter = nextFrontmatter(current, input, existing.type)
         const text = document.getText('body')
         // Resolved again here: typing may have reached the relay during the checks.
-        next.body = bodyOps.length > 0 ? applyBodyOps(text.toString(), bodyOps) : input.body
-        if (bodyOps.length > 0) assertBodyFits(next.body!, existing.body)
+        if (bodyOps.length > 0) {
+          next.body = applyBodyOps(text.toString(), bodyOps)
+          assertBodyFits(next.body, existing.body)
+        } else if (typeof input.body === 'function') {
+          // Applied to the live text, which may hold typing not stored yet, and checked against it (#491).
+          next.body = input.body(text.toString())
+          assertBodyFits(next.body, text.toString())
+        } else {
+          next.body = input.body
+        }
         const nextNote = next.frontmatter ?? { ...storedFrontmatter, type: existing.type }
         const body = next.body ?? existing.body
         try {

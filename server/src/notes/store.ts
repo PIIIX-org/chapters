@@ -364,15 +364,20 @@ export async function syncNoteLinks(noteId: string, body: string): Promise<void>
   return syncLinks(noteId, body)
 }
 
+/** In one transaction: a rename looking for the notes that link to it
+ * (linkReferrers) never sees this note between the delete and the insert,
+ * with no links (#803). */
 async function syncLinks(noteId: string, body: string): Promise<void> {
-  await db.delete(noteLinks).where(eq(noteLinks.sourceNoteId, noteId))
   const targets = extractWikilinks(body)
-  if (targets.length > 0) {
-    await db
-      .insert(noteLinks)
-      .values(targets.map((targetPath) => ({ sourceNoteId: noteId, targetPath })))
-      .onConflictDoNothing()
-  }
+  await db.transaction(async (tx) => {
+    await tx.delete(noteLinks).where(eq(noteLinks.sourceNoteId, noteId))
+    if (targets.length > 0) {
+      await tx
+        .insert(noteLinks)
+        .values(targets.map((targetPath) => ({ sourceNoteId: noteId, targetPath })))
+        .onConflictDoNothing()
+    }
+  })
 }
 
 export async function getLiveNote(vaultId: string, path: string): Promise<NoteRow | null> {
@@ -413,17 +418,25 @@ export async function readNote(
 }
 
 /**
+ * A note's new body, or a function of its current body that the writer
+ * applies under the note's lock: a rename's link rewrite (#803), which must
+ * keep what other writers stored since the caller last read the note.
+ */
+export type BodyEdit = string | ((current: string) => string)
+
+/**
  * Read-modify-write of one note's row, file, links and revision. Writes to the
  * same note are serialized (one at a time, in call order): run concurrently,
  * the row could end at one write and the file at another, and revisions could
  * be skipped or out of order. `options.quarantine` checks the body against
  * the stored one first (refuseSuspiciousWrite; the collab relay's store, which
  * passes the quarantine revision of the loaded document's episode, if any).
+ * A `body` function (BodyEdit) gets the stored body.
  */
 export async function updateNote(
   vaultId: string,
   path: string,
-  input: { frontmatter?: Record<string, unknown>; body?: string },
+  input: { frontmatter?: Record<string, unknown>; body?: BodyEdit },
   actor: Actor = SYSTEM_ACTOR,
   options: { quarantine?: QuarantineRules; episode?: string } = {},
 ): Promise<NoteRow | null> {
@@ -431,15 +444,16 @@ export async function updateNote(
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const row = await getLiveNote(vaultId, resolved.fullPath)
     if (!row) return null
+    const edit = { frontmatter: input.frontmatter, body: typeof input.body === 'function' ? input.body(row.body) : input.body }
     const frontmatter: Frontmatter = {
       ...(input.frontmatter ?? (row.frontmatter as Frontmatter)),
       type: row.type,
     }
-    const body = input.body ?? row.body
+    const body = edit.body ?? row.body
     validateNote(row.type, row.name, frontmatter, body)
     // The size cap first: an over-cap body is refused, never kept as a quarantine revision (#491).
     assertBodyFits(body, row.body)
-    if (options.quarantine) await refuseSuspiciousWrite(row, input, actor, options.quarantine, options.episode)
+    if (options.quarantine) await refuseSuspiciousWrite(row, edit, actor, options.quarantine, options.episode)
     const [updated] = await db
       .update(notes)
       .set({ frontmatter, body, updatedAt: new Date() })
@@ -486,7 +500,8 @@ export function refactorWikilinks(body: string, fromPath: string, toPath: string
  * `updateFn` under that note's own lock: `writeThroughCollab` waits for the
  * relay's store hook, which code holding a note lock must never wait for
  * (ADR-003 §5.1), and two renames rewriting each other's referrers under
- * their own locks would each wait for the other's.
+ * their own locks would each wait for the other's. Each referrer is found
+ * again by id when its links are rewritten (relinkReferrer, #803).
  */
 export async function renameNote(
   vaultId: string,
@@ -495,7 +510,7 @@ export async function renameNote(
   updateFn: (
     vaultId: string,
     path: string,
-    input: { frontmatter?: Record<string, unknown>; body?: string },
+    input: { frontmatter?: Record<string, unknown>; body?: BodyEdit },
     actor: Actor,
   ) => Promise<NoteRow | null> = updateNote,
 ): Promise<NoteRow | null> {
@@ -514,37 +529,83 @@ export async function renameNote(
   )
   if (!moved) return null
 
-  // Refactor incoming wikilinks across other notes in the vault. Each is
-  // re-read: it may have changed since the check in moveNote.
-  for (const path of moved.referrers) {
-    const targetNote = await readNote(vaultId, path)
-    if (!targetNote) continue
-    const refactored = refactorWikilinks(targetNote.body, fromResolved.fullPath, toResolved.fullPath)
-    if (refactored === targetNote.body) continue
+  // Refactor incoming wikilinks across other notes in the vault.
+  for (const referrer of moved.referrers) {
     try {
-      await updateFn(vaultId, path, { body: refactored }, SYSTEM_ACTOR)
+      const relinked = await relinkReferrer(vaultId, referrer.id, moved.updated.id, fromResolved.fullPath, (path, body) =>
+        updateFn(vaultId, path, { body }, SYSTEM_ACTOR),
+      )
+      if (!relinked) console.warn(`[rename] ${renaming}: links in ${referrer.path} not rewritten: the notes kept moving`)
     } catch (err) {
       // Grown past the cap since the check: the rename is done, so the other
       // referrers still get their links; this one keeps the old link.
       if (!(err instanceof NoteTooLargeError)) throw err
-      console.warn(`[rename] ${renaming}: links in ${path} not rewritten: ${err.message}`)
+      console.warn(`[rename] ${renaming}: links in ${referrer.path} not rewritten: ${err.message}`)
     }
   }
 
   return moved.updated
 }
 
+/** Rounds relinkReferrer runs before it gives up on notes that keep moving. */
+const RELINK_ROUNDS = 5
+
+/**
+ * Rewrites the links in note `referrerId` that name `fromPath`, the path
+ * note `noteId` was renamed from, to the note's current path (renameNote,
+ * after its locks are released). Both notes are looked up by id each round,
+ * so one that another rename moved meanwhile is found where it is now
+ * (#803), and `write` applies the rewrite to the body it reads under the
+ * referrer's lock, so another rename's rewrite of the same note that landed
+ * meanwhile is kept. A rename of the note that looked for referrers before
+ * this write stored the new link did not find it: the note's path is read
+ * again under that path's lock, and if the note has moved, the next round
+ * rewrites the link to where it is now. False when the notes were still
+ * moving after RELINK_ROUNDS rounds.
+ */
+async function relinkReferrer(
+  vaultId: string,
+  referrerId: string,
+  noteId: string,
+  fromPath: string,
+  write: (path: string, body: (current: string) => string) => Promise<NoteRow | null>,
+): Promise<boolean> {
+  let linked = fromPath
+  for (let round = 0; round < RELINK_ROUNDS; round++) {
+    const [note] = await db.select({ path: notes.path }).from(notes).where(eq(notes.id, noteId))
+    const [referrer] = await db
+      .select({ path: notes.path, body: notes.body })
+      .from(notes)
+      .where(and(eq(notes.id, referrerId), eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
+    if (!note || note.path === linked || !referrer) return true
+    const from = linked
+    const to = note.path
+    const rewrite = (body: string) => refactorWikilinks(body, from, to)
+    // No link left to rewrite: another rename's rewrite, or an edit, got there first.
+    if (rewrite(referrer.body) === referrer.body) return true
+    // No note, or another one, at the referrer's path: it moved meanwhile.
+    if ((await write(referrer.path, rewrite))?.id !== referrerId) continue
+    const settled = await withKeyLock(noteLock(vaultId, to), async () => {
+      const [now] = await db.select({ path: notes.path }).from(notes).where(eq(notes.id, noteId))
+      return now?.path === to
+    })
+    if (settled) return true
+    linked = to
+  }
+  return false
+}
+
 /**
  * renameNote's move, run under the note locks of both paths. Returns the
- * moved row and the paths of the notes whose links to the old path renameNote
- * rewrites next, or null when no live note is at the old path.
+ * moved row and the notes (id, and the path they had) whose links to the old
+ * path renameNote rewrites next, or null when no live note is at the old path.
  */
 async function moveNote(
   vaultId: string,
   fromResolved: ResolvedNotePath,
   toResolved: ResolvedNotePath,
   renaming: string,
-): Promise<{ updated: NoteRow; referrers: string[] } | null> {
+): Promise<{ updated: NoteRow; referrers: { id: string; path: string }[] } | null> {
   const row = await getLiveNote(vaultId, fromResolved.fullPath)
   if (!row) return null
   if (toResolved.fullPath !== fromResolved.fullPath && (await getLiveNote(vaultId, toResolved.fullPath))) {
@@ -572,7 +633,7 @@ async function moveNote(
   // written, so a refused rename leaves the vault as it was.
   assertBodyFits(currentBody, rawBody, `${renaming} rewrites its own links`)
   const referrers = isMoving ? await linkReferrers(vaultId, row.id, fromResolved.fullPath) : []
-  for (const path of referrers) {
+  for (const { path } of referrers) {
     const referrer = await readNote(vaultId, path)
     if (!referrer) continue
     const rewritten = refactorWikilinks(referrer.body, fromResolved.fullPath, toResolved.fullPath)
@@ -622,10 +683,10 @@ async function moveNote(
   return { updated, referrers }
 }
 
-/** Paths of the live notes, other than `noteId`, that link to `path`. */
-async function linkReferrers(vaultId: string, noteId: string, path: string): Promise<string[]> {
+/** The live notes (id and path), other than `noteId`, that link to `path`. */
+async function linkReferrers(vaultId: string, noteId: string, path: string): Promise<{ id: string; path: string }[]> {
   const rows = await db
-    .select({ sourceNotePath: notes.path })
+    .select({ id: notes.id, path: notes.path })
     .from(noteLinks)
     .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
     .where(
@@ -636,7 +697,7 @@ async function linkReferrers(vaultId: string, noteId: string, path: string): Pro
         or(eq(noteLinks.targetPath, path), eq(noteLinks.targetPath, `${path}.md`)),
       ),
     )
-  return [...new Set(rows.map((r) => r.sourceNotePath))]
+  return [...new Map(rows.map((r) => [r.id, r])).values()]
 }
 
 /**
