@@ -158,6 +158,12 @@
     },
     {
       "test": "crash-write",
+      "match": "^kill \\S+: dirty collab doc \\(client stays\\) survives without duplication$",
+      "issue": 486,
+      "intermittent": "only when the SIGKILL lands inside the relay's debounced store of the open document, after its note file write and before its .crdt write: the reload rebuilds the text from the file and the client that stayed connected sends its typing back a second time"
+    },
+    {
+      "test": "crash-write",
       "match": "^kill \\S+: file = row for every note written in the round$",
       "issue": 486,
       "intermittent": "a round only diverges when the SIGKILL lands between a note's row update and its file write"
