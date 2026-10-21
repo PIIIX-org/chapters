@@ -663,6 +663,30 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `EMBEDDINGS`. `LocalEmbedder` runs the model on at most 8 texts at a
   time, each cut to 16,000 characters: the pipeline pads a run to its
   longest text, so one large run costs ~32 MB per text (#404).
+  Tokenisation and inference run in one `worker_threads` worker
+  (`embedding-worker.ts`, #496), never on the main thread: an ONNX run
+  blocks its thread for the whole batch (0.45 s per batch of 8 on a fast
+  laptop, seconds on a lab runner), which on the main thread kept
+  `/health` and every request waiting while a large file was embedded.
+  One worker, one model copy, one batch in flight. The worker costs memory:
+  its own V8 isolate and its own Transformers.js runtime and tokenizer
+  (cause inferred, not profiled). In the lab's `docker stats` peaks the
+  minified-bundle test went from 607/606/614 MiB on `dev` (runs
+  38967769916, 39399916561, 38967768712) to 755/758 MiB (39400724898,
+  39402040044), about +150 MiB, and the pretty-bundle test from
+  1017/1037 MiB to 1324/1239 MiB, about +200 to 300 MiB under load (still
+  under the lab's 3 GiB bound). Callers take turns batch by batch
+  (round-robin over every active request), so a search query waits for
+  one batch per other active caller (the note queue and the extraction
+  queue: up to about 2 batches), plus the model load on first use. A worker that exits
+  or dies on an uncaught exception fails the request whose batch it was
+  running with `EmbeddingWorkerCrashError` (reported as an `embedding` job
+  failure, see Error reports and metrics in §8) and the next batch starts a new worker; a batch
+  the model itself rejects fails only its request. The worker is unref'd
+  while idle, so it never keeps a script alive. It imports nothing from
+  the repository, so it loads both under tsx (production's
+  `node --import tsx`, inherited through `execArgv`) and under Node's own
+  type stripping (vitest).
 - **`embedding-queue.ts`**: an in-process serial queue —
   `scheduleEmbedding()` never blocks the caller (notes/store.ts calls
   it fire-and-forget on create/update/revert). A boot-time scan
@@ -1128,7 +1152,20 @@ the whole backlog; a repository's own files keep their order. A file
 whose extraction throws is logged and skipped; the drain goes on. A file
 with a line longer than 1,000
 characters (minified, bundled or generated code) gets its file embedding
-but no symbols or imports. The boot-time scan
+but no symbols or imports. **Per-file budget** (#496): a file's symbols
+are all stored, but only the first `ELARA_EMBED_MAX_SYMBOLS_PER_FILE`
+(`config.embedMaxSymbolsPerFile`, default 256; `0` embeds none) get an
+embedding; the rest have a null `embedding`, so `find_symbols` and
+`search` find them by name and snippet only. Such a file records why in
+`repository_files.embedding_note` (migration 0022; null when nothing was
+capped, cleared by the next extraction under the budget), logs a
+warning, and MCP `read_file` returns the text as `embeddingNote`. Changing
+`ELARA_EMBED_MAX_SYMBOLS_PER_FILE` does not re-extract anything: a file
+keeps the embeddings and note of its last extraction until its content
+changes. With
+each text cut to 16,000 characters, one file costs at most 1 + budget
+texts (the 700 KB lab bundle with 900 declarations: 33 batches instead of
+113). The boot-time scan
 (`scheduleMissingExtractions`) re-enqueues every file with a null
 embedding — the queue does not survive a restart, and a re-sync only
 enqueues files whose content changed (#404). `repository_status` reports
@@ -1358,7 +1395,8 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     and a ring of the last 50 error reports with a monotonic `seq`.
   - Jobs report through `recordJob(kind, 'ok' | { error, repeat? }, subjectId)`:
     `embedding` (`embedding-queue.ts`: success, or the third failed
-    attempt), `extraction` (`extraction-queue.ts`, per file), `sync`
+    attempt; `embeddings.ts`: an embedding worker that died, subject null),
+    `extraction` (`extraction-queue.ts`, per file), `sync`
     (`syncGitRepository` and `syncLocalRepository` themselves, so every
     caller is covered, including an unsafe stored URL), `collab-store`
     (`collab-server.ts` `onStoreDocument`: a rejected `updateNote` or CRDT
@@ -1434,7 +1472,9 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
   - Others: `DATABASE_URL`, `PORT`, `CLIENT_DIST`, `EMBEDDINGS`,
     `CORS_ORIGIN`, `LOCAL_REPOS_ROOT`, `ELARA_MONITORING_TOKEN` (Error
     reports and metrics, above), `ELARA_NOTE_MAX_BYTES` (note body size
-    cap, §5.3; a reverse proxy must pass bodies up to 6 × it + 64 KiB).
+    cap, §5.3; a reverse proxy must pass bodies up to 6 × it + 64 KiB),
+    `ELARA_EMBED_MAX_SYMBOLS_PER_FILE` (per-file symbol embedding budget,
+    default 256, §5.10 extraction queue).
 - **Migrations**: `drizzle-kit generate` produces SQL under
   `server/drizzle/`; a few migrations were hand-edited afterward for
   things Drizzle can't express directly (pgvector extension + HNSW
@@ -1640,6 +1680,13 @@ the code looks the way it does, not just *what* it does:
   in-memory queue, and nothing re-enqueued it. `LocalEmbedder` now runs
   at most 8 texts at a time, minified files get no symbols, and boot
   re-enqueues files that never got an embedding.
+- **Embedding blocked the event loop (#496)**: after #404 the same bundle
+  written one declaration per line (900 symbols, no minified guard) was
+  embedded in 113 batches on the main thread; each ONNX run held the event
+  loop, and on a slow runner `/health` missed its 3 s probe in 33 of 36
+  samples (lab run 38967768712; a faster runner saw none, so the lab check
+  was marked intermittent in #661). Embedding now runs in a worker thread
+  and a file embeds at most 256 symbols.
 
 ---
 
