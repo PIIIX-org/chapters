@@ -38,10 +38,20 @@ export function getCollabTicket(): Promise<CollabTicket> {
 
 /**
  * The document name the relay parses (`parseDocName` in
- * `server/src/sync/collab-server.ts`): everything before the first slash is the
- * vault id, the rest is the note path.
+ * `server/src/sync/live-docs.ts`): `<vaultId>/~<noteId>`. Named by note id
+ * (ADR-003 §5.4), so a rename keeps the editor connected and a tab can never
+ * reach another note created later at the same path.
  */
-export function collabDocName(vaultId: string, path: string): string {
+export function collabDocName(vaultId: string, noteId: string): string {
+  return `${vaultId}/~${noteId}`
+}
+
+/**
+ * The path-keyed name bundles before ADR-003 S2b used. The relay refuses it;
+ * it is kept only to find this browser's copies (#720) stored under it, until
+ * none is left.
+ */
+export function legacyCollabDocName(vaultId: string, path: string): string {
   return `${vaultId}/${path}`
 }
 

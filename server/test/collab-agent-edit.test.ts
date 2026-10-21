@@ -7,7 +7,7 @@ import { buildApp } from '../src/app.js'
 import { readNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
-import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
 
 // #483: an agent's edit_note reaches a person's open editor through the relay.
 // The editor's caret is anchored to the characters the person sees, and their
@@ -72,7 +72,7 @@ async function createNote(name: string, body: string): Promise<string> {
 async function openEditor(path: string) {
   const provider = new HocuspocusProvider({
     url: `ws://127.0.0.1:${port}/collab`,
-    name: `${vaultId}/${path}`,
+    name: await noteDocName(vaultId, path),
     token,
     document: new Y.Doc(),
   })
