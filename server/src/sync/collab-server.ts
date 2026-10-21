@@ -49,31 +49,31 @@ class NoteTooLargeRefusal extends Error {
 }
 
 /**
- * Thrown from `beforeSync` while writes are paused (ADR-003 §5.1): nothing
- * of the update is applied or stored. The hook also closes the socket with
- * 1013 ("try again later"): a document-level close leaves the provider
- * detached, while a socket close makes it reconnect with backoff and resend
- * what the relay never took. The editor treats the reason as a drop.
+ * The store is not taking writes for a moment (ADR-003 §5.1: this process's
+ * maintenance-lock connection dropped and writes are paused; or a lock
+ * timeout): reason `store-busy`, one name for every such refusal. Nothing of
+ * the update is applied or stored. Where the relay can, it closes the
+ * socket with 1013 ("try again later"): a document-level close or a
+ * `permission-denied` leaves the provider detached, while a socket close
+ * makes even an older editor reconnect with backoff and resend what the
+ * relay never took. The editor (client/src/hooks/useCollabDoc.ts) treats
+ * `store-busy`, from a close or an authentication failure, as a temporary
+ * drop: it keeps the document and the typing, shows "Saving paused" and
+ * reconnects after a delay.
  */
-class StorePausedRefusal extends Error {
+class StoreBusyRefusal extends Error {
   readonly code = 1013
-  readonly reason = 'store-paused'
-  constructor(documentName: string) {
-    super(`refused an update to ${documentName}: writes are paused until the instance lock is held again`)
+  readonly reason = 'store-busy'
+  constructor(documentName: string, cause: string) {
+    super(`refused ${documentName}: the note store is not taking writes (${cause}); retry later`)
   }
 }
 
-/**
- * Closes the socket of a connection whose document could not be loaded
- * because the store is busy (writes paused, ADR-003 §5.1, or a lock
- * timeout): loading a document is a store transaction (seed, catch-up).
- * Hocuspocus answers a failed load with `permission-denied`, which the
- * editor takes as a revocation; a socket close with 1013 makes it reconnect
- * with backoff instead and load the document once the store takes writes.
- */
-function closeForRetry(socket: ConnectionContext['socket'], err: unknown): void {
-  if (!(err instanceof StoreBusyError) || !socket) return
-  socket.close(1013, 'store-busy')
+/** Closes `socket` with the store-busy close (see StoreBusyRefusal) and returns the refusal to throw. */
+function refuseStoreBusy(socket: { close(code?: number, reason?: string): void } | undefined, documentName: string, cause: string): StoreBusyRefusal {
+  const refusal = new StoreBusyRefusal(documentName, cause)
+  socket?.close(refusal.code, refusal.reason)
+  return refusal
 }
 
 /**
@@ -153,7 +153,7 @@ interface ConnectionContext {
   accessVerifiedAt?: number
   /** A change the server pushed into the document (live-docs.ts), whose writer already ran the quarantine check. */
   directWrite?: boolean
-  /** The connection's socket (handleConnection's default context): closed when a load must be retried. */
+  /** The connection's socket (handleConnection's default context): closed when the store is busy (StoreBusyRefusal). */
   socket?: { close(code?: number, reason?: string): void }
 }
 
@@ -275,7 +275,10 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       const name = parseDocName(documentName)
       if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
       const { state, path, lastId } = await loadCollabState(name.vaultId, name.noteId).catch((err: unknown) => {
-        closeForRetry((context as Partial<ConnectionContext> | undefined)?.socket, err)
+        // Loading is a store transaction (seed, catch-up): a busy store refuses it like an update.
+        if (err instanceof StoreBusyError) {
+          throw refuseStoreBusy((context as Partial<ConnectionContext> | undefined)?.socket, documentName, err.message)
+        }
         throw err
       })
       Y.applyUpdate(document, state)
@@ -323,11 +326,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      */
     async beforeSync({ type, payload, document, documentName, connection }) {
       if (type !== SYNC_STEP_2 && type !== SYNC_UPDATE) return
-      if (writesPaused()) {
-        const refusal = new StorePausedRefusal(documentName)
-        connection.webSocket.close(refusal.code, refusal.reason)
-        throw refusal
-      }
+      if (writesPaused()) throw refuseStoreBusy(connection.webSocket, documentName, 'writes paused')
       const limit = config.noteMaxBytes
       if (!updateFits(document, payload, limit)) throw new NoteTooLargeRefusal(documentName, limit)
     },
@@ -424,6 +423,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       const name = parseDocName(documentName)
       if ('legacy' in name) return
       forgetLivePath(name.noteId)
+      // Compaction is a store transaction; while writes are paused it waits for the next unload.
+      if (writesPaused()) return
       await compactCollabState(name.vaultId, name.noteId).catch((err) =>
         console.error(`collab compaction of ${documentName} failed:`, err),
       )

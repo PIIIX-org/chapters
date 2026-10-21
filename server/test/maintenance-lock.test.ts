@@ -200,13 +200,16 @@ describe('instance maintenance lock (§5.1, §9)', () => {
     await createNote(vaultId, { type: 'docs', name: 'paused-agent', body: 'after' })
   })
 
-  it('keeps collab updates unacked while paused; the editor resends them after the resume', async () => {
+  it('keeps collab updates unacked while paused; the tab survives the unload and reloads, and its edit is saved after the resume', async () => {
     const note = await createNote(vaultId, { type: 'docs', name: 'paused-collab', body: 'base' })
+    const docName = collabDocName(vaultId, note.id)
+    const refusals: string[] = []
     const provider = new HocuspocusProvider({
       url: `ws://127.0.0.1:${port}/collab`,
-      name: collabDocName(vaultId, note.id),
+      name: docName,
       token,
       document: new Y.Doc(),
+      onAuthenticationFailed: ({ reason }) => void refusals.push(reason),
     })
     providers.push(provider)
     const text = provider.document.getText('body')
@@ -220,9 +223,14 @@ describe('instance maintenance lock (§5.1, §9)', () => {
     expect(writesPaused()).toBe(true)
     expect(provider.hasUnsyncedChanges).toBe(true)
     expect((await getLiveNote(vaultId, note.path))?.body).toBe('base')
+    // The store-busy close left the document with no connection: the relay unloads it (no compaction while
+    // paused), and every reconnect's load is a store transaction the pause refuses with store-busy too.
+    await waitFor(() => !collab.hocuspocus.documents.has(docName))
     await waitFor(() => !writesPaused())
     await waitFor(async () => (await getLiveNote(vaultId, note.path))?.body === 'base typed', 15_000)
     await waitFor(() => !provider.hasUnsyncedChanges)
+    // Never a refusal the editor would stop at (revoked): only socket closes it reconnects after.
+    expect(refusals.filter((r) => r !== 'store-busy')).toEqual([])
   }, 30_000)
 
   it('while paused: an unmigrated note is refused at authentication (note-not-migrated), an open editor gets the pause close, a load waits (store-busy)', async () => {
@@ -258,11 +266,11 @@ describe('instance maintenance lock (§5.1, §9)', () => {
       await waitFor(() => refused.unmigrated.length > 0 && closes.unopened.includes('store-busy'))
       expect(refused.unmigrated[0]).toBe('note-not-migrated')
       expect(blocked.isSynced).toBe(false)
-      expect(closes.unmigrated).not.toContain('store-paused')
+      expect(closes.unmigrated).not.toContain('store-busy')
       // A load refused for a busy store is a socket close the editor reconnects after, never a refusal it stops at.
       expect(refused.unopened).toEqual([])
       editor.document.getText('body').insert(0, 'typed ')
-      await waitFor(() => closes.migrated.includes('store-paused'))
+      await waitFor(() => closes.migrated.includes('store-busy'))
       blocked.destroy()
       await waitFor(() => !writesPaused())
       await waitFor(() => waiting.isSynced, 15_000)
