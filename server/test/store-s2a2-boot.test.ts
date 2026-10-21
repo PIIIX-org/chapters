@@ -26,6 +26,9 @@ async function backfillMarkers(vault: string): Promise<string> {
   return JSON.stringify(rows)
 }
 
+// Verifies, boots and exports work on every note of the test database (the
+// whole suite's notes in a full run), so these tests get a minute each.
+//
 // ADR-003 S2a-2: boot step 7 (verify every file projection after an unclean
 // or unknown shutdown), boot step 9 (orphan sweep to .orphans/) and the
 // stopped-server files-only export for a code-only rollback (§9).
@@ -70,7 +73,7 @@ async function conflictCopiesOf(name: string): Promise<string[]> {
   return entries.filter((entry) => entry.startsWith(`${name}.`))
 }
 
-describe('boot step 7: verify after an unclean shutdown (§7)', () => {
+describe('boot step 7: verify after an unclean shutdown (§7)', { timeout: 60_000 }, () => {
   it('after a graceful shutdown a truncated file is left alone; after an unclean one it is conflict-copied and rewritten', async () => {
     const torn = await createNote(vaultId, { type: 'docs', name: 'torn', body: 'whole body' })
     await createNote(vaultId, { type: 'docs', name: 'intact', body: 'fine' })
@@ -135,7 +138,7 @@ describe('boot step 7: verify after an unclean shutdown (§7)', () => {
   })
 })
 
-describe('boot clears the claims a killed process left (§7)', () => {
+describe('boot clears the claims a killed process left (§7)', { timeout: 60_000 }, () => {
   it('a store job leased by the process before (a rename refactor holds 10 minutes) runs at the next boot', async () => {
     await createNote(vaultId, { type: 'docs', name: 'leased-dir', body: 'x' })
     await flushProjections()
@@ -151,7 +154,7 @@ describe('boot clears the claims a killed process left (§7)', () => {
   })
 })
 
-describe('boot step 9: orphan sweep (§7)', () => {
+describe('boot step 9: orphan sweep (§7)', { timeout: 60_000 }, () => {
   it('moves only *.md files without an owner to .orphans/, outside assets/ and dot-directories', async () => {
     await createNote(vaultId, { type: 'docs', name: 'owned', body: 'mine' })
     await flushProjections()
@@ -179,7 +182,7 @@ describe('boot step 9: orphan sweep (§7)', () => {
   })
 })
 
-describe('store-export-legacy (§9)', () => {
+describe('store-export-legacy (§9)', { timeout: 60_000 }, () => {
   it('is refused while the S2a backfill has not finished, and leaves the backfill markers alone', async () => {
     const [state] = (await db.execute(sql`SELECT store_migrated_at FROM instance_state WHERE id = 'singleton'`)) as unknown as Array<{
       store_migrated_at: string | null
