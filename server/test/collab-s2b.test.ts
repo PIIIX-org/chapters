@@ -12,6 +12,7 @@ import { getLiveNote, renameNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
 import { runCollabBackfill } from '../src/sync/collab-backfill.js'
+import { planStoreMigration } from '../src/notes/migrate-store.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
 // ADR-003 S2b: collab documents are named by note id (`<vault>/~<noteId>`)
@@ -239,5 +240,43 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
     expect(await readFile(aside!.movedTo)).toEqual(Buffer.from(Y.encodeStateAsUpdate(predecessor)))
     const { text } = await open(note.id)
     expect(text.toString()).toBe('Successor text.\n')
+  }, 20_000)
+
+  it('migrate-store --dry-run predicts what the backfill does with each bin', async () => {
+    const writeBin = async (path: string, text: string) => {
+      const doc = new Y.Doc()
+      doc.getText('body').insert(0, text)
+      doc.getMap('frontmatter').set('type', 'docs')
+      const bin = join(config.dataDir, 'vaults', vaultId, '.crdt', `${path}.bin`)
+      await mkdir(dirname(bin), { recursive: true })
+      await writeFile(bin, Y.encodeStateAsUpdate(doc))
+    }
+    const row = await create('plan-row', 'Row text.\n')
+    await writeBin(row.path, 'Row text.\n')
+    const revision = await create('plan-revision', 'First text.\n')
+    await writeBin(revision.path, 'First text.\n')
+    await writeThroughCollab(vaultId, revision.path, { body: 'Second text.\n' }, { type: 'user' })
+    const foreign = await create('plan-foreign', 'Mine.\n')
+    await writeBin(foreign.path, 'Somebody else.\n')
+    const none = await create('plan-none', 'No bin.\n')
+    const opened = await create('plan-opened', 'Opened.\n')
+    ;(await open(opened.id)).provider.destroy()
+    const notes = [row, revision, foreign, none, opened]
+    const plan = await planStoreMigration({ vaultId })
+    expect(notes.map((n) => plan.notes.find((p) => p.noteId === n.id)?.collab)).toEqual(['attach', 'attach', 'set-aside', 'seed', 'has-state'])
+    const report = await runCollabBackfill()
+    expect(report.failed).toEqual([])
+    const aside = new Set(report.setAside.map((s) => s.noteId))
+    const states = (await db.execute(sql`
+      SELECT note_id FROM note_crdt WHERE note_id IN (${row.id}, ${revision.id}, ${foreign.id}, ${none.id}, ${opened.id})`)) as unknown as Array<{ note_id: string }>
+    const hasState = new Set(states.map((s) => s.note_id))
+    // attach and has-state both leave the note with CRDT state; set-aside and seed leave none until first open.
+    expect(notes.map((n) => (aside.has(n.id) ? 'set-aside' : hasState.has(n.id) ? 'state' : 'seed'))).toEqual([
+      'state',
+      'state',
+      'set-aside',
+      'seed',
+      'state',
+    ])
   }, 20_000)
 })
