@@ -399,6 +399,20 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   (sorted when more than one), then `index:`. The keys are paths, not note
   ids (ADR-003 S2a moves to id keys): an editor tab left open at the old
   path after a rename still stores to a path with no note, as before.
+- **Renames of notes that link to each other** (#803): each referrer is
+  looked up again by note id when its links are rewritten
+  (`relinkReferrer`): another rename may have moved it, and before, it was
+  skipped, so two notes linking each other and renamed at once both kept
+  the old links. The rewrite goes to `updateFn` as a function of the body
+  (`BodyEdit`), applied under the referrer's lock to the stored body, or
+  through the relay to the live document's text, so two renames rewriting
+  one note both keep their link. The renamed note's path is read by id
+  too, and again under that path's lock after the write: a rename of the
+  note that looked for referrers before the new link was stored missed it,
+  so a note that has moved gets another round (at most 5, then
+  `[rename] … the notes kept moving` is logged). `syncLinks` replaces a
+  note's link rows in one transaction, so a rename never sees a referrer
+  with no links mid-write.
 - **Edits merge frontmatter per key** (#438): `edit_note` and REST
   `PUT /api/vaults/:id/notes/*` take `frontmatter`, `body`, `replace`
   and `removeKeys`; `requestedEdit()` (`sync/crdt-write.ts`) turns them
@@ -419,6 +433,21 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   default. The `sync_local_docs_to_vault` prompt tells the agent to
   update an existing note with `replace: true`, so the vault mirrors the
   file.
+- **A body write reaches open editors as the change alone** (#483):
+  `writeThroughCollab` makes the live document's `body` read the new
+  body with one change (`replaceText`): the longest common start and end
+  are kept, the span between is replaced, new text inserted before the
+  old is deleted, and the span never splits a UTF-16 surrogate pair (Yjs
+  stores half a pair as U+FFFD). Characters the write leaves alone keep
+  their Yjs identity, so a person's caret stays on its text and their
+  Ctrl+Z (a `Y.UndoManager` that tracks only their own edits, never the
+  relay's updates) still finds what they typed. It used to delete the
+  whole body and insert the new one: every open caret mapped to
+  position 0 and the person's undo had nothing left to undo. An agent's
+  edit is not undoable from the editor; note history reverts it. The
+  write still sets the whole body: text a person typed that is not in
+  the agent's body is deleted (#408). The relay's `onLoadDocument` still
+  replaces the whole body when the note's file changed outside it.
 - **Revision dedupe** (#480, `recordRevision`): a write that repeats the
   latest revision records nothing. Frontmatter is compared as jsonb
   stores it: deep equality on its JSON form, so object key order (nested
@@ -716,6 +745,20 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   when one is open (`mcp/crdt-write.ts`), so a human editing a note
   sees an AI's edit streaming in like any other collaborator, not as a
   silent external change.
+- **`agent-presence.ts`** (#481): agents in the editors' "In this note
+  now" row. After an MCP `read_note` / `export_note` (reading) or
+  `edit_note` / `revert_note` (editing), the relay adds an awareness
+  state `{ agent: { name, activity } }` to that note's document, under
+  a client id of its own per MCP connection, but only when the document
+  is already loaded (a read never loads one). `name` is the MCP
+  connection's label; the token, its hash and the connection id are
+  never broadcast. The state has no `user` and no cursor. It stays
+  `editing` until the idle timeout after the agent's last write, is
+  renewed every 15 s (y-protocols drops remote states after 30 s) and is
+  removed after `COLLAB_AGENT_IDLE_MS` (default 60000) without a read or
+  write. `beforeHandleAwareness` strips `agent` from every state a
+  client sends and drops client updates for an agent's client id, so
+  only the relay can put an agent in presence.
 
 ### 5.8 MCP (`server/src/mcp/`)
 

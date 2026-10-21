@@ -30,6 +30,7 @@ import {
   softDeleteNote,
   trashFile,
   updateNote,
+  type NoteRow,
 } from '../src/notes/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -242,5 +243,87 @@ describe('delete, restore and purge against other writes (#484)', () => {
       expect(await fileBody(path)).toBeNull()
     }
     expect(await bodyIn(trashFile(vaultId, created.id))).toBeNull()
+  }, 15_000)
+})
+
+describe('renames of notes that link to each other, at the same time (#803)', () => {
+  // A rename rewrites the links in the notes that link to it after its locks
+  // are released. It found them by path and skipped one with no note there,
+  // so a referrer the other rename had moved kept the old link, and it wrote
+  // a body read before the other rename's rewrite of the same note landed.
+  const seedPair = async (name: string) => {
+    await seed(`docs/${name}-x`, `Links to [[docs/${name}-y]].`)
+    await seed(`docs/${name}-y`, `Links to [[docs/${name}-x]].`)
+  }
+
+  async function expectLinkedAtNewPaths(name: string) {
+    for (const [note, other] of [
+      ['x2', 'y2'],
+      ['y2', 'x2'],
+    ]) {
+      const body = `Links to [[docs/${name}-${other}]].`
+      expect((await getLiveNote(vaultId, `docs/${name}-${note}`))?.body).toBe(body)
+      expect(await fileBody(`docs/${name}-${note}`)).toBe(body)
+    }
+  }
+
+  it('each renamed note links the other at its new path', async () => {
+    const names = ['pair-1', 'pair-2', 'pair-3']
+    for (const name of names) await seedPair(name)
+
+    await Promise.all(
+      names.flatMap((name) => [
+        renameNote(vaultId, `docs/${name}-x`, `${name}-x2`),
+        renameNote(vaultId, `docs/${name}-y`, `${name}-y2`),
+      ]),
+    )
+
+    for (const name of names) await expectLinkedAtNewPaths(name)
+  }, 15_000)
+
+  it('a rewrite queued behind the other rename finds the moved note at its new path', async () => {
+    await seedPair('queued')
+    // y's move holds y's lock while x's rewrite of y waits for it.
+    fsHooks.late.add('/docs/queued-y2.md')
+
+    await Promise.all([
+      renameNote(vaultId, 'docs/queued-x', 'queued-x2'),
+      renameNote(vaultId, 'docs/queued-y', 'queued-y2'),
+    ])
+
+    await expectLinkedAtNewPaths('queued')
+  }, 15_000)
+
+  it('a note linking both renamed notes keeps both rewritten links', async () => {
+    await seed('docs/hub-x', 'X.')
+    await seed('docs/hub-y', 'Y.')
+    await seed('docs/hub', 'Links to [[docs/hub-x]] and [[docs/hub-y]].')
+    // The first rewrite of the hub lands late: the second reads the hub meanwhile.
+    fsHooks.late.add('/docs/hub.md')
+
+    await Promise.all([renameNote(vaultId, 'docs/hub-x', 'hub-x2'), renameNote(vaultId, 'docs/hub-y', 'hub-y2')])
+
+    const body = 'Links to [[docs/hub-x2]] and [[docs/hub-y2]].'
+    expect((await getLiveNote(vaultId, 'docs/hub'))?.body).toBe(body)
+    expect(await fileBody('docs/hub')).toBe(body)
+  }, 15_000)
+
+  it('a note renamed again while its first rename rewrites a link ends up linked at its newest path', async () => {
+    await seed('docs/chain', 'Renamed twice.')
+    await seed('docs/chain-referrer', 'Links to [[docs/chain]].')
+    let second: Promise<NoteRow | null> | undefined
+    // The second rename looks for links to chain-2 while the first one's
+    // rewrite of the referrer is landing, before its links are stored.
+    fsHooks.late.add('/docs/chain-referrer.md')
+    fsHooks.before.set('/docs/chain-referrer.md', () => {
+      second = renameNote(vaultId, 'docs/chain-2', 'chain-3')
+    })
+
+    await renameNote(vaultId, 'docs/chain', 'chain-2')
+    expect((await second)?.path).toBe('docs/chain-3')
+
+    const body = 'Links to [[docs/chain-3]].'
+    expect((await getLiveNote(vaultId, 'docs/chain-referrer'))?.body).toBe(body)
+    expect(await fileBody('docs/chain-referrer')).toBe(body)
   }, 15_000)
 })
