@@ -1277,8 +1277,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   is nothing to resume, and a re-insert would revive rows deleted since
   (shares, purged notes, rotated MFA backup codes). It only regenerates
   a missing generated `index.md` there. The CLI prints counts, and for
-  an unexpected error only the driver's message and code (a drizzle
-  error's message carries the query parameters).
+  an unexpected error only the driver's message and code, taken from
+  the `cause` chain (a drizzle error's message carries the query
+  parameters; a `DrizzleQueryError` whose driver error has no code
+  prints `a database query failed`, #813).
   Ids are the archive's — a true restore, not an import. Rows are
   inserted as stored, not re-validated through the OKF write path.
   Restored MCP and sync tokens keep working (their hashes are
@@ -1706,12 +1708,17 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     `repeat: true` only increments `jobs[kind].repeated`: no total, no
     ring record, no log line, so a dead remote, an expired credential or a
     broken backup destination is one report, not one per retry. Set for a
-    sync of a repository whose `syncStatus` was already `error` (the
-    poller in `scheduler.ts` retries those every `POLL_INTERVAL_MS`; the
-    manual sync route and MCP `sync_repository` claim the row as
-    `syncing` first, so they pass the status they read before the claim
-    through `startSync(repo, previousStatus)` to
-    `syncGitRepository`/`syncLocalRepository`), and for a scheduled backup
+    sync failure of a repository that was already failing:
+    `recordSyncFailure` (`git-sync.ts`, used by `syncGitRepository` and
+    `syncLocalRepository`) counts a failure as new only if its conditional
+    update moves `lastSyncError` from null to a message, then writes
+    `syncStatus = 'error'`. Only sync outcomes write `lastSyncError` (a
+    success clears it), not the `syncing` claims of the manual sync route,
+    MCP `sync_repository` or a sync itself, so a retry (the poller in
+    `scheduler.ts` retries an errored repository every `POLL_INTERVAL_MS`)
+    is a repeat however it was started, and of overlapping syncs of one
+    repository (a poll and a webhook delivery) exactly one failure is new
+    (#775); also for a scheduled backup
     that fails after the previous backup, scheduled or on demand, also
     failed (module flag `backupFailing` in `backup-service.ts`: set on any
     failure, cleared by any success).
