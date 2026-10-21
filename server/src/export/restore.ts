@@ -1,7 +1,6 @@
 import AdmZip from 'adm-zip'
 import { createHash } from 'node:crypto'
 import { readFile, rm, stat } from 'node:fs/promises'
-import { join } from 'node:path'
 import { and, eq, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { instanceState, noteLinks, securityEvents, users } from '../db/schema.js'
@@ -12,7 +11,6 @@ import {
   noteFile,
   resolveNotePath,
   trashFile,
-  vaultDir,
 } from '../notes/store.js'
 import { reconcileStore } from '../notes/store-reconcile.js'
 import { flushProjections } from '../notes/projector.js'

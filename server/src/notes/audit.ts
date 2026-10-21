@@ -1,6 +1,4 @@
-import { access } from 'node:fs/promises'
-import { join } from 'node:path'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositories, repositoryFiles } from '../db/schema.js'
 import { resolveRepositoryAccess } from '../repositories/permissions.js'
@@ -11,7 +9,7 @@ import {
   type Frontmatter,
 } from './okf.js'
 import { resolveNotePath } from './okf/paths.js'
-import { listNotes, readNote, vaultDir } from './store.js'
+import { listNotes, readNote } from './store.js'
 
 export interface ConformanceViolation {
   path: string
@@ -145,13 +143,18 @@ export async function auditVaultConformance(
 
   const checkRepoFile = hooks?.checkRepoFile ?? defaultCheckRepoFile
 
+  // ADR-003 §6: the projection state, not the disk: a projected index.md, a
+  // pending dir_index projection of a note in the directory, or the user's own `<dir>/index` note.
   const defaultCheckIndexExists = async (vId: string, dir: string): Promise<boolean> => {
-    try {
-      await access(join(vaultDir(vId), dir, 'index.md'))
-      return true
-    } catch {
-      return false
-    }
+    const rows = await db.execute(sql`
+      SELECT 1 FROM projected_files WHERE vault_id = ${vId} AND path = ${`${dir}/index.md`}
+      UNION ALL
+      SELECT 1 FROM notes n JOIN note_projections p ON p.note_id = n.id AND p.projection = 'dir_index'
+      WHERE n.vault_id = ${vId} AND n.path LIKE ${`${dir}/%`} AND p.applied_seq < p.target_seq
+      UNION ALL
+      SELECT 1 FROM notes WHERE vault_id = ${vId} AND path = ${`${dir}/index`} AND deleted_at IS NULL
+      LIMIT 1`)
+    return (rows as unknown as unknown[]).length > 0
   }
 
   const checkIndexExists = hooks?.checkIndexExists ?? defaultCheckIndexExists

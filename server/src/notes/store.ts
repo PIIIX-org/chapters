@@ -67,6 +67,13 @@ export interface Actor {
 
 const SYSTEM_ACTOR: Actor = { type: 'collab' }
 
+/** createNote found a live note at the path (the unique index decided, #478). */
+class NoteExistsError extends OkfValidationError {
+  constructor(path: string) {
+    super(`a note already exists at ${path}`)
+  }
+}
+
 /** The `note_revisions.action` of a write kept out of the note (#492, notes/growth-guard.ts). */
 export const QUARANTINE_ACTION = 'quarantine'
 
@@ -317,8 +324,11 @@ export function noteLock(vaultId: string, path: string): string {
 
 /** A row as callers see it: the model's columns only (`seq` and `frontmatter_src` stay internal until #477). */
 function plainRow(row: StoredNote): NoteRow {
-  const { seq: _seq, frontmatterSrc: _src, ...plain } = row
-  return plain
+  const plain: Partial<StoredNote> = { ...row }
+  delete plain.seq
+  delete plain.frontmatterSrc
+  // Only the two internal fields were removed: the rest is the model's row.
+  return plain as NoteRow
 }
 
 /**
@@ -438,7 +448,7 @@ export async function createNote(
       })
     } catch (err) {
       if (isUniqueViolation(err)) {
-        throw new OkfValidationError(`a note already exists at ${resolved.fullPath}`)
+        throw new NoteExistsError(resolved.fullPath)
       }
       throw err
     }
@@ -446,6 +456,28 @@ export async function createNote(
     afterCommit()
     return row
   })
+}
+
+/**
+ * createNote when there is no live note at the path, else null (append_note,
+ * upsert_note, #478): concurrent callers create the note once, and the rest
+ * then edit it like any existing note (restore point included). Path
+ * uniqueness is the unique index's (ADR-003 §5.1): a writer that creates the
+ * note between the check and the insert (another caller, create_note,
+ * restore_note) makes the insert fail, which answers null too.
+ */
+export async function createNoteIfMissing(
+  vaultId: string,
+  input: Parameters<typeof createNote>[1] & { path: string },
+  actor: Actor,
+): Promise<NoteRow | null> {
+  if (await getLiveNote(vaultId, input.path)) return null
+  try {
+    return await createNote(vaultId, input, actor)
+  } catch (err) {
+    if (err instanceof NoteExistsError) return null
+    throw err
+  }
 }
 
 /** Replaces the note's EXTRACTED link rows from its current wikilinks (`pnpm reindex`). */

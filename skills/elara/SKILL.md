@@ -26,7 +26,7 @@ Elara is a team knowledge base and codebase mapping platform built on four found
    - `semantic`: nearest neighbours by embedding similarity.
    - Louvain communities are computed on every call. `find_graph_path` finds the shortest path (breadth-first). Saved graph perspectives are stored for the UI; the `graph` tool cannot apply them. There is no PageRank or centrality score.
 3. **Synced Code Repositories**: Read-only ingestion of git repositories (clone with polling or webhook), a local path under the server's repos root, or agent push. Files are indexed with Tree-sitter for TypeScript, JavaScript, Python, and Go (imports and top-level functions, classes, interfaces, types), and embedded for semantic search (`find_symbols`).
-4. **MCP Server & Prompts**: A stateless, permission-scoped MCP server over Streamable HTTP (`POST /mcp` or `POST /elara/mcp`; there is no stdio transport) with **58 tools** and **20 prompts**.
+4. **MCP Server & Prompts**: A stateless, permission-scoped MCP server over Streamable HTTP (`POST /mcp` or `POST /elara/mcp`; there is no stdio transport) with **60 tools** and **20 prompts**.
 
 ---
 
@@ -66,6 +66,7 @@ When creating or editing notes via `create_note` or `edit_note`:
   }
   ```
 - Write `[[...]]` links bare. Links inside backticks or code blocks are ignored by the graph and the audit.
+- To add to a log or running note, call `append_note` (`createIfMissing: true` creates it if needed), never `read_note` followed by `edit_note` with the old body plus your line: another agent's append between your read and your write is lost. `upsert_note` creates or replaces a note in one call, so two agents writing a missing note never get "already exists".
 - `edit_note`: for a partial change use `ops` (`append`, `prepend`, `replace_text`, `insert_before`/`insert_after` an anchor, `replace_section` under a heading, `delete_block`, `frontmatter_set`/`frontmatter_add`/`frontmatter_remove`); they apply to the live text, so a person's unsaved typing is kept, and an anchor that is missing or occurs more than once fails the whole call with nothing changed. `frontmatter` **merges per top-level key** (keys you send are set, keys you leave out are kept; `null` is stored as a value), `replace: true` replaces the whole map instead, `removeKeys` deletes keys, and `body` **replaces the whole body** (not with `ops`); omit a field to leave it unchanged. The merged frontmatter is validated before anything is written. The edit streams into the live collaboration document as a minimal change and is recorded as a revision. A whole `body` built from an earlier read removes what a person typed since, unless you send `base_rev` (the `rev` that `read_note` returned): then only the lines and keys you changed are applied (`status: "merged"` lists what changed meanwhile), and if a person changed the same lines or keys nothing changes (`status: "conflicted"`, your version kept as a `proposal` revision): read the note again and redo the change.
 - Run `audit_okf_conformance` to check structure (frontmatter, datetimes, link targets, indexes, orphans). It does not check whether the content is correct.
 
@@ -142,6 +143,7 @@ Invokes one of the 20 first-class Elara MCP engineering prompts (e.g. `active_pr
 Performs operations on notes:
 - `/elara-note read <vault-id> <path>`: Read note content and frontmatter.
 - `/elara-note create <vault-id> <path> [body]`: Create a new OKF note (`create_note` with `frontmatter` and `body`).
+- `/elara-note append <vault-id> <path> <text>`: Append lines via `append_note` (add `createIfMissing: true` to create the note).
 - `/elara-note edit <vault-id> <path> <body>`: Replace the note body (and/or merge frontmatter keys) via `edit_note`; for a partial change (append a line, replace one passage, rewrite one section) send `ops` instead.
 - `/elara-note rename <vault-id> <from> <to>`: `rename_note` with `from` and `toName`; `toName` is a slug (rename in place) or a full path (move). Full-path links in other notes are rewritten; bare-name links are not.
 - `/elara-note delete <vault-id> <path>`: Move note to trash.
@@ -198,9 +200,9 @@ Exports a vault zip archive or single note markdown file.
 
 ---
 
-## Elara MCP Tool Reference (58 Tools)
+## Elara MCP Tool Reference (60 Tools)
 
-Elara exposes 58 tools across 7 functional domains. **Capability** is the token access level a tool needs: a token is `read`, `write` or `admin` (ordered), chosen when it is minted, and may also carry a tool allow-list and an expiry. Through the API, account tokens default to `admin`; vault- and repository-pinned tokens default to `write`, so they cannot share, update, trash or purge their pin or erase history unless the owner minted them with `admin`. A pinned token never gets more than its user's permission on the pin: with a read-only vault share the token is `read` (asking for more is refused). The Settings and vault forms start at `write`, or at `read` for a read-only vault member. `tools/list` shows a token only the tools it can call (allow-list, access level, scope; on a pinned token also the user's current permission on the pin, so owner-only tools such as `list_vault_shares` appear only to the owner, and tools that need edit access such as `list_trash` or `note_history` only to an editor). A refusal names the missing capability (`<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`); ask the user for a token with that capability instead of retrying.
+Elara exposes 60 tools across 7 functional domains. **Capability** is the token access level a tool needs: a token is `read`, `write` or `admin` (ordered), chosen when it is minted, and may also carry a tool allow-list and an expiry. Through the API, account tokens default to `admin`; vault- and repository-pinned tokens default to `write`, so they cannot share, update, trash or purge their pin or erase history unless the owner minted them with `admin`. A pinned token never gets more than its user's permission on the pin: with a read-only vault share the token is `read` (asking for more is refused). The Settings and vault forms start at `write`, or at `read` for a read-only vault member. `tools/list` shows a token only the tools it can call (allow-list, access level, scope; on a pinned token also the user's current permission on the pin, so owner-only tools such as `list_vault_shares` appear only to the owner, and tools that need edit access such as `list_trash` or `note_history` only to an editor). A refusal names the missing capability (`<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`); ask the user for a token with that capability instead of retrying.
 
 ### 1. Vault Management (14 tools)
 | Tool | Scope | Capability | Description |
@@ -220,12 +222,14 @@ Elara exposes 58 tools across 7 functional domains. **Capability** is the token 
 | `share_vault` | Vault/Account | `admin` | Grant read or edit access to a user or team. |
 | `revoke_vault_share` | Vault/Account | `admin` | Revoke a user or team share from a vault. |
 
-### 2. Note Operations & OKF Conformance (13 tools)
+### 2. Note Operations & OKF Conformance (15 tools)
 | Tool | Scope | Capability | Description |
 | :--- | :--- | :--- | :--- |
 | `read_note` | Vault/Account | `read` | Read a note's `path`, `frontmatter`, and `body`, with `rev` (its revision, for `edit_note` `base_rev`). |
 | `create_note` | Vault/Account | `write` | Create a note from `path` (or `type` + `name`), a `frontmatter` object, and a `body`. |
 | `edit_note` | Vault/Account | `write` | Local `ops` (append, replace text, insert at an anchor, replace a section, delete a block, frontmatter set/add/remove) on the live text, or replace the whole `body`; merge `frontmatter` keys (or `replace: true` the whole map, `removeKeys` to delete); streamed through live collaboration as a minimal change. With `base_rev`, a stale edit is merged with what changed since, or kept as a proposal when it overlaps. |
+| `append_note` | Vault/Account | `write` | Append `text` as whole lines to the note as it is when the write runs, so concurrent appends all land; `createIfMissing: true` creates the note (with `frontmatter`) when it is missing. Use for logs and running notes instead of read + `edit_note`. |
+| `upsert_note` | Vault/Account | `write` | Create the note, or replace its `body` (merging `frontmatter` keys) when it exists, in one step: concurrent upserts of a missing note create it once and none fails. |
 | `rename_note` | Vault/Account | `write` | Rename (`toName` slug) or move (`toName` full path) a note; full-path links in the vault are rewritten. |
 | `delete_note` | Vault/Account | `write` | Soft-delete a note to the vault trash. |
 | `list_trash` | Vault/Account | `read` | List soft-deleted notes in the vault trash. |

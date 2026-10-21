@@ -260,7 +260,8 @@ async function backfillNote(tx: Tx, id: string, report: BackfillReport, date: st
   const revision = await revisionAtSeq(tx, id, 'migration')
   if (revision === 'adopted') report.revisions.adopted++
   if (revision === 'inserted') report.revisions.inserted++
-  const [{ seq }] = (await tx.execute(sql`SELECT seq FROM notes WHERE id = ${id}`)) as unknown as Array<{ seq: string }>
+  const [current] = (await tx.execute(sql`SELECT seq FROM notes WHERE id = ${id}`)) as unknown as Array<{ seq: string }>
+  const seq = current!.seq
   const rendered = renderNoteFile({ frontmatter: row.frontmatter, frontmatterSrc: order, body: row.body })
   const adoptable = parsed !== null && parsed.body === row.body && sameContent(parsed.frontmatter, row.frontmatter)
   let fileApplied = 0

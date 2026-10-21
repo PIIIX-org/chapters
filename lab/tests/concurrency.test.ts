@@ -5,8 +5,8 @@
 // connection id and the revision body must hold that writer's marker.
 //
 // Scenarios per N:
-//   append-same       read_note + edit_note(body + own line) on one note (the
-//                     only way an agent can "append": edit_note replaces the body)
+//   append-same       append_note(own line) on one note: the atomic append (#478),
+//                     applied to the note as it is when the write runs
 //   replace-same      edit_note(full frontmatter + body) on one note
 //   append-different  read + append on N sibling notes, one per writer
 //   replace-different full frontmatter + body on N siblings (frontmatter change
@@ -100,7 +100,7 @@ async function dbNote(ctx: LabContext, vaultId: string, path: string) {
 const test: LabTest = {
   name: 'concurrency',
   tier: 'fast',
-  description: 'Parallel edit_note appends/replacements on one note and on sibling notes, parallel create_note in one folder; lost updates, errors, attribution.',
+  description: 'Parallel append_note appends and edit_note replacements on one note and on sibling notes, parallel create_note in one folder; lost updates, errors, attribution.',
   async run(ctx) {
     const checks: Check[] = []
     const data: Record<string, unknown> = {}
@@ -141,14 +141,7 @@ const test: LabTest = {
         const since = newest.revisions[0]?.createdAt ?? reset.updatedAt
         const line = (i: number) => `- A${N} w${i} `
         const outcomes = await Promise.all(
-          ws.map((w) =>
-            timed(async () => {
-              const cur = await w.mcp.call('read_note', { vaultId: vault.id, path: shared })
-              if (!cur.ok) return cur
-              const body = stringField(cur.json, 'body') ?? ''
-              return w.mcp.call('edit_note', { vaultId: vault.id, path: shared, body: `${body}${line(w.i)}\n` })
-            }, w.i),
-          ),
+          ws.map((w) => timed(() => w.mcp.call('append_note', { vaultId: vault.id, path: shared, text: line(w.i) }), w.i)),
         )
         // Real time on purpose: the collab relay's debounced store runs on the server clock; let it land before reading.
         await Bun.sleep(SETTLE_MS)
@@ -349,7 +342,7 @@ const test: LabTest = {
       return d && typeof d === 'object' ? `N=${N}: ${Reflect.get(d, 'lost')}/${Reflect.get(d, 'ok')} lost` : `N=${N}: ?`
     }).join(', ')
     return {
-      summary: `Concurrent edit_note on vault ${vault.id}. Appends to one note (read+edit): ${appendLoss}. ${failed.length} of ${checks.length} checks failed.`,
+      summary: `Concurrent writes on vault ${vault.id}. Appends to one note (append_note): ${appendLoss}. ${failed.length} of ${checks.length} checks failed.`,
       checks,
       data: { vaultId: vault.id, writers: writers.map((w) => ({ i: w.i, user: w.user, connId: w.connId })), ...data },
     }

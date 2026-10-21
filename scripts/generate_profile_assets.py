@@ -197,7 +197,7 @@ hero_svg = '''<svg width="100%" height="440" viewBox="0 0 1200 440" xmlns="http:
       <!-- Stat 4: MCP Tools -->
       <g transform="translate(435, 20)">
         <text x="0" y="14" class="mono" font-size="10" font-weight="600" fill="#8B9BB4" letter-spacing="1">MCP TOOLS</text>
-        <text x="0" y="42" class="mono" font-size="24" font-weight="700" fill="#E2E8F4">57</text>
+        <text x="0" y="42" class="mono" font-size="24" font-weight="700" fill="#E2E8F4">60</text>
         <text x="0" y="58" class="mono" font-size="9.5" fill="#8B9BB4">+ 20 prompts</text>
       </g>
     </g>
@@ -304,7 +304,7 @@ badges = [
     {"filename": "badge-okf.svg", "domain": "FORMAT", "value": "OKF v0.2 · ISO 8601", "color": "#5B8DEF", "pip": "#2EC47C", "w": 225},
     {"filename": "badge-crdt.svg", "domain": "COLLAB", "value": "Yjs CRDT · 0.09ms p95", "color": "#2EC47C", "pip": "#2EC47C", "w": 235},
     {"filename": "badge-vector.svg", "domain": "VECTOR", "value": "pgvector 17 · 10.87 QPS", "color": "#5B8DEF", "pip": "#2EC47C", "w": 235},
-    {"filename": "badge-mcp.svg", "domain": "AI MCP", "value": "58 Tools · 20 Prompts", "color": "#3FB8AE", "pip": "#3FB8AE", "w": 230},
+    {"filename": "badge-mcp.svg", "domain": "AI MCP", "value": "60 Tools · 20 Prompts", "color": "#3FB8AE", "pip": "#3FB8AE", "w": 230},
     {"filename": "badge-ast.svg", "domain": "AST ENGINE", "value": "Tree-sitter · 92k LOC/s", "color": "#3FB8AE", "pip": "#3FB8AE", "w": 240},
     {"filename": "badge-security.svg", "domain": "SECURITY", "value": "21/21 Vectors Blocked", "color": "#2EC47C", "pip": "#2EC47C", "w": 235},
     {"filename": "badge-tests.svg", "domain": "TEST SUITE", "value": "15/15 Plans Verified", "color": "#2EC47C", "pip": "#2EC47C", "w": 225},
@@ -944,8 +944,8 @@ rows = [
     },
     {
         "y": 295,
-        "label": "Native 58-Tool Model Context Protocol",
-        "chapters": "✓ 58 Tools · 20 Prompts",
+        "label": "Native 60-Tool Model Context Protocol",
+        "chapters": "✓ 60 Tools · 20 Prompts",
         "c_color": "#2EC47C",
         "obsidian": "⚠️ Community",
         "swimm": "✕",
