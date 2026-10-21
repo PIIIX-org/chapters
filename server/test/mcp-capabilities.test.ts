@@ -73,6 +73,8 @@ async function vaultFixture(name: string) {
   await must(acct, 'delete_note', { vaultId: vault.id, path: 'docs/trashed' })
   const trash = await must<Array<{ id: string }>>(acct, 'list_trash', { vaultId: vault.id })
   const { revisions } = await must<{ revisions: Array<{ id: string }> }>(acct, 'note_history', { vaultId: vault.id, path: 'docs/kept' })
+  // A past state: the revision of the note as it is now cannot be purged (ADR-003 §5.5).
+  await must(acct, 'edit_note', { vaultId: vault.id, path: 'docs/kept', body: 'kept, edited' })
   await must(acct, 'share_vault', { vaultId: vault.id, granteeType: 'user', granteeId: memberId, permission: 'edit' })
   const shares = await must<Array<{ id: string }>>(acct, 'list_vault_shares', { vaultId: vault.id })
   return { id: vault.id, trashedId: trash[0]!.id, revisionId: revisions[0]!.id, shareId: shares[0]!.id }

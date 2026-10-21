@@ -32,6 +32,7 @@ import {
   updateNote,
   type NoteRow,
 } from '../src/notes/store.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 const fsHooks = vi.hoisted(() => ({
@@ -71,8 +72,9 @@ const value = <T>(result: Settled<T>): T => {
   return result.value
 }
 
-/** The note body in `file`, or null when there is no such file. */
+/** The note body in `file` once the projector has written every committed write (ADR-003 §7), or null when there is no such file. */
 async function bodyIn(file: string): Promise<string | null> {
+  await flushProjections()
   try {
     return parseNote(await readFile(file, 'utf8')).body
   } catch (err) {

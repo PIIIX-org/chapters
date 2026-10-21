@@ -22,6 +22,7 @@ import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { metricsSnapshot } from '../src/monitoring/metrics.js'
 import { parseNote } from '../src/notes/okf.js'
 import { getLiveNote, noteFile } from '../src/notes/store.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
@@ -58,7 +59,9 @@ async function must<T>(name: string, args: Args): Promise<T> {
   return JSON.parse(r.text) as T
 }
 
+/** The note's file once the projector has written every committed write (ADR-003 §7). */
 async function fileBody(path: string): Promise<string> {
+  await flushProjections()
   return parseNote(await readFile(noteFile(vaultId, path), 'utf8')).body
 }
 

@@ -6,6 +6,7 @@ import { checkNoteFiles } from '../src/notes/integrity.js'
 import { parseNote, serializeNote, type Frontmatter, type OkfNote } from '../src/notes/okf.js'
 import { noteFile } from '../src/notes/store.js'
 import { createActiveUser, loginCookie, rewriteNoteFileFromRow } from './helpers.js'
+import { flushProjections } from '../src/notes/projector.js'
 
 let app: FastifyInstance
 let cookie: string
@@ -30,13 +31,15 @@ beforeAll(async () => {
     })
     expect(res.statusCode).toBe(200)
   }
+  // Files are projections written after commit (ADR-003 §7).
+  await flushProjections()
 })
 
 // These tests damage files on purpose. Rewrite every file from its row so the
 // suite leaves the vault intact for the CI vault-invariant gate (#578).
 afterAll(async () => {
   for (const name of NAMES) await rewriteNoteFileFromRow(vaultId, `guides/${name}`)
-  expect(await checkNoteFiles(vaultId)).toEqual({ checked: NAMES.length, problems: [] })
+  expect(await checkNoteFiles(vaultId)).toEqual({ checked: NAMES.length, problems: [], pending: [] })
   await app.close()
 })
 
@@ -55,7 +58,22 @@ async function problemsFor(name: string) {
 
 describe('checkNoteFiles', () => {
   it('reports a vault whose files match their rows as clean', async () => {
-    expect(await checkNoteFiles(vaultId)).toEqual({ checked: NAMES.length, problems: [] })
+    expect(await checkNoteFiles(vaultId)).toEqual({ checked: NAMES.length, problems: [], pending: [] })
+  })
+
+  it('lists a note whose file projection has not reached its row as pending, and does not compare its file', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/notes`,
+      headers: { cookie },
+      body: { type: 'pending', name: 'unprojected', body: 'not on disk yet' },
+    })
+    expect(res.statusCode).toBe(200)
+    const report = await checkNoteFiles(vaultId)
+    expect(report.problems).toEqual([])
+    expect(report.pending.map((p) => `${p.path} ${p.projection}`)).toEqual(['pending/unprojected dir_index', 'pending/unprojected file'])
+    await app.inject({ method: 'DELETE', url: `/api/vaults/${vaultId}/notes/pending/unprojected`, headers: { cookie } })
+    await flushProjections()
   })
 
   it('reports a fence-less file as unparseable', async () => {

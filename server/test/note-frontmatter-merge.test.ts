@@ -118,13 +118,13 @@ function cases(live: () => Y.Doc | undefined, open: (path: string) => Promise<vo
     await open(path)
     const before = (await revisionsOf(path)).length
     expect((await editNote({ path, frontmatter: { description: 'Merged.' } })).isError).toBe(false)
-    // Through the relay its store of the document lands first, credited to
-    // `collab` (#403); the agent's write of the same state must still be
-    // recorded, credited to the connection. The oldest is the state the
-    // connection found, kept as its restore point (#482).
+    // No relay store of the same state lands first any more (#403, ADR-003
+    // S2a): the agent's write is the only new revision, credited to the
+    // connection. The oldest is the state the connection found, kept as its
+    // restore point (#482).
     const revisions = await revisionsOf(path)
     const added = revisions.slice(0, revisions.length - before)
-    expect(added.map((r) => r.actorType)).toEqual(live() ? ['mcp', 'collab', 'mcp'] : ['mcp', 'mcp'])
+    expect(added.map((r) => r.actorType)).toEqual(['mcp', 'mcp'])
     expect(added[0]).toMatchObject({ action: 'update', actorType: 'mcp', actorId: connectionId })
     expect(added.at(-1)).toMatchObject({ action: 'restore_point', actorType: 'mcp', actorId: connectionId })
     for (const revision of added.slice(0, -1)) {

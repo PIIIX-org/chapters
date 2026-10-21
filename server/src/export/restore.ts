@@ -13,7 +13,7 @@ import {
   trashFile,
 } from '../notes/store.js'
 import { reconcileStore } from '../notes/store-reconcile.js'
-import { flushProjections } from '../notes/projector.js'
+import { flushProjections, projectDirIndices } from '../notes/projector.js'
 import {
   OkfValidationError,
   extractWikilinks,
@@ -524,11 +524,22 @@ async function planRestore(contents: BackupContents): Promise<PreparedRestore> {
  * Brings the restored rows into the store (ADR-003 §8 "#776 coordination"):
  * boot reconciliation gives every restored note its projection rows and a
  * revision at its `seq`, then the projector writes (or adopts, when the
- * archive's file already holds the row's content) every file and index.md.
+ * archive's file already holds the row's content) every file, and the
+ * index.md of every directory of the archive's live notes is rendered again
+ * from the rows (a crash after the commit can have left one missing).
  */
-async function projectRestored(): Promise<void> {
+async function projectRestored(contents: BackupContents): Promise<void> {
   await reconcileStore()
   await flushProjections()
+  const dirsByVault = new Map<string, Set<string>>()
+  for (const note of contents.tables.get('notes')!) {
+    if (note.deletedAt != null) continue
+    const vaultId = String(note.vaultId)
+    const dirs = dirsByVault.get(vaultId) ?? new Set<string>()
+    for (const dir of resolveNotePath(String(note.path)).ancestorDirectories) dirs.add(dir)
+    dirsByVault.set(vaultId, dirs)
+  }
+  for (const [vaultId, dirs] of dirsByVault) await projectDirIndices(vaultId, dirs)
 }
 
 /**
@@ -587,7 +598,7 @@ async function applyRestore(contents: BackupContents, { inserts, writes }: Prepa
     await Promise.all(created.map((file) => rm(file, { force: true })))
     throw err
   }
-  await projectRestored()
+  await projectRestored(contents)
 }
 
 /**
@@ -605,7 +616,7 @@ export async function restoreBackup(buffer: Buffer, options: { dryRun?: boolean 
   const prepared = await planRestore(contents)
   if (prepared.plan.conflicts.length > 0) throw new RestoreRefusedError(prepared.plan)
   if (options.dryRun) return prepared.plan
-  if (prepared.plan.alreadyRestored) await projectRestored()
+  if (prepared.plan.alreadyRestored) await projectRestored(contents)
   else await applyRestore(contents, prepared)
   return prepared.plan
 }

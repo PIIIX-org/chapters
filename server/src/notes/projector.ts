@@ -108,9 +108,14 @@ async function withPathLock<T>(vaultId: string, rel: string, fn: (tx: Tx) => Pro
   )
 }
 
+/**
+ * Whether the vault still exists (a trashed vault keeps its files, so a
+ * restore of it finds them). FOR SHARE: a vault purge waits for this
+ * transaction, then removes the directory after it, so the projector never
+ * recreates a purged vault's directory.
+ */
 async function vaultLive(tx: Tx, vaultId: string): Promise<boolean> {
-  // FOR SHARE: a vault purge waits for this transaction, then removes the directory after it.
-  const rows = await tx.execute(sql`SELECT 1 FROM vaults WHERE id = ${vaultId} AND deleted_at IS NULL FOR SHARE`)
+  const rows = await tx.execute(sql`SELECT 1 FROM vaults WHERE id = ${vaultId} FOR SHARE`)
   return (rows as unknown as unknown[]).length > 0
 }
 
@@ -247,10 +252,15 @@ function adoption(disk: string, note: NoteForFile): Record<string, unknown> | nu
   }
 }
 
-/** Projects one note's `file`: releases the paths it no longer owns, writes its current path. Returns the seq rendered. */
-async function projectFile(noteId: string): Promise<number | null> {
+/**
+ * Projects one note's `file`: releases the paths it no longer owns, writes
+ * its current path. Returns the seq rendered; 'gone' when there is nothing
+ * to write (the note was purged, or its vault is deleted); 'moved' when the
+ * note moved again after it was read (the next claim renders it).
+ */
+async function projectFile(noteId: string): Promise<number | 'gone' | 'moved'> {
   const seen = await noteForFile(db, noteId)
-  if (!seen) return null
+  if (!seen) return 'gone'
   const rel = noteFileRel({ id: seen.id, path: seen.path, deletedAt: seen.deleted_at })
   const stale = (await db.execute(sql`
     SELECT path FROM projected_files WHERE owner_id = ${noteId} AND vault_id = ${seen.vault_id} AND path <> ${rel}`)) as unknown as Array<{
@@ -263,10 +273,11 @@ async function projectFile(noteId: string): Promise<number | null> {
     })
   }
   return withPathLock(seen.vault_id, rel, async (tx) => {
-    if (!(await vaultLive(tx, seen.vault_id))) return null
+    if (!(await vaultLive(tx, seen.vault_id))) return 'gone' as const
     // The owner is read again under the path lock: the decision made before it is not trusted.
     const note = await noteForFile(tx, noteId)
-    if (!note || noteFileRel({ id: note.id, path: note.path, deletedAt: note.deleted_at }) !== rel) return null
+    if (!note) return 'gone' as const
+    if (noteFileRel({ id: note.id, path: note.path, deletedAt: note.deleted_at }) !== rel) return 'moved' as const
     const seq = Number(note.seq)
     let order: Record<string, unknown> | null = null
     const outcome = await writeOwned(
@@ -445,8 +456,10 @@ async function runProjections(claims: ClaimedProjection[]): Promise<void> {
   for (const claim of claims) {
     if (claim.projection !== 'file') continue
     try {
-      if ((await projectFile(claim.note_id)) === null) {
-        // The note is gone (purged) or moved again since the claim: drop the lease, the next claim renders it.
+      const outcome = await projectFile(claim.note_id)
+      if (outcome === 'gone') await markApplied(db, claim.note_id, 'file', Number(claim.target_seq))
+      // Moved again since it was read: the next claim renders the new path.
+      if (outcome === 'moved') {
         await db.execute(sql`UPDATE note_projections SET lease_until = NULL WHERE note_id = ${claim.note_id} AND projection = 'file'`)
       }
       recordJob('projection', 'ok', claim.note_id)

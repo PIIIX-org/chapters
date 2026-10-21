@@ -86,10 +86,10 @@ describe('migration 0021 (ADR-003 store schema)', () => {
     expect(await seqOf(id)).toBe(4)
     await sql`update notes set deleted_at = now() where id = ${id}`
     expect(await seqOf(id)).toBe(5)
-    // Old-code writes leave the new revision columns null, which the partial unique indexes allow.
+    // The store's create revision is at seq 1 (S2a); SQL updates (old code) write no revision at all.
     const revisions = await sql`select seq, idempotency_key from note_revisions where note_id = ${id}`
-    expect(revisions.length).toBeGreaterThan(0)
-    expect(revisions.every((r) => r.seq === null && r.idempotency_key === null)).toBe(true)
+    expect(revisions.map((r) => r.seq)).toEqual(['1'])
+    expect(revisions.every((r) => r.idempotency_key === null)).toBe(true)
   })
 
   it('bumps seq through the current REST write paths (trash, restore)', async () => {
@@ -115,9 +115,10 @@ describe('migration 0021 (ADR-003 store schema)', () => {
 
     await sql`insert into note_crdt (note_id, snapshot, folded_seq) values (${id}, '\\x00'::bytea, 1)`
     await sql`insert into note_updates (note_id, update, actor_type) values (${id}, '\\x00'::bytea, 'collab')`
-    await sql`insert into note_projections (note_id, projection, target_seq) values (${id}, 'file', 1)`
+    // The store already wrote the projection row (S2a); make sure one exists either way.
+    await sql`insert into note_projections (note_id, projection, target_seq) values (${id}, 'file', 1) on conflict do nothing`
     await sql`insert into projected_files (vault_id, path, owner_kind, owner_id, applied_hash, applied_seq)
-              values (${vaultId}, 'guides/cascade.md', 'note', ${id}, 'h', 1)`
+              values (${vaultId}, 'guides/cascade.md', 'note', ${id}, 'h', 1) on conflict do nothing`
     // A purge by old code (plain DELETE) leaves nothing behind.
     await sql`delete from notes where id = ${id}`
     for (const table of ['note_crdt', 'note_updates', 'note_projections']) {
