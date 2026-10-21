@@ -24,7 +24,9 @@ What counts as a failed job:
 - `sync`: a git or local-folder repository sync failed (also shown on the repository card). Counted once, when the repository goes into `error`: the poller retries a failing git repository every `POLL_INTERVAL_MS`, and a user or agent may retry it by hand; each retry that fails again only adds to `repeated`, not to `failed` (no new report, no log line, no alert). Two syncs that overlap (a poll and a webhook delivery) and both fail count one failure at most. A new error on a repository already in `error` (say, an expired credential, then a deleted remote) is only on its card;
 - `collab-store`: a live (collaborative) edit could not be saved to the note, for example because its frontmatter was invalid. **The note keeps its last valid version while the editors keep seeing their edit**: look at it;
 - `backup`: a scheduled backup failed (an on-demand one that fails is a 500 instead). A scheduled backup that fails after the previous backup (scheduled or on demand) also failed only adds to `repeated`, so `ELARA_BACKUP_INTERVAL_HOURS=1` with a broken destination is one alert, not one an hour. Any backup that succeeds, including "run backup now" after a fix, ends that: the next scheduled failure alerts again (the state restarts with the process);
-- `projection`: a note's `.md` file or a folder's `index.md` could not be written (a read-only or full disk), or a file the server did not write was found where it writes and copied to `.conflicts/` first (error name `ConflictCopy`). The database holds the note, so the write that caused it **succeeded** (no 500): reads, search and agents are unaffected, and the file is written once the disk accepts it (retried with a backoff; the retries only add to `repeated`). `pnpm check-notes` lists files still pending.
+- `projection`: a note's `.md` file or a folder's `index.md` could not be written (a read-only or full disk). The database holds the note, so the write that caused it **succeeded** (no 500): reads, search and agents are unaffected, and the file is written once the disk accepts it (retried with a backoff; the retries only add to `repeated`). `pnpm check-notes` lists files still pending.
+
+A file the server did not write found where it writes (a hand edit, or an unparseable `.md` the store migration rewrites from its row) is copied to `.conflicts/` first (ADR-003). That is intended behaviour, **not a job failure**: it is counted in `conflictCopies` on the endpoint (`copies`, and `paths`, the number of distinct note paths copied since the process started; never the path itself), adds no error report or log line, and raises no `jobs` alert. The server log has one `[projector] ... copied to .conflicts/...` warning per copy with the path.
 
 `repeated` per job kind is on the endpoint and in the jobs alert's "since the process started" line.
 
@@ -46,7 +48,8 @@ Anyone else gets `401` (or `403` for a signed-in non-admin). `/health` does not 
   "now": "2026-10-19T12:40:00.000Z",
   "windowMinutes": 15,
   "totals": { "requests": 18234, "serverErrors": 2, "jobFailures": 1 },
-  "jobs": { "embedding": { "succeeded": 410, "failed": 0, "repeated": 0 }, "extraction": { "succeeded": 0, "failed": 0, "repeated": 0 }, "sync": { "succeeded": 12, "failed": 1, "repeated": 30 }, "collab-store": { "succeeded": 88, "failed": 0, "repeated": 0 }, "backup": { "succeeded": 1, "failed": 0, "repeated": 0 } },
+  "jobs": { "embedding": { "succeeded": 410, "failed": 0, "repeated": 0 }, "extraction": { "succeeded": 0, "failed": 0, "repeated": 0 }, "sync": { "succeeded": 12, "failed": 1, "repeated": 30 }, "collab-store": { "succeeded": 88, "failed": 0, "repeated": 0 }, "backup": { "succeeded": 1, "failed": 0, "repeated": 0 }, "projection": { "succeeded": 95, "failed": 0, "repeated": 0 } },
+  "conflictCopies": { "copies": 13, "paths": 13 },
   "routes": [{ "route": "POST /mcp", "count": 312, "serverErrors": 0, "p50Ms": 25, "p95Ms": 150, "p99Ms": 400, "maxMs": 612 }],
   "errors": [{ "seq": 3, "at": "2026-10-19T12:31:07.004Z", "type": "job", "job": "sync", "subjectId": "0199…", "error": { "name": "Error", "code": null } }],
   "lastSeq": 3
