@@ -6,6 +6,7 @@ import { NoteWriteQuarantinedError } from './growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
 import { requestedEdit, writeThroughCollab } from '../sync/crdt-write.js'
+import { NoteEditError } from '../sync/edit-ops.js'
 import {
   createNote,
   getIncomingLinks,
@@ -95,7 +96,8 @@ export function noteRoutes(app: FastifyInstance) {
   })
 
   // `frontmatter` merges per top-level key; `replace: true` swaps the whole
-  // map and `removeKeys` deletes keys, as edit_note does (#438).
+  // map and `removeKeys` deletes keys, as edit_note does (#438). `ops` are
+  // edit_note's alone (#408): validated by its schema only, so refused here.
   app.put<{
     Params: { id: string; '*': string }
     Body: { frontmatter?: Record<string, unknown>; body?: string; replace?: boolean; removeKeys?: string[]; allowGrowth?: boolean }
@@ -119,11 +121,14 @@ export function noteRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!(await guard(req, reply, 'edit'))) return
       splitPath(req.params['*'])
-      const { allowGrowth, ...edit } = req.body
+      if (Object.hasOwn(req.body, 'ops')) {
+        throw new NoteEditError('`ops` is an edit_note (MCP) argument; REST PUT takes `body`, `frontmatter`, `replace`, `removeKeys` and `allowGrowth`')
+      }
+      const { allowGrowth, frontmatter, body, replace, removeKeys } = req.body
       const updated = await writeThroughCollab(
         req.params.id,
         req.params['*'],
-        requestedEdit(edit),
+        requestedEdit({ frontmatter, body, replace, removeKeys }),
         { type: 'user', id: req.user!.id },
         { quarantine: allowGrowth ? undefined : 'all' },
       )

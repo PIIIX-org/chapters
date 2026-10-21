@@ -2113,7 +2113,7 @@ post('/import', ({ raw, query }) => {
   // Shares from the archive are granted only on request (#621); the mock has no other accounts to match.
   const share = { granteeType: 'user', grantee: 'reviewer@external.example', permission: 'read' }
   const reason = query.get('applyShares') === 'true' ? 'no_active_user' : 'not_requested'
-  return { vaultId: v.id, imported: 2, skipped: ['notes/broken: missing frontmatter fence'], appliedShares: [], skippedShares: [{ ...share, reason }] }
+  return { vaultId: v.id, imported: 2, trashed: 0, skipped: ['notes/broken: missing frontmatter fence'], appliedShares: [], skippedShares: [{ ...share, reason }] }
 })
 
 // --- admin ------------------------------------------------------------------

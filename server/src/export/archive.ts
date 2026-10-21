@@ -20,6 +20,7 @@ import {
   type BackupPart,
   type Row,
 } from './backup-format.js'
+import { addHistoryToZip } from './vault-history.js'
 
 export interface ShareManifestEntry {
   granteeType: 'user' | 'team'
@@ -28,7 +29,17 @@ export interface ShareManifestEntry {
   permission: 'read' | 'edit'
 }
 
+/**
+ * Version of the vault archive layout. 1: OKF tree, `assets/`, manifest and
+ * `.elara/history/` (#499). Archives without it are older exports; import
+ * refuses a version newer than this one.
+ */
+export const VAULT_ARCHIVE_FORMAT_VERSION = 1
+
 export interface VaultManifest {
+  formatVersion: number
+  /** The exported vault's id: import points this vault's attachment links at the new vault (#499). */
+  vaultId: string
   name: string
   mergeable: boolean
   shares: ShareManifestEntry[]
@@ -50,6 +61,8 @@ export async function buildManifest(vaultId: string): Promise<VaultManifest | nu
   const emailById = new Map(userRows.map((u) => [u.id, u.email]))
   const teamNameById = new Map(teamRows.map((t) => [t.id, t.name]))
   return {
+    formatVersion: VAULT_ARCHIVE_FORMAT_VERSION,
+    vaultId: vault.id,
     name: vault.name,
     mergeable: vault.mergeable,
     shares: shares.map((s) => ({
@@ -61,7 +74,7 @@ export async function buildManifest(vaultId: string): Promise<VaultManifest | nu
   }
 }
 
-/** Adds a vault's OKF tree + manifest to a zip under the given prefix. */
+/** Adds a vault's OKF tree, history (revisions + trash, vault-history.ts) and manifest to a zip under the given prefix. */
 export async function addVaultToZip(zip: AdmZip, vaultId: string, prefix = ''): Promise<void> {
   const manifest = await buildManifest(vaultId)
   if (!manifest) return
@@ -84,6 +97,7 @@ export async function addVaultToZip(zip: AdmZip, vaultId: string, prefix = ''): 
       zip.addFile(`${prefix}assets/${asset.fileName}`, data.buffer)
     }
   }
+  await addHistoryToZip(zip, vaultId, prefix)
   zip.addFile(`${prefix}manifest.json`, Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'))
 }
 
