@@ -963,10 +963,37 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   access ("a copy outlives later revocation" — read access isn't
   enough). Sessionless, time-boxed **export links**
   (`EXPORT_LINK_TTL_HOURS`, default 24h) for sharing outside the app.
+  Entries: live notes as OKF `<path>.md`, `assets/<name>`,
+  `manifest.json` (`formatVersion` 1, `vaultId`, `name`, `mergeable`,
+  `shares`) and, per
+  note live or trashed, `.elara/history/<noteId>.json`
+  (`vault-history.ts`, #499): `path`, `createdAt`/`updatedAt`/`deletedAt`
+  (microsecond UTC text), a trashed note's `frontmatter` + `body`, and
+  `revisions` oldest first (`action`, `actorType`, `actorId`,
+  `actorEmail` for user actors, `frontmatter`, `body`, `createdAt`).
+  An export (download, export link or MCP `export_vault`) therefore
+  carries the vault's full history and trash, including the email of
+  every past revision author, also of users who have since lost access.
 - **Import** (`POST /api/import`): uploads a zip, creates a **new**
   vault with a **new** owner and new IDs, re-validates every note
   through the normal OKF write path, best-effort per note (an invalid
-  note is skipped and reported, not fatal). Shares listed in the
+  note is skipped and reported, not fatal). Refused with 400 before any
+  vault is created: a manifest `formatVersion` newer than the server's,
+  or a history file with a time that is not a real UTC instant. Assets
+  keep their archive file names (unsafe names, `.` and `..` are
+  dropped); `.md` files under `assets/` stay attachments, never notes. Trashed notes are recreated in
+  the trash, then live notes; each note with a history file gets the
+  archive's revisions (new ids, original order and times) and its
+  original created/updated/deleted times. A revision keeps its author
+  only when that author is the importer (user id or email, or an MCP
+  connection the importer owns); others keep the actor kind with no id,
+  so an archive cannot attribute edits to another account. Attachment
+  links `/api/vaults/<manifest vaultId>/assets/<name>` whose file came
+  with the archive are pointed at the new vault in bodies, frontmatter
+  strings, trash and revisions. Archives from before #499 (no
+  `.elara/`, no manifest `vaultId`) import live notes only, and links to
+  any vault id are rewritten when the file name is one of the archive's
+  assets. Shares listed in the
   archive's `manifest.json` are **never granted by default** (#621):
   without `?applyShares=true` nothing is looked up or granted and every
   manifest share comes back in `skippedShares` with reason
@@ -976,7 +1003,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `invalid_permission`, so never above the importer's own owner
   access); each grant notifies the grantee and logs
   `vault_share_created` (detail `source: 'import'`). The response is
-  `{ vaultId, imported, skipped, appliedShares, skippedShares }`, each
+  `{ vaultId, imported, trashed, skipped, appliedShares, skippedShares }`
+  (`imported` counts live notes, `trashed` notes recreated in the
+  trash), each
   share `{ granteeType, grantee, permission, reason? }`, skip reasons
   `not_requested`, `invalid_entry`, `invalid_permission`,
   `no_active_user`, `importer`, `no_team`, `ambiguous_team`,

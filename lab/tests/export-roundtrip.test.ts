@@ -512,8 +512,10 @@ const test: LabTest = {
 
     // Export vs source.
     const exportNames = restZip.map((e) => e.name).sort()
+    // History (revisions + trash, #499): one .elara/history/<noteId>.json per note, live or trashed.
     const expectedNames = [
       ...srcLive.map((r) => `${r.path}.md`),
+      ...srcRows.map((r) => `.elara/history/${r.id}.json`),
       ...srcAssets.map((a) => `assets/${a.fileName}`),
       'manifest.json',
     ].sort()
@@ -564,20 +566,30 @@ const test: LabTest = {
       ok: assetByteDiff.length === 0,
       severity: 'high',
     })
-    const trashInExport = srcTrash.filter((t) => exportNames.some((n) => n.includes(t.id) || n === `.trash/${t.id}.md`))
+    // Shape: NoteHistory (server/src/export/vault-history.ts).
+    const exportedHistory = new Map(
+      restZip
+        .filter((e) => e.name.startsWith('.elara/history/'))
+        .map((e) => [e.name.slice('.elara/history/'.length).replace(/\.json$/, ''), JSON.parse(dec.decode(e.data)) as { deletedAt: string | null; body?: string; revisions: unknown[] }]),
+    )
+    const trashInExport = srcTrash.filter((t) => {
+      const h = exportedHistory.get(t.id)
+      return h !== undefined && h.deletedAt !== null && h.body === t.body
+    })
     checks.push({
       name: 'trash travels with the export',
       expected: `${srcTrash.length} trashed notes represented`,
-      actual: `${trashInExport.length} represented (archive.ts:61 exports listNotes = live rows only)`,
+      actual: `${trashInExport.length} represented (deletedAt + body in .elara/history/<id>.json)`,
       ok: trashInExport.length === srcTrash.length,
       severity: 'medium',
     })
     const srcRevTotal = srcRows.reduce((n, r) => n + r.revisions, 0)
+    const exportedRevTotal = [...exportedHistory.values()].reduce((n, h) => n + h.revisions.length, 0)
     checks.push({
       name: 'revision history travels with the export',
       expected: `${srcRevTotal} revisions represented`,
-      actual: `0 (no revision data in the archive format: archive.ts:58-81)`,
-      ok: exportNames.some((n) => /revision|history/i.test(n)),
+      actual: `${exportedRevTotal} revisions in .elara/history/*.json`,
+      ok: exportedRevTotal === srcRevTotal,
       severity: 'medium',
     })
     const manifestEntry = restZip.find((e) => e.name === 'manifest.json')
@@ -698,7 +710,8 @@ const test: LabTest = {
         if (!a || !b) continue
         const d = jsonDiff(a.frontmatter, b.frontmatter)
         if (d.length) fmDiffs.push({ path: p, diff: d })
-        const at = firstByteDiff(a.body, b.body)
+        // Import points the source vault's attachment links at the new vault (#499).
+        const at = firstByteDiff(a.body.replaceAll(`/api/vaults/${V}/`, `/api/vaults/${imp.vaultId}/`), b.body)
         if (at >= 0) bodyDiffs.push({ path: p, firstDiffByte: at, srcLen: enc.encode(a.body).length, impLen: enc.encode(b.body).length })
         const la = srcLive.find((r) => r.path === p)!.links
         const lb = impLive.find((r) => r.path === p)!.links

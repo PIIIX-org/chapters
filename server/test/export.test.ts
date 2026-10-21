@@ -52,7 +52,7 @@ beforeAll(async () => {
       body: { type, name, body },
     })
   }
-  // One trashed note — must be excluded from exports.
+  // One trashed note — kept out of the OKF tree (it travels as history, #499).
   await app.inject({
     method: 'POST',
     url: `/api/vaults/${vaultId}/notes`,
@@ -69,7 +69,7 @@ beforeAll(async () => {
 afterAll(async () => app.close())
 
 describe('export', () => {
-  it('vault zip contains the OKF tree + manifest, trash excluded', async () => {
+  it('vault zip contains the OKF tree + manifest, trash outside the OKF tree', async () => {
     const res = await app.inject({
       method: 'GET',
       url: `/api/vaults/${vaultId}/export`,

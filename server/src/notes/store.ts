@@ -1588,19 +1588,30 @@ export async function saveAsset(
   originalFilename: string,
   buffer: Buffer,
 ): Promise<{ fileName: string; size: number; mimeType: string }> {
-  const fileName = sanitizeAssetFilename(originalFilename)
+  return writeAsset(vaultId, sanitizeAssetFilename(originalFilename), buffer)
+}
+
+/**
+ * Writes an asset under exactly `fileName`, replacing a file of that name.
+ * Callers pass a name that passed `isSafeAssetName` (vault import keeps the
+ * archive's names so note links keep resolving, #499).
+ */
+export async function writeAsset(
+  vaultId: string,
+  fileName: string,
+  buffer: Buffer,
+): Promise<{ fileName: string; size: number; mimeType: string }> {
   const targetDir = join(vaultDir(vaultId), 'assets')
   await mkdir(targetDir, { recursive: true })
-  const targetPath = join(targetDir, fileName)
-  await writeFile(targetPath, buffer)
+  await writeFile(join(targetDir, fileName), buffer)
   const ext = extname(fileName).toLowerCase()
   const mimeType = ASSET_MIME_TYPES[ext] ?? 'application/octet-stream'
   return { fileName, size: buffer.length, mimeType }
 }
 
-/** A bare file name inside a vault's `assets/` directory: no path parts, no traversal. */
+/** A bare file name inside a vault's `assets/` directory: no path parts, no traversal, not the directory itself. */
 export function isSafeAssetName(filename: string): boolean {
-  return Boolean(filename) && !filename.includes('..') && /^[a-zA-Z0-9._-]+$/.test(filename)
+  return Boolean(filename) && filename !== '.' && !filename.includes('..') && /^[a-zA-Z0-9._-]+$/.test(filename)
 }
 
 export async function readAsset(
