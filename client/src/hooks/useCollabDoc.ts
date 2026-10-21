@@ -52,6 +52,12 @@ export type CollabStatus =
    *  takes nothing more for it. What was typed stays on screen and in this
    *  browser; after a restore from the trash a reload brings it back. */
   | 'deleted'
+  /** The server's note store is not taking writes for a moment (ADR-003 §5.1,
+   *  reason `store-busy`: the server lost its database lock and paused
+   *  writes, or a lock timed out). Nothing is lost: the document and what was
+   *  typed stay here (and in this browser's copy), and the hook reconnects by
+   *  itself after a few seconds and sends it again. */
+  | 'paused'
 
 /** A person editing this note, or an agent (an MCP connection) that read or wrote it. */
 export type CollabPeer =
@@ -310,6 +316,8 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     let attemptFailed = false
     // The relay refused a change as too large; no reconnect until the body fits.
     let refused = false
+    // The server's store is busy (`store-busy`): reconnecting after RETRY_MS.
+    let paused = false
     // The relay's body size cap and frame limit, from the latest ticket (the
     // provider only exists once the first ticket is in).
     let maxNoteBytes = 0
@@ -571,6 +579,31 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
      * send the same change again, so stop until the person has cut the note
      * down; the document (and this browser's copy of it) keeps every keystroke.
      */
+    /**
+     * The server's store refused for a moment (`store-busy`, from a close or
+     * an authentication failure): not a revocation. Keep the document and
+     * the typing, stop this provider's own retries (a refused load leaves it
+     * detached anyway), and reconnect on a new provider after RETRY_MS with
+     * the same document, so what the relay never took is sent again.
+     */
+    const storeBusy = () => {
+      if (stopped || refused || cancelled) return
+      paused = true
+      handshake = false
+      socketOpen = false
+      setStatus('paused')
+      setPeers([])
+      provider?.disconnect()
+      settle()
+      clearTimeout(retry)
+      retry = setTimeout(() => {
+        if (cancelled || stopped || refused) return
+        paused = false
+        setStatus('connecting')
+        restart()
+      }, RETRY_MS)
+    }
+
     const refuse = () => {
       if (refused || stopped) return
       refused = true
@@ -663,7 +696,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
           }
         },
         onStatus: ({ status: socketStatus }) => {
-          if (stopped || refused) return
+          if (stopped || refused || paused) return
           if (socketStatus === WebSocketStatus.Connected) {
             everConnected = true
             socketOpen = true
@@ -679,22 +712,26 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
         },
         // `note-not-migrated`: the server's store migration has not processed this note; `reload-required`: the
         // server names documents differently from this bundle (ADR-003 §5.4); `note-deleted`: the note is in the
-        // trash or purged; anything else is a revocation.
+        // trash or purged; `store-busy`: the server's store is not taking writes for a moment (a refused document
+        // load, reconnect later); anything else is a revocation.
         onAuthenticationFailed: ({ reason }) =>
-          reason === 'note-not-migrated'
-            ? stop('not-migrated')
-            : reason === 'reload-required'
-              ? stop('reload-required')
-              : reason === 'note-deleted'
-                ? stop('deleted')
-                : kicked(),
+          reason === 'store-busy'
+            ? storeBusy()
+            : reason === 'note-not-migrated'
+              ? stop('not-migrated')
+              : reason === 'reload-required'
+                ? stop('reload-required')
+                : reason === 'note-deleted'
+                  ? stop('deleted')
+                  : kicked(),
         // The relay closes the document with reason `note-too-large` for a
         // change over the cap (server/src/sync/collab-server.ts), ws closes
         // the socket with 1009 for a frame over its transport limit, the
         // relay closes with `signed-out` when the session ended (#498), and
         // with `note-deleted` when the note is deleted or purged.
         onClose: ({ event }) => {
-          if (event.reason === 'signed-out') stop('signed-out')
+          if (event.reason === 'store-busy') storeBusy()
+          else if (event.reason === 'signed-out') stop('signed-out')
           else if (event.reason === 'note-deleted') stop('deleted')
           else if (event.reason === 'note-too-large' || event.code === 1009) refuse()
         },

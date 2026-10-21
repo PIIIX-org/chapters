@@ -20,8 +20,11 @@ Full decision + rationale: `docs/superpowers/specs/2026-07-17-tech-stack-decisio
 - **Server**: Fastify (HTTP API) + Hocuspocus (Yjs sync relay), one process.
 - **Database**: PostgreSQL — accounts, shares, sessions, audit/security
   logs, notifications, search + embedding indexes (pgvector, Postgres FTS).
-- **Note storage**: plain OKF markdown files on disk. The DB never holds
-  canonical note content.
+- **Note storage**: Postgres is the only authority for note content
+  (ADR-003, `decision/adr-003-authoritative-store`; reverses the 2026-07-17
+  decision that the DB never holds canonical content). Every server write
+  is one transaction; the OKF markdown files on disk (same paths) are a
+  projection written after commit and never read back.
 - **Embeddings**: local ONNX via Transformers.js (`bge-small-en-v1.5`
   default). Note content never leaves the instance.
 - **Graph analysis**: graphology (Louvain). Leiden was evaluated and
@@ -168,7 +171,7 @@ container and one Postgres **per customer** — it is satisfied by construction,
 and the upgrade path below is not needed for the hosted product. It still
 matters for a self-hoster who tries to run two replicas.
 
-Four subsystems hold state in process memory, not in Postgres or any shared
+Five subsystems hold state in process memory, not in Postgres or any shared
 store. None are broken for a single instance (the intended deployment target),
 but **every one silently misbehaves the moment a second instance runs against
 the same database**, whether for horizontal scale or just redundancy:
@@ -187,6 +190,11 @@ the same database**, whether for horizontal scale or just redundancy:
 - `repositories/scheduler.ts` — the git polling fallback (multiple
   instances would each independently poll and clone the same
   repositories on their own schedules).
+- `sync/collab-server.ts` — each relay sees only its own editors' live
+  documents. The note store itself stays consistent with two processes on
+  one database (every store invariant is a Postgres lock, and the file
+  projector serialises each path with an advisory lock), but editors on
+  different processes only see each other's typing after a reload.
 
 **Upgrade path, if this is ever needed**: Postgres `LISTEN`/`NOTIFY` or
 Redis pub/sub for the permission-event bus; the `jobs` table (already
@@ -195,4 +203,4 @@ used by the embedding and extraction queues since #494, claims with
 or Redis with atomic increment. None of this is built — don't assume
 it exists. Each site above already carries its own `ponytail:` comment
 naming this same upgrade path; this section exists so the constraint is
-visible in one place instead of four.
+visible in one place instead of five.

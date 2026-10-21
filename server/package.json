@@ -12,7 +12,8 @@
     "check-notes": "tsx src/scripts/check-notes.ts",
     "profile-graph": "tsx src/scripts/profile-graph.ts",
     "restore-backup": "tsx src/scripts/restore-backup.ts",
-    "migrate-store": "tsx src/scripts/migrate-store.ts"
+    "migrate-store": "tsx src/scripts/migrate-store.ts",
+    "store-export-legacy": "tsx src/scripts/store-export-legacy.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
