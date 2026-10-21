@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
+import { and, eq } from 'drizzle-orm'
+import { db } from '../src/db/client.js'
+import { repositoryFiles } from '../src/db/schema.js'
+import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -45,6 +49,32 @@ describe('agent/CLI push ingestion', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(res.json()).toEqual({ created: 1, updated: 0, deleted: 0, unchanged: 0 })
+  })
+
+  it('a push that lists one path twice is stored and extracted, once per file (#494)', async () => {
+    const { repoId, token } = await makeRepoWithToken()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/repositories/sync',
+      headers: { authorization: `Bearer ${token}` },
+      body: {
+        files: [
+          { path: 'a.ts', content: 'export const a = 1' },
+          { path: 'a.ts', content: 'export const a = 1' },
+          { path: 'b.ts', content: 'export const b = 2' },
+        ],
+        currentPaths: ['a.ts', 'b.ts'],
+      },
+    })
+    expect(res.statusCode).toBe(200)
+    await flushExtraction()
+    for (const path of ['a.ts', 'b.ts']) {
+      const [file] = await db
+        .select()
+        .from(repositoryFiles)
+        .where(and(eq(repositoryFiles.repositoryId, repoId), eq(repositoryFiles.path, path)))
+      expect(file?.embedding).not.toBeNull()
+    }
   })
 
   it('rejects a missing or revoked token', async () => {
