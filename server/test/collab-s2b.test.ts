@@ -11,9 +11,10 @@ import { db } from '../src/db/client.js'
 import { getLiveNote, renameNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
-import { runCollabBackfill } from '../src/sync/collab-backfill.js'
-import { planStoreMigration } from '../src/notes/migrate-store.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+// Imported per test (not at the top), so the rest of this file also runs against code from before S2b (fails-before).
+const backfill = () => import('../src/sync/collab-backfill.js')
+const dryRun = () => import('../src/notes/migrate-store.js')
 
 // ADR-003 S2b: collab documents are named by note id (`<vault>/~<noteId>`)
 // and their Yjs state lives in note_crdt + note_updates, written in the same
@@ -101,9 +102,10 @@ describe('document names (§5.4)', () => {
     const reasons: string[] = []
     const document = new Y.Doc()
     document.getText('body').insert(0, 'typed in an old tab ')
-    connect(`${vaultId}/${note.path}`, document, (reason) => reasons.push(reason))
-    await waitFor(() => reasons.length > 0)
-    expect(reasons[0]).toBe('reload-required')
+    const old = connect(`${vaultId}/${note.path}`, document, (reason) => reasons.push(reason))
+    // Before S2b the relay served path names: it synced and stored the old tab's text.
+    await waitFor(() => reasons.length > 0 || old.isSynced)
+    expect(reasons).toEqual(['reload-required'])
     expect(await rowBody(note.path)).toBe('Kept as it is.\n')
   })
 
@@ -215,7 +217,7 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
     await writeFile(bin, Y.encodeStateAsUpdate(tab))
     // An agent edit the bin never saw: bin text != row text, the S18 case.
     await writeThroughCollab(vaultId, note.path, { body: 'New body.\n' }, { type: 'user' })
-    const report = await runCollabBackfill()
+    const report = await (await backfill()).runCollabBackfill()
     expect(report.failed).toEqual([])
     expect(report.setAside.map((s) => s.noteId)).not.toContain(note.id)
     const marker = '@S18@'
@@ -233,7 +235,7 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
     const bin = join(config.dataDir, 'vaults', vaultId, '.crdt', `${note.path}.bin`)
     await mkdir(dirname(bin), { recursive: true })
     await writeFile(bin, Y.encodeStateAsUpdate(predecessor))
-    const report = await runCollabBackfill()
+    const report = await (await backfill()).runCollabBackfill()
     const aside = report.setAside.find((s) => s.noteId === note.id)
     expect(aside).toBeDefined()
     expect((await stat(aside!.movedTo)).isFile()).toBe(true)
@@ -262,9 +264,9 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
     const opened = await create('plan-opened', 'Opened.\n')
     ;(await open(opened.id)).provider.destroy()
     const notes = [row, revision, foreign, none, opened]
-    const plan = await planStoreMigration({ vaultId })
+    const plan = await (await dryRun()).planStoreMigration({ vaultId })
     expect(notes.map((n) => plan.notes.find((p) => p.noteId === n.id)?.collab)).toEqual(['attach', 'attach', 'set-aside', 'seed', 'has-state'])
-    const report = await runCollabBackfill()
+    const report = await (await backfill()).runCollabBackfill()
     expect(report.failed).toEqual([])
     const aside = new Set(report.setAside.map((s) => s.noteId))
     const states = (await db.execute(sql`
