@@ -303,7 +303,7 @@ describe('scheduled backup failures in the monitoring metrics (#705)', () => {
       block()
       await nextRun({ succeeded: 1, failed: 2, repeated: 2 })
     })
-  }, 30_000)
+  })
 
   it('counts a scheduled failure as new after an on-demand backup succeeded (the operator checked a fix)', async () => {
     await withScheduler(async ({ block, unblock, nextRun }) => {
@@ -315,5 +315,5 @@ describe('scheduled backup failures in the monitoring metrics (#705)', () => {
       block()
       await nextRun({ succeeded: 0, failed: 2, repeated: 0 })
     })
-  }, 30_000)
+  })
 })

@@ -94,5 +94,5 @@ describe('graceful shutdown during a write to an open note (§11 R5-1)', () => {
     const body = (await getLiveNote(vaultId, path))?.body ?? ''
     expect(body).toContain('Agent line.')
     expect(body.match(/Typed\. /g)).toHaveLength(1)
-  }, 20_000)
+  })
 })

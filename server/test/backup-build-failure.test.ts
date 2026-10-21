@@ -103,7 +103,7 @@ describe('a backup whose archive cannot be built (#771)', () => {
     } finally {
       stop()
     }
-  }, 30_000)
+  })
 
   it('answers POST /api/admin/backup/run with the safe error, records it and logs the cause', async () => {
     vi.spyOn(config.backup, 'localPath', 'get').mockReturnValue(testBackupDir)
