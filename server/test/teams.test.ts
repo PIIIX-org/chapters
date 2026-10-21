@@ -150,21 +150,16 @@ describe('GET /api/teams/:id/stats', () => {
   }
 
   /**
-   * `actorId`'s revisions of a note, as the stats query reads them (#852):
-   * `created_at` is clock_timestamp() at the revision insert (store-tx.ts
-   * insertRevision), not notes.updated_at, which is the write transaction's
-   * start on create and the app's clock on update, so a slow write puts the
-   * two any distance apart. `micros` orders revisions inside one millisecond.
+   * `actorId`'s revisions of a note as the stats read them (#852): the time
+   * stored on each (`created_at`, the DB clock at the insert) and the order
+   * they were recorded in (`ord`, #825).
    */
   async function revisionsOf(noteId: string, actorId: string) {
     const rows = await db
-      .select({
-        createdAt: noteRevisions.createdAt,
-        micros: sql`(extract(epoch from ${noteRevisions.createdAt}) * 1000000)::bigint`.mapWith(BigInt),
-      })
+      .select({ createdAt: noteRevisions.createdAt, ord: noteRevisions.ord })
       .from(noteRevisions)
       .where(and(eq(noteRevisions.noteId, noteId), eq(noteRevisions.actorId, actorId)))
-    return rows.map((r) => ({ createdAt: r.createdAt.toISOString(), micros: r.micros }))
+    return rows.map((r) => ({ createdAt: r.createdAt.toISOString(), ord: r.ord }))
   }
 
   it('counts distinct notes and vaults, using the latest edit as lastActivityAt', async () => {
@@ -180,6 +175,14 @@ describe('GET /api/teams/:id/stats', () => {
     const editRes = await updateNoteBody(memberCookie, vaultA.id, noteA.path, 'edited body')
     expect(editRes.statusCode).toBe(200)
     const noteB = await writeNote(memberCookie, vaultB.id, 'note-b')
+    // The DB clock can step back between two writes (#852: by seconds on
+    // the dockerized test Postgres), so `created_at` need not follow the
+    // order writes were recorded in. Date vault A's revisions after vault
+    // B's, as such a step does: vault B's is still the latest edit.
+    await db
+      .update(noteRevisions)
+      .set({ createdAt: sql`${noteRevisions.createdAt} + interval '1 hour'` })
+      .where(eq(noteRevisions.noteId, noteA.id))
 
     const res = await app.inject({
       method: 'GET',
@@ -191,12 +194,13 @@ describe('GET /api/teams/:id/stats', () => {
     expect(row.notesTouched).toBe(2)
     expect(row.vaultsTouched).toBe(2)
     expect(row.lastActivityAt).not.toBeNull()
-    // Must reflect the LATEST revision (vault B's write), not the earlier
-    // create-then-edit on vault A's note: exactly noteB's revision time.
+    // Must reflect the LATEST edit (vault B's write, recorded last), not the
+    // earlier create-then-edit on vault A's note, whatever the clock read:
+    // exactly the time stored on vault B's revision.
     const aRevisions = await revisionsOf(noteA.id, member.id)
     const [bRevision] = await revisionsOf(noteB.id, member.id)
     expect(aRevisions).toHaveLength(2)
-    for (const a of aRevisions) expect(a.micros).toBeLessThan(bRevision!.micros)
+    for (const a of aRevisions) expect(a.ord).toBeLessThan(bRevision!.ord)
     expect(new Date(row.lastActivityAt).toISOString()).toBe(bRevision!.createdAt)
   })
 
@@ -224,12 +228,12 @@ describe('GET /api/teams/:id/stats', () => {
     expect(row.notesTouched).toBe(2)
     expect(row.vaultsTouched).toBe(2)
     expect(row.lastActivityAt).not.toBeNull()
-    // The invisible (private-vault) write is strictly the latest of all; if
-    // it leaked in, lastActivityAt would be its revision time instead of
-    // the last visible write's (noteB).
+    // The invisible (private-vault) write is the latest of all; if it leaked
+    // in, lastActivityAt would be its revision's time instead of the last
+    // visible write's (noteB).
     const [bRevision] = await revisionsOf(noteB.id, member.id)
     const [privateRevision] = await revisionsOf(privateNote.id, member.id)
-    expect(privateRevision!.micros).toBeGreaterThan(bRevision!.micros)
+    expect(privateRevision!.ord).toBeGreaterThan(bRevision!.ord)
     expect(new Date(row.lastActivityAt).toISOString()).toBe(bRevision!.createdAt)
   })
 
