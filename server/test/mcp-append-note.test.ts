@@ -17,7 +17,8 @@ import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
 import { noteRevisions } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
-import { getLiveNote } from '../src/notes/store.js'
+import { createNote, getLiveNote, type Actor } from '../src/notes/store.js'
+import { requestedEdit, writeThroughCollab } from '../src/sync/crdt-write.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
@@ -34,6 +35,7 @@ let collab: CollabRelay
 let baseUrl: string
 let ownerCookie: string
 let ownerToken: string
+let ownerId: string
 let vaultId: string
 const agents: Agent[] = []
 const providers: HocuspocusProvider[] = []
@@ -106,6 +108,7 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
   collab = startCollabServer(app.server)
   const owner = await createActiveUser()
+  ownerId = owner.id
   ownerCookie = await loginCookie(app, owner.email)
   ownerToken = await loginToken(app, owner.email)
   const vault = await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie: ownerCookie }, body: { name: 'Atomic append' } })
@@ -184,9 +187,9 @@ describe('append_note (#478)', () => {
     const path = 'docs/guarded-log'
     const start = Array.from({ length: 40 }, (_, i) => `Distinct line ${i}: observation ${i * 37} about item ${i * 11 + 3}.`).join('\n') + '\n'
     await must(agents[0]!, 'create_note', { vaultId, path, frontmatter: { title: 'Guarded', status: 'draft' }, body: start })
-    await must(agents[0]!, 'append_note', { vaultId, path, text: 'more', frontmatter: { status: 'review' } })
+    await must(agents[0]!, 'append_note', { vaultId, path, text: 'more', frontmatter: { status: 'active' } })
     let row = (await getLiveNote(vaultId, path))!
-    expect(row.frontmatter).toMatchObject({ title: 'Guarded', status: 'review' })
+    expect(row.frontmatter).toMatchObject({ title: 'Guarded', status: 'active' })
     expect(row.body).toBe(`${start}more\n`)
 
     const doubled = await call(agents[0]!, 'append_note', { vaultId, path, text: start })
@@ -239,14 +242,33 @@ describe('upsert_note (#478)', () => {
     }
   }, 30_000)
 
+  it('a create that a writer outside the lock wins (create_note) falls back to editing that note', async () => {
+    const path = 'docs/lost-create'
+    const agent: Actor = { type: 'mcp', id: agents[6]!.id }
+    const row = await writeThroughCollab(vaultId, path, requestedEdit({ body: 'upserted\n' }), agent, {
+      create: async () => {
+        // create_note takes only the store's lock, so it can land between the exists-check and this create.
+        await createNote(vaultId, { path, body: 'created elsewhere\n' }, { type: 'user', id: ownerId })
+        return createNote(vaultId, { path, body: 'upserted\n' }, agent)
+      },
+    })
+    expect(row?.body).toBe('upserted\n')
+    // The relay's own store of the document (actor `collab`) may add a row too; the attributed ones are these.
+    const revs = (await revisions(row!.id)).filter((r) => r.actorType !== 'collab')
+    expect(revs.map((r) => [r.action, r.actorType, r.body])).toEqual([
+      ['create', 'user', 'created elsewhere\n'],
+      ['update', 'mcp', 'upserted\n'],
+    ])
+  })
+
   it('replaces the body of an existing note, merges frontmatter per key, and keeps a restore point', async () => {
     const path = 'docs/upsert-existing'
     await must(agents[4]!, 'create_note', { vaultId, path, frontmatter: { title: 'Kept', status: 'draft' }, body: 'old body\n' })
-    const r = await must<{ body: string; created: boolean }>(agents[5]!, 'upsert_note', { vaultId, path, body: 'new body\n', frontmatter: { status: 'final' } })
+    const r = await must<{ body: string; created: boolean }>(agents[5]!, 'upsert_note', { vaultId, path, body: 'new body\n', frontmatter: { status: 'stable' } })
     expect(r.created).toBe(false)
     const row = (await getLiveNote(vaultId, path))!
     expect(row.body).toBe('new body\n')
-    expect(row.frontmatter).toMatchObject({ title: 'Kept', status: 'final' })
+    expect(row.frontmatter).toMatchObject({ title: 'Kept', status: 'stable' })
     const revs = await revisions(row.id)
     expect(revs.some((rev) => rev.action === 'restore_point' && rev.actorId === agents[5]!.id && rev.body === 'old body\n')).toBe(true)
   })

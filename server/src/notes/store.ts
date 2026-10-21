@@ -41,6 +41,13 @@ export interface Actor {
 
 const SYSTEM_ACTOR: Actor = { type: 'collab' }
 
+/** createNote found a live note at the path (the unique index decided, #478). */
+export class NoteExistsError extends OkfValidationError {
+  constructor(path: string) {
+    super(`a note already exists at ${path}`)
+  }
+}
+
 /** The `note_revisions.action` of a write kept out of the note (#492, notes/growth-guard.ts). */
 export const QUARANTINE_ACTION = 'quarantine'
 
@@ -459,7 +466,7 @@ export async function createNote(
       row = inserted[0]!
     } catch (err) {
       if (isUniqueViolation(err)) {
-        throw new OkfValidationError(`a note already exists at ${resolved.fullPath}`)
+        throw new NoteExistsError(resolved.fullPath)
       }
       throw err
     }

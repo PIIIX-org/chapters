@@ -140,21 +140,6 @@
       "issue": 488
     },
     {
-      "test": "concurrency",
-      "check": "append-same N=10: lost updates",
-      "issue": 478
-    },
-    {
-      "test": "concurrency",
-      "check": "append-same N=20: lost updates",
-      "issue": 478
-    },
-    {
-      "test": "concurrency",
-      "check": "append-same N=5: lost updates",
-      "issue": 478
-    },
-    {
       "test": "crash-write",
       "match": "^kill \\S+: \\.crdt bin = file for every note written in the round$",
       "issue": 486,

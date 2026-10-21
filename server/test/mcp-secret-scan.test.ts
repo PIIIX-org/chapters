@@ -583,6 +583,8 @@ const writeSteps: Step[] = [
     args: () => ({ vaultId: fx.vaultId, path: 'docs/agent-made', body: 'Written by the agent.' }),
   },
   { tool: 'edit_note', args: () => ({ vaultId: fx.vaultId, path: 'docs/agent-made', body: 'Edited by the agent.' }) },
+  { tool: 'append_note', args: () => ({ vaultId: fx.vaultId, path: 'docs/agent-made', text: 'Appended by the agent.' }) },
+  { tool: 'upsert_note', args: () => ({ vaultId: fx.vaultId, path: 'docs/agent-upserted', body: 'Upserted by the agent.' }) },
   { tool: 'rename_note', args: () => ({ vaultId: fx.vaultId, from: 'docs/agent-made', toName: 'agent-renamed' }) },
   { tool: 'restore_note', args: () => ({ vaultId: fx.vaultId, noteId: fx.trashedNoteId }) },
   {
