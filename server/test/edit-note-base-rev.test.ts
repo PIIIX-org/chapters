@@ -526,6 +526,18 @@ describe('upsert_note and REST PUT merge a whole body from its base too (#865)',
     await waitFor(() => text.toString() === expected && liveBody(path) === expected)
   }, 20_000)
 
+  it('a note upsert_note created is its base: the next whole-body upsert keeps typing done since, without a read (#879 review)', async () => {
+    const path = 'docs/upsert-created'
+    const agent = await connect('edit-base-upsert-create')
+    const made = await must<{ created: boolean; rev: number; body: string }>('upsert_note', { vaultId, path, body: BODY }, agent)
+    expect(made.created).toBe(true)
+    const text = (await open(path)).document.getText('body')
+    await waitFor(() => text.toString() === BODY && liveBody(path) === BODY)
+    const typed = await typeAtEnd(path, text, ' v01 v0')
+    const r = await must<Record<string, unknown>>('upsert_note', { vaultId, path, body: `${BODY}AGENT-AFTER-CREATE\n` }, agent)
+    expect(r).toMatchObject({ created: false, status: 'merged', baseRev: made.rev, body: `${typed}\nAGENT-AFTER-CREATE\n` })
+  }, 20_000)
+
   it('upsert_note whose body rewrites the line the person typed in is not applied, and keeps a proposal', async () => {
     const path = 'docs/upsert-conflict'
     const text = await noteInTab(path)
