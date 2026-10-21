@@ -2057,11 +2057,14 @@ export async function compactCollabState(vaultId: string, noteId: string): Promi
  * is rebased, and every unfolded tail is folded, one transaction per note.
  * A failure is logged and counted; boot never stops for one note.
  * `onlyIds` (doctor --repair, #495): only those of these notes that need it.
+ * A note whose S2b backfill or roll-forward failed at this boot is left
+ * alone (collabNoteMigrated): its bin is merged at the next restart, and a
+ * rebase now would add the older release's change a second time then.
  */
 export async function foldPendingCollab(onlyIds?: readonly string[]): Promise<{ folded: number; failed: number }> {
   let folded = 0
   let failed = 0
-  const needing = await notesNeedingFold(db)
+  const needing = (await notesNeedingFold(db)).filter((id) => collabNoteMigrated(id))
   for (const noteId of onlyIds ? needing.filter((id) => onlyIds.includes(id)) : needing) {
     try {
       const [note] = await db.select({ vaultId: notes.vaultId, path: notes.path }).from(notes).where(and(eq(notes.id, noteId), isNull(notes.deletedAt)))

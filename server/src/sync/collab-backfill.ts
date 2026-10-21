@@ -226,8 +226,9 @@ async function attachBins(kind: CollabBackfillReport['kind']): Promise<CollabBac
       failpoint('migration.mid-batch')
     }
   }
-  // A note whose backfill failed takes no editor until a restart attaches its bin (relay: note-not-migrated).
-  if (kind === 'adr-003-collab-backfill') setCollabNotMigrated(report.failed.map((f) => f.noteId))
+  // A note whose backfill or roll-forward failed takes no editor and no write, and the boot fold leaves it alone,
+  // until a restart attaches or merges its bin (relay: note-not-migrated). `.crdt/` stays in place for that rerun.
+  setCollabNotMigrated(report.failed.map((f) => f.noteId))
   if (report.failed.length === 0 && report.waiting === 0) {
     if (kind === 'adr-003-collab-backfill') {
       await db.execute(sql`

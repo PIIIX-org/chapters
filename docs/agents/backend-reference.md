@@ -338,9 +338,13 @@ write materialise and refresh the cache.
 revision (with a diff to the row's text on top) and otherwise moved to
 `vaults/<id>/.migration/<date>/bins/` (`setAside[].reason`: `unknown-text`,
 `undecodable`); one transaction per note, so a rerun resumes. A note whose
-backfill failed is refused by the relay with `note-not-migrated` and never
-seeded until a restart attaches its bin (`setCollabNotMigrated`, store-tx.ts);
-otherwise a seed would make the rerun skip it and retire its bin. The
+backfill or roll-forward failed is gated until a restart attaches or merges
+its bin (`setCollabNotMigrated`, store-tx.ts): the relay refuses it with
+`note-not-migrated`, nothing seeds it, writes refuse it (`lockedNote`,
+`NoteNotMigratedError`, HTTP 503) and the boot fold skips it, and `.crdt/`
+stays in place. Otherwise a seed would make the rerun skip the bin, or a
+rebase would add the older release's row change to the state as new items
+and the rerun would merge the same typing again from the bin. The
 finish (no failure, no note waiting for S2a) sets the marker, renames each
 vault's `.crdt/` to `.crdt.pre-adr-003/` (kept for a code-only rollback) and
 writes `DATA_DIR/collab-migration-report-<time>.json`. Afterwards (roll-forward
@@ -350,7 +354,8 @@ after a code-only rollback), a `.crdt/` bin left by older code is merged into
 bin the old relay saved from the exported state); a bin older code seeded
 afresh from the file shares none and is set aside (`unrelated`), since merging
 it would double the note. `.crdt/` then moves to `.crdt.rollback-<time>/`, and
-what older code changed in the row reaches the state through the rebase.
+what older code changed in the row reaches the state through the rebase
+(for a merged bin both sides hold that change, so it lands once).
 Every boot then runs ADR §7 steps 4-5: merge rows changed outside the store
 (`notes.seq > folded_seq`), then fold every pending tail, each note in its
 own transaction (a failure sets `fold_error` to `boot fold failed: …`,

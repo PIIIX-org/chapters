@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { HocuspocusProvider } from '@hocuspocus/provider'
@@ -13,7 +13,7 @@ import { parseNote, serializeNote } from '../src/notes/okf.js'
 import { exportLegacyFiles } from '../src/notes/store-export.js'
 import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { flushProjections } from '../src/notes/projector.js'
-import { foldPendingCollab, getLiveNote, loadCollabState, purgeNote, softDeleteNote } from '../src/notes/store.js'
+import { foldPendingCollab, getLiveNote, loadCollabState, purgeNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { NoteNotMigratedError, collabNoteMigrated, setCollabNotMigrated } from '../src/notes/store-tx.js'
 import { bootCollab, collabMigrated, runCollabBackfill } from '../src/sync/collab-backfill.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
@@ -179,6 +179,41 @@ describe('roll-forward after a code-only rollback (§9)', () => {
     expect(text).toBe('Hello world.\nTyped while rolled back.\n')
     expect((await getLiveNote(vaultId, note.path))?.body).toBe(text)
     expect(backfill?.renamed.some((r) => r.includes('.crdt.rollback-'))).toBe(true)
+  })
+
+  it('a note whose roll-forward fails is left alone (no editor, no write, no rebase) until the next boot merges its bin, once', async () => {
+    // An instance that finished the S2b backfill, then ran an older release (code-only rollback).
+    await db.execute(sql`
+      INSERT INTO instance_state (id, collab_migrated_at) VALUES ('singleton', now()) ON CONFLICT (id) DO UPDATE SET collab_migrated_at = now()`)
+    const note = await create('rolled-back-fails', 'Hello.\n')
+    const { state } = await loadCollabState(vaultId, note.id)
+    // The old relay's bin, from the exported state, with a tab's typing; the old store wrote the row too.
+    const old = new Y.Doc()
+    Y.applyUpdate(old, state)
+    old.getText('body').insert(old.getText('body').length, 'Rolled back typing.\n')
+    await writeBin(note.path, Y.encodeStateAsUpdate(old))
+    await db.execute(sql`UPDATE notes SET body = ${'Hello.\nRolled back typing.\n'} WHERE id = ${note.id}`)
+    // The bin cannot be read at this boot.
+    await chmod(binFile(note.path), 0o000)
+    try {
+      const first = await bootCollab()
+      expect(first.backfill?.failed.map((f) => f.noteId)).toEqual([note.id])
+      // No rebase of the older release's row change into the CRDT state yet: the bin brings it at the next boot.
+      expect(await storedCrdtText(vaultId, note.path)).toBe('Hello.\n')
+      expect(collabNoteMigrated(note.id)).toBe(false)
+      await expect(updateNote(vaultId, note.path, { body: 'written meanwhile\n' })).rejects.toBeInstanceOf(NoteNotMigratedError)
+      await expect(loadCollabState(vaultId, note.id)).rejects.toBeInstanceOf(NoteNotMigratedError)
+    } finally {
+      await chmod(binFile(note.path), 0o644)
+    }
+    const second = await bootCollab()
+    expect(second.backfill?.failed).toEqual([])
+    expect(second.backfill?.merged).toBeGreaterThanOrEqual(1)
+    expect(collabNoteMigrated(note.id)).toBe(true)
+    const text = await storedCrdtText(vaultId, note.path)
+    expect(text).toBe('Hello.\nRolled back typing.\n')
+    expect(count(text, 'Rolled back typing.')).toBe(1)
+    expect((await getLiveNote(vaultId, note.path))?.body).toBe(text)
   })
 
   it('sets aside a bin with no history in common (old code seeded it from the file) instead of doubling the note', async () => {
