@@ -13,10 +13,12 @@
 // reconnects) through: typing, network blips, unmount/remount, offline edits,
 // MCP edit_note while connected / concurrent / while offline, logout+login,
 // graceful restart, SIGKILL, a SIGKILL timing sweep around the store
-// debounce, and a deterministic injection of the crash window the old relay
-// left open (note written, CRDT state not): the note's CRDT state is saved
-// in the database and put back behind a newer row (S18, S19). Check names
-// keep ".crdt" so the known-defects baseline still matches.
+// debounce, a database restore with a tab left open (S18, the documented
+// infrastructure backup and restore), and the CRDT state put back by SQL
+// behind a newer row (S18, S19): the state the old relay's crash window left
+// (note written, CRDT state not), which since S2b only a manual change of
+// `note_crdt`/`note_updates` leaves (#891). S19's check names keep ".crdt"
+// so the known-defects baseline still matches.
 //
 // After every step: body on disk (parsed by the app's own parseNote inside
 // the container), notes.body in Postgres, the note's CRDT state decoded from
@@ -25,7 +27,7 @@
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { CollabClient, Y, collabDocName } from '../lib/collab.ts'
 import { RestSession } from '../lib/rest.ts'
-import { appLogsSince, count, dbBody, dbNotes, dumpVault, genBody, restoreCrdtState, saveCrdtState, sha } from '../lib/datapath.ts'
+import { appLogsSince, backupInstance, count, dbBody, dbNotes, dumpVault, genBody, restoreCrdtState, restoreInstance, saveCrdtState, sha } from '../lib/datapath.ts'
 
 const SETTLE_MS = 3500 // COLLAB_DEBOUNCE_MS default 2000 (collab-server.ts:18) + margin
 
@@ -402,17 +404,72 @@ const test: LabTest = {
       sweep.push({ delayMs: d, killMs: Math.round(c.killMs), dup: rec.duplicated, onDisk: rec.counts[m]?.disk ?? 0, converged: rec.converged })
     }
 
-    // ------------------------------------------------------------ note 2: injected crash window
+    // ------------------------------------------------------------ note 2: a database restore with a tab left open
+    // The supported way to put a note's stored state back behind what a tab
+    // holds (#488): the infrastructure backup and restore of
+    // docs/self-hosting/backup.md §1-2. `pg_dump` reads one snapshot, so the
+    // row, its revisions and its CRDT state come back together; the tab
+    // typed after the backup and stays open through the downtime (its
+    // session is in the dump), so it reconnects with the same Y.Doc, holding
+    // items the restored server no longer has. Then a page reload joins.
+    const injection: Record<string, unknown>[] = []
+    const pR = 'dup/note-restore'
+    const baseR = mk('BASER')
+    markers.push(baseR)
+    const nR = { path: pR, id: await createNote(pR, `${baseR}\n\n${genBody(1500, 21)}\nend of base restore`) }
+    const R = new CollabClient(ctx.baseUrl, collabDocName(vault.id, nR.id), sess)
+    await R.connect()
+    await settle(R)
+    const backup = await backupInstance(vault.id)
+    const mR = await typeMarker(R, 'INJRESTORE')
+    await settle(R)
+    const storedBeforeRestore = count(await dbBody(ctx, nR.id), mR)
+    // The downtime drops the tab's socket; its provider would retry on its
+    // own. It is held down here until the restored state has been read, so
+    // that reading never races the tab's reconnect.
+    R.disconnect()
+    const restore = await restoreInstance(ctx.baseUrl, vault.id)
+    const restored = await dumpVault(vault.id, [pR])
+    const restoredCounts = {
+      disk: count(restored.notes.find((n) => n.path === pR)?.body ?? '', mR),
+      db: count(await dbBody(ctx, nR.id), mR),
+      crdt: count(restored.crdt.find((c) => c.path === pR)?.body ?? '', mR),
+    }
+    checks.push({
+      name: 'S18 backup restore: the restore took the note back to the backup (the marker typed after it was stored, then gone from disk, DB and .crdt)',
+      expected: 'stored 1 before the restore; disk 0, db 0, crdt 0 after it',
+      actual: `stored ${storedBeforeRestore}; ${JSON.stringify(restoredCounts)}`,
+      ok: storedBeforeRestore === 1 && restoredCounts.disk === 0 && restoredCounts.db === 0 && restoredCounts.crdt === 0,
+      severity: 'high',
+    })
+    const backAfterRestore = await R.reconnect(60_000)
+    await settle(R)
+    const F = new CollabClient(ctx.baseUrl, collabDocName(vault.id, nR.id), sess)
+    const okF = await F.connect()
+    await settle(F)
+    const recR = await snap(
+      'S18 backup restore, stale ydoc (tab kept open) + page reload',
+      nR,
+      { R, F },
+      { once: [mR, baseR] },
+      { backup, restore, storedBeforeRestore, restoredCounts, reconnected: backAfterRestore, reloadConnected: okF },
+    )
+    injection.push({ variant: 'backup restore, tab kept open', marker: mR, restoredCounts, after: recR.counts[mR], duplicated: recR.duplicated })
+    R.destroy()
+    F.destroy()
+
+    // ------------------------------------------------------------ note 2b: the CRDT state put back by SQL
     // The old relay wrote the note and only then its .crdt bin; a SIGKILL
-    // between the two left file = new, CRDT state = old. This reproduces that
-    // state deterministically: save the note's CRDT state, let one edit
-    // store, restart gracefully (doc unloaded), put the old state back.
+    // between the two left file = new, CRDT state = old. Since S2b the row and
+    // the CRDT state share a transaction, so only a manual change of
+    // note_crdt/note_updates leaves it (#891). Reproduced deterministically:
+    // save the note's CRDT state, let one edit store, restart gracefully (doc
+    // unloaded), put the old state back by SQL.
     const p2 = 'dup/note-two'
     const base2 = mk('BASE2')
     markers.push(base2)
     const body2 = `${base2}\n\n${genBody(1500, 22)}\nend of base 2`
     const n2 = { path: p2, id: await createNote(p2, body2) }
-    const injection: Record<string, unknown>[] = []
     for (const variant of ['fresh ydoc (page reload)', 'stale ydoc (tab kept open)'] as const) {
       const C = new CollabClient(ctx.baseUrl, collabDocName(vault.id, n2.id), sess)
       await C.connect()
@@ -429,17 +486,17 @@ const test: LabTest = {
       if (variant.startsWith('fresh')) C.ydoc = new Y.Doc()
       const ok = await C.connect()
       await settle(C)
-      const rec = await snap(`S18 injected stale .crdt, ${variant}`, n2, { C }, { once: [m, base2] }, { diskBefore, binBefore, reconnected: ok })
-      injection.push({ variant, marker: m, diskBefore, binBefore, after: rec.counts[m], duplicated: rec.duplicated })
+      const rec = await snap(`S18 CRDT state put back by SQL, ${variant}`, n2, { C }, { once: [m, base2] }, { diskBefore, binBefore, reconnected: ok })
+      injection.push({ variant: `SQL, ${variant}`, marker: m, diskBefore, binBefore, after: rec.counts[m], duplicated: rec.duplicated })
       C.destroy()
     }
 
     // ------------------------------------------------------------ note 3: a stale CRDT state is a lasting hazard
     // The old relay's load rewrote the body with NEW Yjs items but never
     // saved them, so a session that only reads never persisted that lineage.
-    // Chain after one crash-window leftover: a tab opens the note (fresh
-    // ydoc), stays idle, its network drops long enough for the doc to unload,
-    // it reconnects.
+    // Chain after one CRDT state put back by SQL (as in note 2b): a tab opens
+    // the note (fresh ydoc), stays idle, its network drops long enough for
+    // the doc to unload, it reconnects.
     const p3 = 'dup/note-three'
     const base3 = mk('BASE3')
     markers.push(base3)
@@ -472,10 +529,10 @@ const test: LabTest = {
     const dupSteps = steps.filter((s) => s.duplicated.length > 0)
     const divergedSteps = steps.filter((s) => !s.converged)
     const summary =
-      `${steps.length} steps on 2 notes with a real @hocuspocus/provider client (ticket auth, Y.Doc reuse like useCollabDoc.ts). ` +
+      `${steps.length} steps on 4 notes with a real @hocuspocus/provider client (ticket auth, Y.Doc reuse like useCollabDoc.ts). ` +
       `Duplication in ${dupSteps.length} step(s)${dupSteps.length ? `: ${dupSteps.map((s) => s.step).join(', ')}` : ''}. ` +
       `Disk/DB/.crdt/client divergence in ${divergedSteps.length} step(s)${divergedSteps.length ? `: ${divergedSteps.map((s) => s.step).join(', ')}` : ''}. ` +
-      `Injected stale-.crdt window: ${injection.map((i) => `${i.variant} -> ${JSON.stringify(i.after)}`).join('; ')}.`
+      `Stale stored state (restore, SQL): ${injection.map((i) => `${i.variant} -> ${JSON.stringify(i.after)}`).join('; ')}.`
     return { summary, checks, data: { vaultId: vault.id, steps, sweep, injection, collabErrors } }
   },
 }
