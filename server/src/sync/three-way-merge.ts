@@ -16,6 +16,11 @@ import { diffLines, type LineHunk } from './text-diff.js'
  * already holds the change made since its base) merge as one. The unit is a
  * whole line: two changes to one line overlap even when they touch different
  * words, so a merge never interleaves two rewrites of the same sentence.
+ *
+ * One exception (#408): at the end of the text, when `mine` only added whole
+ * lines after the base's last one (an agent appending to the body it read
+ * while a person types at the end), its lines go after what `theirs` has
+ * there; see appendedAtEnd.
  */
 
 /**
@@ -53,6 +58,30 @@ function sideLines(base: readonly string[], hunks: readonly SideHunk[], mine: bo
   return out
 }
 
+/**
+ * `theirs`' last lines followed by the lines `mine` appended, when both
+ * changed the end of the text and `mine` only added whole lines after the
+ * `base` lines there (ending the last one when it had no newline), else null.
+ * A line `theirs` left without a newline (a person typing) gets one before
+ * them; appended lines `theirs` already ends with (the same append sent again
+ * from the same base) are not added twice.
+ */
+function appendedAtEnd(base: string, theirs: readonly string[], mine: string): string[] | null {
+  if (!mine.startsWith(base)) return null
+  let added = mine.slice(base.length)
+  if (base !== '' && !base.endsWith('\n')) {
+    if (!added.startsWith('\n')) return null
+    added = added.slice(1)
+  }
+  const lines = added.match(/[^\n]*\n|[^\n]+$/g) ?? []
+  let held = Math.min(lines.length, theirs.length)
+  while (held > 0 && !lines.slice(0, held).every((line, i) => line === theirs[theirs.length - held + i])) held--
+  const out = [...theirs]
+  const last = out.at(-1)
+  if (held < lines.length && last !== undefined && !last.endsWith('\n')) out[out.length - 1] = `${last}\n`
+  return [...out, ...lines.slice(held)]
+}
+
 /** `mine` merged onto `theirs`, both made from `base` (see the top of this file). */
 export function mergeText(base: string, theirs: string, mine: string): TextMerge {
   const { lines: baseLines, hunks: theirHunks } = diffLines(base, theirs)
@@ -88,7 +117,12 @@ export function mergeText(base: string, theirs: string, mine: string): TextMerge
       concurrent.push(change)
     } else {
       lines = sideLines(baseLines, group, true, start, end)
-      if (group.some((hunk) => !hunk.mine) && lines.join('') !== theirLines.join('')) conflicts.push(change)
+      if (group.some((hunk) => !hunk.mine) && lines.join('') !== theirLines.join('')) {
+        const appended = end === baseLines.length ? appendedAtEnd(baseLines.slice(start, end).join(''), theirLines, lines.join('')) : null
+        if (appended) concurrent.push(change)
+        else conflicts.push(change)
+        lines = appended ?? lines
+      }
     }
     for (const line of lines) out.push(line)
     shift += theirLines.length - (end - start)
