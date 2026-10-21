@@ -186,5 +186,5 @@ describe('defaultBranch (addition 4)', () => {
     const pushRepo = await seedRepository(owner.id)
     const untouched = (await db.select().from(repositories).where(eq(repositories.id, pushRepo.id)))[0]
     expect(untouched!.defaultBranch).toBeNull()
-  }, 30000)
+  })
 })

@@ -286,7 +286,8 @@ describe('instance backup round trip (#409)', () => {
   // wipe it, restore the archive. In a hook, so a slow run fails here once,
   // not as one timed-out test and then every later test missing the fixture
   // or the archive (#862). Each test after the first needs only the restored
-  // instance, the fixture's ids and the archive.
+  // instance, the fixture's ids and the archive. Its own timeout: the same
+  // work took up to 1.4 s on CI and 17.2 s locally under heavy load.
   beforeAll(async () => {
     await wipeInstance()
     fixture = await buildFixture()
@@ -299,7 +300,7 @@ describe('instance backup round trip (#409)', () => {
     await wipeInstance()
     expect(await userCount()).toBe(0)
     await restoreBackup(archive)
-  })
+  }, 60_000)
 
   it('restores every entity class with its ids after a wipe', async () => {
     expect(Object.keys(sourceFiles)).toEqual(

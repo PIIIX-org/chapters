@@ -124,7 +124,7 @@ describe('real-time collaboration', () => {
       return raw.includes('PERSIST-MARKER') && raw.includes('collab')
     }, 8000)
     expect(raw).toContain('type: docs')
-  }, 10_000)
+  })
 
   it('read-only users cannot join the CRDT socket', async () => {
     let failed = false
@@ -315,7 +315,7 @@ describe('real-time collaboration', () => {
       headers: { cookie: ownerCookie },
     })
     expect(read.json()).toMatchObject({ frontmatter, body: `STORED ${body}` })
-  }, 10_000)
+  })
 
   // #391, ADR-003 §6: reads and writes use the row, never the file, so a
   // damaged file (e.g. #384's fence-less index) blocks nothing; the next

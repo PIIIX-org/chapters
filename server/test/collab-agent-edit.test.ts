@@ -122,7 +122,7 @@ describe('an agent edit reaching an open editor (#483)', () => {
     expect(editor.text.toString()).toBe('First line.\nAn agent line.\n')
     // What reached the editor: the agent's line, and nothing of the person's text.
     expect(editor.received).toEqual([[{ retain: typed.length }, { insert: '\nAn agent line.\n' }]])
-  }, 15_000)
+  })
 
   it('changes only what it changed: a fix above the caret moves the caret with its text', async () => {
     const path = await createNote('fix-above', 'A title\n\nThe agent fixes this colour.\n\nThe person types here.')
@@ -139,7 +139,7 @@ describe('an agent edit reaching an open editor (#483)', () => {
     editor.undo.undo()
     expect(editor.text.toString()).toBe('A title\n\nThe agent fixes this color.\n\nThe person types here.')
     expect(editor.received).toEqual([[{ retain: typed.indexOf('colour') + 4 }, { delete: 1 }]])
-  }, 15_000)
+  })
 
   it('never splits an emoji: the body arrives exactly as sent, on the editor and on disk', async () => {
     // 😀 and 😁 share their first UTF-16 unit, 🔀 and 🤀 their second: a change
@@ -154,5 +154,5 @@ describe('an agent edit reaching an open editor (#483)', () => {
 
     expect(editor.text.toString()).toBe(body)
     expect((await readNote(vaultId, path))?.body).toBe(body)
-  }, 15_000)
+  })
 })

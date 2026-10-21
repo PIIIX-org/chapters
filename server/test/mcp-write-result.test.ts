@@ -162,7 +162,7 @@ describe('read_note serves the live document (#474)', () => {
     const count = await revisionCount(path)
     expect((await must<{ rev: number }>('read_note', { vaultId, path })).rev).toBe(read.rev)
     expect(await revisionCount(path)).toBe(count)
-  }, 20_000)
+  })
 
   it('a read that cannot store the typing first (store busy) fails as a read, not a write', async () => {
     const path = 'docs/live-busy'
@@ -183,7 +183,7 @@ describe('read_note serves the live document (#474)', () => {
       held.release()
     }
     expect((await must<{ body: string }>('read_note', { vaultId, path })).body.startsWith('TYPED')).toBe(true)
-  }, 20_000)
+  })
 
   it('REST GET serves the live document too, with rev', async () => {
     const path = 'docs/live-rest'
@@ -196,7 +196,7 @@ describe('read_note serves the live document (#474)', () => {
     const res = await app.inject({ method: 'GET', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie } })
     expect(res.statusCode).toBe(200)
     expect(res.json()).toMatchObject({ body: typed, rev: await seqOf(path) })
-  }, 20_000)
+  })
 
   it('an agent that reads, then writes the whole body back, keeps the typing (#408)', async () => {
     const path = 'docs/live-write-back'
@@ -209,7 +209,7 @@ describe('read_note serves the live document (#474)', () => {
     const read = await must<{ body: string }>('read_note', { vaultId, path })
     await must('edit_note', { vaultId, path, body: `${read.body}Agent line.\n` })
     await waitFor(async () => (await getLiveNote(vaultId, path))!.body === 'Para TYPED one.\n\nPara two.\n\nPara three.\nAgent line.\n')
-  }, 20_000)
+  })
 })
 
 describe('write results (#477)', () => {
