@@ -164,7 +164,7 @@ describe('delete, purge and restore close and reopen the note (§5.5)', () => {
     await waitFor(() => again.provider.isSynced && again.text.length > 0)
     expect(again.text.toString()).toBe('Still here.\n')
     expect(again.refusals).toEqual([])
-  }, 20_000)
+  })
 
   it('purge refuses the note with note-deleted', async () => {
     const note = await create('purged-open', 'Going.\n')
@@ -190,7 +190,7 @@ describe('a crash around the relay store (#832)', () => {
     expect(count(text.toString(), marker)).toBe(1)
     expect(count(text.toString(), 'live note')).toBe(1)
     expect(count(await rowBody(note.path), marker)).toBe(1)
-  }, 30_000)
+  })
 
   it('a client that stays connected through a kill before the store committed does not double its typing', async () => {
     const note = await create('stays-before', 'live note\n')
@@ -241,7 +241,7 @@ describe('a renamed note open in two editors (#834, §5.5)', () => {
       expect(tab.text.toString()).toBe('Old tab. Shared text.\nAgent line.\n')
     }
     await waitFor(async () => (await rowBody('docs/renamed-typing-to')) === 'Old tab. Shared text.\nAgent line.\n')
-  }, 20_000)
+  })
 })
 
 describe('rebase of a row changed behind the store (§5.4)', () => {
@@ -260,7 +260,7 @@ describe('rebase of a row changed behind the store (§5.4)', () => {
     const [outOfBand] = (await db.execute(sql`
       SELECT count(*)::int AS n FROM note_revisions WHERE note_id = ${note.id} AND action = 'migration:backfill'`)) as unknown as Array<{ n: number }>
     expect(outOfBand!.n).toBe(1)
-  }, 30_000)
+  })
 
   it('keeps both sides of edits to different words of the same line, across a reconnect', async () => {
     const note = await create('same-line', 'alpha beta gamma\n')
@@ -280,7 +280,7 @@ describe('rebase of a row changed behind the store (§5.4)', () => {
     await waitFor(() => text.toString() === 'NEW alpha beta GAMMA\n')
     await waitFor(async () => (await rowBody(note.path)) === 'NEW alpha beta GAMMA\n')
     expect(count(text.toString(), 'NEW')).toBe(1)
-  }, 30_000)
+  })
 })
 
 describe('the cached stored state of an open document (§5.4 "Before S3")', () => {
@@ -335,7 +335,7 @@ describe('the cached stored state of an open document (§5.4 "Before S3")', () =
     await waitFor(async () => (await rowBody('guides/cached-store')) === 'One.\nTwo.\nThree.\nFour.\n')
     expect(materialised.cached).toBeGreaterThan(afterRefresh.cached)
     expect(await storedCrdtText(vaultId, 'guides/cached-store')).toBe('One.\nTwo.\nThree.\nFour.\n')
-  }, 20_000)
+  })
 })
 
 describe('the S2b backfill (§8 step 4, #488)', () => {
@@ -359,7 +359,7 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
     await waitFor(() => text.toString().includes('New body.'))
     expect(text.toString()).toBe(`New body.\n${marker}`)
     await waitFor(async () => (await rowBody(note.path)) === `New body.\n${marker}`)
-  }, 20_000)
+  })
 
   it('sets aside a bin that matches neither the row, the file nor any revision; the note is seeded instead', async () => {
     const note = await create('foreign-bin', 'Successor text.\n')
@@ -375,7 +375,7 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
     expect(await readFile(aside!.movedTo)).toEqual(Buffer.from(Y.encodeStateAsUpdate(predecessor)))
     const { text } = await open(note.id)
     expect(text.toString()).toBe('Successor text.\n')
-  }, 20_000)
+  })
 
   it('migrate-store --dry-run predicts what the backfill does with each bin', async () => {
     const bins = new Map<string, Uint8Array>()
@@ -446,5 +446,5 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
       'seed',
       'state',
     ])
-  }, 20_000)
+  })
 })
