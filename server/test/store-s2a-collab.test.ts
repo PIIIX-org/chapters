@@ -166,6 +166,19 @@ describe('live documents follow the note id recorded at load (§5.5, S2a)', () =
     await tab.type(0, 'Typed. ')
     await waitFor(async () => (await rowBody('docs/old-tab-moved')) === 'Typed. Line one.\nAgent line.')
   }, 15_000)
+
+  it('a write while the note is open at its old and new path keeps the old tab\'s unstored typing in the row and both tabs', async () => {
+    const path = await create('both-open', 'Shared.')
+    const oldTab = await open(path)
+    await renameNote(vaultId, path, 'both-open-moved', { type: 'mcp', id: randomUUID() })
+    const newTab = await open('docs/both-open-moved')
+    await oldTab.type(0, 'Old tab. ')
+    // Within the relay's debounce: the old tab's typing is not stored yet.
+    await writeThroughCollab(vaultId, 'docs/both-open-moved', { frontmatter: { status: 'active' }, frontmatterMode: 'merge' }, { type: 'mcp', id: randomUUID() })
+    expect(await rowBody('docs/both-open-moved')).toBe('Old tab. Shared.')
+    await waitFor(() => newTab.text.toString() === 'Old tab. Shared.')
+    expect(oldTab.text.toString()).toBe('Old tab. Shared.')
+  }, 15_000)
 })
 
 describe('a frontmatter-only edit while the editor holds a doubled note (#488, #492)', () => {

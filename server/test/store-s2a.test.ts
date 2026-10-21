@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { sql } from 'drizzle-orm'
@@ -14,6 +14,8 @@ import { flushProjections } from '../src/notes/projector.js'
 import { bootStore, reconcileStore, runStoreBackfill } from '../src/notes/store-reconcile.js'
 import { serializeNote } from '../src/notes/okf.js'
 import { checkNoteFiles } from '../src/notes/integrity.js'
+import { StoreBusyError } from '../src/notes/store-tx.js'
+import { metricsSnapshot } from '../src/monitoring/metrics.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
 import { crdtFile, saveCrdtState } from '../src/sync/crdt-store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
@@ -306,7 +308,7 @@ describe('backfill and boot reconciliation (§7 step 3, §8)', () => {
     await runStoreBackfill()
     for (const id of ids) {
       const rows = (await db.execute(sql`SELECT 1 FROM note_projections WHERE note_id = ${id}`)) as unknown as unknown[]
-      expect(rows.length).toBe(2)
+      expect(rows.length).toBe(3)
       await expectRevisionAtSeq(id)
     }
     await flushProjections()
@@ -339,12 +341,20 @@ describe('backfill and boot reconciliation (§7 step 3, §8)', () => {
       expect((await bootStore()).migrated).toBe(false)
       const rows = (await db.execute(sql`SELECT 1 FROM note_projections WHERE note_id = ${id}`)) as unknown as unknown[]
       expect(rows).toHaveLength(0)
+      // P5b: the server listens with the backfill unfinished; a write to that note is
+      // refused ("retry") instead of creating its projection rows and overwriting the file.
+      await expect(updateNote(vaultId, 'failed/once', { body: 'written meanwhile' }, agent())).rejects.toThrow(StoreBusyError)
+      // Notes the backfill did process are written as usual.
+      await createNote(vaultId, { type: 'failed', name: 'other', body: 'fine' })
+      expect(await updateNote(vaultId, 'failed/other', { body: 'fine too' }, agent())).not.toBeNull()
     } finally {
       await chmod(file('failed', 'once.md'), 0o644)
     }
     expect((await bootStore()).migrated).toBe(true)
     expect((await readNote(vaultId, 'failed/once'))!.body).toBe('file text')
     await expectRevisionAtSeq(id)
+    expect(await updateNote(vaultId, 'failed/once', { body: 'written after' }, agent())).not.toBeNull()
+    await flushProjections()
   })
 
   it('backfill file-wins replaces the links and queues an embedding of the file text', async () => {
@@ -367,6 +377,27 @@ describe('backfill and boot reconciliation (§7 step 3, §8)', () => {
 })
 
 describe('purge (§5.5)', () => {
+  it('a file the projector cannot write fails as a `projection` job: counted and reported for the monitor (#705)', async () => {
+    const note = await createNote(vaultId, { type: 'pfail', name: 'blocked', body: 'v1' })
+    await flushProjections()
+    const before = metricsSnapshot().jobs.projection
+    // A non-empty directory where the file goes: the projector's rename fails.
+    await rm(file('pfail', 'blocked.md'))
+    await mkdir(file('pfail', 'blocked.md', 'occupant'), { recursive: true })
+    try {
+      expect(await updateNote(vaultId, 'pfail/blocked', { body: 'v2' }, agent())).not.toBeNull()
+      await flushProjections()
+      const after = metricsSnapshot()
+      expect(after.jobs.projection.failed).toBe(before.failed + 1)
+      expect(after.errors.at(-1)).toMatchObject({ type: 'job', job: 'projection', subjectId: note.id })
+    } finally {
+      await rm(file('pfail', 'blocked.md'), { recursive: true, force: true })
+    }
+    await db.execute(sql`UPDATE note_projections SET lease_until = NULL WHERE note_id = ${note.id}`)
+    await flushProjections()
+    expect(await readFile(file('pfail', 'blocked.md'), 'utf8')).toContain('v2')
+  })
+
   it('a deleted then purged note leaves its folder index.md', async () => {
     await createNote(vaultId, { type: 'pf', name: 'keep', body: '' })
     const gone = await createNote(vaultId, { type: 'pf', name: 'gone', body: '' })

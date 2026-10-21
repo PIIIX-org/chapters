@@ -93,9 +93,28 @@ export function toStored(row: NoteRow & { seq: string | number; frontmatterSrc: 
   return { ...row, seq: Number(row.seq) }
 }
 
+/**
+ * Set by boot (store-reconcile.ts bootStore) while the S2a backfill has not
+ * finished: a note the backfill could not process yet is refused for writes
+ * (StoreBusyError, "retry"), so its file is never overwritten before the
+ * backfill lets it win (Q5).
+ */
+let migrationPending = false
+
+export function setStoreMigrationPending(pending: boolean): void {
+  migrationPending = pending
+}
+
+/** `note_projections.projection` of the per-note backfill marker: the backfill processed this note (or it needed none). */
+export const BACKFILL_MARKER = 'backfill'
+
 /** The note row `id`, locked FOR UPDATE; null when it does not exist. */
 export async function lockedNote(tx: Tx, id: string): Promise<StoredNote | null> {
   const [row] = await tx.select(storedColumns).from(notes).where(eq(notes.id, id)).for('update')
+  if (row && migrationPending) {
+    const done = await tx.execute(sql`SELECT 1 FROM note_projections WHERE note_id = ${id} AND projection = ${BACKFILL_MARKER}`)
+    if ((done as unknown as unknown[]).length === 0) throw new StoreBusyError('this note is not migrated to the store yet')
+  }
   return row ? toStored(row) : null
 }
 

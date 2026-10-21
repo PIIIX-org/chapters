@@ -52,11 +52,6 @@
     },
     {
       "test": "browser",
-      "check": "lost typing is recoverable from note history (note_revisions)",
-      "issue": 408
-    },
-    {
-      "test": "browser",
       "check": "no page errors in the browser console",
       "issue": 617
     },

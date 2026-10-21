@@ -12,8 +12,16 @@ import { createNote, renameNote } from '../src/notes/store.js'
 import { flushProjections, renderNoteFile, sweepOrphanFiles } from '../src/notes/projector.js'
 import { bootStore } from '../src/notes/store-reconcile.js'
 import { MaintenanceInProgressError, holdInstanceLock } from '../src/notes/maintenance-lock.js'
-import { exportLegacyFiles } from '../src/notes/store-export.js'
+import { BackfillPendingError, exportLegacyFiles } from '../src/notes/store-export.js'
 import { createActiveUser, loginCookie } from './helpers.js'
+
+/** The `backfill` marker rows of the vault's notes: never a projection, never reset or rendered. */
+async function backfillMarkers(vault: string): Promise<string> {
+  const rows = (await db.execute(sql`
+    SELECT p.note_id, p.target_seq, p.applied_seq, p.index_version FROM note_projections p JOIN notes n ON n.id = p.note_id
+    WHERE n.vault_id = ${vault} AND p.projection = 'backfill' ORDER BY p.note_id`)) as unknown as unknown[]
+  return JSON.stringify(rows)
+}
 
 // ADR-003 S2a-2: boot step 7 (verify every file projection after an unclean
 // or unknown shutdown), boot step 9 (orphan sweep to .orphans/) and the
@@ -68,7 +76,11 @@ describe('boot step 7: verify after an unclean shutdown (§7)', () => {
     const before = await readFile(file('docs/intact.md'))
     expect((await bootStore({ lastShutdown: 'graceful' })).verified).toBe(0)
     expect(await readFile(file('docs/torn.md'), 'utf8')).toBe('')
+    const markers = await backfillMarkers(vaultId)
+    expect(markers).not.toBe('[]')
     const boot = await bootStore({ lastShutdown: 'unclean' })
+    // The check covers file and dir_index projections only, never the backfill marker.
+    expect(await backfillMarkers(vaultId)).toBe(markers)
     expect(boot.verified).toBeGreaterThanOrEqual(2)
     expect(await readFile(file('docs/torn.md'), 'utf8')).toBe(await rendered(torn.id))
     expect(await conflictCopiesOf('torn')).toHaveLength(1)
@@ -106,6 +118,24 @@ describe('boot step 9: orphan sweep (§7)', () => {
 })
 
 describe('store-export-legacy (§9)', () => {
+  it('is refused while the S2a backfill has not finished, and leaves the backfill markers alone', async () => {
+    const [state] = (await db.execute(sql`SELECT store_migrated_at FROM instance_state WHERE id = 'singleton'`)) as unknown as Array<{
+      store_migrated_at: string | null
+    }>
+    await db.execute(sql`UPDATE instance_state SET store_migrated_at = NULL WHERE id = 'singleton'`)
+    try {
+      await expect(exportLegacyFiles()).rejects.toBeInstanceOf(BackfillPendingError)
+    } finally {
+      await db.execute(sql`UPDATE instance_state SET store_migrated_at = ${state?.store_migrated_at ?? new Date().toISOString()} WHERE id = 'singleton'`)
+    }
+    await createNote(vaultId, { type: 'docs', name: 'export-marker', body: 'x' })
+    const markers = await backfillMarkers(vaultId)
+    const report = await exportLegacyFiles()
+    expect(report.ok).toBe(true)
+    expect(report.pending.every((p) => p.projection !== 'backfill')).toBe(true)
+    expect(await backfillMarkers(vaultId)).toBe(markers)
+  })
+
   it('is refused while a server or writing CLI holds the shared lock', async () => {
     const server = await holdInstanceLock('shared')
     try {

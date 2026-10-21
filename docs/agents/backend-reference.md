@@ -261,10 +261,13 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
 - **Instance backups** read note content from the snapshot rows (rendered
   with `frontmatter_src`), never from files (ADR §8 "#776 coordination").
 - **Code-only rollback**: `store-export-legacy` (`notes/store-export.ts`)
-  with no server running: exclusive lock, reconciliation, every pending
-  `file`/`dir_index` projection and store job rendered synchronously, a
-  report `DATA_DIR/store-export-legacy-<utc>.json`, exit 0 only when
-  nothing is pending. Roll-forward is the boot above. Operator procedure:
+  with no server running: exclusive lock; refused while the backfill has
+  failures (`store_migrated_at` unset: those notes' files must still win);
+  reconciliation; every pending `file`/`dir_index` projection and store
+  job rendered synchronously (the per-note `backfill` marker rows are not
+  projections and are left alone); a report
+  `DATA_DIR/store-export-legacy-<utc>.json`; exit 0 only when nothing is
+  pending. Roll-forward is the boot above. Operator procedure:
   `docs/self-hosting/backup.md` §5.
 - **Failpoints** (`failpoints.ts`): `ELARA_FAILPOINTS=<name>[,…]` SIGKILLs
   the process at that store boundary; inert when unset. The lab's

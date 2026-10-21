@@ -19,7 +19,14 @@ import { orderKeys, sameContent } from './frontmatter-order.js'
 import { parseNote, type OkfNote } from './okf.js'
 import { PROJECTION_VERSIONS, flushProjections, noteFileRel, renderNoteFile, sha256, verifyAllProjections } from './projector.js'
 import type { ShutdownKind } from '../lifecycle.js'
-import { enqueueEmbeddingTx, replaceLinks, storeTransaction, type Tx } from './store-tx.js'
+import {
+  BACKFILL_MARKER,
+  enqueueEmbeddingTx,
+  replaceLinks,
+  setStoreMigrationPending,
+  storeTransaction,
+  type Tx,
+} from './store-tx.js'
 
 const BATCH = 100
 
@@ -114,7 +121,7 @@ export async function reconcileStore(): Promise<Reconciled> {
     RETURNING note_id`)) as unknown as unknown[]
   const raised = (await db.execute(sql`
     UPDATE note_projections p SET target_seq = n.seq, attempts = 0, updated_at = now()
-    FROM notes n WHERE p.note_id = n.id AND p.target_seq < n.seq
+    FROM notes n WHERE p.note_id = n.id AND p.target_seq < n.seq AND p.projection IN ('file', 'dir_index')
     RETURNING p.note_id`)) as unknown as unknown[]
   // Version bumps (§7 boot step 8): a renderer that changed re-renders its projections.
   for (const [projection, version] of Object.entries(PROJECTION_VERSIONS)) {
@@ -162,11 +169,16 @@ export async function bootStore(
   await db.execute(sql`UPDATE note_projections SET lease_until = NULL WHERE lease_until IS NOT NULL`)
   if (!(await storeMigrated())) {
     await runStoreBackfill()
-    if (!(await storeMigrated())) return { migrated: false, reconciled: null, verified: 0 }
+    if (!(await storeMigrated())) {
+      // Notes the backfill could not process are refused for writes until it can (Q5).
+      setStoreMigrationPending(true)
+      return { migrated: false, reconciled: null, verified: 0 }
+    }
   } else {
     const removed = await sweepTempFiles()
     if (removed > 0) console.log(`removed ${removed} orphan temp file(s)`)
   }
+  setStoreMigrationPending(false)
   const reconciled = await reconcileStore()
   const verified = options.lastShutdown && options.lastShutdown !== 'graceful' ? await verifyAllProjections() : 0
   await flushProjections()
@@ -246,7 +258,9 @@ export async function runStoreBackfill(): Promise<BackfillReport> {
 }
 
 async function backfillNote(tx: Tx, id: string, report: BackfillReport, date: string): Promise<boolean> {
-  const [done] = (await tx.execute(sql`SELECT 1 FROM note_projections WHERE note_id = ${id} LIMIT 1`)) as unknown as unknown[]
+  const [done] = (await tx.execute(
+    sql`SELECT 1 FROM note_projections WHERE note_id = ${id} AND projection = ${BACKFILL_MARKER}`,
+  )) as unknown as unknown[]
   if (done) return false
   const [row] = (await tx.execute(sql`
     SELECT id, vault_id, path, deleted_at, seq, frontmatter, frontmatter_src, body FROM notes WHERE id = ${id} FOR UPDATE`)) as unknown as Row[]
@@ -321,10 +335,13 @@ async function backfillNote(tx: Tx, id: string, report: BackfillReport, date: st
       ON CONFLICT (vault_id, path) DO UPDATE SET owner_kind = EXCLUDED.owner_kind, owner_id = EXCLUDED.owner_id,
         applied_hash = EXCLUDED.applied_hash, applied_seq = EXCLUDED.applied_seq, written_at = now()`)
   } else report.projection.pending++
+  // The per-note done marker, in this transaction: a later write (which raises
+  // the file and dir_index rows) never makes a rerun skip a note it did not process.
   await tx.execute(sql`
     INSERT INTO note_projections (note_id, projection, target_seq, applied_seq, index_version)
     VALUES (${id}, 'file', ${seq}, ${fileApplied}, ${fileApplied ? PROJECTION_VERSIONS.file : 0}),
-           (${id}, 'dir_index', ${seq}, 0, 0)
+           (${id}, 'dir_index', ${seq}, 0, 0),
+           (${id}, ${BACKFILL_MARKER}, ${seq}, ${seq}, 0)
     ON CONFLICT DO NOTHING`)
   return true
 }

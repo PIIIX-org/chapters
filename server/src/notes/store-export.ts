@@ -14,6 +14,13 @@
  * the old image starts. `.crdt/` needs nothing in S2a: the S2a relay kept the
  * bins current by path.
  *
+ * It refuses to run while the S2a backfill has not finished
+ * (`store_migrated_at` unset): the notes it could not process have no
+ * `backfill` marker and their files must still win (Q5), so rendering rows
+ * over them would lose that. The old image needs nothing then: S2a has not
+ * written those notes. Only `file` and `dir_index` projections are rendered;
+ * the `backfill` marker rows are not projections and are left alone.
+ *
  * Writes `DATA_DIR/store-export-legacy-<utc>.json` and returns the report;
  * `ok` is false when a projection or store job is still pending (its last
  * error is listed), and the rollback must not go ahead then.
@@ -25,7 +32,14 @@ import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { holdInstanceLock } from './maintenance-lock.js'
 import { STORE_JOBS, conflictCopies, flushProjections } from './projector.js'
-import { reconcileStore } from './store-reconcile.js'
+import { reconcileStore, storeMigrated } from './store-reconcile.js'
+
+/** The S2a backfill has failures: the export would overwrite files that must win. */
+export class BackfillPendingError extends Error {
+  constructor() {
+    super('the S2a store backfill has not finished (see the migration report): start the new image until it does, or restore the pre-upgrade backup')
+  }
+}
 
 export interface LegacyExportReport {
   kind: 'adr-003-store-export-legacy'
@@ -48,6 +62,7 @@ export async function exportLegacyFiles(): Promise<LegacyExportReport> {
   const startedAt = new Date().toISOString()
   const conflictsBefore = conflictCopies.length
   try {
+    if (!(await storeMigrated())) throw new BackfillPendingError()
     const reconciled = await reconcileStore()
     // Failed projections back off; the export retries them now.
     await db.execute(sql`
