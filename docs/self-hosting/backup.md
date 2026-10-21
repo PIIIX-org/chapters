@@ -173,7 +173,7 @@ docker compose exec app pnpm doctor --report        # the same as JSON
 docker compose exec app pnpm doctor --repair        # queue the safe repairs, then run it again
 ```
 
-It only reads unless you pass `--repair`, and `--repair` never changes a note: it asks the server to write a note's file or a folder's `index.md` again (a file Elara did not write is copied to `.conflicts/` first), to rebuild a note's links, or to compute its embedding again. Run the doctor again after a minute to see them done. Anything it cannot repair (for example `revision-missing` or a `crdt-*` class) is a bug: open an issue with the report. Run it while the instance is quiet: an edit in progress can show up for a moment.
+It only reads unless you pass `--repair`. `--repair` asks the server to write a note's file or a folder's `index.md` again (a file Elara did not write is copied to `.conflicts/` first), to rebuild a note's links, or to compute its embedding again. It changes a note's text in one case only: editor typing that Elara acknowledged but did not save into the note (`crdt-tail-stale`, `crdt-fold-error`) is saved now, as the next restart would do. Run the doctor again after a minute to see them done. Anything it cannot repair (for example `revision-missing` or a `crdt-*` class) is a bug: open an issue with the report. Run it while the instance is quiet: an edit in progress can show up for a moment.
 
 ### Last resort: rebuild notes from the files
 

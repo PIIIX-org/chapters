@@ -18,6 +18,7 @@ import { parseNote, serializeNote, type Frontmatter } from '../src/notes/okf.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { createNote, noteFile, softDeleteNote, vaultDir } from '../src/notes/store.js'
 import { flushEmbeddings, kickEmbeddings } from '../src/search/embedding-queue.js'
+import { seedDocument } from '../src/sync/note-crdt.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // ADR-003 S6 (#495): the doctor compares file, row, revision, CRDT, FTS,
@@ -42,13 +43,21 @@ const NAMES = [
   'misrevised',
   'binned',
   'crdt',
+  'crdtowned',
+  'folding',
   'fts',
   'unvectored',
   'misvectored',
   'unlinked',
 ]
 
+let collabMigratedBefore: string | null = null
+
 beforeAll(async () => {
+  const [state] = (await db.execute(sql`SELECT collab_migrated_at FROM instance_state WHERE id = 'singleton'`)) as unknown as Array<{
+    collab_migrated_at: string | null
+  }>
+  collabMigratedBefore = state?.collab_migrated_at ?? null
   app = await buildApp()
   await app.ready()
   const owner = await createActiveUser()
@@ -67,6 +76,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  await db.execute(sql`UPDATE instance_state SET collab_migrated_at = ${collabMigratedBefore} WHERE id = 'singleton'`)
   await flushProjections()
   await app.close()
 })
@@ -100,6 +110,12 @@ async function expectRepaired(name: string, cls: DoctorClass, conflictCopy = fal
   expect(classesOf(await doctor())).toEqual(conflictCopy ? ['conflict-copy'] : [])
   await rm(join(vaultDir(vaultId), '.conflicts'), { recursive: true, force: true })
   expect(await noteState(name)).toEqual(before)
+}
+
+async function setCollabMigrated(done: boolean): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO instance_state (id, collab_migrated_at) VALUES ('singleton', ${done ? sql`now()` : sql`NULL`})
+    ON CONFLICT (id) DO UPDATE SET collab_migrated_at = EXCLUDED.collab_migrated_at`)
 }
 
 function docBytes(body: string, frontmatter: Record<string, unknown>): Uint8Array {
@@ -234,7 +250,8 @@ describe('doctor', () => {
     expect((await doctor()).problems).toEqual([])
   })
 
-  it('crdt-bin-differs, crdt-bin-undecodable and crdt-bin-orphan', async () => {
+  it('crdt-bin-differs, crdt-bin-undecodable and crdt-bin-orphan, while the S2b collab backfill has not finished', async () => {
+    await setCollabMigrated(false)
     const { frontmatter } = await noteState('binned')
     await writeVaultFile('.crdt/checks/binned.bin', docBytes('typed in the editor', frontmatter as Record<string, unknown>))
     await writeVaultFile('.crdt/checks/healthy.bin', new Uint8Array([255, 255, 255, 255, 255, 255, 255]))
@@ -254,6 +271,63 @@ describe('doctor', () => {
     expect((await doctor()).problems).toEqual([])
     expect((await doctor()).checked.bins).toBe(1)
     await rm(join(vaultDir(vaultId), '.crdt'), { recursive: true })
+  })
+
+  it('a bin S2b no longer reads is not a problem: its note has note_crdt state, or the collab backfill finished', async () => {
+    const row = await noteState('crdtowned')
+    await db.execute(sql`
+      INSERT INTO note_crdt (note_id, snapshot, folded_seq)
+      VALUES (${ids.crdtowned}, ${Buffer.from(Y.encodeStateAsUpdate(seedDocument(ids.crdtowned!, { frontmatter: row.frontmatter as Record<string, unknown>, body: row.body })))}, ${row.seq})`)
+    await writeVaultFile('.crdt/checks/crdtowned.bin', docBytes('an old path-named state', {}))
+    await writeVaultFile('.crdt/checks/binned.bin', docBytes('typed before S2b', {}))
+    await setCollabMigrated(false)
+    // Before the backfill finishes: only the bin of the note without note_crdt state is still to be read.
+    const before = await doctor()
+    expect(before.problems.map((p) => [p.class, p.path])).toEqual([['crdt-bin-differs', '.crdt/checks/binned.bin']])
+    expect(before.checked.bins).toBe(1)
+    // After it: no bin is read again; a rollback's bins are merged by the next boot.
+    await setCollabMigrated(true)
+    const after = await doctor()
+    expect(after.problems).toEqual([])
+    expect(after.pending.map((p) => [p.kind, p.path])).toEqual([
+      ['crdt-bin', '.crdt/checks/binned.bin'],
+      ['crdt-bin', '.crdt/checks/crdtowned.bin'],
+    ])
+    await rm(join(vaultDir(vaultId), '.crdt'), { recursive: true })
+    await db.execute(sql`DELETE FROM note_crdt WHERE note_id = ${ids.crdtowned}`)
+  })
+
+  it('crdt-tail-stale and crdt-fold-error: acknowledged typing left unfolded; --repair folds it into the row as boot does', async () => {
+    const row = await noteState('folding')
+    const seed = seedDocument(ids.folding!, { frontmatter: row.frontmatter as Record<string, unknown>, body: row.body })
+    await db.execute(sql`
+      INSERT INTO note_crdt (note_id, snapshot, folded_seq) VALUES (${ids.folding}, ${Buffer.from(Y.encodeStateAsUpdate(seed))}, ${row.seq})`)
+    const typed = new Y.Doc()
+    Y.applyUpdate(typed, Y.encodeStateAsUpdate(seed))
+    typed.getText('body').insert(row.body.length, ' and typed in the editor')
+    const update = Y.encodeStateAsUpdate(typed, Y.encodeStateVector(seed))
+    await db.execute(sql`INSERT INTO note_updates (note_id, update, actor_type) VALUES (${ids.folding}, ${Buffer.from(update)}, 'collab')`)
+    // Fresh typing is work in flight.
+    const fresh = await doctor()
+    expect(fresh.problems).toEqual([])
+    expect(fresh.pending).toEqual([expect.objectContaining({ kind: 'crdt-tail', path: 'checks/folding' })])
+    // Left unfolded past STALE_TAIL_MINUTES, with a fold error: problems, repairable.
+    await db.execute(sql`UPDATE note_updates SET created_at = now() - interval '1 hour' WHERE note_id = ${ids.folding}`)
+    await db.execute(sql`UPDATE note_crdt SET fold_error = 'boot fold failed: Error: test' WHERE note_id = ${ids.folding}`)
+    expect(classesOf(await doctor())).toEqual(['crdt-fold-error', 'crdt-tail-stale'])
+    const repaired = await doctor(true)
+    expect(repaired.problems.map((p) => [p.class, p.repaired])).toEqual([
+      ['crdt-fold-error', true],
+      ['crdt-tail-stale', true],
+    ])
+    expect((await noteState('folding')).body).toBe(`${row.body} and typed in the editor`)
+    await flushProjections()
+    kickEmbeddings()
+    await flushEmbeddings()
+    expect((await doctor()).problems).toEqual([])
+    seed.destroy()
+    typed.destroy()
+    await db.execute(sql`DELETE FROM note_crdt WHERE note_id = ${ids.folding}`)
   })
 
   it('note_crdt: fold error, rejected update, snapshot that differs, and an unfolded tail as pending', async () => {

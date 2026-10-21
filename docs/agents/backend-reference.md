@@ -789,10 +789,16 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `projection-failed` (pending with `last_error`), `projection-outdated`
   (`index_version` below `PROJECTION_VERSIONS`); `revision-missing` (no
   revision at `notes.seq`), `revision-differs`; `crdt-bin-differs`,
-  `crdt-bin-undecodable`, `crdt-bin-orphan` (`.crdt/<path>.bin`);
-  `crdt-fold-error`, `crdt-rejected-update`, `crdt-snapshot-differs`
-  (`note_crdt` snapshot ⊕ non-rejected tail against the row, only when
-  `folded_seq = seq` and no tail is pending); `fts-stale` (stored `fts`
+  `crdt-bin-undecodable`, `crdt-bin-orphan` (`.crdt/<path>.bin`, only
+  while `instance_state.collab_migrated_at` is unset and only for bins of
+  live notes with no `note_crdt` row, i.e. what the S2b backfill still
+  reads; after it, bins are listed as `pending` `crdt-bin`, merged by the
+  next boot's roll-forward); `crdt-fold-error`, `crdt-rejected-update`,
+  `crdt-tail-stale` (a non-rejected update past `folded_through` older
+  than `STALE_TAIL_MINUTES`, 10; younger ones are `pending` `crdt-tail`),
+  `crdt-snapshot-differs` (`note_crdt` snapshot ⊕ non-rejected tail
+  against the row, only when `folded_seq = seq` and no tail is pending;
+  `folded_seq < seq` is `pending` `crdt-rebase`); `fts-stale` (stored `fts`
   against the 0002 expression); `vector-missing` (no embedding and no
   job), `vector-failed` (the `embed_note` job of the current `seq`
   failed); `links-differ` (`note_links` against `extractWikilinks(body)`).
@@ -807,8 +813,12 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `embed_note` job inserted or run again however its last run ended
   (`onJobConflict('finished')`; not run in the CLI: the server's worker
   polls). `repaired` is true only when a row was actually changed or
-  queued. It never writes note content; every other class is
-  report-only. The CLI with `--repair` holds the shared instance
+  queued. `crdt-fold-error` and `crdt-tail-stale` are repaired by
+  `foldPendingCollab([noteId])` (boot steps 4-5 for that note under its
+  lock, only if `notesNeedingFold` lists it), which folds acknowledged
+  collab updates from the note's own log into the row; that is the only
+  repair that writes a row, and it never invents content. Every other
+  class is report-only. The CLI with `--repair` holds the shared instance
   maintenance lock like every writing CLI (exit 2 while
   store-export-legacy or rows-from-files runs); read-only runs take no
   lock. A snapshot read while the server writes: run it idle.

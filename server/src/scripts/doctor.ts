@@ -3,8 +3,9 @@
  * CRDT state, FTS vector, embedding, links and projections, and reports
  * every mismatch (notes/doctor.ts). Usage:
  *   pnpm doctor [-- --vault <uuid>] [--repair] [--report [<file>]]
- * Read-only unless `--repair`, which only re-raises derived state (file and
- * index projections, link rows, embedding jobs) and never edits note content.
+ * Read-only unless `--repair`, which re-raises derived state (file and index
+ * projections, link rows, embedding jobs) and folds a stuck collab tail as
+ * boot does; it never invents or overwrites note content.
  * `--report` prints the JSON report instead of text; `--report <file>` writes
  * it to a new file (an existing file or symlink is refused). `--repair` holds
  * the shared instance maintenance lock like every writing CLI. Exits 1 when

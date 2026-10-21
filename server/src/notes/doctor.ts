@@ -11,9 +11,12 @@
  * - projections: a note without a `file` projection row, a projection whose
  *   render failed (`last_error`), one applied by an older renderer version.
  * - row: no revision at the row's `seq`, or that revision's content differs.
- * - CRDT: a `.crdt` bin whose text differs from the row, that does not
- *   decode, or that has no live note; `note_crdt` fold errors, rejected
- *   updates, and a snapshot that differs from the row it is folded into.
+ * - CRDT: `note_crdt` fold errors, rejected updates, an acknowledged tail
+ *   left unfolded for over STALE_TAIL_MINUTES, and a snapshot ⊕ tail that
+ *   differs from the row it is folded into; until the S2b collab backfill
+ *   has finished, also the `.crdt` bins it has still to read (live notes
+ *   with no `note_crdt` row): text different from the row, undecodable, or
+ *   no live note. Bins S2b no longer reads are not problems.
  * - FTS: the stored `fts` vector differs from the one the row gives.
  * - vectors: a live note with no embedding and no job, or whose job for its
  *   current `seq` failed.
@@ -24,12 +27,15 @@
  * reads a snapshot while the server may be writing: run it idle (or with the
  * server stopped) for an exact answer.
  *
- * Read-only by default. `repair` only re-raises derived state, never note
- * content: a `file` projection is reset so the projector renders it again
+ * Read-only by default. `repair` re-raises derived state and never invents
+ * or overwrites note content: a `file` projection is reset so the projector renders it again
  * (under the ownership rules, so bytes it did not write are copied to
  * `.conflicts/` first), a missing projection row is created, a failed one is
  * retried, an outdated one re-rendered, link rows are derived again from the
- * body under the note lock, and an embedding job is queued. The running
+ * body under the note lock, an embedding job is queued, and a fold error or
+ * stale tail is folded as boot does (S2b `foldPendingCollab` for that note,
+ * under its lock: acknowledged collab typing reaches the row, the one repair
+ * that writes a row, and only from the note's own CRDT log). The running
  * server's projector and embedding worker pick these up (they poll), or the
  * next start does. Every other class is report-only.
  */
@@ -44,7 +50,7 @@ import { sameContent } from './frontmatter-order.js'
 import { compareNoteFile, orphanFiles } from './integrity.js'
 import { extractWikilinks } from './okf.js'
 import { PROJECTION_VERSIONS, noteFileRel, sha256 } from './projector.js'
-import { vaultDir } from './store.js'
+import { foldPendingCollab, vaultDir } from './store.js'
 import { docState } from '../sync/live-docs.js'
 import { replaceLinks, storeTransaction, type Tx } from './store-tx.js'
 
@@ -67,6 +73,7 @@ export const DOCTOR_CLASSES = [
   'crdt-fold-error',
   'crdt-rejected-update',
   'crdt-snapshot-differs',
+  'crdt-tail-stale',
   'fts-stale',
   'vector-missing',
   'vector-failed',
@@ -90,7 +97,7 @@ export interface DoctorProblem {
 }
 
 export interface DoctorPending {
-  kind: 'projection' | 'embedding' | 'crdt-tail'
+  kind: 'projection' | 'embedding' | 'crdt-tail' | 'crdt-rebase' | 'crdt-bin'
   vaultId: string
   vaultName: string
   path: string
@@ -115,7 +122,12 @@ type Client = Tx | typeof db
 
 const BATCH = 500
 
+/** An unfolded collab tail older than this is a problem, not work in flight (the relay folds within seconds of the last keystroke). */
+export const STALE_TAIL_MINUTES = 10
+
 const REPAIRABLE: ReadonlySet<DoctorClass> = new Set<DoctorClass>([
+  'crdt-fold-error',
+  'crdt-tail-stale',
   'file-missing',
   'file-unparseable',
   'file-differs',
@@ -171,6 +183,7 @@ interface CrdtRow {
   fold_error: string | null
   rejected: number
   tail: number
+  tail_stale: boolean
 }
 
 async function readMaybe(file: string): Promise<Buffer | null> {
@@ -213,9 +226,18 @@ function contentDiff(a: { frontmatter: Record<string, unknown>; body: string }, 
 /** The stored `fts` against the generated-column expression of migration 0002. */
 const FTS_STALE = sql`n.fts IS DISTINCT FROM to_tsvector('english', coalesce(n.path, '') || ' ' || coalesce(n.frontmatter::text, '') || ' ' || coalesce(n.body, ''))`
 
-export async function runDoctor(options: { vaultId?: string; repair?: boolean; client?: Client } = {}): Promise<DoctorReport> {
+export async function runDoctor(
+  options: { vaultId?: string; repair?: boolean; client?: Client; staleTailMinutes?: number } = {},
+): Promise<DoctorReport> {
   const client = options.client ?? db
   const repair = options.repair ?? false
+  const staleTailMinutes = options.staleTailMinutes ?? STALE_TAIL_MINUTES
+  // S2b (§8 step 4): once the collab backfill finished, `.crdt/` bins are never read again (a rollback's bins merge at the next boot).
+  const [instance] = (await client.execute(sql`SELECT collab_migrated_at FROM instance_state WHERE id = 'singleton'`)) as unknown as Array<{
+    collab_migrated_at: string | null
+  }>
+  const collabMigrated = Boolean(instance?.collab_migrated_at)
+  const crdtNotes = new Set<string>() // notes whose collab state is in note_crdt: their bins are not read either
   const startedAt = new Date().toISOString()
   const problems: DoctorProblem[] = []
   const pending: DoctorPending[] = []
@@ -273,7 +295,9 @@ export async function runDoctor(options: { vaultId?: string; repair?: boolean; c
     const crdt = (await client.execute(sql`
       SELECT c.note_id, c.snapshot, c.snapshot_through, c.folded_through, c.folded_seq, c.fold_error,
         (SELECT count(*)::int FROM note_updates u WHERE u.note_id = c.note_id AND u.rejected_at IS NOT NULL) AS rejected,
-        (SELECT count(*)::int FROM note_updates u WHERE u.note_id = c.note_id AND u.rejected_at IS NULL AND u.id > c.folded_through) AS tail
+        (SELECT count(*)::int FROM note_updates u WHERE u.note_id = c.note_id AND u.rejected_at IS NULL AND u.id > c.folded_through) AS tail,
+        EXISTS (SELECT 1 FROM note_updates u WHERE u.note_id = c.note_id AND u.rejected_at IS NULL AND u.id > c.folded_through
+          AND u.created_at < now() - ${staleTailMinutes} * interval '1 minute') AS tail_stale
       FROM note_crdt c WHERE c.note_id = ANY(${ids}::uuid[])`)) as unknown as CrdtRow[]
     const crdtOf = new Map(crdt.map((c) => [c.note_id, c]))
 
@@ -346,10 +370,15 @@ export async function runDoctor(options: { vaultId?: string; repair?: boolean; c
       const state = crdtOf.get(note.id)
       if (state) {
         checked.crdtRows++
+        crdtNotes.add(note.id)
         if (state.fold_error) problem({ ...at, class: 'crdt-fold-error', path: note.path, detail: state.fold_error })
         if (state.rejected > 0) problem({ ...at, class: 'crdt-rejected-update', path: note.path, detail: `${state.rejected} rejected update(s)` })
-        if (state.tail > 0) pending.push({ ...pendingAt, kind: 'crdt-tail', detail: `${state.tail} update(s) not folded yet` })
-        else if (live && Number(state.folded_seq) === seq) {
+        if (state.tail_stale) {
+          problem({ ...at, class: 'crdt-tail-stale', path: note.path, detail: `${state.tail} acknowledged update(s) not folded into the row for over ${staleTailMinutes} min` })
+        } else if (state.tail > 0) pending.push({ ...pendingAt, kind: 'crdt-tail', detail: `${state.tail} update(s) not folded yet` })
+        else if (live && Number(state.folded_seq) < seq) {
+          pending.push({ ...pendingAt, kind: 'crdt-rebase', detail: `row at seq ${seq}, CRDT state at ${state.folded_seq}: rebased at the next load or boot` })
+        } else if (live && Number(state.folded_seq) === seq) {
           const detail = await snapshotDiff(client, state, note)
           if (detail) problem({ ...at, class: 'crdt-snapshot-differs', path: note.path, detail })
         }
@@ -376,10 +405,17 @@ export async function runDoctor(options: { vaultId?: string; repair?: boolean; c
     }
     for (const bin of await listFiles(root, '.crdt')) {
       if (!bin.endsWith('.bin')) continue
-      checked.bins++
       const rel = bin
       const notePath = rel.slice('.crdt/'.length, -'.bin'.length)
       const noteId = livePaths.get(`${vault.id}/${notePath}`)
+      if (collabMigrated) {
+        // Written by older code during a rollback: the next boot merges or sets it aside (S2b roll-forward).
+        pending.push({ kind: 'crdt-bin', vaultId: vault.id, vaultName: vault.name, path: rel, noteId: noteId ?? '', detail: 'merged into note_crdt at the next boot' })
+        continue
+      }
+      // A note whose collab state is already in note_crdt: S2b never reads its bin again.
+      if (noteId && crdtNotes.has(noteId)) continue
+      checked.bins++
       if (!noteId) {
         problem({ class: 'crdt-bin-orphan', vaultId: vault.id, noteId: null, path: rel, detail: `no live note at ${notePath}` })
         continue
@@ -403,9 +439,14 @@ export async function runDoctor(options: { vaultId?: string; repair?: boolean; c
   }
 
   if (repair) {
+    const folds = new Map<string, boolean>()
     for (const p of problems) {
       if (!p.repairable || !p.noteId) continue
-      p.repaired = await repairProblem(p)
+      if (p.class === 'crdt-fold-error' || p.class === 'crdt-tail-stale') {
+        // Boot steps 4-5 for this note, under its lock: acknowledged typing reaches the row (this is the only repair that changes a row).
+        if (!folds.has(p.noteId)) folds.set(p.noteId, (await foldPendingCollab([p.noteId])).folded > 0)
+        p.repaired = folds.get(p.noteId)
+      } else p.repaired = await repairProblem(p)
     }
     // A generated index: re-render the dir_index projection of the notes under its directory.
     for (const p of problems) {
@@ -434,7 +475,12 @@ async function snapshotDiff(client: Client, state: CrdtRow, row: NoteRow): Promi
   const doc = new Y.Doc()
   try {
     Y.applyUpdate(doc, state.snapshot)
-    for (const u of updates) Y.applyUpdate(doc, u.update)
+    // An update that does not apply is skipped, as the fold skips it (read-only here: the fold marks it rejected).
+    for (const u of updates) {
+      try {
+        Y.applyUpdate(doc, u.update)
+      } catch {}
+    }
     return contentDiff(docState(doc), row)
   } catch (err) {
     return `does not decode: ${err instanceof Error ? err.message : String(err)}`
@@ -443,7 +489,7 @@ async function snapshotDiff(client: Client, state: CrdtRow, row: NoteRow): Promi
   }
 }
 
-/** Re-raises the derived state behind one problem; never touches note content. True when something was queued. */
+/** Re-raises the derived state behind one problem (not the collab folds, see runDoctor). True when something was queued. */
 async function repairProblem(p: DoctorProblem): Promise<boolean> {
   const id = p.noteId!
   switch (p.class) {

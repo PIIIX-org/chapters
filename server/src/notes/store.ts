@@ -2056,11 +2056,13 @@ export async function compactCollabState(vaultId: string, noteId: string): Promi
  * Boot steps 4-5 (§7): every live note whose row moved past its CRDT state
  * is rebased, and every unfolded tail is folded, one transaction per note.
  * A failure is logged and counted; boot never stops for one note.
+ * `onlyIds` (doctor --repair, #495): only those of these notes that need it.
  */
-export async function foldPendingCollab(): Promise<{ folded: number; failed: number }> {
+export async function foldPendingCollab(onlyIds?: readonly string[]): Promise<{ folded: number; failed: number }> {
   let folded = 0
   let failed = 0
-  for (const noteId of await notesNeedingFold(db)) {
+  const needing = await notesNeedingFold(db)
+  for (const noteId of onlyIds ? needing.filter((id) => onlyIds.includes(id)) : needing) {
     try {
       const [note] = await db.select({ vaultId: notes.vaultId, path: notes.path }).from(notes).where(and(eq(notes.id, noteId), isNull(notes.deletedAt)))
       if (!note) continue
