@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { checkNoteFiles } from '../src/notes/integrity.js'
-import { getRevision, listRevisionMeta, readNote, type RevisionRow } from '../src/notes/store.js'
+import { getRevision, listRevisionMeta, readNote, type RevisionDetail } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -89,7 +89,7 @@ async function stored(path: string): Promise<{ frontmatter: Record<string, unkno
 }
 
 /** Every revision of the note with its content, newest first. */
-async function revisionsOf(path: string): Promise<RevisionRow[]> {
+async function revisionsOf(path: string): Promise<RevisionDetail[]> {
   const meta = (await listRevisionMeta(vaultId, path, 200, 0))!
   return (await Promise.all(meta.map((r) => getRevision(vaultId, r.id)))).map((r) => r!)
 }

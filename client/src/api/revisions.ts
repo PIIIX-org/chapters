@@ -18,9 +18,18 @@ export interface Revision {
   actorId: string | null
   /** History list only: the MCP connection's name when an agent recorded this revision; null otherwise or once the connection is deleted. */
   actorName?: string | null
-  /** 'restore_point' is the note as it was before an agent's first write in a session (#482). */
+  /**
+   * create, update, delete, restore, rename, revert, quarantine, or
+   * restore_point: the note as it was before an agent's first write in a
+   * session (#482). A newer one is shown as is.
+   */
   action: string
   createdAt: string
+  /** A `revert` row: the revision it brought back (#479). */
+  sourceRevisionId?: string
+  /** A `rename` row: the note's path before and after (#479). */
+  fromPath?: string
+  toPath?: string
 }
 
 /** Newest first. Requires **edit** access, not merely read (audit rule). */

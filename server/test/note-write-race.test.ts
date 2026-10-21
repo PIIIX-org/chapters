@@ -112,8 +112,8 @@ describe('renames through the live collab engine (#803)', () => {
     await createNote(vaultId, { path: 'docs/relay-hub', body: 'Links to [[docs/relay-x]] and [[docs/relay-y]].' })
 
     await Promise.all([
-      renameNote(vaultId, 'docs/relay-x', 'relay-x2', writeThroughCollab),
-      renameNote(vaultId, 'docs/relay-y', 'relay-y2', writeThroughCollab),
+      renameNote(vaultId, 'docs/relay-x', 'relay-x2', { type: 'collab' }, writeThroughCollab),
+      renameNote(vaultId, 'docs/relay-y', 'relay-y2', { type: 'collab' }, writeThroughCollab),
     ])
 
     const body = 'Links to [[docs/relay-x2]] and [[docs/relay-y2]].'

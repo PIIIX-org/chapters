@@ -50,11 +50,24 @@ export const RESTORE_POINT_ACTION = 'restore_point'
 /** An MCP connection's session on a note ends after this many minutes without a revision of its own there (#482). */
 export const RESTORE_POINT_IDLE_MINUTES = 30
 
+/**
+ * What a history event records besides the note's state (#479): a delete or
+ * restore of the note, a rename with its old and new path, a revert with the
+ * revision it brought back.
+ */
+export type HistoryEvent =
+  | { action: 'delete' | 'restore' }
+  | { action: 'rename'; fromPath: string; toPath: string }
+  | { action: 'revert'; sourceRevisionId: string }
+
+/** The `note_revisions.action` of every history event. */
+const EVENT_ACTIONS: HistoryEvent['action'][] = ['delete', 'restore', 'rename', 'revert']
+
 /** The revision actions recordRevision dedupes: content writes. */
 const DEDUPED_ACTIONS: Record<string, true> = { create: true, update: true }
 
-/** Revisions recordRevision never compares a write with: not a write's state (#482, #492). */
-const NOT_A_DEDUPE_BASELINE = [QUARANTINE_ACTION, RESTORE_POINT_ACTION, 'delete']
+/** Revisions recordRevision never compares a write with: not a write's state (#479, #482, #492). */
+const NOT_A_DEDUPE_BASELINE = [QUARANTINE_ACTION, RESTORE_POINT_ACTION, ...EVENT_ACTIONS]
 
 /** Records a revision unless it repeats the note's latest content. Frontmatter
  * is compared as jsonb stores it (#480): deep equality on its JSON form, so
@@ -68,10 +81,10 @@ const NOT_A_DEDUPE_BASELINE = [QUARANTINE_ACTION, RESTORE_POINT_ACTION, 'delete'
  * stored is recorded: the relay's revision has no author (#403) and may
  * bundle a person's typing, so it is never re-attributed.
  *
- * Only content writes (DEDUPED_ACTIONS) are deduped; an event (`delete`) is
- * always recorded. The write is compared with the newest content revision:
- * quarantined writes (#492), restore points (#482) and events are not a
- * write's state, so they are never the baseline. */
+ * Only content writes (DEDUPED_ACTIONS) are deduped; events (#479) go
+ * through recordEvent and are always recorded. The write is compared with
+ * the newest content revision: quarantined writes (#492), restore points
+ * (#482) and events are not a write's state, so they are never the baseline. */
 async function recordRevision(
   noteId: string,
   action: string,
@@ -108,6 +121,25 @@ async function recordRevision(
     actorType: actor.type,
     actorId: actor.id,
     action,
+    frontmatter: frontmatter as Record<string, unknown>,
+    body,
+  })
+}
+
+/** Records a history event with the note's state. Always a new row: an event
+ * is never a repeat of the state before it, whoever recorded that. */
+async function recordEvent(
+  noteId: string,
+  event: HistoryEvent,
+  frontmatter: unknown,
+  body: string,
+  actor: Actor,
+): Promise<void> {
+  await db.insert(noteRevisions).values({
+    noteId,
+    actorType: actor.type,
+    actorId: actor.id,
+    ...event,
     frontmatter: frontmatter as Record<string, unknown>,
     body,
   })
@@ -207,7 +239,6 @@ async function pendingRestorePoint(noteId: string, connectionId: string) {
     createdAt: sql`${clock!.at}::timestamptz`,
   }
 }
-
 /**
  * Keeps a suspicious write out of the note (#492): when `input.body` breaks
  * one of `rules` against the stored body, the write is recorded as a
@@ -545,13 +576,15 @@ export type BodyEdit = string | ((current: string) => string)
  * the stored one first (refuseSuspiciousWrite; the collab relay's store, which
  * passes the quarantine revision of the loaded document's episode, if any).
  * A `body` function (BodyEdit) gets the stored body.
+ * `options.revertOf` names the revision this write brings back (revertNote):
+ * the write is then recorded as its own `revert` event (#479).
  */
 export async function updateNote(
   vaultId: string,
   path: string,
   input: { frontmatter?: Record<string, unknown>; body?: BodyEdit },
   actor: Actor = SYSTEM_ACTOR,
-  options: { quarantine?: QuarantineRules; episode?: string } = {},
+  options: { quarantine?: QuarantineRules; episode?: string; revertOf?: string } = {},
 ): Promise<NoteRow | null> {
   const resolved = resolveNotePath(path)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
@@ -582,7 +615,11 @@ export async function updateNote(
     }
     await syncLinks(row.id, body)
     scheduleEmbedding(row.id)
-    await recordRevision(row.id, 'update', frontmatter, body, actor)
+    if (options.revertOf) {
+      await recordEvent(row.id, { action: 'revert', sourceRevisionId: options.revertOf }, frontmatter, body, actor)
+    } else {
+      await recordRevision(row.id, 'update', frontmatter, body, actor)
+    }
     return updated!
   })
 }
@@ -601,7 +638,9 @@ export function refactorWikilinks(body: string, fromPath: string, toPath: string
 }
 
 /**
- * Renames or moves a note. The move itself (row, file, CRDT state, folder
+ * Renames or moves a note to `toName` (a slug in its folder, or a path),
+ * rewriting the links to it; the move is recorded as a `rename` event by
+ * `actor` (#479). The move itself (row, file, CRDT state, folder
  * indexes, the note's own links) runs under the locks of both the old and the
  * new path (#484; `withKeyLocks` takes them in sorted order, so two renames
  * between the same paths never wait on each other in a cycle): a write to the
@@ -620,6 +659,7 @@ export async function renameNote(
   vaultId: string,
   from: string,
   toName: string,
+  actor: Actor = SYSTEM_ACTOR,
   updateFn: (
     vaultId: string,
     path: string,
@@ -638,7 +678,7 @@ export async function renameNote(
   const renaming = `renaming ${fromResolved.fullPath} to ${toResolved.fullPath}`
   const moved = await withKeyLocks(
     [noteLock(vaultId, fromResolved.fullPath), noteLock(vaultId, toResolved.fullPath)],
-    () => moveNote(vaultId, fromResolved, toResolved, renaming),
+    () => moveNote(vaultId, fromResolved, toResolved, renaming, actor),
   )
   if (!moved) return null
 
@@ -709,7 +749,8 @@ async function relinkReferrer(
 }
 
 /**
- * renameNote's move, run under the note locks of both paths. Returns the
+ * renameNote's move, run under the note locks of both paths. Records the
+ * `rename` event by `actor` when the path changes (#479). Returns the
  * moved row and the notes (id, and the path they had) whose links to the old
  * path renameNote rewrites next, or null when no live note is at the old path.
  */
@@ -718,6 +759,7 @@ async function moveNote(
   fromResolved: ResolvedNotePath,
   toResolved: ResolvedNotePath,
   renaming: string,
+  actor: Actor,
 ): Promise<{ updated: NoteRow; referrers: { id: string; path: string }[] } | null> {
   const row = await getLiveNote(vaultId, fromResolved.fullPath)
   if (!row) return null
@@ -793,6 +835,15 @@ async function moveNote(
   ]
   await regenProgressiveIndices(vaultId, affectedDirs)
   await syncLinks(updated.id, currentBody)
+  if (isMoving) {
+    await recordEvent(
+      updated.id,
+      { action: 'rename', fromPath: fromResolved.fullPath, toPath: toResolved.fullPath },
+      newFrontmatter,
+      currentBody,
+      actor,
+    )
+  }
   return { updated, referrers }
 }
 
@@ -835,7 +886,7 @@ export async function softDeleteNote(
     await mkdir(join(vaultDir(vaultId), '.trash'), { recursive: true })
     await rename(noteFile(vaultId, resolved.fullPath), trashFile(vaultId, row.id))
     await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
-    await recordRevision(row.id, 'delete', row.frontmatter, row.body, actor)
+    await recordEvent(row.id, { action: 'delete' }, row.frontmatter, row.body, actor)
     return updated!
   })
 }
@@ -860,7 +911,11 @@ async function withTrashedNote<T>(
   })
 }
 
-export async function restoreNote(vaultId: string, noteId: string): Promise<NoteRow | null> {
+export async function restoreNote(
+  vaultId: string,
+  noteId: string,
+  actor: Actor = SYSTEM_ACTOR,
+): Promise<NoteRow | null> {
   return withTrashedNote(vaultId, noteId, async (row) => {
     const resolved = resolveNotePath(row.path)
     if (await getLiveNote(vaultId, resolved.fullPath)) {
@@ -875,6 +930,7 @@ export async function restoreNote(vaultId: string, noteId: string): Promise<Note
     await rename(trashFile(vaultId, row.id), noteFile(vaultId, resolved.fullPath))
     await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
     scheduleEmbedding(row.id)
+    await recordEvent(row.id, { action: 'restore' }, row.frontmatter, row.body, actor)
     return updated!
   })
 }
@@ -919,9 +975,35 @@ export async function listTrash(
     .offset(offset)
 }
 
-export type RevisionMeta = Pick<RevisionRow, 'id' | 'actorType' | 'actorId' | 'action' | 'createdAt'> & {
-  /** The MCP connection's name on a revision an agent recorded; null for other actors or a deleted connection (#482). */
-  actorName: string | null
+/** The event fields of a revision (#479), present only on the rows that have
+ * them (a revert's source, a rename's paths), so a plain row costs nothing more. */
+export interface RevisionEventDetail {
+  sourceRevisionId?: string
+  fromPath?: string
+  toPath?: string
+}
+
+export type RevisionMeta = Pick<RevisionRow, 'id' | 'actorType' | 'actorId' | 'action' | 'createdAt'> &
+  RevisionEventDetail & {
+    /** The MCP connection's name on a revision an agent recorded; null for other actors or a deleted connection (#482). */
+    actorName: string | null
+  }
+
+/** One recorded revision with its content and the note's current path. */
+export type RevisionDetail = Omit<RevisionRow, keyof RevisionEventDetail> & RevisionEventDetail & { path: string }
+
+const eventColumns = {
+  sourceRevisionId: noteRevisions.sourceRevisionId,
+  fromPath: noteRevisions.fromPath,
+  toPath: noteRevisions.toPath,
+}
+
+function eventDetail(r: { sourceRevisionId: string | null; fromPath: string | null; toPath: string | null }): RevisionEventDetail {
+  return {
+    ...(r.sourceRevisionId === null ? {} : { sourceRevisionId: r.sourceRevisionId }),
+    ...(r.fromPath === null ? {} : { fromPath: r.fromPath }),
+    ...(r.toPath === null ? {} : { toPath: r.toPath }),
+  }
 }
 
 /** Adds `actorName` to each revision: the History tab names the agent of a restore point with it (#482). */
@@ -981,6 +1063,7 @@ export async function listRevisionPage(
       action: noteRevisions.action,
       createdAt: noteRevisions.createdAt,
       bodyBytes: sql<number>`octet_length(${noteRevisions.body})`,
+      ...eventColumns,
       at: sql<string>`to_char(${noteRevisions.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
     })
     .from(noteRevisions)
@@ -1005,6 +1088,7 @@ export async function listRevisionPage(
         action: r.action,
         createdAt: r.createdAt,
         bodyBytes: r.bodyBytes,
+        ...eventDetail(r),
       })),
     ),
     next: rows.length > limit && last ? { at: last.at, id: last.id } : null,
@@ -1028,20 +1112,26 @@ export async function listRevisionMeta(
       actorId: noteRevisions.actorId,
       action: noteRevisions.action,
       createdAt: noteRevisions.createdAt,
+      ...eventColumns,
     })
     .from(noteRevisions)
     .where(eq(noteRevisions.noteId, row.id))
     .orderBy(desc(noteRevisions.createdAt))
     .limit(limit)
     .offset(offset)
-  return withActorNames(rows)
+  return withActorNames(
+    rows.map(({ sourceRevisionId, fromPath, toPath, ...meta }) => ({
+      ...meta,
+      ...eventDetail({ sourceRevisionId, fromPath, toPath }),
+    })),
+  )
 }
 
 /** Full content of a single recorded revision for preview / diff inspection. */
 export async function getRevision(
   vaultId: string,
   revisionId: string,
-): Promise<(RevisionRow & { path: string }) | null> {
+): Promise<RevisionDetail | null> {
   const rows = await db
     .select({
       id: noteRevisions.id,
@@ -1053,6 +1143,7 @@ export async function getRevision(
       frontmatter: noteRevisions.frontmatter,
       body: noteRevisions.body,
       createdAt: noteRevisions.createdAt,
+      ...eventColumns,
     })
     .from(noteRevisions)
     .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
@@ -1061,7 +1152,8 @@ export async function getRevision(
 
   const row = rows[0]
   if (!row) return null
-  return row as RevisionRow & { path: string }
+  const { sourceRevisionId, fromPath, toPath, ...revision } = row
+  return { ...revision, ...eventDetail({ sourceRevisionId, fromPath, toPath }) }
 }
 
 export interface BacklinkItem {
@@ -1393,7 +1485,8 @@ export async function getLocalGraph(
   }
 }
 
-/** Restores a note to a recorded revision (a new attributed write). */
+/** Restores a note to a recorded revision: a new attributed write, recorded
+ * as a `revert` event naming that revision; earlier rows stay as they are (#479). */
 export async function revertNote(
   vaultId: string,
   path: string,
@@ -1404,6 +1497,7 @@ export async function revertNote(
     path: string,
     input: { frontmatter?: Record<string, unknown>; body?: string },
     actor: Actor,
+    options: { revertOf: string },
   ) => Promise<NoteRow | null> = updateNote,
 ): Promise<NoteRow | null> {
   const row = await getLiveNote(vaultId, path)
@@ -1415,30 +1509,13 @@ export async function revertNote(
       .where(and(eq(noteRevisions.id, revisionId), eq(noteRevisions.noteId, row.id)))
   )[0]
   if (!revision) return null
-  const updated = await updateFn(
+  return updateFn(
     vaultId,
     path,
     { frontmatter: revision.frontmatter as Record<string, unknown>, body: revision.body },
     actor,
+    { revertOf: revision.id },
   )
-  if (updated) {
-    const newest = (
-      await db
-        .select({ id: noteRevisions.id, action: noteRevisions.action })
-        .from(noteRevisions)
-        .where(and(eq(noteRevisions.noteId, row.id), ne(noteRevisions.action, QUARANTINE_ACTION)))
-        .orderBy(desc(noteRevisions.createdAt))
-        .limit(1)
-    )[0]
-    // A revert that records nothing (the state is already stored) must not relabel a restore point (#482).
-    if (newest && newest.action !== RESTORE_POINT_ACTION) {
-      await db
-        .update(noteRevisions)
-        .set({ action: 'revert' })
-        .where(eq(noteRevisions.id, newest.id))
-    }
-  }
-  return updated
 }
 
 /**

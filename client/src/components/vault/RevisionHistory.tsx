@@ -43,10 +43,33 @@ const AUTHOR: Record<Revision['actorType'], { label: string; className: string }
   mcp: { label: 'by AI via MCP', className: 'text-accent' },
 }
 
-/** A restore point (#482) is named after the agent it was kept for: reverting to it undoes that agent's session. */
-function actionLabel(revision: Revision): string {
+/** What each recorded action did, in words. An action added server-side
+ * later is shown as its raw name rather than hidden. */
+const ACTION: Record<string, string> = {
+  create: 'Created',
+  update: 'Edited',
+  delete: 'Moved to trash',
+  restore: 'Restored from trash',
+  quarantine: 'Held back (quarantined)',
+}
+
+/**
+ * The row's action (#479): a rename says where the note moved from and to; a
+ * revert names the time of the version it brought back when that version is
+ * on this page, and says "an earlier version" when it is older or purged. A
+ * restore point (#482) is named after the agent it was kept for: reverting to
+ * it undoes that agent's session.
+ */
+function describeAction(revision: Revision, onPage: Revision[]): string {
   if (revision.action === 'restore_point') return `Before ${revision.actorName ?? 'an AI agent'} edited`
-  return revision.action
+  if (revision.action === 'rename' && revision.fromPath && revision.toPath) {
+    return `Renamed from ${revision.fromPath} to ${revision.toPath}`
+  }
+  if (revision.action === 'revert') {
+    const source = onPage.find((r) => r.id === revision.sourceRevisionId)
+    return source ? `Reverted to the version from ${formatStamp(source.createdAt)}` : 'Reverted to an earlier version'
+  }
+  return Object.hasOwn(ACTION, revision.action) ? ACTION[revision.action]! : revision.action
 }
 
 interface RevisionHistoryProps {
@@ -128,7 +151,7 @@ export function RevisionHistory({ vaultId, path, access }: RevisionHistoryProps)
               <span className="font-mono text-xs text-muted-foreground">
                 {formatStamp(revision.createdAt)}
               </span>
-              <span className="text-sm text-foreground">{actionLabel(revision)}</span>
+              <span className="text-sm text-foreground break-all">{describeAction(revision, revisions.data)}</span>
               {/* Falls back rather than throwing: a new actor_type added
                   server-side should mislabel one row, never unmount the panel
                   the person is using to recover their work. */}

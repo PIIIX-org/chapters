@@ -251,7 +251,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `path` (string, required).
   - `limit` (integer 1-100, optional, default 20).
   - `cursor` (string, optional): `nextCursor` from the previous page, passed unchanged. Anything else is refused with `invalid cursor`.
-- **Returns**: `{ revisions, hasMore, nextCursor }`. `revisions` is one page, newest first, metadata only: `{ id, actorType: "user" | "mcp" | "collab", actorId, actorName, action, createdAt, bodyBytes }` (`actorName` is the MCP connection's name on a revision a connection recorded, else `null`; `bodyBytes` is the UTF-8 size of the body at that revision). `action` is `create`, `update`, `delete`, `revert`, `restore_point` for the note as it was before a connection's first write in a session (see `edit_note`), or `quarantine` for a write kept out of the note (see `edit_note`); a `quarantine` revision is not the note's content. `hasMore` says whether older revisions exist; `nextCursor` is the cursor for them, or `null` on the last page. A revision recorded while you page does not shift the pages: each revision comes back exactly once.
+- **Returns**: `{ revisions, hasMore, nextCursor }`. `revisions` is one page, newest first, metadata only: `{ id, actorType: "user" | "mcp" | "collab", actorId, actorName, action, createdAt, bodyBytes }` (`actorName` is the MCP connection's name on a revision a connection recorded, else `null`; `bodyBytes` is the UTF-8 size of the body at that revision). `action` is `create`, `update`, `delete` (moved to the trash), `restore` (back from the trash), `rename` (with `fromPath` and `toPath`, the paths before and after), `revert` (with `sourceRevisionId`, the revision it brought back), `restore_point` for the note as it was before a connection's first write in a session (see `edit_note`), or `quarantine` for a write kept out of the note (see `edit_note`); a `quarantine` revision is not the note's content. Each delete, restore, rename and revert is its own revision, attributed to whoever did it, even when the note's content did not change; `fromPath`, `toPath` and `sourceRevisionId` appear only on those rows. `hasMore` says whether older revisions exist; `nextCursor` is the cursor for them, or `null` on the last page. A revision recorded while you page does not shift the pages: each revision comes back exactly once.
 - No revision content: read one revision with `get_revision`.
 
 ### `get_revision`
@@ -261,7 +261,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `vaultId` (uuid, optional).
   - `revisionId` (uuid, required): an `id` from `note_history`.
   - `path` (string, optional), `noteId` (uuid, optional): when given, the revision must belong to that note. `path` is read like every note path (trimmed, `\` as `/`, a trailing `.md` dropped).
-- **Returns**: `{ id, noteId, path, actorType, actorId, action, frontmatter, body, createdAt }`: the note as it was at that revision (`path` is the note's current path). A revision that is not in the vault, or not of the named note, is `revision not found`.
+- **Returns**: `{ id, noteId, path, actorType, actorId, action, frontmatter, body, createdAt }`, plus `sourceRevisionId` on a `revert` and `fromPath` / `toPath` on a `rename`: the note as it was at that revision (`path` is the note's current path). A revision that is not in the vault, or not of the named note, is `revision not found`.
 - Unlike `note_history`, which answers `note not found` for a note in the trash, `get_revision` still returns the revisions of a trashed note (as the REST revision route does); it needs the same edit access.
 
 ### `revert_note`
@@ -271,7 +271,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `vaultId` (uuid, optional).
   - `path` (string, required).
   - `revisionId` (uuid, required).
-- **Returns**: the updated note row. The revert is recorded as a new revision. Reverting to a `restore_point` revision undoes everything that connection did to the note in that session, and also discards every later change by anyone else. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert.
+- **Returns**: the updated note row. The revert is recorded as a new `revert` revision whose `sourceRevisionId` is `revisionId`; earlier revisions are left as they were. Reverting to a `restore_point` revision undoes everything that connection did to the note in that session, and also discards every later change by anyone else. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert.
 - The same body size limit as `edit_note` applies: reverting to a revision whose body is over the limit and larger than the current body is refused with an error naming the limit.
 
 ### `purge_revision`
@@ -538,7 +538,7 @@ All team and user tools are **account only**.
 - **Scope**: vault. Edit access.
 - **Capability**: `read`.
 - **Parameters**: `vaultId` (uuid, optional).
-- **Returns**: `{ vaultId, zipBase64, sizeBytes }`. The zip holds the live notes as OKF `.md` files, `assets/`, `manifest.json` (format version, vault id, name, mergeable, shares) and `.elara/history/<noteId>.json` per note, live or trashed: every revision (action, actor, time, frontmatter, body) and the note's times; trashed notes carry their content there. The zip therefore carries the vault's full history, trash included, and the email of every past revision author, including people who no longer have access. Importing it (`POST /api/import`) recreates revisions and trash and points attachment links at the new vault.
+- **Returns**: `{ vaultId, zipBase64, sizeBytes }`. The zip holds the live notes as OKF `.md` files, `assets/`, `manifest.json` (format version, vault id, name, mergeable, shares) and `.elara/history/<noteId>.json` per note, live or trashed: every revision (id, action, actor, time, frontmatter, body, and a rename's paths or a revert's source) and the note's times; trashed notes carry their content there. The zip therefore carries the vault's full history, trash included, and the email of every past revision author, including people who no longer have access. Importing it (`POST /api/import`) recreates revisions and trash and points attachment links at the new vault; a revert in the imported history names the imported revision it brought back.
 
 ### `export_note`
 - **Scope**: vault. Read access.

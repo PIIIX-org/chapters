@@ -145,14 +145,17 @@ async function noteFileDamaged(vaultId: string, path: string): Promise<boolean> 
  * checks, an op that does not resolve, validation) still disconnects, and
  * that store of the live document, which a person may have doubled, gets the
  * relay's check. A frontmatter-only edit leaves the body to the relay's check.
+ * `options.revertOf` (revertNote) records the attributed store write as a
+ * `revert` event naming that revision (#479).
  */
 export async function writeThroughCollab(
   vaultId: string,
   path: string,
   input: NoteEdit,
   actor: Actor,
-  options: { quarantine?: QuarantineRules } = {},
+  options: { quarantine?: QuarantineRules; revertOf?: string } = {},
 ): Promise<NoteRow | null> {
+  const record = { revertOf: options.revertOf }
   return withKeyLock(`collab:${vaultId}/${resolveNotePath(path).fullPath}`, async () => {
     const existing = await getLiveNote(vaultId, path)
     if (!existing) return null
@@ -175,7 +178,7 @@ export async function writeThroughCollab(
         await screen(body, storedFrontmatter)
       }
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
-      return updateNote(vaultId, path, { frontmatter, body }, actor)
+      return updateNote(vaultId, path, { frontmatter, body }, actor, record)
     }
     const documentName = `${vaultId}/${path}`
     let connection: DirectConnection
@@ -194,7 +197,7 @@ export async function writeThroughCollab(
       if (!(await noteFileDamaged(vaultId, path))) throw err
       if (input.frontmatter === undefined || input.body === undefined) throw new NoteFileDamagedError(path)
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
-      return updateNote(vaultId, path, { frontmatter, body: input.body }, actor)
+      return updateNote(vaultId, path, { frontmatter, body: input.body }, actor, record)
     }
     const next: { frontmatter?: Frontmatter; body?: string } = {}
     try {
@@ -238,7 +241,7 @@ export async function writeThroughCollab(
     } finally {
       await connection.disconnect()
     }
-    return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: next.body }, actor)
+    return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: next.body }, actor, record)
   })
 }
 
