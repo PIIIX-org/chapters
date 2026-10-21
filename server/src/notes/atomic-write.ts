@@ -15,8 +15,15 @@ import { dirname } from 'node:path'
  * `mode`: the file's permission bits whatever the umask. The temp file is
  * created with them and chmodded before any content goes in, so the content
  * is never on disk with looser permissions (#493).
+ *
+ * `beforeRename`: runs once the temp file is complete, before the rename (the
+ * projector's `projector.after-tmp-before-rename` failpoint, ADR-003 §11).
  */
-export async function atomicWrite(file: string, content: string | Uint8Array, options: { mode?: number } = {}): Promise<void> {
+export async function atomicWrite(
+  file: string,
+  content: string | Uint8Array,
+  options: { mode?: number; beforeRename?: () => void } = {},
+): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
   try {
@@ -31,6 +38,7 @@ export async function atomicWrite(file: string, content: string | Uint8Array, op
         await handle.close()
       }
     }
+    options.beforeRename?.()
     await rename(tmp, file)
   } catch (err) {
     await rm(tmp, { force: true })

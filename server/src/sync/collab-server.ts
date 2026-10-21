@@ -6,7 +6,12 @@ import * as Y from 'yjs'
 import { getSessionUser, sessionActive } from '../auth/sessions.js'
 import { hashToken } from '../auth/tokens.js'
 import { atLeast, resolveAccess } from '../vaults/permissions.js'
-import { readNote, updateNote, splitPath } from '../notes/store.js'
+import { eq } from 'drizzle-orm'
+import { db } from '../db/client.js'
+import { notes } from '../db/schema.js'
+import { noteLock, readNote, updateNote, splitPath } from '../notes/store.js'
+import { withKeyLock } from '../notes/key-lock.js'
+import { docState, loadedDocument, registerLiveDocs, sharesHistory } from './live-docs.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { affects, onPermissionChange } from './permission-events.js'
@@ -80,24 +85,22 @@ interface ConnectionContext {
   /** That session ended: nothing more is taken from this connection. */
   sessionEnded?: boolean
   accessVerifiedAt?: number
-  /** A server-side body write through a direct connection (crdt-write.ts), whose caller already ran the quarantine check. */
+  /** A change the server pushed into the document (live-docs.ts), whose writer already ran the quarantine check. */
   directWrite?: boolean
 }
 
-function docState(document: Y.Doc): { frontmatter: Record<string, unknown>; body: string } {
-  return {
-    frontmatter: document.getMap('frontmatter').toJSON(),
-    body: document.getText('body').toString(),
-  }
-}
+/** The note each loaded document was loaded from (ADR-003 §5.5, S2a): its stores go to that note only. */
+const documentNotes = new WeakMap<Y.Doc, string>()
+
+/** The origin of the two-way merge of two documents of one renamed note: a local change, stored by the relay. */
+const MERGE_ORIGIN = { source: 'local', context: { userId: 'server' } }
 
 /**
  * The sync relay (spec 5 + audit hardening). It has no listener of its own:
  * it is attached to Fastify's HTTP server and answers websocket upgrades on
  * `COLLAB_PATH` only, so the whole app is one process on one port. Editors
  * only — read-only live viewers are served via the SSE hub and never join
- * here. MCP writes (sub-project 6) use openDirectConnection on this instance,
- * so every AI edit is a visible participant in the same engine.
+ * here. Server writes reach loaded documents through live-docs.ts.
  */
 let currentInstance: Hocuspocus | null = null
 
@@ -180,41 +183,51 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       return { userId, sessionHash } satisfies ConnectionContext
     },
 
+    /**
+     * Loads the path-named document from the note's row (the database is
+     * the authority, ADR-003 §6) and its `.crdt` bin, under the note's lock
+     * (§5.2, S2a): a write to the note either finished first (and kept the
+     * bin equal to the row, so nothing is rebuilt) or waits for the load and
+     * then pushes into the loaded document. Records the note's id: the
+     * document's stores go to that note only (§5.5).
+     */
     async onLoadDocument({ documentName, document }) {
       const { vaultId, path } = parseDocName(documentName)
-      const note = await readNote(vaultId, path)
-      if (!note) throw new Error(`note does not exist: ${documentName}`)
-
-      const savedUpdate = await loadCrdtState(vaultId, path)
-      if (savedUpdate) {
-        Y.applyUpdate(document, savedUpdate)
-        const body = document.getText('body')
-        const currentBody = body.toString()
-        if (currentBody !== note.body) {
-          body.delete(0, body.length)
-          body.insert(0, note.body)
-        }
-        const fm = document.getMap('frontmatter')
-        const currentFm = fm.toJSON() as Record<string, unknown>
-        for (const key of Object.keys(currentFm)) {
-          if (!(key in note.frontmatter)) {
-            fm.delete(key)
+      await withKeyLock(noteLock(vaultId, path), async () => {
+        const note = await readNote(vaultId, path)
+        if (!note) throw new Error(`note does not exist: ${documentName}`)
+        documentNotes.set(document, note.row.id)
+        const savedUpdate = await loadCrdtState(vaultId, path)
+        if (savedUpdate) {
+          Y.applyUpdate(document, savedUpdate)
+          const body = document.getText('body')
+          const currentBody = body.toString()
+          if (currentBody !== note.body) {
+            body.delete(0, body.length)
+            body.insert(0, note.body)
           }
-        }
-        for (const [key, value] of Object.entries(note.frontmatter)) {
-          if (JSON.stringify(currentFm[key]) !== JSON.stringify(value)) {
-            fm.set(key, value)
+          const fm = document.getMap('frontmatter')
+          const currentFm = fm.toJSON() as Record<string, unknown>
+          for (const key of Object.keys(currentFm)) {
+            if (!(key in note.frontmatter)) {
+              fm.delete(key)
+            }
           }
+          for (const [key, value] of Object.entries(note.frontmatter)) {
+            if (JSON.stringify(currentFm[key]) !== JSON.stringify(value)) {
+              fm.set(key, value)
+            }
+          }
+        } else {
+          const body = document.getText('body')
+          if (body.length === 0) body.insert(0, note.body)
+          const fm = document.getMap('frontmatter')
+          for (const [key, value] of Object.entries(note.frontmatter)) {
+            if (fm.get(key) === undefined) fm.set(key, value)
+          }
+          await saveCrdtState(vaultId, path, Y.encodeStateAsUpdate(document))
         }
-      } else {
-        const body = document.getText('body')
-        if (body.length === 0) body.insert(0, note.body)
-        const fm = document.getMap('frontmatter')
-        for (const [key, value] of Object.entries(note.frontmatter)) {
-          if (fm.get(key) === undefined) fm.set(key, value)
-        }
-        await saveCrdtState(vaultId, path, Y.encodeStateAsUpdate(document))
-      }
+      })
       return document
     },
 
@@ -261,12 +274,47 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       stripAgentClaims(documentName, states)
     },
 
+    /**
+     * Stores the document into the note it loaded (ADR-003 §5.5, S2a), by
+     * id, through the transactional store, which takes the note's lock: a
+     * write holding it finishes (and pushes its change into this document)
+     * first. A document whose path the note no longer has (renamed while
+     * open) stores into the note at its current path, never into a note
+     * created later at the old path; when the note is also open at its
+     * current path, the two documents are merged into each other instead and
+     * the current-path document stores. A trashed or purged note stores nothing.
+     */
     async onStoreDocument({ documentName, document, lastContext }) {
-      const { vaultId, path } = parseDocName(documentName)
+      const { vaultId, path: docPath } = parseDocName(documentName)
       const state = docState(document)
       bodyMeasured(document, state.body)
       const context: Partial<ConnectionContext> | undefined = lastContext
-      // A rejected store is a failed job (#705): the file keeps its last valid
+      const noteId = documentNotes.get(document)
+      const [note] = noteId
+        ? await db.select({ path: notes.path, deletedAt: notes.deletedAt }).from(notes).where(eq(notes.id, noteId))
+        : []
+      if (!noteId || !note || note.deletedAt) {
+        const reason = !note ? 'the note was purged' : 'the note is in the trash'
+        console.error(`collab store of ${documentName} not stored: ${reason}`)
+        recordJob('collab-store', { error: { name: 'NoteGone', message: reason } }, vaultId)
+        return
+      }
+      const path = note.path
+      if (path !== docPath) {
+        const current = loadedDocument(vaultId, path)
+        if (current && current.doc !== document) {
+          if (!sharesHistory(document, current.doc)) {
+            console.error(`collab store of ${documentName} not stored: the note is open at ${path} with unrelated history`)
+            recordJob('collab-store', { error: { name: 'UnrelatedHistory', message: `${docPath} -> ${path}` } }, vaultId)
+            return
+          }
+          // Each tab sees the other's typing; the current-path document stores the merged state.
+          Y.applyUpdate(current.doc, Y.encodeStateAsUpdate(document, Y.encodeStateVector(current.doc)), MERGE_ORIGIN)
+          Y.applyUpdate(document, Y.encodeStateAsUpdate(current.doc, Y.encodeStateVector(document)), MERGE_ORIGIN)
+          return
+        }
+      }
+      // A rejected store is a failed job (#705): the row keeps its last valid
       // version while editors see their edit, so the owner must hear of it.
       let failed = false
       try {
@@ -274,13 +322,10 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         // merged into a rebuilt document doubles it, #488) is quarantined
         // (#492): kept as a revision, not stored. Editors keep what they see;
         // the next store without the repeat is written as usual and ends the episode.
-        await updateNote(
-          vaultId,
-          path,
-          state,
-          undefined,
-          context?.directWrite ? {} : { quarantine: 'repeated-block', episode: quarantineEpisodes.get(document) },
-        )
+        await updateNote(vaultId, path, state, undefined, {
+          relay: { noteId },
+          ...(context?.directWrite ? {} : { quarantine: 'repeated-block' as const, episode: quarantineEpisodes.get(document) }),
+        })
         quarantineEpisodes.delete(document)
       } catch (err) {
         if (err instanceof NoteWriteQuarantinedError) {
@@ -289,7 +334,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
           if (!err.repeat) console.error(`collab store quarantined for ${documentName}: ${err.message}`)
           recordJob('collab-store', { error: err, repeat: err.repeat }, vaultId)
         } else {
-          // Invalid collab state (e.g. bad frontmatter): keep last valid file.
+          // Invalid collab state (e.g. bad frontmatter): keep last valid row.
           console.error(`collab store rejected for ${documentName}:`, err)
           recordJob('collab-store', { error: err }, vaultId)
         }
@@ -350,6 +395,14 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
 
   const unbindKick = wireKick(hocuspocus)
   currentInstance = hocuspocus
+  registerLiveDocs({
+    loaded(name) {
+      const doc = hocuspocus.documents.get(name)
+      if (!doc || doc.isLoading) return null
+      const editors = [...new Set([...doc.getConnections()].map((c) => (c.context as ConnectionContext).userId))]
+      return { doc, editors }
+    },
+  })
 
   return {
     hocuspocus,
@@ -360,6 +413,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       for (const client of wss.clients) client.terminate()
       wss.close()
       currentInstance = null
+      registerLiveDocs(null)
       forgetAgentPresence()
     },
   }

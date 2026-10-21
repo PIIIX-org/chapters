@@ -105,13 +105,14 @@ export async function recomputeSemanticEdges(
   })
 }
 
-/** Removes every semantic edge touching a node, in both directions. */
+/** Removes every semantic edge touching a node, in both directions (inside `client`'s transaction when given). */
 export async function deleteSemanticEdgesFor(
   nodeType: SemanticNodeType,
   nodeIds: string[],
+  client: DbOrTx = db,
 ): Promise<void> {
   if (nodeIds.length === 0) return
-  await db
+  await client
     .delete(semanticEdges)
     .where(
       or(

@@ -10,6 +10,7 @@ import { scrubStoredGitCredentials } from './repositories/git-remote.js'
 import { startBackupScheduler } from './export/backup-service.js'
 import { config, MIN_MONITORING_TOKEN_LENGTH } from './config.js'
 import { sql } from './db/client.js'
+import { reconcileStore, runStoreBackfill, storeMigrated, sweepTempFiles } from './notes/store-reconcile.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 
@@ -26,6 +27,19 @@ const app = await buildApp()
 
 try {
   await runMigrations()
+  // ADR-003 S2a, before anything is served (§7 boot steps 2-3): the one-time
+  // backfill into the transactional store (resumable), then on every boot the
+  // reconciliation of rows written around the store (rollback-era code,
+  // restores, SQL). Neither aborts boot because of one note.
+  if (!(await storeMigrated())) await runStoreBackfill()
+  else {
+    const removed = await sweepTempFiles()
+    if (removed > 0) console.log(`removed ${removed} orphan temp file(s)`)
+  }
+  const store = await reconcileStore()
+  if (store.projections + store.raised + store.revisions + store.failed > 0) {
+    console.log(`store reconciliation: ${JSON.stringify(store)}`)
+  }
   // Before anything serves or syncs a repository: remotes stored with a
   // credential in the URL (before #383 was fixed) are moved to encrypted storage.
   const scrub = await scrubStoredGitCredentials()

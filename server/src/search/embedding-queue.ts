@@ -49,6 +49,14 @@ export function scheduleEmbedding(noteId: string): void {
   embedding.track(enqueueEmbeddings([noteId]))
 }
 
+/**
+ * Wakes the worker after a store write committed its `embed_note` job in the
+ * same transaction (ADR-003 §5.2, notes/store-tx.ts). Never blocks the caller.
+ */
+export function kickEmbeddings(): void {
+  embedding.kick()
+}
+
 /** Awaits until pending enqueues and the drain are finished — tests and batch jobs only. */
 export async function flushEmbeddings(): Promise<void> {
   await embedding.flush()

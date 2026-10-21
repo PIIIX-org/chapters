@@ -10,11 +10,12 @@ import {
   assetFile,
   isSafeAssetName,
   noteFile,
-  regenProgressiveIndices,
   resolveNotePath,
   trashFile,
   vaultDir,
 } from '../notes/store.js'
+import { reconcileStore } from '../notes/store-reconcile.js'
+import { flushProjections } from '../notes/projector.js'
 import {
   OkfValidationError,
   extractWikilinks,
@@ -521,24 +522,15 @@ async function planRestore(contents: BackupContents): Promise<PreparedRestore> {
   }
 }
 
-/** Regenerates the progressive-disclosure index.md files of the archive's live notes' directories (derived from the committed rows). */
-async function regenIndices(contents: BackupContents, onlyMissing: boolean): Promise<void> {
-  const dirsByVault = new Map<string, Set<string>>()
-  for (const note of contents.tables.get('notes')!) {
-    if (note.deletedAt != null) continue
-    const vaultId = String(note.vaultId)
-    const dirs = dirsByVault.get(vaultId) ?? new Set<string>()
-    for (const dir of resolveNotePath(String(note.path)).ancestorDirectories) dirs.add(dir)
-    dirsByVault.set(vaultId, dirs)
-  }
-  for (const [vaultId, dirs] of dirsByVault) {
-    let wanted = [...dirs]
-    if (onlyMissing) {
-      const missing = await Promise.all(wanted.map((dir) => stat(join(vaultDir(vaultId), dir, 'index.md')).then(() => false, () => true)))
-      wanted = wanted.filter((_, i) => missing[i])
-    }
-    await regenProgressiveIndices(vaultId, wanted)
-  }
+/**
+ * Brings the restored rows into the store (ADR-003 §8 "#776 coordination"):
+ * boot reconciliation gives every restored note its projection rows and a
+ * revision at its `seq`, then the projector writes (or adopts, when the
+ * archive's file already holds the row's content) every file and index.md.
+ */
+async function projectRestored(): Promise<void> {
+  await reconcileStore()
+  await flushProjections()
 }
 
 /**
@@ -597,7 +589,7 @@ async function applyRestore(contents: BackupContents, { inserts, writes }: Prepa
     await Promise.all(created.map((file) => rm(file, { force: true })))
     throw err
   }
-  await regenIndices(contents, false)
+  await projectRestored()
 }
 
 /**
@@ -615,7 +607,7 @@ export async function restoreBackup(buffer: Buffer, options: { dryRun?: boolean 
   const prepared = await planRestore(contents)
   if (prepared.plan.conflicts.length > 0) throw new RestoreRefusedError(prepared.plan)
   if (options.dryRun) return prepared.plan
-  if (prepared.plan.alreadyRestored) await regenIndices(contents, true)
+  if (prepared.plan.alreadyRestored) await projectRestored()
   else await applyRestore(contents, prepared)
   return prepared.plan
 }
