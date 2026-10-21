@@ -1,10 +1,11 @@
 import { chmod, mkdir, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
+import { DrizzleQueryError } from 'drizzle-orm/errors'
 import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { buildInstanceBackup } from './archive.js'
 import { deleteS3Object, listS3Objects, uploadS3Object, type S3Config } from './s3.js'
-import { recordJob } from '../monitoring/metrics.js'
+import { errorInfo, recordJob } from '../monitoring/metrics.js'
 import { atomicWrite } from '../notes/atomic-write.js'
 
 /**
@@ -153,6 +154,29 @@ export async function pruneS3Backups(
 }
 
 /**
+ * Building the archive failed (database dump, a vault file). The message is
+ * fixed because the original one can name a note's path or a database value,
+ * and this one is shown on the admin page (`lastError`) and in the run
+ * endpoint's 500 (#771). The `code` (EACCES, a Postgres SQLSTATE) is kept for
+ * the operator and the monitoring report: it is taken from the first error in
+ * the `cause` chain that has one, because drizzle wraps a query failure in a
+ * `DrizzleQueryError` whose `cause` carries the SQLSTATE. The original error is
+ * the `cause`, printed in the server log only.
+ */
+class BackupBuildError extends Error {
+  readonly code: string | null
+  constructor(cause: unknown) {
+    let code: string | null = null
+    for (let current = cause; current instanceof Error && !code; current = current.cause) {
+      code = errorInfo(current).code
+    }
+    super(`Building the backup archive failed${code ? ` (${code})` : ''}; details in the server log`, { cause })
+    this.name = 'BackupBuildError'
+    this.code = code
+  }
+}
+
+/**
  * Runs an instance backup and distributes it to all configured destinations
  * (local filesystem and/or S3-compatible object storage), applying retention pruning.
  */
@@ -164,11 +188,21 @@ export async function executeBackup(options?: { actorUserId?: string }): Promise
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   const filename = `elara-backup-${timestamp}.zip`
-  const zip = await buildInstanceBackup()
-  const sizeBytes = zip.byteLength
   let totalPruned = 0
 
   try {
+    // Inside the try: a failed build is a failed run too, so the scheduler
+    // waits a full interval instead of rebuilding every 15 minutes (#771).
+    const zip = await buildInstanceBackup().catch((err: unknown) => {
+      // Logged here so on-demand runs (POST /admin/backup/run) leave the cause
+      // in the server log too. A drizzle wrapper's message carries the query
+      // parameters, so its driver error is logged instead.
+      const logged = err instanceof DrizzleQueryError ? err.cause : err
+      console.error('[backup] building the archive failed:', logged)
+      throw new BackupBuildError(err)
+    })
+    const sizeBytes = zip.byteLength
+
     if (localPath && destinations.includes('local')) {
       await preparePrivateDir(localPath)
       // Atomic: a crash mid-write leaves a temp file, never a truncated zip under
@@ -264,10 +298,10 @@ export function startBackupScheduler(): () => void {
       executeBackup().then(
         () => recordJob('backup', 'ok'),
         (err) => {
-          console.error('[backup-scheduler] automated backup failed:', err)
+          // A build failure's cause is logged by executeBackup already, and a
+          // drizzle cause's message carries the query parameters.
+          console.error('[backup-scheduler] automated backup failed:', err instanceof BackupBuildError ? err.message : err)
           recordJob('backup', { error: err, repeat: wasFailing })
-          // Also when building the archive failed before executeBackup's own bookkeeping.
-          backupFailing = true
         },
       )
     }
