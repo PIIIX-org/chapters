@@ -4,7 +4,7 @@ import { EmbeddingWorkerCrashError, LocalEmbedder } from '../src/search/embeddin
 
 // The real model is never loaded: a fake worker with the same message protocol
 // answers `[text length, batch number]` per text (test/fixtures/fake-embedding-worker.ts).
-// The real worker is covered by embedding-worker.test.ts.
+// The real model is covered by embedding-worker.test.ts (opt-in: ELARA_REAL_MODEL_TESTS=1).
 const FAKE_WORKER = new URL('./fixtures/fake-embedding-worker.ts', import.meta.url)
 
 let errorSpy: MockInstance<typeof console.error>
@@ -76,6 +76,32 @@ describe('local embedder', () => {
     expect(batchOf(await embedder.embed(['first']))).toEqual([0])
     await expect(embedder.embed(['fail'])).rejects.toMatchObject({ name: 'TypeError', message: 'bad input' })
     expect(batchOf(await embedder.embed(['second']))).toEqual([1])
+  })
+
+  it('keeps the event loop responsive while a batch holds the embedding thread (#496)', async () => {
+    const embedder = new LocalEmbedder(FAKE_WORKER)
+    expect(batchOf(await embedder.embed(['warm']))).toEqual([0])
+    // Three batches that each block their thread for 300 ms, like an ONNX run
+    // of 8 texts (0.45 s on a fast laptop). On the main thread one batch alone
+    // would exceed the 200 ms limit. A /health probe is a timer callback away: it
+    // answers only while the main event loop is free.
+    // A real interval on purpose: the lag of the real event loop is what is measured.
+    const texts = ['busy:300', ...Array(7).fill('a'), 'busy:300', ...Array(7).fill('b'), 'busy:300']
+    let maxLagMs = 0
+    let last = performance.now()
+    const timer = setInterval(() => {
+      const now = performance.now()
+      maxLagMs = Math.max(maxLagMs, now - last - 20)
+      last = now
+    }, 20)
+    let vectors: number[][]
+    try {
+      vectors = await embedder.embed(texts)
+    } finally {
+      clearInterval(timer)
+    }
+    expect(maxLagMs).toBeLessThan(200)
+    expect(batchOf(vectors)).toEqual(texts.map((_, i) => 1 + Math.floor(i / 8)))
   })
 
   it('an empty request needs no worker', async () => {

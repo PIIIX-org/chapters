@@ -1,15 +1,16 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { parseNote, type OkfNote } from './okf.js'
-import { noteFile } from './store.js'
+import { noteFile, vaultDir } from './store.js'
 
 export interface NoteFileProblem {
   vaultId: string
   vaultName: string
   path: string
-  problem: 'missing-file' | 'unparseable' | 'frontmatter-mismatch' | 'body-mismatch'
+  problem: 'missing-file' | 'unparseable' | 'frontmatter-mismatch' | 'body-mismatch' | 'orphan-file'
   detail: string
 }
 
@@ -33,6 +34,37 @@ interface Row {
   file_applied: boolean
 }
 
+/** How a file's text differs from a row: the check-notes comparison, also used by the doctor. */
+export type FileContentProblem = Pick<NoteFileProblem, 'problem' | 'detail'>
+
+/**
+ * Compares the text of a note file with the row's frontmatter and body:
+ * frontmatter key by key with deep equality (jsonb does not keep key order),
+ * body exactly. Returns nothing when the file holds the row's content.
+ */
+export function compareNoteFile(raw: string, row: { frontmatter: Record<string, unknown>; body: string }): FileContentProblem[] {
+  let parsed: OkfNote
+  try {
+    parsed = parseNote(raw)
+  } catch (err) {
+    return [{ problem: 'unparseable', detail: err instanceof Error ? err.message : String(err) }]
+  }
+  const problems: FileContentProblem[] = []
+  const differing = [...new Set([...Object.keys(parsed.frontmatter), ...Object.keys(row.frontmatter)])]
+    .filter((key) => !isDeepStrictEqual(parsed.frontmatter[key], row.frontmatter[key]))
+    .sort()
+  if (differing.length > 0) problems.push({ problem: 'frontmatter-mismatch', detail: `differing keys: ${differing.join(', ')}` })
+  if (parsed.body !== row.body) {
+    let offset = 0
+    while (parsed.body[offset] === row.body[offset]) offset++
+    problems.push({
+      problem: 'body-mismatch',
+      detail: `first difference at offset ${offset} (file ${parsed.body.length} chars, row ${row.body.length} chars)`,
+    })
+  }
+  return problems
+}
+
 /**
  * Read-only file checker (ADR-003 §7 "check-notes stays read-only"). The
  * database is the authority and the `.md` files are a projection the
@@ -40,8 +72,10 @@ interface Row {
  * only where its `file` projection is applied at the row's current `seq`;
  * notes whose projections are still pending are listed separately (a file
  * behind its row there is expected, not damage). A file that differs from
- * an applied row, is missing or does not parse is a problem. CI runs this
- * over everything the server test suite wrote (#578).
+ * an applied row, is missing or does not parse is a problem, and so is an
+ * orphan: a `.md` file the projector never wrote that no note or generated
+ * index owns (#495). CI runs this over everything the server test suite
+ * wrote (#578).
  */
 export async function checkNoteFiles(
   vaultId?: string,
@@ -70,31 +104,90 @@ export async function checkNoteFiles(
       problems.push({ ...note, problem: 'missing-file', detail: 'file not found on disk' })
       continue
     }
-    let parsed: OkfNote
-    try {
-      parsed = parseNote(raw)
-    } catch (err) {
-      problems.push({ ...note, problem: 'unparseable', detail: err instanceof Error ? err.message : String(err) })
-      continue
-    }
-    // jsonb does not keep key order, so compare key by key, not serialized.
-    const differing = [...new Set([...Object.keys(parsed.frontmatter), ...Object.keys(row.frontmatter)])]
-      .filter((key) => !isDeepStrictEqual(parsed.frontmatter[key], row.frontmatter[key]))
-      .sort()
-    if (differing.length > 0) {
-      problems.push({ ...note, problem: 'frontmatter-mismatch', detail: `differing keys: ${differing.join(', ')}` })
-    }
-    if (parsed.body !== row.body) {
-      let offset = 0
-      while (parsed.body[offset] === row.body[offset]) offset++
-      problems.push({
-        ...note,
-        problem: 'body-mismatch',
-        detail: `first difference at offset ${offset} (file ${parsed.body.length} chars, row ${row.body.length} chars)`,
-      })
-    }
+    for (const problem of compareNoteFile(raw, row)) problems.push({ ...note, ...problem })
+  }
+  for (const orphan of await orphanFiles(vaultId)) {
+    problems.push({
+      vaultId: orphan.vaultId,
+      vaultName: orphan.vaultName,
+      path: orphan.path,
+      problem: 'orphan-file',
+      detail: 'no note, generated index or projector record owns this file',
+    })
   }
   return { checked, problems, pending }
+}
+
+/**
+ * Every `*.md` file under a vault directory, vault-relative, outside
+ * `assets/` and every dot-directory (`.trash`, `.conflicts`, `.orphans`,
+ * `.migration`, `.crdt*`): the files the orphan sweep (§7 boot step 9) looks at.
+ */
+export async function vaultMarkdownFiles(vaultId: string): Promise<string[]> {
+  const root = vaultDir(vaultId)
+  const found: string[] = []
+  async function visit(rel: string): Promise<void> {
+    let entries
+    try {
+      entries = await readdir(join(root, rel), { withFileTypes: true })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw err
+    }
+    for (const entry of entries) {
+      const child = rel ? `${rel}/${entry.name}` : entry.name
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith('.') || child === 'assets') continue
+        await visit(child)
+      } else if (entry.isFile() && entry.name.endsWith('.md')) found.push(child)
+    }
+  }
+  await visit('')
+  return found.sort()
+}
+
+/** A `.md` file with no owner: see orphanFiles. */
+export interface OrphanFile {
+  vaultId: string
+  vaultName: string
+  path: string
+}
+
+/**
+ * The `.md` files of live vaults that the orphan sweep would move (§7 boot
+ * step 9): no `projected_files` row, no live note at that path and, for an
+ * `index.md`, no live note under its directory. Read-only.
+ */
+export async function orphanFiles(vaultId?: string, client: Pick<typeof db, 'execute'> = db): Promise<OrphanFile[]> {
+  const vaults = (await client.execute(sql`
+    SELECT id, name FROM vaults WHERE deleted_at IS NULL ${vaultId ? sql`AND id = ${vaultId}` : sql``}
+    ORDER BY name, id`)) as unknown as Array<{ id: string; name: string }>
+  const orphans: OrphanFile[] = []
+  for (const vault of vaults) {
+    const files = await vaultMarkdownFiles(vault.id)
+    if (files.length === 0) continue
+    const recorded = new Set(
+      ((await client.execute(sql`SELECT path FROM projected_files WHERE vault_id = ${vault.id}`)) as unknown as Array<{ path: string }>).map(
+        (r) => r.path,
+      ),
+    )
+    const live = new Set(
+      ((await client.execute(sql`SELECT path FROM notes WHERE vault_id = ${vault.id} AND deleted_at IS NULL`)) as unknown as Array<{
+        path: string
+      }>).map((r) => r.path),
+    )
+    const dirs = new Set<string>([''])
+    for (const path of live) {
+      const parts = path.split('/')
+      for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'))
+    }
+    for (const rel of files) {
+      if (recorded.has(rel) || live.has(rel.slice(0, -3))) continue
+      if (rel === 'index.md' ? live.size > 0 : rel.endsWith('/index.md') && dirs.has(rel.slice(0, -'/index.md'.length))) continue
+      orphans.push({ vaultId: vault.id, vaultName: vault.name, path: rel })
+    }
+  }
+  return orphans
 }
 
 /** Every pending `file`/`dir_index` projection of a live note in a live vault. */
