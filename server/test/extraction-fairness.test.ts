@@ -48,7 +48,8 @@ describe('extraction queue fairness across repositories (#497)', () => {
     // (#849: 101 real extractions ran past 5 s on a loaded machine). The first
     // file is held until both repositories are enqueued, so the order depends
     // only on the queue, not on timing.
-    const { promise: gate, resolve: release } = Promise.withResolvers<void>()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
     const pathById = new Map<string, string>()
     const order: string[] = []
     vi.spyOn(extractionWork, 'processFile').mockImplementation(async (fileId) => {
