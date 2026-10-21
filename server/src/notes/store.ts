@@ -33,7 +33,6 @@ import {
   type NoteCrdt,
   type UpdateActor,
 } from '../sync/note-crdt.js'
-import { recordJob } from '../monitoring/metrics.js'
 import { mergeFrontmatter, mergeTextKeepingTheirs } from '../sync/three-way-merge.js'
 import { revisionAtSeq } from './store-reconcile.js'
 import { failpoint } from '../failpoints.js'
