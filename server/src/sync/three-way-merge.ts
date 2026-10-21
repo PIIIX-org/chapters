@@ -55,6 +55,27 @@ function sideLines(base: readonly string[], hunks: readonly SideHunk[], mine: bo
 
 /** `mine` merged onto `theirs`, both made from `base` (see the top of this file). */
 export function mergeText(base: string, theirs: string, mine: string): TextMerge {
+  const merged = mergeLines(base, theirs, mine, false)
+  return merged.conflicts.length > 0 ? { text: null, conflicts: merged.conflicts } : { text: merged.text, concurrent: merged.concurrent }
+}
+
+/**
+ * `mine` merged onto `theirs` where an overlap keeps `theirs`' lines instead
+ * of refusing the merge (ADR-003 §5.4 rebase: acked typing, `theirs`, stays
+ * in the text; `mine`, a row changed behind the store, stays recoverable
+ * from its own revision). `overlaps` lists where `mine` was dropped.
+ */
+export function mergeTextKeepingTheirs(base: string, theirs: string, mine: string): { text: string; overlaps: LineChange[] } {
+  const merged = mergeLines(base, theirs, mine, true)
+  return { text: merged.text, overlaps: merged.conflicts }
+}
+
+function mergeLines(
+  base: string,
+  theirs: string,
+  mine: string,
+  keepTheirs: boolean,
+): { text: string; concurrent: LineChange[]; conflicts: LineChange[] } {
   const { lines: baseLines, hunks: theirHunks } = diffLines(base, theirs)
   const hunks: SideHunk[] = [
     ...theirHunks.map((hunk) => ({ ...hunk, mine: false })),
@@ -88,15 +109,17 @@ export function mergeText(base: string, theirs: string, mine: string): TextMerge
       concurrent.push(change)
     } else {
       lines = sideLines(baseLines, group, true, start, end)
-      if (group.some((hunk) => !hunk.mine) && lines.join('') !== theirLines.join('')) conflicts.push(change)
+      if (group.some((hunk) => !hunk.mine) && lines.join('') !== theirLines.join('')) {
+        conflicts.push(change)
+        if (keepTheirs) lines = theirLines
+      }
     }
     for (const line of lines) out.push(line)
     shift += theirLines.length - (end - start)
     copied = end
   }
-  if (conflicts.length > 0) return { text: null, conflicts }
   for (let k = copied; k < baseLines.length; k++) out.push(baseLines[k]!)
-  return { text: out.join(''), concurrent }
+  return { text: out.join(''), concurrent, conflicts }
 }
 
 /** The merged frontmatter, the keys only `theirs` changed, and the keys both changed differently. */

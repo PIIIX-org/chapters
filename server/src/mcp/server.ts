@@ -1007,7 +1007,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireAccess(target, 'read')
       const note = await readNote(target, path)
       if (!note) throw new McpToolError('note not found')
-      showAgentPresence(target, note.row.path, presence, 'reading')
+      showAgentPresence(target, note.row.id, presence, 'reading')
       const rev = await revisionOfState(note.row.id, { frontmatter: note.frontmatter, body: note.body })
       return { path: note.row.path, rev, frontmatter: note.frontmatter, body: note.body }
     },
@@ -1123,7 +1123,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         }
       }
       if (!updated) throw new McpToolError('note not found')
-      showAgentPresence(target, updated.path, presence, 'editing')
+      showAgentPresence(target, updated.id, presence, 'editing')
       const rev = await revisionOfState(updated.id, updated)
       return baseRev === undefined ? { ...updated, rev } : { ...updated, rev, baseRev, ...report }
     },
@@ -1152,7 +1152,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         writeThroughCollab(target, path, requestedEdit(edit), actor, { quarantine: allowGrowth ? undefined : 'all' }),
       ))
     if (!note) throw new McpToolError('note not found')
-    showAgentPresence(target, note.path, presence, 'editing')
+    showAgentPresence(target, note.id, presence, 'editing')
     return { ...note, created: made !== null }
   }
 
@@ -1395,7 +1395,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         revertNote(target, path, revisionId, actor, writeThroughCollab),
       )
       if (!reverted) throw new McpToolError('note or revision not found')
-      showAgentPresence(target, reverted.path, presence, 'editing')
+      showAgentPresence(target, reverted.id, presence, 'editing')
       return reverted
     },
   )
@@ -1992,7 +1992,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireAccess(target, 'read')
       const note = await readNote(target, path)
       if (!note) throw new McpToolError('note not found')
-      showAgentPresence(target, note.row.path, presence, 'reading')
+      showAgentPresence(target, note.row.id, presence, 'reading')
       return {
         path: note.row.path,
         markdown: serializeNote({ frontmatter: note.frontmatter, body: note.body }),

@@ -92,7 +92,8 @@ export function noteRoutes(app: FastifyInstance) {
     splitPath(req.params['*'])
     const note = await readNote(req.params.id, req.params['*'])
     if (!note) return reply.code(404).send({ error: 'note not found' })
-    return { path: note.row.path, frontmatter: note.frontmatter, body: note.body, updatedAt: note.row.updatedAt }
+    // `id` names the note's collab document (`<vault>/~<id>`, ADR-003 §5.4).
+    return { id: note.row.id, path: note.row.path, frontmatter: note.frontmatter, body: note.body, updatedAt: note.row.updatedAt }
   })
 
   // `frontmatter` merges per top-level key; `replace: true` swaps the whole

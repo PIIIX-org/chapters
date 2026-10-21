@@ -323,5 +323,11 @@ export async function applyRowChange(
   if (body !== current.body) await replaceLinks(tx, row.id, body)
   await raiseProjections(tx, row.id, row.seq, listed ? ['file', 'dir_index'] : ['file'])
   if (deletedAt === null) await enqueueEmbeddingTx(tx, row.id, row.seq)
+  // A note with CRDT state that agreed with the row before this write still
+  // agrees with it (the store writes the matching Yjs update in the same
+  // transaction, or the change is to path or `deleted_at` only, which the
+  // CRDT state does not hold). A row already past `folded_seq` changed behind
+  // the store and stays so, for the rebase (ADR-003 §5.4).
+  await tx.execute(sql`UPDATE note_crdt SET folded_seq = ${row.seq} WHERE note_id = ${row.id} AND folded_seq = ${current.seq}`)
   return { row, changed }
 }
