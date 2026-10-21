@@ -194,7 +194,7 @@ async function listFiles(root: string, dir: string): Promise<string[]> {
       throw err
     }
     for (const entry of entries) {
-      const child = `${rel}/${entry.name}`
+      const child = rel ? `${rel}/${entry.name}` : entry.name
       if (entry.isDirectory()) await visit(child)
       else if (entry.isFile()) found.push(child)
     }
@@ -372,12 +372,12 @@ export async function runDoctor(options: { vaultId?: string; repair?: boolean; c
   for (const vault of vaults) {
     const root = vaultDir(vault.id)
     for (const copy of await listFiles(root, '.conflicts')) {
-      problem({ class: 'conflict-copy', vaultId: vault.id, noteId: null, path: copy.slice(1), detail: 'bytes the projector replaced; review and delete' })
+      problem({ class: 'conflict-copy', vaultId: vault.id, noteId: null, path: copy, detail: 'bytes the projector replaced; review and delete' })
     }
     for (const bin of await listFiles(root, '.crdt')) {
       if (!bin.endsWith('.bin')) continue
       checked.bins++
-      const rel = bin.slice(1)
+      const rel = bin
       const notePath = rel.slice('.crdt/'.length, -'.bin'.length)
       const noteId = livePaths.get(`${vault.id}/${notePath}`)
       if (!noteId) {

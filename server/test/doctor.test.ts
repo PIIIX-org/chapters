@@ -83,7 +83,7 @@ async function noteState(name: string): Promise<{ seq: string; body: string; fro
 }
 
 /** Runs the doctor, expects only `cls` at `name`, repairs, lets the workers run, and expects the vault clean with the row untouched. */
-async function expectRepaired(name: string, cls: DoctorClass): Promise<void> {
+async function expectRepaired(name: string, cls: DoctorClass, conflictCopy = false): Promise<void> {
   const before = await noteState(name)
   expect(classesOf(await doctor())).toEqual([cls])
   const repaired = await doctor(true)
@@ -91,7 +91,8 @@ async function expectRepaired(name: string, cls: DoctorClass): Promise<void> {
   await flushProjections()
   kickEmbeddings()
   await flushEmbeddings()
-  expect((await doctor()).problems).toEqual([])
+  expect(classesOf(await doctor())).toEqual(conflictCopy ? ['conflict-copy'] : [])
+  await rm(join(vaultDir(vaultId), '.conflicts'), { recursive: true, force: true })
   expect(await noteState(name)).toEqual(before)
 }
 
@@ -135,7 +136,7 @@ describe('doctor', () => {
 
   it('file-unparseable', async () => {
     await writeFile(file('garbled'), '## no frontmatter fence\n')
-    await expectRepaired('garbled', 'file-unparseable')
+    await expectRepaired('garbled', 'file-unparseable', true)
   })
 
   it('file-differs: content different from the row; the repair keeps a conflict copy', async () => {
