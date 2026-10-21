@@ -1850,6 +1850,23 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     rather than `pnpm start`, so the server is PID 1 and `SIGTERM`
     reaches the shutdown handler in `index.ts` that flushes note edits
     still inside the collab store debounce.
+  - Sets `pnpm_config_verify_deps_before_run=false`, so the operator
+    commands (`pnpm check-notes`, `pnpm migrate-store`,
+    `pnpm restore-backup`, ...) run straight away and offline (#872).
+    pnpm 11's default checks the dependencies before every script and
+    installs the whole workspace from the registry when it thinks they
+    are stale. It compares manifests with the lockfile whenever a
+    `package.json` is newer than the last install, which `COPY server`
+    makes true in every image built on a cached install layer. That
+    comparison failed on the `adm-zip` override until
+    `server/package.json` said the same `>=0.6.1` as the override. Keep
+    a direct dependency's range equal to its override in
+    `pnpm-workspace.yaml`: pnpm compares the raw manifest, not the
+    overridden one. The image check (`.github/actions/image-offline-check`,
+    run by `image-check.yml` on PRs that change the image's dependency
+    inputs and by `publish.yml` before it pushes) runs
+    `pnpm check-notes --help` with `--network none` as shipped, and once
+    more with every manifest touched and the check set to `error`.
   - `HEALTHCHECK` hits `/health` with `node -e` + `fetch` (no curl in
     `node:*-slim`, and an apt layer for it is not worth it).
   - Exposes **`3000` only**. The Yjs relay rides Fastify's own HTTP
