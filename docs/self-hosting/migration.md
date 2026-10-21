@@ -84,6 +84,7 @@ docker compose exec app pnpm migrate-store --dry-run --report /data/elara/migrat
 | `crdt` (live notes) | `matches-row`, `matches-file`, `matches-revision` | the bin is attached to the note in S2b (its history is kept) |
 | | `mismatch`, `undecodable` | the bin is set aside in S2b and the note is seeded fresh on first open |
 | | `missing` | no bin; seeded on first open, as today |
+| `collab` (live notes) | `attach` / `set-aside` / `seed` / `has-state` | what the S2b backfill does with the note: attaches its bin, moves the bin to `.migration/<date>/bins/`, nothing until first open (no bin), or nothing because the note already has its CRDT state in the database; `counts.collab` has the totals |
 | `projection` | `applied` / `adopted` / `create` / `rewrite` | what happens to the file: nothing, kept as it is, written, or rewritten after a conflict copy |
 | `embedding` | `applied` / `pending` | pending embeddings are computed after the migration |
 
@@ -114,3 +115,26 @@ Yjs decode); the real migration adds one commit per note and the index build.
 The production estimate is the rehearsal's wall time × the ratio between the
 two hosts. If the rehearsal suggests more than 5 minutes, the migration plan
 goes back to the owner (ADR-003 Q6) before production migrates.
+
+## S2b: the editors' state moves into the database
+
+The release with ADR-003 S2b stops using `.crdt/<path>.bin` files. Each
+note's live-editing state (Yjs) is kept in Postgres (`note_crdt` and
+`note_updates`), written in the same transaction as the note, and the
+editor names a note's live document by the note id instead of its path.
+
+- **Upgrade prerequisite:** reload every open editor tab before upgrading,
+  or make sure nobody types during the upgrade. The server refuses a tab
+  still running the older page; the newer page shows "Reload to keep
+  editing". Details and rollback: [backup.md §5](backup.md).
+- **First boot:** before it serves requests, the server attaches each live
+  note's bin when its text equals the note's row, its file or one of its
+  revisions (with the change to the row's text on top), moves any other bin
+  to `vaults/<id>/.migration/<date>/bins/`, then sets
+  `instance_state.collab_migrated_at`, renames each vault's `.crdt/` to
+  `.crdt.pre-adr-003/` and writes `DATA_DIR/collab-migration-report-<time>.json`.
+  Notes without an attached bin get their state on first open. Run the dry
+  run first: its `collab` column says which notes fall in which class.
+- **Every boot** then merges into each note's state any change made to the
+  row outside the server (manual SQL, an older release) and folds editors'
+  typing that had not reached the row yet.

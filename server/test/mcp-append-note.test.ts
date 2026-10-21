@@ -19,7 +19,7 @@ import { noteRevisions } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { getLiveNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
-import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
 
 type Args = Record<string, unknown>
 interface Agent {
@@ -76,10 +76,10 @@ function created(r: { text: string }): boolean {
 }
 
 /** A browser tab on the note, through the real relay. */
-function open(path: string): HocuspocusProvider {
+async function open(path: string): Promise<HocuspocusProvider> {
   const provider = new HocuspocusProvider({
     url: `${baseUrl.replace('http', 'ws')}/collab`,
-    name: `${vaultId}/${path}`,
+    name: await noteDocName(vaultId, path),
     token: ownerToken,
     document: new Y.Doc(),
   })
@@ -145,11 +145,11 @@ describe('append_note (#478)', () => {
     const path = 'docs/open-log'
     const body = 'Intro.\n'
     await must(agents[0]!, 'create_note', { vaultId, path, body })
-    const tab = open(path)
+    const tab = await open(path)
     const text = tab.document.getText('body')
     await waitFor(() => text.toString() === body)
     text.insert(0, 'TYPED ')
-    await waitFor(() => (collab.hocuspocus.documents.get(`${vaultId}/${path}`)?.getText('body').toString() ?? '').includes('TYPED'))
+    await waitFor(() => (collab.hocuspocus.documents.get(tab.configuration.name)?.getText('body').toString() ?? '').includes('TYPED'))
 
     const results = await Promise.all(agents.slice(0, 5).map((agent, i) => call(agent, 'append_note', { vaultId, path, text: `line ${i}` })))
     expect(results.filter((r) => r.isError).map((r) => r.text)).toEqual([])

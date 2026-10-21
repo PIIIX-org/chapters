@@ -69,30 +69,8 @@
     },
     {
       "test": "collab-duplication",
-      "match": "^S17 SIGKILL \\d+ ms after ack: @M17d\\d+@ kept exactly once on disk$",
-      "issue": 488,
-      "intermittent": "which kill delays duplicate text depends on where the SIGKILL lands between the relay's note write and its .crdt write (2-5 of 8 delays per run)"
-    },
-    {
-      "test": "collab-duplication",
-      "match": "^S17 SIGKILL \\d+ ms after ack: no duplicated text$",
-      "issue": 488,
-      "intermittent": "which kill delays duplicate text depends on where the SIGKILL lands between the relay's note write and its .crdt write (2-5 of 8 delays per run)"
-    },
-    {
-      "test": "collab-duplication",
       "check": "S16 server-acknowledged collab edit survives SIGKILL after the tab closed",
       "issue": 487
-    },
-    {
-      "test": "collab-duplication",
-      "check": "S18 injected stale .crdt, fresh ydoc (page reload): disk = DB = .crdt = clients",
-      "issue": 488
-    },
-    {
-      "test": "collab-duplication",
-      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): disk = DB = .crdt = clients",
-      "issue": 488
     },
     {
       "test": "collab-duplication",
@@ -101,19 +79,8 @@
     },
     {
       "test": "collab-duplication",
-      "check": "S19b same idle tab reconnects after the doc unloaded: disk = DB = .crdt = clients",
+      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): @INJSTALE@ kept exactly once on disk",
       "issue": 488
-    },
-    {
-      "test": "collab-duplication",
-      "check": "S19b same idle tab reconnects after the doc unloaded: no duplicated text",
-      "issue": 488
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: \\.crdt bin = file for every note written in the round$",
-      "issue": 486,
-      "intermittent": "a round only leaves a stale .crdt bin when the SIGKILL lands between the relay's note write and its .crdt write"
     },
     {
       "test": "crash-write",
@@ -125,12 +92,6 @@
       "match": "^kill \\S+: check-notes clean$",
       "issue": 486,
       "intermittent": "a row without its file appears only when a SIGKILL lands between a create's insert and its file write; it then stays for later rounds"
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: dirty collab doc \\(client stays\\) survives without duplication$",
-      "issue": 832,
-      "intermittent": "only when the SIGKILL lands inside the relay's debounced store of the open document, after its note file write and before its .crdt write: the reload rebuilds the text from the file and the client that stayed connected sends its typing back a second time"
     },
     {
       "test": "crash-write",
@@ -189,6 +150,12 @@
       "test": "export-roundtrip",
       "check": "OKF reference parser (open-knowledge-format document.py) reads every exported note as written",
       "issue": 564
+    },
+    {
+      "test": "fix-crash-catchup",
+      "check": "filesPendingExtraction reaches 0",
+      "issue": 845,
+      "intermittent": "repository_status's filesPendingExtraction lags the SQL count by one poll after the boot catch-up (field 1, SQL pending 0); seen on four branches off dev 3616b53 that do not touch extraction (#845), reruns pass"
     },
     {
       "test": "multilingual-search",
