@@ -7,9 +7,9 @@ import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import { applyTextDiff, DIFF_TIME_LIMIT_MS, diffText, type TextEdit } from '../src/sync/text-diff.js'
 
-/** A deterministic markdown note of about `bytes` units: a heading every 12 lines, lines of random words. */
-function note(bytes: number, seed: number): string {
-  const words = ['vault', 'note', 'graph', 'index', 'revision', 'collab', 'crash', 'durable', 'atomic', 'rename', 'fsync', 'yjs', 'agent', 'search']
+/** A deterministic markdown note of about `bytes` units: a heading every 12 lines, lines of `words` to twice that many random words. */
+function note(bytes: number, seed: number, words = 8): string {
+  const vocabulary = ['vault', 'note', 'graph', 'index', 'revision', 'collab', 'crash', 'durable', 'atomic', 'rename', 'fsync', 'yjs', 'agent', 'search']
   let s = seed >>> 0
   const random = (): number => {
     s = (Math.imul(s, 1664525) + 1013904223) >>> 0
@@ -19,8 +19,8 @@ function note(bytes: number, seed: number): string {
   let length = 0
   for (let line = 0; length < bytes; line++) {
     const heading = line % 12 === 0 ? `## Section ${line / 12}\n` : ''
-    const n = 8 + Math.floor(random() * 8)
-    const text = `${heading}${Array.from({ length: n }, () => words[Math.floor(random() * words.length)]).join(' ')}.\n`
+    const n = words + Math.floor(random() * words)
+    const text = `${heading}${Array.from({ length: n }, () => vocabulary[Math.floor(random() * vocabulary.length)]).join(' ')}.\n`
     out.push(text)
     length += text.length
   }
@@ -109,4 +109,24 @@ describe('diffText cost (#833)', () => {
     expect(Y.encodeStateAsUpdate(apply.result).length).toBeLessThan(2 * (body.length + next.length))
     expect(apply.ms).toBeLessThan(100)
   })
+
+  // Review round 3: a short line paired with a long unrelated one counted as
+  // alike (most of the short one is a scattered subsequence of the long one),
+  // and the character diff cut it into hundreds of fragments.
+  for (const [from, to] of [
+    [8, 80],
+    [80, 8],
+  ]) {
+    it(`an unrelated rewrite of a 40 KB note from lines of ${from}+ words to lines of ${to}+ words is about one change per line`, () => {
+      const body = note(40_000, 6, from)
+      const next = note(40_000, 7, to)
+      const result = diffText(body, next)
+      expect(applied(body, result)).toBe(next)
+      expect(result.length).toBeLessThanOrEqual(2 * Math.min(body.split('\n').length, next.split('\n').length) + 2)
+      const live = new Y.Doc()
+      live.getText('body').insert(0, body)
+      live.transact(() => applyTextDiff(live.getText('body'), next))
+      expect(Y.encodeStateAsUpdate(live).length).toBeLessThan(1.5 * (body.length + next.length))
+    })
+  }
 })

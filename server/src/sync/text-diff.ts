@@ -25,11 +25,11 @@ import type * as Y from 'yjs'
  * changed run with as many new lines as old ones pairs them in order; any
  * other run is diffed per character if alike (never exactly), and if it is
  * too large or too unlike each line of its shorter side pairs with one of
- * the other's, in order, by the alignment that keeps the most characters at
- * the pairs' starts and ends. Each pair is diffed per character if alike,
- * at any length, otherwise changed between its common start and end, so a
- * rewrite of every line (a `- ` before each) still keeps each line's
- * unchanged characters. One time limit bounds the
+ * the other's, in order, by the alignment with the most likeness (shared
+ * starts, ends and stretches of text). Each pair is diffed per character if
+ * alike, at any length, otherwise changed between its common start and end,
+ * so a rewrite of every line (a `- ` before each, a `**` wrap) still keeps
+ * each line's unchanged characters. One time limit bounds the
  * whole diff (ADR-003 §5.2 step 5); past it the rest is linear work
  * (pairs trimmed to their common start and end). Characters are
  * compared by code point, so no change splits a surrogate pair (Yjs would
@@ -54,21 +54,26 @@ const REGION_UNITS = 16_384
  * Alike enough for a character diff: at most ALIKE_SHARE of the units (both
  * sides counted) changes, or what one side has more of plus at most
  * KEPT_SHARE of the shorter side (a sentence added to a paragraph that also
- * had a word changed), and never more than UNLIKE_EDITS (LINE_EDITS for one
- * line of a pair), so a failed attempt costs little: about the square of the
- * cap, since unlike text has short common stretches.
+ * had a word changed) in at most 2 + 1/16 of the shorter side's units
+ * separate changes (else a short line would match a long unrelated one
+ * through a scattered common subsequence, hundreds of fragments), and never
+ * more than UNLIKE_EDITS (LINE_EDITS for one line of a pair), so a failed
+ * attempt costs little: about the square of the cap, since unlike text has
+ * short common stretches.
  */
 const ALIKE_SHARE = 0.25
 const KEPT_SHARE = 0.1
 const UNLIKE_EDITS = 1_024
 const LINE_EDITS = 4_096
 /**
- * A changed run tries every alignment of its lines while the shifts to try
- * times its shorter side's units (and lines) stay under this; past it, and
- * past the deadline, only the alignments that put the lines one side has
- * more of in one block.
+ * A changed run tries every alignment of its lines while its lines times the
+ * shifts to try stay under this and the deadline holds; otherwise only the
+ * alignments that put the lines one side has more of in one block.
  */
-const PAIRING_UNITS = 1 << 20
+const PAIRING_CELLS = 1 << 20
+/** How many stretches of a line, and how long, alignment looks for in a candidate partner. */
+const SAMPLES = 8
+const SAMPLE_UNITS = 16
 
 /** What a character diff covers: the whole change to a text, a changed run of lines, or one line of a pair. */
 type Scope = 'text' | 'run' | 'line'
@@ -338,12 +343,24 @@ function characterEditsWithin(from: string, to: string, start: number, end: numb
   const size = removed + inserted
   if ((scope !== 'line' && size > REGION_UNITS) || Date.now() > deadline) return false
   const shorter = Math.min(removed, inserted)
-  const alike = Math.max(Math.floor(size * ALIKE_SHARE), Math.abs(removed - inserted) + Math.floor(2 * shorter * KEPT_SHARE))
+  const share = Math.floor(size * ALIKE_SHARE)
+  const alike = Math.max(share, Math.abs(removed - inserted) + Math.floor(2 * shorter * KEPT_SHARE))
   const limit = scope === 'text' && size <= EXACT_UNITS ? Infinity : Math.min(alike, scope === 'line' ? LINE_EDITS : UNLIKE_EDITS)
   const a = codePoints(from, start, start + removed)
   const b = codePoints(to, start, start + inserted)
   const { runs, complete } = diffTokens(a, b, deadline, limit)
   if (!complete) return false
+  if (limit !== Infinity) {
+    // Alike only through what one side adds: the rest must be a few separate changes.
+    let distance = 0
+    let changes = 0
+    for (let r = 0; r < runs.length; r++) {
+      if (runs[r]!.op === EQUAL) continue
+      distance += runs[r]!.n
+      if (r === 0 || runs[r - 1]!.op === EQUAL) changes++
+    }
+    if (distance > share && changes > 2 + Math.floor(shorter / 16)) return false
+  }
   const units = (codes: number[], first: number, n: number): number => {
     let length = 0
     for (let i = first; i < first + n; i++) length += codes[i]! > 0xffff ? 2 : 1
@@ -388,12 +405,32 @@ function characterEdits(from: string, to: string, at: number, deadline: number, 
 }
 
 /**
- * For each line i of `short`, the shift s (one of `shifts`, ascending) that
- * pairs it with long[i + s]: never decreasing from line to line, and keeping
- * the most characters at the pairs' common starts and ends; on a tie, the
- * smaller shift. A dynamic programme over lines × shifts.
+ * How plainly `b` is `a` changed: the units they share at their start and
+ * end, plus SAMPLE_UNITS for each of SAMPLES stretches of `a`'s middle found
+ * in `b`, so a line changed at both ends (wrapped in `**`, a `- ` added and
+ * its period dropped) still scores against its new version and not against
+ * its neighbour's.
  */
-function alignedShifts(short: readonly string[], long: readonly string[], shifts: readonly number[]): Int32Array {
+function likeness(a: string, b: string): number {
+  const [start, end] = commonEnds(a, b)
+  let score = start + end
+  const middle = a.length - start - end
+  const length = Math.min(SAMPLE_UNITS, middle >> 2)
+  if (length < 4) return score
+  for (let i = 0; i < SAMPLES; i++) {
+    const at = start + Math.floor(((middle - length) * (2 * i + 1)) / (2 * SAMPLES))
+    if (b.includes(a.slice(at, at + length))) score += length
+  }
+  return score
+}
+
+/**
+ * For each line i of `short`, the shift s (one of `shifts`, ascending) that
+ * pairs it with long[i + s]: never decreasing from line to line, and with
+ * the most likeness in all; on a tie, the smaller shift. A dynamic programme
+ * over lines × shifts; null when the deadline passes first.
+ */
+function alignedShifts(short: readonly string[], long: readonly string[], shifts: readonly number[], deadline: number): Int32Array | null {
   const n = short.length
   const k = shifts.length
   const aligned = new Int32Array(n).fill(shifts[0]!)
@@ -406,9 +443,9 @@ function alignedShifts(short: readonly string[], long: readonly string[], shifts
     let prefix = -Infinity
     let arg = 0
     for (let j = 0; j < k; j++) {
+      if ((j & 1023) === 0 && Date.now() > deadline) return null
       if (i > 0 && best[j]! > prefix) [prefix, arg] = [best[j]!, j]
-      const [start, end] = commonEnds(short[i]!, long[i + shifts[j]!]!)
-      next[j] = (i > 0 ? prefix : 0) + start + end
+      next[j] = (i > 0 ? prefix : 0) + likeness(short[i]!, long[i + shifts[j]!]!)
       choice[i * k + j] = arg
     }
     ;[best, next] = [next, best]
@@ -437,12 +474,11 @@ function pairedLineEdits(from: readonly string[], to: readonly string[], at: num
   const fromLonger = from.length > to.length
   const [short, long] = fromLonger ? [to, from] : [from, to]
   const spare = long.length - short.length
-  let units = short.length
-  for (const line of short) units += line.length
-  let shifts = [0, spare]
-  if (spare === 0) shifts = [0]
-  else if ((spare + 1) * units <= PAIRING_UNITS && Date.now() <= deadline) shifts = Array.from({ length: spare + 1 }, (_, s) => s)
-  const aligned = alignedShifts(short, long, shifts)
+  const all = spare > 1 && (spare + 1) * short.length <= PAIRING_CELLS
+  const aligned =
+    (all && alignedShifts(short, long, Array.from({ length: spare + 1 }, (_, s) => s), deadline)) ||
+    // The extra lines in one block, before or after the pairs: two shifts, linear.
+    alignedShifts(short, long, spare === 0 ? [0] : [0, spare], Infinity)!
   let offset = at
   let next = 0
   // The longer side's lines from `next` up to `until`, unpaired: deleted when old, inserted when new.

@@ -319,28 +319,42 @@ describe('applyTextDiff on a live document', () => {
     })
   }
 
-  // Review round 2 of #833: every paragraph changed (a `- ` before each) and
-  // one added or removed in the middle: nothing anchors the line diff, and one
-  // shift across the whole note lined up only one half, so the other half was
-  // replaced.
-  for (const size of [9_000, 24_000, 50_000]) {
-    for (const change of ['added', 'removed'] as const) {
-      for (const timeLimitMs of [undefined, -1]) {
-        it(`keeps typing when every paragraph of a ${size / 1000} KB note changes and one is ${change} in the middle (limit ${timeLimitMs ?? 'default'})`, () => {
-          const paragraph = paragraphs(size + (change === 'added' ? 1 : 2))
-          const lines: string[] = []
-          while (lines.join('').length < size) lines.push(paragraph(lines.length, 30))
-          const n = lines.length
-          const middle = Math.floor(n / 2)
-          const body = lines.map((line) => `${line}\n`).join('')
-          const listed = lines.map((line) => `- ${line}\n`)
-          if (change === 'added') listed.splice(middle, 0, `- ${paragraph('NEW', 30)}\n`)
-          else listed.splice(middle, 1)
-          const next = listed.join('')
-          const markers = [1, middle - 2, middle + 2, n - 2].map((k) => `Paragraph ${k} holds `)
-          expectTypingKept(body, next, markers, timeLimitMs)
-          expect(removedUnits(body, next, timeLimitMs)).toBeLessThanOrEqual(change === 'added' ? 0 : lines[middle]!.length + 1)
-        })
+  // Review rounds 2 and 3 of #833: every paragraph changed and one added or
+  // removed in the middle: nothing anchors the line diff, and one shift
+  // across the whole note (round 2), or an alignment scored only by common
+  // starts and ends when every paragraph changes at both ends (round 3),
+  // lined up only one half, so the other half was replaced.
+  const shapes = {
+    'a `- ` before each': (line: string): string => `- ${line}`,
+    'each wrapped in `**`': (line: string): string => `**${line.slice(0, -1)}**\n`,
+    'a `- ` before each and its period dropped': (line: string): string => `- ${line.slice(0, -2)}\n`,
+  }
+  for (const [shape, change] of Object.entries(shapes)) {
+    // Changed at both ends, past the time limit the pairs keep nothing to trim to, as on dev.
+    const limits = shape === 'a `- ` before each' ? [undefined, -1] : [undefined]
+    for (const size of [9_000, 24_000, 50_000]) {
+      for (const edit of ['added', 'removed'] as const) {
+        for (const timeLimitMs of limits) {
+          it(`keeps typing when every paragraph of a ${size / 1000} KB note changes (${shape}) and one is ${edit} in the middle (limit ${timeLimitMs ?? 'default'})`, () => {
+            const paragraph = paragraphs(size + (edit === 'added' ? 1 : 2))
+            const lines: string[] = []
+            while (lines.join('').length < size) lines.push(paragraph(lines.length, 30))
+            const n = lines.length
+            const middle = Math.floor(n / 2)
+            const body = lines.map((line) => `${line}\n`).join('')
+            const changed = lines.map((line) => `${change(line)}\n`)
+            if (edit === 'added') changed.splice(middle, 0, `${change(paragraph('NEW', 30))}\n`)
+            else changed.splice(middle, 1)
+            const next = changed.join('')
+            // Typing in every fifth paragraph, and either side of the middle.
+            const typed = new Set([middle - 2, middle + 2])
+            for (let k = 1; k < n; k += 5) if (k !== middle) typed.add(k)
+            expectTypingKept(body, next, [...typed].map((k) => `Paragraph ${k} holds `), timeLimitMs)
+            // Only what the shape removes from each kept paragraph (a period), and the removed paragraph.
+            const perLine = shape.includes('period') ? 1 : 0
+            expect(removedUnits(body, next, timeLimitMs)).toBeLessThanOrEqual(perLine * n + (edit === 'added' ? 0 : lines[middle]!.length + 1))
+          })
+        }
       }
     }
   }
