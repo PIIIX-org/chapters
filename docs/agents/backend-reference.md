@@ -687,12 +687,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   the repository, so it loads both under tsx (production's
   `node --import tsx`, inherited through `execArgv`) and under Node's own
   type stripping (vitest).
-- **`embedding-queue.ts`**: an in-process serial queue —
+- **`embedding-queue.ts`**: durable jobs (#494, see **Durable jobs**
+  below), kind `embed_note`, key `embed_note:<noteId>:<seq>` —
   `scheduleEmbedding()` never blocks the caller (notes/store.ts calls
-  it fire-and-forget on create/update/revert). A boot-time scan
-  (`scheduleMissingEmbeddings`) catches up any note left with a null
-  embedding. One bad note's embedding failure is logged and skipped,
-  never stops the drain.
+  it fire-and-forget on create/update/revert); it inserts the job in
+  the background and `flushEmbeddings()` awaits that insert and the
+  drain. The job embeds the note as it is when it runs. A boot-time scan
+  (`scheduleMissingEmbeddings`) adds a job (idempotently) for any live
+  note with a null embedding. `pnpm reindex` re-runs finished jobs
+  (`enqueueEmbeddings(ids, 'finished')`). A failure is logged and
+  retried with backoff, never stops the drain.
 - **`semantic-edges.ts`**: `recomputeSemanticEdges()` — kNN against
   both notes and code, filtered to `similarity >= SEMANTIC_THRESHOLD`
   (default 0.75), capped to `SEMANTIC_K` (default 8) per node. Called
@@ -1143,13 +1147,19 @@ import row whose target is still null with the current rules, so
 repositories indexed before #398 gain their import edges without a
 re-sync (unchanged files are never re-extracted).
 
-**Extraction queue** (`extraction-queue.ts`): in-process and serial, like
-the note embedding queue, but fair across repositories (#497): one FIFO
-per repository, served round-robin in turns of at most 10 files
-(`EXTRACTION_TURN_FILES`), so a large repository's backlog delays another
+**Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
+**Durable jobs** below), kind `extract`, payload `{fileId,
+repositoryId}`, key `extract:<fileId>:<contentHash>`; `syncRepositoryFiles`
+enqueues the changed files in one statement after the batch is persisted.
+Enqueueing a key whose job already succeeded runs it again (content went
+back to an earlier version); a pending or failed job is left alone. One
+serial worker, fair across repositories (#497): each turn claims at most
+10 jobs (`EXTRACTION_TURN_FILES`) of one repository in enqueue order, then
+the repository with claimable jobs that was served least recently goes
+next (ties: oldest job), so a large repository's backlog delays another
 repository's files by at most one turn per other busy repository, not by
 the whole backlog; a repository's own files keep their order. A file
-whose extraction throws is logged and skipped; the drain goes on. A file
+whose extraction throws is logged and retried with backoff; the drain goes on. A file
 with a line longer than 1,000
 characters (minified, bundled or generated code) gets its file embedding
 but no symbols or imports. **Per-file budget** (#496): a file's symbols
@@ -1166,10 +1176,34 @@ changes. With
 each text cut to 16,000 characters, one file costs at most 1 + budget
 texts (the 700 KB lab bundle with 900 declarations: 33 batches instead of
 113). The boot-time scan
-(`scheduleMissingExtractions`) re-enqueues every file with a null
-embedding — the queue does not survive a restart, and a re-sync only
-enqueues files whose content changed (#404). `repository_status` reports
-the count as `filesPendingExtraction`.
+(`scheduleMissingExtractions`) adds a job, idempotently, for every file
+with a null embedding that has none for its current content (rows from
+before the jobs table; a re-sync only enqueues files whose content
+changed, #404), and wakes the worker. `repository_status` reports
+`filesPendingExtraction` (null embedding: queued, running or failed) and
+`extractionFailures: {total, files: [{path, attempts, lastError}]}` (the
+first 5 by path whose job for the current content gave up).
+
+**Durable jobs** (`jobs/durable.ts`, ADR-003 S5, #494; table `jobs` from
+migration 0021). A job is claimable when `done_at` is null and
+`lease_until` is null or past. `claimJob` is one statement (`UPDATE … WHERE
+id = (SELECT … ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)`) that sets
+`lease_until = now() + 60 s` and `attempts + 1`; `completeJob` sets
+`done_at` and clears `last_error`; `failJob` stores `last_error` (error
+name and message, URL credentials redacted, at most 500 characters) and,
+as the table has no `run_after`, pushes `lease_until` out by the backoff
+(5 s · 2^(attempt−1), at most 5 min). After `MAX_JOB_ATTEMPTS` = 3 claims
+the job gets `done_at` with `last_error` kept: that is "failed", and
+monitoring gets one report then (earlier failures count as `repeated`).
+`attempts` counts claims, so a job that kills the process each time also
+stops at 3. Crash recovery: a job a dead process held becomes claimable
+when its lease runs out; every drainer is woken every 5 s
+(`startJobPolling`, started at boot) for such jobs and for backoffs.
+Boot deletes successful jobs finished more than 7 days ago
+(`pruneFinishedJobs`); failed ones stay as the per-file and per-note
+status. A job that outlives its lease while still running can run twice
+only if a second process shares the database; extraction and embedding
+are idempotent rewrites.
 
 `docs/superpowers/specs/2026-07-18-repository-ingestion-design.md` and
 `2026-07-18-code-graph-integration-design.md` are the full specs.
@@ -1395,8 +1429,9 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     and a ring of the last 50 error reports with a monotonic `seq`.
   - Jobs report through `recordJob(kind, 'ok' | { error, repeat? }, subjectId)`:
     `embedding` (`embedding-queue.ts`: success, or the third failed
-    attempt; `embeddings.ts`: an embedding worker that died, subject null),
-    `extraction` (`extraction-queue.ts`, per file), `sync`
+    attempt, earlier ones as `repeat`; `embeddings.ts`: an embedding worker that died, subject null),
+    `extraction` (`extraction-queue.ts`, per file: success, or the third
+    failed attempt, earlier ones as `repeat`), `sync`
     (`syncGitRepository` and `syncLocalRepository` themselves, so every
     caller is covered, including an unsafe stored URL), `collab-store`
     (`collab-server.ts` `onStoreDocument`: a rejected `updateNote` or CRDT
@@ -1499,8 +1534,6 @@ moment a second instance runs against the same database**:
 | Subsystem | File | Failure mode with 2+ instances |
 |---|---|---|
 | Login lockout | `auth/lockout.ts` | each instance has its own counter — the effective threshold multiplies by instance count |
-| Embedding queue | `search/embedding-queue.ts` | work scheduled on one instance never runs on another (no double-processing, but no load distribution either) |
-| Extraction queue | `repositories/extraction-queue.ts` | same as above |
 | Permission-change bus | `sync/permission-events.ts` | an instance that didn't receive the in-process event never kicks its own live connections — a revoked user could keep a session open on a *different* instance |
 | MCP rate limiter | `mcp/rate-limit.ts` | a client can get up to N× the intended limit by landing requests across N instances behind a load balancer |
 | Git polling scheduler | `repositories/scheduler.ts` | multiple instances independently poll/clone the same repos on their own schedules |

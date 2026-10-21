@@ -1,4 +1,4 @@
-import { and, count, eq, isNull } from 'drizzle-orm'
+import { and, count, eq, isNull, sql } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFileSymbols, repositoryFiles } from '../db/schema.js'
@@ -7,18 +7,23 @@ import { recomputeSemanticEdges } from '../search/semantic-edges.js'
 import { extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import { resolveImportPath } from './import-resolution.js'
 import { recordJob } from '../monitoring/metrics.js'
+import { MAX_JOB_ATTEMPTS, claimJob, completeJob, failJob, jobDrainer, onJobConflict } from '../jobs/durable.js'
 
-// ponytail: in-process serial queue; move to a job table if multi-process
 /**
- * One FIFO per repository, served round-robin (#497): each turn extracts at
- * most `EXTRACTION_TURN_FILES` files of one repository, then that repository
- * goes to the back of the line if it still has work. A large repository's
- * backlog therefore delays another repository's files by at most one turn,
- * instead of the whole backlog. Map insertion order is the round-robin order.
+ * Extraction runs from durable `jobs` rows (#494, ADR-003 S5; see
+ * jobs/durable.ts): kind `extract`, payload `{fileId, repositoryId}`, key
+ * `extract:<fileId>:<contentHash>`. Fair across repositories (#497): each turn
+ * claims at most `EXTRACTION_TURN_FILES` jobs of one repository, then the
+ * repository with claimable jobs that was served least recently goes next
+ * (ties: the oldest job). A large repository's backlog therefore delays
+ * another repository's files by at most one turn, and a repository's own
+ * files keep their enqueue order.
  */
 const EXTRACTION_TURN_FILES = 10
-const queues = new Map<string, { files: string[]; head: number }>()
-let running: Promise<void> | null = null
+export const EXTRACTION_JOB = 'extract'
+/** Turn number each repository last got; repositories never served count as 0. */
+const lastTurn = new Map<string, number>()
+let turn = 0
 
 /**
  * A line this long means minified, bundled or generated code (prettier-style
@@ -60,19 +65,34 @@ async function getRepoSiblings(repositoryId: string) {
   return cached
 }
 
-/** Enqueue a repository file for extraction + embedding. Never blocks the caller. */
-export function scheduleExtraction(fileId: string, repositoryId: string): void {
-  let pending = queues.get(repositoryId)
-  if (!pending) {
-    pending = { files: [], head: 0 }
-    queues.set(repositoryId, pending)
-  }
-  pending.files.push(fileId)
-  running ??= drain()
+/** Inserts extraction jobs for these files at their current content, in this order. */
+export async function enqueueExtractions(
+  fileIds: string[],
+  rerun: 'never' | 'succeeded' = 'succeeded',
+): Promise<void> {
+  if (fileIds.length === 0) return
+  await db.execute(sql`
+    INSERT INTO jobs (kind, payload, idempotency_key)
+    SELECT ${EXTRACTION_JOB}, jsonb_build_object('fileId', f.id::text, 'repositoryId', f.repository_id::text),
+      ${EXTRACTION_JOB} || ':' || f.id || ':' || f.content_hash
+    FROM unnest(${`{${fileIds.join(',')}}`}::uuid[]) WITH ORDINALITY AS u(id, ord)
+    JOIN repository_files f ON f.id = u.id
+    ORDER BY u.ord
+    ${onJobConflict(rerun)}`)
+  extraction.kick()
+}
+
+/**
+ * Enqueue a repository file for extraction + embedding. Never blocks the
+ * caller. Callers enqueue on a content change, so a file whose content went
+ * back to an earlier version is extracted again; a failed job stays failed.
+ */
+export function scheduleExtraction(fileId: string): void {
+  extraction.track(enqueueExtractions([fileId]))
 }
 
 export async function flushExtraction(): Promise<void> {
-  while (running) await running
+  await extraction.flush()
 }
 
 /**
@@ -123,22 +143,26 @@ export async function backfillUnresolvedImports(): Promise<number> {
 }
 
 /**
- * Boot catch-up: the queue lives in memory, so files enqueued when the
- * process stopped are lost — and a re-sync never re-enqueues them, because
- * their content hash is unchanged. A file gets its embedding as the last step
- * of extraction, so a null embedding means extraction never completed.
+ * Boot catch-up: enqueue every file with a null embedding (its extraction
+ * never completed) and wake the worker, which also reclaims jobs whose lease
+ * a dead process left. Idempotent: a file with a pending or failed job for its
+ * current content gets no second one. Returns the files found.
  */
 export async function scheduleMissingExtractions(): Promise<number> {
   const missing = await db
-    .select({ id: repositoryFiles.id, repositoryId: repositoryFiles.repositoryId })
+    .select({ id: repositoryFiles.id })
     .from(repositoryFiles)
     .where(isNull(repositoryFiles.embedding))
-    .orderBy(repositoryFiles.repositoryId)
-  for (const row of missing) scheduleExtraction(row.id, row.repositoryId)
+    .orderBy(repositoryFiles.repositoryId, repositoryFiles.path)
+  await enqueueExtractions(
+    missing.map((r) => r.id),
+    'never',
+  )
+  extraction.kick()
   return missing.length
 }
 
-/** Files of a repository whose extraction has not completed (queued, lost or failed). */
+/** Files of a repository whose extraction has not completed (queued, running or failed). */
 export async function countPendingExtractions(repositoryId: string): Promise<number> {
   const [row] = await db
     .select({ pending: count() })
@@ -147,43 +171,71 @@ export async function countPendingExtractions(repositoryId: string): Promise<num
   return row?.pending ?? 0
 }
 
-async function drain(): Promise<void> {
+/**
+ * Files whose extraction job for their current content gave up after
+ * `MAX_JOB_ATTEMPTS`: the total and the first `limit` by path with the error.
+ */
+export async function extractionFailures(
+  repositoryId: string,
+  limit = 5,
+): Promise<{ total: number; files: Array<{ path: string; attempts: number; lastError: string }> }> {
+  const rows = (await db.execute(sql`
+    SELECT f.path, j.attempts, j.last_error AS "lastError", count(*) OVER () AS total
+    FROM repository_files f
+    JOIN jobs j ON j.idempotency_key = ${EXTRACTION_JOB} || ':' || f.id || ':' || f.content_hash
+    WHERE f.repository_id = ${repositoryId} AND j.done_at IS NOT NULL AND j.last_error IS NOT NULL
+    ORDER BY f.path
+    LIMIT ${limit}`)) as unknown as Array<{ path: string; attempts: number; lastError: string; total: string | number }>
+  return {
+    total: Number(rows[0]?.total ?? 0),
+    files: rows.map(({ path, attempts, lastError }) => ({ path, attempts, lastError })),
+  }
+}
+
+/** The next repository to get a turn: least recently served, then oldest claimable job. */
+async function nextRepository(): Promise<string | null> {
+  const rows = (await db.execute(sql`
+    SELECT payload->>'repositoryId' AS "repositoryId", min(id) AS first
+    FROM jobs
+    WHERE kind = ${EXTRACTION_JOB} AND done_at IS NULL AND (lease_until IS NULL OR lease_until < now())
+    GROUP BY 1`)) as unknown as Array<{ repositoryId: string; first: string | number }>
+  let best: { repositoryId: string; turn: number; first: number } | null = null
+  for (const row of rows) {
+    const candidate = { repositoryId: row.repositoryId, turn: lastTurn.get(row.repositoryId) ?? 0, first: Number(row.first) }
+    if (!best || candidate.turn < best.turn || (candidate.turn === best.turn && candidate.first < best.first)) best = candidate
+  }
+  return best?.repositoryId ?? null
+}
+
+async function drainOnce(): Promise<void> {
   try {
     for (;;) {
-      const next = queues.entries().next()
-      if (next.done) break
-      const [repositoryId, pending] = next.value
-      for (let n = 0; n < EXTRACTION_TURN_FILES && pending.head < pending.files.length; n++) {
-        const fileId = pending.files[pending.head++]!
+      const repositoryId = await nextRepository()
+      if (!repositoryId) return
+      lastTurn.set(repositoryId, ++turn)
+      for (let n = 0; n < EXTRACTION_TURN_FILES; n++) {
+        const job = await claimJob<{ fileId: string }>(EXTRACTION_JOB, sql`payload->>'repositoryId' = ${repositoryId}`)
+        if (!job) break
+        const { fileId } = job.payload
         try {
           await processFile(fileId)
+          await completeJob(job.id)
           recordJob('extraction', 'ok', fileId)
         } catch (err) {
-          console.error(`extraction failed for repository file ${fileId}:`, err)
-          recordJob('extraction', { error: err }, fileId)
+          console.error(
+            `extraction failed for repository file ${fileId} (attempt ${job.attempts}/${MAX_JOB_ATTEMPTS}):`,
+            err,
+          )
+          await failJob(job, err, 'extraction', fileId)
         }
-      }
-      // The entry stays in the map during its turn, so files scheduled for this
-      // repository meanwhile join its queue; re-inserting moves it to the back.
-      queues.delete(repositoryId)
-      if (pending.head < pending.files.length) {
-        // ponytail: O(1) amortized compaction to avoid O(N^2) array shifting (INGEST-02).
-        if (pending.head > 1000 && pending.head > pending.files.length / 2) {
-          pending.files.splice(0, pending.head)
-          pending.head = 0
-        }
-        queues.set(repositoryId, pending)
       }
     }
   } finally {
-    queues.clear()
     repoSiblingsCache.clear()
-    // Cleared here, in the same synchronous step that saw the queue empty: a
-    // `.finally()` on the caller's side would run a microtask later, and a file
-    // enqueued in between would find `running` still set and start no drain.
-    running = null
   }
 }
+
+const extraction = jobDrainer('extraction', drainOnce)
 
 async function processFile(fileId: string): Promise<void> {
   const row = (await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, fileId)))[0]

@@ -333,7 +333,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Scope**: repository. Repository access.
 - **Capability**: `read`.
 - **Parameters**: `repositoryId` (uuid, optional).
-- **Returns**: `{ syncStatus, lastSyncedAt, lastSyncError, filesPendingExtraction }`. `syncStatus` is `idle`, `syncing`, or `error`. `filesPendingExtraction` counts files with no embedding yet (queued, or failed; the server re-queues them at its next start), so `idle` with a non-zero count means symbols are still arriving. The indexed commit is not reported.
+- **Returns**: `{ syncStatus, lastSyncedAt, lastSyncError, filesPendingExtraction, extractionFailures }`. `syncStatus` is `idle`, `syncing`, or `error`. `filesPendingExtraction` counts files with no embedding yet (queued, running, or failed; extraction jobs survive a restart), so `idle` with a count above `extractionFailures.total` means symbols are still arriving. `extractionFailures` is `{ total, files: [{ path, attempts, lastError }] }`: files whose extraction gave up after 3 attempts (the first 5 by path); they are retried only when their content changes. The indexed commit is not reported.
 
 ### `sync_repository`
 - **Scope**: repository. Repository access.

@@ -51,11 +51,11 @@ async function jobByKey(key: string) {
 
 describe('durable extraction jobs (#494)', () => {
   it('a duplicate enqueue of the same file and content is a no-op', async () => {
-    const { repo, file, key } = await fileWithoutExtraction('dup')
+    const { file, key } = await fileWithoutExtraction('dup')
     const calls = countEmbedsOf(file.path)
 
-    scheduleExtraction(file.id, repo.id)
-    scheduleExtraction(file.id, repo.id)
+    scheduleExtraction(file.id)
+    scheduleExtraction(file.id)
     await scheduleMissingExtractions()
     await flushExtraction()
 
@@ -136,7 +136,9 @@ describe('durable note embedding jobs (#494)', () => {
     expect(calls.n).toBe(1)
     const rows = await db.select().from(jobs).where(sql`${jobs.payload}->>'noteId' = ${note!.id}`)
     expect(rows).toHaveLength(1)
-    expect(rows[0]!.idempotencyKey).toBe(`embed_note:${note!.id}:${note!.seq}`)
+    // `notes.seq` (migration 0021) is not in the Drizzle schema yet.
+    const [{ seq }] = (await db.execute(sql`SELECT seq FROM notes WHERE id = ${note!.id}`)) as unknown as [{ seq: string }]
+    expect(rows[0]!.idempotencyKey).toBe(`embed_note:${note!.id}:${seq}`)
     expect(rows[0]!.doneAt).not.toBeNull()
   })
 })

@@ -43,7 +43,7 @@ describe('durable job retries (#494)', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const failedBefore = metricsSnapshot().jobs.extraction.failed
 
-    scheduleExtraction(file!.id, repo!.id)
+    scheduleExtraction(file!.id)
     await flushExtraction()
 
     expect(calls).toBe(MAX_JOB_ATTEMPTS)
@@ -55,7 +55,7 @@ describe('durable job retries (#494)', () => {
     expect(metricsSnapshot().jobs.extraction.failed).toBe(failedBefore + 1)
 
     // Stopped: another enqueue of the same content does not run it again.
-    scheduleExtraction(file!.id, repo!.id)
+    scheduleExtraction(file!.id)
     await flushExtraction()
     expect(calls).toBe(MAX_JOB_ATTEMPTS)
   })
