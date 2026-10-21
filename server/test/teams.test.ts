@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { randomUUID } from 'node:crypto'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
 import { noteRevisions, notifications } from '../src/db/schema.js'
@@ -159,7 +159,17 @@ describe('GET /api/teams/:id/stats', () => {
       .select({ createdAt: noteRevisions.createdAt, ord: noteRevisions.ord })
       .from(noteRevisions)
       .where(and(eq(noteRevisions.noteId, noteId), eq(noteRevisions.actorId, actorId)))
-    return rows.map((r) => ({ createdAt: r.createdAt.toISOString(), ord: r.ord }))
+    return rows.map((r) => ({ createdAt: r.createdAt, ord: r.ord }))
+  }
+
+  /**
+   * The latest `created_at` among `revisions`, as the stats' max() returns
+   * it. Read from the rows, not from notes.updated_at (the transaction's
+   * start on create, the app's clock on update): the Docker test Postgres
+   * clock steps back by seconds, so no window around another clock holds.
+   */
+  function latestTime(revisions: Array<{ createdAt: Date }>): string {
+    return new Date(Math.max(...revisions.map((r) => r.createdAt.getTime()))).toISOString()
   }
 
   it('counts distinct notes and vaults, using the latest edit as lastActivityAt', async () => {
@@ -175,14 +185,6 @@ describe('GET /api/teams/:id/stats', () => {
     const editRes = await updateNoteBody(memberCookie, vaultA.id, noteA.path, 'edited body')
     expect(editRes.statusCode).toBe(200)
     const noteB = await writeNote(memberCookie, vaultB.id, 'note-b')
-    // The DB clock can step back between two writes (#852: by seconds on
-    // the dockerized test Postgres), so `created_at` need not follow the
-    // order writes were recorded in. Date vault A's revisions after vault
-    // B's, as such a step does: vault B's is still the latest edit.
-    await db
-      .update(noteRevisions)
-      .set({ createdAt: sql`${noteRevisions.createdAt} + interval '1 hour'` })
-      .where(eq(noteRevisions.noteId, noteA.id))
 
     const res = await app.inject({
       method: 'GET',
@@ -194,14 +196,13 @@ describe('GET /api/teams/:id/stats', () => {
     expect(row.notesTouched).toBe(2)
     expect(row.vaultsTouched).toBe(2)
     expect(row.lastActivityAt).not.toBeNull()
-    // Must reflect the LATEST edit (vault B's write, recorded last), not the
-    // earlier create-then-edit on vault A's note, whatever the clock read:
-    // exactly the time stored on vault B's revision.
+    // Must reflect the member's latest revision across both vaults (vault
+    // B's write, unless the DB clock stepped back), not only vault A's.
     const aRevisions = await revisionsOf(noteA.id, member.id)
-    const [bRevision] = await revisionsOf(noteB.id, member.id)
+    const bRevisions = await revisionsOf(noteB.id, member.id)
     expect(aRevisions).toHaveLength(2)
-    for (const a of aRevisions) expect(a.ord).toBeLessThan(bRevision!.ord)
-    expect(new Date(row.lastActivityAt).toISOString()).toBe(bRevision!.createdAt)
+    for (const a of aRevisions) expect(a.ord).toBeLessThan(bRevisions[0]!.ord)
+    expect(new Date(row.lastActivityAt).toISOString()).toBe(latestTime([...aRevisions, ...bRevisions]))
   })
 
   it('excludes activity in vaults the caller cannot access (privacy)', async () => {
@@ -210,7 +211,7 @@ describe('GET /api/teams/:id/stats', () => {
     const vaultB = await createVault(ownerCookie, 'Vault B')
     await shareVault(ownerCookie, vaultA.id, member.id)
     await shareVault(ownerCookie, vaultB.id, member.id)
-    await writeNote(memberCookie, vaultA.id, 'note-a')
+    const noteA = await writeNote(memberCookie, vaultA.id, 'note-a')
     const noteB = await writeNote(memberCookie, vaultB.id, 'note-b')
 
     // A third vault owned by the member, shared with nobody. Its edit is the
@@ -229,12 +230,12 @@ describe('GET /api/teams/:id/stats', () => {
     expect(row.vaultsTouched).toBe(2)
     expect(row.lastActivityAt).not.toBeNull()
     // The invisible (private-vault) write is the latest of all; if it leaked
-    // in, lastActivityAt would be its revision's time instead of the last
-    // visible write's (noteB).
-    const [bRevision] = await revisionsOf(noteB.id, member.id)
+    // in, lastActivityAt would be its revision's time instead of the latest
+    // visible one.
+    const visible = [...(await revisionsOf(noteA.id, member.id)), ...(await revisionsOf(noteB.id, member.id))]
     const [privateRevision] = await revisionsOf(privateNote.id, member.id)
-    expect(privateRevision!.ord).toBeGreaterThan(bRevision!.ord)
-    expect(new Date(row.lastActivityAt).toISOString()).toBe(bRevision!.createdAt)
+    for (const v of visible) expect(privateRevision!.ord).toBeGreaterThan(v.ord)
+    expect(new Date(row.lastActivityAt).toISOString()).toBe(latestTime(visible))
   })
 
   it('includes members with zero activity as 0 / 0 / null', async () => {
