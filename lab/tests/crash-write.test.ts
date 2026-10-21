@@ -46,12 +46,14 @@ const BODY_BYTES = Number(process.env.LAB_CRASH_BODY_BYTES ?? 40_000)
  */
 const KILLS = (process.env.LAB_CRASH_KILLS ?? 't100,t400,a1,a4,a10,a20,a30,a38').split(',')
 /**
- * After a round, wait until the vault has no pending `file`/`dir_index`
- * projection (the signal `check-notes --wait-idle` uses), at least
- * SETTLE_MIN_MS (the 2 s collab store debounce) and at most SETTLE_MAX_MS.
+ * After a round, wait at least SETTLE_MIN_MS (the old fixed settle: the 2 s
+ * collab store debounce plus the store's updateNote under the note lock; the
+ * stays note's projection only becomes pending once that commits), then until
+ * the vault has no pending `file`/`dir_index` projection (the signal
+ * `check-notes --wait-idle` uses), at most SETTLE_MAX_MS in total.
  * A projector still behind at the bound is compared as is and fails.
  */
-const SETTLE_MIN_MS = 2500
+const SETTLE_MIN_MS = 3500
 const SETTLE_MAX_MS = Number(process.env.LAB_CRASH_SETTLE_MAX_MS ?? 30_000)
 
 async function pendingProjections(ctx: LabContext, vaultId: string): Promise<number> {
