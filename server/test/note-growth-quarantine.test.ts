@@ -219,7 +219,7 @@ describe('collab relay store', () => {
     const noteId = (await must<{ id: string }>('create_note', { vaultId, path, body })).id
     const before = metricsSnapshot().jobs['collab-store']
 
-    const provider = new HocuspocusProvider({ url: `${baseUrl.replace('http', 'ws')}/collab`, name: `${vaultId}/${path}`, token: ownerToken, document: new Y.Doc() })
+    const provider = new HocuspocusProvider({ url: `${baseUrl.replace('http', 'ws')}/collab`, name: `${vaultId}/~${noteId}`, token: ownerToken, document: new Y.Doc() })
     providers.push(provider)
     const text = provider.document.getText('body')
     await waitFor(() => text.toString() === body)
@@ -264,7 +264,7 @@ describe('collab relay store', () => {
     const path = 'docs/two-episodes'
     const body = paragraphs('episode', 25)
     const noteId = (await must<{ id: string }>('create_note', { vaultId, path, body })).id
-    const docName = `${vaultId}/${path}`
+    const docName = `${vaultId}/~${noteId}`
     const before = metricsSnapshot().jobs['collab-store']
     const open = () => new HocuspocusProvider({ url: `${baseUrl.replace('http', 'ws')}/collab`, name: docName, token: ownerToken, document: new Y.Doc() })
 
@@ -277,16 +277,18 @@ describe('collab relay store', () => {
     first.destroy()
     await waitFor(() => !collab.hocuspocus.documents.has(docName), 15_000)
 
-    // Episode 2: the reloaded document holds the stored body and is doubled again.
+    // Episode 2: the reloaded document holds what was typed in episode 1 (ADR-003 S2b: refused typing stays in the
+    // note's CRDT log with `fold_error`, the row keeps its last valid body), and is typed into again.
+    const episode1 = `${body}\n\n${body}\n\ntyped-in-episode-1`
     const second = open()
     providers.push(second)
     const text2 = second.document.getText('body')
-    await waitFor(() => text2.toString() === body)
-    text2.insert(text2.length, `\n\n${body}\n\ntyped-in-episode-2`)
+    await waitFor(() => text2.toString() === episode1)
+    text2.insert(text2.length, '\n\ntyped-in-episode-2')
     await waitFor(async () => (await quarantined(noteId)).some((q) => q.body.endsWith('typed-in-episode-2')))
 
     const bodies = (await quarantined(noteId)).map((q) => q.body).sort()
-    expect(bodies).toEqual([`${body}\n\n${body}\n\ntyped-in-episode-1`, `${body}\n\n${body}\n\ntyped-in-episode-2`])
+    expect(bodies).toEqual([episode1, `${episode1}\n\ntyped-in-episode-2`])
     expect(await rowBody(path)).toBe(body)
     // Each episode is reported as a failure of its own.
     await waitFor(() => metricsSnapshot().jobs['collab-store'].failed >= before.failed + 2)
@@ -300,7 +302,7 @@ describe('collab relay store', () => {
     const path = 'docs/doubled-then-refused-ops'
     const body = paragraphs('ops', 18) // ~1.7 KiB
     const noteId = (await must<{ id: string }>('create_note', { vaultId, path, body })).id
-    const provider = new HocuspocusProvider({ url: `${baseUrl.replace('http', 'ws')}/collab`, name: `${vaultId}/${path}`, token: ownerToken, document: new Y.Doc() })
+    const provider = new HocuspocusProvider({ url: `${baseUrl.replace('http', 'ws')}/collab`, name: `${vaultId}/~${noteId}`, token: ownerToken, document: new Y.Doc() })
     providers.push(provider)
     const text = provider.document.getText('body')
     await waitFor(() => text.toString() === body)

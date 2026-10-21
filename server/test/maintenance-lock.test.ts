@@ -20,6 +20,7 @@ import {
   type InstanceLockOptions,
 } from '../src/notes/maintenance-lock.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
+import { collabDocName } from '../src/sync/live-docs.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
 // ADR-003 §5.1 rev 5, §9: the instance maintenance lock on a reserved
@@ -203,7 +204,7 @@ describe('instance maintenance lock (§5.1, §9)', () => {
     const note = await createNote(vaultId, { type: 'docs', name: 'paused-collab', body: 'base' })
     const provider = new HocuspocusProvider({
       url: `ws://127.0.0.1:${port}/collab`,
-      name: `${vaultId}/${note.path}`,
+      name: collabDocName(vaultId, note.id),
       token,
       document: new Y.Doc(),
     })
@@ -224,47 +225,53 @@ describe('instance maintenance lock (§5.1, §9)', () => {
     await waitFor(() => !provider.hasUnsyncedChanges)
   }, 30_000)
 
-  it('while paused, a note the migration has not processed is refused at authentication (note-not-migrated), never with the pause close', async () => {
+  it('while paused: an unmigrated note is refused at authentication (note-not-migrated), an open editor gets the pause close, a load waits (store-busy)', async () => {
     const migrated = await createNote(vaultId, { type: 'docs', name: 'paused-migrated', body: 'migrated' })
     const unmigrated = await createNote(vaultId, { type: 'docs', name: 'paused-unmigrated', body: 'unmigrated' })
+    const unopened = await createNote(vaultId, { type: 'docs', name: 'paused-unopened', body: 'unopened' })
     await db.execute(sql`DELETE FROM note_projections WHERE note_id = ${unmigrated.id} AND projection = 'backfill'`)
+    type Key = 'migrated' | 'unmigrated' | 'unopened'
+    const closes: Record<Key, string[]> = { migrated: [], unmigrated: [], unopened: [] }
+    const refused: Record<Key, string[]> = { migrated: [], unmigrated: [], unopened: [] }
+    const open = (noteId: string, key: Key) => {
+      const provider = new HocuspocusProvider({
+        url: `ws://127.0.0.1:${port}/collab`,
+        name: collabDocName(vaultId, noteId),
+        token,
+        document: new Y.Doc(),
+        onClose: ({ event }) => void closes[key].push(event.reason),
+        onAuthenticationFailed: ({ reason }) => void refused[key].push(reason),
+      })
+      providers.push(provider)
+      return provider
+    }
+    // Opened before the pause: loading a document is a store transaction (seed, catch-up).
+    const editor = open(migrated.id, 'migrated')
+    await waitFor(() => editor.isSynced)
     await hold('shared', { backoffMs: 1500 })
     await dropLockConnection()
     await waitFor(() => writesPaused())
     setStoreMigrationPending(true)
     try {
-      const closes: Record<'migrated' | 'unmigrated', string[]> = { migrated: [], unmigrated: [] }
-      let refused = ''
-      const open = (path: string, key: 'migrated' | 'unmigrated') => {
-        const provider = new HocuspocusProvider({
-          url: `ws://127.0.0.1:${port}/collab`,
-          name: `${vaultId}/${path}`,
-          token,
-          document: new Y.Doc(),
-          onClose: ({ event }) => void closes[key].push(event.reason),
-          onAuthenticationFailed: ({ reason }) => {
-            if (key === 'unmigrated') refused = reason
-          },
-        })
-        providers.push(provider)
-        return provider
-      }
-      const blocked = open(unmigrated.path, 'unmigrated')
-      const editor = open(migrated.path, 'migrated')
-      await waitFor(() => refused !== '' && editor.isSynced)
-      expect(refused).toBe('note-not-migrated')
+      const blocked = open(unmigrated.id, 'unmigrated')
+      const waiting = open(unopened.id, 'unopened')
+      await waitFor(() => refused.unmigrated.length > 0 && closes.unopened.includes('store-busy'))
+      expect(refused.unmigrated[0]).toBe('note-not-migrated')
       expect(blocked.isSynced).toBe(false)
       expect(closes.unmigrated).not.toContain('store-paused')
-      // The migrated note authenticates and syncs (reads are not paused); its first update gets the pause close.
+      // A load refused for a busy store is a socket close the editor reconnects after, never a refusal it stops at.
+      expect(refused.unopened).toEqual([])
       editor.document.getText('body').insert(0, 'typed ')
       await waitFor(() => closes.migrated.includes('store-paused'))
       blocked.destroy()
+      await waitFor(() => !writesPaused())
+      await waitFor(() => waiting.isSynced, 15_000)
+      expect(refused.unopened).toEqual([])
     } finally {
       setStoreMigrationPending(false)
     }
-    await waitFor(() => !writesPaused())
     await waitFor(async () => (await getLiveNote(vaultId, migrated.path))?.body === 'typed migrated', 15_000)
-  }, 30_000)
+  }, 45_000)
 
   it('exits (stays paused) only when an exporter holds the exclusive form', async () => {
     let exited = 0

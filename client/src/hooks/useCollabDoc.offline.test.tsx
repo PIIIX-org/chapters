@@ -20,6 +20,7 @@ import { useCollabDoc } from './useCollabDoc.js'
  * applied with the provider as origin, and what the relay lacks is pushed back.
  */
 interface ProviderOptions {
+  name: string
   document: Y.Doc
   token: () => Promise<string>
   onStatus: (data: { status: string }) => void
@@ -63,8 +64,10 @@ vi.mock('../api/collab.js', async (importOriginal) => ({
 }))
 
 const USER = { id: 'u-taha', name: 'taha' }
-const NOTE = { vaultId: 'v-1', path: 'journals/2026-08-25.md' }
-const STASH = collabStashName(USER.id, `${NOTE.vaultId}/${NOTE.path}`)
+const NOTE = { vaultId: 'v-1', noteId: 'n-1', path: 'journals/2026-08-25.md' }
+const STASH = collabStashName(USER.id, `${NOTE.vaultId}/~${NOTE.noteId}`)
+/** The name a bundle before ADR-003 S2b kept this note's copies under: by path. */
+const LEGACY_STASH = collabStashName(USER.id, `${NOTE.vaultId}/${NOTE.path}`)
 
 function mount() {
   return renderHook(() => useCollabDoc({ ...NOTE, user: USER, enabled: true }))
@@ -256,6 +259,45 @@ describe('useCollabDoc offline copy (#720)', () => {
     view.unmount()
   })
 
+  it('finds a copy kept under the path-keyed name of an older bundle and merges it once (ADR-003 §5.4)', async () => {
+    // The relay's document, and a copy of it a tab on the old bundle kept with
+    // typing the relay never got (refused with reload-required).
+    const relay = new Y.Doc()
+    relay.getText('body').insert(0, 'BASE line\n')
+    const old = new Y.Doc()
+    Y.applyUpdate(old, Y.encodeStateAsUpdate(relay))
+    const copy = keepCollabCopy(LEGACY_STASH, old)!
+    old.getText('body').insert(10, 'typed in the old tab\n')
+    await copy.close()
+
+    const view = mount()
+    await waitFor(() => expect(view.result.current.restored).toBe(true))
+    const provider = await nthProvider(0)
+    expect(provider.options.name).toBe(`${NOTE.vaultId}/~${NOTE.noteId}`)
+    sync(provider, relay)
+    const merged = view.result.current.ydoc.getText('body').toString()
+    expect(merged).toBe('BASE line\ntyped in the old tab\n')
+    expect(view.result.current.unmerged).toBeNull()
+    push(provider, relay)
+    expect(relay.getText('body').toString()).toBe(merged)
+    // The path-keyed copy is gone once the live document's own copy (id-keyed) holds it.
+    await waitFor(async () => expect(await stored(LEGACY_STASH)).toEqual([]))
+    await waitFor(async () => expect(await stored(STASH)).toEqual([merged]))
+    view.unmount()
+  })
+
+  it('offers, not merges, a path-keyed copy that shares no history with the relay', async () => {
+    await seed(LEGACY_STASH, 'BASE line\nfrom a re-seeded note\n')
+    const relay = new Y.Doc()
+    relay.getText('body').insert(0, 'BASE line\n')
+    const view = mount()
+    await waitFor(() => expect(view.result.current.restored).toBe(true))
+    sync(await nthProvider(0), relay)
+    expect(view.result.current.ydoc.getText('body').toString()).toBe('BASE line\n')
+    expect(view.result.current.unmerged).toBe('BASE line\nfrom a re-seeded note\n')
+    view.unmount()
+  })
+
   it('one tab sending its copy never drops what another tab has not sent', async () => {
     const relay = new Y.Doc()
     relay.getText('body').insert(0, 'BASE line\n')
@@ -440,7 +482,7 @@ describe('collab copies in IndexedDB (#720)', () => {
   })
 
   it('logout deletes that user\'s copies and nobody else\'s', async () => {
-    const other = collabStashName('u-jane', `${NOTE.vaultId}/${NOTE.path}`)
+    const other = collabStashName('u-jane', `${NOTE.vaultId}/~${NOTE.noteId}`)
     for (const name of [STASH, other]) await seed(name, `kept for ${name}`)
 
     await clearCollabStashes(USER.id)
@@ -465,7 +507,7 @@ describe('collab copies in IndexedDB (#720)', () => {
   })
 
   it('finds the copies without indexedDB.databases() (Firefox < 126)', async () => {
-    const other = collabStashName('u-jane', `${NOTE.vaultId}/${NOTE.path}`)
+    const other = collabStashName('u-jane', `${NOTE.vaultId}/~${NOTE.noteId}`)
     for (const name of [STASH, other]) await seed(name, `kept for ${name}`)
     const databases = indexedDB.databases.bind(indexedDB)
     Object.defineProperty(indexedDB, 'databases', { value: undefined, configurable: true })

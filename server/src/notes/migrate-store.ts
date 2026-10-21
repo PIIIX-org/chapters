@@ -31,6 +31,14 @@ export type CrdtClass =
   | 'mismatch'
   | 'missing'
   | 'undecodable'
+/**
+ * What the S2b backfill (sync/collab-backfill.ts) does with the live note:
+ * `attach` its bin (text equals row, file or a revision), `set-aside` the
+ * bin to `.migration/<date>/bins/` (mismatch or undecodable), `seed` on
+ * first open (no bin), or nothing because the note already has `note_crdt`
+ * state (`has-state`).
+ */
+export type CollabAction = 'attach' | 'set-aside' | 'seed' | 'has-state'
 /** §8 step 2f, the `file` projection after the backfill. */
 export type ProjectionClass = 'applied' | 'adopted' | 'create' | 'rewrite'
 
@@ -45,6 +53,8 @@ export interface NoteEntry {
   revision: RevisionClass
   /** null for trashed notes: the S2b backfill runs per live note. */
   crdt: CrdtClass | null
+  /** null for trashed notes, like `crdt`. */
+  collab: CollabAction | null
   projection: ProjectionClass
   embedding: 'applied' | 'pending'
   detail?: string
@@ -89,6 +99,7 @@ export interface StoreMigrationReport {
     notSerializeNoteForm: number
     revision: Record<RevisionClass, number>
     crdt: Record<CrdtClass, number>
+    collab: Record<CollabAction, number>
     projection: Record<ProjectionClass, number>
     embeddingPending: number
     /** `.md` files with no live note at their path (not generated `index.md` files). */
@@ -135,6 +146,8 @@ interface NoteRowLite {
   deleted_at: string | null
   updated_at: string
   has_embedding: boolean
+  /** The note already has S2b CRDT state (`note_crdt`); false before migration 0021. */
+  has_crdt: boolean
 }
 
 function differingKeys(a: Record<string, unknown>, b: Record<string, unknown>): string[] {
@@ -203,6 +216,7 @@ export async function planStoreMigration(options: { vaultId?: string } = {}): Pr
       notSerializeNoteForm: 0,
       revision: zero(['consistent', 'gap', 'none'] as const),
       crdt: zero(['matches-row', 'matches-file', 'matches-revision', 'mismatch', 'missing', 'undecodable'] as const),
+      collab: zero(['attach', 'set-aside', 'seed', 'has-state'] as const),
       projection: zero(['applied', 'adopted', 'create', 'rewrite'] as const),
       embeddingPending: 0,
       filesWithoutRow: 0,
@@ -253,7 +267,8 @@ export async function planStoreMigration(options: { vaultId?: string } = {}): Pr
       const t1 = performance.now()
       const rows = await tx<NoteRowLite[]>`
         select id, vault_id, path, frontmatter, body, deleted_at, updated_at,
-               embedding is not null as has_embedding
+               embedding is not null as has_embedding,
+               ${report.database.schema0021Applied ? tx`exists (select 1 from note_crdt c where c.note_id = notes.id)` : tx`false`} as has_crdt
         from notes
         where id > ${after} ${vaultFilter === null ? tx`` : tx`and vault_id = ${vaultFilter}`}
         order by id limit ${BATCH}`
@@ -450,6 +465,17 @@ async function classifyNote(
     c.crdt[crdt]++
     timings.crdt += performance.now() - t1
   }
+  const collab: CollabAction | null =
+    crdt === null
+      ? null
+      : row.has_crdt
+        ? 'has-state'
+        : crdt === 'missing'
+          ? 'seed'
+          : crdt === 'mismatch' || crdt === 'undecodable'
+            ? 'set-aside'
+            : 'attach'
+  if (collab) c.collab[collab]++
 
   const embedding = row.has_embedding ? 'applied' : 'pending'
   if (embedding === 'pending') c.embeddingPending++
@@ -463,6 +489,7 @@ async function classifyNote(
     serializeNoteForm,
     revision,
     crdt,
+    collab,
     projection,
     embedding,
     ...(detail === undefined ? {} : { detail }),

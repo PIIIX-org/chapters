@@ -10,6 +10,7 @@
  * The output is counts and messages only: never a secret, hash or note.
  */
 import { readFile } from 'node:fs/promises'
+import { DrizzleQueryError } from 'drizzle-orm/errors'
 import { runMigrations } from '../db/migrate.js'
 import { sql } from '../db/client.js'
 import { holdSharedLockOrExit } from '../notes/maintenance-lock.js'
@@ -40,13 +41,16 @@ function printPlan(plan: RestorePlan): void {
 /**
  * The driver's message and code only. A drizzle error's message carries the
  * query parameters, and a Postgres error's detail the failing row: both can
- * hold password hashes and TOTP secrets.
+ * hold password hashes and TOTP secrets. The code is taken from the first
+ * error in the `cause` chain that has one (drizzle's `DrizzleQueryError` wraps
+ * the driver error); a drizzle error without one gets a fixed message. Matched
+ * by class: drizzle does not set the error's `name` (#813).
  */
 function describeError(err: unknown): string {
   for (let current = err; current instanceof Error; current = current.cause) {
     if ('code' in current && typeof current.code === 'string') return `${current.message} (${current.code})`
   }
-  return err instanceof Error && err.name !== 'DrizzleQueryError' ? err.message : 'a database query failed'
+  return err instanceof Error && !(err instanceof DrizzleQueryError) ? err.message : 'a database query failed'
 }
 
 // A writing CLI holds the shared instance lock (ADR-003 §5.1): refused while store-export-legacy runs.

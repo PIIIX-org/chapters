@@ -16,6 +16,8 @@
 // "not corrupted" but is reported separately: refusing a legal value is
 // itself a usability defect.
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
+import { collabDocName } from '../lib/collab.ts'
+import { dbNoteId } from '../lib/datapath.ts'
 
 interface Case {
   id: string
@@ -151,7 +153,7 @@ const test: LabTest = {
       // ---- live collab session on the (expected) current state
       const base = afterFull?.outcome === 'intact' ? full : edited
       const collab = await collabSession(ctx, {
-        name: `${vault.id}/${path}`,
+        name: collabDocName(vault.id, await dbNoteId(ctx, vault.id, path)),
         token: sessionToken,
         insert: 'COLLAB ',
         setFrontmatter: { resource: 'collab---value' },

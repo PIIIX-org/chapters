@@ -6,6 +6,7 @@ import * as Y from 'yjs'
 import { buildApp } from '../src/app.js'
 import { getLiveNote, writeNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
+import { collabDocName } from '../src/sync/live-docs.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
 // ADR-003 §11 R5-1, second half: a graceful shutdown (the relay's destroy,
@@ -59,7 +60,7 @@ describe('graceful shutdown during a write to an open note (§11 R5-1)', () => {
     })
     expect(created.statusCode).toBe(200)
     const path = 'docs/shutdown'
-    provider = new HocuspocusProvider({ url: `ws://127.0.0.1:${port}/collab`, name: `${vaultId}/${path}`, token, document: new Y.Doc() })
+    provider = new HocuspocusProvider({ url: `ws://127.0.0.1:${port}/collab`, name: collabDocName(vaultId, (created.json() as { id: string }).id), token, document: new Y.Doc() })
     const text = provider.document.getText('body')
     await waitFor(() => provider!.isSynced && text.length > 0)
 

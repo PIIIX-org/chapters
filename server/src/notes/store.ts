@@ -6,21 +6,35 @@ import * as Y from 'yjs'
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
+import { recordJob } from '../monitoring/metrics.js'
 import { config } from '../config.js'
 import { kickEmbeddings } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
-import { deleteCrdtState, renameCrdtState, saveCrdtState } from '../sync/crdt-store.js'
 import {
+  closeNoteEditors,
   cloneDocument,
+  compileChange,
   docState,
-  liveDocumentsOf,
-  mergeDocuments,
-  pushToDocuments,
-  sharesHistory,
-  updateBin,
+  liveDocumentOf,
+  noteMoved,
+  pushToLiveDocument,
   type DocState,
-  type LiveDocument,
 } from '../sync/live-docs.js'
+import {
+  appendUpdate,
+  compactNoteCrdt,
+  storedStateOf,
+  insertNoteCrdt,
+  markFolded,
+  notesNeedingFold,
+  readNoteCrdt,
+  rememberStoredState,
+  seedDocument,
+  setFoldError,
+  type NoteCrdt,
+} from '../sync/note-crdt.js'
+import { mergeFrontmatter, mergeTextKeepingTheirs } from '../sync/three-way-merge.js'
+import { revisionAtSeq } from './store-reconcile.js'
 import { failpoint } from '../failpoints.js'
 import {
   OkfValidationError,
@@ -39,8 +53,10 @@ import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from
 import { orderKeys, presentedFrontmatter, sameContent } from './frontmatter-order.js'
 import {
   BACKFILL_MARKER,
+  NoteNotMigratedError,
   StoreBusyError,
   applyRowChange,
+  collabNoteMigrated,
   enqueueEmbeddingTx,
   insertRevision,
   insertStoreJob,
@@ -343,32 +359,28 @@ function plainRow(row: StoredNote): WrittenNote {
 }
 
 /**
- * The relay's loaded documents of a note (by the note id each recorded at
- * load, never by path: a renamed note can be open at its old path, and a new
- * note at that old path is another note), before a write (ADR-003 §5.2 step
- * 3, S2a). Documents of the note that share history are merged into each
- * other first (the §5.5 two-documents rule), so the state the write stores
- * and compiles its change against holds every tab's typing. `base` is a
- * clone of the primary document (at the note's current path, else the
- * first): the committed change is compiled against it once and the same
- * update is pushed into every document (step 8).
+ * The relay's loaded document of a note (named by note id, ADR-003 §5.4, so
+ * there is at most one), before a write (§5.2 step 3). `base` is a clone
+ * taken now: `state` is what the write is computed from, and the editors'
+ * typing the write appends to the log is exactly `base`'s delta over the
+ * stored state, so the change compiled later is relative to what the write
+ * saw. Typing that reaches the relay after the clone merges as a concurrent
+ * edit when the change is pushed (step 8).
  */
 interface Fold {
-  primary: LiveDocument
+  /** The open document itself (whose cached stored state readNoteCrdt may use), and `base`, the clone taken now. */
+  live: Y.Doc
   base: Y.Doc
   editors: string[]
   state: DocState
 }
 
-function foldSource(vaultId: string, noteId: string, path: string): Fold | null {
-  const loaded = liveDocumentsOf(noteId)
-  if (loaded.length === 0) return null
-  const primary = loaded.find((d) => d.name === `${vaultId}/${path}`) ?? loaded[0]!
-  for (const other of loaded) {
-    if (other !== primary && sharesHistory(other.doc, primary.doc)) mergeDocuments(primary.doc, other.doc)
-  }
-  const base = cloneDocument(primary.doc)
-  return { primary, base, editors: [...new Set(loaded.flatMap((d) => d.editors))], state: docState(base) }
+function foldSource(noteId: string, relayDoc?: Y.Doc): Fold | null {
+  const live = liveDocumentOf(noteId)
+  const doc = relayDoc ?? live?.doc
+  if (!doc) return null
+  const base = cloneDocument(doc)
+  return { live: doc, base, editors: live?.editors ?? [], state: docState(base) }
 }
 
 function releaseFold(fold: Fold | null): void {
@@ -376,18 +388,19 @@ function releaseFold(fold: Fold | null): void {
 }
 
 /**
- * Whether the relay would refuse to store `state` over `row` (invalid, over
- * the size cap, a repeated block: #491, #492). Such a state is never written
- * on the editors' behalf, neither by a fold nor as the body a write keeps.
+ * Why the relay would refuse to store `state` over `row` (invalid, over the
+ * size cap, a repeated block: #491, #492), or null. Such a state is never
+ * written to the row on the editors' behalf, neither by a fold nor as the
+ * body a write keeps; it stays in the CRDT log with `fold_error` set.
  */
-function refusedState(row: NoteRow, state: DocState): boolean {
+function refusal(row: NoteRow, state: DocState): string | null {
   try {
     validateNote(row.type, row.name, { ...state.frontmatter, type: row.type } as Frontmatter, state.body)
     assertBodyFits(state.body, row.body)
-  } catch {
-    return true
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
   }
-  return suspiciousWrite(row.body, state.body, 'repeated-block') !== null
+  return suspiciousWrite(row.body, state.body, 'repeated-block') === null ? null : 'the text repeats a block of the stored note (#492)'
 }
 
 /**
@@ -396,64 +409,133 @@ function refusedState(row: NoteRow, state: DocState): boolean {
  * editors keep their text, as the relay's own quarantine leaves it).
  */
 export function keptBody(row: NoteRow, current: DocState): string {
-  return current.body !== row.body && refusedState(row, current) ? row.body : current.body
+  return current.body !== row.body && refusal(row, current) !== null ? row.body : current.body
+}
+
+/** A note after Invariant W's catch-up: its row, its CRDT state (null when it has none) and why the editors' state was not folded. */
+interface CaughtUp {
+  row: StoredNote
+  crdt: NoteCrdt | null
+  refused: string | null
+  /** The rebase update applied to the CRDT state, to push into the loaded document. */
+  rebased: Uint8Array | null
 }
 
 /**
- * Invariant W, S2a (§5.2 step 3): stores the loaded document's state as a
- * revision of its editors before a write changes the note, in the write's
- * transaction. A state the relay itself would refuse is not stored
- * (`refused`); the write is then compiled against it and stands or falls on
- * its own validation.
+ * Folds the CRDT state into the row (§5.4 fold steps 3-5): a state the row
+ * already holds only advances `folded_through`; a state the relay would
+ * refuse sets `fold_error` and leaves the row at its last valid version;
+ * any other is written as a revision of `detail`'s kind.
  */
-async function foldLive(tx: Tx, row: StoredNote, fold: Fold | null): Promise<{ row: StoredNote; refused: boolean }> {
-  if (!fold) return { row, refused: false }
-  const frontmatter = { ...fold.state.frontmatter, type: row.type } as Frontmatter
-  if (fold.state.body === row.body && sameContent(frontmatter, row.frontmatter as Record<string, unknown>)) {
-    return { row, refused: false }
+async function foldCrdt(tx: Tx, row: StoredNote, crdt: NoteCrdt, detail: Record<string, unknown>): Promise<CaughtUp> {
+  const state = docState(crdt.doc)
+  const frontmatter = { ...state.frontmatter, type: row.type } as Frontmatter
+  if (state.body === row.body && sameContent(frontmatter, row.frontmatter as Record<string, unknown>)) {
+    await markFolded(tx, crdt, row.seq)
+    return { row, crdt, refused: null, rebased: null }
   }
-  if (refusedState(row, fold.state)) return { row, refused: true }
+  const refused = refusal(row, state)
+  if (refused !== null) {
+    await markFolded(tx, crdt, row.seq, { foldError: refused })
+    return { row, crdt, refused, rebased: null }
+  }
   const { row: folded } = await applyRowChange(
     tx,
     row,
-    { frontmatter, body: fold.state.body },
-    { action: 'update', actor: SYSTEM_ACTOR, actorDetail: { kind: 'fold', editors: fold.editors } },
-    { frontmatterOrder: orderKeys(row.frontmatterSrc, fold.state.frontmatter) },
+    { frontmatter, body: state.body },
+    { action: 'update', actor: SYSTEM_ACTOR, actorDetail: detail },
+    { frontmatterOrder: orderKeys(row.frontmatterSrc, state.frontmatter) },
   )
-  return { row: folded, refused: false }
+  await markFolded(tx, crdt, folded.seq)
+  failpoint('fold.before-commit')
+  return { row: folded, crdt, refused: null, rebased: null }
 }
 
 /**
- * After commit, still under the note lock (§5.2 step 8, S2a): pushes the
- * committed state into every loaded document of the note, or, when none is
- * loaded, keeps the `.crdt` bin at `binPath` equal to it. When the fold was
- * refused and the write left the body alone, only the frontmatter is pushed:
- * the editors keep the text the relay would not store.
+ * Rebase (§5.4 `rebaseLocked`): the row changed behind the store
+ * (`notes.seq > folded_seq`: old code during a rollback, manual SQL, a
+ * restore not converted yet). Base = the revision at `folded_seq`; theirs =
+ * the row, first kept as a revision at its `seq`; ours = the CRDT state.
+ * Non-overlapping changes from both sides are kept; on an overlap ours (the
+ * editors' typing) stays and theirs is recoverable from its revision. The
+ * merge is applied as a diff on top of the CRDT state (never a rebuild),
+ * appended as a `rebase` update, then folded as a `merge` revision.
  */
-async function pushCommitted(
-  vaultId: string,
-  binPath: string,
+async function rebaseLocked(tx: Tx, row: StoredNote, crdt: NoteCrdt): Promise<CaughtUp> {
+  await revisionAtSeq(tx, row.id, 'out-of-band')
+  const [base] = (await tx.execute(sql`
+    SELECT frontmatter, body FROM note_revisions WHERE note_id = ${row.id} AND seq = ${crdt.foldedSeq} LIMIT 1`)) as unknown as Array<{
+    frontmatter: Record<string, unknown>
+    body: string
+  }>
+  const ours = docState(crdt.doc)
+  const theirs = { frontmatter: row.frontmatter as Record<string, unknown>, body: row.body }
+  let merged: DocState = ours
+  let conflict = ours.body !== theirs.body || !sameContent(ours.frontmatter, theirs.frontmatter)
+  if (base) {
+    const body = mergeTextKeepingTheirs(base.body, ours.body, theirs.body)
+    const frontmatter = mergeFrontmatter(base.frontmatter as Record<string, unknown>, ours.frontmatter, theirs.frontmatter)
+    merged = { frontmatter: frontmatter.frontmatter, body: body.text }
+    conflict = body.overlaps.length > 0 || frontmatter.conflicts.length > 0
+  }
+  if (conflict) console.warn(`[collab] note ${row.id}: rebase kept the editors' text where the row changed behind the store too`)
+  const update = compileChange(cloneDocument(crdt.doc), { frontmatter: { ...merged.frontmatter, type: row.type }, body: merged.body })
+  const appended = await appendUpdate(tx, crdt, update, SYSTEM_ACTOR, { kind: 'rebase', conflict })
+  const folded = await foldCrdt(tx, row, crdt, { kind: 'merge', conflict })
+  return { ...folded, rebased: appended ? update : null }
+}
+
+/**
+ * Invariant W, S2b (§5.2 step 3): before a write changes a note with CRDT
+ * state, the row catches up with it: a rebase when the row changed behind
+ * the store, then the loaded document's typing (`fold.base`'s delta over the
+ * stored state) appended to the log, then (unless `storeRow` is false: the
+ * relay's own store, which writes the row itself) the fold.
+ */
+async function catchUp(
+  tx: Tx,
+  row: StoredNote,
+  crdt: NoteCrdt | null,
   fold: Fold | null,
-  committed: StoredNote,
-  keepLiveBody: boolean,
-): Promise<void> {
-  failpoint('edit.after-commit-before-live-apply')
-  const frontmatter = committed.frontmatter as Record<string, unknown>
-  const loaded = liveDocumentsOf(committed.id)
-  if (loaded.length > 0) {
-    const primary = (fold && loaded.find((d) => d.doc === fold.primary.doc)) || loaded[0]!
-    const base = fold && primary.doc === fold.primary.doc ? fold.base : cloneDocument(primary.doc)
-    if (base !== fold?.base) releaseFold(fold)
-    const docs = [primary.doc, ...loaded.filter((d) => d !== primary).map((d) => d.doc)]
-    pushToDocuments(docs, base, (current) => ({ frontmatter, body: keepLiveBody ? current.body : committed.body }))
-    return
+  options: { storeRow: boolean },
+): Promise<CaughtUp> {
+  if (!crdt) return { row, crdt, refused: null, rebased: null }
+  const rebase = row.seq > crdt.foldedSeq ? await rebaseLocked(tx, row, crdt) : null
+  const current = rebase?.row ?? row
+  if (fold) {
+    // Over the stored state: its cached vector when `crdt.doc` is the open document's clone (readNoteCrdt).
+    const typing = Y.encodeStateAsUpdate(fold.base, crdt.storedStateVector ?? Y.encodeStateVector(crdt.doc))
+    await appendUpdate(tx, crdt, typing, SYSTEM_ACTOR, { kind: 'typing', editors: fold.editors })
+    // The stored state now holds everything `crdt.doc` does.
+    crdt.storedStateVector = null
   }
-  releaseFold(fold)
-  try {
-    await updateBin(vaultId, binPath, { frontmatter, body: committed.body })
-  } catch (err) {
-    console.warn(`[store] ${vaultId}/${binPath}: .crdt bin not updated: ${(err as Error).message}`)
-  }
+  const folded = options.storeRow
+    ? await foldCrdt(tx, current, crdt, { kind: 'fold', editors: fold?.editors ?? [] })
+    : { row: current, crdt, refused: null, rebased: null }
+  return { ...folded, rebased: rebase?.rebased ?? null }
+}
+
+/**
+ * §5.2 steps 5-6: the committed state compiled into one Yjs update on the
+ * CRDT state (server process client id), appended with the write; the CRDT
+ * state then agrees with the row at its new `seq`. `refused` (the editors'
+ * state the row does not take, and the write left the body alone) keeps
+ * the editors' text in the CRDT state and `fold_error` set. Returns the
+ * update to push into the loaded document after commit.
+ */
+async function commitChange(
+  tx: Tx,
+  crdt: NoteCrdt,
+  written: StoredNote,
+  actor: Actor,
+  detail: Record<string, unknown> | undefined,
+  refused: string | null,
+): Promise<Uint8Array | null> {
+  const body = refused === null ? written.body : docState(crdt.doc).body
+  const update = compileChange(cloneDocument(crdt.doc), { frontmatter: written.frontmatter as Record<string, unknown>, body })
+  const appended = await appendUpdate(tx, crdt, update, actor, detail)
+  await markFolded(tx, crdt, written.seq, { foldError: refused })
+  return appended ? update : null
 }
 
 /** Wakes the workers that follow a commit: the projector (files, index.md) and the embedding worker. */
@@ -615,17 +697,17 @@ function presented(row: StoredNote, foldError?: string): ReadNote {
 
 /**
  * Reads a live note as its editors see it (#474, ADR-003 §6 fold on read):
- * when the relay has the note's document loaded, its state is first stored
- * as a revision of its editors (the fold a write makes first, §5.2 step 3,
- * S2a; one revision per fold, Q8), under the note's lock, and the row is
- * served after. The text returned is therefore exactly the revision at
- * `row.seq`, the `rev` a later `base_rev` names, and holds everything the
- * relay has. A note with no loaded document is read without a lock or a
- * write. A state the relay would refuse to store (#491, #492) is not
- * folded: the last valid row is served with `foldError`. When the store
- * cannot take the fold (lock timeout, maintenance), the read fails with
- * NoteReadBusyError (HTTP 503): it would otherwise serve text without the
- * typing.
+ * when the relay has the note's document loaded, Invariant W's catch-up runs
+ * first under the note's lock (a row changed behind the store is rebased,
+ * the editors' typing is appended to the CRDT log and folded; one revision
+ * per fold, Q8), and the row is served after. The text returned is
+ * therefore exactly the revision at `row.seq`, the `rev` a later `base_rev`
+ * names, and holds everything the relay has. A note with no loaded
+ * document is read without a lock or a write. A state the relay would
+ * refuse to store (#491, #492) is not folded: the last valid row is served
+ * with `foldError` (also set on `note_crdt`). When the store cannot take the
+ * fold (lock timeout, maintenance), the read fails with NoteReadBusyError
+ * (HTTP 503): it would otherwise serve text without the typing.
  *
  * Never call it while holding the note's lock (the relay's load hook does):
  * key-lock.ts is not reentrant.
@@ -634,11 +716,11 @@ export async function readLiveNote(vaultId: string, path: string): Promise<ReadN
   const resolved = resolveNotePath(path)
   const seen = await readStored(vaultId, resolved.fullPath)
   if (!seen) return null
-  if (liveDocumentsOf(seen.id).length === 0) return presented(seen)
+  if (!liveDocumentOf(seen.id)) return presented(seen)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const row = await readStored(vaultId, resolved.fullPath)
     if (!row) return null
-    const fold = foldSource(vaultId, row.id, resolved.fullPath)
+    const fold = foldSource(row.id)
     if (!fold) return presented(row)
     try {
       let folded
@@ -646,13 +728,14 @@ export async function readLiveNote(vaultId: string, path: string): Promise<ReadN
         folded = await storeTransaction([row.id], async (tx) => {
           const locked = await lockedNote(tx, row.id)
           if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
-          return foldLive(tx, locked, fold)
+          return catchUp(tx, locked, await readNoteCrdt(tx, locked.id), fold, { storeRow: true })
         })
       } catch (err) {
         if (err instanceof StoreBusyError) throw new NoteReadBusyError()
         throw err
       }
       if (!folded) return readNote(vaultId, resolved.fullPath)
+      pushToLiveDocument(row.id, folded.rebased)
       if (folded.row.seq !== row.seq) afterCommit()
       return presented(
         folded.row,
@@ -703,10 +786,11 @@ export interface WriteOptions {
   actorDetail?: Record<string, unknown>
   /**
    * The relay's own store of its document (collab-server.ts): the note it
-   * loaded (`noteId`, the store goes nowhere else, §5.5). It is the live
-   * document, so nothing is folded first or pushed back.
+   * loaded (`noteId`, the store goes nowhere else) and the document. Its
+   * typing is appended to the CRDT log and the write itself stores it, so
+   * nothing is folded first.
    */
-  relay?: { noteId: string }
+  relay?: { noteId: string; doc: Y.Doc }
   /** `dry_run` (#477): compute the next state and return it as the row would be, without writing anything. */
   dryRun?: boolean
   /** Receives the state the write changed (what the editors saw, else the row): the base of its `diff_stats` (#477). */
@@ -738,11 +822,13 @@ const WRITE_ROUNDS = 3
  *    the editors see), else the row; `compute` turns it into the next state
  *    and refuses by throwing (validation, size cap, quarantine, overlap);
  * 2. one transaction: the instance and note locks, the row again (FOR
- *    UPDATE; a row another process changed meanwhile recomputes), the loaded
- *    document's state stored first, then the write: row, revision at the new
- *    `seq`, links, projection targets, embedding job; COMMIT is the ack;
- * 3. the committed state pushed into the loaded document, or the `.crdt` bin
- *    kept equal to it; the projector woken.
+ *    UPDATE; a row another process changed meanwhile recomputes; a row
+ *    changed behind the store is rebased into the CRDT state first, then
+ *    the write recomputes), the editors' typing appended to the CRDT log and
+ *    folded, then the write: row, revision at the new `seq`, links,
+ *    projection targets, embedding job, and (for a note with CRDT state)
+ *    the change as one Yjs update; COMMIT is the ack;
+ * 3. that update applied to the loaded document; the projector woken.
  * Null when no live note is at `path` (or it is not `options.relay.noteId`).
  */
 export async function writeNote(
@@ -757,7 +843,7 @@ export async function writeNote(
     for (let round = 0; round < WRITE_ROUNDS; round++) {
       const seen = await readStored(vaultId, resolved.fullPath)
       if (!seen || (options.relay && seen.id !== options.relay.noteId)) return null
-      const fold = options.relay ? null : foldSource(vaultId, seen.id, resolved.fullPath)
+      const fold = foldSource(seen.id, options.relay?.doc)
       const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
       let next: NextState
       try {
@@ -771,32 +857,44 @@ export async function writeNote(
         releaseFold(fold)
         return { ...plainRow(seen), frontmatter: { ...next.frontmatter, type: seen.type }, body: next.body }
       }
-      const committed = await storeTransaction([seen.id], async (tx) => {
-        const locked = await lockedNote(tx, seen.id)
-        if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
-        if (locked.seq !== seen.seq) return 'moved' as const
-        const { row, refused } = await foldLive(tx, locked, fold)
-        const { row: written } = await applyRowChange(
-          tx,
-          row,
-          { frontmatter: { ...next.frontmatter, type: row.type }, body: next.body },
-          options.revertOf
-            ? { action: 'revert', actor, sourceRevisionId: options.revertOf, actorDetail: options.actorDetail }
-            : { action: 'update', actor, actorDetail: options.actorDetail },
-        )
-        await options.recordKey?.(tx, plainRow(written))
-        failpoint('edit.before-commit')
-        return { written, keepLiveBody: refused && written.body === locked.body }
-      })
-      if (committed === 'moved') {
+      let committed
+      try {
+        committed = await storeTransaction([seen.id], async (tx) => {
+          const locked = await lockedNote(tx, seen.id)
+          if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
+          if (locked.seq !== seen.seq) return 'moved' as const
+          // With the open document in hand, its cached stored state spares materialising snapshot ⊕ tail.
+          const crdt = await readNoteCrdt(tx, locked.id, fold ? { live: fold.live, base: fold.base, seq: locked.seq } : undefined)
+          // The row changed behind the store: merged into the CRDT state, then this write is computed again.
+          if (crdt && locked.seq > crdt.foldedSeq) return { rebased: (await rebaseLocked(tx, locked, crdt)).rebased }
+          const { row, refused } = await catchUp(tx, locked, crdt, fold, { storeRow: !options.relay })
+          const { row: written } = await applyRowChange(
+            tx,
+            row,
+            { frontmatter: { ...next.frontmatter, type: row.type }, body: next.body },
+            options.revertOf
+              ? { action: 'revert', actor, sourceRevisionId: options.revertOf, actorDetail: options.actorDetail }
+              : { action: 'update', actor, actorDetail: options.actorDetail },
+          )
+          const keepLiveBody = refused !== null && written.body === locked.body
+          const update = crdt ? await commitChange(tx, crdt, written, actor, options.actorDetail, keepLiveBody ? refused : null) : null
+          await options.recordKey?.(tx, plainRow(written))
+          failpoint('edit.before-commit')
+          return { written, update, stored: crdt && fold ? storedStateOf(crdt) : null }
+        })
+      } finally {
         releaseFold(fold)
+      }
+      if (committed === 'moved') continue
+      if (!committed) return null
+      if ('rebased' in committed) {
+        pushToLiveDocument(seen.id, committed.rebased ?? null)
         continue
       }
-      if (!committed) {
-        releaseFold(fold)
-        return null
-      }
-      if (!options.relay) await pushCommitted(vaultId, resolved.fullPath, fold, committed.written, committed.keepLiveBody)
+      failpoint('edit.after-commit-before-live-apply')
+      pushToLiveDocument(seen.id, committed.update)
+      // The open document now holds what was committed (its typing was appended, the update pushed).
+      if (fold) rememberStoredState(fold.live, committed.stored)
       afterCommit()
       failpoint('edit.after-commit-before-ack')
       return plainRow(committed.written)
@@ -809,9 +907,9 @@ export async function writeNote(
  * Writes `input` to the live note at `path` (writeNote): a field left out
  * keeps its current value (a body the relay would refuse is not kept, see
  * keptBody), a `body` function (BodyEdit) gets the current body. `input`
- * may be a function, read under the note's lock: the relay's store passes
- * its document's state that way, so a server write that held the lock (and
- * pushed its change into the document) is in the state it stores.
+ * may be a function of the current state, called under the note's lock:
+ * the relay's store passes one that returns its document's state as the
+ * write sees it, so the row gets exactly the typing the write appends.
  * `options.quarantine` checks the body against the stored one first
  * (refuseSuspiciousWrite; the collab relay's store passes the quarantine
  * revision of the loaded document's episode, if any).
@@ -819,7 +917,7 @@ export async function writeNote(
 export async function updateNote(
   vaultId: string,
   path: string,
-  input: NoteInput | (() => NoteInput),
+  input: NoteInput | ((current: DocState) => NoteInput),
   actor: Actor = SYSTEM_ACTOR,
   options: WriteOptions & { quarantine?: QuarantineRules; episode?: string } = {},
 ): Promise<WrittenNote | null> {
@@ -827,7 +925,7 @@ export async function updateNote(
     vaultId,
     path,
     async (current, row) => {
-      const edit = typeof input === 'function' ? input() : input
+      const edit = typeof input === 'function' ? input(current) : input
       const body = typeof edit.body === 'function' ? edit.body(current.body) : (edit.body ?? keptBody(row, current))
       const frontmatter: Frontmatter = { ...(edit.frontmatter ?? current.frontmatter), type: row.type }
       validateNote(row.type, row.name, frontmatter, body)
@@ -1016,23 +1114,23 @@ async function moveNote(
     throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
   }
   const isMoving = fromResolved.fullPath !== toResolved.fullPath
-  const fold = foldSource(vaultId, seen.id, fromResolved.fullPath)
-  const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
-  // Self-referential wikilinks in the note's own body follow it.
-  const keptText = keptBody(plainRow(seen), current)
-  const newBody = isMoving ? refactorWikilinks(keptText, fromResolved.fullPath, toResolved.fullPath) : keptText
-  const newFrontmatter: Frontmatter = { ...current.frontmatter, type: toResolved.type }
-  let result: { updated: StoredNote; referrers: string[]; job: number | null; keepLiveBody: boolean } | null
+  const fold = foldSource(seen.id)
+  let result: { updated: StoredNote; referrers: string[]; job: number | null; update: Uint8Array | null; rebased: Uint8Array | null } | null
   try {
-    validateNote(toResolved.type, toResolved.name, newFrontmatter, newBody)
-    // #491: rewriting links can grow a body past the size cap. Every rewritten
-    // body (the note's own, then each referrer's) is checked before anything is
-    // written, so a refused rename leaves the vault as it was.
-    assertBodyFits(newBody, current.body, `${renaming} rewrites its own links`)
     result = await storeTransaction([seen.id], async (tx) => {
       const locked = await lockedNote(tx, seen.id)
       if (!locked || locked.deletedAt || locked.path !== fromResolved.fullPath) return null
-      const { row, refused } = await foldLive(tx, locked, fold)
+      const crdt = await readNoteCrdt(tx, locked.id)
+      const { row, refused, rebased } = await catchUp(tx, locked, crdt, fold, { storeRow: true })
+      // Self-referential wikilinks in the note's own body follow it. The row
+      // holds the editors' typing now, unless the relay would refuse it.
+      const newBody = isMoving ? refactorWikilinks(row.body, fromResolved.fullPath, toResolved.fullPath) : row.body
+      const newFrontmatter: Frontmatter = { ...(row.frontmatter as Record<string, unknown>), type: toResolved.type }
+      validateNote(toResolved.type, toResolved.name, newFrontmatter, newBody)
+      // #491: rewriting links can grow a body past the size cap. Every rewritten
+      // body (the note's own, then each referrer's) is checked before anything is
+      // written, so a refused rename leaves the vault as it was.
+      assertBodyFits(newBody, row.body, `${renaming} rewrites its own links`)
       const referrers = isMoving ? await linkReferrers(tx, vaultId, row.id, fromResolved.fullPath) : []
       for (const referrer of referrers) {
         const rewritten = refactorWikilinks(referrer.body, fromResolved.fullPath, toResolved.fullPath)
@@ -1046,6 +1144,9 @@ async function moveNote(
           ? { action: 'rename', actor, fromPath: fromResolved.fullPath, toPath: toResolved.fullPath }
           : { action: 'update', actor },
       )
+      // The body and `type` change, compiled into the CRDT state (§5.5): the document keeps its name, so editors stay connected.
+      const keepLiveBody = refused !== null && updated.body === locked.body
+      const update = crdt ? await commitChange(tx, crdt, updated, actor, undefined, keepLiveBody ? refused : null) : null
       if (isMoving) {
         // The folders the note left: their index.md no longer lists it.
         await insertStoreJob(tx, STORE_JOBS.dirIndex, { vaultId, dirs: fromResolved.ancestorDirectories })
@@ -1060,24 +1161,18 @@ async function moveNote(
             )
           : null
       await recordKey?.(tx, plainRow(updated))
-      return { updated, referrers: referrers.map((r) => r.id), job, keepLiveBody: refused && updated.body === locked.body }
+      return { updated, referrers: referrers.map((r) => r.id), job, update, rebased }
     })
   } catch (err) {
-    releaseFold(fold)
     if (isUniqueViolation(err)) throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
     throw err
-  }
-  if (!result) {
+  } finally {
     releaseFold(fold)
-    return null
   }
-  // S2a (§5.5): every loaded document of the note (or its bin) gets the change, then the bin moves with the note.
-  await pushCommitted(vaultId, fromResolved.fullPath, fold, result.updated, result.keepLiveBody)
-  if (isMoving) {
-    const live = liveDocumentsOf(seen.id).find((d) => d.name === `${vaultId}/${fromResolved.fullPath}`)
-    if (live) await saveCrdtState(vaultId, fromResolved.fullPath, Y.encodeStateAsUpdate(live.doc)).catch(() => {})
-    await renameCrdtState(vaultId, fromResolved.fullPath, toResolved.fullPath).catch(() => {})
-  }
+  if (!result) return null
+  pushToLiveDocument(seen.id, result.rebased)
+  pushToLiveDocument(seen.id, result.update)
+  if (isMoving) noteMoved(seen.id, vaultId, fromResolved.fullPath, toResolved.fullPath)
   afterCommit()
   return { updated: plainRow(result.updated), referrers: result.referrers, job: result.job }
 }
@@ -1121,19 +1216,22 @@ export async function softDeleteNote(
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const seen = await readStored(vaultId, resolved.fullPath)
     if (!seen) return null
-    const fold = foldSource(vaultId, seen.id, resolved.fullPath)
+    const fold = foldSource(seen.id)
     try {
       const deleted = await storeTransaction([seen.id], async (tx) => {
         const locked = await lockedNote(tx, seen.id)
         if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
-        const { row } = await foldLive(tx, locked, fold)
+        const { row, rebased } = await catchUp(tx, locked, await readNoteCrdt(tx, locked.id), fold, { storeRow: true })
         const deleted = (await applyRowChange(tx, row, { deletedAt: new Date() }, { action: 'delete', actor })).row
         await options.recordKey?.(tx, plainRow(deleted))
-        return deleted
+        return { row: deleted, rebased }
       })
       if (!deleted) return null
+      pushToLiveDocument(seen.id, deleted.rebased)
+      // §5.5: the note's editors are closed now (`note-deleted`); a reconnect is refused until a restore.
+      closeNoteEditors(seen.id)
       afterCommit()
-      return plainRow(deleted)
+      return plainRow(deleted.row)
     } finally {
       releaseFold(fold)
     }
@@ -1813,18 +1911,31 @@ export async function revertNote(
 /**
  * Hard purge (spec 6): permanently removes one recorded revision — for
  * accidentally-committed secrets, where "recoverable" is the wrong
- * property. Owner/admin only — enforced by callers.
+ * property. Owner/admin only — enforced by callers. Refused for the
+ * revision at the note's `seq` (its text still holds it) and for the
+ * rebase base (the revision at `note_crdt.folded_seq` while the row is
+ * past it). The note's CRDT state is compacted in the same transaction:
+ * only a re-encoded snapshot drops deleted text (ADR-003 §5.4, §5.5).
  */
 export async function purgeRevision(vaultId: string, revisionId: string): Promise<boolean> {
   const [found] = (await db.execute(sql`
-    SELECT r.seq = n.seq AS current FROM note_revisions r JOIN notes n ON n.id = r.note_id
-    WHERE r.id = ${revisionId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ current: boolean | null }>
+    SELECT r.note_id, r.seq = n.seq AS current,
+      (c.folded_seq IS NOT NULL AND r.seq = c.folded_seq AND n.seq > c.folded_seq) AS base
+    FROM note_revisions r JOIN notes n ON n.id = r.note_id LEFT JOIN note_crdt c ON c.note_id = n.id
+    WHERE r.id = ${revisionId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ note_id: string; current: boolean | null; base: boolean }>
   if (!found) return false
   // ADR-003 §5.5: the note's text still holds what this revision holds (invariant I2).
   if (found.current) {
     throw new OkfValidationError('this revision is the note as it is now; edit the note first, then purge the revision')
   }
-  await db.delete(noteRevisions).where(eq(noteRevisions.id, revisionId))
+  if (found.base) {
+    throw new OkfValidationError('this revision is the base of a pending merge of the note; open or edit the note first, then purge the revision')
+  }
+  await storeTransaction([found.note_id], async (tx) => {
+    await tx.delete(noteRevisions).where(eq(noteRevisions.id, revisionId))
+    const crdt = await readNoteCrdt(tx, found.note_id)
+    if (crdt) await compactNoteCrdt(tx, crdt)
+  })
   return true
 }
 
@@ -1851,12 +1962,128 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
     })
     if (!done) return false
     failpoint('purge.after-commit-before-remove')
-    // The unchanged S2a relay still keys its CRDT state by path (ADR-003 §8 step 2e).
-    await deleteCrdtState(vaultId, row.path).catch(() => {})
+    closeNoteEditors(row.id)
     wakeProjector()
     return true
   })
   return purged ?? false
+}
+
+/**
+ * The relay's load of note `noteId`'s document (ADR-003 §5.4 "Load"), under
+ * the note's locks: the note's CRDT state, seeded deterministically in the
+ * same transaction when it has none; a row changed behind the store is
+ * rebased into it and folded first, and so is a tail left unfolded. Never
+ * reads a file or a `.crdt` bin, and never rebuilds the text (#488).
+ * Returns the state to apply to the document, the note's path, and the last
+ * update id that state includes (null while `fold_error` is set: the open
+ * document then caches nothing, see note-crdt.ts readNoteCrdt).
+ */
+export async function loadCollabState(
+  vaultId: string,
+  noteId: string,
+): Promise<{ state: Uint8Array; path: string; lastId: number | null }> {
+  for (let round = 0; round < WRITE_ROUNDS; round++) {
+    const [note] = await db
+      .select({ path: notes.path })
+      .from(notes)
+      .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
+    if (!note) throw new Error(`note does not exist: ${vaultId}/~${noteId}`)
+    const loaded = await withKeyLock(noteLock(vaultId, note.path), () =>
+      storeTransaction([noteId], async (tx) => {
+        const locked = await lockedNote(tx, noteId)
+        if (!locked || locked.deletedAt || locked.vaultId !== vaultId) throw new Error(`note does not exist: ${vaultId}/~${noteId}`)
+        if (locked.path !== note.path) return null
+        const stored = await readNoteCrdt(tx, noteId)
+        if (stored) {
+          await catchUp(tx, locked, stored, null, { storeRow: true })
+          return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null }
+        }
+        // Its bin is still to be attached at the next restart: a seed now would make the backfill skip it.
+        if (!collabNoteMigrated(noteId)) throw new NoteNotMigratedError()
+        const seed = seedDocument(noteId, { frontmatter: locked.frontmatter as Record<string, unknown>, body: locked.body })
+        await insertNoteCrdt(tx, noteId, seed, locked.seq)
+        return { state: Y.encodeStateAsUpdate(seed), lastId: 0 }
+      }),
+    )
+    if (loaded) return { ...loaded, path: note.path }
+  }
+  throw new StoreBusyError('the note kept moving')
+}
+
+/**
+ * A store of `doc` the relay refused (invalid, over the cap, quarantined):
+ * the editors' typing is still appended to the note's CRDT log, and
+ * `fold_error` says why the row keeps its last valid version (§5.4 fold
+ * step 5). Editors keep their text; the next valid store folds it.
+ */
+export async function keepRefusedTyping(vaultId: string, noteId: string, doc: Y.Doc, reason: string): Promise<void> {
+  const [note] = await db.select({ path: notes.path }).from(notes).where(and(eq(notes.id, noteId), isNull(notes.deletedAt)))
+  if (!note) return
+  const fold = foldSource(noteId, doc)!
+  try {
+    await withKeyLock(noteLock(vaultId, note.path), () =>
+      storeTransaction([noteId], async (tx) => {
+        const locked = await lockedNote(tx, noteId)
+        const crdt = locked && !locked.deletedAt ? await readNoteCrdt(tx, noteId) : null
+        if (!crdt) return
+        await appendUpdate(tx, crdt, Y.encodeStateAsUpdate(fold.base, Y.encodeStateVector(crdt.doc)), SYSTEM_ACTOR, {
+          kind: 'typing',
+          editors: fold.editors,
+          refused: reason,
+        })
+        await setFoldError(tx, crdt, reason)
+      }),
+    )
+  } finally {
+    releaseFold(fold)
+  }
+}
+
+/** Compacts note `noteId`'s CRDT state (§5.4 fold step 6, "on unload"): the relay unloaded its document. */
+export async function compactCollabState(vaultId: string, noteId: string): Promise<void> {
+  const [note] = await db.select({ path: notes.path }).from(notes).where(eq(notes.id, noteId))
+  if (!note) return
+  await withKeyLock(noteLock(vaultId, note.path), () =>
+    storeTransaction([noteId], async (tx) => {
+      const crdt = await readNoteCrdt(tx, noteId)
+      if (crdt && crdt.tailCount > 0) await compactNoteCrdt(tx, crdt)
+    }),
+  )
+}
+
+/**
+ * Boot steps 4-5 (§7): every live note whose row moved past its CRDT state
+ * is rebased, and every unfolded tail is folded, one transaction per note.
+ * A failure is logged and counted; boot never stops for one note.
+ */
+export async function foldPendingCollab(): Promise<{ folded: number; failed: number }> {
+  let folded = 0
+  let failed = 0
+  for (const noteId of await notesNeedingFold(db)) {
+    try {
+      const [note] = await db.select({ vaultId: notes.vaultId, path: notes.path }).from(notes).where(and(eq(notes.id, noteId), isNull(notes.deletedAt)))
+      if (!note) continue
+      await withKeyLock(noteLock(note.vaultId, note.path), () =>
+        storeTransaction([noteId], async (tx) => {
+          const locked = await lockedNote(tx, noteId)
+          if (!locked || locked.deletedAt) return
+          await catchUp(tx, locked, await readNoteCrdt(tx, noteId), null, { storeRow: true })
+        }),
+      )
+      folded++
+    } catch (err) {
+      failed++
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[collab] boot fold of note ${noteId} failed:`, err)
+      recordJob('collab-store', { error: err }, noteId)
+      // §7: a failure sets fold_error (monitoring, the doctor); the next fold clears it.
+      await db
+        .execute(sql`UPDATE note_crdt SET fold_error = ${`boot fold failed: ${message}`}, updated_at = now() WHERE note_id = ${noteId}`)
+        .catch((setErr: unknown) => console.error(`[collab] note ${noteId}: fold_error not recorded:`, setErr))
+    }
+  }
+  return { folded, failed }
 }
 
 export const ASSET_MIME_TYPES: Record<string, string> = {
