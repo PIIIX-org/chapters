@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type AdmZip from 'adm-zip'
 import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import { z } from 'zod'
@@ -44,6 +45,8 @@ function isValidTime(text: string): boolean {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const revisionSchema = z.object({
+  /** The revision's id in the exported vault; only names a revert's source within the archive (older archives have none). */
+  id: z.string().optional(),
   action: z.string().min(1),
   actorType: z.enum(['user', 'mcp', 'collab']),
   actorId: z.string().nullable(),
@@ -52,6 +55,10 @@ const revisionSchema = z.object({
   frontmatter: z.record(z.string(), z.unknown()),
   body: z.string(),
   createdAt: z.string(),
+  /** History events (#479): a rename's paths, a revert's source (the `id` of another revision of the note). */
+  fromPath: z.string().optional(),
+  toPath: z.string().optional(),
+  sourceRevisionId: z.string().optional(),
 })
 
 const historySchema = z.object({
@@ -134,12 +141,16 @@ export async function addHistoryToZip(zip: AdmZip, vaultId: string, prefix = '')
     // Per note, so an export never holds every revision body of a vault in one result.
     const revisions = await db
       .select({
+        id: noteRevisions.id,
         action: noteRevisions.action,
         actorType: noteRevisions.actorType,
         actorId: noteRevisions.actorId,
         frontmatter: noteRevisions.frontmatter,
         body: noteRevisions.body,
         createdAt: utcText(noteRevisions.createdAt),
+        fromPath: noteRevisions.fromPath,
+        toPath: noteRevisions.toPath,
+        sourceRevisionId: noteRevisions.sourceRevisionId,
       })
       .from(noteRevisions)
       .where(eq(noteRevisions.noteId, row.id))
@@ -163,6 +174,7 @@ export async function addHistoryToZip(zip: AdmZip, vaultId: string, prefix = '')
       deletedAt: row.deletedAt,
       ...(row.trashed ? { frontmatter: row.frontmatter as Record<string, unknown>, body: row.body } : {}),
       revisions: revisions.map((r) => ({
+        id: r.id,
         action: r.action,
         actorType: r.actorType,
         actorId: r.actorId,
@@ -172,6 +184,9 @@ export async function addHistoryToZip(zip: AdmZip, vaultId: string, prefix = '')
         frontmatter: r.frontmatter as Record<string, unknown>,
         body: r.body,
         createdAt: r.createdAt,
+        ...(r.fromPath === null ? {} : { fromPath: r.fromPath }),
+        ...(r.toPath === null ? {} : { toPath: r.toPath }),
+        ...(r.sourceRevisionId === null ? {} : { sourceRevisionId: r.sourceRevisionId }),
       })),
     }
     zip.addFile(`${prefix}${HISTORY_PREFIX}${row.id}.json`, Buffer.from(JSON.stringify(history), 'utf8'))
@@ -272,13 +287,25 @@ export async function importVaultContent(
     return null
   }
 
-  /** Replaces the revisions the import recorded with the archive's, and restores the note's times. */
+  /**
+   * Replaces the revisions the import recorded with the archive's, and
+   * restores the note's times. Each revision gets a new id; a revert's source
+   * is pointed at the new id of the archive revision it names, or left empty
+   * when that revision is not in the note's history (purged, or an archive
+   * from before revision ids were exported).
+   */
   const applyHistory = async (noteId: string, history: NoteHistory): Promise<void> => {
+    const newIds = history.revisions.map(() => randomUUID())
+    const byArchiveId = new Map<string, string>()
+    history.revisions.forEach((r, i) => {
+      if (r.id !== undefined) byArchiveId.set(r.id, newIds[i]!)
+    })
     await db.transaction(async (tx) => {
       await tx.delete(noteRevisions).where(eq(noteRevisions.noteId, noteId))
       if (history.revisions.length) {
         await tx.insert(noteRevisions).values(
-          history.revisions.map((r) => ({
+          history.revisions.map((r, i) => ({
+            id: newIds[i]!,
             noteId,
             actorType: r.actorType,
             actorId: attributedId(r),
@@ -286,6 +313,9 @@ export async function importVaultContent(
             frontmatter: rewriteFrontmatter(r.frontmatter),
             body: rewriteLinks(r.body),
             createdAt: sql`${r.createdAt}::timestamptz`,
+            fromPath: r.fromPath ?? null,
+            toPath: r.toPath ?? null,
+            sourceRevisionId: (r.sourceRevisionId !== undefined && byArchiveId.get(r.sourceRevisionId)) || null,
           })),
         )
       }

@@ -36,7 +36,7 @@ interface HistoryRow {
   action: string
   actorType: string
   actorName?: string | null
-  baseRevisionId?: string
+  sourceRevisionId?: string
 }
 
 let app: FastifyInstance
@@ -199,11 +199,11 @@ describe('edit_note with a stale base_rev (#475)', () => {
     expect(liveBody(path)).toBe(typed)
     expect(await rowBody(path)).not.toContain('rewritten by the agent')
 
-    // The agent's version is a revision linked to the base it was made from.
-    const proposal = await must<{ action: string; body: string; baseRevisionId: string }>('get_revision', { vaultId, path, revisionId: result.proposalId })
-    expect(proposal).toMatchObject({ action: 'proposal', body: agentBody, baseRevisionId: read.rev })
+    // The agent's version is a revision linked to the base it was made from (#479's source_revision_id).
+    const proposal = await must<{ action: string; body: string; sourceRevisionId: string }>('get_revision', { vaultId, path, revisionId: result.proposalId })
+    expect(proposal).toMatchObject({ action: 'proposal', body: agentBody, sourceRevisionId: read.rev })
     const listed = (await history(path)).find((row) => row.id === result.proposalId)
-    expect(listed).toMatchObject({ action: 'proposal', actorType: 'mcp', actorName: 'edit-base', baseRevisionId: read.rev })
+    expect(listed).toMatchObject({ action: 'proposal', actorType: 'mcp', actorName: 'edit-base', sourceRevisionId: read.rev })
 
     // The same edit sent again keeps one proposal.
     const again = JSON.parse((await call('edit_note', { vaultId, path, base_rev: read.rev, body: agentBody })).text) as { proposalId: string }
@@ -231,6 +231,47 @@ describe('edit_note with a stale base_rev (#475)', () => {
     expect(clash.isError, clash.text).toBe(false)
     expect(JSON.parse(clash.text)).toMatchObject({ status: 'conflicted', conflicts: { frontmatterKeys: ['title'] } })
     expect((await getLiveNote(vaultId, path))?.frontmatter).toMatchObject({ title: 'Renamed by a person', status: 'active' })
+  }, 20_000)
+
+  it("a based edit is not quarantined because a person shortened the note since the agent's read", async () => {
+    const path = 'docs/rev-shortened'
+    // 80 distinct lines of 75 bytes: 6000 bytes, so the growth rule's 2 KiB floor holds after the cut too.
+    const lines = Array.from({ length: 80 }, (_, i) => `Line ${String(i).padStart(2, '0')} holds its own words about item ${i * 7 + 3}, nothing repeated.`.padEnd(74, '.') + '\n')
+    await must('create_note', { vaultId, path, body: lines.join('') })
+    const read = await must<Read>('read_note', { vaultId, path })
+    // A person deletes the last 50 lines: 2250 bytes are left.
+    const kept = lines.slice(0, 30).join('')
+    const cut = await app.inject({ method: 'PUT', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie }, body: { body: kept } })
+    expect(cut.statusCode, cut.body).toBe(200)
+
+    const edited = await call('edit_note', { vaultId, path, base_rev: read.rev, body: read.body.replace('Line 00', 'Line 00, edited,') })
+    expect(edited.isError, edited.text).toBe(false)
+    expect(JSON.parse(edited.text)).toMatchObject({ status: 'merged', body: kept.replace('Line 00', 'Line 00, edited,') })
+    expect((await history(path)).map((row) => row.action)).not.toContain('quarantine')
+  }, 20_000)
+
+  it('a conflicting edit with ops keeps them in the proposal: body ops on the live text, frontmatter ops on its map', async () => {
+    const path = 'docs/rev-ops-proposal'
+    await must('create_note', { vaultId, path, body: BODY, frontmatter: { title: 'Start' } })
+    const read = await must<Read>('read_note', { vaultId, path })
+    const put = await app.inject({ method: 'PUT', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie }, body: { frontmatter: { title: 'Renamed by a person' } } })
+    expect(put.statusCode, put.body).toBe(200)
+
+    const r = await must<{ status: string; proposalId: string }>('edit_note', {
+      vaultId,
+      path,
+      base_rev: read.rev,
+      frontmatter: { title: 'Agent title' },
+      ops: [
+        { op: 'append', text: 'Agent line.' },
+        { op: 'frontmatter_add', key: 'tags', value: 'agent' },
+      ],
+    })
+    expect(r.status).toBe('conflicted')
+    const proposal = await must<{ frontmatter: Args; body: string }>('get_revision', { vaultId, path, revisionId: r.proposalId })
+    expect(proposal.body).toBe(`${BODY}Agent line.\n`)
+    expect(proposal.frontmatter).toMatchObject({ title: 'Agent title', tags: ['agent'] })
+    expect(await rowBody(path)).toBe(BODY)
   }, 20_000)
 
   it('reports applied when nothing changed since the base, and its rev is the next base', async () => {

@@ -172,7 +172,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | Table | Purpose |
 |---|---|
 | `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed) |
-| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`/`delete`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content; `actor_detail.baseRevisionId` names its base) |
+| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
 
@@ -499,8 +499,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   revisions that held the note's content, frontmatter compared as jsonb;
   null when none does). `edit_note` `base_rev` must be such a revision of
   the note (`getBaseRevision`: not a `quarantine` or `proposal` row;
-  anything else is refused and nothing changes; the schema takes a
-  string only, where #408 also took an integer).
+  anything else, an integer included (the schema still takes one, as
+  #408's did), is refused and nothing changes).
   With it, `writeThroughCollab` gets `NoteEdit.base` and rebases the edit
   onto the live document inside the same transaction
   (`sync/three-way-merge.ts`): `body` per whole line (`diffLines` in
@@ -511,21 +511,27 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `removeKeys` per key on the map they make from the base's (a key the
   agent left as the base had it keeps the live value; a key both changed
   to different values conflicts); `ops` still resolve against the live
-  text and map. A clean merge goes through the usual checks and
+  text and map. The size cap is checked on the agent's raw body, but the
+  write quarantine (#492) only on the rebased body: compared with the
+  stored body, a body made from an older, longer state would be a false
+  growth finding after a person shortened the note. A clean merge goes
+  through the usual checks and
   `applyTextDiff` live → merged, so only the agent's lines change, and
   reports `status` `applied` (nothing changed since the base) or
   `merged` with `concurrentChanges` (`lines` `{line, removed, added}`
   numbered in the live body just before the edit, `frontmatterKeys`). An
   overlap, found before the transaction or inside it, writes nothing:
-  `recordProposal` keeps the agent's version (its frontmatter applied to
-  the base's, its body or the base's) as a `proposal` revision with
-  `actor_detail.baseRevisionId` (ADR-003's column, outside the drizzle
-  model and so outside backups until S2a), an identical retry reuses the
-  actor's latest one, and `edit_note` returns `status: conflicted`,
-  `proposalId` and `conflicts` (same shape) as a normal result.
-  `note_history` and `get_revision` add `baseRevisionId` on proposal rows
-  only; the History tab labels them "Proposed by <connection name>". S2a
-  replaces the revision-id `rev` with `seq` (ADR-003 §5.2 step 9).
+  `recordProposal` keeps the agent's version (its `frontmatter`,
+  `removeKeys` and frontmatter ops applied to the base's map; its `body`,
+  or its body ops applied to the live text, or the base's body) as a
+  `proposal` revision whose `source_revision_id` (#479's column, carried
+  by backups and the vault export/import) is the base; an identical retry
+  reuses the actor's latest one, and `edit_note` returns `status:
+  conflicted`, `proposalId` and `conflicts` (same shape) as a normal
+  result. `note_history`, `get_revision` and the REST history list show
+  it as `sourceRevisionId`; the History tab labels proposals "Proposed by
+  <connection name>". S2a replaces the revision-id `rev` with `seq`
+  (ADR-003 §5.2 step 9).
 - **Revision dedupe** (#480, `recordRevision`): a write that repeats the
   latest revision records nothing. Frontmatter is compared as jsonb
   stores it: deep equality on its JSON form, so object key order (nested
@@ -539,8 +545,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   re-attributed, since it may bundle a person's typing (#403). Only
   content writes (`create`, `update`) are deduped, against the newest
   content revision: `quarantine`, `proposal` (#475), `restore_point`
-  (#482) and `delete` rows are never the baseline, and a `delete` is
-  always recorded.
+  (#482) and the events `delete`/`restore`/`rename`/`revert` (#479) are
+  never the baseline, and an event (`recordEvent`) is always recorded.
 - **Progressive indexes** (`regenProgressiveIndices`): run on create,
   rename, delete, restore, and on updates whose frontmatter really
   changed (`isDeepStrictEqual`, so key order alone never counts: `jsonb`
@@ -639,7 +645,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   afresh after an unload always adds a new revision and a new failure; an
   MCP/REST write continues only an identical retry of the newest quarantine
   by the same actor. `recordRevision`'s
-  dedupe and revert's `revert` relabel skip quarantine and proposal rows. Restore one
+  dedupe skips quarantine and proposal rows. Restore one
   with `revert_note` / the REST revert route.
 - **Restore points** (`withRestorePoint` in `store.ts`, #482): the MCP
   write tools (`edit_note`, `rename_note`, `delete_note`, `revert_note`)
@@ -661,8 +667,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   so also across a rename), so concurrent first writes keep one. A
   restore point that fails to insert (the note was purged in between) is
   logged and the landed write still succeeds. Unsaved relay typing is
-  not in it (stored row only). Revert's `revert` relabel never relabels
-  a restore point. History lists (`listRevisionPage`, `listRevisionMeta`)
+  not in it (stored row only). A revert adds its own `revert` row and
+  never relabels an earlier one, a restore point included (#479). History lists (`listRevisionPage`, `listRevisionMeta`)
   add `actorName` (the MCP connection's name, null otherwise; anyone with
   edit access to the vault sees it); the History tab labels a restore
   point "Before <name> edited".
@@ -984,8 +990,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   (a JS `Date` would truncate to milliseconds), so a revision recorded
   while a caller pages shifts nothing. `get_revision` returns one
   revision's frontmatter and body (`getRevision()`, the same query as
-  the REST revision route), gated like `note_history`. Both add
-  `baseRevisionId` on `proposal` rows only (#475).
+  the REST revision route), gated like `note_history`. Both, and the
+  REST history list, add `sourceRevisionId` / `fromPath` / `toPath`
+  only on the rows that have them (#479; `sourceRevisionId` also on a
+  `proposal`, #475), so a plain row costs no more.
   - *Repositories* (13): `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `get_repository_graph_preference`, `set_repository_graph_preference`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
   - *Teams & Users* (7): `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
   - *Export & Notifications* (4): `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`.
@@ -1049,8 +1057,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   note live or trashed, `.elara/history/<noteId>.json`
   (`vault-history.ts`, #499): `path`, `createdAt`/`updatedAt`/`deletedAt`
   (microsecond UTC text), a trashed note's `frontmatter` + `body`, and
-  `revisions` oldest first (`action`, `actorType`, `actorId`,
-  `actorEmail` for user actors, `frontmatter`, `body`, `createdAt`).
+  `revisions` oldest first (`id`, `action`, `actorType`, `actorId`,
+  `actorEmail` for user actors, `frontmatter`, `body`, `createdAt`, and
+  on event rows (#479) `fromPath`/`toPath` or `sourceRevisionId`).
   An export (download, export link or MCP `export_vault`) therefore
   carries the vault's full history and trash, including the email of
   every past revision author, also of users who have since lost access.
@@ -1063,7 +1072,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   keep their archive file names (unsafe names, `.` and `..` are
   dropped); `.md` files under `assets/` stay attachments, never notes. Trashed notes are recreated in
   the trash, then live notes; each note with a history file gets the
-  archive's revisions (new ids, original order and times) and its
+  archive's revisions (new ids, original order and times; a revert's
+  `sourceRevisionId` is pointed at the new id of the archived revision
+  it names, or null when that one is not in the archive, as in archives
+  exported before revision ids were) and its
   original created/updated/deleted times. A revision keeps its author
   only when that author is the importer (user id or email, or an MCP
   connection the importer owns); others keep the actor kind with no id,

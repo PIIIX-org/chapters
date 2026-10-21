@@ -1081,7 +1081,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         ops: EDIT_OPS.optional(),
         replace: z.boolean().optional(),
         removeKeys: z.array(z.string()).optional(),
-        base_rev: z.string().optional(),
+        // An integer is still accepted (#408 took one) and refused as not a revision id until `rev` is the note's seq (ADR-003 S2a).
+        base_rev: z.union([z.string(), z.number().int()]).optional(),
         allowGrowth: z.boolean().optional(),
       },
     },
@@ -1097,7 +1098,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         ops?: EditOp[]
         replace?: boolean
         removeKeys?: string[]
-        base_rev?: string
+        base_rev?: string | number
         allowGrowth?: boolean
       },
       { vaultId: target },
@@ -1105,7 +1106,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireAccess(target, 'edit')
       const edit = requestedEdit(args)
       if (baseRev !== undefined) {
-        const base = UUID_REGEX.test(baseRev) ? await getBaseRevision(target, args.path, baseRev) : null
+        const base = typeof baseRev === 'string' && UUID_REGEX.test(baseRev) ? await getBaseRevision(target, args.path, baseRev) : null
         if (!base) {
           if (!(await getLiveNote(target, args.path))) throw new McpToolError('note not found')
           throw new McpToolError(
@@ -1158,7 +1159,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     async ({ from, toName }: { from: string; toName: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
       const renamed = await withRestorePoint(target, from, auth.connection.id, () =>
-        renameNote(target, from, toName, writeThroughCollab),
+        renameNote(target, from, toName, actor, writeThroughCollab),
       )
       if (!renamed) throw new McpToolError('note not found')
       return renamed
@@ -1215,7 +1216,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async ({ noteId }: { noteId: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
-      const restored = await restoreNote(target, noteId)
+      const restored = await restoreNote(target, noteId, actor)
       if (!restored) throw new McpToolError('note not found or not trashed')
       return restored
     },
@@ -1249,7 +1250,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       pinPermission: 'edit',
       description:
-        'Change history for a note (actor-attributed), newest first, metadata only: id, action, actorType, actorId, actorName (the MCP connection name), createdAt, bodyBytes. One page of `limit` revisions (default 20, max 100); when `hasMore`, pass `nextCursor` as `cursor` for the next page. Read one revision\'s content with get_revision. A `restore_point` revision is the note as it was before a connection\'s first write in a session; revert_note to it undoes that session (and every later change by others). Requires edit access.',
+        'Change history for a note (actor-attributed), newest first, metadata only: id, action, actorType, actorId, actorName (the MCP connection name), createdAt, bodyBytes. Actions: create, update, delete, restore, rename (with fromPath, toPath), revert (with sourceRevisionId, the revision it brought back), quarantine, restore_point, proposal (an edit_note with base_rev that overlapped changes made since, not applied; sourceRevisionId is its base). One page of `limit` revisions (default 20, max 100); when `hasMore`, pass `nextCursor` as `cursor` for the next page. Read one revision\'s content with get_revision. A `restore_point` revision is the note as it was before a connection\'s first write in a session; revert_note to it undoes that session (and every later change by others). Requires edit access.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
         path: z.string(),

@@ -153,7 +153,11 @@ type Rebased = { frontmatter?: Frontmatter; body?: string; report: WriteReport }
 
 /** Thrown inside the document transaction when the rebase finds an overlap; the caller keeps a proposal. */
 class EditOverlap extends Error {
-  constructor(readonly conflicts: EditChanges) {
+  constructor(
+    readonly conflicts: EditChanges,
+    /** The live body the overlap was found on, which body ops in the proposal resolve against. */
+    readonly liveBody: string,
+  ) {
     super('edit overlaps changes made since its base revision')
   }
 }
@@ -188,15 +192,20 @@ function rebase(edit: NoteEdit & { base: EditBase }, live: { frontmatter: Record
 /**
  * Keeps `edit`, which overlaps changes made since its base (#475), as a
  * proposal revision instead of writing it: the note as the edit would have
- * it from its base (its frontmatter and `removeKeys` applied to the base's,
- * its body or else the base's). Always throws NoteEditConflictError.
+ * it. The frontmatter is its `frontmatter` and `removeKeys` applied to the
+ * base's, then its frontmatter ops; the body is its `body`, or its body ops
+ * applied to `liveBody` (ops always resolve against the live text; one that
+ * does not resolve refuses the edit, as without a conflict), or else the
+ * base's. Always throws.
  */
-async function propose(note: NoteRow, edit: NoteEdit & { base: EditBase }, actor: Actor, conflicts: EditChanges): Promise<never> {
+async function propose(note: NoteRow, edit: NoteEdit & { base: EditBase }, actor: Actor, conflicts: EditChanges, liveBody: string): Promise<never> {
   const { base } = edit
-  const proposal = {
-    frontmatter: nextFrontmatter(base.frontmatter, { ...edit, ops: undefined }, note.type) ?? { ...base.frontmatter, type: note.type },
-    body: typeof edit.body === 'string' ? edit.body : base.body,
-  }
+  const ops = edit.ops ?? []
+  let body = base.body
+  if (typeof edit.body === 'string') body = edit.body
+  else if (ops.some((op) => !isFrontmatterOp(op))) body = applyBodyOps(liveBody, ops, note.body)
+  const wanted = nextFrontmatter(base.frontmatter, { ...edit, ops: undefined }, note.type) ?? base.frontmatter
+  const proposal = { frontmatter: { ...applyFrontmatterOps(wanted, ops), type: note.type }, body }
   throw new NoteEditConflictError(note.path, await recordProposal(note.id, proposal, actor, base.id), conflicts)
 }
 
@@ -258,14 +267,17 @@ async function noteFileDamaged(vaultId: string, path: string): Promise<boolean> 
  * it is kept as a `proposal` revision and NoteEditConflictError is thrown.
  * `options.report` receives whether the note had changed since the base, and
  * where.
+ * `options.revertOf` (revertNote) records the attributed store write as a
+ * `revert` event naming that revision (#479).
  */
 export async function writeThroughCollab(
   vaultId: string,
   path: string,
   input: NoteEdit,
   actor: Actor,
-  options: { quarantine?: QuarantineRules; report?: WriteReport } = {},
+  options: { quarantine?: QuarantineRules; revertOf?: string; report?: WriteReport } = {},
 ): Promise<NoteRow | null> {
+  const record = { revertOf: options.revertOf }
   return withKeyLock(`collab:${vaultId}/${resolveNotePath(path).fullPath}`, async () => {
     const existing = await getLiveNote(vaultId, path)
     if (!existing) return null
@@ -280,7 +292,12 @@ export async function writeThroughCollab(
       await refuseSuspiciousWrite(existing, { frontmatter: nextFrontmatter(frontmatter, input, existing.type), body }, actor, options.quarantine)
     }
     const bodyFromStored = typeof input.body === 'function' ? input.body(existing.body) : input.body
-    if (bodyFromStored !== undefined) await screen(bodyFromStored, storedFrontmatter)
+    if (bodyFromStored !== undefined) {
+      // A based edit's body is not what is written: its rebased body is screened below. Checked
+      // against the stored body, a body made from an older, longer state would be a false quarantine.
+      if (based) assertBodyFits(bodyFromStored, existing.body)
+      else await screen(bodyFromStored, storedFrontmatter)
+    }
     const collab = getCollab()
     if (!collab) {
       let body = input.body
@@ -291,7 +308,7 @@ export async function writeThroughCollab(
       let frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
       if (based) {
         const rebased = rebase(based, { frontmatter: storedFrontmatter, body: existing.body }, existing.type)
-        if ('conflicts' in rebased) return propose(existing, based, actor, rebased.conflicts)
+        if ('conflicts' in rebased) return propose(existing, based, actor, rebased.conflicts, existing.body)
         if (rebased.body !== undefined) {
           body = rebased.body
           await screen(body, storedFrontmatter)
@@ -299,7 +316,7 @@ export async function writeThroughCollab(
         frontmatter = rebased.frontmatter
         if (options.report) Object.assign(options.report, rebased.report)
       }
-      return updateNote(vaultId, path, { frontmatter, body }, actor)
+      return updateNote(vaultId, path, { frontmatter, body }, actor, record)
     }
     const documentName = `${vaultId}/${path}`
     let connection: DirectConnection
@@ -318,7 +335,7 @@ export async function writeThroughCollab(
       if (!(await noteFileDamaged(vaultId, path))) throw err
       if (input.frontmatter === undefined || input.body === undefined) throw new NoteFileDamagedError(path)
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
-      return updateNote(vaultId, path, { frontmatter, body: input.body }, actor)
+      return updateNote(vaultId, path, { frontmatter, body: input.body }, actor, record)
     }
     const next: { frontmatter?: Frontmatter; body?: string } = {}
     try {
@@ -328,8 +345,9 @@ export async function writeThroughCollab(
       }
       if (based && live) {
         const liveFrontmatter = live.getMap('frontmatter').toJSON() as Record<string, unknown>
-        const rebased = rebase(based, { frontmatter: liveFrontmatter, body: live.getText('body').toString() }, existing.type)
-        if ('conflicts' in rebased) throw new EditOverlap(rebased.conflicts)
+        const liveBody = live.getText('body').toString()
+        const rebased = rebase(based, { frontmatter: liveFrontmatter, body: liveBody }, existing.type)
+        if ('conflicts' in rebased) throw new EditOverlap(rebased.conflicts, liveBody)
         if (rebased.body !== undefined) await screen(rebased.body, liveFrontmatter)
       }
       await connection.transact((document) => {
@@ -338,7 +356,7 @@ export async function writeThroughCollab(
         const text = document.getText('body')
         // Rebased and resolved again here: typing may have reached the relay during the checks.
         const rebased = based ? rebase(based, { frontmatter: current, body: text.toString() }, existing.type) : null
-        if (rebased && 'conflicts' in rebased) throw new EditOverlap(rebased.conflicts)
+        if (rebased && 'conflicts' in rebased) throw new EditOverlap(rebased.conflicts, text.toString())
         next.frontmatter = rebased ? rebased.frontmatter : nextFrontmatter(current, input, existing.type)
         if (bodyOps) {
           next.body = applyBodyOps(text.toString(), ops, existing.body)
@@ -373,12 +391,12 @@ export async function writeThroughCollab(
       })
     } catch (err) {
       // Nothing was written: the edit is kept as a proposal instead.
-      if (err instanceof EditOverlap && based) await propose(existing, based, actor, err.conflicts)
+      if (err instanceof EditOverlap && based) await propose(existing, based, actor, err.conflicts, err.liveBody)
       throw err
     } finally {
       await connection.disconnect()
     }
-    return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: next.body }, actor)
+    return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: next.body }, actor, record)
   })
 }
 

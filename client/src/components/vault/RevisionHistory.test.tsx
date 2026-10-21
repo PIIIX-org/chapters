@@ -184,6 +184,32 @@ describe('RevisionHistory', () => {
     expect(collabRow.querySelector('.text-accent')).toBeNull()
   })
 
+  it('says what each history event did: delete, restore, rename with its paths, revert with its source (#479)', async () => {
+    const events: Revision[] = [
+      { id: 'rev-revert', actorType: 'user', actorId: 'u1', action: 'revert', sourceRevisionId: 'rev-create', createdAt: '2026-08-21T10:00:00.000Z' },
+      { id: 'rev-rename', actorType: 'mcp', actorId: 'c1', action: 'rename', fromPath: 'notes/old-name', toPath: 'notes/one', createdAt: '2026-08-21T09:00:00.000Z' },
+      { id: 'rev-restore', actorType: 'user', actorId: 'u1', action: 'restore', createdAt: '2026-08-21T08:00:00.000Z' },
+      { id: 'rev-delete', actorType: 'mcp', actorId: 'c1', action: 'delete', createdAt: '2026-08-21T07:00:00.000Z' },
+      { id: 'rev-create', actorType: 'user', actorId: 'u1', action: 'create', createdAt: '2026-08-21T06:00:00.000Z' },
+      { id: 'rev-gone', actorType: 'user', actorId: 'u1', action: 'revert', sourceRevisionId: 'rev-purged', createdAt: '2026-08-20T06:00:00.000Z' },
+    ]
+    stubFetch(() => mockJsonResponse(200, events))
+    renderWithClient(<RevisionHistory vaultId="v1" path="notes/one" access="edit" />)
+
+    const items = await screen.findAllByRole('listitem')
+    const text = items.map((item) => item.textContent ?? '')
+    expect(text[0]).toContain('Reverted to the version from')
+    // The source row is on this page, so the revert names its time, the same text that row shows.
+    const createdStamp = within(items[4]!).getByText(/2026/).textContent!
+    expect(text[0]).toContain(createdStamp)
+    expect(text[1]).toContain('Renamed from notes/old-name to notes/one')
+    expect(text[2]).toContain('Restored from trash')
+    expect(text[3]).toContain('Moved to trash')
+    expect(text[4]).toContain('Created')
+    // A source not on this page (older, or purged) is still named as a revert.
+    expect(text[5]).toContain('Reverted to an earlier version')
+  })
+
   it('names a restore point after the agent it was kept for, so one revert undoes that agent (#482)', async () => {
     const restorePoints = [
       { id: 'rp-named', actorType: 'mcp', actorId: 'c1', actorName: 'claude-laptop', action: 'restore_point', createdAt: '2026-08-21T10:00:00.000Z' },
