@@ -70,9 +70,9 @@
     {
       "test": "browser",
       "check": "lost typing is recoverable from note history (note_revisions)",
-      "issue": 881,
+      "issue": 408,
       "state": "inconclusive",
-      "intermittent": "inconclusive when the S1 step lost no typing, so there is nothing to recover (run 39636198769: \"nothing was lost\"); #881 tracks the dev-wide baseline for this state"
+      "intermittent": "inconclusive when the S1 step lost no typing, so there is nothing to recover (run 39636198769: \"nothing was lost\"); the dev-wide baseline for this state is #886"
     },
     {
       "test": "browser",
