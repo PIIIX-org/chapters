@@ -3,6 +3,7 @@ import { mergeFrontmatter, mergeText, type LineChange } from './three-way-merge.
 import {
   recordProposal,
   refuseSuspiciousWrite,
+  keptBody,
   writeNote,
   type Actor,
   type BodyEdit,
@@ -230,7 +231,10 @@ export async function writeThroughCollab(
       const merged = based ? rebase(based, current, existing.type) : null
       if (based && merged && 'conflicts' in merged) return propose(existing, based, actor, merged.conflicts, current.body)
       const rebased = merged && !('conflicts' in merged) ? merged : null
-      let body = current.body
+      // An edit that leaves the body alone keeps what the editors see, unless
+      // the relay would refuse to store it (a doubled document, #488/#492):
+      // then the stored body, so the agent's write never carries it in.
+      let body = keptBody(existing, current)
       let screened = false
       if (bodyOps) {
         body = applyBodyOps(current.body, ops, existing.body)

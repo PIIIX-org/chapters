@@ -4,6 +4,8 @@ import type { FastifyInstance } from 'fastify'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import { buildApp } from '../src/app.js'
+import { sql } from 'drizzle-orm'
+import { db } from '../src/db/client.js'
 import { getLiveNote, renameNote, writeNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
@@ -103,6 +105,13 @@ describe('a write to an open note (§5.1 R5-1, §5.2 step 8)', () => {
     })
     expect(editor.text.toString()).toContain('Agent line.')
     expect(editor.text.toString().match(/Typed\. /g)).toHaveLength(1)
+    // No store in between wrote the editors' older state back over the acknowledged write.
+    const after = (await db.execute(sql`
+      SELECT r.body FROM note_revisions r JOIN notes n ON n.id = r.note_id
+      WHERE n.vault_id = ${vaultId} AND n.path = ${path}
+        AND r.ord > (SELECT min(ord) FROM note_revisions WHERE note_id = r.note_id AND body LIKE '%Agent line.%')
+      ORDER BY r.ord`)) as unknown as Array<{ body: string }>
+    expect(after.filter((r) => !r.body.includes('Agent line.'))).toEqual([])
   }, 20_000)
 
   it('an agent edit reaches the open editor and is still in the row after the next debounced store', async () => {
@@ -133,4 +142,51 @@ describe('a renamed note open at its old and its new path (§5.5, S2a)', () => {
     // Nothing is stored at the old path.
     expect(await getLiveNote(vaultId, path)).toBeNull()
   }, 20_000)
+})
+
+describe('live documents follow the note id recorded at load (§5.5, S2a)', () => {
+  it('a write to a new note at a renamed note\'s old path never reaches the renamed note', async () => {
+    const path = await create('reused', 'The first note.')
+    await open(path)
+    await renameNote(vaultId, path, 'reused-moved', { type: 'mcp', id: randomUUID() })
+    await create('reused', 'The second note.')
+    await writeThroughCollab(vaultId, path, { body: 'The second note, edited.' }, { type: 'mcp', id: randomUUID() })
+    expect(await rowBody(path)).toBe('The second note, edited.')
+    // Past a debounced store of the old-path tab, the renamed note keeps its own text.
+    await new Promise((r) => setTimeout(r, 600))
+    expect(await rowBody('docs/reused-moved')).toBe('The first note.')
+  }, 15_000)
+
+  it('an old-path tab of a renamed note keeps an acknowledged agent write when it stores', async () => {
+    const path = await create('old-tab', 'Line one.')
+    const tab = await open(path)
+    await renameNote(vaultId, path, 'old-tab-moved', { type: 'mcp', id: randomUUID() })
+    await writeThroughCollab(vaultId, 'docs/old-tab-moved', { body: 'Line one.\nAgent line.' }, { type: 'mcp', id: randomUUID() })
+    await waitFor(() => tab.text.toString().includes('Agent line.'))
+    await tab.type(0, 'Typed. ')
+    await waitFor(async () => (await rowBody('docs/old-tab-moved')) === 'Typed. Line one.\nAgent line.')
+  }, 15_000)
+})
+
+describe('a frontmatter-only edit while the editor holds a doubled note (#488, #492)', () => {
+  it('keeps the stored body: the doubled text is never committed as the agent\'s write', async () => {
+    const body = Array.from({ length: 30 }, (_, i) => `paragraph ${i}: the ${i * 7}th observation about item ${i * 13 + 5} notes that value ${i * 31 + 2} changed after run ${i}.`).join('\n\n')
+    const path = await create('doubled-fm', body)
+    const editor = await open(path)
+    await editor.type(editor.text.length, `\n\n${body}`)
+    // The relay quarantines the doubled document (#492): the row keeps the single body.
+    await waitFor(async () => {
+      const rows = (await db.execute(sql`
+        SELECT 1 FROM note_revisions r JOIN notes n ON n.id = r.note_id
+        WHERE n.vault_id = ${vaultId} AND n.path = ${path} AND r.action = 'quarantine'`)) as unknown as unknown[]
+      return rows.length > 0
+    })
+    expect(await rowBody(path)).toBe(body)
+    const actor = { type: 'mcp' as const, id: randomUUID() }
+    const row = await writeThroughCollab(vaultId, path, { frontmatter: { status: 'active' }, frontmatterMode: 'merge' }, actor, { quarantine: 'all' })
+    expect(row?.body).toBe(body)
+    expect((await getLiveNote(vaultId, path))?.frontmatter).toMatchObject({ status: 'active' })
+    // The editor keeps what it shows.
+    expect(editor.text.toString()).toBe(`${body}\n\n${body}`)
+  }, 15_000)
 })

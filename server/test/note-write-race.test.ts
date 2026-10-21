@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { createNote, getRevision, listRevisionMeta, readNote, renameNote, updateNote } from '../src/notes/store.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
@@ -79,6 +80,8 @@ describe('concurrent writes to one note', () => {
     expect(note.body).toBe(writes.at(-1))
     expect(note.row.body).toBe(writes.at(-1))
     expect(await revisionBodies(path)).toEqual(writes)
+    // The projector writes the file after the commits: no temp file is left once it has.
+    await flushProjections()
     const leftovers = (await readdir(join(config.dataDir, 'vaults', vaultId, 'docs'))).filter((f) =>
       f.endsWith('.tmp'),
     )
