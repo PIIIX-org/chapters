@@ -7,7 +7,7 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
 - **Last promotion to `prod`**: #660 Promote: Elara study phase 1 (guardrails and security) (merged 2026-10-17, `5c5bdc0`).
 - **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) success; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
 - **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/6, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 32/50, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/74, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/35, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/46, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/46.
-- **Open issues**: [248](https://github.com/PIIIX-org/chapters/issues): P0 51, P1 114, P2 69, no priority 14; `bug` 60, `security` 12, `decision` 2, `deferred` 2.
+- **Open issues**: [248](https://github.com/PIIIX-org/chapters/issues): P0 52, P1 113, P2 69, no priority 14; `bug` 61, `security` 12, `decision` 2, `deferred` 2.
 - **Owner actions** (label `owner`):
   - #589 [fix 192] Revoke the 5 GitHub tokens exposed before #383 (P0)
   - #703 [phase 2] Verified production backup and a migration rehearsal on a copy of production… (P0)
@@ -15,6 +15,7 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #636 Production uptime
 - **In progress: [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3)** (17 open, owner actions excluded):
   - #403 MCP/REST edits are attributed to collab/null in the audit trail when the collab relay is… (P0)
+  - #408 edit_note replaces the whole body and deletes text a user is typing at the same moment (P0)
   - #474 [fix 74] read_note serves the live document when it is loaded, not the debounced file on… (P0)
   - #475 [fix 75] Compare-and-set: a stale base is three-way merged; clean merges apply and report… (P0)
   - #476 [fix 76] Whole-markdown writes accepted only as a structural diff against the live doc (P0)
@@ -25,10 +26,10 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #488 [fix 89] Never rebuild text from a stale .crdt without saving the result; seed the CRDT… (P0)
   - #489 [fix 90] Rerun the lab SIGKILL boundary tests (lab/data-path) after the change: no… (P0)
   - #494 [fix 96] Durable jobs table for extraction and embedding: leases, attempts, last_error,… (P0)
-  - #479 [fix 80] Log delete, restore and rename as history events; revert must not relabel the… (P1)
   - … and 5 more: https://github.com/PIIIX-org/chapters/milestone/3
 - **Open bugs** (label `bug`):
   - #403 MCP/REST edits are attributed to collab/null in the audit trail when the collab relay is… (P0)
+  - #408 edit_note replaces the whole body and deletes text a user is typing at the same moment (P0)
   - #713 [ui] Landing page says "No notes" to a user with notes (P1)
   - #714 [ui] Floating top bar collides with page controls; status pill duplicated (DEF-02, DEF-08… (P1)
   - #715 [ui] Primary actions rest at 20 % opacity (P1)
@@ -39,8 +40,7 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #731 [ui] The default graph of a small vault is four unlabeled dots (P1)
   - #733 [ui] Vault card footer clips "Delete"; the delete confirmation is unreadable (P1)
   - #734 [ui] The irreversible action has the weaker guard (P1)
-  - #739 [ui] Repository page double-offsets the content (P1)
-  - … and 48 more: https://github.com/PIIIX-org/chapters/issues?q=is%3Aopen+label%3Abug
+  - … and 49 more: https://github.com/PIIIX-org/chapters/issues?q=is%3Aopen+label%3Abug
 <!-- state:generated:end -->
 
 - **Product**: **Elara**; the repo keeps the name `chapters`. Current work: the fixes from the Elara AI-performance study (Elara vault notes `audit/2026-10-14-ai-performance-study` and its round-2 follow-up), one GitHub issue per fix-list item, grouped by the `Phase N` milestones above; plan in the Chapters vault `fixes/index`, hand-off `fixes/handoff-phase-1`. Production (`chapters.piiix.org`) redeploys by itself on every push to `prod` (about 20 s after the push, before CI has run), not from the image #590 publishes after CI (#664, owner action). Until #664 is fixed, the only gate on production is that the push is refused unless every required check on that commit is green, so never push to `prod` by any other route. A promotion is a PR `dev`→`prod` with every required check green (full lab tier and bench on its head) and a `VERDICT: MERGE` comment from an independent review, then a fast-forward push of the reviewed head (`git push origin <sha>:prod`).
