@@ -56,10 +56,13 @@ describe('diffText', () => {
         }
       }
       expect(viaYjs(from, to), JSON.stringify({ from, to })).toBe(to)
-      expect(viaYjs(from, to, 0), JSON.stringify({ from, to, timeLimitMs: 0 })).toBe(to)
+      // A limit already past: the line pass gives up too, and every run takes the paired-lines fallback.
+      expect(viaYjs(from, to, -1), JSON.stringify({ from, to, timeLimitMs: -1 })).toBe(to)
       const edits = diffText(from, to)
       // Ascending and separated by unchanged text.
       for (let j = 1; j < edits.length; j++) expect(edits[j]!.at).toBeGreaterThan(edits[j - 1]!.at + edits[j - 1]!.remove)
+      const coarse = diffText(from, to, -1)
+      for (let j = 1; j < coarse.length; j++) expect(coarse[j]!.at).toBeGreaterThanOrEqual(coarse[j - 1]!.at + coarse[j - 1]!.remove)
     }
   })
 
@@ -84,6 +87,46 @@ describe('diffText', () => {
 })
 
 describe('applyTextDiff on a live document', () => {
+  // The review's case: a write that changes every line of a 250 KB note
+  // (a `- ` before each) is past the character diff's time limit, and the
+  // fallback used to replace the whole run, so typing that reached the
+  // server after the write, anchored to a deleted character, landed at
+  // position 0. Run with the default limit and with one already past.
+  for (const timeLimitMs of [undefined, -1]) {
+    it(`keeps offline typing in place when every line of a 250 KB note changes (limit ${timeLimitMs ?? 'default'})`, () => {
+      const lines = Array.from({ length: 6000 }, (_, i) => `Line ${i} holds a few words of the note, number ${i * 7}.\n`)
+      const body = lines.join('')
+      expect(body.length).toBeGreaterThan(250_000)
+      const server = new Y.Doc()
+      server.getText('body').insert(0, body)
+      const tab = new Y.Doc()
+      Y.applyUpdate(tab, Y.encodeStateAsUpdate(server))
+      // Offline: the person types in the middle of line 3000.
+      const at = lines.slice(0, 3000).join('').length + 'Line 3000 holds '.length
+      tab.getText('body').insert(at, 'TYPED ')
+      const next = lines.map((line) => `- ${line}`).join('')
+      const edits = diffText(body, next, timeLimitMs)
+      // Each line keeps its text: only the `- ` are new.
+      expect(edits.reduce((sum, edit) => sum + edit.remove, 0)).toBe(0)
+      server.transact(() => applyTextDiff(server.getText('body'), next, timeLimitMs))
+      Y.applyUpdate(server, Y.encodeStateAsUpdate(tab))
+      Y.applyUpdate(tab, Y.encodeStateAsUpdate(server))
+      const expected = lines.map((line, i) => `- ${i === 3000 ? line.replace('holds ', 'holds TYPED ') : line}`).join('')
+      expect(server.getText('body').toString().startsWith('TYPED')).toBe(false)
+      expect(server.getText('body').toString()).toBe(expected)
+      expect(tab.getText('body').toString()).toBe(expected)
+    })
+  }
+
+  it('the fallback pairs lines when a run has more on one side', () => {
+    expect(diffText('a1\nb1\n', 'xa1\nxb1\nnew\n', -1)).toEqual([
+      { at: 0, remove: 0, insert: 'x' },
+      { at: 3, remove: 0, insert: 'x' },
+      { at: 6, remove: 0, insert: 'new\n' },
+    ])
+    expect(viaYjs('a1\nb1\nc1\n', 'a2\n', -1)).toBe('a2\n')
+  })
+
   it('keeps a concurrent edit outside the changed region where it was typed', () => {
     const server = new Y.Doc()
     server.getText('body').insert(0, 'Para one.\n\nPara two.\n')

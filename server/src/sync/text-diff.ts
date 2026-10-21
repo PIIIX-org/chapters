@@ -13,11 +13,12 @@ import type * as Y from 'yjs'
  * The diff is per character (code point) first, with Myers' O(ND) algorithm
  * and its linear-space middle snake, bounded by a time limit. Past the limit
  * it is redone per line, and per character inside each changed run of lines
- * as far as a second limit allows; past that, the rest of a run is replaced
- * whole after trimming its common prefix and suffix. A 1 MiB rewrite costs
- * at most the two limits plus linear work. Characters are compared by code
- * point, so no change splits a surrogate pair (Yjs would turn a split pair
- * into U+FFFD).
+ * as far as a second limit allows; a run left over pairs its old and new
+ * lines in order and changes each pair between their common start and end,
+ * so a rewrite of every line (a `- ` before each) still keeps each line's
+ * unchanged characters. A 1 MiB rewrite costs at most the two limits plus
+ * linear work. Characters are compared by code point, so no change splits a
+ * surrogate pair (Yjs would turn a split pair into U+FFFD).
  */
 
 /** One change, in UTF-16 offsets of the old text: remove `remove` units at `at`, then insert `insert` there. */
@@ -209,6 +210,45 @@ function characterEdits(from: string, to: string, at: number, deadline: number, 
   return complete
 }
 
+/**
+ * The one change turning `from` into `to` between their longest common start
+ * and end, at UTF-16 offset `at`, or null when they are equal. The kept start
+ * and end never split a surrogate pair.
+ */
+function trimmedEdit(from: string, to: string, at: number): TextEdit | null {
+  if (from === to) return null
+  const shorter = Math.min(from.length, to.length)
+  let start = 0
+  while (start < shorter && from.charCodeAt(start) === to.charCodeAt(start)) start++
+  // The kept start must not end on the first half of a pair (U+D800-U+DBFF).
+  if (start > 0 && (from.charCodeAt(start - 1) & 0xfc00) === 0xd800) start--
+  let end = 0
+  while (end < shorter - start && from.charCodeAt(from.length - 1 - end) === to.charCodeAt(to.length - 1 - end)) end++
+  // The kept end must not begin on the second half of a pair (U+DC00-U+DFFF).
+  if (end > 0 && (from.charCodeAt(from.length - end) & 0xfc00) === 0xdc00) end--
+  return { at: at + start, remove: from.length - start - end, insert: to.slice(start, to.length - end) }
+}
+
+/**
+ * A changed run of lines the character diff could not settle in time: the
+ * old and new lines paired in order, each pair changed between its common
+ * start and end, then the lines one side has left over. Linear, and it keeps
+ * the identity of every character a pair shares at its start and end.
+ */
+function pairedLineEdits(from: readonly string[], to: readonly string[], at: number, out: TextEdit[]): void {
+  const pairs = Math.min(from.length, to.length)
+  let offset = at
+  for (let i = 0; i < pairs; i++) {
+    const edit = trimmedEdit(from[i]!, to[i]!, offset)
+    if (edit) out.push(edit)
+    offset += from[i]!.length
+  }
+  let remove = 0
+  for (let i = pairs; i < from.length; i++) remove += from[i]!.length
+  const insert = to.slice(pairs).join('')
+  if (remove > 0 || insert !== '') out.push({ at: offset, remove, insert })
+}
+
 /** The changes that turn `from` into `to`, in ascending order of `at`; empty when they are equal. */
 export function diffText(from: string, to: string, timeLimitMs = DIFF_TIME_LIMIT_MS): TextEdit[] {
   if (from === to) return []
@@ -229,14 +269,21 @@ export function diffText(from: string, to: string, timeLimitMs = DIFF_TIME_LIMIT
   let ai = 0
   let bi = 0
   let aOffset = 0
-  // A changed run of lines: its old and new text, diffed per character once the run ends.
-  let removed = ''
-  let inserted = ''
+  // A changed run of lines: its old and new lines, diffed per character once the run ends.
+  let removed: string[] = []
+  let inserted: string[] = []
   let runStart = 0
+  const refined: TextEdit[] = []
   const flush = (): void => {
-    if (removed !== '' || inserted !== '') characterEdits(removed, inserted, runStart, deadline, edits)
-    removed = ''
-    inserted = ''
+    if (removed.length === 0 && inserted.length === 0) return
+    refined.length = 0
+    if (Date.now() <= deadline && characterEdits(removed.join(''), inserted.join(''), runStart, deadline, refined)) {
+      for (const edit of refined) edits.push(edit)
+    } else {
+      pairedLineEdits(removed, inserted, runStart, edits)
+    }
+    removed = []
+    inserted = []
   }
   for (const run of diffTokens(tokenize(aLines), tokenize(bLines), deadline).runs) {
     if (run.op === EQUAL) {
@@ -246,15 +293,15 @@ export function diffText(from: string, to: string, timeLimitMs = DIFF_TIME_LIMIT
       bi += run.n
       continue
     }
-    if (removed === '' && inserted === '') runStart = aOffset
+    if (removed.length === 0 && inserted.length === 0) runStart = aOffset
     if (run.op === DELETE) {
       for (let i = 0; i < run.n; i++) {
-        removed += aLines[ai + i]!
+        removed.push(aLines[ai + i]!)
         aOffset += aLines[ai + i]!.length
       }
       ai += run.n
     } else {
-      for (let i = 0; i < run.n; i++) inserted += bLines[bi + i]!
+      for (let i = 0; i < run.n; i++) inserted.push(bLines[bi + i]!)
       bi += run.n
     }
   }

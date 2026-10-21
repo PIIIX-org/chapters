@@ -154,7 +154,8 @@ export async function writeThroughCollab(
     const existing = await getLiveNote(vaultId, path)
     if (!existing) return null
     const storedFrontmatter = existing.frontmatter as Record<string, unknown>
-    const bodyOps = input.ops?.filter((op) => !isFrontmatterOp(op)) ?? []
+    const ops = input.ops ?? []
+    const bodyOps = ops.some((op) => !isFrontmatterOp(op))
     // Before the document edit: a refused body must never reach the editors (#491, #492).
     const screen = async (body: string, frontmatter: Record<string, unknown>): Promise<void> => {
       assertBodyFits(body, existing.body)
@@ -166,8 +167,8 @@ export async function writeThroughCollab(
     const collab = getCollab()
     if (!collab) {
       let body = input.body
-      if (bodyOps.length > 0) {
-        body = applyBodyOps(existing.body, bodyOps)
+      if (bodyOps) {
+        body = applyBodyOps(existing.body, ops)
         await screen(body, storedFrontmatter)
       }
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
@@ -178,7 +179,7 @@ export async function writeThroughCollab(
     try {
       connection = await collab.openDirectConnection(documentName, {
         userId: actor.type === 'user' ? actor.id : 'mcp',
-        directWrite: input.body !== undefined || bodyOps.length > 0,
+        directWrite: input.body !== undefined || bodyOps,
       })
     } catch (err) {
       // Loading the collab document parses the note's file. When the file is
@@ -196,8 +197,8 @@ export async function writeThroughCollab(
     const next: { frontmatter?: Frontmatter; body?: string } = {}
     try {
       const live = collab.documents.get(documentName)
-      if (bodyOps.length > 0 && live) {
-        await screen(applyBodyOps(live.getText('body').toString(), bodyOps), live.getMap('frontmatter').toJSON())
+      if (bodyOps && live) {
+        await screen(applyBodyOps(live.getText('body').toString(), ops, existing.body), live.getMap('frontmatter').toJSON())
       }
       await connection.transact((document) => {
         const fm = document.getMap('frontmatter')
@@ -205,8 +206,8 @@ export async function writeThroughCollab(
         next.frontmatter = nextFrontmatter(current, input, existing.type)
         const text = document.getText('body')
         // Resolved again here: typing may have reached the relay during the checks.
-        if (bodyOps.length > 0) {
-          next.body = applyBodyOps(text.toString(), bodyOps)
+        if (bodyOps) {
+          next.body = applyBodyOps(text.toString(), ops, existing.body)
           assertBodyFits(next.body, existing.body)
         } else if (typeof input.body === 'function') {
           // Applied to the live text, which may hold typing not stored yet, and checked against it (#491).

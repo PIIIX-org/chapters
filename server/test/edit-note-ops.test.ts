@@ -25,6 +25,7 @@ let app: FastifyInstance
 let collab: CollabRelay
 let baseUrl: string
 let ownerToken: string
+let cookie: string
 let vaultId: string
 let mcp: Client
 const providers: HocuspocusProvider[] = []
@@ -79,7 +80,7 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${port}`
   collab = startCollabServer(app.server)
   const owner = await createActiveUser()
-  const cookie = await loginCookie(app, owner.email)
+  cookie = await loginCookie(app, owner.email)
   ownerToken = await loginToken(app, owner.email)
   vaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'Edit ops' } })).json<{ id: string }>().id
   const minted = await app.inject({
@@ -253,6 +254,17 @@ describe('edit_note ops (#408)', () => {
     const missing = await call('edit_note', { vaultId, path, ops: [{ op: 'delete_block', find: 'nowhere' }] })
     expect(missing.isError).toBe(true)
     expect(missing.text).toMatch(/ops\[0\].*"nowhere".*not found/)
+    // The index counts frontmatter ops too.
+    const afterFrontmatter = await call('edit_note', {
+      vaultId,
+      path,
+      ops: [
+        { op: 'frontmatter_set', key: 'status', value: 'x' },
+        { op: 'replace_text', find: 'nowhere', replace: 'y' },
+      ],
+    })
+    expect(afterFrontmatter.isError).toBe(true)
+    expect(afterFrontmatter.text).toMatch(/ops\[1\] replace_text: "nowhere" not found/)
     const count = await call('edit_note', { vaultId, path, ops: [{ op: 'replace_text', find: 'foo', replace: 'bar' }] })
     expect(count.isError).toBe(true)
     expect(count.text).toMatch(/2 times.*expectedCount/)
@@ -271,6 +283,21 @@ describe('edit_note ops (#408)', () => {
     expect(unknown.isError).toBe(true)
     expect(unknown.text).toContain('"where"')
     expect(await rowBody(path)).toBe(base)
+  })
+
+  it('REST PUT refuses `ops` with 400 and changes nothing (they are edit_note arguments)', async () => {
+    const path = await fresh()
+    const put = (body: object) => app.inject({ method: 'PUT', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie }, body })
+    for (const ops of [[{ op: 'insert_after', anchor: 'foo', text: 'x' }], [{ op: 'append' }], []]) {
+      const refused = await put({ ops })
+      expect(refused.statusCode, refused.body).toBe(400)
+      expect(refused.json<{ error: string }>().error).toMatch(/`ops` is an edit_note \(MCP\) argument/)
+    }
+    expect(liveBody(path)).toBe(base)
+    expect(await rowBody(path)).toBe(base)
+    const ok = await put({ body: `${base}more\n` })
+    expect(ok.statusCode, ok.body).toBe(200)
+    expect(await rowBody(path)).toBe(`${base}more\n`)
   })
 
   it('accepts base_rev and echoes it; it is not compared yet (#475)', async () => {
