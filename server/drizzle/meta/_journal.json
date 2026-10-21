@@ -176,6 +176,13 @@
       "when": 1791400000000,
       "tag": "0024_revision_order",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791500000000,
+      "tag": "0025_write_idempotency",
+      "breakpoints": true
     }
   ]
 }
