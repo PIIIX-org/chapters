@@ -2,7 +2,8 @@
 // message protocol, no model. Each vector is `[text length, batch number]`, the
 // batch number counting batches this worker thread has run (0 = its first).
 // A first text of `exit`, `throw` or `fail` makes the worker exit, die on an
-// uncaught exception, or answer with an error.
+// uncaught exception, or answer with an error. A first text of `busy:<ms>`
+// holds this thread for that long before answering, like an ONNX run does.
 import { parentPort } from 'node:worker_threads'
 
 let batches = 0
@@ -13,6 +14,11 @@ port.on('message', ({ id, texts }: { id: number; texts: string[] }) => {
   if (texts[0] === 'fail') {
     port.postMessage({ id, error: { name: 'TypeError', message: 'bad input' } })
     return
+  }
+  const busy = /^busy:(\d+)$/.exec(texts[0] ?? '')
+  if (busy) {
+    const until = performance.now() + Number(busy[1])
+    while (performance.now() < until);
   }
   const batch = batches++
   port.postMessage({ id, vectors: texts.map((t) => [t.length, batch]) })

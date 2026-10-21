@@ -58,7 +58,8 @@
     {
       "test": "browser",
       "check": "S1-type-while-agent-appends: no lost user typing",
-      "issue": 408
+      "issue": 408,
+      "intermittent": "since S2b (#843) only when an agent's whole-body edit_note lands while a typed token is in flight: passed on dev (run 39641225039) and on #839 (run 39638878096), failed in the other 5 of 7 browser runs on S2b branches that leave edit_note alone (e.g. 39644992802); #864 removes it"
     },
     {
       "test": "browser",
@@ -68,8 +69,16 @@
     },
     {
       "test": "browser",
+      "check": "lost typing is recoverable from note history (note_revisions)",
+      "issue": 408,
+      "state": "inconclusive",
+      "intermittent": "inconclusive when the S1 step lost no typing, so there is nothing to recover (\"nothing was lost\" on dev, run 39641225039, and on #839, run 39638878096: 2 of 7 browser runs on S2b branches that leave edit_note alone); #864 removes it"
+    },
+    {
+      "test": "browser",
       "check": "S1: user typing stays contiguous while the agent writes",
-      "issue": 408
+      "issue": 408,
+      "intermittent": "failed on dev (run 39641225039), on #839 (run 39638878096) and in all 7 browser runs on S2b branches that leave edit_note alone; passes with #864's whole-body merge (runs 39638573189, 39635637393), which removes it"
     },
     {
       "test": "browser",
@@ -166,12 +175,6 @@
       "test": "export-roundtrip",
       "check": "OKF reference parser (open-knowledge-format document.py) reads every exported note as written",
       "issue": 564
-    },
-    {
-      "test": "fix-crash-catchup",
-      "check": "filesPendingExtraction reaches 0",
-      "issue": 845,
-      "intermittent": "repository_status's filesPendingExtraction lags the SQL count by one poll after the boot catch-up (field 1, SQL pending 0); seen on four branches off dev 3616b53 that do not touch extraction (#845), reruns pass"
     },
     {
       "test": "multilingual-search",

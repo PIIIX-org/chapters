@@ -1,0 +1,38 @@
+# Builds the image and runs the operator commands in it with no network
+# (#872), on PRs that change what the image's dependencies come from.
+# publish.yml runs the same action before it pushes; this catches a break
+# on the PR instead of during a promotion. Docs:
+# docs/agents/github-workflow.md (Image check).
+name: Image check
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - '**/package.json'
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - '**/.npmrc'
+      - .github/workflows/image-check.yml
+      - .github/actions/image-offline-check/**
+      - .github/scripts/image-offline-check.sh
+  workflow_dispatch:
+
+concurrency:
+  group: image-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  offline-scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: ./.github/actions/image-offline-check
