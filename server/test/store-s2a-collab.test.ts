@@ -7,6 +7,9 @@ import { buildApp } from '../src/app.js'
 import { sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { getLiveNote, renameNote, writeNote } from '../src/notes/store.js'
+import { setStoreMigrationPending } from '../src/notes/store-tx.js'
+import { crdtFile } from '../src/sync/crdt-store.js'
+import { rm } from 'node:fs/promises'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
@@ -178,6 +181,56 @@ describe('live documents follow the note id recorded at load (§5.5, S2a)', () =
     expect(await rowBody('docs/both-open-moved')).toBe('Old tab. Shared.')
     await waitFor(() => newTab.text.toString() === 'Old tab. Shared.')
     expect(oldTab.text.toString()).toBe('Old tab. Shared.')
+  }, 15_000)
+})
+
+describe('two unrelated documents of one note (§5.5, S2a)', () => {
+  it('server writes pushed into both never make them look related: no merge, no doubled text', async () => {
+    const body = 'paragraph 0: the first line.\n\nparagraph 1: the second line.'
+    const path = await create('unrelated', body)
+    const oldTab = await open(path)
+    await renameNote(vaultId, path, 'unrelated-moved', { type: 'mcp', id: randomUUID() })
+    // No bin at the new path: the new-path document is seeded afresh, with no history in common with the old one.
+    await rm(crdtFile(vaultId, 'docs/unrelated-moved'), { force: true })
+    const newTab = await open('docs/unrelated-moved')
+    const agent = { type: 'mcp' as const, id: randomUUID() }
+    await writeThroughCollab(vaultId, 'docs/unrelated-moved', { body: `${body}\n\nfirst agent line.` }, agent)
+    await writeThroughCollab(vaultId, 'docs/unrelated-moved', { body: `${body}\n\nfirst agent line.\nsecond agent line.` }, agent)
+    const expected = `${body}\n\nfirst agent line.\nsecond agent line.`
+    expect(await rowBody('docs/unrelated-moved')).toBe(expected)
+    await waitFor(() => newTab.text.toString() === expected && oldTab.text.toString() === expected)
+    expect(newTab.text.toString().match(/paragraph 0:/g)).toHaveLength(1)
+  }, 15_000)
+})
+
+describe('a note the store migration has not processed (§8, Q5)', () => {
+  it('cannot be opened in an editor: the relay refuses it, so nothing is typed that could not be stored', async () => {
+    const id = randomUUID()
+    await db.execute(sql`
+      INSERT INTO notes (id, vault_id, type, name, path, frontmatter, body)
+      VALUES (${id}, ${vaultId}, 'docs', 'unmigrated', 'docs/unmigrated', '{"type":"docs"}'::jsonb, 'from before the store')`)
+    setStoreMigrationPending(true)
+    try {
+      let refused = ''
+      const provider = new HocuspocusProvider({
+        url: `ws://127.0.0.1:${port}/collab`,
+        name: `${vaultId}/docs/unmigrated`,
+        token,
+        document: new Y.Doc(),
+        onAuthenticationFailed: ({ reason }) => {
+          refused = reason
+        },
+      })
+      providers.push(provider)
+      await waitFor(() => refused !== '')
+      // Hocuspocus answers every onAuthenticate refusal as `permission-denied`; the client shows its refused state (`revoked`).
+      expect(refused).toBe('permission-denied')
+      expect(provider.isSynced).toBe(false)
+      expect(collab.hocuspocus.documents.has(`${vaultId}/docs/unmigrated`)).toBe(false)
+    } finally {
+      setStoreMigrationPending(false)
+      await db.execute(sql`DELETE FROM notes WHERE id = ${id}`)
+    }
   }, 15_000)
 })
 

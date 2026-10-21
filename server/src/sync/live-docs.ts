@@ -163,9 +163,15 @@ export async function updateBin(vaultId: string, path: string, committed: DocSta
 
 /**
  * The client's `sharesHistory` rule (client/src/hooks/useCollabDoc.ts),
- * applied to two server documents: true if they have a Yjs client in common.
+ * applied to two server documents: true if they have a Yjs client in common
+ * other than SERVER_CLIENT_ID. Every server write is pushed into every open
+ * document of a note under that one id, also into unrelated ones, so it
+ * proves nothing about where the documents came from; counting it would merge
+ * two unrelated copies of the same text into a doubled note.
  */
 export function sharesHistory(a: Y.Doc, b: Y.Doc): boolean {
-  for (const client of a.store.clients.keys()) if (b.store.clients.has(client)) return true
+  for (const client of a.store.clients.keys()) {
+    if (client !== SERVER_CLIENT_ID && b.store.clients.has(client)) return true
+  }
   return false
 }

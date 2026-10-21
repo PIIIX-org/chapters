@@ -187,7 +187,9 @@ export async function storeMigrated(): Promise<boolean> {
 /**
  * The S2a backfill (§8 step 2): every note, live and trashed, by id in
  * batches, one transaction per note under its advisory lock. A note is done
- * once it has its projection rows, so a rerun skips it.
+ * once it has its `backfill` marker (a `note_projections` row written in its
+ * backfill transaction, or at create), so a rerun skips it; a later write's
+ * projection rows never count as done.
  *
  * Per note: read the row and its file (`<path>.md`, or `.trash/<id>.md`);
  * choose the content (Q5: a file that parses and differs from the row wins,

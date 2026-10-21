@@ -9,7 +9,8 @@ import { atLeast, resolveAccess } from '../vaults/permissions.js'
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
-import { noteLock, readNote, updateNote, splitPath } from '../notes/store.js'
+import { getLiveNote, noteLock, readNote, updateNote, splitPath } from '../notes/store.js'
+import { NoteNotMigratedError, noteMigrated } from '../notes/store-tx.js'
 import { withKeyLock } from '../notes/key-lock.js'
 import { docState, liveDocumentsOf, mergeDocuments, registerLiveDocs, sharesHistory, type LiveDocument } from './live-docs.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
@@ -177,6 +178,12 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         })
         throw new Error('edit access required')
       }
+      // A note the store migration has not processed yet takes no writes, so no
+      // editor either: nothing may be typed that could not be stored. The tab
+      // shows the relay's refusal ("this note stopped syncing"), not a silent editor.
+      const { path } = parseDocName(documentName)
+      const note = await getLiveNote(vaultId, path)
+      if (note && !(await noteMigrated(db, note.id))) throw new Error(new NoteNotMigratedError().message)
       return { userId, sessionHash } satisfies ConnectionContext
     },
 
@@ -193,6 +200,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       await withKeyLock(noteLock(vaultId, path), async () => {
         const note = await readNote(vaultId, path)
         if (!note) throw new Error(`note does not exist: ${documentName}`)
+        if (!(await noteMigrated(db, note.row.id))) throw new NoteNotMigratedError()
         documentNotes.set(document, note.row.id)
         const savedUpdate = await loadCrdtState(vaultId, path)
         if (savedUpdate) {
