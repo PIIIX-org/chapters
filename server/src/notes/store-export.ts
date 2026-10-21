@@ -1,7 +1,7 @@
 /**
  * The stopped-server export for a code-only rollback (ADR-003 §9, Q10),
  * S2a form: files only. Run with no server up
- * (`docker compose run --rm app pnpm -C server store-export-legacy`).
+ * (`docker compose run --rm app pnpm store-export-legacy`).
  *
  * It takes the instance maintenance lock in its exclusive form on a reserved
  * connection (maintenance-lock.ts), so it refuses to run while any server or

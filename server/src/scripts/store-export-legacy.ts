@@ -1,6 +1,6 @@
 /**
  * ADR-003 §9 code-only rollback, step 2: run with the server stopped
- * (`docker compose run --rm app pnpm -C server store-export-legacy`).
+ * (`docker compose run --rm app pnpm store-export-legacy`).
  * Takes the exclusive instance lock (refused while a server or writing CLI
  * runs), renders every pending file and index.md from the rows, writes a
  * report to DATA_DIR and exits 0 only when nothing is left pending.

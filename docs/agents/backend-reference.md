@@ -176,12 +176,12 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
 
-**ADR-003 store schema (migration 0021, S1: present, not used yet).** The
-schema for the single authoritative store (vault note
-`decision/adr-003-authoritative-store` §4) is in place; no code reads or
-writes it until S2a/S2b, so behaviour is unchanged. It is additive: code
-from before 0021 runs on it with no SQL (no NOT NULL column without a
-lasting default on a table old code writes, nothing dropped or renamed).
+**ADR-003 store schema (migration 0021; S2a: Postgres is the only authority
+for server writes).** The schema of the single authoritative store (vault
+note `decision/adr-003-authoritative-store` §4). It is additive: code from
+before 0021 runs on it with no SQL (no NOT NULL column without a lasting
+default on a table old code writes, nothing dropped or renamed), which is
+what the code-only rollback below relies on.
 
 | Object | Purpose |
 |---|---|
@@ -196,10 +196,82 @@ lasting default on a table old code writes, nothing dropped or renamed).
 | `instance_state.store_migrated_at` / `collab_migrated_at` | backfill markers for S2a and S2b |
 
 `schema.ts` declares the five new tables. The new columns on `notes`,
-`note_revisions` and `instance_state` stay out of the Drizzle models until
-S2a: REST and MCP return note and revision rows whole, so declaring them
-would add fields to responses. The S1 dry run is
-`pnpm -C server migrate-store --dry-run` (§10).
+`note_revisions` and `instance_state` stay out of the Drizzle models: REST
+and MCP return note and revision rows whole, so declaring them would add
+fields to responses; the store reads them with SQL (`store-tx.ts`
+`storedColumns`).
+
+**The S2a store** (`notes/store-tx.ts`, `store.ts`, `projector.ts`,
+`store-reconcile.ts`, `maintenance-lock.ts`):
+
+- **One transaction per write.** Create, edit (whole body, ops,
+  `base_rev`), append/upsert, rename, delete, restore, revert and purge are
+  each one Postgres transaction (`storeTransaction`): `SET LOCAL
+  lock_timeout = '5s'`, the shared form of the instance maintenance lock
+  (`pg_try_advisory_xact_lock_shared`), the note's advisory lock by id,
+  then the row (the trigger bumps `seq`), `frontmatter_src`, the revision
+  at the new `seq` (I2), links, raised `note_projections` targets and the
+  `embed_note` job. Commit is the acknowledgement. A lock timeout, the
+  maintenance lock held by an exporter, or a paused process answers
+  `StoreBusyError` (HTTP 503; over MCP the error says to retry) with
+  nothing written. The in-process queue (`withKeyLock`) stays keyed by
+  path (#484/#803); the Postgres lock is by id.
+- **Files are projections.** `.md` files, `.trash/<id>.md` and the
+  generated `index.md` files are written after commit by the projector
+  (one in-process worker, woken after each commit and by the job poll),
+  never read back as truth: reads (`readNote`, `browse_vault`, audit) use
+  the rows. Ownership is by path (`projected_files`): bytes the projector
+  did not write are copied to `.conflicts/<path>.<utc>.md` before a
+  rewrite or an unlink; a file whose content equals the row (written by
+  older code, other YAML formatting or key order) is adopted with its
+  bytes. Rename refactors, file removal after purge and old-folder
+  `index.md` are `jobs` rows inserted in the write's transaction.
+  `flushProjections()` drains it (tests' teardown, restore, the export).
+- **The relay** (S2a, still path-named documents and `.crdt/<path>.bin`):
+  a server write never goes through a `DirectConnection`; after commit the
+  change is pushed into the loaded document as a diff under the note
+  lock, or into the bin of a note nobody has open. The store hook stores
+  into the note id recorded at load.
+- **Maintenance lock** (`maintenance-lock.ts`, ADR §5.1 rev 5): every
+  server (from before migrations until exit) and the writing CLIs
+  (`restore-backup`, `reindex`) hold the shared form of a session advisory
+  lock on a reserved connection (its own single-connection client, no
+  idle or lifetime recycling); `store-export-legacy` holds the exclusive
+  form, so it refuses to run next to a server and a server refuses to
+  start during it (exit 2, "maintenance in progress"). If the reserved
+  connection drops, writes pause at once: store transactions answer
+  `StoreBusyError`, the relay's `beforeSync` closes the socket with 1013
+  `store-paused` before applying an update (unacked; the editor reconnects
+  and resends). The process retries the lock with backoff (250 ms doubling
+  to 10 s) while Postgres is unreachable, resumes when it holds it, and
+  exits only when the retry returns false (an exporter holds it).
+- **Boot** (`index.ts`): shared lock → migrations → the one-time backfill
+  (`store_migrated_at`; else the temp-file sweep) → reconciliation of rows
+  written around the store (projection rows, raised targets, a revision at
+  every `seq`; renderer version bumps) → after an `unclean` or `unknown`
+  previous shutdown (`lifecycle.json`), every `file` and `dir_index`
+  projection is verified against the disk before `listen` (files are
+  written without fsync) → `listen` → in the background, after the first
+  projector drain, the **orphan sweep**: `*.md` under `vaults/<id>/`,
+  outside `assets/` and every dot-directory, with no `projected_files` row
+  and no owner in the DB (a live note at the path, or the `dir_index` of a
+  directory with live notes) is moved to `.orphans/<path>`, never deleted.
+  Graceful shutdown: the relay flushes its stores, then the projector gets
+  a bounded drain (5 s).
+- **Instance backups** read note content from the snapshot rows (rendered
+  with `frontmatter_src`), never from files (ADR §8 "#776 coordination").
+- **Code-only rollback**: `store-export-legacy` (`notes/store-export.ts`)
+  with no server running: exclusive lock, reconciliation, every pending
+  `file`/`dir_index` projection and store job rendered synchronously, a
+  report `DATA_DIR/store-export-legacy-<utc>.json`, exit 0 only when
+  nothing is pending. Roll-forward is the boot above. Operator procedure:
+  `docs/self-hosting/backup.md` §5.
+- **Failpoints** (`failpoints.ts`): `ELARA_FAILPOINTS=<name>[,…]` SIGKILLs
+  the process at that store boundary; inert when unset. The lab's
+  `store-failpoints` test uses them.
+- `check-notes` is read-only: it compares a file with its row only where
+  the `file` projection is applied; `--wait-idle[=<s>]` waits for the
+  projector, `--fail-on-pending` fails on pending projections (CI).
 
 ### Repositories (codebase mapping)
 
@@ -350,16 +422,15 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   back; if that fails, or the frontmatter (deep-equal) or body (exact)
   differs, the write is refused with an `OkfValidationError`
   (`note cannot be stored: ...`) — HTTP 400 over REST, an `isError`
-  result over MCP. The file is the canonical copy, so a note its own file
-  could not reproduce must never be stored.
-- **`store.ts`**: the note write path. `createNote` → validate → insert
-  row (unique-violation on live path collision) → atomic disk write
-  (`atomic-write.ts`: write to a temp file named per call —
-  `<file>.<pid>.<random>.tmp` — then `rename`) → regenerate the ancestor
-  directories' progressive `index.md` → sync `noteLinks` from extracted
-  wikilinks → schedule an embedding (async, off the request path) →
-  record a revision. Soft delete moves the file into
-  `.trash/<noteId>.md`; hard purge (owner/admin only) is a genuine
+  result over MCP. The file projection renders the row, so a note its own
+  file could not reproduce must never be stored.
+- **`store.ts`**: the note write path. Every write validates, then runs
+  one store transaction (see "The S2a store" above): row, revision at the
+  new `seq`, links, projection targets and embedding job commit together,
+  and the projector writes the file and `index.md` after commit
+  (`atomic-write.ts`: a temp file named per call —
+  `<file>.<pid>.<random>.tmp` — then `rename`). Soft delete projects the
+  file to `.trash/<noteId>.md`; hard purge (owner/admin only) is a genuine
   irreversible delete, for cases like an accidentally committed secret
   where "recoverable" is the wrong property.
 - **Concurrent writes to one note** (#401): writers of one note run one
@@ -397,9 +468,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   note's own lock: no code holding a `note:` lock waits for the relay's
   store hook (ADR-003 §5.1), and two renames rewriting each other's
   referrers would otherwise wait on each other. Lock order: `note:` keys
-  (sorted when more than one), then `index:`. The keys are paths, not note
-  ids (ADR-003 S2a moves to id keys): an editor tab left open at the old
-  path after a rename still stores to a path with no note, as before.
+  (sorted when more than one), then `index:`. These in-process keys are
+  paths; the Postgres advisory lock of the store transaction is by note id,
+  and an editor tab left open at the old path after a rename stores into
+  the note it loaded (by id), never into a new note at the old path.
 - **Renames of notes that link to each other** (#803): each referrer is
   looked up again by note id when its links are rewritten
   (`relinkReferrer`): another rename may have moved it, and before, it was
