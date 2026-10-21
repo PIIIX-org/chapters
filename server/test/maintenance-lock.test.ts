@@ -162,7 +162,7 @@ describe('instance maintenance lock (§5.1, §9)', () => {
       for (const socket of accepted) socket.destroy()
       await new Promise((resolve) => proxy.close(resolve))
     }
-  }, 30_000)
+  })
 
   it('holds the shared form on its own connection; the exclusive form is refused while it is held, and the reverse', async () => {
     await hold('shared')
@@ -231,7 +231,7 @@ describe('instance maintenance lock (§5.1, §9)', () => {
     await waitFor(() => !provider.hasUnsyncedChanges)
     // Never a refusal the editor would stop at (revoked): only socket closes it reconnects after.
     expect(refusals.filter((r) => r !== 'store-busy')).toEqual([])
-  }, 30_000)
+  })
 
   it('while paused: an unmigrated note is refused at authentication (note-not-migrated), an open editor gets the pause close, a load waits (store-busy)', async () => {
     const migrated = await createNote(vaultId, { type: 'docs', name: 'paused-migrated', body: 'migrated' })
