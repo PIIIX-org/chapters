@@ -132,7 +132,7 @@ chapters/
 │   │   ├── export/                 # backup/restore, vault export, share links, import
 │   │   ├── repositories/           # codebase ingestion (git/local/agent-push), extraction
 │   │   ├── email/                  # nodemailer wrapper
-│   │   └── scripts/                # CLI entry points (reindex, restore-backup, check-notes, migrate-store)
+│   │   └── scripts/                # CLI entry points (reindex, restore-backup, check-notes, doctor, rows-from-files, migrate-store)
 │   └── test/                       # one file per subsystem, Vitest
 ├── shared/                         # types shared server ↔ client (UI phase, not started)
 └── client/                         # React + Vite (UI phase — do not start yet)
@@ -288,7 +288,14 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   `store-failpoints` test uses them.
 - `check-notes` is read-only: it compares a file with its row only where
   the `file` projection is applied; `--wait-idle[=<s>]` waits for the
-  projector, `--fail-on-pending` fails on pending projections (CI).
+  projector, `--fail-on-pending` fails on pending projections (CI). It
+  also reports orphan `.md` files (`orphan-file`, #495).
+- **Doctor** (`doctor.ts`, `pnpm doctor`, ADR-003 S6, #495): compares
+  every copy of a note with its row and reports each mismatch by class
+  (below). Read-only by default; `--repair` only re-raises derived state.
+- **`rows-from-files`** (`rows-from-files.ts`, ADR-003 Q9): the
+  last-resort import that rebuilds missing note rows from the `.md` files
+  under the exclusive instance maintenance lock (below).
 
 **S2b: the relay's state is `note_crdt` + `note_updates`**
 (`sync/note-crdt.ts`). A note's document is `snapshot ⊕` its non-rejected
@@ -582,21 +589,57 @@ Every share/membership mutation calls `emitPermissionChange()` (see
 - **Edits are minimal diffs; `edit_note` takes ops** (#408):
   `writeThroughCollab` never deletes and re-inserts the whole Y.Text.
   `applyTextDiff` (`sync/text-diff.ts`) turns the live text into the new
-  body with a minimal character diff (Myers O(ND) with the linear-space
-  middle snake, over code points so no surrogate pair is split) inside
-  the one document transaction; past `DIFF_TIME_LIMIT_MS` (100 ms) it is
-  redone per line and refined per character inside each changed run as
-  far as a second limit allows (ADR-003 §5.2 step 5); a run still left
-  pairs its old and new lines in order and changes each pair only between
-  its common start and end (linear), so a rewrite of every line of a
-  large note (a `- ` before each) keeps every line's unchanged characters
-  rather than replacing the run. Pairing is in order: when such a run also
-  adds or removes lines partway through, the lines after that point are
-  paired with their neighbours and keep less. Untouched
-  characters keep their Yjs identity, so a person's caret stays on its
-  text, their Ctrl+Z (a `Y.UndoManager` that tracks only their own edits,
-  never the relay's updates) still finds what they typed (#483), and
-  typing that reaches the relay after the write merges where it was
+  body with a minimal diff inside the one document transaction, under one
+  time limit, `DIFF_TIME_LIMIT_MS` (100 ms, ADR-003 §5.2 step 5) (#833).
+  The common start and end are set aside first (a linear scan), so an
+  append or a change in one place costs about one read of the body. What
+  is left is diffed per character (Myers O(ND) with the linear-space
+  middle snake, over code points so no surrogate pair is split): exactly
+  when it is at most 256 UTF-16 units, so a small edit is as short as the
+  code-point edit distance, and up to 16,384 units only while the two
+  sides are alike: the edit distance is at most a quarter of their
+  length, or at most the text one side adds plus a tenth of the shorter
+  side, when four of eight 16-unit stretches of the shorter side are
+  found in the longer one before the search (a sentence added to a
+  paragraph that also had words changed, or a long passage put in front
+  of it). When the shorter side is under 64 units (stretches shorter than 16), the result must
+  also be at most 2 + 1/16 of the shorter side's units separate changes
+  (not a short line against a long unrelated one). The search stops at
+  1,024 edits (4,096 within one line), so a failed attempt is cheap.
+  Otherwise the whole lines around it are diffed per line (lines found on
+  one side only, and blank lines, skip the search, so a rewrite of every
+  line is linear and a paragraph added next to an edited one does not
+  take its blank line). A changed run with as many new lines as old ones
+  pairs them in order; another run is diffed per character if at most
+  16,384 units and alike (never exactly), else paired too: each line of
+  its shorter side pairs with one of the other side's lines, in order, by
+  the alignment with the most likeness (the characters a pair shares at
+  its start and end, plus 16 for each of up to eight word triples from the
+  middle of the line found in its candidate, looked up as hashes in a set
+  per line, so lines changed at both ends, such as wrapped in `**`, still
+  find their new versions). It is a dynamic programme over lines ×
+  shifts; past 2^15 cells, or when the time limit runs out during it, only
+  alignments that put the lines one side has more of in one block are
+  tried. The lines left over between
+  pairs are inserted or deleted where they stand. Each pair is diffed per
+  character if alike, otherwise changed only between its common start
+  and end. So a rewrite of every line of a large note (a `- ` before
+  each, a `**` wrap), with or without a paragraph added or removed, keeps
+  the unchanged characters of every line that is alike; a paragraph added
+  before, after or between edited ones leaves them in place; a long
+  paragraph changed at both ends, or in up to 4,096 edits, keeps the text
+  between the changes; and an unrelated rewrite is about one change per
+  line rather than thousands of fragments. Past the time limit the rest
+  is linear (pairs trimmed to their common start and end, so a line
+  changed at both ends is replaced). Not every unchanged character is
+  kept: a pair or run that fails the alike test keeps only its common
+  start and end, and a run with the same number of lines that also adds
+  one line and removes another partway through pairs the lines in
+  between with their neighbours. Kept characters keep their Yjs identity, so a
+  person's caret stays on its text, their Ctrl+Z (a
+  `Y.UndoManager` that tracks only their own edits, never the relay's
+  updates) still finds what they typed (#483), and typing that reaches
+  the relay after the write merges where it was
   typed. In each change the new text is inserted before the old is
   deleted, so a caret at the end of a replaced span lands after the new
   text and typing in flight joins after it. It used to delete the whole
@@ -769,7 +812,81 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   before they end, and tests that insert note rows without files delete
   their fixture vaults. One exception: the MCP storage-failure test pins
   the known row-ahead-of-file bug (#486, #489) with an assertion and then
-  soft-deletes that note so the gate skips it.
+  soft-deletes that note so the gate skips it. It also reports
+  `orphan-file`: a `.md` file outside `assets/` and the dot-directories
+  with no `projected_files` row, no live note at its path and (for an
+  `index.md`) no live note under its directory, i.e. what the boot orphan
+  sweep would move to `.orphans/` (#495). Shared helpers: `compareNoteFile`,
+  `vaultMarkdownFiles`, `orphanFiles`.
+- **`doctor.ts`** / `pnpm doctor` (ADR-003 S6, #495): `runDoctor({vaultId,
+  repair})` returns `{ok, checked, counts, problems, pending}`. Classes
+  (`DOCTOR_CLASSES`): `file-missing`, `file-unparseable`, `file-differs`
+  (content differs from the row), `file-edited` (same content, bytes not
+  the `projected_files.applied_hash`, a hand or `git` edit, Q2),
+  `file-unrecorded` (no `projected_files` row for this note) for note
+  files and `.trash/<id>.md` whose `file` projection is applied, and for
+  recorded generated `index.md` files; `file-orphan`; `conflict-copy`
+  (anything in `.conflicts/`); `projection-missing` (no `file` row),
+  `projection-failed` (pending with `last_error`), `projection-outdated`
+  (`index_version` below `PROJECTION_VERSIONS`); `revision-missing` (no
+  revision at `notes.seq`), `revision-differs`; `crdt-bin-differs`,
+  `crdt-bin-undecodable`, `crdt-bin-orphan` (`.crdt/<path>.bin`, only
+  while `instance_state.collab_migrated_at` is unset and only for bins of
+  live notes with no `note_crdt` row, i.e. what the S2b backfill still
+  reads; after it, bins are listed as `pending` `crdt-bin`, merged by the
+  next boot's roll-forward); `crdt-fold-error`, `crdt-rejected-update`,
+  `crdt-tail-stale` (a non-rejected update past `folded_through` older
+  than `STALE_TAIL_MINUTES`, 10; younger ones are `pending` `crdt-tail`),
+  `crdt-snapshot-differs` (`note_crdt` snapshot ⊕ non-rejected tail
+  against the row, only when `folded_seq = seq` and no tail is pending;
+  `folded_seq < seq` is `pending` `crdt-rebase`); `fts-stale` (stored `fts`
+  against the 0002 expression); `vector-missing` (no embedding and no
+  job), `vector-failed` (the `embed_note` job of the current `seq`
+  failed); `links-differ` (`note_links` against `extractWikilinks(body)`).
+  Pending projections, embedding jobs and unfolded CRDT tails are listed
+  in `pending`, not as problems. `repair: true` re-raises only: the
+  note's `file` projection reset to `applied_seq = 0` (the projector
+  renders it again under the ownership rules, so bytes it did not write
+  are copied to `.conflicts/` first; content-equal bytes are adopted),
+  a generated index's `dir_index` projections reset, a missing `file`
+  projection row inserted, a failed one's backoff cleared, an outdated
+  one re-rendered, link rows rederived under the note lock, an
+  `embed_note` job inserted or run again however its last run ended
+  (`onJobConflict('finished')`; not run in the CLI: the server's worker
+  polls). `repaired` is true only when a row was actually changed or
+  queued. `crdt-fold-error` and `crdt-tail-stale` are repaired by
+  `foldPendingCollab([noteId])` (boot steps 4-5 for that note under its
+  lock, only if `notesNeedingFold` lists it), which folds acknowledged
+  collab updates from the note's own log into the row; that is the only
+  repair that writes a row, and it never invents content. Every other
+  class is report-only. The CLI with `--repair` holds the shared instance
+  maintenance lock like every writing CLI (exit 2 while
+  store-export-legacy or rows-from-files runs); read-only runs take no
+  lock. A snapshot read while the server writes: run it idle.
+- **`rows-from-files.ts`** / `pnpm rows-from-files` (ADR-003 Q9): first
+  (not in a dry run) it clears the leases of pending `file`/`dir_index`
+  projections and store jobs and drains them, so a rename or trash move
+  committed before the stop has moved its file. Then, for every vault
+  directory (or `--vault`), each `*.md` outside `assets/` and the
+  dot-directories: no live row → `createNote(…, { asImported: true })`
+  from the file (the frontmatter as given, no `timestamp` added; row,
+  revision, links, projections, embedding job; the projector then adopts
+  a file that already is a valid note as it is; one without `type`, which
+  the store fills in from the path, is conflict-copied and rewritten), a row with the same content → nothing, a row
+  that differs → reported and left alone, a file whose `projected_files`
+  owner is a note now at another path or in the trash → skipped (never
+  resurrected; this also covers the dry run, which drains nothing), a
+  generated `index.md` (no frontmatter) or a file removed during the run
+  → skipped, anything the parser or store refuses → `failed`. A
+  `.crdt/<path>.bin` beside a created note is listed in `crdtBins` (the
+  lost row's editor state; the doctor reports it if it differs). A
+  directory with no vault row is skipped, or with `--owner <email>` gets
+  a vault row with that id (`Restored <id8>`). The real run holds the
+  exclusive instance maintenance lock (`holdInstanceLock('exclusive')`),
+  so it refuses (exit 2) while a server or writing CLI is up; if the
+  lock's connection drops it throws before the next create and after the
+  final drain. `--dry-run` reads only and takes no lock. Revisions and
+  CRDT history are not recovered.
 - **Damaged files** (`sync/crdt-write.ts`, #391): every write loads the
   collab document from the note's file first, so a file that does not
   parse used to block edit and revert too. When the load fails on a
@@ -1042,6 +1159,57 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   end of the write's transaction, so a refused write (a check, an op that
   does not resolve, validation) still gets this check on its connection's
   disconnect store: a document a person doubled stays out of the row (#408).
+- **An ack means committed in Postgres** (ADR-003 §5.4 "Append", S3,
+  #487; `collab-append.ts`, `appendCollabUpdate` in `notes/store.ts`).
+  `beforeSync` runs on every sync-step-2 and update message before
+  Hocuspocus applies it and sends `SyncStatus(true)` (what the editor
+  shows as saved): the update must decode and apply to an empty scratch
+  document (else the document connection closes and nothing is stored),
+  passes the size cap, is skipped when the live document already holds it
+  (`Y.snapshotContainsUpdate`, a reconnect repeating known items), and
+  otherwise `Y.diffUpdate` against the live document is inserted into
+  `note_updates` (actor `collab`, `actor_detail.kind = 'collab'`).
+  Appends of one note are group-committed: those that arrive while a
+  commit runs go together, each batch as a single autocommit statement
+  (the instance check, the note re-checked live, the id before the batch,
+  one multi-row INSERT; `commitAppends`). The append takes neither the
+  note's queue lock nor its advisory lock, so a fold or a write holding
+  them never delays an ack. It holds the note's in-process append gate
+  (`appendGate` in `note-crdt.ts`) from its ids to its COMMIT, and every materialisation of the note's CRDT
+  state holds that gate around its tail read only. The tail read is
+  therefore a clean boundary (`lastId`): every lower id is committed and
+  seen, every later append gets a higher id. Folds mark `folded_through`
+  and compact only up to that boundary, and a server-authored update a
+  write appends in its own transaction does not move it, so a row appended
+  during a fold or a write stays for the next fold (or boot). A write
+  computes its change against exactly the state it read (`compute` runs
+  inside the transaction), so typing appended meanwhile merges as a
+  concurrent edit and is never diffed away. `lockedNote` takes `FOR NO KEY
+  UPDATE`, so an append's foreign-key check never waits for it. A failed insert
+  (Postgres down, a lock timeout, maintenance) closes the socket with
+  1013 `store-unavailable`: the editor keeps the change unsynced, reconnects and
+  resends; a trashed or purged note closes the document unacked and its
+  reconnect is refused. If the live apply then fails, `afterHandleMessage`
+  marks the row `rejected_at`. The fold into row + revision follows:
+  the debounced store (2 s pause, 10 s max), the last tab closing
+  (`unloadImmediately: true`), every server write (Invariant W), the
+  unload compaction (which folds before it compacts) and boot
+  (`foldPendingCollab`; a note whose fold fails gets `fold_error` and a
+  failed `collab-store` job, and boot continues). A SIGKILL after the ack
+  therefore loses nothing: boot folds the logged update. Lab failpoints
+  `collab.after-log-before-ack` and `collab.after-ack-before-fold` mark
+  the two crash boundaries. A fold that stores the row (boot, load,
+  unload) wakes the projector, so the file follows at once. A reconnect
+  that finds the store busy or unreachable (`storeUnavailable` in
+  `store-tx.ts`: a busy store, a connection refused, lost or timed out,
+  Postgres shutting down or not accepting connections) in `onAuthenticate`
+  or `onLoadDocument` is refused with reason `store-busy`, not a
+  revocation. `useCollabDoc` shows "reconnecting", keeps the text and
+  connects again after 5 s on a new provider, which resends what is
+  unsynced; a reconnect ticket that fails with anything but 401/403 is
+  retried the same way. Backpressure: a socket with more than 16 MiB sent and not yet
+  handled, or a note with 256 appends waiting for its append gate, is
+  closed with 1013 (retryable) instead of queueing without end.
 - **Size cap on the relay** (#491, `collab-size.ts`): ws refuses a frame
   over `noteTransportLimit()` before reading it (close 1009).
   `beforeSync` refuses a sync-step-2 or update message whose Yjs update
@@ -1712,6 +1880,23 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     rather than `pnpm start`, so the server is PID 1 and `SIGTERM`
     reaches the shutdown handler in `index.ts` that flushes note edits
     still inside the collab store debounce.
+  - Sets `pnpm_config_verify_deps_before_run=false`, so the operator
+    commands (`pnpm check-notes`, `pnpm migrate-store`,
+    `pnpm restore-backup`, ...) run straight away and offline (#872).
+    pnpm 11's default checks the dependencies before every script and
+    installs the whole workspace from the registry when it thinks they
+    are stale. It compares manifests with the lockfile whenever a
+    `package.json` is newer than the last install, which `COPY server`
+    makes true in every image built on a cached install layer. That
+    comparison failed on the `adm-zip` override until
+    `server/package.json` said the same `>=0.6.1` as the override. Keep
+    a direct dependency's range equal to its override in
+    `pnpm-workspace.yaml`: pnpm compares the raw manifest, not the
+    overridden one. The image check (`.github/actions/image-offline-check`,
+    run by `image-check.yml` on PRs that change the image's dependency
+    inputs and by `publish.yml` before it pushes) runs
+    `pnpm check-notes --help` with `--network none` as shipped, and once
+    more with every manifest touched and the check set to `error`.
   - `HEALTHCHECK` hits `/health` with `node -e` + `fetch` (no curl in
     `node:*-slim`, and an apt layer for it is not worth it).
   - Exposes **`3000` only**. The Yjs relay rides Fastify's own HTTP
@@ -1953,7 +2138,9 @@ file and `.crdt` bin in one `REPEATABLE READ READ ONLY` transaction (only
 pre-0021 columns, so it runs on a production copy before the upgrade) and
 reports what the S2a/S2b backfill will do: per-note classes (`crdt`: what
 the bin's text matches; `collab`: what the S2b backfill does with it,
-`attach`/`set-aside`/`seed`/`has-state`), the file ≠ row
+`attach-equal`/`attach-diffed`/`set-aside`/`seed`/`has-state`, equal or
+diffed against the row S2a leaves, the file's content when the file wins),
+the file ≠ row
 conflict list (Q5: the file wins; `row.updated_at` against the file mtime,
 both hashes), files that will change bytes, files with no row, sizes and
 timings.
@@ -1978,7 +2165,26 @@ full edit with the intended content, which rewrites both. On a running
 server, an edit in flight between its row update and its file write also
 shows as a mismatch for a moment: re-run the check (or `-- --vault
 <uuid>`) before acting on a single mismatch, or run it while writes are
-stopped.
+stopped. An `orphan-file` is a `.md` file nothing owns (a hand-made file,
+a leftover of a rename by old code); the next start moves it to
+`.orphans/`.
+
+**Doctor**: `pnpm -C server doctor [-- --vault <uuid>] [--repair]
+[--report [<file>]]` checks every copy of every note (file, row, revision,
+CRDT, FTS, vector, links, projections) and prints one `PROBLEM <class>`
+line per mismatch and one `PENDING` line per job still running; exit 1 on
+any problem, 2 on bad arguments. `--report` prints the JSON report,
+`--report <file>` writes it to a new file. `--repair` queues the safe
+re-raises (marked `[repair queued]`) under the shared instance lock (exit
+2 during maintenance); run the doctor again once the projector is idle to
+confirm. Report-only classes need a person:
+`revision-*` and `crdt-*` are store bugs (file an issue with the report),
+`conflict-copy` and `file-orphan` need a look before deleting, `fts-stale`
+needs `UPDATE notes SET body = body WHERE id = …` by hand (the generated
+column is recomputed, `seq` does not move).
+
+**Rows from files** (last resort, ADR-003 Q9): `pnpm -C server
+rows-from-files -- --dry-run` then without `--dry-run`, server stopped.
 
 **A quarantined write** (#492, §5.3): a `collab-store` report named
 `NoteWriteQuarantinedError` (monitoring, subject = vault id) or an agent's

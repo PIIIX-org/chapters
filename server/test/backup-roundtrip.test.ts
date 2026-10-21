@@ -282,13 +282,27 @@ describe('instance backup round trip (#409)', () => {
   let sourceFiles: Record<string, string>
   let sourceEvents: string[]
 
-  it('restores every entity class with its ids after a wipe', async () => {
+  // The round trip the tests below start from: build an instance, back it up,
+  // wipe it, restore the archive. In a hook, so a slow run fails here once,
+  // not as one timed-out test and then every later test missing the fixture
+  // or the archive (#862). Each test after the first needs only the restored
+  // instance, the fixture's ids and the archive. Its own timeout: the same
+  // work took up to 1.4 s on CI and 17.2 s locally under heavy load.
+  beforeAll(async () => {
     await wipeInstance()
     fixture = await buildFixture()
     await flushProjections()
     source = await snapshotDb()
     sourceFiles = await snapshotFiles()
     sourceEvents = await securityEventRows()
+    archive = await buildInstanceBackup()
+
+    await wipeInstance()
+    expect(await userCount()).toBe(0)
+    await restoreBackup(archive)
+  }, 60_000)
+
+  it('restores every entity class with its ids after a wipe', async () => {
     expect(Object.keys(sourceFiles)).toEqual(
       expect.arrayContaining([
         `${fixture.vaultId}/assets/${fixture.assetName}`,
@@ -298,12 +312,6 @@ describe('instance backup round trip (#409)', () => {
         `${fixture.trashedVaultId}/concepts/inside.md`,
       ]),
     )
-    archive = await buildInstanceBackup()
-
-    await wipeInstance()
-    expect(await userCount()).toBe(0)
-    await restoreBackup(archive)
-
     const restored = await snapshotDb()
     for (const name of Object.keys(TABLES)) {
       expect({ table: name, rows: restored[name] }).toEqual({ table: name, rows: source[name] })
