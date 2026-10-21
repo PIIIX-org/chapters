@@ -154,6 +154,14 @@ jobs:
             type=semver,pattern=v{{version}}
             type=sha,format=short
 
+      # Operators run `pnpm <script>` inside the app container
+      # (docs/self-hosting). Build the image first, from the same cache as
+      # the push below, and run the operator commands in it with no network
+      # before anything is pushed (#872). The same action runs on PRs
+      # (image-check.yml). The push build reuses these layers from the
+      # builder.
+      - uses: ./.github/actions/image-offline-check
+
       - uses: docker/build-push-action@v7
         with:
           context: .
