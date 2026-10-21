@@ -16,7 +16,6 @@ import * as Y from 'yjs'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
-import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { serializeNote } from '../src/notes/okf.js'
 import { createNote, getLiveNote, readNote, updateNote } from '../src/notes/store.js'
 import { NoteTooLargeError } from '../src/notes/size-cap.js'
@@ -24,7 +23,7 @@ import { writeThroughCollab } from '../src/sync/crdt-write.js'
 import { db } from '../src/db/client.js'
 import { noteRevisions } from '../src/db/schema.js'
 import { and, eq } from 'drizzle-orm'
-import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName, storedCrdtText } from './helpers.js'
 
 /** The default cap: 1 MiB of UTF-8. */
 const CAP = 1024 * 1024
@@ -68,10 +67,10 @@ interface Closed {
   reason: string
 }
 
-function connect(name: string, closes: Closed[] = [], document = new Y.Doc()): HocuspocusProvider {
+async function connect(path: string, closes: Closed[] = [], document = new Y.Doc()): Promise<HocuspocusProvider> {
   const provider = new HocuspocusProvider({
     url: collabUrl,
-    name: `${vaultId}/${name}`,
+    name: await noteDocName(vaultId, path),
     token: ownerToken,
     document,
     onClose: ({ event }) => closes.push({ code: event.code, reason: event.reason }),
@@ -97,13 +96,6 @@ async function restBody(path: string): Promise<string> {
     headers: { cookie: ownerCookie },
   })
   return (res.json() as { body: string }).body
-}
-
-async function storedCrdtBody(path: string): Promise<string> {
-  const state = await loadCrdtState(vaultId, path)
-  const doc = new Y.Doc()
-  if (state) Y.applyUpdate(doc, state)
-  return doc.getText('body').toString()
 }
 
 async function mcpClient(): Promise<Client> {
@@ -233,26 +225,26 @@ describe('note body size cap (#491)', () => {
   it('collab refuses an update that would push the body over the cap, and never stores it', async () => {
     await newNote('collab-over', 'small start')
     const closes: Closed[] = []
-    const provider = connect('docs/collab-over', closes)
+    const provider = await connect('docs/collab-over', closes)
     await waitFor(() => provider.isSynced)
 
     provider.document.getText('body').insert(0, `OVER-CAP-MARKER ${bodyOfBytes(CAP)}`)
     await waitFor(() => closes.some((c) => c.reason === 'note-too-large'))
     await storeSettled('docs/collab-over')
 
-    const serverDoc = collab.hocuspocus.documents.get(`${vaultId}/docs/collab-over`)
+    const serverDoc = collab.hocuspocus.documents.get(provider.configuration.name)
     expect(serverDoc?.getText('body').toString() ?? 'small start').toBe('small start')
     expect(await restBody('docs/collab-over')).toBe('small start')
     const file = await readFile(join(config.dataDir, 'vaults', vaultId, 'docs', 'collab-over.md'), 'utf8')
     expect(file).not.toContain('OVER-CAP-MARKER')
-    expect(await storedCrdtBody('docs/collab-over')).toBe('small start')
+    expect(await storedCrdtText(vaultId, 'docs/collab-over')).toBe('small start')
     provider.destroy()
   })
 
   it('collab closes a frame over the transport limit before reading it, and never stores it', async () => {
     await newNote('collab-frame', 'frame start')
     const closes: Closed[] = []
-    const provider = connect('docs/collab-frame', closes)
+    const provider = await connect('docs/collab-frame', closes)
     await waitFor(() => provider.isSynced)
 
     provider.document.getText('body').insert(0, `HUGE-FRAME-MARKER ${'x'.repeat(7 * CAP)}`)
@@ -261,13 +253,13 @@ describe('note body size cap (#491)', () => {
     await storeSettled('docs/collab-frame')
 
     expect(await restBody('docs/collab-frame')).toBe('frame start')
-    expect(await storedCrdtBody('docs/collab-frame')).toBe('frame start')
+    expect(await storedCrdtText(vaultId, 'docs/collab-frame')).toBe('frame start')
   })
 
   it('a note of exactly the cap round-trips: collab stores it, an agent reads and edits it, the editor sees the edit', async () => {
     await newNote('collab-fits', 'tiny')
     const closes: Closed[] = []
-    const provider = connect('docs/collab-fits', closes)
+    const provider = await connect('docs/collab-fits', closes)
     await waitFor(() => provider.isSynced)
 
     const full = bodyOfBytes(CAP)
@@ -293,7 +285,7 @@ describe('note body size cap (#491)', () => {
 
   it('a REST write over the cap never reaches the live document', async () => {
     await newNote('collab-rest', 'live start')
-    const provider = connect('docs/collab-rest')
+    const provider = await connect('docs/collab-rest')
     await waitFor(() => provider.isSynced)
 
     const res = await app.inject({
@@ -304,7 +296,7 @@ describe('note body size cap (#491)', () => {
     })
     expect(res.statusCode).toBe(413)
     // writeThroughCollab edits the live document before it answers: refused means never edited.
-    expect(collab.hocuspocus.documents.get(`${vaultId}/docs/collab-rest`)?.getText('body').toString()).toBe('live start')
+    expect(collab.hocuspocus.documents.get(provider.configuration.name)?.getText('body').toString()).toBe('live start')
     provider.destroy()
   })
 
@@ -410,7 +402,7 @@ describe('note body size cap (#491)', () => {
     expect(grow.statusCode).toBe(413)
 
     const closes: Closed[] = []
-    const provider = connect('docs/legacy', closes)
+    const provider = await connect('docs/legacy', closes)
     await waitFor(() => provider.isSynced)
     const text = provider.document.getText('body')
     text.delete(0, 500)
@@ -431,7 +423,7 @@ describe('note body size cap (#491)', () => {
     } finally {
       delete process.env.ELARA_NOTE_MAX_BYTES
     }
-    const first = connect('docs/legacy-resync')
+    const first = await connect('docs/legacy-resync')
     await waitFor(() => first.isSynced)
     const document = first.document
     first.destroy()
@@ -444,7 +436,7 @@ describe('note body size cap (#491)', () => {
     expect(Buffer.byteLength(local)).toBeGreaterThan(CAP)
 
     const closes: Closed[] = []
-    const provider = connect('docs/legacy-resync', closes, document)
+    const provider = await connect('docs/legacy-resync', closes, document)
     const refused = () => closes.some((c) => c.reason === 'note-too-large')
     await waitFor(async () => refused() || (await restBody('docs/legacy-resync')) === local)
     expect(refused()).toBe(false)

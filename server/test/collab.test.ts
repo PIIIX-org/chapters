@@ -82,13 +82,13 @@ beforeAll(async () => {
       body: { granteeType: 'user', granteeId, permission },
     })
   }
-  await app.inject({
+  const created = await app.inject({
     method: 'POST',
     url: `/api/vaults/${vaultId}/notes`,
     headers: { cookie: ownerCookie },
     body: { type: 'docs', name: 'shared', body: 'Initial content.' },
   })
-  docName = `${vaultId}/docs/shared`
+  docName = `${vaultId}/~${(created.json() as { id: string }).id}`
 })
 
 afterAll(async () => {
@@ -297,7 +297,7 @@ describe('real-time collaboration', () => {
     })
     expect(created.statusCode).toBe(200)
 
-    const client = connect(ownerToken, `${vaultId}/docs/dashed`)
+    const client = connect(ownerToken, `${vaultId}/~${(created.json() as { id: string }).id}`)
     await waitFor(() => client.document.getText('body').length > 0)
     expect(client.document.getMap('frontmatter').get('title')).toBe('alpha---beta')
     expect(client.document.getText('body').toString()).toBe(body)

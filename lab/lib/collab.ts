@@ -1,12 +1,16 @@
 // A Hocuspocus client that behaves like client/src/hooks/useCollabDoc.ts:
 // it connects to `/collab` on the app's own origin, names the document
-// `<vaultId>/<path>` (client/src/api/collab.ts collabDocName), and pays for
+// `<vaultId>/~<noteId>` (client/src/api/collab.ts collabDocName; the relay
+// refuses path names with `reload-required` since ADR-003 S2b), and pays for
 // every (re)connect with a fresh single-use ticket from POST /api/collab/ticket
 // (server/src/sync/routes.ts:58) using the browser session cookie. The Y.Doc
 // is owned by the caller so a reconnect can reuse it, as the hook does.
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import type { RestSession } from './rest.ts'
+
+/** The collab document of note `noteId` (client/src/api/collab.ts collabDocName). */
+export const collabDocName = (vaultId: string, noteId: string) => `${vaultId}/~${noteId}`
 
 export interface CollabEvent {
   t: number

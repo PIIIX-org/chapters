@@ -65,7 +65,7 @@ vi.mock('../api/collab.js', async (importOriginal) => ({
 }))
 
 const USER = { id: 'u-taha', name: 'taha' }
-const NOTE = { vaultId: 'v-1', path: 'journals/2026-08-25.md' }
+const NOTE = { vaultId: 'v-1', noteId: 'n-1', path: 'journals/2026-08-25.md' }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const count = (text: string, needle: string) => text.split(needle).length - 1

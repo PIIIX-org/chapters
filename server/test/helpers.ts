@@ -9,6 +9,7 @@ import { serializeNote, type Frontmatter } from '../src/notes/okf.js'
 import { getLiveNote, noteFile } from '../src/notes/store.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
+import * as Y from 'yjs'
 
 let counter = 0
 export function uniqueEmail(prefix = 'user'): string {
@@ -74,6 +75,32 @@ export async function rewriteNoteFileFromRow(vaultId: string, path: string): Pro
   if (!row) throw new Error(`no live note at ${path}`)
   const note = { frontmatter: row.frontmatter as Frontmatter, body: row.body }
   await writeFile(noteFile(vaultId, row.path), serializeNote(note), 'utf8')
+}
+
+/** The relay's document name of the live note at `path` (`<vault>/~<noteId>`, ADR-003 §5.4). */
+export async function noteDocName(vaultId: string, path: string): Promise<string> {
+  const row = await getLiveNote(vaultId, path)
+  if (!row) throw new Error(`no live note at ${path}`)
+  return `${vaultId}/~${row.id}`
+}
+
+/**
+ * The body text of the live note's CRDT state in the database (`note_crdt`
+ * snapshot ⊕ the non-rejected tail), or '' when it has none: what the relay
+ * loads next (ADR-003 §5.4).
+ */
+export async function storedCrdtText(vaultId: string, path: string): Promise<string> {
+  const row = await getLiveNote(vaultId, path)
+  if (!row) throw new Error(`no live note at ${path}`)
+  const [crdt] = await sql<Array<{ snapshot: Uint8Array; snapshot_through: string }>>`
+    SELECT snapshot, snapshot_through FROM note_crdt WHERE note_id = ${row.id}`
+  const doc = new Y.Doc()
+  if (!crdt) return ''
+  Y.applyUpdate(doc, crdt.snapshot)
+  const tail = await sql<Array<{ update: Uint8Array }>>`
+    SELECT update FROM note_updates WHERE note_id = ${row.id} AND id > ${crdt.snapshot_through} AND rejected_at IS NULL ORDER BY id`
+  for (const { update } of tail) Y.applyUpdate(doc, update)
+  return doc.getText('body').toString()
 }
 
 /**

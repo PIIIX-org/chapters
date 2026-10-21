@@ -84,13 +84,13 @@ beforeAll(async () => {
     headers: { cookie: ownerCookie },
     body: { granteeType: 'user', granteeId: reader.id, permission: 'read' },
   })
-  await app.inject({
+  const created = await app.inject({
     method: 'POST',
     url: `/api/vaults/${vaultId}/notes`,
     headers: { cookie: ownerCookie },
     body: { type: 'docs', name: 'ticketed', body: 'Ticketed content.' },
   })
-  docName = `${vaultId}/docs/ticketed`
+  docName = `${vaultId}/~${(created.json() as { id: string }).id}`
 })
 
 afterAll(async () => {

@@ -12,23 +12,28 @@ Chapters stores its state across two locations:
 
 ### Creating a Full Backup
 
-Run the following commands on your host where `docker-compose.yml` is running:
+The repository ships no backup script. Save the following as `backup.sh` in the directory that holds your `docker-compose.yml` and `.env` (for example `/opt/chapters`), make it executable (`chmod 700 backup.sh`) and run it (`./backup.sh`). Each run writes a new `./backups/<date>_<time>/` next to it and keeps the older ones: prune them yourself.
 
-```bash
+```sh
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")"
+
 # 1. Create a timestamped backup directory, readable by you only (the dump holds password and token hashes)
 umask 077
 BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
 mkdir -p ./backups/${BACKUP_DATE}
 
-# 2. Dump the PostgreSQL database
-docker compose exec -T db pg_dump -U ${POSTGRES_USER:-elara} ${POSTGRES_DB:-elara} > ./backups/${BACKUP_DATE}/chapters-db.sql
+# 2. Dump the PostgreSQL database (user and database name come from the db container's environment, i.e. your .env)
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > ./backups/${BACKUP_DATE}/chapters-db.sql
 
-# 3. Only if you added roles of your own (e.g. a read-only reporting user): dump the roles too.
+# 3. Only if you added roles of your own (e.g. a read-only reporting user): dump the roles too (delete this line otherwise).
 #    The file holds each role's password hash; section 2 step 4 sets the app role's password back to the .env value after loading it.
-docker compose exec -T db pg_dumpall -U ${POSTGRES_USER:-elara} --globals-only > ./backups/${BACKUP_DATE}/globals.sql
+docker compose exec -T db sh -c 'pg_dumpall -U "$POSTGRES_USER" --globals-only' > ./backups/${BACKUP_DATE}/globals.sql
 
-# 4. Archive the files volume (raw markdown files & vaults)
-docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/${BACKUP_DATE}:/backup alpine tar czf /backup/chapters-data.tar.gz -C /data .
+# 4. Archive the files volume (raw markdown files & vaults). A one-off container of the app service mounts the same
+#    volume the app uses, whatever compose named it; tar runs as root there, so it reads every file and records the owners
+docker compose run --rm --no-deps -T -u root --entrypoint tar app czf - -C /data . > ./backups/${BACKUP_DATE}/chapters-data.tar.gz
 
 # 5. Save your encryption key and configuration (DO NOT commit to public repos)
 cp .env ./backups/${BACKUP_DATE}/env-backup
@@ -36,11 +41,13 @@ cp .env ./backups/${BACKUP_DATE}/env-backup
 
 ### Automating with Cron
 
-Add a nightly cron job on your host (`crontab -e`):
+Run the script above nightly from the crontab of a user that can run `docker` (`crontab -e`), with the path you saved it under:
 
 ```cron
-0 2 * * * cd /opt/chapters && ./scripts/backup.sh > /var/log/chapters-backup.log 2>&1
+0 2 * * * /opt/chapters/backup.sh >> /opt/chapters/backup.log 2>&1
 ```
+
+The script changes to its own directory first, so `docker compose` finds `docker-compose.yml` and `.env` there, and it stops at the first command that fails. To have Elara write its own instance backup (section 3) on a schedule instead, without cron: it runs every `ELARA_BACKUP_INTERVAL_HOURS` (default 24) once `ELARA_BACKUP_LOCAL_PATH` or an S3 bucket with its access keys is set. The stock `docker-compose.yml` passes the app only the variables listed under its `environment:`, so add those there.
 
 ---
 
@@ -58,7 +65,7 @@ docker compose up -d --wait db
 docker compose exec db pg_isready
 
 # 3. Only if the backup has a globals.sql (section 1 step 3): load the roles. "role ... already exists" is expected
-docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d postgres < ./backups/<TIMESTAMP>/globals.sql
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d postgres' < ./backups/<TIMESTAMP>/globals.sql
 
 # 4. Set the app role's password to the POSTGRES_PASSWORD in .env (run it even without a globals.sql)
 docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -v role="$POSTGRES_USER" -v pw="$POSTGRES_PASSWORD"' <<'SQL'
@@ -66,10 +73,11 @@ ALTER ROLE :"role" PASSWORD :'pw';
 SQL
 
 # 5. Restore PostgreSQL database
-docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} < ./backups/<TIMESTAMP>/chapters-db.sql
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < ./backups/<TIMESTAMP>/chapters-db.sql
 
-# 6. Restore the data volume (raw markdown notes)
-docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/<TIMESTAMP>:/backup alpine tar xzf /backup/chapters-data.tar.gz -C /data
+# 6. Restore the data volume (raw markdown notes) into the volume the app service mounts, keeping the owners
+#    (builds the app image first if it is not there yet)
+docker compose run --rm --no-deps -T -u root --entrypoint tar app xzf - -C /data < ./backups/<TIMESTAMP>/chapters-data.tar.gz
 
 # 7. Check that the password in .env works over the network, as the app connects (prints 1)
 docker compose exec -T db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h db -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT 1"'
@@ -138,7 +146,7 @@ Archives written before #409 (an `account-dump.json`, no `backup.json`) still re
 - users who had MFA on can't sign in until it is cleared, after which they set it up again:
 
   ```bash
-  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "UPDATE users SET mfa_enabled_at = NULL WHERE mfa_enabled_at IS NOT NULL AND totp_secret IS NULL"
+  docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "UPDATE users SET mfa_enabled_at = NULL WHERE mfa_enabled_at IS NOT NULL AND totp_secret IS NULL"
   ```
 
 ---
@@ -164,7 +172,7 @@ Database migrations only run forward. Going back to an older image keeps the new
 - **Migrations 0019 and 0020 (MCP token capabilities, #548, #549)** add `mcp_connections.access` as `NOT NULL` and then drop its default. Code from before 0019 does not set `access` when it mints a token, so every new MCP connection fails until the column has its default back. Run this before starting the older code:
 
   ```bash
-  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "ALTER TABLE mcp_connections ALTER COLUMN access SET DEFAULT 'write'"
+  docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "ALTER TABLE mcp_connections ALTER COLUMN access SET DEFAULT 'write'"
   ```
 
   The older code does not read `access` or `allowed_tools`, so read-only and allow-listed tokens get every tool of their scope while it runs. Revoke any of those you would not trust with more. Note the time you rolled back.
@@ -173,9 +181,9 @@ Database migrations only run forward. Going back to an older image keeps the new
 
   ```bash
   # Account tokens minted while rolled back got 'write'; 0019 gives account tokens 'admin'.
-  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "UPDATE mcp_connections SET access = 'admin' WHERE scope = 'account' AND created_at > '<rollback time, e.g. 2026-10-20T12:00:00Z>'"
+  docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "UPDATE mcp_connections SET access = 'admin' WHERE scope = 'account' AND created_at > '<rollback time, e.g. 2026-10-20T12:00:00Z>'"
   # Back to the schema 0020 left: no default, so an insert that forgets the level fails.
-  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "ALTER TABLE mcp_connections ALTER COLUMN access DROP DEFAULT"
+  docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "ALTER TABLE mcp_connections ALTER COLUMN access DROP DEFAULT"
   ```
 
   Pinned tokens minted while rolled back keep `write`. The newer code lists and runs on them only what the user's permission on the pin allows, so a read-only member's token is not widened.
@@ -183,3 +191,4 @@ Database migrations only run forward. Going back to an older image keeps the new
 - **Migration 0021 (ADR-003 store schema)** is additive: it adds columns with lasting defaults, a trigger that only maintains `notes.seq`, new tables whose foreign keys cascade, and two marker columns. Older code runs on it with **no SQL**. Before the store migration itself ships, see [migration.md](migration.md) for the read-only dry run that reports what it will do to your notes.
 - **Migration 0023 (history events, #479)** is additive: three nullable columns on `note_revisions` (`source_revision_id`, `from_path`, `to_path`). Older code runs on it with **no SQL**. It stops recording restore and rename events and leaves the new columns empty; the events the newer code recorded stay in the history. It also brings back the older revert: it relabels the newest revision `revert` instead of adding one (code with #482 skips relabelling a `restore_point`). When that newest row is an event the newer code recorded (a `rename` or `restore`), the relabelled row keeps its `from_path`/`to_path` and has no `source_revision_id`. Code from before #482 also does not record a delete by the author of the latest revision when the note is unchanged.
 - **Migration 0024 (revision order, #825)** is additive: `note_revisions.ord`, numbered from a sequence (its default), so older code records revisions with **no SQL**. Older code lists history by the database clock again, so revisions recorded in the same instant, or after the clock stepped back, can show out of order; the newer code lists every revision in the order it was recorded. An instance backup made by the newer code carries `ord` on every revision, and older code refuses it (`column "ord" is unknown to this version`): restore it with the newer release. A backup made before 0024 restores on the newer release with its revisions numbered in time order.
+- **ADR-003 S2b (collab state in Postgres).** Before upgrading to the release that ships S2b, **reload every open editor tab, or make sure nobody types during the upgrade.** From S2b the editor names a note's live document by the note id, and the server refuses a tab still running the older page (it shows "Reload to keep editing"; the older page shows its own disconnected state). A tab from a release that keeps unsent typing in the browser (#720) gets that typing back once after the reload; a tab from an older release keeps it on screen only, so copy it out before closing the tab. The first boot of S2b moves each note's `.crdt/<path>.bin` into the database (a bin whose text matches nothing the note ever held goes to `vaults/<id>/.migration/<date>/bins/`), writes `DATA_DIR/collab-migration-report-<time>.json`, and renames each vault's `.crdt/` to `.crdt.pre-adr-003/`; keep that directory until the next release. If that boot cannot move a note's bin, the note stays closed to editors ("waiting for the store migration") until you fix the cause in the report and restart. A code-only rollback over S2b needs `store-export-legacy` to write each note's current `.crdt` bin from the database first; until a release adds that to the export, roll back over S2b only by restoring the pre-upgrade backup. If older code did run and wrote `.crdt/` bins again, the next S2b boot merges a bin into the database only when it continues the note's own editing history; any other bin (for example one the older code started afresh from the file) goes to `vaults/<id>/.migration/<date>/bins/` instead, and what the older code wrote to the note reaches the database through the boot's merge of changed notes. `.crdt/` then moves to `.crdt.rollback-<time>/`.

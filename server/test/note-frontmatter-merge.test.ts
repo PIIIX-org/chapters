@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
-import type { DirectConnection } from '@hocuspocus/server'
-import type * as Y from 'yjs'
+import { HocuspocusProvider } from '@hocuspocus/provider'
+import * as Y from 'yjs'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { checkNoteFiles } from '../src/notes/integrity.js'
 import { getRevision, listRevisionMeta, readNote, type RevisionDetail } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
 
 // #438: edit_note (and REST PUT) used to replace the whole frontmatter map, so
 // `frontmatter: { status: 'active' }` silently dropped the note's title and
@@ -27,14 +27,27 @@ let counter = 0
 const TITLE = 'Merge target'
 const TAGS = ['alpha', 'beta']
 
+let collabUrl: string
+let sessionToken: string
+
+async function waitFor(check: () => boolean, ms = 8000): Promise<void> {
+  const start = Date.now()
+  while (!check()) {
+    if (Date.now() - start > ms) throw new Error('waitFor timed out')
+    await new Promise((r) => setTimeout(r, 25))
+  }
+}
+
 beforeAll(async () => {
   app = await buildApp()
   await app.listen({ port: 0, host: '127.0.0.1' })
   const address = app.server.address()
   const baseUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+  collabUrl = `${baseUrl.replace('http', 'ws')}/collab`
   const owner = await createActiveUser()
   ownerId = owner.id
   cookie = await loginCookie(app, owner.email)
+  sessionToken = await loginToken(app, owner.email)
   vaultId = (
     await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'Merge vault' } })
   ).json().id
@@ -247,13 +260,22 @@ describe('edit_note frontmatter merge without the relay', () => {
 
 describe('edit_note frontmatter merge through the live relay', () => {
   let collab: CollabRelay
-  let connection: DirectConnection | null = null
+  let connection: HocuspocusProvider | null = null
   let liveName = ''
 
+  /** Opens the note in an editor (a provider on the relay), as a person would. */
   async function openLive(path: string): Promise<void> {
-    await connection?.disconnect()
-    liveName = `${vaultId}/${path}`
-    connection = await collab.hocuspocus.openDirectConnection(liveName, { userId: 'test-reader' })
+    connection?.destroy()
+    liveName = await noteDocName(vaultId, path)
+    const provider = new HocuspocusProvider({ url: collabUrl, name: liveName, token: sessionToken, document: new Y.Doc() })
+    connection = provider
+    await waitFor(() => provider.isSynced)
+  }
+
+  /** A person's change in the editor, acknowledged by the relay (in its document, not stored yet). */
+  async function typeLive(change: (document: Y.Doc) => void): Promise<void> {
+    change(connection!.document)
+    await waitFor(() => !connection!.hasUnsyncedChanges)
   }
 
   beforeAll(() => {
@@ -261,7 +283,7 @@ describe('edit_note frontmatter merge through the live relay', () => {
   })
 
   afterAll(async () => {
-    await connection?.disconnect()
+    connection?.destroy()
     await collab.destroy()
   })
 
@@ -270,7 +292,7 @@ describe('edit_note frontmatter merge through the live relay', () => {
   it('merges onto keys a person set in the live document that are not stored yet', async () => {
     const path = await freshNote()
     await openLive(path)
-    await connection!.transact((document) => document.getMap('frontmatter').set('description', 'Typed live.'))
+    await typeLive((document) => document.getMap('frontmatter').set('description', 'Typed live.'))
     expect((await editNote({ path, frontmatter: { status: 'active' } })).isError).toBe(false)
     expect((await stored(path)).frontmatter).toMatchObject({
       title: TITLE,
@@ -284,7 +306,7 @@ describe('edit_note frontmatter merge through the live relay', () => {
     const path = await freshNote()
     await openLive(path)
     // A person typed a value the relay refuses to store (it keeps the last valid file).
-    await connection!.transact((document) => document.getMap('frontmatter').set('status', 'bogus'))
+    await typeLive((document) => document.getMap('frontmatter').set('status', 'bogus'))
     const merged = await editNote({ path, frontmatter: { description: 'Agent note.' } })
     expect(merged.isError).toBe(true)
     expect(merged.text).toMatch(/"status" is already on the note.*`replace: true`/)
