@@ -1209,8 +1209,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   is nothing to resume, and a re-insert would revive rows deleted since
   (shares, purged notes, rotated MFA backup codes). It only regenerates
   a missing generated `index.md` there. The CLI prints counts, and for
-  an unexpected error only the driver's message and code (a drizzle
-  error's message carries the query parameters).
+  an unexpected error only the driver's message and code, taken from
+  the `cause` chain (a drizzle error's message carries the query
+  parameters; a `DrizzleQueryError` whose driver error has no code
+  prints `a database query failed`, #813).
   Ids are the archive's — a true restore, not an import. Rows are
   inserted as stored, not re-validated through the OKF write path.
   Restored MCP and sync tokens keep working (their hashes are
