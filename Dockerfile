@@ -83,13 +83,13 @@ ENV LOCAL_REPOS_ROOT=/data/elara/local-repos
 # check-notes`, `pnpm migrate-store`, `pnpm restore-backup`, ...). pnpm 11
 # checks the dependencies before every script and, by default, runs a full
 # workspace install first when it thinks they are stale — from the
-# registry, so offline it hangs (#872). Here that check is wrong: when the
-# install layer comes from cache, `COPY server` gives server/package.json a
-# newer mtime than the install recorded, and the closer look that follows
-# fails on the `adm-zip` override (it compares the manifest's `^0.6.1`
-# with the lockfile's overridden `>=0.6.1`). This image's dependencies are
-# fixed when it is built, so nothing may install at run time. `false` is
-# also what pnpm sets for the scripts it runs itself.
+# registry, so offline it hangs (#872). It looks closer whenever a
+# package.json is newer than the last install, which `COPY server` makes
+# true whenever the install layer comes from cache. That closer look
+# failed on the `adm-zip` override until server/package.json said the same
+# `>=0.6.1` as the override; any other mismatch would do the same. This
+# image's dependencies are fixed when it is built, so nothing may install
+# at run time. `false` is also what pnpm sets for the scripts it runs itself.
 ENV pnpm_config_verify_deps_before_run=false
 
 # The commit this image was built from, reported by `/health` as `version`
