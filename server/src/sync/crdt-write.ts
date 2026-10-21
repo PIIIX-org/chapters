@@ -8,8 +8,11 @@ import {
   type Actor,
   type BodyEdit,
   type NoteRow,
+  type RecordKey,
+  type WriteOutcome,
+  type WrittenNote,
 } from '../notes/store.js'
-import type { QuarantineRules } from '../notes/growth-guard.js'
+import { NoteWriteWouldQuarantineError, suspiciousWrite, type QuarantineRules } from '../notes/growth-guard.js'
 import { assertBodyFits } from '../notes/size-cap.js'
 import { OkfValidationError, validateNote, type Frontmatter } from '../notes/okf.js'
 
@@ -22,16 +25,21 @@ export interface EditChanges {
 
 /**
  * An edit made from an older revision that overlaps changes made since then
- * (#475): nothing was written, and the edit is kept as a `proposal` revision.
+ * (#475): nothing was written, and the edit is kept as a `proposal` revision
+ * (`proposalId`; null for a `dry_run`, #477, which keeps nothing).
  */
 export class NoteEditConflictError extends Error {
   readonly statusCode = 409
   constructor(
     readonly path: string,
-    readonly proposalId: string,
+    readonly proposalId: string | null,
     readonly conflicts: EditChanges,
   ) {
-    super(`edit of ${path} overlaps changes made since its base revision; kept as proposal ${proposalId}`)
+    super(
+      proposalId
+        ? `edit of ${path} overlaps changes made since its base revision; kept as proposal ${proposalId}`
+        : `edit of ${path} overlaps changes made since its base revision (dry run: nothing kept)`,
+    )
   }
 }
 
@@ -169,12 +177,20 @@ function rebase(edit: NoteEdit & { base: EditBase }, live: { frontmatter: Record
  * does not resolve refuses the edit, as without a conflict), or else the
  * base's. Always throws.
  */
-async function propose(note: NoteRow, edit: NoteEdit & { base: EditBase }, actor: Actor, conflicts: EditChanges, liveBody: string): Promise<never> {
+async function propose(
+  note: NoteRow,
+  edit: NoteEdit & { base: EditBase },
+  actor: Actor,
+  conflicts: EditChanges,
+  liveBody: string,
+  dryRun: boolean,
+): Promise<never> {
   const { base } = edit
   const ops = edit.ops ?? []
   let body = base.body
   if (typeof edit.body === 'string') body = edit.body
   else if (ops.some((op) => !isFrontmatterOp(op))) body = applyBodyOps(liveBody, ops, note.body)
+  if (dryRun) throw new NoteEditConflictError(note.path, null, conflicts)
   const wanted = nextFrontmatter(base.frontmatter, { ...edit, ops: undefined }, note.type) ?? base.frontmatter
   const proposal = { frontmatter: { ...applyFrontmatterOps(wanted, ops), type: note.type }, body }
   throw new NoteEditConflictError(note.path, await recordProposal(note.id, proposal, actor, base.id), conflicts)
@@ -212,15 +228,27 @@ async function propose(note: NoteRow, edit: NoteEdit & { base: EditBase }, actor
  * `proposal` revision and NoteEditConflictError is thrown.
  * `options.report` receives whether the note had changed since the base, and
  * where. `options.revertOf` (revertNote) records the write as a `revert`
- * event naming that revision (#479).
+ * event naming that revision (#479). `options.dryRun` (#477) computes the
+ * result and refuses as the write would, but writes nothing: no proposal or
+ * quarantine revision either. `options.outcome` receives the state the write
+ * changed (writeNote).
  */
 export async function writeThroughCollab(
   vaultId: string,
   path: string,
   input: NoteEdit,
   actor: Actor,
-  options: { quarantine?: QuarantineRules; revertOf?: string; report?: WriteReport; actorDetail?: Record<string, unknown> } = {},
-): Promise<NoteRow | null> {
+  options: {
+    quarantine?: QuarantineRules
+    revertOf?: string
+    report?: WriteReport
+    actorDetail?: Record<string, unknown>
+    dryRun?: boolean
+    outcome?: WriteOutcome
+    recordKey?: RecordKey
+  } = {},
+): Promise<WrittenNote | null> {
+  const dryRun = options.dryRun === true
   const ops = input.ops ?? []
   const bodyOps = ops.some((op) => !isFrontmatterOp(op))
   const based = input.base ? { ...input, base: input.base } : null
@@ -229,7 +257,7 @@ export async function writeThroughCollab(
     path,
     async (current, existing) => {
       const merged = based ? rebase(based, current, existing.type) : null
-      if (based && merged && 'conflicts' in merged) return propose(existing, based, actor, merged.conflicts, current.body)
+      if (based && merged && 'conflicts' in merged) return propose(existing, based, actor, merged.conflicts, current.body, dryRun)
       const rebased = merged && !('conflicts' in merged) ? merged : null
       // An edit that leaves the body alone keeps what the editors see, unless
       // the relay would refuse to store it (a doubled document, #488/#492):
@@ -256,12 +284,13 @@ export async function writeThroughCollab(
         // Before anything is written: a refused body must never reach the editors (#491, #492).
         assertBodyFits(body, existing.body)
         if (options.quarantine) {
-          await refuseSuspiciousWrite(
-            existing,
-            { frontmatter: nextFrontmatter(current.frontmatter, input, existing.type), body },
-            actor,
-            options.quarantine,
-          )
+          const next = { frontmatter: nextFrontmatter(current.frontmatter, input, existing.type), body }
+          if (dryRun) {
+            const finding = suspiciousWrite(existing.body, body, options.quarantine)
+            if (finding) throw new NoteWriteWouldQuarantineError(existing.path, finding)
+          } else {
+            await refuseSuspiciousWrite(existing, next, actor, options.quarantine)
+          }
         }
       }
       const frontmatter = (rebased ? rebased.frontmatter : nextFrontmatter(current.frontmatter, input, existing.type)) ?? {
@@ -277,7 +306,7 @@ export async function writeThroughCollab(
       return { frontmatter, body }
     },
     actor,
-    { revertOf: options.revertOf, actorDetail: options.actorDetail },
+    { revertOf: options.revertOf, actorDetail: options.actorDetail, dryRun, outcome: options.outcome, recordKey: options.recordKey },
   )
 }
 
