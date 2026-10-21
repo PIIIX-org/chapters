@@ -47,14 +47,31 @@ export const QUARANTINE_ACTION = 'quarantine'
 /** The `note_revisions.action` of the state kept before an agent's first write in a session (#482). */
 export const RESTORE_POINT_ACTION = 'restore_point'
 
+/**
+ * The `note_revisions.action` of an agent's edit kept out of the note because
+ * it overlaps changes made since the revision it was made from (#475,
+ * edit_note `base_rev`); `actor_detail.baseRevisionId` names that revision.
+ */
+export const PROPOSAL_ACTION = 'proposal'
+
+/** Revisions that never held the note's content: writes kept out of it (#492, #475). */
+const NOT_A_NOTE_STATE = [QUARANTINE_ACTION, PROPOSAL_ACTION]
+
+/**
+ * A proposal's `actor_detail.baseRevisionId` (#475). ADR-003 §4 adds
+ * `actor_detail` for per-row detail; it stays outside the drizzle model
+ * (and so outside backups) until S2a.
+ */
+const BASE_REVISION_ID = sql<string | null>`${noteRevisions}.actor_detail ->> 'baseRevisionId'`
+
 /** An MCP connection's session on a note ends after this many minutes without a revision of its own there (#482). */
 export const RESTORE_POINT_IDLE_MINUTES = 30
 
 /** The revision actions recordRevision dedupes: content writes. */
 const DEDUPED_ACTIONS: Record<string, true> = { create: true, update: true }
 
-/** Revisions recordRevision never compares a write with: not a write's state (#482, #492). */
-const NOT_A_DEDUPE_BASELINE = [QUARANTINE_ACTION, RESTORE_POINT_ACTION, 'delete']
+/** Revisions recordRevision never compares a write with: not a write's state (#482, #492, #475). */
+const NOT_A_DEDUPE_BASELINE = [...NOT_A_NOTE_STATE, RESTORE_POINT_ACTION, 'delete']
 
 /** Records a revision unless it repeats the note's latest content. Frontmatter
  * is compared as jsonb stores it (#480): deep equality on its JSON form, so
@@ -70,8 +87,8 @@ const NOT_A_DEDUPE_BASELINE = [QUARANTINE_ACTION, RESTORE_POINT_ACTION, 'delete'
  *
  * Only content writes (DEDUPED_ACTIONS) are deduped; an event (`delete`) is
  * always recorded. The write is compared with the newest content revision:
- * quarantined writes (#492), restore points (#482) and events are not a
- * write's state, so they are never the baseline. */
+ * quarantined writes (#492), proposals (#475), restore points (#482) and
+ * events are not a write's state, so they are never the baseline. */
 async function recordRevision(
   noteId: string,
   action: string,
@@ -121,9 +138,9 @@ async function recordRevision(
  *
  * MCP is served as stateless HTTP with no session id, so a session is the
  * connection on this note until it has recorded no revision there for
- * RESTORE_POINT_IDLE_MINUTES (quarantined writes do not count: they are not
- * the note's state). The state is read before the write and recorded, dated
- * at that read, only when `write` returns a result: a refused or failed write
+ * RESTORE_POINT_IDLE_MINUTES (quarantined writes and proposals do not count:
+ * they are not the note's state). The state is read before the write and
+ * recorded, dated at that read, only when `write` returns a result: a refused or failed write
  * leaves no restore point. Unlike recordRevision it is kept even when the
  * latest revision holds the same state (someone else's, or the agent's own
  * from an earlier session); only not when that latest revision already is
@@ -174,7 +191,7 @@ async function pendingRestorePoint(noteId: string, connectionId: string) {
         eq(noteRevisions.noteId, row.id),
         eq(noteRevisions.actorType, 'mcp'),
         eq(noteRevisions.actorId, connectionId),
-        ne(noteRevisions.action, QUARANTINE_ACTION),
+        notInArray(noteRevisions.action, NOT_A_NOTE_STATE),
         sql`${noteRevisions.createdAt} > now() - make_interval(mins => ${RESTORE_POINT_IDLE_MINUTES})`,
       ),
     )
@@ -184,7 +201,7 @@ async function pendingRestorePoint(noteId: string, connectionId: string) {
     await db
       .select()
       .from(noteRevisions)
-      .where(and(eq(noteRevisions.noteId, row.id), ne(noteRevisions.action, QUARANTINE_ACTION)))
+      .where(and(eq(noteRevisions.noteId, row.id), notInArray(noteRevisions.action, NOT_A_NOTE_STATE)))
       .orderBy(desc(noteRevisions.createdAt))
       .limit(1)
   )[0]
@@ -264,6 +281,49 @@ export async function refuseSuspiciousWrite(
     .values({ noteId: row.id, actorType: actor.type, actorId: actor.id, action: QUARANTINE_ACTION, frontmatter, body: input.body })
     .returning({ id: noteRevisions.id })
   throw new NoteWriteQuarantinedError(row.path, finding, inserted!.id, false)
+}
+
+/**
+ * Keeps an agent's edit that overlaps changes made since the revision it was
+ * made from (#475) as a `proposal` revision linked to that revision; the
+ * note's row and file are not touched. When the actor's latest proposal on
+ * the note is the same one (same base, same content), a retry returns it
+ * instead of adding one per attempt. Returns the proposal's id.
+ */
+export async function recordProposal(
+  noteId: string,
+  proposal: { frontmatter: Record<string, unknown>; body: string },
+  actor: Actor,
+  baseRevisionId: string,
+): Promise<string> {
+  const frontmatter = JSON.parse(JSON.stringify(proposal.frontmatter)) as Record<string, unknown>
+  const [latest] = await db
+    .select({
+      id: noteRevisions.id,
+      frontmatter: noteRevisions.frontmatter,
+      body: noteRevisions.body,
+      baseRevisionId: BASE_REVISION_ID,
+    })
+    .from(noteRevisions)
+    .where(
+      and(
+        eq(noteRevisions.noteId, noteId),
+        eq(noteRevisions.action, PROPOSAL_ACTION),
+        eq(noteRevisions.actorType, actor.type),
+        actor.id === undefined ? isNull(noteRevisions.actorId) : eq(noteRevisions.actorId, actor.id),
+      ),
+    )
+    .orderBy(desc(noteRevisions.createdAt), desc(noteRevisions.id))
+    .limit(1)
+  if (latest?.baseRevisionId === baseRevisionId && latest.body === proposal.body && isDeepStrictEqual(latest.frontmatter, frontmatter)) {
+    return latest.id
+  }
+  const [inserted] = await db.execute<{ id: string }>(sql`
+    insert into ${noteRevisions} (note_id, actor_type, actor_id, action, frontmatter, body, actor_detail)
+    values (${noteId}::uuid, ${actor.type}::actor_type, ${actor.id ?? null}::uuid, ${PROPOSAL_ACTION},
+            ${JSON.stringify(frontmatter)}::jsonb, ${proposal.body}, ${JSON.stringify({ baseRevisionId })}::jsonb)
+    returning id`)
+  return inserted!.id
 }
 
 export function vaultDir(vaultId: string): string {
@@ -944,6 +1004,8 @@ async function withActorNames<T extends Pick<RevisionRow, 'actorType' | 'actorId
 export interface RevisionSummary extends RevisionMeta {
   /** UTF-8 bytes of the note body at this revision. */
   bodyBytes: number
+  /** A `proposal` (#475) only: the revision it was made from. */
+  baseRevisionId?: string
 }
 
 /**
@@ -981,6 +1043,7 @@ export async function listRevisionPage(
       action: noteRevisions.action,
       createdAt: noteRevisions.createdAt,
       bodyBytes: sql<number>`octet_length(${noteRevisions.body})`,
+      baseRevisionId: BASE_REVISION_ID,
       at: sql<string>`to_char(${noteRevisions.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
     })
     .from(noteRevisions)
@@ -1005,6 +1068,7 @@ export async function listRevisionPage(
         action: r.action,
         createdAt: r.createdAt,
         bodyBytes: r.bodyBytes,
+        ...(r.baseRevisionId ? { baseRevisionId: r.baseRevisionId } : {}),
       })),
     ),
     next: rows.length > limit && last ? { at: last.at, id: last.id } : null,
@@ -1037,11 +1101,11 @@ export async function listRevisionMeta(
   return withActorNames(rows)
 }
 
-/** Full content of a single recorded revision for preview / diff inspection. */
+/** Full content of a single recorded revision for preview / diff inspection; a proposal (#475) also names its base. */
 export async function getRevision(
   vaultId: string,
   revisionId: string,
-): Promise<(RevisionRow & { path: string }) | null> {
+): Promise<(RevisionRow & { path: string; baseRevisionId?: string }) | null> {
   const rows = await db
     .select({
       id: noteRevisions.id,
@@ -1053,6 +1117,7 @@ export async function getRevision(
       frontmatter: noteRevisions.frontmatter,
       body: noteRevisions.body,
       createdAt: noteRevisions.createdAt,
+      baseRevisionId: BASE_REVISION_ID,
     })
     .from(noteRevisions)
     .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
@@ -1061,7 +1126,51 @@ export async function getRevision(
 
   const row = rows[0]
   if (!row) return null
-  return row as RevisionRow & { path: string }
+  const { baseRevisionId, ...revision } = row
+  return baseRevisionId ? { ...revision, baseRevisionId } : revision
+}
+
+/**
+ * The id of the newest revision holding exactly this state of the note: the
+ * `rev` read_note and edit_note return, which edit_note takes back as
+ * `base_rev` (#475). Only the newest 20 revisions that held the note's
+ * content are compared (jsonb equality for the frontmatter, so key order
+ * does not count); null when none of them holds this state.
+ */
+export async function revisionOfState(noteId: string, state: { frontmatter: unknown; body: string }): Promise<string | null> {
+  const recent = db
+    .select({ id: noteRevisions.id, frontmatter: noteRevisions.frontmatter, body: noteRevisions.body, createdAt: noteRevisions.createdAt })
+    .from(noteRevisions)
+    .where(and(eq(noteRevisions.noteId, noteId), notInArray(noteRevisions.action, NOT_A_NOTE_STATE)))
+    .orderBy(desc(noteRevisions.createdAt), desc(noteRevisions.id))
+    .limit(20)
+    .as('recent')
+  const [found] = await db
+    .select({ id: recent.id })
+    .from(recent)
+    .where(and(eq(recent.body, state.body), sql`${recent.frontmatter} = ${JSON.stringify(state.frontmatter ?? null)}::jsonb`))
+    .orderBy(desc(recent.createdAt), desc(recent.id))
+    .limit(1)
+  return found?.id ?? null
+}
+
+/**
+ * The revision an edit says it was made from (edit_note `base_rev`, #475): a
+ * revision of the live note at `path` that held its content. Null when there
+ * is no such note or the revision is not one of its states.
+ */
+export async function getBaseRevision(
+  vaultId: string,
+  path: string,
+  revisionId: string,
+): Promise<Pick<RevisionRow, 'id' | 'frontmatter' | 'body'> | null> {
+  const row = await getLiveNote(vaultId, path)
+  if (!row) return null
+  const [revision] = await db
+    .select({ id: noteRevisions.id, frontmatter: noteRevisions.frontmatter, body: noteRevisions.body })
+    .from(noteRevisions)
+    .where(and(eq(noteRevisions.id, revisionId), eq(noteRevisions.noteId, row.id), notInArray(noteRevisions.action, NOT_A_NOTE_STATE)))
+  return revision ?? null
 }
 
 export interface BacklinkItem {
@@ -1426,7 +1535,7 @@ export async function revertNote(
       await db
         .select({ id: noteRevisions.id, action: noteRevisions.action })
         .from(noteRevisions)
-        .where(and(eq(noteRevisions.noteId, row.id), ne(noteRevisions.action, QUARANTINE_ACTION)))
+        .where(and(eq(noteRevisions.noteId, row.id), notInArray(noteRevisions.action, NOT_A_NOTE_STATE)))
         .orderBy(desc(noteRevisions.createdAt))
         .limit(1)
     )[0]

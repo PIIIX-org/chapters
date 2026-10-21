@@ -1,1 +1,1 @@
-export { requestedEdit, writeThroughCollab } from '../sync/crdt-write.js'
+export { NoteEditConflictError, requestedEdit, writeThroughCollab, type WriteReport } from '../sync/crdt-write.js'

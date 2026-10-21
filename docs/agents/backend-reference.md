@@ -172,7 +172,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | Table | Purpose |
 |---|---|
 | `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed) |
-| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`/`delete`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), or `quarantine` for a write kept out of the note (#492, not the note's content) |
+| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`/`delete`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content; `actor_detail.baseRevisionId` names its base) |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
 
@@ -482,15 +482,50 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   again inside the transaction, where the cap is re-checked on the exact
   result. An op that cannot be resolved throws `NoteEditError` (400) and
   nothing changes; `ops` with `body` is refused in `requestedEdit`.
-  Without the relay, ops apply to the stored body. `base_rev` is
-  accepted and echoed as `baseRev`; compare-and-set and a three-way merge
-  are #475 (ADR-003's `seq`). REST PUT keeps `body`/`frontmatter` and
-  gets the minimal diff, not `ops`: the route builds the edit from its
-  named fields only and refuses a body holding `ops` with 400 (its JSON
-  schema does not validate them; edit_note's zod schema does). A whole `body` built from a stale
-  `read_note` (the file lags the editor by the relay's debounce) still
-  removes text typed since; serving `read_note` from the live document is
-  #474.
+  Without the relay, ops apply to the stored body. REST PUT keeps
+  `body`/`frontmatter` and gets the minimal diff, not `ops`: the route
+  builds the edit from its named fields only and refuses a body holding
+  `ops` with 400 (its JSON schema does not validate them; edit_note's zod
+  schema does). Every whole-markdown write (edit_note and REST PUT `body`,
+  revert, a rename's referrer rewrite) goes through `writeThroughCollab`,
+  so it reaches the live document as this diff from its text, never as
+  delete-all/insert-all (#476). Without `base_rev`, a whole `body` built
+  from a stale `read_note` (the file lags the editor by the relay's
+  debounce) still removes text typed since; serving `read_note` from the
+  live document is #474.
+- **Stale base: three-way merge or proposal** (#475): `read_note` returns
+  `rev` and `edit_note` returns `rev` of its result: the id of the newest
+  revision holding exactly that state (`revisionOfState`, the newest 20
+  revisions that held the note's content, frontmatter compared as jsonb;
+  null when none does). `edit_note` `base_rev` must be such a revision of
+  the note (`getBaseRevision`: not a `quarantine` or `proposal` row;
+  anything else is refused and nothing changes; the schema takes a
+  string only, where #408 also took an integer).
+  With it, `writeThroughCollab` gets `NoteEdit.base` and rebases the edit
+  onto the live document inside the same transaction
+  (`sync/three-way-merge.ts`): `body` per whole line (`diffLines` in
+  `text-diff.ts`; base → live and base → agent hunks overlap when their
+  base lines intersect, when an insertion falls strictly inside the other
+  side's lines, or when both insert at one point; adjacent lines merge;
+  overlapping hunks with the same result merge as one), `frontmatter` and
+  `removeKeys` per key on the map they make from the base's (a key the
+  agent left as the base had it keeps the live value; a key both changed
+  to different values conflicts); `ops` still resolve against the live
+  text and map. A clean merge goes through the usual checks and
+  `applyTextDiff` live → merged, so only the agent's lines change, and
+  reports `status` `applied` (nothing changed since the base) or
+  `merged` with `concurrentChanges` (`lines` `{line, removed, added}`
+  numbered in the live body just before the edit, `frontmatterKeys`). An
+  overlap, found before the transaction or inside it, writes nothing:
+  `recordProposal` keeps the agent's version (its frontmatter applied to
+  the base's, its body or the base's) as a `proposal` revision with
+  `actor_detail.baseRevisionId` (ADR-003's column, outside the drizzle
+  model and so outside backups until S2a), an identical retry reuses the
+  actor's latest one, and `edit_note` returns `status: conflicted`,
+  `proposalId` and `conflicts` (same shape) as a normal result.
+  `note_history` and `get_revision` add `baseRevisionId` on proposal rows
+  only; the History tab labels them "Proposed by <connection name>". S2a
+  replaces the revision-id `rev` with `seq` (ADR-003 §5.2 step 9).
 - **Revision dedupe** (#480, `recordRevision`): a write that repeats the
   latest revision records nothing. Frontmatter is compared as jsonb
   stores it: deep equality on its JSON form, so object key order (nested
@@ -503,8 +538,9 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   revision and the attributed one; the `collab` row is never
   re-attributed, since it may bundle a person's typing (#403). Only
   content writes (`create`, `update`) are deduped, against the newest
-  content revision: `quarantine`, `restore_point` (#482) and `delete`
-  rows are never the baseline, and a `delete` is always recorded.
+  content revision: `quarantine`, `proposal` (#475), `restore_point`
+  (#482) and `delete` rows are never the baseline, and a `delete` is
+  always recorded.
 - **Progressive indexes** (`regenProgressiveIndices`): run on create,
   rename, delete, restore, and on updates whose frontmatter really
   changed (`isDeepStrictEqual`, so key order alone never counts: `jsonb`
@@ -603,21 +639,21 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   afresh after an unload always adds a new revision and a new failure; an
   MCP/REST write continues only an identical retry of the newest quarantine
   by the same actor. `recordRevision`'s
-  dedupe and revert's `revert` relabel skip quarantine rows. Restore one
+  dedupe and revert's `revert` relabel skip quarantine and proposal rows. Restore one
   with `revert_note` / the REST revert route.
 - **Restore points** (`withRestorePoint` in `store.ts`, #482): the MCP
   write tools (`edit_note`, `rename_note`, `delete_note`, `revert_note`)
   run through `withRestorePoint(vaultId, path, connectionId, write)`.
   MCP is stateless Streamable HTTP (no session id), so a session is the
-  connection on that note until it has recorded no non-quarantine
-  revision there for `RESTORE_POINT_IDLE_MINUTES` (30). On the first write
+  connection on that note until it has recorded no revision there other
+  than a quarantine or a proposal for `RESTORE_POINT_IDLE_MINUTES` (30). On the first write
   of a session it reads the database clock, then the stored row, and,
   only when the write returns a result, inserts a `restore_point`
   revision of that state attributed to the connection, dated at that
   clock read (so it sorts before the write's own revisions and every
   revision the row can contain sorts before it). It bypasses
   `recordRevision`'s dedupe (kept even when equal to the latest
-  revision) and is skipped only when the latest non-quarantine revision
+  revision) and is skipped only when the latest revision other than a quarantine or a proposal
   already is this connection's restore point of the same state; it is
   never `recordRevision`'s dedupe baseline, so the connection's next
   write or delete is still recorded. Writes by one connection to one
@@ -948,7 +984,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   (a JS `Date` would truncate to milliseconds), so a revision recorded
   while a caller pages shifts nothing. `get_revision` returns one
   revision's frontmatter and body (`getRevision()`, the same query as
-  the REST revision route), gated like `note_history`.
+  the REST revision route), gated like `note_history`. Both add
+  `baseRevisionId` on `proposal` rows only (#475).
   - *Repositories* (13): `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `get_repository_graph_preference`, `set_repository_graph_preference`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
   - *Teams & Users* (7): `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
   - *Export & Notifications* (4): `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`.

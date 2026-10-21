@@ -43,9 +43,13 @@ const AUTHOR: Record<Revision['actorType'], { label: string; className: string }
   mcp: { label: 'by AI via MCP', className: 'text-accent' },
 }
 
-/** A restore point (#482) is named after the agent it was kept for: reverting to it undoes that agent's session. */
+/**
+ * A restore point (#482) is named after the agent it was kept for: reverting to it undoes that agent's session.
+ * A proposal (#475) is an agent's edit kept out of the note because it overlapped changes made since the agent read it.
+ */
 function actionLabel(revision: Revision): string {
   if (revision.action === 'restore_point') return `Before ${revision.actorName ?? 'an AI agent'} edited`
+  if (revision.action === 'proposal') return `Proposed by ${revision.actorName ?? 'an AI agent'}`
   return revision.action
 }
 

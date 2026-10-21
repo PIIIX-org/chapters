@@ -290,29 +290,27 @@ describe('edit_note with a stale base_rev (#475)', () => {
 
   it('a proposal is not a state of the note: neither the dedupe baseline nor the start of a session', async () => {
     const path = 'docs/rev-baseline'
-    const text = await noteInTab(path)
+    await noteInTab(path)
     const agent = await connect('edit-base-fresh')
     const read = await must<Read>('read_note', { vaultId, path }, agent)
-    const typed = await type(path, text, 'two.', 'TYPED ')
-    // The relay stores the typing as a revision before the conflicting edit.
-    await waitFor(async () => (await rowBody(path)) === typed)
+    // Rows by the relay (`collab`) come and go with its debounce; the authored ones are what this checks.
+    const authored = async (): Promise<string[]> =>
+      (await history(path)).filter((row) => row.actorType !== 'collab').map((row) => `${row.actorType} ${row.action}`)
+    const personBody = BODY.replace('Para two.', 'Para two, by a person.')
+    const saved = await app.inject({ method: 'PUT', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie }, body: { body: personBody } })
+    expect(saved.statusCode, saved.body).toBe(200)
     const conflicted = await must<{ status: string }>('edit_note', { vaultId, path, base_rev: read.rev, body: read.body.replace('Para two.', 'Para 2.') }, agent)
     expect(conflicted.status).toBe('conflicted')
-    expect((await history(path))[0]!.action).toBe('proposal')
+    expect(await authored()).toEqual(['mcp proposal', 'user update', 'mcp create'])
+
+    // The person saving the same text again repeats their own latest state: the proposal is never the baseline.
+    const again = await app.inject({ method: 'PUT', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie }, body: { body: personBody } })
+    expect(again.statusCode, again.body).toBe(200)
+    expect(await authored()).toEqual(['mcp proposal', 'user update', 'mcp create'])
 
     // The connection's first write that lands keeps a restore point: the proposal did not start its session.
     await must('edit_note', { vaultId, path, ops: [{ op: 'append', text: 'Agent line.' }] }, agent)
-    const rows = await history(path)
-    expect(rows.slice(0, 3).map((row) => row.action)).toEqual(['update', 'restore_point', 'proposal'])
-
-    // A person's save of the state they already saved is still a repeat: the proposal is never the baseline.
-    const before = rows.length
-    const current = (await getLiveNote(vaultId, path))!
-    const again = await app.inject({ method: 'PUT', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie }, body: { body: current.body } })
-    expect(again.statusCode, again.body).toBe(200)
-    const twice = await app.inject({ method: 'PUT', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie }, body: { body: current.body } })
-    expect(twice.statusCode, twice.body).toBe(200)
-    expect((await history(path)).length).toBe(before + 1)
+    expect(await authored()).toEqual(['mcp update', 'mcp restore_point', 'mcp proposal', 'user update', 'mcp create'])
   }, 20_000)
 })
 

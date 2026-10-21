@@ -18,7 +18,10 @@ export interface Revision {
   actorId: string | null
   /** History list only: the MCP connection's name when an agent recorded this revision; null otherwise or once the connection is deleted. */
   actorName?: string | null
-  /** 'restore_point' is the note as it was before an agent's first write in a session (#482). */
+  /**
+   * 'restore_point' is the note as it was before an agent's first write in a session (#482); 'proposal' is an
+   * agent's edit kept out of the note because it overlapped changes made since the agent read it (#475).
+   */
   action: string
   createdAt: string
 }
