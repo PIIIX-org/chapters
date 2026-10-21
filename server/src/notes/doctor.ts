@@ -405,8 +405,7 @@ export async function runDoctor(options: { vaultId?: string; repair?: boolean; c
   if (repair) {
     for (const p of problems) {
       if (!p.repairable || !p.noteId) continue
-      await repairProblem(p)
-      p.repaired = true
+      p.repaired = await repairProblem(p)
     }
     // A generated index: re-render the dir_index projection of the notes under its directory.
     for (const p of problems) {
@@ -444,8 +443,8 @@ async function snapshotDiff(client: Client, state: CrdtRow, row: NoteRow): Promi
   }
 }
 
-/** Re-raises the derived state behind one problem; never touches note content. */
-async function repairProblem(p: DoctorProblem): Promise<void> {
+/** Re-raises the derived state behind one problem; never touches note content. True when something was queued. */
+async function repairProblem(p: DoctorProblem): Promise<boolean> {
   const id = p.noteId!
   switch (p.class) {
     case 'file-missing':
@@ -455,36 +454,38 @@ async function repairProblem(p: DoctorProblem): Promise<void> {
     case 'file-unrecorded':
     case 'projection-outdated':
       // Rendered again under the ownership rules (bytes it did not write go to .conflicts/ first).
-      await db.execute(sql`
+      return affected(sql`
         UPDATE note_projections SET applied_seq = 0, attempts = 0, lease_until = NULL, last_error = NULL, updated_at = now()
-        WHERE note_id = ${id} AND ${p.class === 'projection-outdated' ? sql`projection IN ('file', 'dir_index')` : sql`projection = 'file'`}`)
-      return
+        WHERE note_id = ${id} AND ${p.class === 'projection-outdated' ? sql`projection IN ('file', 'dir_index')` : sql`projection = 'file'`}
+        RETURNING note_id`)
     case 'projection-missing':
-      await db.execute(sql`
+      return affected(sql`
         INSERT INTO note_projections (note_id, projection, target_seq) SELECT id, 'file', seq FROM notes WHERE id = ${id}
-        ON CONFLICT (note_id, projection) DO NOTHING`)
-      return
+        ON CONFLICT (note_id, projection) DO NOTHING RETURNING note_id`)
     case 'projection-failed':
-      await db.execute(sql`
+      return affected(sql`
         UPDATE note_projections SET attempts = 0, lease_until = NULL, updated_at = now()
-        WHERE note_id = ${id} AND applied_seq < target_seq AND projection IN ('file', 'dir_index')`)
-      return
+        WHERE note_id = ${id} AND applied_seq < target_seq AND projection IN ('file', 'dir_index') RETURNING note_id`)
     case 'links-differ':
-      await storeTransaction([id], async (tx) => {
+      return storeTransaction([id], async (tx) => {
         const [row] = (await tx.execute(sql`SELECT body FROM notes WHERE id = ${id} AND deleted_at IS NULL`)) as unknown as Array<{ body: string }>
         if (row) await replaceLinks(tx, id, row.body)
+        return Boolean(row)
       })
-      return
     case 'vector-missing':
     case 'vector-failed':
       // The job row only: the running server's embedding worker polls for it (no model load in this process).
-      await db.execute(sql`
+      // `finished`: an operator's repair runs the job again however it ended (an error, a crash, or a success that left no vector).
+      return affected(sql`
         INSERT INTO jobs (kind, payload, idempotency_key)
         SELECT ${EMBEDDING_JOB}, jsonb_build_object('noteId', n.id::text, 'seq', n.seq), ${EMBEDDING_JOB} || ':' || n.id || ':' || n.seq
         FROM notes n WHERE n.id = ${id} AND n.deleted_at IS NULL
-        ${onJobConflict('errored')}`)
-      return
+        ${onJobConflict('finished')} RETURNING id`)
     default:
-      return
+      return false
   }
+}
+
+async function affected(statement: SQL): Promise<boolean> {
+  return ((await db.execute(statement)) as unknown as unknown[]).length > 0
 }

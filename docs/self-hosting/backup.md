@@ -151,7 +151,9 @@ It only reads unless you pass `--repair`, and `--repair` never changes a note: i
 
 ### Last resort: rebuild notes from the files
 
-The database is the backup that matters: it alone holds revisions, editor history and edits not yet written to a file. If it is lost and no dump can be restored, `rows-from-files` rebuilds the missing notes from the `.md` files in the data volume (each note gets one `create` revision; history is gone):
+The database is the backup that matters: it alone holds revisions, editor history and edits not yet written to a file. If it is lost and no dump can be restored, `rows-from-files` rebuilds the missing notes from the `.md` files in the data volume (each note gets one `create` revision; history is gone).
+
+If the database itself is gone (a new, empty one), create the schema and an administrator first: start the app once (`docker compose up -d`; it runs the migrations and prints the one-time setup token in `docker compose logs app`), finish setup at `/setup`, then continue. The app leaves the folders of vaults it does not know alone.
 
 ```bash
 docker compose stop app
@@ -160,7 +162,7 @@ docker compose run --rm app pnpm rows-from-files --owner you@example.com       #
 docker compose start app
 ```
 
-It refuses to run while the app is up (exit 2). It never overwrites a note that exists: one whose file differs is listed and left alone. Folders whose vault no longer exists are skipped unless you pass `--owner <email>`, which recreates them as `Restored <id>` vaults owned by that user (rename and share them afterwards). Run `pnpm doctor` afterwards.
+It refuses to run while the app is up (exit 2). It first finishes any file moves the app had not done when it stopped (a rename or a delete), so it never brings back a note that was renamed or deleted. It never overwrites a note that exists: one whose file differs is listed and left alone. Each note is created exactly as its file says, so the files stay as they are. Folders whose vault no longer exists are skipped unless you pass `--owner <email>` (an existing user, such as the administrator you just created), which recreates them as `Restored <id>` vaults owned by that user (rename and share them afterwards). The report lists `.crdt` files left beside recreated notes (`crdtBins`): they hold the lost database's editor state; delete the ones `pnpm doctor` reports as `crdt-bin-differs`. Run `pnpm doctor` afterwards.
 
 ### Files Elara set aside
 

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import postgres from 'postgres'
@@ -12,7 +12,8 @@ import { runDoctor } from '../src/notes/doctor.js'
 import { INSTANCE_LOCK_KEY, MaintenanceInProgressError } from '../src/notes/maintenance-lock.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { rowsFromFiles } from '../src/notes/rows-from-files.js'
-import { createNote, getLiveNote, noteFile, vaultDir } from '../src/notes/store.js'
+import { withKeyLock } from '../src/notes/key-lock.js'
+import { createNote, getLiveNote, noteFile, noteLock, trashFile, vaultDir } from '../src/notes/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // ADR-003 Q9 default (S6, #495): the last-resort import that rebuilds note
@@ -44,6 +45,11 @@ afterAll(async () => {
   await other.end()
   await app.close()
 })
+
+async function writeVaultFile(vault: string, rel: string, bytes: string): Promise<void> {
+  await mkdir(join(vaultDir(vault), rel, '..'), { recursive: true })
+  await writeFile(join(vaultDir(vault), rel), bytes)
+}
 
 /** Drops a note row as a lost database would, leaving its file. */
 async function loseRow(path: string): Promise<void> {
@@ -98,7 +104,10 @@ describe('rows-from-files', () => {
   it('a vault directory without a vault row: skipped, or recreated for --owner', async () => {
     const lostVault = randomUUID()
     await mkdir(join(vaultDir(lostVault), 'notes'), { recursive: true })
-    await writeFile(join(vaultDir(lostVault), 'notes/found.md'), '---\ntype: notes\ntitle: found\n---\nfound body\n')
+    // No `timestamp`: legitimate (it is optional), and the import must not add one.
+    const foundBytes = '---\ntype: notes\ntitle: found\n---\nfound body\n'
+    await writeFile(join(vaultDir(lostVault), 'notes/found.md'), foundBytes)
+    await writeVaultFile(lostVault, '.crdt/notes/found.bin', 'stale editor state')
     const skipped = await rowsFromFiles({ vaultId: lostVault })
     expect(skipped.vaultsSkipped).toEqual([{ vaultId: lostVault, reason: expect.stringContaining('--owner') }])
     expect(skipped.created).toEqual([])
@@ -106,10 +115,74 @@ describe('rows-from-files', () => {
     const report = await rowsFromFiles({ vaultId: lostVault, ownerEmail })
     expect(report.vaultsCreated).toEqual([lostVault])
     expect(report.created).toEqual([{ vaultId: lostVault, path: 'notes/found' }])
-    expect((await getLiveNote(lostVault, 'notes/found'))!.body).toBe('found body\n')
+    const found = (await getLiveNote(lostVault, 'notes/found'))!
+    expect(found.body).toBe('found body\n')
+    expect(found.frontmatter).toEqual({ type: 'notes', title: 'found' })
+    // Adopted byte for byte: no conflict copy, no rewrite.
+    expect(await readFile(join(vaultDir(lostVault), 'notes/found.md'), 'utf8')).toBe(foundBytes)
+    expect(await stat(join(vaultDir(lostVault), '.conflicts')).then(() => true, () => false)).toBe(false)
+    // The bin beside the recreated row is listed.
+    expect(report.crdtBins).toEqual([{ vaultId: lostVault, path: '.crdt/notes/found.bin' }])
     const [vault] = (await db.execute(sql`SELECT name FROM vaults WHERE id = ${lostVault}`)) as unknown as Array<{ name: string }>
     expect(vault!.name).toBe(`Restored ${lostVault.slice(0, 8)}`)
     await db.execute(sql`DELETE FROM vaults WHERE id = ${lostVault}`)
     await rm(vaultDir(lostVault), { recursive: true, force: true })
+  })
+
+  it('never resurrects a note whose rename or trash move was committed but not yet projected', async () => {
+    const moved = await createNote(vaultId, { path: 'moving/old', frontmatter: { title: 'old' }, body: 'renamed' })
+    const trashed = await createNote(vaultId, { path: 'moving/gone', frontmatter: { title: 'gone' }, body: 'trashed' })
+    await flushProjections()
+    // The server stopped after these commits, before the projector moved the files.
+    await db.execute(sql`UPDATE notes SET path = 'moving/new', name = 'new' WHERE id = ${moved.id}`)
+    await db.execute(sql`UPDATE notes SET deleted_at = now() WHERE id = ${trashed.id}`)
+    await db.execute(sql`
+      UPDATE note_projections p SET target_seq = n.seq FROM notes n
+      WHERE p.note_id = n.id AND n.id IN (${moved.id}, ${trashed.id}) AND p.projection IN ('file', 'dir_index')`)
+
+    const dry = await rowsFromFiles({ dryRun: true, vaultId })
+    expect(dry.created).toEqual([])
+
+    const report = await rowsFromFiles({ vaultId })
+    expect(report.created).toEqual([])
+    expect(await getLiveNote(vaultId, 'moving/old')).toBeNull()
+    expect(await getLiveNote(vaultId, 'moving/gone')).toBeNull()
+    const [count] = (await db.execute(sql`
+      SELECT count(*)::int AS live FROM notes WHERE vault_id = ${vaultId} AND path LIKE 'moving/%' AND deleted_at IS NULL`)) as unknown as Array<{
+      live: number
+    }>
+    expect(count!.live).toBe(1)
+    // The drain moved the files where the rows say.
+    expect((await readdir(join(vaultDir(vaultId), 'moving'))).sort()).toEqual(['index.md', 'new.md'])
+    expect(await stat(trashFile(vaultId, trashed.id)).then(() => true, () => false)).toBe(true)
+  })
+
+  it('stops with an error when its exclusive lock is lost during the run, even within one vault', async () => {
+    await loseRow('recover/lost')
+    // Hold the import inside its createNote, then cut the lock's connection.
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let entered!: () => void
+    const blocking = new Promise<void>((resolve) => (entered = resolve))
+    const blocker = withKeyLock(noteLock(vaultId, 'recover/lost'), async () => {
+      entered()
+      await held
+    })
+    await blocking
+    const run = rowsFromFiles({ vaultId })
+    run.catch(() => {})
+    const lockPids = () => other<Array<{ pid: number }>>`
+      SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND mode = 'ExclusiveLock'
+        AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+        AND ((classid::bigint << 32) | objid::bigint) = ${INSTANCE_LOCK_KEY.toString()}::bigint`
+    let pids = await lockPids()
+    while (pids.length === 0) pids = await lockPids()
+    await other`SELECT pg_terminate_backend(${pids[0]!.pid})`
+    while ((await lockPids()).length > 0) await new Promise((resolve) => setTimeout(resolve, 20))
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    release()
+    await blocker
+    await expect(run).rejects.toThrow(/lock was lost/)
+    await flushProjections()
   })
 })

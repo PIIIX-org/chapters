@@ -6,12 +6,14 @@
  * Read-only unless `--repair`, which only re-raises derived state (file and
  * index projections, link rows, embedding jobs) and never edits note content.
  * `--report` prints the JSON report instead of text; `--report <file>` writes
- * it to a new file (an existing file or symlink is refused). Exits 1 when it
- * found a problem, 2 on bad arguments.
+ * it to a new file (an existing file or symlink is refused). `--repair` holds
+ * the shared instance maintenance lock like every writing CLI. Exits 1 when
+ * it found a problem, 2 on bad arguments or while maintenance holds the lock.
  */
 import { open, type FileHandle } from 'node:fs/promises'
 import { sql } from '../db/client.js'
 import { runDoctor } from '../notes/doctor.js'
+import { holdSharedLockOrExit } from '../notes/maintenance-lock.js'
 
 const USAGE = 'usage: doctor [--vault <vault-id>] [--repair] [--report [<file>]]'
 const args = process.argv.slice(2).filter((arg) => arg !== '--')
@@ -47,7 +49,10 @@ if (reportPath) {
   }
 }
 
+// `--repair` writes, so it holds the shared instance lock like every writing CLI (exit 2 while store-export-legacy or rows-from-files runs).
+const instanceLock = repair ? await holdSharedLockOrExit() : null
 const report = await runDoctor({ vaultId, repair })
+await instanceLock?.release()
 const summary =
   `checked ${report.checked.notes} notes, ${report.checked.files} files, ${report.checked.bins} .crdt bins, ` +
   `${report.checked.crdtRows} note_crdt rows: ${report.problems.length} problem(s)` +

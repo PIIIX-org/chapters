@@ -723,21 +723,37 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   a generated index's `dir_index` projections reset, a missing `file`
   projection row inserted, a failed one's backoff cleared, an outdated
   one re-rendered, link rows rederived under the note lock, an
-  `embed_note` job inserted (not run in the CLI: the server's worker
-  polls). It never writes note content; every other class is
-  report-only. A snapshot read while the server writes: run it idle.
-- **`rows-from-files.ts`** / `pnpm rows-from-files` (ADR-003 Q9): for
-  every vault directory (or `--vault`), each `*.md` outside `assets/` and
-  the dot-directories: no live row → `createNote` from the file (row,
+  `embed_note` job inserted or run again however its last run ended
+  (`onJobConflict('finished')`; not run in the CLI: the server's worker
+  polls). `repaired` is true only when a row was actually changed or
+  queued. It never writes note content; every other class is
+  report-only. The CLI with `--repair` holds the shared instance
+  maintenance lock like every writing CLI (exit 2 while
+  store-export-legacy or rows-from-files runs); read-only runs take no
+  lock. A snapshot read while the server writes: run it idle.
+- **`rows-from-files.ts`** / `pnpm rows-from-files` (ADR-003 Q9): first
+  (not in a dry run) it clears the leases of pending `file`/`dir_index`
+  projections and store jobs and drains them, so a rename or trash move
+  committed before the stop has moved its file. Then, for every vault
+  directory (or `--vault`), each `*.md` outside `assets/` and the
+  dot-directories: no live row → `createNote(…, { asImported: true })`
+  from the file (the frontmatter as given, no `timestamp` added; row,
   revision, links, projections, embedding job; the projector then adopts
-  the file), a row with the same content → nothing, a row that differs →
-  reported and left alone, a generated `index.md` (no frontmatter) →
-  skipped, anything the parser or store refuses → `failed`. A directory
-  with no vault row is skipped, or with `--owner <email>` gets a vault row
-  with that id (`Restored <id8>`). The real run holds the exclusive
-  instance maintenance lock (`holdInstanceLock('exclusive')`), so it
-  refuses (exit 2) while a server or writing CLI is up; `--dry-run` reads
-  only and takes no lock. Revisions and CRDT history are not recovered.
+  the file byte for byte), a row with the same content → nothing, a row
+  that differs → reported and left alone, a file whose `projected_files`
+  owner is a note now at another path or in the trash → skipped (never
+  resurrected; this also covers the dry run, which drains nothing), a
+  generated `index.md` (no frontmatter) or a file removed during the run
+  → skipped, anything the parser or store refuses → `failed`. A
+  `.crdt/<path>.bin` beside a created note is listed in `crdtBins` (the
+  lost row's editor state; the doctor reports it if it differs). A
+  directory with no vault row is skipped, or with `--owner <email>` gets
+  a vault row with that id (`Restored <id8>`). The real run holds the
+  exclusive instance maintenance lock (`holdInstanceLock('exclusive')`),
+  so it refuses (exit 2) while a server or writing CLI is up; if the
+  lock's connection drops it throws before the next create and after the
+  final drain. `--dry-run` reads only and takes no lock. Revisions and
+  CRDT history are not recovered.
 - **Damaged files** (`sync/crdt-write.ts`, #391): every write loads the
   collab document from the note's file first, so a file that does not
   parse used to block edit and revert too. When the load fails on a
@@ -1918,8 +1934,9 @@ CRDT, FTS, vector, links, projections) and prints one `PROBLEM <class>`
 line per mismatch and one `PENDING` line per job still running; exit 1 on
 any problem, 2 on bad arguments. `--report` prints the JSON report,
 `--report <file>` writes it to a new file. `--repair` queues the safe
-re-raises (marked `[repair queued]`); run the doctor again once the
-projector is idle to confirm. Report-only classes need a person:
+re-raises (marked `[repair queued]`) under the shared instance lock (exit
+2 during maintenance); run the doctor again once the projector is idle to
+confirm. Report-only classes need a person:
 `revision-*` and `crdt-*` are store bugs (file an issue with the report),
 `conflict-copy` and `file-orphan` need a look before deleting, `fts-stale`
 needs `UPDATE notes SET body = body WHERE id = …` by hand (the generated

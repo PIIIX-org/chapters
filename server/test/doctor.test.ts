@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import postgres from 'postgres'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -6,7 +9,9 @@ import * as Y from 'yjs'
 import { sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
+import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
+import { INSTANCE_LOCK_KEY } from '../src/notes/maintenance-lock.js'
 import { runDoctor, type DoctorClass, type DoctorReport } from '../src/notes/doctor.js'
 import { parseNote, serializeNote, type Frontmatter } from '../src/notes/okf.js'
 import { flushProjections } from '../src/notes/projector.js'
@@ -297,6 +302,13 @@ describe('doctor', () => {
     await expectRepaired('unvectored', 'vector-missing')
   })
 
+  it('vector-failed: a job whose runs ended with the process is run again too', async () => {
+    await db.execute(sql`
+      UPDATE jobs SET done_at = now(), attempts = 3, last_error = 'LeaseExpired: the process running this job stopped before it finished, 3 times'
+      WHERE kind = 'embed_note' AND payload->>'noteId' = ${ids.misvectored}`)
+    await expectRepaired('misvectored', 'vector-failed')
+  })
+
   it('vector-failed: the job for the current seq failed', async () => {
     await db.execute(sql`
       UPDATE jobs SET done_at = now(), last_error = 'Error: model unavailable'
@@ -321,6 +333,38 @@ describe('doctor', () => {
     expect((await doctor()).problems).toEqual([
       expect.objectContaining({ class: 'file-missing', path: `.trash/${trashed.id}.md`, noteId: trashed.id }),
     ])
+    await doctor(true)
+    await flushProjections()
+    expect((await doctor()).problems).toEqual([])
+  })
+
+  it('the CLI with --repair holds the shared instance lock: refused (exit 2, nothing written) while maintenance holds it', async () => {
+    const other = postgres(config.databaseUrl, { max: 1, onnotice: () => {} })
+    const projection = () => db.execute(sql`SELECT applied_seq FROM note_projections WHERE note_id = ${ids.vanished} AND projection = 'file'`)
+    try {
+      await rm(file('vanished'))
+      const before = await projection()
+      await other`SELECT pg_advisory_lock(${INSTANCE_LOCK_KEY.toString()}::bigint)`
+      const cli = (...args: string[]) =>
+        promisify(execFile)(process.execPath, ['--import', 'tsx', 'src/scripts/doctor.ts', '--vault', vaultId, ...args], {
+          cwd: join(import.meta.dirname, '..'),
+          env: process.env,
+        }).then(
+          (out) => ({ code: 0, out: out.stdout + out.stderr }),
+          (err: { code?: number; stdout?: string; stderr?: string }) => ({ code: err.code ?? -1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` }),
+        )
+      const repairRun = await cli('--repair')
+      expect(repairRun.out).toContain('maintenance in progress')
+      expect(repairRun.code).toBe(2)
+      expect(await projection()).toEqual(before)
+      // Read-only runs take no lock.
+      const readRun = await cli()
+      expect(readRun.out).toContain('PROBLEM file-missing')
+      expect(readRun.code).toBe(1)
+    } finally {
+      await other`SELECT pg_advisory_unlock_all()`
+      await other.end()
+    }
     await doctor(true)
     await flushProjections()
     expect((await doctor()).problems).toEqual([])

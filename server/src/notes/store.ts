@@ -470,6 +470,8 @@ export async function createNote(
     body?: string
   },
   actor: Actor = SYSTEM_ACTOR,
+  /** `asImported` (rows-from-files, #495): the frontmatter is a file's, kept as given; no `timestamp` is added. Not reachable from REST/MCP input. */
+  options: { asImported?: boolean } = {},
 ): Promise<NoteRow> {
   const rawPath =
     input.path ??
@@ -478,7 +480,7 @@ export async function createNote(
       : `${input.type ?? ''}/${input.name ?? ''}`)
   const resolved = resolveNotePath(rawPath)
   const frontmatter: Frontmatter = {
-    timestamp: new Date().toISOString(),
+    ...(options.asImported ? {} : { timestamp: new Date().toISOString() }),
     ...input.frontmatter,
     type: input.frontmatter?.type ? String(input.frontmatter.type) : resolved.type,
   }
