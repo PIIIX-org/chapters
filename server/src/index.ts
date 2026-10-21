@@ -2,9 +2,10 @@ import { buildApp } from './app.js'
 import { startCollabServer } from './sync/collab-server.js'
 import { runMigrations } from './db/migrate.js'
 import { ensureInstanceState } from './auth/bootstrap.js'
-import { scheduleMissingEmbeddings } from './search/embedding-queue.js'
+import { EMBEDDING_JOB, scheduleMissingEmbeddings } from './search/embedding-queue.js'
 import { startLocalWatchers, startPollingScheduler, reconcileOrphanedSyncs } from './repositories/scheduler.js'
-import { backfillUnresolvedImports, scheduleMissingExtractions } from './repositories/extraction-queue.js'
+import { EXTRACTION_JOB, backfillUnresolvedImports, scheduleMissingExtractions } from './repositories/extraction-queue.js'
+import { pruneFinishedJobs, startJobPolling } from './jobs/durable.js'
 import { scrubStoredGitCredentials } from './repositories/git-remote.js'
 import { startBackupScheduler } from './export/backup-service.js'
 import { config, MIN_MONITORING_TOKEN_LENGTH } from './config.js'
@@ -30,10 +31,19 @@ try {
   const scrub = await scrubStoredGitCredentials()
   if (scrub.scrubbed > 0) console.log(`moved credentials out of ${scrub.scrubbed} repository git URL(s)`)
   if (scrub.skipped > 0) console.warn(`${scrub.skipped} repository git URL(s) still hold a credential: set CREDENTIALS_ENCRYPTION_KEY`)
+  // Embedding and extraction jobs are rows in `jobs` (#494): the worker resumes
+  // pending ones, reclaims those whose lease a dead process left and fails
+  // those whose runs ended with the process 3 times (LeaseExpired). These
+  // scans add jobs (idempotently) for rows without an embedding and no job
+  // (written before the jobs table), and re-run jobs of the current content or
+  // `seq` that failed with an error (an outage that outlasted the retries).
+  const pruned = await pruneFinishedJobs([EMBEDDING_JOB, EXTRACTION_JOB])
+  if (pruned > 0) console.log(`pruned ${pruned} finished background job(s)`)
   const missing = await scheduleMissingEmbeddings()
-  if (missing > 0) console.log(`embedding catch-up scheduled for ${missing} notes`)
+  if (missing > 0) console.log(`embedding catch-up: ${missing} notes without an embedding or with a failed job`)
   const missingFiles = await scheduleMissingExtractions()
-  if (missingFiles > 0) console.log(`extraction catch-up scheduled for ${missingFiles} repository files`)
+  if (missingFiles > 0) console.log(`extraction catch-up: ${missingFiles} repository files without an embedding or with a failed job`)
+  startJobPolling()
   const reconciled = await reconcileOrphanedSyncs()
   if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)
   const backfilled = await backfillUnresolvedImports()

@@ -4,7 +4,7 @@ import { db } from '../db/client.js'
 import { repositoryFiles, repositoryFileSymbols } from '../db/schema.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import { detectLanguage } from './language.js'
-import { scheduleExtraction } from './extraction-queue.js'
+import { enqueueExtractions } from './extraction-queue.js'
 import { checkCodeStaleness } from '../notes/staleness.js'
 
 export type RepositoryFileRow = typeof repositoryFiles.$inferSelect
@@ -99,7 +99,7 @@ export async function syncRepositoryFiles(
     result.deleted = toDelete.length
   }
 
-  for (const id of toExtract) scheduleExtraction(id, repositoryId)
+  await enqueueExtractions(toExtract)
   checkCodeStaleness(repositoryId).catch(console.error)
 
   return result

@@ -244,7 +244,7 @@ Elara exposes 58 tools across 7 functional domains. **Capability** is the token 
 | `connect_repository` | Account | `admin` | Connect a repo (git URL or local filesystem path). |
 | `browse_repository` | Repo/Account | `read` | List every indexed file of a repository (flat list). |
 | `read_file` | Repo/Account | `read` | Read a whole code file with its symbol outline. |
-| `repository_status` | Repo/Account | `read` | Check sync state, last sync time, last sync error, and `filesPendingExtraction`. |
+| `repository_status` | Repo/Account | `read` | Check sync state, last sync time, last sync error, `filesPendingExtraction` and `extractionFailures`. |
 | `sync_repository` | Repo/Account | `write` | Trigger immediate synchronization of a repository. |
 | `update_repository` | Repo/Account | `admin` | Update repository name or mergeable setting (owner only). |
 | `get_repository_graph_preference` | Repo/Account | `read` | Get user's merged-graph inclusion preference. |
