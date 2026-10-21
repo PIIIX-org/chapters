@@ -95,9 +95,12 @@ export function toStored(row: NoteRow & { seq: string | number; frontmatterSrc: 
 
 /**
  * Set by boot (store-reconcile.ts bootStore) while the S2a backfill has not
- * finished: a note the backfill could not process yet is refused for writes
- * (StoreBusyError, "retry"), so its file is never overwritten before the
- * backfill lets it win (Q5).
+ * finished, cleared at the boot whose backfill finishes. A note the backfill
+ * could not process yet is refused for writes (NoteNotMigratedError) and for
+ * editors (the relay's onAuthenticate), so its file is never overwritten
+ * before the backfill lets it win (Q5) and nothing is typed that could not be
+ * stored. The backfill runs again only at the next restart (it runs offline,
+ * §8 Q6), so the refusal says so instead of inviting a retry that cannot work.
  */
 let migrationPending = false
 
@@ -108,13 +111,27 @@ export function setStoreMigrationPending(pending: boolean): void {
 /** `note_projections.projection` of the per-note backfill marker: the backfill processed this note (or it needed none). */
 export const BACKFILL_MARKER = 'backfill'
 
+/** A write or an editor refused because the note's S2a backfill has not run yet (HTTP 503). */
+export class NoteNotMigratedError extends StoreBusyError {
+  constructor() {
+    super('note not migrated')
+    this.message =
+      'this note is waiting for the store migration, which failed for it at the last start; nothing was written. ' +
+      'An administrator must fix the cause (see the migration report) and restart the server; then the note can be written again'
+  }
+}
+
+/** Whether note `noteId` can be written and edited: true unless a backfill is pending and has not processed it. */
+export async function noteMigrated(client: Tx | typeof db, noteId: string): Promise<boolean> {
+  if (!migrationPending) return true
+  const done = await client.execute(sql`SELECT 1 FROM note_projections WHERE note_id = ${noteId} AND projection = ${BACKFILL_MARKER}`)
+  return (done as unknown as unknown[]).length > 0
+}
+
 /** The note row `id`, locked FOR UPDATE; null when it does not exist. */
 export async function lockedNote(tx: Tx, id: string): Promise<StoredNote | null> {
   const [row] = await tx.select(storedColumns).from(notes).where(eq(notes.id, id)).for('update')
-  if (row && migrationPending) {
-    const done = await tx.execute(sql`SELECT 1 FROM note_projections WHERE note_id = ${id} AND projection = ${BACKFILL_MARKER}`)
-    if ((done as unknown as unknown[]).length === 0) throw new StoreBusyError('this note is not migrated to the store yet')
-  }
+  if (row && !(await noteMigrated(tx, id))) throw new NoteNotMigratedError()
   return row ? toStored(row) : null
 }
 

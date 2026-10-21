@@ -15,14 +15,15 @@
 // fails afterwards as a `projection` job. Then a failing job of another kind
 // (a git repository on an unresolvable `.invalid` host with the secret as its
 // URL credential: the first sync fails). The next run must post a `jobs`
-// alert naming both; neither the marker nor the secret may appear in the
+// alert naming both, and an injected 500 (an attachment upload into a
+// read-only assets directory) an `errors` alert; neither the marker nor the secret may appear in the
 // payload, the endpoint or the report log lines.
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
-import { poll } from '../lib/portability.ts'
+import { poll, postFile } from '../lib/portability.ts'
 
 const MONITOR = fileURLToPath(new URL('../../.github/scripts/uptime-monitor.mjs', import.meta.url))
 const ENDPOINT = '/api/admin/monitoring'
@@ -99,6 +100,7 @@ const test: LabTest = {
     const env = { ELARA_MONITORING_TOKEN: token, ALERT_WEBHOOK_URL: `http://127.0.0.1:${sink.port}/hook`, ALERT_SLOW_MS: '3600000' }
     const admin = ctx.rest('admin')
     let noteDir: string | null = null
+    let assetsDir: string | null = null
     try {
       // The workflow without the secret: metrics are skipped, the run passes.
       const unset = await monitor(ctx, join(dir, 'unset.json'), { ELARA_MONITORING_TOKEN: '' })
@@ -161,6 +163,31 @@ const test: LabTest = {
         severity: 'high',
       })
 
+      // Injected server error: an attachment upload into a read-only `assets`
+      // directory. Attachments are not projections: the upload writes the file
+      // on the request path, so EACCES answers 500.
+      const first = await postFile(ctx.baseUrl, `/api/vaults/${vault.id}/assets`, admin.cookie, 'first.txt', new TextEncoder().encode('x'), 'text/plain')
+      assetsDir = `/data/elara/vaults/${vault.id}/assets`
+      const lock = await ctx.docker.appExec(['chmod', '0555', assetsDir])
+      if (lock.code !== 0) throw new Error(`chmod failed: ${lock.stderr}`)
+      const upload = await postFile(
+        ctx.baseUrl,
+        `/api/vaults/${vault.id}/assets?q=${marker}&access_token=${secret}`,
+        admin.cookie,
+        `${marker}.txt`,
+        new TextEncoder().encode(`attachment ${marker} ${secret}`),
+        'text/plain',
+      )
+      await ctx.docker.appExec(['chmod', '0755', assetsDir])
+      assetsDir = null
+      checks.push({
+        name: 'injected server error: an attachment upload into a read-only assets directory answers 500',
+        expected: '200 for the first upload, then 500',
+        actual: `${first.status}, then ${upload.status}`,
+        ok: first.status === 200 && upload.status === 500,
+        severity: 'high',
+      })
+
       // Failing job: the first sync of an unresolvable remote.
       const repo = await admin.must<{ id: string }>('POST', '/api/repositories', {
         name: ctx.uniq('lab-monitoring-repo'),
@@ -182,13 +209,24 @@ const test: LabTest = {
 
       const alerted = await monitor(ctx, state, env)
       const jobs = alerted.alerts.find((a) => a.kind === 'jobs')
+      const errors = alerted.alerts.find((a) => a.kind === 'errors')
       const posted = received.map((r) => JSON.parse(r) as { text: string; alerts: Alert[] })
       const postedKinds = posted.flatMap((p) => p.alerts.map((a) => a.kind))
       checks.push({
+        name: 'the injected server error produces an errors alert with the route template, through the webhook',
+        expected: "alerts include errors with a 500 on 'POST /api/vaults/:id/assets'; one POST to the stub carrying it",
+        actual: `alerts [${kinds(alerted)}]; errors ${JSON.stringify(errors?.recent ?? null)}; ${received.length} POST(s) with [${postedKinds.join(',')}]`,
+        ok:
+          !!errors?.recent?.some((e) => e.route === 'POST /api/vaults/:id/assets' && e.status === 500) &&
+          received.length === 1 &&
+          postedKinds.includes('errors'),
+        severity: 'critical',
+      })
+      checks.push({
         name: 'the failed file write produces a jobs alert naming the projection, through the webhook',
-        expected: 'alerts include jobs with a projection failure; one POST to the stub carrying it',
-        actual: `alerts [${kinds(alerted)}]; jobs ${JSON.stringify(jobs?.recent ?? null)}; ${received.length} POST(s) with [${postedKinds.join(',')}]`,
-        ok: !!jobs?.recent?.some((e) => e.job === 'projection') && received.length === 1 && postedKinds.includes('jobs'),
+        expected: 'alerts include jobs with a projection failure; the POST carries it',
+        actual: `jobs ${JSON.stringify(jobs?.recent ?? null)}`,
+        ok: !!jobs?.recent?.some((e) => e.job === 'projection') && postedKinds.includes('jobs'),
         severity: 'critical',
       })
       checks.push({
@@ -214,9 +252,12 @@ const test: LabTest = {
       ]
       checks.push({
         name: 'no note text, path, query or secret in the alert, the endpoint or the report log lines',
-        expected: `marker and secret absent; at least one job_failure log line`,
+        expected: `marker and secret absent; at least one server_error and one job_failure log line`,
         actual: `${found.length ? found.join('; ') : 'absent'}; ${reportLines.filter((l) => l.includes('server_error')).length} server_error, ${reportLines.filter((l) => l.includes('job_failure')).length} job_failure line(s)`,
-        ok: found.length === 0 && reportLines.some((l) => l.includes('"job_failure"')),
+        ok:
+          found.length === 0 &&
+          reportLines.some((l) => l.includes('"server_error"')) &&
+          reportLines.some((l) => l.includes('"job_failure"')),
         severity: 'critical',
       })
 
@@ -226,17 +267,18 @@ const test: LabTest = {
         name: 'each failure is alerted once',
         expected: 'next run: no errors or jobs alert, no new POST',
         actual: `alerts [${kinds(again)}], ${received.length - postsBefore} new POST(s)`,
-        ok: !again.alerts.some((a) => a.kind === 'jobs') && received.length === postsBefore,
+        ok: !again.alerts.some((a) => a.kind === 'errors' || a.kind === 'jobs') && received.length === postsBefore,
         severity: 'high',
       })
 
       return {
-        summary: `Monitor runs (file mode, webhook to a stub sink): no token [${kinds(unset)}], baseline [${kinds(baseline)}], after a failed file projection and a failed sync [${kinds(alerted)}], again [${kinds(again)}]; ${received.length} webhook POST(s); leaks: ${found.length ? found.join('; ') : 'none'}.`,
+        summary: `Monitor runs (file mode, webhook to a stub sink): no token [${kinds(unset)}], baseline [${kinds(baseline)}], after a 500, a failed file projection and a failed sync [${kinds(alerted)}], again [${kinds(again)}]; ${received.length} webhook POST(s); leaks: ${found.length ? found.join('; ') : 'none'}.`,
         checks,
         data: { runs: { unset, baseline, alerted, again }, webhook: posted, reportLines },
       }
     } finally {
       if (noteDir) await ctx.docker.appExec(['chmod', '0755', noteDir])
+      if (assetsDir) await ctx.docker.appExec(['chmod', '0755', assetsDir])
       void sink.stop(true)
       rmSync(dir, { recursive: true, force: true })
     }
