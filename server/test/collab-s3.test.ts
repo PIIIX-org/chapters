@@ -1,12 +1,14 @@
+import { readFile } from 'node:fs/promises'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
-import { db } from '../src/db/client.js'
+import { db, sql as pg } from '../src/db/client.js'
 import { FailpointError, setFailpointHandler, type Failpoint } from '../src/failpoints.js'
-import { foldPendingCollab, getLiveNote, readLiveNote } from '../src/notes/store.js'
+import { foldPendingCollab, getLiveNote, noteFile, readLiveNote } from '../src/notes/store.js'
+import { INSTANCE_LOCK_KEY } from '../src/notes/store-tx.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
@@ -131,6 +133,8 @@ describe('an acknowledged collab edit is in Postgres at the ack (#487)', () => {
     // Boot (§7 step 5) folds every pending tail into row + revision.
     await foldPendingCollab()
     expect(count(await rowBody(note.path), marker)).toBe(1)
+    // The boot fold wakes the projector: the file follows the row at once, not at the projector's next poll.
+    await waitFor(async () => count(await readFile(noteFile(vaultId, note.path), 'utf8').catch(() => ''), marker) === 1, 1500)
     const [revision] = (await db.execute(sql`
       SELECT body FROM note_revisions WHERE note_id = ${note.id} ORDER BY ord DESC LIMIT 1`)) as unknown as Array<{ body: string }>
     expect(count(revision!.body, marker)).toBe(1)
@@ -197,4 +201,44 @@ describe('an acknowledged collab edit is in Postgres at the ack (#487)', () => {
     expect(count(await storedText(note.id), '@S3-REFUSED@')).toBe(0)
     provider.destroy()
   }, 20_000)
+})
+
+describe('a busy store across a reconnect (S3)', () => {
+  it('refuses the reload with store-busy, not a revocation, and the change lands once the store is back', async () => {
+    const note = await create('busy-store', 'Before.\n')
+    const document = new Y.Doc()
+    const reasons: string[] = []
+    // What useCollabDoc does on store-busy: a new provider on the same document after a pause.
+    const connectTab = () => {
+      const provider = new HocuspocusProvider({
+        url: `ws://127.0.0.1:${port}/collab`,
+        name: `${vaultId}/~${note.id}`,
+        token,
+        document,
+        onAuthenticationFailed: ({ reason }) => reasons.push(reason),
+      })
+      providers.push(provider)
+      return provider
+    }
+    let provider = connectTab()
+    const text = document.getText('body')
+    await waitFor(() => provider.isSynced && text.length > 0)
+    const held = await pg.reserve()
+    try {
+      // Maintenance holds the instance lock: the append fails, the socket closes, the reload is refused.
+      await held`SELECT pg_advisory_lock(${INSTANCE_LOCK_KEY.toString()}::bigint)`
+      text.insert(text.length, '@BUSY-STORE@')
+      await waitFor(() => reasons.length > 0, 15_000)
+      expect(reasons).toEqual(['store-busy'])
+      expect(provider.hasUnsyncedChanges).toBe(true)
+    } finally {
+      await held`SELECT pg_advisory_unlock(${INSTANCE_LOCK_KEY.toString()}::bigint)`
+      held.release()
+    }
+    provider.destroy()
+    provider = connectTab()
+    await waitFor(() => provider.isSynced && !provider.hasUnsyncedChanges, 15_000)
+    expect(count(text.toString(), '@BUSY-STORE@')).toBe(1)
+    expect(count(await storedText(note.id), '@BUSY-STORE@')).toBe(1)
+  }, 40_000)
 })

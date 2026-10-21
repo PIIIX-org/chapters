@@ -1984,6 +1984,7 @@ export async function loadCollabState(vaultId: string, noteId: string): Promise<
       .from(notes)
       .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
     if (!note) throw new Error(`note does not exist: ${vaultId}/~${noteId}`)
+    let foldedRow = false
     const state = await withKeyLock(noteLock(vaultId, note.path), () =>
       storeTransaction([noteId], async (tx) => {
         const locked = await lockedNote(tx, noteId)
@@ -1991,7 +1992,8 @@ export async function loadCollabState(vaultId: string, noteId: string): Promise<
         if (locked.path !== note.path) return null
         const stored = await readNoteCrdt(tx, noteId)
         if (stored) {
-          await catchUp(tx, locked, stored, null, { storeRow: true })
+          const { row } = await catchUp(tx, locked, stored, null, { storeRow: true })
+          if (row.seq !== locked.seq) foldedRow = true
           return Y.encodeStateAsUpdate(stored.doc)
         }
         // Its bin is still to be attached at the next restart: a seed now would make the backfill skip it.
@@ -2001,6 +2003,8 @@ export async function loadCollabState(vaultId: string, noteId: string): Promise<
         return Y.encodeStateAsUpdate(seed)
       }),
     )
+    // A fold that stored the row wakes the projector, so the file follows at once, not at its next poll.
+    if (foldedRow) afterCommit()
     if (state) return { state, path: note.path }
   }
   throw new StoreBusyError('the note kept moving')
@@ -2020,6 +2024,24 @@ export async function loadCollabState(vaultId: string, noteId: string): Promise<
  * connection unacked and the editor resends.
  */
 export async function appendCollabUpdate(vaultId: string, noteId: string, update: Uint8Array, actor: UpdateActor): Promise<number | null> {
+  // Backpressure: past the bound the relay closes the socket unacked (retryable) instead of queueing without end.
+  const waiting = pendingAppends.get(noteId) ?? 0
+  if (waiting >= MAX_PENDING_APPENDS) throw new StoreBusyError('too many collab updates are waiting for this note')
+  pendingAppends.set(noteId, waiting + 1)
+  try {
+    return await appendLogged(vaultId, noteId, update, actor)
+  } finally {
+    const left = (pendingAppends.get(noteId) ?? 1) - 1
+    if (left > 0) pendingAppends.set(noteId, left)
+    else pendingAppends.delete(noteId)
+  }
+}
+
+/** Collab appends of one note waiting for (or holding) its append gate; bounded by MAX_PENDING_APPENDS. */
+const pendingAppends = new Map<string, number>()
+const MAX_PENDING_APPENDS = 256
+
+async function appendLogged(vaultId: string, noteId: string, update: Uint8Array, actor: UpdateActor): Promise<number | null> {
   return withKeyLock(appendGate(noteId), () =>
     storeTransaction([], async (tx) => {
       const [note] = await tx
@@ -2070,15 +2092,17 @@ export async function keepRefusedTyping(vaultId: string, noteId: string, doc: Y.
 export async function compactCollabState(vaultId: string, noteId: string): Promise<void> {
   const [note] = await db.select({ path: notes.path }).from(notes).where(eq(notes.id, noteId))
   if (!note) return
-  await withKeyLock(noteLock(vaultId, note.path), () =>
+  const foldedRow = await withKeyLock(noteLock(vaultId, note.path), () =>
     storeTransaction([noteId], async (tx) => {
       const locked = await lockedNote(tx, noteId)
       const crdt = locked ? await readNoteCrdt(tx, noteId) : null
-      if (!locked || !crdt) return
-      if (!locked.deletedAt) await catchUp(tx, locked, crdt, null, { storeRow: true })
+      if (!locked || !crdt) return false
+      const folded = locked.deletedAt ? null : await catchUp(tx, locked, crdt, null, { storeRow: true })
       if (crdt.tailCount > 0) await compactNoteCrdt(tx, crdt)
+      return folded !== null && folded.row.seq !== locked.seq
     }),
   )
+  if (foldedRow) afterCommit()
 }
 
 /**
@@ -2091,9 +2115,11 @@ export async function foldPendingCollab(): Promise<{ folded: number; failed: num
   let folded = 0
   let failed = 0
   for (const noteId of await notesNeedingFold(db)) {
+    let vaultId: string | null = null
     try {
       const [note] = await db.select({ vaultId: notes.vaultId, path: notes.path }).from(notes).where(and(eq(notes.id, noteId), isNull(notes.deletedAt)))
       if (!note) continue
+      vaultId = note.vaultId
       await withKeyLock(noteLock(note.vaultId, note.path), () =>
         storeTransaction([noteId], async (tx) => {
           const locked = await lockedNote(tx, noteId)
@@ -2106,13 +2132,15 @@ export async function foldPendingCollab(): Promise<{ folded: number; failed: num
       failed++
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[collab] boot fold of note ${noteId} failed:`, err)
-      recordJob('collab-store', { error: err }, noteId)
+      recordJob('collab-store', { error: err }, vaultId)
       // §7: a failure sets fold_error (monitoring, the doctor); the next fold clears it.
       await db
         .execute(sql`UPDATE note_crdt SET fold_error = ${`boot fold failed: ${message}`}, updated_at = now() WHERE note_id = ${noteId}`)
         .catch((setErr: unknown) => console.error(`[collab] note ${noteId}: fold_error not recorded:`, setErr))
     }
   }
+  // The folds stored rows: wake the projector, so files follow at once, not at its next poll.
+  if (folded > 0) afterCommit()
   return { folded, failed }
 }
 

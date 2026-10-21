@@ -31,6 +31,16 @@ export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
 const DEBOUNCE_MS = Number(process.env.COLLAB_DEBOUNCE_MS ?? 2000)
 
+/**
+ * Backpressure (S3): bytes a socket has sent that the relay has not handled
+ * yet. Every update now waits for its log commit before the next message of
+ * that connection is handled, so a client that sends faster than the store
+ * commits queues up here; past the bound the socket is closed with 1013
+ * `store-busy` and the editor reconnects and resends what is still unsynced.
+ */
+const MAX_PENDING_SOCKET_BYTES = 16 * 1024 * 1024
+const pendingSocketBytes = new WeakMap<object, number>()
+
 /** y-protocols/sync message types that carry a Yjs update (step 2 of the handshake, and live edits). */
 const SYNC_STEP_2 = 1
 const SYNC_UPDATE = 2
@@ -74,6 +84,17 @@ class NoteNotMigratedRefusal extends Error {
   constructor() {
     super(new NoteNotMigratedError().message)
   }
+}
+
+/**
+ * Thrown from `onLoadDocument` when the store is busy (a lock timeout,
+ * maintenance, Postgres away; S3, #487). Hocuspocus sends it as a refused
+ * authentication with this reason; the editor (`useCollabDoc`) keeps the
+ * text, does not show a revocation, and connects again after a pause, which
+ * resends whatever is still unsynced.
+ */
+class StoreBusyRefusal extends Error {
+  readonly reason = 'store-busy'
 }
 
 /**
@@ -230,7 +251,14 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     async onLoadDocument({ documentName, document }) {
       const name = parseDocName(documentName)
       if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
-      const { state, path } = await loadCollabState(name.vaultId, name.noteId)
+      let loaded
+      try {
+        loaded = await loadCollabState(name.vaultId, name.noteId)
+      } catch (err) {
+        if (err instanceof StoreBusyError) throw new StoreBusyRefusal(err.message)
+        throw err
+      }
+      const { state, path } = loaded
       Y.applyUpdate(document, state)
       documentNotes.set(document, name.noteId)
       setLivePath(name.noteId, name.vaultId, path)
@@ -304,7 +332,9 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * that the live document then failed to apply (Hocuspocus closes the
      * connection) is marked `rejected_at` at once, so no fold trips on it.
      */
-    async afterHandleMessage({ document, context }) {
+    async afterHandleMessage({ document, context, connection, update }) {
+      const socket = connection.webSocket
+      pendingSocketBytes.set(socket, Math.max(0, (pendingSocketBytes.get(socket) ?? 0) - update.byteLength))
       const ctx = context as ConnectionContext
       const logged = ctx.logged
       if (!logged) return
@@ -428,7 +458,16 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       const connection = hocuspocus.handleConnection(ws, toRequest(req))
-      ws.on('message', (data) => connection.handleMessage(toBytes(data)))
+      ws.on('message', (data) => {
+        const bytes = toBytes(data)
+        const pending = (pendingSocketBytes.get(ws) ?? 0) + bytes.byteLength
+        pendingSocketBytes.set(ws, pending)
+        if (pending > MAX_PENDING_SOCKET_BYTES) {
+          ws.close(1013, 'store-busy')
+          return
+        }
+        connection.handleMessage(bytes)
+      })
       ws.on('close', (code, reason) =>
         connection.handleClose({ code, reason: reason.toString() }),
       )

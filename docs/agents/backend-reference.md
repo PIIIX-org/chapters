@@ -971,7 +971,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   failed `collab-store` job, and boot continues). A SIGKILL after the ack
   therefore loses nothing: boot folds the logged update. Lab failpoints
   `collab.after-log-before-ack` and `collab.after-ack-before-fold` mark
-  the two crash boundaries.
+  the two crash boundaries. A fold that stores the row (boot, load,
+  unload) wakes the projector, so the file follows at once. A load that
+  finds the store busy refuses the connection with reason `store-busy`
+  (not a revocation): `useCollabDoc` shows "reconnecting", keeps the text
+  and connects again after 5 s on a new provider, which resends what is
+  unsynced. Backpressure: a socket with more than 16 MiB sent and not yet
+  handled, or a note with 256 appends waiting for its append gate, is
+  closed with 1013 (retryable) instead of queueing without end.
 - **Size cap on the relay** (#491, `collab-size.ts`): ws refuses a frame
   over `noteTransportLimit()` before reading it (close 1009).
   `beforeSync` refuses a sync-step-2 or update message whose Yjs update

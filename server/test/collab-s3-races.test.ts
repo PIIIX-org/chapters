@@ -7,8 +7,9 @@ import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
 import { appendCollabUpdate, foldPendingCollab, getLiveNote, writeNote } from '../src/notes/store.js'
-import { lockedNote, storeTransaction } from '../src/notes/store-tx.js'
-import { compactNoteCrdt, markFolded, readNoteCrdt } from '../src/sync/note-crdt.js'
+import { StoreBusyError, lockedNote, storeTransaction } from '../src/notes/store-tx.js'
+import { appendGate, compactNoteCrdt, markFolded, readNoteCrdt } from '../src/sync/note-crdt.js'
+import { withKeyLock } from '../src/notes/key-lock.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
@@ -172,5 +173,19 @@ describe('typing during an agent write (S3, §5.2)', () => {
       const body = await rowBody(note.path)
       return ['@BEFORE-WRITE@', '@DURING-WRITE@', 'Agent line.'].every((m) => count(body, m) === 1)
     })
+  }, 30_000)
+})
+
+describe('backpressure (S3)', () => {
+  it('refuses an append past the per-note bound as busy (retryable), and takes the rest once the queue drains', async () => {
+    const note = await seeded('backpressure', 'Seeded.\n')
+    const update = await typingUpdate(note.id, '@QUEUED@')
+    let release!: () => void
+    const held = withKeyLock(appendGate(note.id), () => new Promise<void>((r) => (release = r)))
+    const queued = Array.from({ length: 256 }, () => appendCollabUpdate(vaultId, note.id, update, { type: 'collab' }))
+    await expect(appendCollabUpdate(vaultId, note.id, update, { type: 'collab' })).rejects.toBeInstanceOf(StoreBusyError)
+    release()
+    await held
+    expect((await Promise.all(queued)).every((id) => id !== null)).toBe(true)
   }, 30_000)
 })

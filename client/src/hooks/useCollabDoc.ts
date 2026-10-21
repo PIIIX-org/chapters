@@ -615,6 +615,25 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
       }, RETRY_MS)
     }
 
+    /**
+     * The relay could not load the note because its store is busy
+     * (`store-busy`: a lock timeout, maintenance, Postgres away; S3 also
+     * closes the socket when it cannot log a change). Not a revocation: keep
+     * the text and its unsent changes, and connect again on a new provider
+     * after a pause, which resends them.
+     */
+    const storeBusy = () => {
+      if (stopped || refused || cancelled) return
+      setStatus('reconnecting')
+      const busy = provider
+      provider = undefined
+      busy?.destroy()
+      clearTimeout(retry)
+      retry = setTimeout(() => {
+        if (!cancelled && !stopped) void connect()
+      }, RETRY_MS)
+    }
+
     const connect = async () => {
       // The ticket carries both the credential and the relay's URL; the relay
       // listens on its own port and nothing else tells the client where.
@@ -673,9 +692,16 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
           }
         },
         // `note-not-migrated`: the server's store migration has not processed this note; `reload-required`: the
-        // server names documents differently from this bundle (ADR-003 §5.4); anything else is a revocation.
+        // server names documents differently from this bundle (ADR-003 §5.4); `store-busy`: the relay could not load
+        // the note from its store just now (retried); anything else is a revocation.
         onAuthenticationFailed: ({ reason }) =>
-          reason === 'note-not-migrated' ? stop('not-migrated') : reason === 'reload-required' ? stop('reload-required') : kicked(),
+          reason === 'note-not-migrated'
+            ? stop('not-migrated')
+            : reason === 'reload-required'
+              ? stop('reload-required')
+              : reason === 'store-busy'
+                ? storeBusy()
+                : kicked(),
         // The relay closes the document with reason `note-too-large` for a
         // change over the cap (server/src/sync/collab-server.ts), ws closes
         // the socket with 1009 for a frame over its transport limit, and the
@@ -711,7 +737,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     return () => {
       cancelled = true
       watching.abort()
-      if (retry) clearTimeout(retry)
+      clearTimeout(retry)
       holdRelease()
       ydoc.off('update', onUpdate)
       window.removeEventListener('offline', wentOffline)

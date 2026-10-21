@@ -223,6 +223,28 @@ describe('useCollabDoc', () => {
     expect(view.result.current.ydoc.getText('body').toString()).toBe('typed before the upgrade')
   })
 
+  it('a relay whose store is busy is not a revocation: it reconnects after a pause and keeps the unsent text (S3)', async () => {
+    vi.useFakeTimers()
+    try {
+      const view = mount()
+      await vi.waitFor(() => expect(stub.providers).toHaveLength(1))
+      const provider = stub.providers[0]!
+      act(() => view.result.current.ydoc.getText('body').insert(0, 'typed while the store was busy'))
+      act(() => provider.options.onAuthenticationFailed({ reason: 'store-busy' }))
+      expect(view.result.current.status).toBe('reconnecting')
+      expect(provider.destroyed).toBe(true)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(stub.providers).toHaveLength(2)
+      expect(stub.providers[1]!.options.document).toBe(view.result.current.ydoc)
+      expect(view.result.current.ydoc.getText('body').toString()).toBe('typed while the store was busy')
+      expect(view.result.current.status).not.toBe('revoked')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('names the document by note id, so a rename keeps the same document', async () => {
     const view = renderHook(
       ({ path }: { path: string }) =>
