@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'n
 import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
@@ -103,7 +103,7 @@ async function recordRevision(
         })
         .from(noteRevisions)
         .where(and(eq(noteRevisions.noteId, noteId), notInArray(noteRevisions.action, NOT_A_DEDUPE_BASELINE)))
-        .orderBy(desc(noteRevisions.createdAt))
+        .orderBy(desc(noteRevisions.ord))
         .limit(1)
     )[0]
     const repeatsAuthor = actor.type === 'collab' || (last?.actorType === actor.type && last.actorId === (actor.id ?? null))
@@ -155,8 +155,9 @@ async function recordEvent(
  * connection on this note until it has recorded no revision there for
  * RESTORE_POINT_IDLE_MINUTES (quarantined writes do not count: they are not
  * the note's state). The state is read before the write and recorded, dated
- * at that read, only when `write` returns a result: a refused or failed write
- * leaves no restore point. Unlike recordRevision it is kept even when the
+ * and placed in the history (`ord`) at that read, only when `write` returns
+ * a result: a refused or failed write leaves no restore point. Unlike
+ * recordRevision it is kept even when the
  * latest revision holds the same state (someone else's, or the agent's own
  * from an earlier session); only not when that latest revision already is
  * this connection's restore point of this state. The state kept is the stored
@@ -192,10 +193,13 @@ export async function withRestorePoint<T>(
 
 /** The restore point withRestorePoint records after the write, or null when the session already has one. */
 async function pendingRestorePoint(noteId: string, connectionId: string) {
-  // The database's clock, as text, read before the row: a revision committed
-  // after the read sorts after the restore point. A JS Date would drop the
-  // microseconds that order revisions.
-  const [clock] = await db.execute<{ at: string }>(sql`select clock_timestamp()::text as at`)
+  // The database's clock, as text, and the restore point's place in the
+  // history, both taken before the write: the restore point lists before every
+  // revision recorded after this read whatever the clock does (#825). A JS
+  // Date would drop the microseconds of the time it shows.
+  const [mark] = await db.execute<{ at: string; ord: string }>(
+    sql`select clock_timestamp()::text as at, nextval(pg_get_serial_sequence('note_revisions', 'ord'))::text as ord`,
+  )
   const row = (await db.select().from(notes).where(and(eq(notes.id, noteId), isNull(notes.deletedAt))))[0]
   if (!row) return null
   const active = await db
@@ -217,7 +221,7 @@ async function pendingRestorePoint(noteId: string, connectionId: string) {
       .select()
       .from(noteRevisions)
       .where(and(eq(noteRevisions.noteId, row.id), ne(noteRevisions.action, QUARANTINE_ACTION)))
-      .orderBy(desc(noteRevisions.createdAt))
+      .orderBy(desc(noteRevisions.ord))
       .limit(1)
   )[0]
   if (
@@ -236,7 +240,8 @@ async function pendingRestorePoint(noteId: string, connectionId: string) {
     action: RESTORE_POINT_ACTION,
     frontmatter: row.frontmatter as Record<string, unknown>,
     body: row.body,
-    createdAt: sql`${clock!.at}::timestamptz`,
+    createdAt: sql`${mark!.at}::timestamptz`,
+    ord: Number(mark!.ord),
   }
 }
 /**
@@ -270,7 +275,7 @@ export async function refuseSuspiciousWrite(
         .select()
         .from(noteRevisions)
         .where(eq(noteRevisions.noteId, row.id))
-        .orderBy(desc(noteRevisions.createdAt))
+        .orderBy(desc(noteRevisions.ord))
         .limit(1)
     )[0]
     if (
@@ -285,7 +290,7 @@ export async function refuseSuspiciousWrite(
   if (continued) {
     const updated = await db
       .update(noteRevisions)
-      .set({ frontmatter, body: input.body, createdAt: sql`now()` })
+      .set({ frontmatter, body: input.body, createdAt: sql`now()`, ord: sql`default` })
       .where(and(eq(noteRevisions.id, continued), eq(noteRevisions.noteId, row.id), eq(noteRevisions.action, QUARANTINE_ACTION)))
       .returning({ id: noteRevisions.id })
     if (updated.length > 0) throw new NoteWriteQuarantinedError(row.path, finding, continued, true)
@@ -990,7 +995,7 @@ export type RevisionMeta = Pick<RevisionRow, 'id' | 'actorType' | 'actorId' | 'a
   }
 
 /** One recorded revision with its content and the note's current path. */
-export type RevisionDetail = Omit<RevisionRow, keyof RevisionEventDetail> & RevisionEventDetail & { path: string }
+export type RevisionDetail = Omit<RevisionRow, keyof RevisionEventDetail | 'ord'> & RevisionEventDetail & { path: string }
 
 const eventColumns = {
   sourceRevisionId: noteRevisions.sourceRevisionId,
@@ -1029,21 +1034,18 @@ export interface RevisionSummary extends RevisionMeta {
 }
 
 /**
- * Where a history page ends: the last revision's `created_at` as microsecond
- * UTC text (a JS Date keeps only milliseconds, which would skip or repeat
- * revisions recorded within the same millisecond) and its id, which orders
- * revisions recorded in the same instant.
+ * Where a history page ends: the last revision's `ord`, its place in the
+ * order revisions were recorded in (#825; `created_at` can step back or tie).
  */
 export interface RevisionPosition {
-  at: string
-  id: string
+  ord: number
 }
 
 /**
  * One page of a note's change history, newest first, metadata only (#411):
  * the bodies are never read (`octet_length` takes the size from the stored
- * value's header). Keyset-paged on (created_at, id) after `before`, so a
- * revision recorded while a caller pages does not shift the pages. `next` is
+ * value's header). Keyset-paged on `ord` after `before`, so a revision
+ * recorded while a caller pages does not shift the pages. `next` is
  * the position to continue from, or null on the last page. Null when the note
  * does not exist. Edit/owner only — enforced by callers.
  */
@@ -1064,18 +1066,11 @@ export async function listRevisionPage(
       createdAt: noteRevisions.createdAt,
       bodyBytes: sql<number>`octet_length(${noteRevisions.body})`,
       ...eventColumns,
-      at: sql<string>`to_char(${noteRevisions.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      ord: noteRevisions.ord,
     })
     .from(noteRevisions)
-    .where(
-      and(
-        eq(noteRevisions.noteId, row.id),
-        before
-          ? sql`(${noteRevisions.createdAt}, ${noteRevisions.id}) < (${before.at}::timestamptz, ${before.id}::uuid)`
-          : undefined,
-      ),
-    )
-    .orderBy(desc(noteRevisions.createdAt), desc(noteRevisions.id))
+    .where(and(eq(noteRevisions.noteId, row.id), before ? lt(noteRevisions.ord, before.ord) : undefined))
+    .orderBy(desc(noteRevisions.ord))
     .limit(limit + 1)
   const page = rows.slice(0, limit)
   const last = page.at(-1)
@@ -1091,12 +1086,13 @@ export async function listRevisionPage(
         ...eventDetail(r),
       })),
     ),
-    next: rows.length > limit && last ? { at: last.at, id: last.id } : null,
+    next: rows.length > limit && last ? { ord: last.ord } : null,
   }
 }
 
-/** Revision metadata only — never a note's content — newest first, always
- * bounded (perf rule 3: no unbounded reads). The REST history list. */
+/** Revision metadata only — never a note's content — newest first (in the
+ * order recorded, #825), always bounded (perf rule 3: no unbounded reads).
+ * The REST history list. */
 export async function listRevisionMeta(
   vaultId: string,
   path: string,
@@ -1116,7 +1112,7 @@ export async function listRevisionMeta(
     })
     .from(noteRevisions)
     .where(eq(noteRevisions.noteId, row.id))
-    .orderBy(desc(noteRevisions.createdAt))
+    .orderBy(desc(noteRevisions.ord))
     .limit(limit)
     .offset(offset)
   return withActorNames(

@@ -71,7 +71,7 @@ async function quarantined(noteId: string) {
     .select()
     .from(noteRevisions)
     .where(and(eq(noteRevisions.noteId, noteId), eq(noteRevisions.action, 'quarantine')))
-    .orderBy(desc(noteRevisions.createdAt))
+    .orderBy(desc(noteRevisions.ord))
 }
 
 /** Polls `check`: the relay stores on a debounce, and there is no event to await for a store's outcome. */
@@ -161,7 +161,7 @@ describe('MCP edit_note', () => {
       .select()
       .from(noteRevisions)
       .where(eq(noteRevisions.noteId, noteId))
-      .orderBy(desc(noteRevisions.createdAt))
+      .orderBy(desc(noteRevisions.ord))
       .limit(1)
     expect(newest).toMatchObject({ action: 'update', body: doubled })
   })

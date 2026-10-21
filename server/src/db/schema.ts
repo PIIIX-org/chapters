@@ -391,7 +391,9 @@ export const actorType = pgEnum('actor_type', ['user', 'mcp', 'collab'])
  * `actor_detail` (unused until S2a, kept out of this model like `notes.seq`).
  * Migration 0023 (#479): `sourceRevisionId` is the revision a `revert` row
  * brought back; `fromPath` / `toPath` the paths of a `rename` row. Null on
- * every other row.
+ * every other row. Migration 0024 (#825, #811): `ord` is the order revisions
+ * were recorded in (a sequence, not the clock: `created_at` can step back or
+ * tie); every list of a note's revisions orders by it.
  */
 export const noteRevisions = pgTable(
   'note_revisions',
@@ -411,8 +413,9 @@ export const noteRevisions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    ord: bigserial('ord', { mode: 'number' }).notNull(),
   },
-  (t) => [index('note_revisions_note_idx').on(t.noteId, t.createdAt)],
+  (t) => [index('note_revisions_note_idx').on(t.noteId, t.createdAt), index('note_revisions_note_ord').on(t.noteId, t.ord)],
 )
 
 const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
