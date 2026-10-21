@@ -316,9 +316,10 @@ describe('backfill and boot reconciliation (§7 step 3, §8)', () => {
     await db.execute(sql`INSERT INTO instance_state (id, store_migrated_at) VALUES ('singleton', now()) ON CONFLICT (id) DO UPDATE SET store_migrated_at = now()`)
     const note = await createNote(vaultId, { type: 'lease', name: 'orphan', body: 'one' })
     await flushProjections()
-    await updateNote(vaultId, 'lease/orphan', { body: 'two' }, agent())
-    // What claimProjections leaves when the process dies before the file write.
+    // What claimProjections leaves when the process dies before the file write
+    // (set before the write, so its own wake-up cannot write the file first).
     await db.execute(sql`UPDATE note_projections SET lease_until = now() + interval '60 seconds', attempts = 1 WHERE note_id = ${note.id}`)
+    await updateNote(vaultId, 'lease/orphan', { body: 'two' }, agent())
     await flushProjections()
     expect(await readFile(file('lease', 'orphan.md'), 'utf8')).toContain('one')
     await bootStore()
