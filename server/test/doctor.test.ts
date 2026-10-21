@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import postgres from 'postgres'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import * as Y from 'yjs'
@@ -357,6 +358,10 @@ describe('doctor', () => {
       expect(repairRun.out).toContain('maintenance in progress')
       expect(repairRun.code).toBe(2)
       expect(await projection()).toEqual(before)
+      // The lock is taken before the report file is created: a refusal leaves no empty file behind.
+      const reportFile = join(tmpdir(), `doctor-report-${randomUUID()}.json`)
+      expect((await cli('--repair', '--report', reportFile)).code).toBe(2)
+      expect(await stat(reportFile).then(() => true, () => false)).toBe(false)
       // Read-only runs take no lock.
       const readRun = await cli()
       expect(readRun.out).toContain('PROBLEM file-missing')

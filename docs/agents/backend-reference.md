@@ -739,7 +739,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   dot-directories: no live row → `createNote(…, { asImported: true })`
   from the file (the frontmatter as given, no `timestamp` added; row,
   revision, links, projections, embedding job; the projector then adopts
-  the file byte for byte), a row with the same content → nothing, a row
+  a file that already is a valid note as it is; one without `type`, which
+  the store fills in from the path, is conflict-copied and rewritten), a row with the same content → nothing, a row
   that differs → reported and left alone, a file whose `projected_files`
   owner is a note now at another path or in the trash → skipped (never
   resurrected; this also covers the dry run, which drains nothing), a

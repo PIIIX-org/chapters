@@ -19,7 +19,9 @@
  * - a generated `index.md` (no frontmatter): skipped; any other file that
  *   does not parse, or that the store refuses: reported as failed.
  * The note is created from the file's frontmatter as it is (no `timestamp`
- * added), so the projector adopts the file byte for byte. A `.crdt/<path>.bin`
+ * added), so the projector adopts a file that already is a valid note as
+ * it is; a file the store has to complete (no `type`, which the path
+ * gives) is copied to `.conflicts/` and rewritten. A `.crdt/<path>.bin`
  * left beside a created note is listed (`crdtBins`): it holds the editor
  * state of the lost row; `pnpm doctor` compares it, delete it if it differs.
  * A vault directory without a vault row is skipped, or, with `ownerEmail`,

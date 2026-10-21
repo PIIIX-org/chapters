@@ -37,6 +37,10 @@ if (bad) {
   process.exit(2)
 }
 
+// `--repair` writes, so it holds the shared instance lock like every writing CLI (exit 2 while store-export-legacy
+// or rows-from-files runs). Taken before the report file is created, so a refusal leaves no empty file behind.
+const instanceLock = repair ? await holdSharedLockOrExit() : null
+
 let file: FileHandle | undefined
 if (reportPath) {
   try {
@@ -49,8 +53,6 @@ if (reportPath) {
   }
 }
 
-// `--repair` writes, so it holds the shared instance lock like every writing CLI (exit 2 while store-export-legacy or rows-from-files runs).
-const instanceLock = repair ? await holdSharedLockOrExit() : null
 const report = await runDoctor({ vaultId, repair })
 await instanceLock?.release()
 const summary =

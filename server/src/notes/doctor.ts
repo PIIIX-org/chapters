@@ -411,12 +411,12 @@ export async function runDoctor(options: { vaultId?: string; repair?: boolean; c
     for (const p of problems) {
       if (p.repairable && !p.noteId && (p.class === 'file-missing' || p.class === 'file-edited')) {
         const dir = p.path === 'index.md' ? '' : p.path.slice(0, -'/index.md'.length)
-        await db.execute(sql`
+        p.repaired = await affected(sql`
           UPDATE note_projections SET applied_seq = 0, attempts = 0, lease_until = NULL, last_error = NULL, updated_at = now()
           WHERE projection = 'dir_index' AND note_id IN (
             SELECT id FROM notes WHERE vault_id = ${p.vaultId} AND deleted_at IS NULL
-              AND (${dir} = '' OR left(path, ${dir.length + 1}) = ${`${dir}/`}))`)
-        p.repaired = true
+              AND (${dir} = '' OR left(path, ${dir.length + 1}) = ${`${dir}/`}))
+          RETURNING note_id`)
       }
     }
   }
