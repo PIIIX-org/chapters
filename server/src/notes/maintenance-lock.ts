@@ -81,6 +81,11 @@ type Client = postgres.Sql
 
 const CONNECT_TIMEOUT_MS = 10_000
 
+/** postgres.js's `socket` option (supported by the driver, not in its type declarations): a factory for the connection's socket. */
+interface SocketFactoryOptions {
+  socket: (options: { host: string[]; port: number[]; path?: string | false }) => Promise<Socket>
+}
+
 /**
  * A reserved client opens exactly one socket (its own TCP or Unix socket to
  * the DATABASE_URL host and port; postgres.js still negotiates TLS on it).
@@ -92,7 +97,7 @@ const CONNECT_TIMEOUT_MS = 10_000
  */
 function reservedClient(databaseUrl: string, onclose: () => void): Client {
   let opened = false
-  return postgres(databaseUrl, {
+  const options: postgres.Options<Record<string, never>> & SocketFactoryOptions = {
     max: 1,
     idle_timeout: null as unknown as undefined,
     max_lifetime: null,
@@ -100,11 +105,11 @@ function reservedClient(databaseUrl: string, onclose: () => void): Client {
     fetch_types: false,
     onnotice: () => {},
     onclose,
-    socket: (options: { host: string[]; port: number[]; path?: string | false }) => {
+    socket: async (target) => {
       if (opened) throw new Error('the reserved connection closed; the next attempt waits for the backoff')
       opened = true
       return new Promise<Socket>((resolve, reject) => {
-        const socket = options.path ? connect(options.path) : connect(options.port[0]!, options.host[0]!)
+        const socket = target.path ? connect(target.path) : connect(target.port[0]!, target.host[0]!)
         const timer = setTimeout(() => {
           socket.destroy()
           reject(new Error(`connecting to Postgres timed out after ${CONNECT_TIMEOUT_MS} ms`))
@@ -119,7 +124,8 @@ function reservedClient(databaseUrl: string, onclose: () => void): Client {
         })
       })
     },
-  })
+  }
+  return postgres(databaseUrl, options)
 }
 
 async function tryLock(client: Client, mode: InstanceLockMode): Promise<boolean> {
