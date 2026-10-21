@@ -288,6 +288,34 @@ describe('collab relay store', () => {
     // Each episode is reported as a failure of its own.
     await waitFor(() => metricsSnapshot().jobs['collab-store'].failed >= before.failed + 2)
   }, 30_000)
+
+  // #408 review: a refused edit_note with body `ops` opened its direct
+  // connection as a checked write (`directWrite`), and the connection's store
+  // on disconnect then skipped the relay's own quarantine, so the doubled live
+  // document reached the row even though the edit was refused.
+  it('a refused ops edit does not store a doubled live document past the relay quarantine', async () => {
+    const path = 'docs/doubled-then-refused-ops'
+    const body = paragraphs('ops', 18) // ~1.7 KiB
+    const noteId = (await must<{ id: string }>('create_note', { vaultId, path, body })).id
+    const provider = new HocuspocusProvider({ url: `${baseUrl.replace('http', 'ws')}/collab`, name: `${vaultId}/${path}`, token: ownerToken, document: new Y.Doc() })
+    providers.push(provider)
+    const text = provider.document.getText('body')
+    await waitFor(() => text.toString() === body)
+    text.insert(text.length, `\n\n${body}`)
+    await waitFor(async () => (await quarantined(noteId)).length > 0)
+    expect(await rowBody(path)).toBe(body)
+
+    const quarantinedOps = await call('edit_note', { vaultId, path, ops: [{ op: 'append', text: 'one more line' }] })
+    expect(quarantinedOps.isError).toBe(true)
+    expect(quarantinedOps.text).toMatch(/quarantined/)
+    expect(await rowBody(path)).toBe(body)
+
+    const ambiguous = await call('edit_note', { vaultId, path, ops: [{ op: 'insert_after', anchor: 'paragraph', text: '!' }] })
+    expect(ambiguous.isError).toBe(true)
+    expect(ambiguous.text).toMatch(/occurs \d+ times/)
+    expect(await rowBody(path)).toBe(body)
+    expect(await fileBody(path)).toBe(body)
+  }, 20_000)
 })
 
 describe('writes that are not quarantined', () => {

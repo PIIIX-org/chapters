@@ -67,7 +67,7 @@ When creating or editing notes via `create_note` or `edit_note`:
   }
   ```
 - Write `[[...]]` links bare. Links inside backticks or code blocks are ignored by the graph and the audit.
-- `edit_note`: `frontmatter` **merges per top-level key** (keys you send are set, keys you leave out are kept; `null` is stored as a value), `replace: true` replaces the whole map instead, `removeKeys` deletes keys, and `body` **replaces the whole body**; omit a field to leave it unchanged. The merged frontmatter is validated before anything is written. The edit streams into the live collaboration document and is recorded as a revision. Text a person is typing in the same note at that moment can be lost.
+- `edit_note`: for a partial change use `ops` (`append`, `prepend`, `replace_text`, `insert_before`/`insert_after` an anchor, `replace_section` under a heading, `delete_block`, `frontmatter_set`/`frontmatter_add`/`frontmatter_remove`); they apply to the live text, so a person's unsaved typing is kept, and an anchor that is missing or occurs more than once fails the whole call with nothing changed. `frontmatter` **merges per top-level key** (keys you send are set, keys you leave out are kept; `null` is stored as a value), `replace: true` replaces the whole map instead, `removeKeys` deletes keys, and `body` **replaces the whole body** (not with `ops`); omit a field to leave it unchanged. The merged frontmatter is validated before anything is written. The edit streams into the live collaboration document as a minimal change and is recorded as a revision. A whole `body` built from an earlier read removes what a person typed since.
 - Run `audit_okf_conformance` to check structure (frontmatter, datetimes, link targets, indexes, orphans). It does not check whether the content is correct.
 
 ### 3. Post-Task Note Evaluation Protocol
@@ -143,7 +143,7 @@ Invokes one of the 20 first-class Elara MCP engineering prompts (e.g. `active_pr
 Performs operations on notes:
 - `/elara-note read <vault-id> <path>`: Read note content and frontmatter.
 - `/elara-note create <vault-id> <path> [body]`: Create a new OKF note (`create_note` with `frontmatter` and `body`).
-- `/elara-note edit <vault-id> <path> <body>`: Replace the note body (and/or merge frontmatter keys) via `edit_note`.
+- `/elara-note edit <vault-id> <path> <body>`: Replace the note body (and/or merge frontmatter keys) via `edit_note`; for a partial change (append a line, replace one passage, rewrite one section) send `ops` instead.
 - `/elara-note rename <vault-id> <from> <to>`: `rename_note` with `from` and `toName`; `toName` is a slug (rename in place) or a full path (move). Full-path links in other notes are rewritten; bare-name links are not.
 - `/elara-note delete <vault-id> <path>`: Move note to trash.
 - `/elara-note history <vault-id> <path>`: View revision history and attribution.
@@ -226,7 +226,7 @@ Elara exposes 58 tools across 7 functional domains. **Capability** is the token 
 | :--- | :--- | :--- | :--- |
 | `read_note` | Vault/Account | `read` | Read a note's `path`, `frontmatter`, and `body`. |
 | `create_note` | Vault/Account | `write` | Create a note from `path` (or `type` + `name`), a `frontmatter` object, and a `body`. |
-| `edit_note` | Vault/Account | `write` | Merge `frontmatter` keys (or `replace: true` the whole map, `removeKeys` to delete) and/or replace the whole `body`, streamed through live collaboration. |
+| `edit_note` | Vault/Account | `write` | Local `ops` (append, replace text, insert at an anchor, replace a section, delete a block, frontmatter set/add/remove) on the live text, or replace the whole `body`; merge `frontmatter` keys (or `replace: true` the whole map, `removeKeys` to delete); streamed through live collaboration as a minimal change. |
 | `rename_note` | Vault/Account | `write` | Rename (`toName` slug) or move (`toName` full path) a note; full-path links in the vault are rewritten. |
 | `delete_note` | Vault/Account | `write` | Soft-delete a note to the vault trash. |
 | `list_trash` | Vault/Account | `read` | List soft-deleted notes in the vault trash. |
