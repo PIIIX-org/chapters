@@ -23,6 +23,8 @@ export const FAILPOINTS = [
   'rename.after-commit-before-refactor',
   'purge.after-commit-before-remove',
   'migration.mid-batch',
+  'collab.after-log-before-ack',
+  'collab.after-ack-before-fold',
 ] as const
 
 export type Failpoint = (typeof FAILPOINTS)[number]
