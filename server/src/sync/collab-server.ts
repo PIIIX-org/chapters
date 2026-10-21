@@ -10,7 +10,7 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { compactCollabState, keepRefusedTyping, loadCollabState, updateNote } from '../notes/store.js'
-import { NoteNotMigratedError, StoreBusyError, noteMigrated, storeMigrationPending } from '../notes/store-tx.js'
+import { NoteNotMigratedError, StoreBusyError, collabNoteMigrated, noteMigrated, storeMigrationPending } from '../notes/store-tx.js'
 import { docState, forgetLivePath, livePath, parseDocName, registerLiveDocs, setLivePath, type LiveDocument } from './live-docs.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
@@ -208,6 +208,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       // editor either: nothing may be typed that could not be stored. The
       // refusal carries its own reason, which the editor shows as such.
       if (storeMigrationPending() && !(await noteMigrated(db, note.id))) throw new NoteNotMigratedRefusal()
+      // The same for a note whose S2b backfill failed at this boot: its bin is attached at the next restart.
+      if (!collabNoteMigrated(note.id)) throw new NoteNotMigratedRefusal()
       return { userId, sessionHash } satisfies ConnectionContext
     },
 
