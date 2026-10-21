@@ -11,7 +11,7 @@ import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { noteLock, readNote, updateNote, splitPath } from '../notes/store.js'
 import { withKeyLock } from '../notes/key-lock.js'
-import { docState, loadedDocument, registerLiveDocs, sharesHistory } from './live-docs.js'
+import { docState, liveDocumentsOf, registerLiveDocs, sharesHistory, type LiveDocument } from './live-docs.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { affects, onPermissionChange } from './permission-events.js'
@@ -310,8 +310,6 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      */
     async onStoreDocument({ documentName, document, lastContext }) {
       const { vaultId, path: docPath } = parseDocName(documentName)
-      const state = docState(document)
-      bodyMeasured(document, state.body)
       const context: Partial<ConnectionContext> | undefined = lastContext
       const noteId = documentNotes.get(document)
       const [note] = noteId
@@ -325,7 +323,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       }
       const path = note.path
       if (path !== docPath) {
-        const current = loadedDocument(vaultId, path)
+        const current = liveDocumentsOf(noteId).find((d) => d.name === `${vaultId}/${path}`)
         if (current && current.doc !== document) {
           if (!sharesHistory(document, current.doc)) {
             console.error(`collab store of ${documentName} not stored: the note is open at ${path} with unrelated history`)
@@ -346,6 +344,15 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         // merged into a rebuilt document doubles it, #488) is quarantined
         // (#492): kept as a revision, not stored. Editors keep what they see;
         // the next store without the repeat is written as usual and ends the episode.
+        // The state is read under the note's lock (updateNote calls it there):
+        // a server write that held the lock has pushed its change into this
+        // document by then, so a store never writes the editors' older state
+        // back over an acknowledged write.
+        const state = () => {
+          const now = docState(document)
+          bodyMeasured(document, now.body)
+          return now
+        }
         await updateNote(vaultId, path, state, undefined, {
           relay: { noteId },
           ...(context?.directWrite ? {} : { quarantine: 'repeated-block' as const, episode: quarantineEpisodes.get(document) }),
@@ -420,11 +427,14 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
   const unbindKick = wireKick(hocuspocus)
   currentInstance = hocuspocus
   registerLiveDocs({
-    loaded(name) {
-      const doc = hocuspocus.documents.get(name)
-      if (!doc || doc.isLoading) return null
-      const editors = [...new Set([...doc.getConnections()].map((c) => (c.context as ConnectionContext).userId))]
-      return { doc, editors }
+    ofNote(noteId) {
+      const out: LiveDocument[] = []
+      hocuspocus.documents.forEach((doc, name) => {
+        if (doc.isLoading || documentNotes.get(doc) !== noteId) return
+        const editors = [...new Set([...doc.getConnections()].map((c) => (c.context as ConnectionContext).userId))]
+        out.push({ doc, name, editors })
+      })
+      return out
     },
   })
 

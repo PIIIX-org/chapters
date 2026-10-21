@@ -13,7 +13,7 @@ import { deleteCrdtState, renameCrdtState, saveCrdtState } from '../sync/crdt-st
 import {
   cloneDocument,
   docState,
-  loadedDocument,
+  liveDocumentsOf,
   pushToDocument,
   updateBin,
   type DocState,
@@ -338,69 +338,107 @@ function plainRow(row: StoredNote): NoteRow {
 }
 
 /**
- * The relay's loaded document of the note at `path`, cloned before a write
- * (ADR-003 §5.2 step 3, S2a): its state is what the editors see, which the
- * write stores first and compiles its change against; the clone is the base
- * the committed change is pushed into the document from (step 8).
+ * The relay's loaded documents of a note (by the note id each recorded at
+ * load, never by path: a renamed note can be open at its old path, and a new
+ * note at that old path is another note), each cloned before a write
+ * (ADR-003 §5.2 step 3, S2a). The state of the document at the note's
+ * current path (else the first) is what the editors see, which the write
+ * stores first and compiles its change against; the clones are the bases the
+ * committed change is pushed into the documents from (step 8).
  */
 interface Fold {
-  live: LiveDocument
-  base: Y.Doc
+  docs: Array<{ live: LiveDocument; base: Y.Doc }>
+  editors: string[]
   state: DocState
 }
 
-function foldSource(vaultId: string, path: string): Fold | null {
-  const live = loadedDocument(vaultId, path)
-  if (!live) return null
-  const base = cloneDocument(live.doc)
-  return { live, base, state: docState(base) }
+function foldSource(vaultId: string, noteId: string, path: string): Fold | null {
+  const loaded = liveDocumentsOf(noteId)
+  if (loaded.length === 0) return null
+  const docs = loaded.map((live) => ({ live, base: cloneDocument(live.doc) }))
+  const primary = docs.find((d) => d.live.name === `${vaultId}/${path}`) ?? docs[0]!
+  return { docs, editors: [...new Set(loaded.flatMap((d) => d.editors))], state: docState(primary.base) }
+}
+
+function releaseFold(fold: Fold | null): void {
+  for (const d of fold?.docs ?? []) d.base.destroy()
+}
+
+/**
+ * Whether the relay would refuse to store `state` over `row` (invalid, over
+ * the size cap, a repeated block: #491, #492). Such a state is never written
+ * on the editors' behalf, neither by a fold nor as the body a write keeps.
+ */
+function refusedState(row: NoteRow, state: DocState): boolean {
+  try {
+    validateNote(row.type, row.name, { ...state.frontmatter, type: row.type } as Frontmatter, state.body)
+    assertBodyFits(state.body, row.body)
+  } catch {
+    return true
+  }
+  return suspiciousWrite(row.body, state.body, 'repeated-block') !== null
+}
+
+/**
+ * The body a write that does not change the body keeps: what the editors
+ * see, unless the relay would refuse that state (then the stored body; the
+ * editors keep their text, as the relay's own quarantine leaves it).
+ */
+export function keptBody(row: NoteRow, current: DocState): string {
+  return current.body !== row.body && refusedState(row, current) ? row.body : current.body
 }
 
 /**
  * Invariant W, S2a (§5.2 step 3): stores the loaded document's state as a
  * revision of its editors before a write changes the note, in the write's
- * transaction. A state the relay itself would refuse (invalid, over the cap,
- * a repeated block, #491/#492) is not stored; the write is then compiled
- * against it and stands or falls on its own validation.
+ * transaction. A state the relay itself would refuse is not stored
+ * (`refused`); the write is then compiled against it and stands or falls on
+ * its own validation.
  */
-async function foldLive(tx: Tx, row: StoredNote, fold: Fold | null): Promise<StoredNote> {
-  if (!fold) return row
+async function foldLive(tx: Tx, row: StoredNote, fold: Fold | null): Promise<{ row: StoredNote; refused: boolean }> {
+  if (!fold) return { row, refused: false }
   const frontmatter = { ...fold.state.frontmatter, type: row.type } as Frontmatter
-  if (fold.state.body === row.body && sameContent(frontmatter, row.frontmatter as Record<string, unknown>)) return row
-  try {
-    validateNote(row.type, row.name, frontmatter, fold.state.body)
-    assertBodyFits(fold.state.body, row.body)
-  } catch {
-    return row
+  if (fold.state.body === row.body && sameContent(frontmatter, row.frontmatter as Record<string, unknown>)) {
+    return { row, refused: false }
   }
-  if (suspiciousWrite(row.body, fold.state.body, 'repeated-block')) return row
+  if (refusedState(row, fold.state)) return { row, refused: true }
   const { row: folded } = await applyRowChange(
     tx,
     row,
     { frontmatter, body: fold.state.body },
-    { action: 'update', actor: SYSTEM_ACTOR, actorDetail: { kind: 'fold', editors: fold.live.editors } },
+    { action: 'update', actor: SYSTEM_ACTOR, actorDetail: { kind: 'fold', editors: fold.editors } },
     { frontmatterOrder: orderKeys(row.frontmatterSrc, fold.state.frontmatter) },
   )
-  return folded
+  return { row: folded, refused: false }
 }
 
 /**
  * After commit, still under the note lock (§5.2 step 8, S2a): pushes the
- * committed state into the loaded document, or else keeps the note's `.crdt`
- * bin equal to it. A document that unloaded meanwhile gets its bin updated.
+ * committed state into every loaded document of the note, or, when none is
+ * loaded, keeps the `.crdt` bin at `binPath` equal to it. When the fold was
+ * refused and the write left the body alone, only the frontmatter is pushed:
+ * the editors keep the text the relay would not store.
  */
-async function pushCommitted(vaultId: string, path: string, fold: Fold | null, committed: StoredNote): Promise<void> {
+async function pushCommitted(
+  vaultId: string,
+  binPath: string,
+  fold: Fold | null,
+  committed: StoredNote,
+  keepLiveBody: boolean,
+): Promise<void> {
   failpoint('edit.after-commit-before-live-apply')
-  const state = { frontmatter: committed.frontmatter as Record<string, unknown>, body: committed.body }
-  if (fold && loadedDocument(vaultId, path)?.doc === fold.live.doc) {
-    pushToDocument(fold.live.doc, fold.base, state)
-    return
+  const frontmatter = committed.frontmatter as Record<string, unknown>
+  const loaded = liveDocumentsOf(committed.id)
+  for (const live of loaded) {
+    const base = fold?.docs.find((d) => d.live.doc === live.doc)?.base ?? cloneDocument(live.doc)
+    pushToDocument(live.doc, base, { frontmatter, body: keepLiveBody ? docState(base).body : committed.body })
   }
-  fold?.base.destroy()
+  for (const d of fold?.docs ?? []) if (!loaded.some((live) => live.doc === d.live.doc)) d.base.destroy()
+  if (loaded.length > 0) return
   try {
-    await updateBin(vaultId, path, state)
+    await updateBin(vaultId, binPath, { frontmatter, body: committed.body })
   } catch (err) {
-    console.warn(`[store] ${vaultId}/${path}: .crdt bin not updated: ${(err as Error).message}`)
+    console.warn(`[store] ${vaultId}/${binPath}: .crdt bin not updated: ${(err as Error).message}`)
   }
 }
 
@@ -581,20 +619,20 @@ export async function writeNote(
     for (let round = 0; round < WRITE_ROUNDS; round++) {
       const seen = await readStored(vaultId, resolved.fullPath)
       if (!seen || (options.relay && seen.id !== options.relay.noteId)) return null
-      const fold = options.relay ? null : foldSource(vaultId, resolved.fullPath)
+      const fold = options.relay ? null : foldSource(vaultId, seen.id, resolved.fullPath)
       const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
       let next: NextState
       try {
         next = await compute(current, plainRow(seen))
       } catch (err) {
-        fold?.base.destroy()
+        releaseFold(fold)
         throw err
       }
       const committed = await storeTransaction([seen.id], async (tx) => {
         const locked = await lockedNote(tx, seen.id)
         if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
         if (locked.seq !== seen.seq) return 'moved' as const
-        const row = await foldLive(tx, locked, fold)
+        const { row, refused } = await foldLive(tx, locked, fold)
         const { row: written } = await applyRowChange(
           tx,
           row,
@@ -604,20 +642,20 @@ export async function writeNote(
             : { action: 'update', actor, actorDetail: options.actorDetail },
         )
         failpoint('edit.before-commit')
-        return written
+        return { written, keepLiveBody: refused && written.body === locked.body }
       })
       if (committed === 'moved') {
-        fold?.base.destroy()
+        releaseFold(fold)
         continue
       }
       if (!committed) {
-        fold?.base.destroy()
+        releaseFold(fold)
         return null
       }
-      if (!options.relay) await pushCommitted(vaultId, resolved.fullPath, fold, committed)
+      if (!options.relay) await pushCommitted(vaultId, resolved.fullPath, fold, committed.written, committed.keepLiveBody)
       afterCommit()
       failpoint('edit.after-commit-before-ack')
-      return plainRow(committed)
+      return plainRow(committed.written)
     }
     throw new StoreBusyError('the note kept changing')
   })
@@ -625,15 +663,19 @@ export async function writeNote(
 
 /**
  * Writes `input` to the live note at `path` (writeNote): a field left out
- * keeps its current value, a `body` function (BodyEdit) gets the current
- * body. `options.quarantine` checks the body against the stored one first
+ * keeps its current value (a body the relay would refuse is not kept, see
+ * keptBody), a `body` function (BodyEdit) gets the current body. `input`
+ * may be a function, read under the note's lock: the relay's store passes
+ * its document's state that way, so a server write that held the lock (and
+ * pushed its change into the document) is in the state it stores.
+ * `options.quarantine` checks the body against the stored one first
  * (refuseSuspiciousWrite; the collab relay's store passes the quarantine
  * revision of the loaded document's episode, if any).
  */
 export async function updateNote(
   vaultId: string,
   path: string,
-  input: { frontmatter?: Record<string, unknown>; body?: BodyEdit },
+  input: NoteInput | (() => NoteInput),
   actor: Actor = SYSTEM_ACTOR,
   options: WriteOptions & { quarantine?: QuarantineRules; episode?: string } = {},
 ): Promise<NoteRow | null> {
@@ -641,19 +683,26 @@ export async function updateNote(
     vaultId,
     path,
     async (current, row) => {
-      const body = typeof input.body === 'function' ? input.body(current.body) : (input.body ?? current.body)
-      const frontmatter: Frontmatter = { ...(input.frontmatter ?? current.frontmatter), type: row.type }
+      const edit = typeof input === 'function' ? input() : input
+      const body = typeof edit.body === 'function' ? edit.body(current.body) : (edit.body ?? keptBody(row, current))
+      const frontmatter: Frontmatter = { ...(edit.frontmatter ?? current.frontmatter), type: row.type }
       validateNote(row.type, row.name, frontmatter, body)
       // The size cap first: an over-cap body is refused, never kept as a quarantine revision (#491).
       assertBodyFits(body, row.body)
       if (options.quarantine) {
-        await refuseSuspiciousWrite(row, { frontmatter: input.frontmatter, body }, actor, options.quarantine, options.episode)
+        await refuseSuspiciousWrite(row, { frontmatter: edit.frontmatter, body }, actor, options.quarantine, options.episode)
       }
       return { frontmatter, body }
     },
     actor,
     options,
   )
+}
+
+/** A write's new frontmatter and body; a field left out keeps its value. */
+export interface NoteInput {
+  frontmatter?: Record<string, unknown>
+  body?: BodyEdit
 }
 
 /**
@@ -821,12 +870,13 @@ async function moveNote(
     throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
   }
   const isMoving = fromResolved.fullPath !== toResolved.fullPath
-  const fold = foldSource(vaultId, fromResolved.fullPath)
+  const fold = foldSource(vaultId, seen.id, fromResolved.fullPath)
   const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
   // Self-referential wikilinks in the note's own body follow it.
-  const newBody = isMoving ? refactorWikilinks(current.body, fromResolved.fullPath, toResolved.fullPath) : current.body
+  const keptText = keptBody(plainRow(seen), current)
+  const newBody = isMoving ? refactorWikilinks(keptText, fromResolved.fullPath, toResolved.fullPath) : keptText
   const newFrontmatter: Frontmatter = { ...current.frontmatter, type: toResolved.type }
-  let result: { updated: StoredNote; referrers: string[]; job: number | null } | null
+  let result: { updated: StoredNote; referrers: string[]; job: number | null; keepLiveBody: boolean } | null
   try {
     validateNote(toResolved.type, toResolved.name, newFrontmatter, newBody)
     // #491: rewriting links can grow a body past the size cap. Every rewritten
@@ -836,7 +886,7 @@ async function moveNote(
     result = await storeTransaction([seen.id], async (tx) => {
       const locked = await lockedNote(tx, seen.id)
       if (!locked || locked.deletedAt || locked.path !== fromResolved.fullPath) return null
-      const row = await foldLive(tx, locked, fold)
+      const { row, refused } = await foldLive(tx, locked, fold)
       const referrers = isMoving ? await linkReferrers(tx, vaultId, row.id, fromResolved.fullPath) : []
       for (const referrer of referrers) {
         const rewritten = refactorWikilinks(referrer.body, fromResolved.fullPath, toResolved.fullPath)
@@ -863,21 +913,21 @@ async function moveNote(
               { leaseMs: RENAME_REFACTOR_LEASE_MS },
             )
           : null
-      return { updated, referrers: referrers.map((r) => r.id), job }
+      return { updated, referrers: referrers.map((r) => r.id), job, keepLiveBody: refused && updated.body === locked.body }
     })
   } catch (err) {
-    fold?.base.destroy()
+    releaseFold(fold)
     if (isUniqueViolation(err)) throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
     throw err
   }
   if (!result) {
-    fold?.base.destroy()
+    releaseFold(fold)
     return null
   }
-  // S2a (§5.5): the old-path document or bin gets the change, then the bin moves with the note.
-  await pushCommitted(vaultId, fromResolved.fullPath, fold, result.updated)
+  // S2a (§5.5): every loaded document of the note (or its bin) gets the change, then the bin moves with the note.
+  await pushCommitted(vaultId, fromResolved.fullPath, fold, result.updated, result.keepLiveBody)
   if (isMoving) {
-    const live = loadedDocument(vaultId, fromResolved.fullPath)
+    const live = liveDocumentsOf(seen.id).find((d) => d.name === `${vaultId}/${fromResolved.fullPath}`)
     if (live) await saveCrdtState(vaultId, fromResolved.fullPath, Y.encodeStateAsUpdate(live.doc)).catch(() => {})
     await renameCrdtState(vaultId, fromResolved.fullPath, toResolved.fullPath).catch(() => {})
   }
@@ -923,19 +973,19 @@ export async function softDeleteNote(
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const seen = await readStored(vaultId, resolved.fullPath)
     if (!seen) return null
-    const fold = foldSource(vaultId, resolved.fullPath)
+    const fold = foldSource(vaultId, seen.id, resolved.fullPath)
     try {
       const deleted = await storeTransaction([seen.id], async (tx) => {
         const locked = await lockedNote(tx, seen.id)
         if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
-        const row = await foldLive(tx, locked, fold)
+        const { row } = await foldLive(tx, locked, fold)
         return (await applyRowChange(tx, row, { deletedAt: new Date() }, { action: 'delete', actor })).row
       })
       if (!deleted) return null
       afterCommit()
       return plainRow(deleted)
     } finally {
-      fold?.base.destroy()
+      releaseFold(fold)
     }
   })
 }
@@ -1641,6 +1691,8 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
       // cascade — clear it by hand or the rows leak (#92).
       await deleteSemanticEdgesFor('note', [row.id], tx)
       await insertStoreJob(tx, STORE_JOBS.removeFile, { vaultId, ownerId: row.id, paths: [`.trash/${row.id}.md`] })
+      // The delete's dir_index projection cascades away with the row: the folders are queued here.
+      await insertStoreJob(tx, STORE_JOBS.dirIndex, { vaultId, dirs: resolveNotePath(row.path).ancestorDirectories })
       return true
     })
     if (!done) return false

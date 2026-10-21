@@ -38,15 +38,21 @@ export function docState(document: Y.Doc): DocState {
   }
 }
 
-/** A loaded relay document and the users with it open. */
+/** A loaded relay document, its name and the users with it open. */
 export interface LiveDocument {
   doc: Y.Doc
+  name: string
   editors: string[]
 }
 
 export interface LiveDocs {
-  /** The document named `name` if it has finished loading (a loading one counts as not loaded), else null. */
-  loaded(name: string): LiveDocument | null
+  /**
+   * Every document that finished loading (a loading one counts as not
+   * loaded) from note `noteId`: the note id is recorded at load, so a
+   * document left open at a renamed note's old path is found, and a new note
+   * at that path is never confused with it.
+   */
+  ofNote(noteId: string): LiveDocument[]
 }
 
 let registry: LiveDocs | null = null
@@ -56,9 +62,9 @@ export function registerLiveDocs(docs: LiveDocs | null): void {
   registry = docs
 }
 
-/** The relay's loaded document of the note at `path`, if any. */
-export function loadedDocument(vaultId: string, path: string): LiveDocument | null {
-  return registry?.loaded(`${vaultId}/${path}`) ?? null
+/** The relay's loaded documents of note `noteId`. */
+export function liveDocumentsOf(noteId: string): LiveDocument[] {
+  return registry?.ofNote(noteId) ?? []
 }
 
 /**

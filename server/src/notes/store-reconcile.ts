@@ -17,8 +17,9 @@ import { failpoint } from '../failpoints.js'
 import { atomicWrite } from './atomic-write.js'
 import { orderKeys, sameContent } from './frontmatter-order.js'
 import { parseNote, type OkfNote } from './okf.js'
-import { PROJECTION_VERSIONS, noteFileRel, renderNoteFile, sha256 } from './projector.js'
-import { storeTransaction, type Tx } from './store-tx.js'
+import { PROJECTION_VERSIONS, flushProjections, noteFileRel, renderNoteFile, sha256, verifyAllProjections } from './projector.js'
+import type { ShutdownKind } from '../lifecycle.js'
+import { enqueueEmbeddingTx, replaceLinks, storeTransaction, type Tx } from './store-tx.js'
 
 const BATCH = 100
 
@@ -87,6 +88,14 @@ async function revisionAtSeq(tx: Tx, noteId: string, reason: string): Promise<'p
   return 'inserted'
 }
 
+/** What reconcileStore found: rows it gave projection rows, targets it raised, revisions it added, notes it could not fix. */
+export interface Reconciled {
+  projections: number
+  raised: number
+  revisions: number
+  failed: number
+}
+
 /**
  * Boot step 3 (§7), on every boot and after a backup restore: finds rows
  * written around the store (old code during a rollback, restores, manual
@@ -96,7 +105,7 @@ async function revisionAtSeq(tx: Tx, noteId: string, reason: string): Promise<'p
  * projection targets, and a revision at every note's current `seq`.
  * One failure is logged and skipped; reconciliation never aborts boot.
  */
-export async function reconcileStore(): Promise<{ projections: number; raised: number; revisions: number; failed: number }> {
+export async function reconcileStore(): Promise<Reconciled> {
   const inserted = (await db.execute(sql`
     INSERT INTO note_projections (note_id, projection, target_seq)
     SELECT n.id, p.kind, n.seq FROM notes n CROSS JOIN (VALUES ('file'), ('dir_index')) AS p(kind)
@@ -128,6 +137,40 @@ export async function reconcileStore(): Promise<{ projections: number; raised: n
     }
   }
   return { projections: inserted.length, raised: raised.length, revisions, failed }
+}
+
+/**
+ * The store's part of boot (ADR-003 §7 boot steps 2-3), before `listen`:
+ * 1. clear the projection claims a stopped or killed process left (their
+ *    lease would keep those projections from running for up to a minute;
+ *    nothing else runs yet, and file IO stays guarded by the path lock);
+ * 2. the one-time backfill while `store_migrated_at` is unset; while it has
+ *    failures the marker stays unset and reconciliation does not run, so a
+ *    note the backfill could not read gets no projection rows and is
+ *    backfilled (file wins, Q5) on a later boot, never skipped as done;
+ * 3. reconciliation of rows written around the store;
+ * 4. boot step 7: after an `unclean` or `unknown` previous shutdown
+ *    (`lastShutdown`), every `file` and `dir_index` projection is marked for
+ *    verification against the disk (files are written without fsync, so a
+ *    power loss can leave one truncated: conflict copy, then rewrite);
+ * 5. the projector runs until nothing is pending, so files equal rows when
+ *    serving starts.
+ */
+export async function bootStore(
+  options: { lastShutdown?: ShutdownKind } = {},
+): Promise<{ migrated: boolean; reconciled: Reconciled | null; verified: number }> {
+  await db.execute(sql`UPDATE note_projections SET lease_until = NULL WHERE lease_until IS NOT NULL`)
+  if (!(await storeMigrated())) {
+    await runStoreBackfill()
+    if (!(await storeMigrated())) return { migrated: false, reconciled: null, verified: 0 }
+  } else {
+    const removed = await sweepTempFiles()
+    if (removed > 0) console.log(`removed ${removed} orphan temp file(s)`)
+  }
+  const reconciled = await reconcileStore()
+  const verified = options.lastShutdown && options.lastShutdown !== 'graceful' ? await verifyAllProjections() : 0
+  await flushProjections()
+  return { migrated: true, reconciled, verified }
 }
 
 /** True when the S2a backfill has finished on this instance. */
@@ -252,6 +295,10 @@ async function backfillNote(tx: Tx, id: string, report: BackfillReport, date: st
       SELECT id, ${MIGRATION_ACTOR.type}, 'migration:file', frontmatter, body, seq,
         '{"kind":"system","reason":"migration: the file wins (Q5)"}'::jsonb
       FROM notes WHERE id = ${id}`)
+    // As every store write: the new body's links and an embedding of it.
+    await replaceLinks(tx, id, parsed.body)
+    const [moved] = (await tx.execute(sql`SELECT seq FROM notes WHERE id = ${id}`)) as unknown as Array<{ seq: string }>
+    await enqueueEmbeddingTx(tx, id, Number(moved!.seq))
     row.frontmatter = frontmatter
     row.body = parsed.body
     order = orderKeys(parsed.frontmatter, frontmatter)

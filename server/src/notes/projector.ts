@@ -370,9 +370,13 @@ export function renderDirIndex(rows: IndexRow[], dir: string): string | null {
   return `${sections.join('\n\n')}\n`
 }
 
-/** The live rows `renderDirIndex` lists. */
-export async function indexRows(vaultId: string): Promise<IndexRow[]> {
-  return db
+/**
+ * The live rows `renderDirIndex` lists. Inside a path-lock transaction pass
+ * its `tx`: a read on another pooled connection could queue behind a
+ * TRUNCATE that waits for this transaction, a wait Postgres cannot see.
+ */
+export async function indexRows(vaultId: string, client: Tx | typeof db = db): Promise<IndexRow[]> {
+  return client
     .select({ path: notes.path, type: notes.type, frontmatter: sql<Record<string, unknown>>`${notes.frontmatter}` })
     .from(notes)
     .where(and(eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
@@ -401,7 +405,7 @@ export async function projectDirIndices(vaultId: string, dirs: Iterable<string>)
     await withPathLock(vaultId, rel, async (tx) => {
       if (!(await vaultLive(tx, vaultId))) return
       // Rows read again under the lock: a create that committed meanwhile is listed (#779).
-      const current = await indexRows(vaultId)
+      const current = await indexRows(vaultId, tx)
       if (current.some((note) => note.path === `${dir}/index`)) return
       const content = renderDirIndex(current, dir)
       if (content === null) {

@@ -10,8 +10,8 @@ import { scrubStoredGitCredentials } from './repositories/git-remote.js'
 import { startBackupScheduler } from './export/backup-service.js'
 import { config, MIN_MONITORING_TOKEN_LENGTH } from './config.js'
 import { sql } from './db/client.js'
-import { reconcileStore, runStoreBackfill, storeMigrated, sweepTempFiles } from './notes/store-reconcile.js'
-import { flushProjections, sweepOrphanFiles, verifyAllProjections } from './notes/projector.js'
+import { bootStore } from './notes/store-reconcile.js'
+import { flushProjections, sweepOrphanFiles } from './notes/projector.js'
 import { holdSharedLockOrExit } from './notes/maintenance-lock.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
@@ -36,27 +36,17 @@ await holdSharedLockOrExit()
 
 try {
   await runMigrations()
-  // ADR-003 S2a, before anything is served (§7 boot steps 2-3): the one-time
-  // backfill into the transactional store (resumable), then on every boot the
-  // reconciliation of rows written around the store (rollback-era code,
-  // restores, SQL). Neither aborts boot because of one note.
-  if (!(await storeMigrated())) await runStoreBackfill()
-  else {
-    const removed = await sweepTempFiles()
-    if (removed > 0) console.log(`removed ${removed} orphan temp file(s)`)
-  }
-  const store = await reconcileStore()
-  if (store.projections + store.raised + store.revisions + store.failed > 0) {
-    console.log(`store reconciliation: ${JSON.stringify(store)}`)
-  }
-  // Boot step 7: files are written without fsync, so after an unclean or
-  // unknown shutdown every file projection is verified against the disk
-  // (ownership rules: a truncated file is conflict-copied and rewritten).
-  if (bootRecord.boot.lastShutdown !== 'graceful') {
-    const marked = await verifyAllProjections()
-    await flushProjections()
-    console.log(`verified ${marked} file projection(s) after a ${bootRecord.boot.lastShutdown} shutdown`)
-  }
+  // ADR-003 S2a, before anything is served (§7 boot steps 2-8): stale
+  // projection claims cleared, the one-time backfill (resumable), the
+  // reconciliation of rows written around the store, after an unclean or
+  // unknown shutdown a verify of every file against its row, and the
+  // projector run until files equal rows. Nothing here aborts boot because
+  // of one note.
+  const store = await bootStore({ lastShutdown: bootRecord.boot.lastShutdown })
+  if (!store.migrated) console.warn('store backfill had failures: see the migration report; it runs again at the next boot')
+  const r = store.reconciled
+  if (r && r.projections + r.raised + r.revisions + r.failed > 0) console.log(`store reconciliation: ${JSON.stringify(r)}`)
+  if (store.verified > 0) console.log(`verified ${store.verified} projection(s) after a ${bootRecord.boot.lastShutdown} shutdown`)
   // Before anything serves or syncs a repository: remotes stored with a
   // credential in the URL (before #383 was fixed) are moved to encrypted storage.
   const scrub = await scrubStoredGitCredentials()
@@ -87,23 +77,24 @@ try {
   await app.listen({ port: config.port, host: '0.0.0.0' })
   // One process, one port: the relay rides Fastify's own HTTP server.
   const collab = startCollabServer(app.server)
-  // Boot step 9, in the background: once the projector has drained, `.md`
-  // files no row or projection owns are moved to `.orphans/` (never deleted).
-  void flushProjections()
-    .then(() => sweepOrphanFiles())
+  // Boot step 9, in the background (bootStore already drained the
+  // projector): `.md` files no row or projection owns are moved to
+  // `.orphans/`, never deleted. Each path is decided under its path lock.
+  void sweepOrphanFiles()
     .then((moved) => {
       if (moved.length > 0) console.warn(`moved ${moved.length} orphan note file(s) to .orphans/`)
     })
     .catch((err: unknown) => console.error('orphan sweep failed:', err))
   // Hocuspocus used to install these itself inside its `listen()`. Without
   // them a redeploy drops every note edit still inside the store debounce.
+  // After the relay's last stores commit, the projector gets a bounded drain
+  // (ADR-003 §7) so their files land and no claim is left behind.
+  const drainProjector = () =>
+    Promise.race([flushProjections(), new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref())]).catch(() => {})
+  const shutdown = () => collab.destroy().then(drainProjector).then(() => app.close())
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
-      void collab
-        .destroy()
-        // A bounded projector drain (§7); not needed for correctness: the next boot resumes it.
-        .then(() => Promise.race([flushProjections(), new Promise((resolve) => setTimeout(resolve, 5000).unref())]))
-        .then(() => app.close())
+      void shutdown()
         .then(() => sql.end({ timeout: 5 }))
         // Only once every flush finished: a shutdown that fails or that
         // Docker cuts short with SIGKILL stays `unclean`.
@@ -113,17 +104,13 @@ try {
   }
   process.on('uncaughtException', (err) => {
     app.log.error(err, 'uncaught exception, initiating shutdown')
-    void collab
-      .destroy()
-      .then(() => app.close())
+    void shutdown()
       .then(() => sql.end({ timeout: 5 }))
       .finally(() => process.exit(1))
   })
   process.on('unhandledRejection', (reason) => {
     app.log.error({ err: reason }, 'unhandled rejection, initiating shutdown')
-    void collab
-      .destroy()
-      .then(() => app.close())
+    void shutdown()
       .then(() => sql.end({ timeout: 5 }))
       .finally(() => process.exit(1))
   })

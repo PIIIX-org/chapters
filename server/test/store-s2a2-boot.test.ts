@@ -9,7 +9,8 @@ import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
 import { createNote, renameNote } from '../src/notes/store.js'
-import { flushProjections, renderNoteFile, sweepOrphanFiles, verifyAllProjections } from '../src/notes/projector.js'
+import { flushProjections, renderNoteFile, sweepOrphanFiles } from '../src/notes/projector.js'
+import { bootStore } from '../src/notes/store-reconcile.js'
 import { MaintenanceInProgressError, holdInstanceLock } from '../src/notes/maintenance-lock.js'
 import { exportLegacyFiles } from '../src/notes/store-export.js'
 import { createActiveUser, loginCookie } from './helpers.js'
@@ -59,19 +60,20 @@ async function conflictCopiesOf(name: string): Promise<string[]> {
 }
 
 describe('boot step 7: verify after an unclean shutdown (§7)', () => {
-  it('a file a power loss truncated is conflict-copied and rewritten; intact files keep their bytes', async () => {
+  it('after a graceful shutdown a truncated file is left alone; after an unclean one it is conflict-copied and rewritten', async () => {
     const torn = await createNote(vaultId, { type: 'docs', name: 'torn', body: 'whole body' })
-    const intact = await createNote(vaultId, { type: 'docs', name: 'intact', body: 'fine' })
+    await createNote(vaultId, { type: 'docs', name: 'intact', body: 'fine' })
     await flushProjections()
     await writeFile(file('docs/torn.md'), '')
     const before = await readFile(file('docs/intact.md'))
-    expect(await verifyAllProjections()).toBeGreaterThanOrEqual(2)
-    await flushProjections()
+    expect((await bootStore({ lastShutdown: 'graceful' })).verified).toBe(0)
+    expect(await readFile(file('docs/torn.md'), 'utf8')).toBe('')
+    const boot = await bootStore({ lastShutdown: 'unclean' })
+    expect(boot.verified).toBeGreaterThanOrEqual(2)
     expect(await readFile(file('docs/torn.md'), 'utf8')).toBe(await rendered(torn.id))
     expect(await conflictCopiesOf('torn')).toHaveLength(1)
     expect((await readFile(file('docs/intact.md'))).equals(before)).toBe(true)
     expect(await conflictCopiesOf('intact')).toHaveLength(0)
-    expect(intact.id).toBeTruthy()
   })
 })
 

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { sql } from 'drizzle-orm'
@@ -11,7 +11,7 @@ import { db } from '../src/db/client.js'
 import { FailpointError, setFailpointHandler, type Failpoint } from '../src/failpoints.js'
 import { createNote, purgeNote, readNote, renameNote, restoreNote, revertNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { flushProjections } from '../src/notes/projector.js'
-import { reconcileStore, runStoreBackfill } from '../src/notes/store-reconcile.js'
+import { bootStore, reconcileStore, runStoreBackfill } from '../src/notes/store-reconcile.js'
 import { serializeNote } from '../src/notes/okf.js'
 import { checkNoteFiles } from '../src/notes/integrity.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
@@ -310,5 +310,72 @@ describe('backfill and boot reconciliation (§7 step 3, §8)', () => {
       await expectRevisionAtSeq(id)
     }
     await flushProjections()
+  })
+
+  it('a projection claim a killed process left does not hold its file back after the next boot', async () => {
+    await db.execute(sql`INSERT INTO instance_state (id, store_migrated_at) VALUES ('singleton', now()) ON CONFLICT (id) DO UPDATE SET store_migrated_at = now()`)
+    const note = await createNote(vaultId, { type: 'lease', name: 'orphan', body: 'one' })
+    await flushProjections()
+    // What claimProjections leaves when the process dies before the file write
+    // (set before the write, so its own wake-up cannot write the file first).
+    await db.execute(sql`UPDATE note_projections SET lease_until = now() + interval '60 seconds', attempts = 1 WHERE note_id = ${note.id}`)
+    await updateNote(vaultId, 'lease/orphan', { body: 'two' }, agent())
+    await flushProjections()
+    expect(await readFile(file('lease', 'orphan.md'), 'utf8')).toContain('one')
+    await bootStore()
+    expect(await readFile(file('lease', 'orphan.md'), 'utf8')).toContain('two')
+  })
+
+  it('a note whose backfill failed is backfilled at the next boot (the file still wins), not skipped as done', async () => {
+    const id = randomUUID()
+    await db.execute(sql`UPDATE instance_state SET store_migrated_at = NULL`)
+    await db.execute(sql`
+      INSERT INTO notes (id, vault_id, type, name, path, frontmatter, body)
+      VALUES (${id}, ${vaultId}, 'failed', 'once', 'failed/once', '{"type":"failed"}'::jsonb, 'row text')`)
+    await mkdir(file('failed'), { recursive: true })
+    await writeFile(file('failed', 'once.md'), serializeNote({ frontmatter: { type: 'failed' }, body: 'file text' }))
+    await chmod(file('failed', 'once.md'), 0o000)
+    try {
+      expect((await bootStore()).migrated).toBe(false)
+      const rows = (await db.execute(sql`SELECT 1 FROM note_projections WHERE note_id = ${id}`)) as unknown as unknown[]
+      expect(rows).toHaveLength(0)
+    } finally {
+      await chmod(file('failed', 'once.md'), 0o644)
+    }
+    expect((await bootStore()).migrated).toBe(true)
+    expect((await readNote(vaultId, 'failed/once'))!.body).toBe('file text')
+    await expectRevisionAtSeq(id)
+  })
+
+  it('backfill file-wins replaces the links and queues an embedding of the file text', async () => {
+    const id = randomUUID()
+    await db.execute(sql`
+      INSERT INTO notes (id, vault_id, type, name, path, frontmatter, body)
+      VALUES (${id}, ${vaultId}, 'linked', 'wins', 'linked/wins', '{"type":"linked"}'::jsonb, 'see [[docs/old]]')`)
+    await db.execute(sql`INSERT INTO note_links (source_note_id, target_path) VALUES (${id}, 'docs/old')`)
+    await mkdir(file('linked'), { recursive: true })
+    await writeFile(file('linked', 'wins.md'), serializeNote({ frontmatter: { type: 'linked' }, body: 'see [[docs/new]]' }))
+    await runStoreBackfill()
+    const links = (await db.execute(sql`SELECT target_path FROM note_links WHERE source_note_id = ${id}`)) as unknown as Array<{
+      target_path: string
+    }>
+    expect(links.map((l) => l.target_path)).toEqual(['docs/new'])
+    const jobs = (await db.execute(sql`SELECT 1 FROM jobs WHERE kind = 'embed_note' AND payload->>'noteId' = ${id}`)) as unknown as unknown[]
+    expect(jobs.length).toBeGreaterThan(0)
+    await flushProjections()
+  })
+})
+
+describe('purge (§5.5)', () => {
+  it('a deleted then purged note leaves its folder index.md', async () => {
+    await createNote(vaultId, { type: 'pf', name: 'keep', body: '' })
+    const gone = await createNote(vaultId, { type: 'pf', name: 'gone', body: '' })
+    await flushProjections()
+    await softDeleteNote(vaultId, 'pf/gone', agent())
+    await purgeNote(vaultId, gone.id)
+    await flushProjections()
+    const index = await readFile(file('pf', 'index.md'), 'utf8')
+    expect(index).toContain('[[pf/keep]]')
+    expect(index).not.toContain('pf/gone')
   })
 })
