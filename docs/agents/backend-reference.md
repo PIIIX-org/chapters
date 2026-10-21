@@ -682,15 +682,27 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   queues (not awaited) the notes with more than 45 revisions stored whole
   at their current `seq`, again only after an errored run. Each batch is
   one store transaction under the note's lock (at most 20 revisions or
-  about 250 ms) and each revision one UPDATE that checks in SQL that the
+  about 50 ms) and each revision one UPDATE that checks in SQL that the
   delta rebuilds the body exactly and that the base is still whole (a
-  mismatch keeps it whole and logs). Failpoints
+  mismatch keeps it whole and logs). **Low priority (#880):** a batch
+  waits (up to 5 s) while any `file` or `dir_index` projection is
+  pending without an error, and ends early when one appears; each line
+  diff is limited to 20 ms (past it the delta is coarser, never wrong);
+  a revision that grew to more than twice its base is kept whole without
+  a diff; a base's body is read once per run. **Watermark:**
+  `note_revision_compaction (note_id, examined_through)` (FK cascade)
+  holds the `ord` of the newest revision a run decided on, written in the
+  batch's transaction; the next run starts after it, so a history that
+  does not compress (a note rewritten whole each time) is diffed once,
+  not again at every run. A revision the retention protected when a run
+  passed it stays whole; `expandDependents` moves the watermark back
+  before the revisions it stores whole again. Failpoints
   `revisions.compact-before-commit` (the batch rolls back) and
-  `revisions.compact-after-commit` (the batch stays): a rerun only finds
-  revisions still whole, so it ends where an uninterrupted run ends.
-  Failures are monitoring job kind `compaction`. `purge_revision` runs
-  in a store transaction under the note's lock and first stores whole
-  every revision built on the one it purges (the FK refuses otherwise).
+  `revisions.compact-after-commit` (the batch stays): a rerun starts at
+  the watermark, so it ends where an uninterrupted run ends. Failures are
+  monitoring job kind `compaction`. `purge_revision` runs in a store
+  transaction under the note's lock and first stores whole every
+  revision built on the one it purges (the FK refuses otherwise).
 - **Progressive indexes** (`regenProgressiveIndices`): run on create,
   rename, delete, restore, and on updates whose frontmatter really
   changed (`isDeepStrictEqual`, so key order alone never counts: `jsonb`

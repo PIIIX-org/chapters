@@ -18,6 +18,13 @@ ALTER TABLE "note_revisions"
   ADD CONSTRAINT "note_revisions_delta_base_id_fkey" FOREIGN KEY ("delta_base_id") REFERENCES "note_revisions"("id"),
   ADD CONSTRAINT "note_revisions_delta_check" CHECK (("body_delta" IS NULL) = ("delta_base_id" IS NULL) AND ("body_delta" IS NULL) = ("body_bytes" IS NULL));--> statement-breakpoint
 CREATE INDEX "note_revisions_delta_base" ON "note_revisions" ("delta_base_id") WHERE "delta_base_id" IS NOT NULL;--> statement-breakpoint
+-- Per note, the `ord` of the newest revision compaction has decided on
+-- (compacted or kept whole): the next run starts after it, so a revision that
+-- did not compress is not diffed again at every run (#880).
+CREATE TABLE "note_revision_compaction" (
+  "note_id" uuid PRIMARY KEY REFERENCES "notes"("id") ON DELETE CASCADE,
+  "examined_through" bigint NOT NULL
+);--> statement-breakpoint
 -- A delta is a JSON array of pieces, concatenated: a string is literal text,
 -- a pair [from, count] copies `count` characters of the base from `from`
 -- (1-based, as substr counts them).

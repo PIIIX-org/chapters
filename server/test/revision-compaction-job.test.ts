@@ -7,14 +7,14 @@
 // every revision whole again; and an instance backup holds every body whole.
 import { randomBytes } from 'node:crypto'
 import AdmZip from 'adm-zip'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { vaults } from '../src/db/schema.js'
 import { buildInstanceBackup } from '../src/export/archive.js'
 import { FailpointError, setFailpointHandler } from '../src/failpoints.js'
 import { jobTiming } from '../src/jobs/durable.js'
-import { createNote, purgeRevision, revertNote, type Actor } from '../src/notes/store.js'
+import { createNote, purgeRevision, revertNote, updateNote, type Actor } from '../src/notes/store.js'
 import {
   KEEP_RECENT_REVISIONS,
   compactNoteRevisions,
@@ -133,11 +133,13 @@ describe('compactNoteRevisions (#501)', { timeout: 60_000 }, () => {
   it('stores old revisions as deltas from whole ones, reads them back exactly, and a rerun changes nothing', async () => {
     const texts = bodies(80)
     const { noteId } = await noteWithHistory(texts)
-    const compacted = await compactNoteRevisions(noteId)
+    const { compacted, examined } = await compactNoteRevisions(noteId)
     const rows = await stored(noteId)
     expect(rows.map((r) => r.body)).toEqual(texts)
     expect(compacted).toBe(rows.filter((r) => r.delta !== null).length)
     expect(compacted).toBeGreaterThan(40)
+    // Every revision before the newest ones was decided on once.
+    expect(examined).toBe(texts.length - KEEP_RECENT_REVISIONS - 1)
     // The newest revisions stay whole; a delta's base is whole and older; a compacted row keeps no body.
     for (const r of rows.slice(-KEEP_RECENT_REVISIONS)) expect(r.delta).toBeNull()
     for (const [i, r] of rows.entries()) {
@@ -147,8 +149,50 @@ describe('compactNoteRevisions (#501)', { timeout: 60_000 }, () => {
       expect(rows[r.baseOrd!]!.delta).toBeNull()
     }
     const before = shape(rows)
-    expect(await compactNoteRevisions(noteId)).toBe(0)
+    expect(await compactNoteRevisions(noteId)).toEqual({ compacted: 0, examined: 0 })
     expect(shape(await stored(noteId))).toEqual(before)
+  })
+
+  it('diffs a history that does not compress once, not again at every run (#880)', async () => {
+    // A note rewritten whole each time: no delta pays, every revision stays whole.
+    const texts = Array.from({ length: 50 }, () => bodies(1, 60)[0]!)
+    const { noteId, ids } = await noteWithHistory(texts)
+    expect(await compactNoteRevisions(noteId)).toEqual({ compacted: 0, examined: texts.length - KEEP_RECENT_REVISIONS - 1 })
+    expect(await compactNoteRevisions(noteId)).toEqual({ compacted: 0, examined: 0 })
+    // Newer revisions are examined when they leave the newest 20, and only they.
+    for (const body of bodies(5)) {
+      await db.execute(sql`
+        INSERT INTO note_revisions (note_id, actor_type, actor_id, action, frontmatter, body)
+        VALUES (${noteId}, 'user', ${person.id!}, 'update', '{"type":"docs"}'::jsonb, ${body})`)
+    }
+    expect((await compactNoteRevisions(noteId)).examined).toBe(5)
+    expect((await stored(noteId)).slice(0, ids.length).map((r) => r.body)).toEqual(texts)
+  })
+
+  it('leaves the projector first: writes to another note are projected promptly while a heavy history compacts (#880)', async () => {
+    // 60 revisions of a 300 KB note rewritten whole each time: every one is read and diffed.
+    const heavy = Array.from({ length: 60 }, () => bodies(1, 7_500)[0]!)
+    const { noteId } = await noteWithHistory(heavy)
+    const busy = await createNote(vaultId, { path: `docs/compaction-busy-${++counter}`, frontmatter: { type: 'docs' }, body: 'start\n' }, person)
+    const compacting = compactNoteRevisions(noteId)
+    const delays: number[] = []
+    for (let i = 0; i < 20; i++) {
+      const written = await updateNote(vaultId, busy.path, { body: `write ${i}\n` }, person)
+      const acked = performance.now()
+      await vi.waitFor(
+        async () => {
+          const [p] = (await db.execute(sql`
+            SELECT applied_seq FROM note_projections WHERE note_id = ${busy.id} AND projection = 'file'`)) as unknown as Array<{ applied_seq: string }>
+          expect(Number(p?.applied_seq)).toBeGreaterThanOrEqual(written!.seq)
+        },
+        { timeout: 10_000, interval: 5 },
+      )
+      delays.push(performance.now() - acked)
+    }
+    delays.sort((a, b) => a - b)
+    // Each file is written well within a second of its write (the lab's crash-write control allows 3.5 s).
+    expect(delays.at(-1), JSON.stringify(delays.map(Math.round))).toBeLessThan(1_000)
+    expect((await compacting).examined).toBe(heavy.length - KEEP_RECENT_REVISIONS - 1)
   })
 
   it('keeps whole the note as it is, restore points, quarantines, proposals and their bases, and the rebase base', async () => {
@@ -268,20 +312,22 @@ describe('compactNoteRevisions (#501)', { timeout: 60_000 }, () => {
     }
   })
 
-  it('the rollback UPDATE in backup.md stores every revision whole again', async () => {
+  it('the rollback SQL in backup.md stores every revision whole again, and a roll-forward compacts again', async () => {
     const texts = bodies(60)
     const { noteId } = await noteWithHistory(texts)
-    await compactNoteRevisions(noteId)
-    expect((await stored(noteId)).some((r) => r.delta !== null)).toBe(true)
+    const first = await compactNoteRevisions(noteId)
+    expect(first.compacted).toBeGreaterThan(0)
     await db.execute(
       sql.raw(
         'UPDATE note_revisions SET body = note_revision_body(body, body_delta, delta_base_id), ' +
-          'body_delta = NULL, delta_base_id = NULL, body_bytes = NULL WHERE body_delta IS NOT NULL',
+          'body_delta = NULL, delta_base_id = NULL, body_bytes = NULL WHERE body_delta IS NOT NULL; ' +
+          'DELETE FROM note_revision_compaction',
       ),
     )
     const rows = await stored(noteId)
     expect(rows.map((r) => r.whole)).toEqual(texts)
     expect(rows.every((r) => r.delta === null)).toBe(true)
+    expect((await compactNoteRevisions(noteId)).compacted).toBe(first.compacted)
   })
 
   it('an instance backup holds every revision body whole', async () => {

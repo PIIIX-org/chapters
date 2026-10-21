@@ -30,10 +30,19 @@
  * Each batch is one store transaction under the note's lock (at most
  * BATCH_ROWS revisions or BATCH_MS), and each revision is one UPDATE that
  * checks in SQL that the delta rebuilds the body exactly and that the base is
- * still whole. A crash loses at most the batch in flight, which a rerun
- * redoes: a rerun only finds the revisions still whole, so the job is
- * idempotent.
+ * still whole. Compaction runs at low priority: a batch does not start, and
+ * ends early, while a note's file is waiting to be written (the projector
+ * goes first, #880), and each diff is time-limited (DIFF_MS) so it never
+ * holds the event loop for long. `note_revision_compaction.examined_through`
+ * records the newest revision a run decided on (compacted or kept whole), in
+ * the batch's transaction, so a rerun starts after it: a history whose
+ * revisions do not compress (a note rewritten whole each time) is diffed
+ * once, not again at every run. A crash loses at most the batch in flight,
+ * which a rerun redoes, so the job is idempotent. A revision the retention
+ * protected when a run passed it (a proposal's base, the rebase base) stays
+ * whole.
  */
+import { setTimeout as sleep } from 'node:timers/promises'
 import { sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { failpoint } from '../failpoints.js'
@@ -47,7 +56,13 @@ export const KEEP_RECENT_REVISIONS = 20
 
 /** At most this many revisions per transaction, which holds the note's lock for at most about BATCH_MS. */
 const BATCH_ROWS = 20
-const BATCH_MS = 250
+const BATCH_MS = 50
+/** The time limit of one revision's line diff: past it the delta is coarser (larger), never wrong. */
+const DIFF_MS = 20
+
+/** How long a batch waits for the projector before it runs anyway, and how often it looks. */
+const YIELD_MAX_MS = 5_000
+const YIELD_POLL_MS = 50
 
 /**
  * The pieces that rebuild a body from its base, concatenated in order: a
@@ -68,8 +83,8 @@ function codePoints(text: string): number {
 }
 
 /** The delta from `base` to `body`, per whole line (sync/text-diff.ts `diffLines`). */
-export function encodeDelta(base: string, body: string): RevisionDelta {
-  const { lines, hunks } = diffLines(base, body)
+export function encodeDelta(base: string, body: string, timeLimitMs?: number): RevisionDelta {
+  const { lines, hunks } = diffLines(base, body, timeLimitMs)
   const delta: RevisionDelta = []
   let line = 0
   let from = 1
@@ -107,20 +122,53 @@ async function candidates(tx: Tx, noteId: string, after: number): Promise<Array<
   return rows.map((r) => ({ id: r.id, ord: Number(r.ord) }))
 }
 
-/** Stores revision `id` as a delta from the nearest older whole revision when the retention rules above allow it. */
-async function compactRevision(tx: Tx, noteId: string, id: string, ord: number): Promise<boolean> {
+/** True while a note's file or a folder's index.md is waiting to be written (and not failing): compaction waits for it. */
+async function projectionPending(): Promise<boolean> {
+  const rows = (await db.execute(sql`
+    SELECT 1 FROM note_projections
+    WHERE applied_seq < target_seq AND projection IN ('file', 'dir_index') AND last_error IS NULL LIMIT 1`)) as unknown as unknown[]
+  return rows.length > 0
+}
+
+/** Waits until no projection is pending, or for at most YIELD_MAX_MS. */
+async function yieldToProjector(): Promise<void> {
+  const until = Date.now() + YIELD_MAX_MS
+  while (Date.now() < until && (await projectionPending())) await sleep(YIELD_POLL_MS)
+}
+
+/** The base last read in this run: consecutive revisions usually share it, so its body is read once. */
+interface BaseCache {
+  id: string | null
+  body: string
+}
+
+/**
+ * Stores revision `id` as a delta from the nearest older whole revision when
+ * the retention rules above allow it. Returns whether it did.
+ */
+async function compactRevision(tx: Tx, noteId: string, id: string, ord: number, cache: BaseCache): Promise<boolean> {
   const [base] = (await tx.execute(sql`
-    SELECT b.id, b.body, octet_length(b.body) AS bytes,
+    SELECT b.id, octet_length(b.body) AS bytes,
       (SELECT coalesce(sum(octet_length(d.body_delta::text)), 0) FROM note_revisions d WHERE d.delta_base_id = b.id)::bigint AS used
     FROM note_revisions b
     WHERE b.note_id = ${noteId} AND b.ord < ${ord} AND b.body_delta IS NULL AND b.action NOT IN ${NOT_A_BASE}
-    ORDER BY b.ord DESC LIMIT 1`)) as unknown as Array<{ id: string; body: string; bytes: number; used: string | number }>
+    ORDER BY b.ord DESC LIMIT 1`)) as unknown as Array<{ id: string; bytes: number; used: string | number }>
   if (!base) return false
-  const [revision] = (await tx.execute(sql`SELECT body FROM note_revisions WHERE id = ${id}`)) as unknown as Array<{ body: string }>
+  const [revision] = (await tx.execute(sql`SELECT body, octet_length(body) AS bytes FROM note_revisions WHERE id = ${id}`)) as unknown as Array<{
+    body: string
+    bytes: number
+  }>
   if (!revision) return false
-  const delta = JSON.stringify(encodeDelta(base.body, revision.body))
+  // A body more than twice its base's size needs literal text over half its size: no delta can pay, so no diff.
+  if ((revision.bytes - base.bytes) * 2 > revision.bytes) return false
+  if (cache.id !== base.id) {
+    const [whole] = (await tx.execute(sql`SELECT body FROM note_revisions WHERE id = ${base.id}`)) as unknown as Array<{ body: string }>
+    cache.id = base.id
+    cache.body = whole!.body
+  }
+  const delta = JSON.stringify(encodeDelta(cache.body, revision.body, DIFF_MS))
   const bytes = Buffer.byteLength(delta)
-  if (bytes * 2 > Buffer.byteLength(revision.body) || Number(base.used) + bytes > base.bytes) return false
+  if (bytes * 2 > revision.bytes || Number(base.used) + bytes > base.bytes) return false
   // SET reads the row as it was: `body_bytes` is the size of the body it replaces.
   const updated = (await tx.execute(sql`
     UPDATE note_revisions r SET body = '', body_delta = ${delta}::jsonb, delta_base_id = b.id, body_bytes = octet_length(r.body)
@@ -132,42 +180,66 @@ async function compactRevision(tx: Tx, noteId: string, id: string, ord: number):
   return updated.length > 0
 }
 
+/** What one run did: revisions it stored as deltas, and revisions it decided on (compacted or kept whole). */
+export interface CompactionRun {
+  compacted: number
+  examined: number
+}
+
 /**
- * Compacts the history of note `noteId` as far as the retention allows.
- * Returns the number of revisions it compacted (0 on a rerun with nothing new).
+ * Compacts the history of note `noteId` as far as the retention allows,
+ * starting after the newest revision an earlier run decided on.
  */
-export async function compactNoteRevisions(noteId: string): Promise<number> {
-  let after = 0
-  let total = 0
+export async function compactNoteRevisions(noteId: string): Promise<CompactionRun> {
+  const [mark] = (await db.execute(sql`
+    SELECT examined_through FROM note_revision_compaction WHERE note_id = ${noteId}`)) as unknown as Array<{ examined_through: string }>
+  let after = Number(mark?.examined_through ?? 0)
+  const run: CompactionRun = { compacted: 0, examined: 0 }
+  const cache: BaseCache = { id: null, body: '' }
   for (;;) {
+    await yieldToProjector()
     const batch = await storeTransaction([noteId], async (tx) => {
       const started = Date.now()
       const found = await candidates(tx, noteId, after)
       let compacted = 0
+      let examined = 0
       let last = after
       for (const { id, ord } of found) {
-        if (await compactRevision(tx, noteId, id, ord)) compacted += 1
+        if (await compactRevision(tx, noteId, id, ord, cache)) compacted += 1
+        examined += 1
         last = ord
-        if (Date.now() - started > BATCH_MS) break
+        if (Date.now() - started > BATCH_MS || (await projectionPending())) break
+      }
+      if (last > after) {
+        await tx.execute(sql`
+          INSERT INTO note_revision_compaction (note_id, examined_through) VALUES (${noteId}, ${last})
+          ON CONFLICT (note_id) DO UPDATE SET examined_through = GREATEST(note_revision_compaction.examined_through, EXCLUDED.examined_through)`)
       }
       failpoint('revisions.compact-before-commit')
-      return { compacted, last, more: found.length > 0 && (found.length === BATCH_ROWS || last < found.at(-1)!.ord) }
+      return { compacted, examined, last, more: found.length > 0 && (found.length === BATCH_ROWS || last < found.at(-1)!.ord) }
     })
     failpoint('revisions.compact-after-commit')
-    total += batch.compacted
+    run.compacted += batch.compacted
+    run.examined += batch.examined
     after = batch.last
-    if (!batch.more) return total
+    if (!batch.more) return run
   }
 }
 
 /**
  * Stores whole again every revision whose base is `revisionId`, inside `tx`
- * (the note's store transaction): before that revision is purged.
+ * (the note's store transaction): before that revision is purged. The note's
+ * next run examines them again (its `examined_through` moves back before them).
  */
 export async function expandDependents(tx: Tx, revisionId: string): Promise<void> {
   await tx.execute(sql`
-    UPDATE note_revisions SET body = note_revision_body(body, body_delta, delta_base_id), body_delta = NULL, delta_base_id = NULL, body_bytes = NULL
-    WHERE delta_base_id = ${revisionId}`)
+    WITH expanded AS (
+      UPDATE note_revisions SET body = note_revision_body(body, body_delta, delta_base_id), body_delta = NULL, delta_base_id = NULL, body_bytes = NULL
+      WHERE delta_base_id = ${revisionId}
+      RETURNING note_id, ord)
+    UPDATE note_revision_compaction c SET examined_through = LEAST(c.examined_through, e.first - 1)
+    FROM (SELECT note_id, min(ord) AS first FROM expanded GROUP BY note_id) e
+    WHERE c.note_id = e.note_id`)
 }
 
 async function drainOnce(): Promise<void> {
