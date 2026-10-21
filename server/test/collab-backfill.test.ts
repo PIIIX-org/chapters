@@ -9,13 +9,15 @@ import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
 import { FailpointError, setFailpointHandler } from '../src/failpoints.js'
-import { serializeNote } from '../src/notes/okf.js'
+import { parseNote, serializeNote } from '../src/notes/okf.js'
+import { exportLegacyFiles } from '../src/notes/store-export.js'
+import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { foldPendingCollab, getLiveNote, loadCollabState, purgeNote, softDeleteNote } from '../src/notes/store.js'
 import { NoteNotMigratedError, collabNoteMigrated, setCollabNotMigrated } from '../src/notes/store-tx.js'
 import { bootCollab, collabMigrated, runCollabBackfill } from '../src/sync/collab-backfill.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
-import { createActiveUser, loginCookie, loginToken, storedCrdtText, wipeInstance } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, storedCrdtDoc, storedCrdtText, wipeInstance } from './helpers.js'
 
 // ADR-003 §8 step 4-5 and §9: the S2b backfill of `.crdt` bins into
 // note_crdt (attach, set aside, resume, finish), the roll-forward after a
@@ -198,6 +200,64 @@ describe('roll-forward after a code-only rollback (§9)', () => {
     expect(count(text, 'Hello world.')).toBe(1)
     expect((await getLiveNote(vaultId, note.path))?.body).toBe(text)
     expect((await crdtRow(note.id))?.fold_error).toBeNull()
+  })
+
+  it('store-export-legacy writes each note its bin, which the old relay takes as is, and the roll-forward merges what it wrote from it', async () => {
+    // The export refuses to run before the S2a backfill finished; this file started from an empty instance.
+    await db.execute(sql`
+      INSERT INTO instance_state (id, store_migrated_at) VALUES ('singleton', now()) ON CONFLICT (id) DO UPDATE SET store_migrated_at = now()`)
+    const note = await create('exported', 'Exported.\n')
+    await appendTyping(note.id, note.path, 'Acked, not folded.\n')
+    // The tail is still unfolded: the row lacks the typing until the export folds it.
+    expect((await getLiveNote(vaultId, note.path))!.body).toBe('Exported.\n')
+    const stored = await storedCrdtDoc(vaultId, note.path)
+
+    const report = await exportLegacyFiles()
+    expect(report.ok).toBe(true)
+    expect(await loadCrdtState(vaultId, note.path)).not.toBeNull()
+    expect(report.bins.failed).toEqual([])
+    expect(report.bins.skipped.map((s) => s.noteId)).not.toContain(note.id)
+    const row = (await getLiveNote(vaultId, note.path))!.body
+    expect(row).toBe('Exported.\nAcked, not folded.\n')
+    // The old relay's load: bin text = file text, so it keeps the bin's items and rebuilds nothing.
+    const bin = new Y.Doc()
+    Y.applyUpdate(bin, (await loadCrdtState(vaultId, note.path))!)
+    const file = parseNote(await readFile(join(config.dataDir, 'vaults', vaultId, `${note.path}.md`), 'utf8'))
+    expect(bin.getText('body').toString()).toBe(row)
+    expect(file.body).toBe(row)
+    // Same items as the stored state: a tab holding them merges, nothing doubles.
+    expect(Y.encodeStateAsUpdate(stored, Y.encodeStateVector(bin)).byteLength).toBeLessThanOrEqual(2)
+
+    // While rolled back, the old relay stores a tab's typing into the bin and the row.
+    bin.getText('body').insert(bin.getText('body').length, 'Typed on the old image.\n')
+    await writeBin(note.path, Y.encodeStateAsUpdate(bin))
+    await db.execute(sql`UPDATE notes SET body = ${'Exported.\nAcked, not folded.\nTyped on the old image.\n'} WHERE id = ${note.id}`)
+    const { backfill } = await bootCollab()
+    expect(backfill?.kind).toBe('adr-003-collab-roll-forward')
+    expect(backfill?.setAside.map((s) => s.noteId)).not.toContain(note.id)
+    expect(backfill?.merged).toBeGreaterThanOrEqual(1)
+    const text = await storedCrdtText(vaultId, note.path)
+    expect(text).toBe('Exported.\nAcked, not folded.\nTyped on the old image.\n')
+    expect((await getLiveNote(vaultId, note.path))?.body).toBe(text)
+  })
+
+  it('a note whose tail cannot be folded gets no bin (its typing stays in the log) and the export says it is incomplete', async () => {
+    await db.execute(sql`
+      INSERT INTO instance_state (id, store_migrated_at) VALUES ('singleton', now()) ON CONFLICT (id) DO UPDATE SET store_migrated_at = now()`)
+    const note = await create('export-unfolded', 'Base.\n')
+    await appendTyping(note.id, note.path, 'Unfolded.\n')
+    setFailpointHandler((point) => {
+      if (point === 'fold.before-commit') throw new FailpointError(point)
+    })
+    const report = await exportLegacyFiles()
+    setFailpointHandler(null)
+    expect(report.ok).toBe(false)
+    expect(report.folded.failed).toBeGreaterThanOrEqual(1)
+    expect(report.bins.skipped.map((s) => s.noteId)).toContain(note.id)
+    expect(await loadCrdtState(vaultId, note.path)).toBeNull()
+    expect(await storedCrdtText(vaultId, note.path)).toBe('Base.\nUnfolded.\n')
+    // Leave no export bins for the tests after this one.
+    await rm(join(config.dataDir, 'vaults', vaultId, '.crdt'), { recursive: true, force: true })
   })
 })
 

@@ -1,6 +1,6 @@
 /**
- * The stopped-server export for a code-only rollback (ADR-003 §9, Q10),
- * S2a form: files only. Run with no server up
+ * The stopped-server export for a code-only rollback (ADR-003 §9, Q10):
+ * files and `.crdt` bins. Run with no server up
  * (`docker compose run --rm app pnpm store-export-legacy`).
  *
  * It takes the instance maintenance lock in its exclusive form on a reserved
@@ -15,8 +15,12 @@
  * removals, old-folder indexes) synchronously under the ownership rules, so
  * every `.md` file and `index.md` matches the rows before the old image
  * starts. Store jobs that are leased, out of attempts or failed for good are
- * run again: their work must be done before the old image starts. `.crdt/`
- * needs nothing in S2a: the S2a relay kept the bins current by path.
+ * run again: their work must be done before the old image starts. Every
+ * unfolded collab tail is folded first (boot steps 4-5), and once the files
+ * are rendered every live note with CRDT state gets its `.crdt/<path>.bin`
+ * (collab-backfill.ts exportCrdtBins), the layout the relay before S2b
+ * reads: it opens the note with the same text and items, so tabs merge
+ * instead of doubling, and the roll-forward merges the bins it wrote.
  *
  * It refuses to run while the S2a backfill has not finished
  * (`store_migrated_at` unset): the notes it could not process have no
@@ -37,8 +41,9 @@ import { db } from '../db/client.js'
 import { holdInstanceLock } from './maintenance-lock.js'
 import { STORE_JOBS, conflictCopies, flushProjections, verifyAllProjections } from './projector.js'
 import { reconcileStore, storeMigrated } from './store-reconcile.js'
-// Registers the rename refactor runner the projector calls for `store_rename_refactor` jobs.
-import './store.js'
+import { exportCrdtBins, type CrdtBinExport } from '../sync/collab-backfill.js'
+// Also registers the rename refactor runner the projector calls for `store_rename_refactor` jobs.
+import { foldPendingCollab } from './store.js'
 
 /** The S2a backfill has failures: the export would overwrite files that must win. */
 export class BackfillPendingError extends Error {
@@ -53,6 +58,10 @@ export interface LegacyExportReport {
   finishedAt: string
   ok: boolean
   reconciled: { projections: number; raised: number; revisions: number; failed: number }
+  /** Collab tails folded into the rows before rendering (boot steps 4-5); a `failed` note keeps its tail in the log and gets no bin. */
+  folded: { folded: number; failed: number }
+  /** `.crdt` bins written for the old relay. */
+  bins: CrdtBinExport
   /** Projections still behind their target after the drain, with their last error. */
   pending: Array<{ noteId: string; projection: string; lastError: string | null }>
   /** Store jobs not done after the drain. */
@@ -70,6 +79,8 @@ export async function exportLegacyFiles(): Promise<LegacyExportReport> {
   try {
     if (!(await storeMigrated())) throw new BackfillPendingError()
     const reconciled = await reconcileStore()
+    // Boot steps 4-5: acked typing reaches the rows before they are rendered for the old image.
+    const folded = await foldPendingCollab()
     await verifyAllProjections()
     // Failed projections back off; the export retries them now.
     await db.execute(sql`
@@ -93,6 +104,7 @@ export async function exportLegacyFiles(): Promise<LegacyExportReport> {
       kind: string
       last_error: string | null
     }>
+    const bins = await exportCrdtBins()
     if (lost) throw new Error('the exclusive instance lock was lost during the export: run it again')
     const finishedAt = new Date().toISOString()
     const reportFile = join(config.dataDir, `store-export-legacy-${finishedAt.replace(/[:.]/g, '-')}.json`)
@@ -100,8 +112,10 @@ export async function exportLegacyFiles(): Promise<LegacyExportReport> {
       kind: 'adr-003-store-export-legacy',
       startedAt,
       finishedAt,
-      ok: pending.length === 0 && jobs.length === 0,
+      ok: pending.length === 0 && jobs.length === 0 && folded.failed === 0 && bins.failed.length === 0,
       reconciled,
+      folded,
+      bins,
       pending: pending.map((p) => ({ noteId: p.note_id, projection: p.projection, lastError: p.last_error })),
       pendingJobs: jobs.map((j) => ({ id: Number(j.id), kind: j.kind, lastError: j.last_error })),
       conflictCopies: conflictCopies.slice(conflictsBefore),
