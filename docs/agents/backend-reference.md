@@ -491,6 +491,25 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `read_note` (the file lags the editor by the relay's debounce) still
   removes text typed since; serving `read_note` from the live document is
   #474.
+- **Atomic append and upsert** (#478): MCP `append_note` is the `append`
+  op and `upsert_note` a whole-`body` edit, both through
+  `writeThroughCollab` with `options.create`: under the note's
+  `collab:<vault>/<path>` lock, a missing note is created by that
+  callback (`createNote`) instead of edited, so concurrent writes of a
+  missing note create it once and the rest edit it. A writer that does
+  not take that lock (`create_note`, `restore_note`) can still create the
+  note first; the unique index then refuses the callback's insert
+  (`NoteExistsError`, a subclass of `OkfValidationError` with the same
+  "already exists" message) and the edit applies to that note. Agents
+  used to append by `read_note` + `edit_note` with the whole body, which
+  lost 50–92% of concurrent appends in the lab (`concurrency`,
+  `append-same`). Both tools merge `frontmatter` per key into an
+  existing note (on create it is the note's frontmatter), run the size
+  cap, the quarantine unless `allowGrowth`, the restore point (#482) and
+  the presence row (#481) as `edit_note` does, and return the row plus
+  `created`. On the create path the restore point is skipped (no prior
+  state), and a call that found the note missing but lost the create to
+  another writer edits without one.
 - **Revision dedupe** (#480, `recordRevision`): a write that repeats the
   latest revision records nothing. Frontmatter is compared as jsonb
   stores it: deep equality on its JSON form, so object key order (nested
@@ -933,10 +952,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   handler checks owner or edit permission must declare `pinPermission`),
   `test/mcp-capabilities.test.ts` covers each rule and
   `test/mcp-tool-visibility.test.ts` the filtered `tools/list`.
-- **Tools** (58, all registered in `server.ts`; parameters and return
+- **Tools** (60, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):
   - *Vaults* (14): `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `get_vault_graph_preference`, `set_vault_graph_preference`, `get_vault_preferences`, `update_vault_preferences`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.
-  - *Notes* (13): `read_note`, `create_note`, `edit_note`, `rename_note`, `delete_note`, `list_trash`, `restore_note`, `purge_note`, `note_history`, `get_revision`, `revert_note`, `purge_revision`, `audit_okf_conformance`.
+  - *Notes* (15): `read_note`, `create_note`, `edit_note`, `append_note`, `upsert_note`, `rename_note`, `delete_note`, `list_trash`, `restore_note`, `purge_note`, `note_history`, `get_revision`, `revert_note`, `purge_revision`, `audit_okf_conformance`.
   `note_history` is metadata only and paged (#411): `listRevisionPage()`
   selects id, actor, action, `created_at` and `octet_length(body)`
   (read from the stored value's header, the body is never loaded; one
@@ -994,7 +1013,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 - **Agent skills**: `skills/elara/` (current) and `skills/chapters/`
   (legacy copy, kept consistent) give AI assistants navigation rules
   (Elara for cross-repo and natural-language questions, grep for exact
-  strings in one repo), the 58-tool catalog (`references/mcp-tools.md`), slash
+  strings in one repo), the 60-tool catalog (`references/mcp-tools.md`), slash
   commands (`/elara-*`, with `/chapters-*` aliases), the OKF rules
   (`references/okf-format.md`), the `/elara-map` protocol, and an
   always-active rule file (`rules/elara.md`).
