@@ -119,8 +119,9 @@ describe('S3 performance acceptance (§11)', () => {
     const latencies = [...sent.values()].map((e) => Math.max(e.acked!, ...e.seen.values()) - e.at).sort((a, b) => a - b)
     const p = (q: number) => latencies[Math.min(latencies.length - 1, Math.ceil(latencies.length * q) - 1)]!
     const folds = (await revisionCount(note.id)) - foldsBefore
-    console.log(
-      `[S3 perf] ${latencies.length} keystrokes, ${folds} folds of the 1 MiB note: p50 ${p(0.5).toFixed(1)} ms, p95 ${p(0.95).toFixed(1)} ms, max ${p(1).toFixed(1)} ms`,
+    // stdout, not console.log: the suite hides console output of passing tests, and CI's numbers go in the PR.
+    process.stdout.write(
+      `[S3 perf] ${latencies.length} keystrokes, ${folds} folds of the 1 MiB note: p50 ${p(0.5).toFixed(1)} ms, p95 ${p(0.95).toFixed(1)} ms, max ${p(1).toFixed(1)} ms\n`,
     )
     // The relay folded the big note while the typists typed.
     expect(folds).toBeGreaterThan(0)

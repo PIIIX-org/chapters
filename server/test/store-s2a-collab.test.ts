@@ -68,9 +68,6 @@ async function open(path: string) {
       text.insert(index, typed)
       await waitFor(() => !provider.hasUnsyncedChanges)
     },
-    unsynced(): boolean {
-      return provider.hasUnsyncedChanges
-    },
   }
 }
 
@@ -97,13 +94,11 @@ describe('a write to an open note (§5.1 R5-1, §5.2 step 8)', () => {
     )
     await inCompute
     // Typing makes a relay store due (debounce 150 ms in tests, maxDebounce 750 ms); it waits for the lock.
-    // Since S3 the typing is logged under the note's lock before it is acked, so its ack waits for the write too.
-    editor.text.insert(0, 'Typed. ')
+    // Since S3 the typing is logged before it is acked, without waiting for the write's lock.
+    await editor.type(0, 'Typed. ')
     await new Promise((r) => setTimeout(r, 900))
-    expect(editor.unsynced()).toBe(true)
     release()
     const written = await write
-    await waitFor(() => !editor.unsynced())
     expect(written?.body).toContain('Agent line.')
     // The store that waited runs after the write: the row keeps the agent's line and the typing.
     await waitFor(async () => {

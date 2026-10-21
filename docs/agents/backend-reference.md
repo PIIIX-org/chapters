@@ -944,8 +944,21 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   (`Y.snapshotContainsUpdate`, a reconnect repeating known items), and
   otherwise `Y.diffUpdate` against the live document is inserted into
   `note_updates` (actor `collab`, `actor_detail.kind = 'collab'`) in one
-  store transaction under the note's queue lock, the instance check and
-  the note advisory lock, the note re-checked live. A failed insert
+  short store transaction (lock timeout, the instance check, the note
+  re-checked live). The append takes neither the note's queue lock nor its
+  advisory lock, so a fold or a write holding them never delays an ack. It
+  holds the note's in-process append gate (`appendGate` in `note-crdt.ts`)
+  from its id to its COMMIT, and every materialisation of the note's CRDT
+  state holds that gate around its tail read only. The tail read is
+  therefore a clean boundary (`lastId`): every lower id is committed and
+  seen, every later append gets a higher id. Folds mark `folded_through`
+  and compact only up to that boundary, and a server-authored update a
+  write appends in its own transaction does not move it, so a row appended
+  during a fold or a write stays for the next fold (or boot). A write
+  computes its change against exactly the state it read (`compute` runs
+  inside the transaction), so typing appended meanwhile merges as a
+  concurrent edit and is never diffed away. `lockedNote` takes `FOR NO KEY
+  UPDATE`, so an append's foreign-key check never waits for it. A failed insert
   (Postgres down, a lock timeout, maintenance) closes the socket with
   1013 `store-unavailable`: the editor keeps the change unsynced, reconnects and
   resends; a trashed or purged note closes the document unacked and its

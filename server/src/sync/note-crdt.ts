@@ -15,6 +15,7 @@ import * as Y from 'yjs'
 import type { db } from '../db/client.js'
 import { noteCrdt, noteUpdates } from '../db/schema.js'
 import type { Tx } from '../notes/store-tx.js'
+import { withKeyLock } from '../notes/key-lock.js'
 import { recordJob } from '../monitoring/metrics.js'
 import { SERVER_CLIENT_ID, type DocState } from './live-docs.js'
 
@@ -104,10 +105,25 @@ function toBytes(value: Uint8Array | Buffer): Uint8Array {
 }
 
 /**
+ * The in-process key every relay append of note `noteId` holds from its id
+ * to its COMMIT (S3), and that a materialisation holds only around its tail
+ * read. Appends do not take the note's lock, so a fold never delays an ack;
+ * this key is what makes the tail read a clean boundary: no append is in
+ * flight while it runs, so every row with a lower id is committed and seen,
+ * and every later append gets a higher id. Folding and compaction stop at
+ * that boundary (`lastId`), never past an unseen row.
+ */
+export function appendGate(noteId: string): string {
+  return `append:${noteId}`
+}
+
+/**
  * Materialises note `noteId`'s CRDT state (FOR UPDATE on its `note_crdt`
- * row), or null when it has none. A stored update that throws when applied
- * is marked `rejected_at` and skipped, and `fold_error` names it (§5.4 fold
- * step 2): one bad update never blocks the note or any other.
+ * row), or null when it has none: the snapshot and every non-rejected
+ * update committed before the tail read (`lastId` is that boundary). A
+ * stored update that throws when applied is marked `rejected_at` and
+ * skipped, and `fold_error` names it (§5.4 fold step 2): one bad update
+ * never blocks the note or any other.
  */
 export async function readNoteCrdt(tx: Tx, noteId: string): Promise<NoteCrdt | null> {
   const [row] = await tx.select().from(noteCrdt).where(eq(noteCrdt.noteId, noteId)).for('update')
@@ -115,11 +131,13 @@ export async function readNoteCrdt(tx: Tx, noteId: string): Promise<NoteCrdt | n
   const doc = new Y.Doc()
   const snapshot = toBytes(row.snapshot)
   Y.applyUpdate(doc, snapshot)
-  const tail = await tx
-    .select({ id: noteUpdates.id, update: noteUpdates.update })
-    .from(noteUpdates)
-    .where(and(eq(noteUpdates.noteId, noteId), gt(noteUpdates.id, row.snapshotThrough), isNull(noteUpdates.rejectedAt)))
-    .orderBy(asc(noteUpdates.id))
+  const tail = await withKeyLock(appendGate(noteId), () =>
+    tx
+      .select({ id: noteUpdates.id, update: noteUpdates.update })
+      .from(noteUpdates)
+      .where(and(eq(noteUpdates.noteId, noteId), gt(noteUpdates.id, row.snapshotThrough), isNull(noteUpdates.rejectedAt)))
+      .orderBy(asc(noteUpdates.id)),
+  )
   const crdt: NoteCrdt = {
     noteId,
     doc,
@@ -173,7 +191,15 @@ export async function insertNoteCrdt(tx: Tx, noteId: string, doc: Y.Doc, seq: nu
   }
 }
 
-/** Appends `update` to the note's log and applies it to the materialised document. Returns false for an empty update (nothing stored). */
+/**
+ * Appends a server-authored `update` (a write, a rebase, refused typing) to
+ * the note's log inside the caller's locked transaction and applies it to
+ * the materialised document. `lastId` stays at the tail-read boundary: a
+ * relay append committed after that read may have a lower id than this row,
+ * so this row is left for the next fold to see again (applying it twice is
+ * harmless) rather than marking the unseen one folded. Returns false for an
+ * empty update (nothing stored).
+ */
 export async function appendUpdate(
   tx: Tx,
   crdt: NoteCrdt,
@@ -182,18 +208,14 @@ export async function appendUpdate(
   detail?: Record<string, unknown>,
 ): Promise<boolean> {
   if (!updateHasContent(update)) return false
-  const [row] = await tx
-    .insert(noteUpdates)
-    .values({
-      noteId: crdt.noteId,
-      update: Buffer.from(update),
-      actorType: actor.type,
-      actorId: actor.id ?? null,
-      actorDetail: detail ?? null,
-    })
-    .returning({ id: noteUpdates.id })
+  await tx.insert(noteUpdates).values({
+    noteId: crdt.noteId,
+    update: Buffer.from(update),
+    actorType: actor.type,
+    actorId: actor.id ?? null,
+    actorDetail: detail ?? null,
+  })
   Y.applyUpdate(crdt.doc, update)
-  crdt.lastId = row!.id
   crdt.tailCount++
   crdt.tailBytes += update.byteLength
   return true

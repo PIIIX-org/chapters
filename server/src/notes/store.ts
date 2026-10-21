@@ -15,12 +15,12 @@ import {
   compileChange,
   docState,
   liveDocumentOf,
-  livePath,
   noteMoved,
   pushToLiveDocument,
   type DocState,
 } from '../sync/live-docs.js'
 import {
+  appendGate,
   appendUpdate,
   compactNoteCrdt,
   insertNoteCrdt,
@@ -819,16 +819,21 @@ const WRITE_ROUNDS = 3
 /**
  * One server write to the live note at `path` (ADR-003 §5.2, Invariant W),
  * under the note's lock:
- * 1. the current state is the relay's loaded document if there is one (what
- *    the editors see), else the row; `compute` turns it into the next state
- *    and refuses by throwing (validation, size cap, quarantine, overlap);
- * 2. one transaction: the instance and note locks, the row again (FOR
- *    UPDATE; a row another process changed meanwhile recomputes; a row
- *    changed behind the store is rebased into the CRDT state first, then
- *    the write recomputes), the editors' typing appended to the CRDT log and
- *    folded, then the write: row, revision at the new `seq`, links,
- *    projection targets, embedding job, and (for a note with CRDT state)
- *    the change as one Yjs update; COMMIT is the ack;
+ * 1. a dry run computes against the relay's loaded document if there is one
+ *    (what the editors see), else the row, and stops there;
+ * 2. one transaction: the instance and note locks, the row again (FOR NO
+ *    KEY UPDATE, so a relay append's foreign-key check never waits for it;
+ *    a row another process changed meanwhile recomputes; a row changed
+ *    behind the store is rebased into the CRDT state first, then the write
+ *    recomputes), the CRDT state (snapshot ⊕ every update committed before
+ *    the tail read, which every acked collab update is) folded, then
+ *    `compute` turns that state into the next one and refuses by throwing
+ *    (validation, size cap, quarantine, overlap), then the write: row,
+ *    revision at the new `seq`, links, projection targets, embedding job,
+ *    and (for a note with CRDT state) the change as one Yjs update relative
+ *    to exactly the state `compute` saw; COMMIT is the ack. Collab updates
+ *    appended meanwhile (S3: appends do not wait for this transaction) stay
+ *    in the log past `folded_through` and merge as concurrent edits;
  * 3. that update applied to the loaded document; the projector woken.
  * Null when no live note is at `path` (or it is not `options.relay.noteId`).
  */
@@ -845,18 +850,15 @@ export async function writeNote(
       const seen = await readStored(vaultId, resolved.fullPath)
       if (!seen || (options.relay && seen.id !== options.relay.noteId)) return null
       const fold = foldSource(seen.id, options.relay?.doc)
-      const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
-      let next: NextState
-      try {
-        next = await compute(current, plainRow(seen))
-      } catch (err) {
-        releaseFold(fold)
-        throw err
-      }
-      if (options.outcome) options.outcome.before = current
       if (options.dryRun) {
-        releaseFold(fold)
-        return { ...plainRow(seen), frontmatter: { ...next.frontmatter, type: seen.type }, body: next.body }
+        try {
+          const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
+          const next = await compute(current, plainRow(seen))
+          if (options.outcome) options.outcome.before = current
+          return { ...plainRow(seen), frontmatter: { ...next.frontmatter, type: seen.type }, body: next.body }
+        } finally {
+          releaseFold(fold)
+        }
       }
       let committed
       try {
@@ -868,6 +870,9 @@ export async function writeNote(
           // The row changed behind the store: merged into the CRDT state, then this write is computed again.
           if (crdt && locked.seq > crdt.foldedSeq) return { rebased: (await rebaseLocked(tx, locked, crdt)).rebased }
           const { row, refused } = await catchUp(tx, locked, crdt, fold, { storeRow: !options.relay })
+          const current = crdt ? docState(crdt.doc) : { frontmatter: row.frontmatter as Record<string, unknown>, body: row.body }
+          const next = await compute(current, plainRow(row))
+          if (options.outcome) options.outcome.before = current
           const { row: written } = await applyRowChange(
             tx,
             row,
@@ -2003,33 +2008,28 @@ export async function loadCollabState(vaultId: string, noteId: string): Promise<
 
 /**
  * Logs a collab update the relay checked (§5.4 "Append", S3) before the
- * relay applies and acks it: one store transaction under the note's locks
- * (so commit order is id order and no fold skips it), the note re-checked
- * live. Returns the row id, or null when the note is trashed or purged
- * (nothing stored; the relay refuses the update). A throw (Postgres down, a
- * lock timeout, maintenance) leaves nothing stored either; the relay then
- * closes the connection unacked and the editor resends.
+ * relay applies and acks it: one short store transaction (lock timeout,
+ * the instance check) that inserts the row if the note is live. It takes
+ * neither the note's queue lock nor its advisory lock, so a fold or a write
+ * holding them never delays an ack; it holds the note's append gate
+ * (appendGate) from its id to its COMMIT instead, which is what lets a fold
+ * stop at a boundary no later append falls under. Returns the row id, or
+ * null when the note is trashed or purged (nothing stored; the relay
+ * refuses the update). A throw (Postgres down, a lock timeout,
+ * maintenance) leaves nothing stored either; the relay then closes the
+ * connection unacked and the editor resends.
  */
-export async function appendCollabUpdate(
-  vaultId: string,
-  noteId: string,
-  update: Uint8Array,
-  actor: UpdateActor,
-): Promise<number | null> {
-  for (let round = 0; round < WRITE_ROUNDS; round++) {
-    const path = livePath(noteId)?.path ?? (await db.select({ path: notes.path }).from(notes).where(eq(notes.id, noteId)))[0]?.path
-    if (path === undefined) return null
-    const id = await withKeyLock(noteLock(vaultId, path), () =>
-      storeTransaction([noteId], async (tx) => {
-        const locked = await lockedNote(tx, noteId)
-        if (!locked || locked.deletedAt || locked.vaultId !== vaultId) return null
-        if (locked.path !== path) return 'moved' as const
-        return logUpdate(tx, noteId, update, actor, { kind: 'collab' })
-      }),
-    )
-    if (id !== 'moved') return id
-  }
-  throw new StoreBusyError('the note kept moving')
+export async function appendCollabUpdate(vaultId: string, noteId: string, update: Uint8Array, actor: UpdateActor): Promise<number | null> {
+  return withKeyLock(appendGate(noteId), () =>
+    storeTransaction([], async (tx) => {
+      const [note] = await tx
+        .select({ id: notes.id })
+        .from(notes)
+        .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
+      if (!note) return null
+      return logUpdate(tx, noteId, update, actor, { kind: 'collab' })
+    }),
+  )
 }
 
 /**

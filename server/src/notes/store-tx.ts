@@ -159,7 +159,7 @@ export function collabNoteMigrated(noteId: string): boolean {
 
 /** The note row `id`, locked FOR UPDATE; null when it does not exist. */
 export async function lockedNote(tx: Tx, id: string): Promise<StoredNote | null> {
-  const [row] = await tx.select(storedColumns).from(notes).where(eq(notes.id, id)).for('update')
+  const [row] = await tx.select(storedColumns).from(notes).where(eq(notes.id, id)).for('no key update')
   if (row && !(await noteMigrated(tx, id))) throw new NoteNotMigratedError()
   return row ? toStored(row) : null
 }
