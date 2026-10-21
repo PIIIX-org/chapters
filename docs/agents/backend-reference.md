@@ -668,7 +668,11 @@ one implementation, three callers. Nodes are the union of `notes` and
   set.
 
 Community detection runs `graphology-communities-louvain` over the
-fully assembled graph on every call. The merged cross-resource view
+fully assembled graph on every call, seeded from the node ids. Its result
+also depends on node and edge insertion order, so every query feeding it
+(notes, repository files, note links, code imports, semantic edges) has
+an `ORDER BY` on ids (#816): unordered, the row order followed the index
+the planner picked, and two calls over the same data could differ. The merged cross-resource view
 additionally requires the resource owner's `mergeable` flag and the
 viewing user's own per-resource opt-in — three independent gates, all
 re-resolved live.
@@ -738,8 +742,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   the background and `flushEmbeddings()` awaits that insert and the
   drain. The job embeds the note as it is when it runs. A boot-time scan
   (`scheduleMissingEmbeddings`) adds a job (idempotently) for any live
-  note with a null embedding, and re-runs its job if that failed with an
-  error (not a `LeaseExpired` crash loop). `pnpm reindex` re-runs finished jobs
+  note with a null embedding, and re-runs the job of the note's current
+  `seq` if it failed with an error (not a `LeaseExpired` crash loop),
+  also when an earlier version left an embedding. `pnpm reindex` re-runs finished jobs
   (`enqueueEmbeddings(ids, 'finished')`). A failure is logged and
   retried with backoff, never stops the drain.
 - **`semantic-edges.ts`**: `recomputeSemanticEdges()` — kNN against
@@ -1264,9 +1269,10 @@ texts (the 700 KB lab bundle with 900 declarations: 33 batches instead of
 (`scheduleMissingExtractions`) adds a job, idempotently, for every file
 with a null embedding that has none for its current content (rows from
 before the jobs table; a re-sync only enqueues files whose content
-changed, #404), re-runs such a file's job if it failed with an error (an
-outage that outlasted the retries; a restart repaired that before #494
-too), and wakes the worker. A job failed as `LeaseExpired` is not re-run
+changed, #404), re-runs the job of a file's current content if it failed
+with an error (an outage that outlasted the retries; a restart repaired
+that before #494 too), also for an updated file that kept the embedding
+of its previous content, and wakes the worker. A job failed as `LeaseExpired` is not re-run
 at boot, so a file whose extraction kills the process cannot crash every
 boot. `repository_status` reports `filesPendingExtraction` (files whose
 extraction for the current content is still to come: a pending job, or
