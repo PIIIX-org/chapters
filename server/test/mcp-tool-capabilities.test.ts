@@ -46,6 +46,7 @@ const OWNER_TOOLS = [
   'update_vault',
 ]
 const EDIT_TOOLS = [
+  'append_note',
   'create_note',
   'delete_graph_perspective',
   'delete_note',
@@ -58,6 +59,7 @@ const EDIT_TOOLS = [
   'restore_note',
   'revert_note',
   'save_graph_perspective',
+  'upsert_note',
 ]
 
 let app: FastifyInstance

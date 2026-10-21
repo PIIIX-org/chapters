@@ -132,7 +132,8 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
     expect(text).toContain('Implement MCP prompts suite with 20 engineering workflows')
     expect(text).toContain('session/')
     expect(text).toContain('Elara flagship knowledge base project note')
-    expect(text).toContain('create_note')
+    // The session log is appended to atomically (#478), never read and written back whole.
+    expect(text).toContain('append_note')
   })
 
   it('evaluates sync_local_docs_to_vault prompt with validation steps', async () => {

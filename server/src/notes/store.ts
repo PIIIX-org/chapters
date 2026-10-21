@@ -41,11 +41,28 @@ export interface Actor {
 
 const SYSTEM_ACTOR: Actor = { type: 'collab' }
 
+/** createNote found a live note at the path (the unique index decided, #478). */
+class NoteExistsError extends OkfValidationError {
+  constructor(path: string) {
+    super(`a note already exists at ${path}`)
+  }
+}
+
 /** The `note_revisions.action` of a write kept out of the note (#492, notes/growth-guard.ts). */
 export const QUARANTINE_ACTION = 'quarantine'
 
 /** The `note_revisions.action` of the state kept before an agent's first write in a session (#482). */
 export const RESTORE_POINT_ACTION = 'restore_point'
+
+/**
+ * The `note_revisions.action` of an agent's edit kept out of the note because
+ * it overlaps changes made since the revision it was made from (#475,
+ * edit_note `base_rev`); its `source_revision_id` names that revision.
+ */
+export const PROPOSAL_ACTION = 'proposal'
+
+/** Revisions that never held the note's content: writes kept out of it (#492, #475). */
+const NOT_A_NOTE_STATE = [QUARANTINE_ACTION, PROPOSAL_ACTION]
 
 /** An MCP connection's session on a note ends after this many minutes without a revision of its own there (#482). */
 export const RESTORE_POINT_IDLE_MINUTES = 30
@@ -66,8 +83,8 @@ const EVENT_ACTIONS: HistoryEvent['action'][] = ['delete', 'restore', 'rename', 
 /** The revision actions recordRevision dedupes: content writes. */
 const DEDUPED_ACTIONS: Record<string, true> = { create: true, update: true }
 
-/** Revisions recordRevision never compares a write with: not a write's state (#479, #482, #492). */
-const NOT_A_DEDUPE_BASELINE = [QUARANTINE_ACTION, RESTORE_POINT_ACTION, ...EVENT_ACTIONS]
+/** Revisions recordRevision never compares a write with: not a write's state (#475, #479, #482, #492). */
+const NOT_A_DEDUPE_BASELINE = [...NOT_A_NOTE_STATE, RESTORE_POINT_ACTION, ...EVENT_ACTIONS]
 
 /** Records a revision unless it repeats the note's latest content. Frontmatter
  * is compared as jsonb stores it (#480): deep equality on its JSON form, so
@@ -83,8 +100,9 @@ const NOT_A_DEDUPE_BASELINE = [QUARANTINE_ACTION, RESTORE_POINT_ACTION, ...EVENT
  *
  * Only content writes (DEDUPED_ACTIONS) are deduped; events (#479) go
  * through recordEvent and are always recorded. The write is compared with
- * the newest content revision: quarantined writes (#492), restore points
- * (#482) and events are not a write's state, so they are never the baseline. */
+ * the newest content revision: quarantined writes (#492), proposals (#475),
+ * restore points (#482) and events are not a write's state, so they are
+ * never the baseline. */
 async function recordRevision(
   noteId: string,
   action: string,
@@ -153,11 +171,11 @@ async function recordEvent(
  *
  * MCP is served as stateless HTTP with no session id, so a session is the
  * connection on this note until it has recorded no revision there for
- * RESTORE_POINT_IDLE_MINUTES (quarantined writes do not count: they are not
- * the note's state). The state is read before the write and recorded, dated
- * and placed in the history (`ord`) at that read, only when `write` returns
- * a result: a refused or failed write leaves no restore point. Unlike
- * recordRevision it is kept even when the
+ * RESTORE_POINT_IDLE_MINUTES (quarantined writes and proposals do not count:
+ * they are not the note's state). The state is read before the write and
+ * recorded, dated and placed in the history (`ord`) at that read, only when
+ * `write` returns a result: a refused or failed write leaves no restore
+ * point. Unlike recordRevision it is kept even when the
  * latest revision holds the same state (someone else's, or the agent's own
  * from an earlier session); only not when that latest revision already is
  * this connection's restore point of this state. The state kept is the stored
@@ -210,7 +228,7 @@ async function pendingRestorePoint(noteId: string, connectionId: string) {
         eq(noteRevisions.noteId, row.id),
         eq(noteRevisions.actorType, 'mcp'),
         eq(noteRevisions.actorId, connectionId),
-        ne(noteRevisions.action, QUARANTINE_ACTION),
+        notInArray(noteRevisions.action, NOT_A_NOTE_STATE),
         sql`${noteRevisions.createdAt} > now() - make_interval(mins => ${RESTORE_POINT_IDLE_MINUTES})`,
       ),
     )
@@ -220,7 +238,7 @@ async function pendingRestorePoint(noteId: string, connectionId: string) {
     await db
       .select()
       .from(noteRevisions)
-      .where(and(eq(noteRevisions.noteId, row.id), ne(noteRevisions.action, QUARANTINE_ACTION)))
+      .where(and(eq(noteRevisions.noteId, row.id), notInArray(noteRevisions.action, NOT_A_NOTE_STATE)))
       .orderBy(desc(noteRevisions.ord))
       .limit(1)
   )[0]
@@ -300,6 +318,56 @@ export async function refuseSuspiciousWrite(
     .values({ noteId: row.id, actorType: actor.type, actorId: actor.id, action: QUARANTINE_ACTION, frontmatter, body: input.body })
     .returning({ id: noteRevisions.id })
   throw new NoteWriteQuarantinedError(row.path, finding, inserted!.id, false)
+}
+
+/**
+ * Keeps an agent's edit that overlaps changes made since the revision it was
+ * made from (#475) as a `proposal` revision linked to that revision; the
+ * note's row and file are not touched. When the actor's latest proposal on
+ * the note is the same one (same base, same content), a retry returns it
+ * instead of adding one per attempt. Returns the proposal's id.
+ */
+export async function recordProposal(
+  noteId: string,
+  proposal: { frontmatter: Record<string, unknown>; body: string },
+  actor: Actor,
+  baseRevisionId: string,
+): Promise<string> {
+  const frontmatter = JSON.parse(JSON.stringify(proposal.frontmatter)) as Record<string, unknown>
+  const [latest] = await db
+    .select({
+      id: noteRevisions.id,
+      frontmatter: noteRevisions.frontmatter,
+      body: noteRevisions.body,
+      sourceRevisionId: noteRevisions.sourceRevisionId,
+    })
+    .from(noteRevisions)
+    .where(
+      and(
+        eq(noteRevisions.noteId, noteId),
+        eq(noteRevisions.action, PROPOSAL_ACTION),
+        eq(noteRevisions.actorType, actor.type),
+        actor.id === undefined ? isNull(noteRevisions.actorId) : eq(noteRevisions.actorId, actor.id),
+      ),
+    )
+    .orderBy(desc(noteRevisions.ord))
+    .limit(1)
+  if (latest?.sourceRevisionId === baseRevisionId && latest.body === proposal.body && isDeepStrictEqual(latest.frontmatter, frontmatter)) {
+    return latest.id
+  }
+  const [inserted] = await db
+    .insert(noteRevisions)
+    .values({
+      noteId,
+      actorType: actor.type,
+      actorId: actor.id,
+      action: PROPOSAL_ACTION,
+      frontmatter,
+      body: proposal.body,
+      sourceRevisionId: baseRevisionId,
+    })
+    .returning({ id: noteRevisions.id })
+  return inserted!.id
 }
 
 export function vaultDir(vaultId: string): string {
@@ -495,7 +563,7 @@ export async function createNote(
       row = inserted[0]!
     } catch (err) {
       if (isUniqueViolation(err)) {
-        throw new OkfValidationError(`a note already exists at ${resolved.fullPath}`)
+        throw new NoteExistsError(resolved.fullPath)
       }
       throw err
     }
@@ -506,6 +574,28 @@ export async function createNote(
     await recordRevision(row.id, 'create', frontmatter, body, actor)
     return row
   })
+}
+
+/**
+ * createNote when there is no live note at the path, else null (append_note,
+ * upsert_note, #478): concurrent callers create the note once, and the rest
+ * then edit it like any existing note (restore point included). Path
+ * uniqueness is the unique index's (ADR-003 §5.1): a writer that creates the
+ * note between the check and the insert (another caller, create_note,
+ * restore_note) makes the insert fail, which answers null too.
+ */
+export async function createNoteIfMissing(
+  vaultId: string,
+  input: Parameters<typeof createNote>[1] & { path: string },
+  actor: Actor,
+): Promise<NoteRow | null> {
+  if (await getLiveNote(vaultId, input.path)) return null
+  try {
+    return await createNote(vaultId, input, actor)
+  } catch (err) {
+    if (err instanceof NoteExistsError) return null
+    throw err
+  }
 }
 
 /** Replaces the note's EXTRACTED link rows from its current wikilinks. */
@@ -981,7 +1071,8 @@ export async function listTrash(
 }
 
 /** The event fields of a revision (#479), present only on the rows that have
- * them (a revert's source, a rename's paths), so a plain row costs nothing more. */
+ * them (a revert's source, a proposal's base (#475), a rename's paths), so a
+ * plain row costs nothing more. */
 export interface RevisionEventDetail {
   sourceRevisionId?: string
   fromPath?: string
@@ -1123,7 +1214,7 @@ export async function listRevisionMeta(
   )
 }
 
-/** Full content of a single recorded revision for preview / diff inspection. */
+/** Full content of a single recorded revision for preview / diff inspection; a proposal (#475) also names its base. */
 export async function getRevision(
   vaultId: string,
   revisionId: string,
@@ -1150,6 +1241,49 @@ export async function getRevision(
   if (!row) return null
   const { sourceRevisionId, fromPath, toPath, ...revision } = row
   return { ...revision, ...eventDetail({ sourceRevisionId, fromPath, toPath }) }
+}
+
+/**
+ * The id of the newest revision holding exactly this state of the note: the
+ * `rev` read_note and edit_note return, which edit_note takes back as
+ * `base_rev` (#475). Only the newest 20 revisions that held the note's
+ * content are compared (jsonb equality for the frontmatter, so key order
+ * does not count); null when none of them holds this state.
+ */
+export async function revisionOfState(noteId: string, state: { frontmatter: unknown; body: string }): Promise<string | null> {
+  const recent = db
+    .select({ id: noteRevisions.id, frontmatter: noteRevisions.frontmatter, body: noteRevisions.body, ord: noteRevisions.ord })
+    .from(noteRevisions)
+    .where(and(eq(noteRevisions.noteId, noteId), notInArray(noteRevisions.action, NOT_A_NOTE_STATE)))
+    .orderBy(desc(noteRevisions.ord))
+    .limit(20)
+    .as('recent')
+  const [found] = await db
+    .select({ id: recent.id })
+    .from(recent)
+    .where(and(eq(recent.body, state.body), sql`${recent.frontmatter} = ${JSON.stringify(state.frontmatter ?? null)}::jsonb`))
+    .orderBy(desc(recent.ord))
+    .limit(1)
+  return found?.id ?? null
+}
+
+/**
+ * The revision an edit says it was made from (edit_note `base_rev`, #475): a
+ * revision of the live note at `path` that held its content. Null when there
+ * is no such note or the revision is not one of its states.
+ */
+export async function getBaseRevision(
+  vaultId: string,
+  path: string,
+  revisionId: string,
+): Promise<Pick<RevisionRow, 'id' | 'frontmatter' | 'body'> | null> {
+  const row = await getLiveNote(vaultId, path)
+  if (!row) return null
+  const [revision] = await db
+    .select({ id: noteRevisions.id, frontmatter: noteRevisions.frontmatter, body: noteRevisions.body })
+    .from(noteRevisions)
+    .where(and(eq(noteRevisions.id, revisionId), eq(noteRevisions.noteId, row.id), notInArray(noteRevisions.action, NOT_A_NOTE_STATE)))
+  return revision ?? null
 }
 
 export interface BacklinkItem {
@@ -1512,6 +1646,7 @@ export async function revertNote(
     actor,
     { revertOf: revision.id },
   )
+
 }
 
 /**

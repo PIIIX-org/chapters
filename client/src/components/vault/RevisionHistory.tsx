@@ -58,10 +58,12 @@ const ACTION: Record<string, string> = {
  * revert names the time of the version it brought back when that version is
  * on this page, and says "an earlier version" when it is older or purged. A
  * restore point (#482) is named after the agent it was kept for: reverting to
- * it undoes that agent's session.
+ * it undoes that agent's session. A proposal (#475) is an agent's edit kept
+ * out of the note because it overlapped changes made since the agent read it.
  */
 function describeAction(revision: Revision, onPage: Revision[]): string {
   if (revision.action === 'restore_point') return `Before ${revision.actorName ?? 'an AI agent'} edited`
+  if (revision.action === 'proposal') return `Proposed by ${revision.actorName ?? 'an AI agent'}`
   if (revision.action === 'rename' && revision.fromPath && revision.toPath) {
     return `Renamed from ${revision.fromPath} to ${revision.toPath}`
   }

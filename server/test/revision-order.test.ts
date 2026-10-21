@@ -4,10 +4,19 @@
 // revisions the same instant; the history, its pages and the "latest
 // revision" a write is compared with must not follow it.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { noteRevisions, vaults } from '../src/db/schema.js'
-import { createNote, listRevisionMeta, listRevisionPage, updateNote, type Actor, type RevisionPosition } from '../src/notes/store.js'
+import {
+  createNote,
+  listRevisionMeta,
+  listRevisionPage,
+  recordProposal,
+  revisionOfState,
+  updateNote,
+  type Actor,
+  type RevisionPosition,
+} from '../src/notes/store.js'
 import { createActiveUser } from './helpers.js'
 
 let vaultId: string
@@ -25,10 +34,19 @@ afterAll(async () => {
 
 /** A note with one revision per body, written in this order by `person`; returns the revision ids in that order. */
 async function written(path: string, bodies: string[]): Promise<{ noteId: string; ids: string[] }> {
+  const ids: string[] = []
+  // The id each write added: the one revision of the note not seen before (bodies may repeat).
+  const added = async (noteId: string) => {
+    const rows = await db.select({ id: noteRevisions.id }).from(noteRevisions).where(eq(noteRevisions.noteId, noteId))
+    ids.push(rows.find((r) => !ids.includes(r.id))!.id)
+  }
   const note = await createNote(vaultId, { path, body: bodies[0] }, person)
-  for (const body of bodies.slice(1)) await updateNote(vaultId, path, { body }, person)
-  const rows = await db.select({ id: noteRevisions.id, body: noteRevisions.body }).from(noteRevisions).where(eq(noteRevisions.noteId, note.id))
-  return { noteId: note.id, ids: bodies.map((body) => rows.find((r) => r.body === body)!.id) }
+  await added(note.id)
+  for (const body of bodies.slice(1)) {
+    await updateNote(vaultId, path, { body }, person)
+    await added(note.id)
+  }
+  return { noteId: note.id, ids }
 }
 
 /** Dates the revisions as a stepping clock would: `at[i]` seconds from now for `ids[i]`. */
@@ -86,5 +104,31 @@ describe('revision order does not follow the database clock (#825, #811)', () =>
     expect(rows.map((r) => r.body).sort()).toEqual(['kept', 'kept', 'latest'])
     const history = (await listRevisionMeta(vaultId, path, 20, 0))!
     expect(history.slice(1).map((r) => r.id)).toEqual([ids[1], ids[0]])
+  })
+
+  it("edit_note's rev is the revision of the note's state recorded last, not the one with the latest clock time (#475)", async () => {
+    const path = 'docs/order-rev'
+    const { noteId, ids } = await written(path, ['same', 'other', 'same'])
+    // The second `same` was recorded after the clock stepped back past the first.
+    await dated(ids, [0, 1, -2])
+    const note = (await db.select({ frontmatter: noteRevisions.frontmatter }).from(noteRevisions).where(eq(noteRevisions.id, ids[2]!)))[0]!
+    expect(await revisionOfState(noteId, { frontmatter: note.frontmatter, body: 'same' })).toBe(ids[2])
+  })
+
+  it('a resubmitted proposal is compared with the proposal recorded last, not the one with the latest clock time (#475)', async () => {
+    const path = 'docs/order-proposal'
+    const { noteId, ids } = await written(path, ['base'])
+    const frontmatter = { type: 'docs' }
+    const first = await recordProposal(noteId, { frontmatter, body: 'proposal one' }, person, ids[0]!)
+    const second = await recordProposal(noteId, { frontmatter, body: 'proposal two' }, person, ids[0]!)
+    // `second` was recorded after the clock stepped back past `first`.
+    await dated([first, second], [0, -2])
+    // A retry of the latest proposal returns it instead of adding another.
+    expect(await recordProposal(noteId, { frontmatter, body: 'proposal two' }, person, ids[0]!)).toBe(second)
+    const proposals = await db
+      .select({ id: noteRevisions.id })
+      .from(noteRevisions)
+      .where(and(eq(noteRevisions.noteId, noteId), eq(noteRevisions.action, 'proposal')))
+    expect(proposals.map((r) => r.id).sort()).toEqual([first, second].sort())
   })
 })

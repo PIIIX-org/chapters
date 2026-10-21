@@ -390,10 +390,11 @@ export const actorType = pgEnum('actor_type', ['user', 'mcp', 'collab'])
  * explicit hard purge. Migration 0021 also adds `seq`, `idempotency_key` and
  * `actor_detail` (unused until S2a, kept out of this model like `notes.seq`).
  * Migration 0023 (#479): `sourceRevisionId` is the revision a `revert` row
- * brought back; `fromPath` / `toPath` the paths of a `rename` row. Null on
- * every other row. Migration 0024 (#825, #811): `ord` is the order revisions
- * were recorded in (a sequence, not the clock: `created_at` can step back or
- * tie); every list of a note's revisions orders by it.
+ * brought back, or the base revision a `proposal` row was made from (#475);
+ * `fromPath` / `toPath` the paths of a `rename` row. Null on every other row.
+ * Migration 0024 (#825, #811): `ord` is the order revisions were recorded in
+ * (a sequence, not the clock: `created_at` can step back or tie); every list
+ * of a note's revisions orders by it.
  */
 export const noteRevisions = pgTable(
   'note_revisions',

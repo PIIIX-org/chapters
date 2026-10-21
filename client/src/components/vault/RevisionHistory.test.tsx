@@ -224,6 +224,19 @@ describe('RevisionHistory', () => {
     expect(screen.queryByText('restore_point')).toBeNull()
   })
 
+  it("names an agent's proposal after the agent: its edit overlapped a person's changes and was kept out of the note (#475)", async () => {
+    const proposals = [
+      { id: 'p-named', actorType: 'mcp', actorId: 'c1', actorName: 'claude-laptop', action: 'proposal', createdAt: '2026-08-21T10:00:00.000Z' },
+      { id: 'p-gone', actorType: 'mcp', actorId: 'c2', actorName: null, action: 'proposal', createdAt: '2026-08-21T09:00:00.000Z' },
+    ]
+    stubFetch((url) => (url.includes('/history/') ? mockJsonResponse(200, [...proposals, ...REVISIONS]) : undefined))
+    renderWithClient(<RevisionHistory vaultId="v1" path="notes/one.md" access="edit" />)
+
+    expect(await screen.findByText('Proposed by claude-laptop')).toBeTruthy()
+    expect(screen.getByText('Proposed by an AI agent')).toBeTruthy()
+    expect(screen.queryByText('proposal')).toBeNull()
+  })
+
   it('opens diff preview modal showing visual additions and deletions comparing revision against current note', async () => {
     stubFetch((url) => {
       if (url.includes('/api/vaults/v1/revisions/rev-user')) {
