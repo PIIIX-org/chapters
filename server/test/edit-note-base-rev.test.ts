@@ -143,6 +143,9 @@ async function typeAtEnd(path: string, text: Y.Text, chars: string): Promise<str
   return typed
 }
 
+/** The lab's agent append: the body read_note returned, ended with a newline, plus one line. */
+const appended = (read: string, line: string) => `${read.endsWith('\n') || read === '' ? read : `${read}\n`}${line}\n`
+
 beforeAll(async () => {
   app = await buildApp()
   await app.listen({ port: 0, host: '127.0.0.1' })
@@ -404,9 +407,6 @@ describe('edit_note with a stale base_rev (#475)', () => {
 })
 
 describe("a whole body without base_rev merges against the connection's last read (#408, #476)", () => {
-  /** The lab's agent append: the body read_note returned, ended with a newline, plus one line. */
-  const appended = (read: string, line: string) => `${read.endsWith('\n') || read === '' ? read : `${read}\n`}${line}\n`
-
   it('keeps every character a person typed at the end after the read; the agent line goes after them (lab browser S1)', async () => {
     const path = 'docs/last-read-s1'
     const text = await noteInTab(path)
@@ -488,6 +488,75 @@ describe("a whole body without base_rev merges against the connection's last rea
     expect(await rowBody(path)).toBe(typed)
     const proposal = await must<{ action: string; body: string }>('get_revision', { vaultId, path, revisionId: r.proposalId })
     expect(proposal).toMatchObject({ action: 'proposal', body: agentBody })
+  }, 20_000)
+})
+
+describe('upsert_note and REST PUT merge a whole body from its base too (#865)', () => {
+  /** The person's REST PUT of `body` to `path`, with `baseRev` when given. */
+  const put = (path: string, body: Record<string, unknown>) =>
+    app.inject({ method: 'PUT', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie }, body })
+
+  it("upsert_note of an existing note merges from the connection's last read: typing done after the read stays (S1 shape)", async () => {
+    const path = 'docs/upsert-s1'
+    const text = await noteInTab(path)
+    await typeAtEnd(path, text, ' u01 u0')
+    const read = await must<Read>('read_note', { vaultId, path })
+    const typed = await typeAtEnd(path, text, '2 u03 u')
+    const r = await must<Record<string, unknown>>('upsert_note', { vaultId, path, body: appended(read.body, 'AGENT-UPSERT') })
+    const expected = `${typed}\nAGENT-UPSERT\n`
+    expect(r).toMatchObject({ created: false, status: 'merged', baseRev: read.rev, body: expected })
+    await waitFor(() => text.toString() === expected && liveBody(path) === expected)
+  }, 20_000)
+
+  it('upsert_note whose body rewrites the line the person typed in is not applied, and keeps a proposal', async () => {
+    const path = 'docs/upsert-conflict'
+    const text = await noteInTab(path)
+    const read = await must<Read>('read_note', { vaultId, path })
+    const typed = await type(path, text, 'two.', 'TYPED ')
+    const r = await must<{ status: string; created: boolean; proposalId: string }>('upsert_note', { vaultId, path, body: read.body.replace('Para two.', 'Para 2.') })
+    expect(r).toMatchObject({ status: 'conflicted', created: false, baseRev: read.rev, conflicts: { lines: [{ line: 3, removed: 1, added: 1 }] } })
+    expect(r.proposalId).toMatch(/^[0-9a-f-]{36}$/)
+    await sleep(300)
+    expect(text.toString()).toBe(typed)
+  }, 20_000)
+
+  it('REST PUT with `baseRev` (the `rev` REST GET returned) merges: typing done after the GET stays (S1 shape)', async () => {
+    const path = 'docs/put-s1'
+    const text = await noteInTab(path)
+    await typeAtEnd(path, text, ' p01 p0')
+    const got = await app.inject({ method: 'GET', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie } })
+    const read = got.json<{ body: string; rev: number }>()
+    const typed = await typeAtEnd(path, text, '2 p03 p')
+    const res = await put(path, { body: appended(read.body, 'SAVED-BY-CLIENT'), baseRev: read.rev })
+    expect(res.statusCode, res.body).toBe(200)
+    const expected = `${typed}\nSAVED-BY-CLIENT\n`
+    expect(res.json()).toMatchObject({ body: expected, status: 'merged', baseRev: read.rev, concurrentChanges: { lines: [{ line: 6, removed: 1, added: 1 }] } })
+    await waitFor(() => text.toString() === expected && liveBody(path) === expected)
+  }, 20_000)
+
+  it('REST PUT with `baseRev` whose body overlaps typing answers 409 with a proposal and changes nothing', async () => {
+    const path = 'docs/put-conflict'
+    const text = await noteInTab(path)
+    const read = await must<Read>('read_note', { vaultId, path })
+    const typed = await type(path, text, 'two.', 'TYPED ')
+    const res = await put(path, { body: read.body.replace('Para two.', 'Para 2.'), baseRev: read.rev })
+    expect(res.statusCode, res.body).toBe(409)
+    expect(res.json()).toMatchObject({ status: 'conflicted', baseRev: read.rev, conflicts: { lines: [{ line: 3, removed: 1, added: 1 }] } })
+    expect(res.json<{ proposalId: string }>().proposalId).toMatch(/^[0-9a-f-]{36}$/)
+    await sleep(300)
+    expect(text.toString()).toBe(typed)
+    expect(await rowBody(path)).toBe(typed)
+  }, 20_000)
+
+  it('REST PUT refuses a `baseRev` that is not a revision of the note (400), and changes nothing', async () => {
+    const path = 'docs/put-bad-base'
+    await noteInTab(path)
+    for (const baseRev of [999, 'not-a-revision']) {
+      const res = await put(path, { body: 'Replaced.\n', baseRev })
+      expect(res.statusCode, `${String(baseRev)}: ${res.body}`).toBe(400)
+      expect(res.json<{ error: string }>().error).toMatch(/baseRev/)
+    }
+    expect(await rowBody(path)).toBe(BODY)
   }, 20_000)
 })
 
