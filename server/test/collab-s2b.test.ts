@@ -8,7 +8,7 @@ import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
-import { getLiveNote, renameNote } from '../src/notes/store.js'
+import { getLiveNote, purgeNote, renameNote, softDeleteNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
@@ -115,6 +115,54 @@ describe('document names (§5.4)', () => {
     expect(got.id).toBe(note.id)
     const { text } = await open(note.id)
     expect(text.toString()).toBe('Loaded by id.\n')
+  })
+})
+
+describe('delete, purge and restore close and reopen the note (§5.5)', () => {
+  function tab(noteId: string) {
+    const closes: string[] = []
+    const refusals: string[] = []
+    const provider = new HocuspocusProvider({
+      url: `ws://127.0.0.1:${port}/collab`,
+      name: `${vaultId}/~${noteId}`,
+      token,
+      document: new Y.Doc(),
+      onAuthenticationFailed: ({ reason }) => refusals.push(reason),
+      onClose: ({ event }) => closes.push(event.reason),
+    })
+    providers.push(provider)
+    return { provider, closes, refusals, text: provider.document.getText('body') }
+  }
+
+  it('closes open editors at once with note-deleted, refuses reconnects until a restore, then lets editors in', async () => {
+    const note = await create('deleted-open', 'Still here.\n')
+    const open1 = tab(note.id)
+    await waitFor(() => open1.provider.isSynced && open1.text.length > 0)
+    const deleted = await app.inject({ method: 'DELETE', url: `/api/vaults/${vaultId}/notes/${note.path}`, headers: { cookie } })
+    expect(deleted.statusCode).toBeLessThan(300)
+    await waitFor(() => open1.closes.includes('note-deleted'), 3000)
+    open1.provider.destroy()
+
+    const refused = tab(note.id)
+    await waitFor(() => refused.refusals.length > 0)
+    expect(refused.refusals).toEqual(['note-deleted'])
+    refused.provider.destroy()
+
+    const restored = await app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/trash/${note.id}/restore`, headers: { cookie } })
+    expect(restored.statusCode).toBeLessThan(300)
+    const again = tab(note.id)
+    await waitFor(() => again.provider.isSynced && again.text.length > 0)
+    expect(again.text.toString()).toBe('Still here.\n')
+    expect(again.refusals).toEqual([])
+  }, 20_000)
+
+  it('purge refuses the note with note-deleted', async () => {
+    const note = await create('purged-open', 'Going.\n')
+    await softDeleteNote(vaultId, note.path)
+    expect(await purgeNote(vaultId, note.id)).toBe(true)
+    const late = tab(note.id)
+    await waitFor(() => late.refusals.length > 0)
+    expect(late.refusals).toEqual(['note-deleted'])
   })
 })
 

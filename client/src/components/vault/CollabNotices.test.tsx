@@ -48,6 +48,13 @@ describe('CollabNotices', () => {
     expect(screen.queryByText(/access to this note was removed/i)).toBeNull()
   })
 
+  it('says a deleted note is in the trash and can be restored, not that access was removed', () => {
+    render(<CollabNotices revoked={false} deleted tooLarge={null} unmerged={null} onDiscard={() => {}} />)
+    expect(screen.getByText(/this note was deleted/i)).toBeTruthy()
+    expect(screen.getByText(/where it can be restored/i)).toBeTruthy()
+    expect(screen.queryByText(/access to this note was removed/i)).toBeNull()
+  })
+
   it('renders nothing when there is nothing to say', () => {
     const { container } = render(<CollabNotices revoked={false} tooLarge={null} unmerged={null} onDiscard={() => {}} />)
     expect(container.textContent).toBe('')

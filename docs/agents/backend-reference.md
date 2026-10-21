@@ -898,7 +898,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   the note's state from `note_crdt` + `note_updates` (seeding it when
   absent), never a file. A rename keeps every editor connected (same id)
   and moves the note's SSE viewers to the new path (a `moved` event);
-  agent presence is looked up by note id. `onAuthenticate` requires live `edit` access.
+  agent presence is looked up by note id. A delete or purge closes the
+  note's editors right after it commits (`closeNoteEditors`, close code
+  4410, reason `note-deleted`), and `onAuthenticate` refuses a note in the
+  trash or purged with the same reason; the editor stops reconnecting, keeps
+  the text in this browser and says the note is in the trash (status
+  `deleted`). After a restore new connections are let in; a reload brings
+  the kept typing back. `onAuthenticate` requires live `edit` access.
   **`beforeHandleMessage` re-resolves access on every inbound Yjs
   message**, not just at connect time — dropping below `edit` mid-session
   drops the next message and closes the connection.

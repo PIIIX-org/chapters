@@ -11,6 +11,7 @@ import { config } from '../config.js'
 import { kickEmbeddings } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import {
+  closeNoteEditors,
   cloneDocument,
   compileChange,
   docState,
@@ -1213,6 +1214,8 @@ export async function softDeleteNote(
       })
       if (!deleted) return null
       pushToLiveDocument(seen.id, deleted.rebased)
+      // §5.5: the note's editors are closed now (`note-deleted`); a reconnect is refused until a restore.
+      closeNoteEditors(seen.id)
       afterCommit()
       return plainRow(deleted.row)
     } finally {
@@ -1945,6 +1948,7 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
     })
     if (!done) return false
     failpoint('purge.after-commit-before-remove')
+    closeNoteEditors(row.id)
     wakeProjector()
     return true
   })

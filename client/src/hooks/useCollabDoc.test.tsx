@@ -223,6 +223,27 @@ describe('useCollabDoc', () => {
     expect(view.result.current.ydoc.getText('body').toString()).toBe('typed before the upgrade')
   })
 
+  it('a note deleted while open stops the editor as deleted, not revoked, and keeps the text (close or refusal)', async () => {
+    const { view, provider } = await connected()
+    act(() => provider.options.onStatus({ status: 'connected' }))
+    act(() => view.result.current.ydoc.getText('body').insert(0, 'typed as it was deleted'))
+    act(() => provider.options.onClose({ event: { code: 4410, reason: 'note-deleted' } }))
+    expect(view.result.current.status).toBe('deleted')
+    expect(view.result.current.writable).toBe(false)
+    expect(provider.disconnected).toBe(true)
+    expect(view.result.current.ydoc.getText('body').toString()).toBe('typed as it was deleted')
+    // The refused reconnect that may follow does not turn it into a revocation.
+    act(() => provider.options.onAuthenticationFailed({ reason: 'permission-denied' }))
+    expect(view.result.current.status).toBe('deleted')
+  })
+
+  it('a note in the trash refuses the connection with note-deleted: deleted, not revoked', async () => {
+    const { view, provider } = await connected()
+    act(() => provider.options.onAuthenticationFailed({ reason: 'note-deleted' }))
+    expect(view.result.current.status).toBe('deleted')
+    expect(provider.disconnected).toBe(true)
+  })
+
   it('names the document by note id, so a rename keeps the same document', async () => {
     const view = renderHook(
       ({ path }: { path: string }) =>

@@ -61,6 +61,24 @@ class SessionEnded extends Error {
 }
 
 /**
+ * Why a note's editors are closed or refused (ADR-003 §5.5): the note is in
+ * the trash or purged. Passed to `close()` right after a delete or purge
+ * commits (live-docs.ts closeNoteEditors), and thrown from `onAuthenticate`
+ * for a note that is not live; the editor (client/src/hooks/useCollabDoc.ts)
+ * reads `note-deleted`, stops reconnecting and says the note is in the trash.
+ */
+class NoteDeletedRefusal extends Error {
+  readonly code = 4410
+  readonly reason = 'note-deleted'
+  constructor(documentName: string) {
+    super(`${documentName}: the note was deleted`)
+  }
+}
+
+/** Documents whose editors were closed because the note was deleted: their unload stores nothing and reports nothing. */
+const deletedDocuments = new WeakSet<Y.Doc>()
+
+/**
  * Thrown from `onAuthenticate` for a note the store migration has not
  * processed yet (ADR-003 §8, Q5): Hocuspocus sends `reason` to the client as
  * the authentication failure; the editor (client/src/hooks/useCollabDoc.ts)
@@ -203,7 +221,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         .select({ id: notes.id, deletedAt: notes.deletedAt })
         .from(notes)
         .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId)))
-      if (!note || note.deletedAt) throw new Error(`note does not exist: ${documentName}`)
+      if (!note || note.deletedAt) throw new NoteDeletedRefusal(documentName)
       // A note the store migration has not processed yet takes no writes, so no
       // editor either: nothing may be typed that could not be stored. The
       // refusal carries its own reason, which the editor shows as such.
@@ -302,6 +320,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
             ? await db.select({ path: notes.path, deletedAt: notes.deletedAt }).from(notes).where(eq(notes.id, noteId))
             : []
           if (!noteId || !note || note.deletedAt || round === 3) {
+            // Closed by a delete or purge (§5.5): nothing to store, and nothing went wrong.
+            if (deletedDocuments.has(document) && (!note || note.deletedAt)) return
             const reason = !note ? 'the note was purged' : note.deletedAt ? 'the note is in the trash' : 'the note kept moving'
             console.error(`collab store of ${documentName} not stored: ${reason}`)
             recordJob('collab-store', { error: { name: 'NoteGone', message: reason } }, vaultId)
@@ -408,6 +428,13 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         return { doc, name, editors }
       }
       return null
+    },
+    closeNote(noteId) {
+      for (const [name, doc] of hocuspocus.documents) {
+        if (documentNotes.get(doc) !== noteId) continue
+        deletedDocuments.add(doc)
+        doc.getConnections().forEach((connection) => connection.close(new NoteDeletedRefusal(name)))
+      }
     },
   })
 
