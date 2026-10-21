@@ -514,7 +514,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   text and map. The size cap is checked on the agent's raw body, but the
   write quarantine (#492) only on the rebased body: compared with the
   stored body, a body made from an older, longer state would be a false
-  growth finding after a person shortened the note. A clean merge goes
+  growth finding after a person shortened the note. Without the relay,
+  and when the note's file is damaged so no document loads (#384/#391's
+  full-edit repair), the edit is rebased onto the stored row instead,
+  with the same proposal, screen and report. A clean merge goes
   through the usual checks and
   `applyTextDiff` live → merged, so only the agent's lines change, and
   reports `status` `applied` (nothing changed since the base) or

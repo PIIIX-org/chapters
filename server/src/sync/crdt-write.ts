@@ -298,13 +298,9 @@ export async function writeThroughCollab(
       if (based) assertBodyFits(bodyFromStored, existing.body)
       else await screen(bodyFromStored, storedFrontmatter)
     }
-    const collab = getCollab()
-    if (!collab) {
-      let body = input.body
-      if (bodyOps) {
-        body = applyBodyOps(existing.body, ops)
-        await screen(body, storedFrontmatter)
-      }
+    // The edit written straight to the stored row (no relay, or a damaged file no document can load).
+    // With a base it is rebased onto the row first, like onto the live document below (#475).
+    const storeEdit = async (body: BodyEdit | undefined): Promise<NoteRow | null> => {
       let frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
       if (based) {
         const rebased = rebase(based, { frontmatter: storedFrontmatter, body: existing.body }, existing.type)
@@ -317,6 +313,15 @@ export async function writeThroughCollab(
         if (options.report) Object.assign(options.report, rebased.report)
       }
       return updateNote(vaultId, path, { frontmatter, body }, actor, record)
+    }
+    const collab = getCollab()
+    if (!collab) {
+      let body = input.body
+      if (bodyOps) {
+        body = applyBodyOps(existing.body, ops)
+        await screen(body, storedFrontmatter)
+      }
+      return storeEdit(body)
     }
     const documentName = `${vaultId}/${path}`
     let connection: DirectConnection
@@ -334,8 +339,7 @@ export async function writeThroughCollab(
       // that cannot be read.
       if (!(await noteFileDamaged(vaultId, path))) throw err
       if (input.frontmatter === undefined || input.body === undefined) throw new NoteFileDamagedError(path)
-      const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
-      return updateNote(vaultId, path, { frontmatter, body: input.body }, actor, record)
+      return storeEdit(input.body)
     }
     const next: { frontmatter?: Frontmatter; body?: string } = {}
     try {

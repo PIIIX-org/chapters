@@ -11,6 +11,8 @@
 // #476: every whole-markdown write (edit_note `body`, REST PUT, revert)
 // reaches the live document as a diff from its text, never as delete-all
 // and insert-all.
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
@@ -19,8 +21,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import { buildApp } from '../src/app.js'
+import { config } from '../src/config.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
-import { getLiveNote } from '../src/notes/store.js'
+import { getLiveNote, updateNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
@@ -108,6 +111,9 @@ async function history(path: string): Promise<HistoryRow[]> {
 }
 
 const BODY = 'Para one.\n\nPara two.\n\nPara three.\n'
+
+/** 80 distinct lines of 75 bytes: 6000 bytes, so the growth rule's 2 KiB floor holds after a cut to 30 lines too. */
+const LINES = Array.from({ length: 80 }, (_, i) => `Line ${String(i).padStart(2, '0')} holds its own words about item ${i * 7 + 3}, nothing repeated.`.padEnd(74, '.') + '\n')
 
 /** A note with BODY, open in a tab; the tab's text is the person's editor. */
 async function noteInTab(path: string, frontmatter?: Args): Promise<Y.Text> {
@@ -235,12 +241,10 @@ describe('edit_note with a stale base_rev (#475)', () => {
 
   it("a based edit is not quarantined because a person shortened the note since the agent's read", async () => {
     const path = 'docs/rev-shortened'
-    // 80 distinct lines of 75 bytes: 6000 bytes, so the growth rule's 2 KiB floor holds after the cut too.
-    const lines = Array.from({ length: 80 }, (_, i) => `Line ${String(i).padStart(2, '0')} holds its own words about item ${i * 7 + 3}, nothing repeated.`.padEnd(74, '.') + '\n')
-    await must('create_note', { vaultId, path, body: lines.join('') })
+    await must('create_note', { vaultId, path, body: LINES.join('') })
     const read = await must<Read>('read_note', { vaultId, path })
     // A person deletes the last 50 lines: 2250 bytes are left.
-    const kept = lines.slice(0, 30).join('')
+    const kept = LINES.slice(0, 30).join('')
     const cut = await app.inject({ method: 'PUT', url: `/api/vaults/${vaultId}/notes/${path}`, headers: { cookie }, body: { body: kept } })
     expect(cut.statusCode, cut.body).toBe(200)
 
@@ -249,6 +253,36 @@ describe('edit_note with a stale base_rev (#475)', () => {
     expect(JSON.parse(edited.text)).toMatchObject({ status: 'merged', body: kept.replace('Line 00', 'Line 00, edited,') })
     expect((await history(path)).map((row) => row.action)).not.toContain('quarantine')
   }, 20_000)
+
+  describe('when the note file is damaged, so no live document loads (#384, #391)', () => {
+    // A full edit (frontmatter and body) is then written to the stored row directly; with a base it is still rebased and screened.
+    const damage = (path: string) => writeFile(join(config.dataDir, 'vaults', vaultId, `${path}.md`), '## Concepts & Artifacts\n\n| Concept |\n', 'utf8')
+
+    it('a based edit that doubles the note is quarantined, as without base_rev', async () => {
+      const path = 'docs/rev-damaged-doubled'
+      await must('create_note', { vaultId, path, body: LINES.join('') })
+      const read = await must<Read>('read_note', { vaultId, path })
+      await damage(path)
+      const doubled = await call('edit_note', { vaultId, path, base_rev: read.rev, frontmatter: {}, body: read.body + read.body })
+      expect(doubled.isError, doubled.text).toBe(true)
+      expect(doubled.text).toMatch(/quarantine/i)
+      expect(await rowBody(path)).toBe(read.body)
+    }, 20_000)
+
+    it('a based edit keeps the lines a person deleted since the read', async () => {
+      const path = 'docs/rev-damaged-shortened'
+      await must('create_note', { vaultId, path, body: LINES.join('') })
+      const read = await must<Read>('read_note', { vaultId, path })
+      const kept = LINES.slice(0, 10).join('')
+      expect(await updateNote(vaultId, path, { body: kept }, { type: 'user' })).toBeTruthy()
+      await damage(path)
+      const edited = await call('edit_note', { vaultId, path, base_rev: read.rev, frontmatter: {}, body: read.body.replace('Line 00', 'Line 00, edited,') })
+      expect(edited.isError, edited.text).toBe(false)
+      const expected = kept.replace('Line 00', 'Line 00, edited,')
+      expect(JSON.parse(edited.text)).toMatchObject({ status: 'merged', body: expected })
+      expect(await rowBody(path)).toBe(expected)
+    }, 20_000)
+  })
 
   it('a conflicting edit with ops keeps them in the proposal: body ops on the live text, frontmatter ops on its map', async () => {
     const path = 'docs/rev-ops-proposal'
