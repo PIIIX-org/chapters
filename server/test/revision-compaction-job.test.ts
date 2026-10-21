@@ -14,7 +14,7 @@ import { vaults } from '../src/db/schema.js'
 import { buildInstanceBackup } from '../src/export/archive.js'
 import { FailpointError, setFailpointHandler } from '../src/failpoints.js'
 import { jobTiming } from '../src/jobs/durable.js'
-import { createNote, purgeRevision, type Actor } from '../src/notes/store.js'
+import { createNote, purgeRevision, revertNote, type Actor } from '../src/notes/store.js'
 import {
   KEEP_RECENT_REVISIONS,
   compactNoteRevisions,
@@ -233,6 +233,20 @@ describe('compactNoteRevisions (#501)', { timeout: 60_000 }, () => {
     const rows = await stored(noteId)
     expect(rows.map((r) => r.body)).toEqual(texts)
     expect(rows.filter((r) => r.delta !== null).length).toBeGreaterThan(30)
+  })
+
+  it('reverts a note to a compacted revision exactly', async () => {
+    const texts = bodies(60)
+    const { noteId } = await noteWithHistory(texts)
+    await compactNoteRevisions(noteId)
+    const rows = await stored(noteId)
+    const index = rows.findIndex((r) => r.delta !== null)
+    expect(index).toBeGreaterThan(0)
+    const [note] = (await db.execute(sql`SELECT path FROM notes WHERE id = ${noteId}`)) as unknown as Array<{ path: string }>
+    const reverted = await revertNote(vaultId, note!.path, rows[index]!.id, person)
+    expect(reverted?.body).toBe(texts[index])
+    const [row] = (await db.execute(sql`SELECT body FROM notes WHERE id = ${noteId}`)) as unknown as Array<{ body: string }>
+    expect(row!.body).toBe(texts[index])
   })
 
   it('purging a base revision stores the revisions built on it whole again', async () => {

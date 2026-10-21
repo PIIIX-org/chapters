@@ -5,11 +5,12 @@
 -- UTF-8 size of that body. Compaction is lossless: `note_revision_body`
 -- returns every revision's body exactly (notes/revision-compaction.ts).
 --
--- Additive (the 0021 rule, backup.md §5): nullable columns, a check older
--- code cannot violate (it never sets them) and a foreign key with NO ACTION,
--- so older code can never delete a base a delta still needs. Older code reads
--- `body` directly and would see a compacted revision as empty: before
--- running it, expand every revision with the UPDATE in backup.md §5.
+-- The schema change is additive (nullable columns, a check older code cannot
+-- violate because it never sets them, and a foreign key with NO ACTION, so
+-- older code can never delete a base a delta still needs), but the data is
+-- not: older code reads `body` directly and shows a compacted revision as
+-- empty. A code-only rollback therefore needs the UPDATE in backup.md §5
+-- first, which stores every revision whole again.
 ALTER TABLE "note_revisions"
   ADD COLUMN "body_delta" jsonb,
   ADD COLUMN "delta_base_id" uuid,

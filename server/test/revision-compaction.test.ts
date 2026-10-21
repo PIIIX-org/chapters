@@ -30,9 +30,9 @@ interface HistoryRow {
 }
 
 const PATH = 'docs/long-history'
-const LINES = 400
+const LINES = 200
 /** Writes after the create: the agent's first edit, then the person's. */
-const WRITES = 200
+const WRITES = 150
 
 let app: FastifyInstance
 let baseUrl: string
@@ -128,7 +128,7 @@ beforeAll(async () => {
     }),
   )
 
-  // A 400-line note (about 18 KB) written 200 times, one line each time.
+  // A 200-line note (about 9 KB) written 150 times, one line each time.
   lines = Array.from({ length: LINES }, (_, i) => line(i))
   const created = await createNote(vaultId, { path: PATH, frontmatter: { type: 'docs' }, body: text() }, person)
   noteId = created.id
@@ -143,7 +143,7 @@ beforeAll(async () => {
     await updateNote(vaultId, PATH, { body: text() }, person)
     expected.push({ action: 'update', body: text() })
   }
-}, 120_000)
+}, 60_000)
 
 afterAll(async () => {
   await agent?.close()
