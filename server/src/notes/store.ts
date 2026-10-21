@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'n
 import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
@@ -50,7 +50,13 @@ export const RESTORE_POINT_ACTION = 'restore_point'
 /** An MCP connection's session on a note ends after this many minutes without a revision of its own there (#482). */
 export const RESTORE_POINT_IDLE_MINUTES = 30
 
-/** Records a revision unless it repeats the note's latest one. Frontmatter
+/** The revision actions recordRevision dedupes: content writes. */
+const DEDUPED_ACTIONS: Record<string, true> = { create: true, update: true }
+
+/** Revisions recordRevision never compares a write with: not a write's state (#482, #492). */
+const NOT_A_DEDUPE_BASELINE = [QUARANTINE_ACTION, RESTORE_POINT_ACTION, 'delete']
+
+/** Records a revision unless it repeats the note's latest content. Frontmatter
  * is compared as jsonb stores it (#480): deep equality on its JSON form, so
  * object key order (jsonb uses its own, the collab document and a
  * frontmatter merge keep theirs), `undefined` members and Date vs ISO string
@@ -60,8 +66,12 @@ export const RESTORE_POINT_IDLE_MINUTES = 30
  * the relay (`collab`), whose store of an already recorded state changes
  * nothing. An attributed write (`mcp`, `user`) of the state the relay just
  * stored is recorded: the relay's revision has no author (#403) and may
- * bundle a person's typing, so it is never re-attributed. Quarantined writes
- * (#492) are not the note's state, so they are not compared. */
+ * bundle a person's typing, so it is never re-attributed.
+ *
+ * Only content writes (DEDUPED_ACTIONS) are deduped; an event (`delete`) is
+ * always recorded. The write is compared with the newest content revision:
+ * quarantined writes (#492), restore points (#482) and events are not a
+ * write's state, so they are never the baseline. */
 async function recordRevision(
   noteId: string,
   action: string,
@@ -69,27 +79,29 @@ async function recordRevision(
   body: string,
   actor: Actor,
 ): Promise<void> {
-  const last = (
-    await db
-      .select({
-        frontmatter: noteRevisions.frontmatter,
-        body: noteRevisions.body,
-        actorType: noteRevisions.actorType,
-        actorId: noteRevisions.actorId,
-      })
-      .from(noteRevisions)
-      .where(and(eq(noteRevisions.noteId, noteId), ne(noteRevisions.action, QUARANTINE_ACTION)))
-      .orderBy(desc(noteRevisions.createdAt))
-      .limit(1)
-  )[0]
-  const repeatsAuthor = actor.type === 'collab' || (last?.actorType === actor.type && last.actorId === (actor.id ?? null))
-  if (
-    last &&
-    repeatsAuthor &&
-    last.body === body &&
-    isDeepStrictEqual(last.frontmatter, JSON.parse(JSON.stringify(frontmatter ?? null)))
-  ) {
-    return
+  if (DEDUPED_ACTIONS[action]) {
+    const last = (
+      await db
+        .select({
+          frontmatter: noteRevisions.frontmatter,
+          body: noteRevisions.body,
+          actorType: noteRevisions.actorType,
+          actorId: noteRevisions.actorId,
+        })
+        .from(noteRevisions)
+        .where(and(eq(noteRevisions.noteId, noteId), notInArray(noteRevisions.action, NOT_A_DEDUPE_BASELINE)))
+        .orderBy(desc(noteRevisions.createdAt))
+        .limit(1)
+    )[0]
+    const repeatsAuthor = actor.type === 'collab' || (last?.actorType === actor.type && last.actorId === (actor.id ?? null))
+    if (
+      last &&
+      repeatsAuthor &&
+      last.body === body &&
+      isDeepStrictEqual(last.frontmatter, JSON.parse(JSON.stringify(frontmatter ?? null)))
+    ) {
+      return
+    }
   }
   await db.insert(noteRevisions).values({
     noteId,
@@ -117,8 +129,11 @@ async function recordRevision(
  * from an earlier session); only not when that latest revision already is
  * this connection's restore point of this state. The state kept is the stored
  * note: typing the relay has not stored yet is not in it. Writes by the same
- * connection to the note run one at a time, so concurrent first writes keep
- * one restore point.
+ * connection to the note (keyed by note id, so whatever path it is reached
+ * by, also across a rename) run one at a time, so concurrent first writes
+ * keep one restore point. A restore point that cannot be stored (the note was
+ * purged in between) is logged, not reported as the write's failure: the
+ * write has landed.
  */
 export async function withRestorePoint<T>(
   vaultId: string,
@@ -126,18 +141,30 @@ export async function withRestorePoint<T>(
   connectionId: string,
   write: () => Promise<T>,
 ): Promise<T> {
-  const resolved = resolveNotePath(path)
-  return withKeyLock(`restore-point:${connectionId}:${vaultId}/${resolved.fullPath}`, async () => {
-    const point = await pendingRestorePoint(vaultId, resolved.fullPath, connectionId)
+  const found = await getLiveNote(vaultId, path)
+  // No live note: nothing to keep, and the write itself reports the missing note.
+  if (!found) return write()
+  return withKeyLock(`restore-point:${connectionId}:${found.id}`, async () => {
+    const point = await pendingRestorePoint(found.id, connectionId)
     const result = await write()
-    if (point && result) await db.insert(noteRevisions).values(point)
+    if (point && result) {
+      try {
+        await db.insert(noteRevisions).values(point)
+      } catch (err) {
+        console.warn(`[restore-point] note ${found.id}: restore point not kept: ${(err as Error).message}`)
+      }
+    }
     return result
   })
 }
 
 /** The restore point withRestorePoint records after the write, or null when the session already has one. */
-async function pendingRestorePoint(vaultId: string, path: string, connectionId: string) {
-  const row = await getLiveNote(vaultId, path)
+async function pendingRestorePoint(noteId: string, connectionId: string) {
+  // The database's clock, as text, read before the row: a revision committed
+  // after the read sorts after the restore point. A JS Date would drop the
+  // microseconds that order revisions.
+  const [clock] = await db.execute<{ at: string }>(sql`select clock_timestamp()::text as at`)
+  const row = (await db.select().from(notes).where(and(eq(notes.id, noteId), isNull(notes.deletedAt))))[0]
   if (!row) return null
   const active = await db
     .select({ id: noteRevisions.id })
@@ -170,8 +197,6 @@ async function pendingRestorePoint(vaultId: string, path: string, connectionId: 
   ) {
     return null
   }
-  // The database's clock, as text: a JS Date would drop the microseconds that order revisions.
-  const [clock] = await db.execute<{ at: string }>(sql`select clock_timestamp()::text as at`)
   return {
     noteId: row.id,
     actorType: 'mcp' as const,
