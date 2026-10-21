@@ -59,6 +59,13 @@ export interface BackupTable {
   legacyKey?: string
   /** Applied to each row before it is inserted. */
   onRestore?: (row: Row) => Row
+  /**
+   * JS key of a column numbered from a sequence in the order rows were
+   * recorded (#825, #858). A restore keeps the archive's numbers, numbers rows
+   * of an archive from before the column in (created_at, id) order, and
+   * advances the sequence past them.
+   */
+  sequence?: string
 }
 
 /**
@@ -108,7 +115,7 @@ export const BACKUP_TABLES: BackupTable[] = [
   { name: 'repository_graph_preferences', table: repositoryGraphPreferences },
   { name: 'repository_sync_tokens', table: repositorySyncTokens, unique: [{ columns: ['tokenHash'] }] },
   { name: 'mcp_connections', table: mcpConnections, unique: [{ columns: ['tokenHash'] }], legacyKey: 'mcpConnections' },
-  { name: 'security_events', table: securityEvents, legacyKey: 'securityEvents' },
+  { name: 'security_events', table: securityEvents, legacyKey: 'securityEvents', sequence: 'seq' },
   { name: 'notifications', table: notifications, legacyKey: 'notifications' },
   {
     name: 'notes',
@@ -116,7 +123,7 @@ export const BACKUP_TABLES: BackupTable[] = [
     omit: ['embedding'],
     unique: [{ columns: ['vaultId', 'path'], liveOnly: true }],
   },
-  { name: 'note_revisions', table: noteRevisions },
+  { name: 'note_revisions', table: noteRevisions, sequence: 'ord' },
 ]
 
 /** The setup/MFA-mandate row: restored by hand, never with the setup token. */

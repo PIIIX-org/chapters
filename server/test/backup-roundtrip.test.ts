@@ -543,4 +543,51 @@ describe('instance backup round trip (#409)', () => {
     expect(legacy.ids).toEqual([...byTime.map((r) => r.id), legacy.recorded])
     await wipeInstance()
   })
+
+  it('numbers new security events after the restored ones, and those of an archive from before seq by time (#858)', async () => {
+    // On a fresh instance (the event sequence at 1), restores `zip`, records one event and returns every event in `seq` order.
+    const restoreAndRecord = async (zip: Buffer) => {
+      await wipeInstance()
+      await db.execute(dsql`select setval(pg_get_serial_sequence('security_events', 'seq'), 1, false)`)
+      await restoreBackup(zip)
+      const [recorded] = await db.insert(securityEvents).values({ type: 'after_the_restore' }).returning({ id: securityEvents.id })
+      const rows = await db.select({ id: securityEvents.id, type: securityEvents.type }).from(securityEvents).orderBy(asc(securityEvents.seq))
+      return { rows, recorded: recorded!.id }
+    }
+
+    const restored = await restoreAndRecord(archive)
+    expect(restored.rows.slice(-2).map((r) => r.type)).toEqual(['instance_restored', 'after_the_restore'])
+    expect(restored.rows.at(-1)!.id).toBe(restored.recorded)
+
+    // The same archive as one written before migration 0027: no `seq` on its events, which it lists in any
+    // order (here the reverse of the recorded one).
+    const zip = new AdmZip(archive)
+    const lines = zip.getEntry('db/security_events.jsonl')!.getData().toString('utf8').trim().split('\n')
+    expect(lines.length).toBeGreaterThan(1)
+    const data = Buffer.from(
+      [...lines]
+        .reverse()
+        .map((line) => {
+          const row = JSON.parse(line) as Record<string, unknown>
+          delete row.seq
+          return JSON.stringify(row)
+        })
+        .join('\n') + '\n',
+    )
+    zip.updateFile('db/security_events.jsonl', data)
+    const manifest = JSON.parse(zip.getEntry('backup.json')!.getData().toString('utf8'))
+    manifest.parts['db/security_events.jsonl'] = { sha256: createHash('sha256').update(data).digest('hex'), size: data.length }
+    zip.updateFile('backup.json', Buffer.from(JSON.stringify(manifest)))
+    const legacy = await restoreAndRecord(zip.toBuffer())
+    const archived = new Set(lines.map((line) => String(JSON.parse(line).id)))
+    const byTime = await db
+      .select({ id: securityEvents.id })
+      .from(securityEvents)
+      .orderBy(asc(securityEvents.createdAt), asc(securityEvents.id))
+    const archivedByTime = byTime.map((r) => r.id).filter((id) => archived.has(id))
+    expect(archivedByTime).toHaveLength(lines.length)
+    expect(legacy.rows.map((r) => r.id).slice(0, lines.length)).toEqual(archivedByTime)
+    expect(legacy.rows.slice(lines.length).map((r) => r.type)).toEqual(['instance_restored', 'after_the_restore'])
+    await wipeInstance()
+  })
 })
