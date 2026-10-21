@@ -94,6 +94,7 @@ describe('a write to an open note (§5.1 R5-1, §5.2 step 8)', () => {
     )
     await inCompute
     // Typing makes a relay store due (debounce 150 ms in tests, maxDebounce 750 ms); it waits for the lock.
+    // Since S3 the typing is logged before it is acked, without waiting for the write's lock.
     await editor.type(0, 'Typed. ')
     await new Promise((r) => setTimeout(r, 900))
     release()

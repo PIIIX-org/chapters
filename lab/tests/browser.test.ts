@@ -113,6 +113,17 @@ async function readEditor(page: Page): Promise<EditorRead> {
     return { text: null, dom: null, source: 'evaluate-failed', head: null, editable: null }
   }
 }
+/** The editor text, taken when the status line reads "Synced" just after it (up to 1.5 s; else the last sample). */
+async function ackedEditorText(page: Page): Promise<string | null> {
+  const deadline = performance.now() + 1500
+  for (;;) {
+    const text = (await readEditor(page)).text
+    const { status } = await readChrome(page)
+    if (status.some((s) => s.includes('Synced')) || performance.now() > deadline) return text
+    await Bun.sleep(20)
+  }
+}
+
 async function readChrome(page: Page): Promise<ChromeRead> {
   try {
     return (await page.evaluate(READ_CHROME)) as ChromeRead
@@ -453,7 +464,11 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
         await Bun.sleep(100)
       }
     })()
-    const editorAtRead = watchPage ? (await readEditor(watchPage)).text : null
+    // What the editor shows that the relay has acknowledged: a read covers every acked update (ADR-003 §5.6), and since
+    // S3 a keystroke is acked only once it is in the log, so a token still in flight is not yet the read's to return.
+    // The editor text counts once the status line says "Synced" right after it was taken (nothing typed before it is
+    // unacked then); while typing never pauses long enough, the last sample is used as before.
+    const editorAtRead = watchPage ? await ackedEditorText(watchPage) : null
     const t0 = performance.now()
     const read = await agent.call('read_note', { vaultId: vault.id, path })
     const readMs = Math.round(performance.now() - t0)
@@ -997,7 +1012,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
   const staleReads = agentWrites.filter((w) => !w.editorOffline && w.missingFromRead.length > 0)
   checks.push({
     name: 'read_note returns what the live editor shows',
-    expected: 'no token visible in a connected editor is missing from the agent read',
+    expected: 'no token the connected editor showed as synced (acknowledged) is missing from the agent read',
     actual:
       staleReads.length === 0
         ? 'never stale'
