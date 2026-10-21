@@ -19,6 +19,7 @@ import { config } from '../config.js'
 import { sql } from '../db/client.js'
 import { docState, sameDocState, type DocState } from '../sync/live-docs.js'
 import { parseNote, serializeNote, type OkfNote } from './okf.js'
+import { fileWinsContent } from './store-reconcile.js'
 
 const BATCH = 100
 
@@ -470,6 +471,8 @@ async function classifyNote(
     c.crdt[crdt]++
     timings.crdt += performance.now() - t1
   }
+  // S2b runs after S2a, so it compares the bin with the row S2a leaves: the file's content when the file wins (Q5).
+  const afterS2a = fileClass === 'differs' && parsed ? fileWinsContent(row, parsed) : { frontmatter: row.frontmatter, body: row.body }
   const collab: CollabAction | null =
     crdt === null
       ? null
@@ -479,7 +482,7 @@ async function classifyNote(
           ? 'seed'
           : crdt === 'mismatch' || crdt === 'undecodable'
             ? 'set-aside'
-            : binState && sameDocState(binState, { frontmatter: row.frontmatter, body: row.body })
+            : binState && sameDocState(binState, afterS2a)
               ? 'attach-equal'
               : 'attach-diffed'
   if (collab) c.collab[collab]++

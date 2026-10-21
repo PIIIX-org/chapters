@@ -2029,7 +2029,9 @@ file and `.crdt` bin in one `REPEATABLE READ READ ONLY` transaction (only
 pre-0021 columns, so it runs on a production copy before the upgrade) and
 reports what the S2a/S2b backfill will do: per-note classes (`crdt`: what
 the bin's text matches; `collab`: what the S2b backfill does with it,
-`attach`/`set-aside`/`seed`/`has-state`), the file ≠ row
+`attach-equal`/`attach-diffed`/`set-aside`/`seed`/`has-state`, equal or
+diffed against the row S2a leaves, the file's content when the file wins),
+the file ≠ row
 conflict list (Q5: the file wins; `row.updated_at` against the file mtime,
 both hashes), files that will change bytes, files with no row, sizes and
 timings.
