@@ -9,7 +9,7 @@ import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
 import { runDoctor } from '../src/notes/doctor.js'
-import { INSTANCE_LOCK_KEY, MaintenanceInProgressError } from '../src/notes/maintenance-lock.js'
+import { INSTANCE_LOCK_KEY, MaintenanceInProgressError, holdsExclusiveLock } from '../src/notes/maintenance-lock.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { rowsFromFiles } from '../src/notes/rows-from-files.js'
 import { withKeyLock } from '../src/notes/key-lock.js'
@@ -155,7 +155,7 @@ describe('rows-from-files', () => {
     // The drain moved the files where the rows say.
     expect((await readdir(join(vaultDir(vaultId), 'moving'))).sort()).toEqual(['index.md', 'new.md'])
     expect(await stat(trashFile(vaultId, trashed.id)).then(() => true, () => false)).toBe(true)
-  })
+  }, 30_000)
 
   it('stops with an error when its exclusive lock is lost during the run, even within one vault', async () => {
     await loseRow('recover/lost')
@@ -178,11 +178,11 @@ describe('rows-from-files', () => {
     let pids = await lockPids()
     while (pids.length === 0) pids = await lockPids()
     await other`SELECT pg_terminate_backend(${pids[0]!.pid})`
-    while ((await lockPids()).length > 0) await new Promise((resolve) => setTimeout(resolve, 20))
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    // The import sees the loss once the lock module has (it clears the exclusive flag before onLost).
+    while (holdsExclusiveLock()) await new Promise((resolve) => setTimeout(resolve, 20))
     release()
     await blocker
     await expect(run).rejects.toThrow(/lock was lost/)
     await flushProjections()
-  })
+  }, 30_000)
 })

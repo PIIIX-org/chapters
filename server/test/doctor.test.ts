@@ -373,7 +373,8 @@ describe('doctor', () => {
     await doctor(true)
     await flushProjections()
     expect((await doctor()).problems).toEqual([])
-  })
+    // Three CLI processes (tsx start-up each): slow on a loaded machine.
+  }, 60_000)
 
   it('scopes to one vault', async () => {
     const other = randomUUID()
