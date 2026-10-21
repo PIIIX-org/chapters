@@ -96,6 +96,13 @@ export interface NoteCrdt {
   tailCount: number
   tailBytes: number
   snapshotBytes: number
+  /**
+   * The state vector of the stored state when `doc` holds more than that:
+   * `doc` is then a clone of the open document (readNoteCrdt with a
+   * matching cached state), and the editors' typing is the delta over this
+   * vector. Null when `doc` is the stored state itself.
+   */
+  storedStateVector: Uint8Array | null
 }
 
 function toBytes(value: Uint8Array | Buffer): Uint8Array {
@@ -103,12 +110,101 @@ function toBytes(value: Uint8Array | Buffer): Uint8Array {
 }
 
 /**
- * Materialises note `noteId`'s CRDT state (FOR UPDATE on its `note_crdt`
- * row), or null when it has none. A stored update that throws when applied
- * is marked `rejected_at` and skipped, and `fold_error` names it (§5.4 fold
- * step 2): one bad update never blocks the note or any other.
+ * What the database holds for an open document's note (ADR-003 §5.4 "Before
+ * S3"): the state vector of `note_crdt` ⊕ tail and the last update id it
+ * includes. Set at load and after every commit that appended or folded with
+ * the document in hand; dropped on `fold_error` and with the document. While
+ * it matches the database (same last update id, no `fold_error`, row folded
+ * at its `seq`), a write materialises nothing: the open document already
+ * holds that state, and its typing is the delta over the cached vector.
  */
-export async function readNoteCrdt(tx: Tx, noteId: string): Promise<NoteCrdt | null> {
+export interface StoredState {
+  noteId: string
+  stateVector: Uint8Array
+  lastId: number
+}
+
+const storedStates = new WeakMap<Y.Doc, StoredState>()
+
+/** What `crdt` holds as stored once its transaction commits, or null while `fold_error` is set (nothing is cached then). */
+export function storedStateOf(crdt: NoteCrdt): StoredState | null {
+  return crdt.foldError === null ? { noteId: crdt.noteId, stateVector: Y.encodeStateVector(crdt.doc), lastId: crdt.lastId } : null
+}
+
+/** After the commit: `live` (an open document of the note) holds `state`; null forgets what was cached. */
+export function rememberStoredState(live: Y.Doc, state: StoredState | null): void {
+  if (state) storedStates.set(live, state)
+  else storedStates.delete(live)
+}
+
+/** Records the stored state an open document was just loaded from (ids up to `lastId`). */
+export function rememberLoadedState(live: Y.Doc, noteId: string, lastId: number): void {
+  storedStates.set(live, { noteId, stateVector: Y.encodeStateVector(live), lastId })
+}
+
+/**
+ * An open document a write has in hand: `live` itself, `base` the clone the
+ * write is computed from, and the row's `seq` under the lock. readNoteCrdt
+ * uses its cached stored state when it still matches.
+ */
+export interface OpenDocument {
+  live: Y.Doc
+  base: Y.Doc
+  seq: number
+}
+
+/**
+ * Note `noteId`'s CRDT state (FOR UPDATE on its `note_crdt` row), or null
+ * when it has none. With `open`, whose cached stored state matches the
+ * database (last update id, no `fold_error`, folded at the row's `seq`), the
+ * state is `open.base` and nothing is materialised: only the bookkeeping is
+ * read. Otherwise `snapshot ⊕` the tail is materialised; a stored update
+ * that throws when applied is marked `rejected_at` and skipped, and
+ * `fold_error` names it (§5.4 fold step 2): one bad update never blocks the
+ * note or any other.
+ */
+export async function readNoteCrdt(tx: Tx, noteId: string, open?: OpenDocument): Promise<NoteCrdt | null> {
+  const cached = open ? storedStates.get(open.live) : undefined
+  if (open && cached && cached.noteId === noteId) {
+    const [row] = (await tx.execute(sql`
+      SELECT c.snapshot_through, c.folded_through, c.folded_seq, c.fold_error, octet_length(c.snapshot) AS snapshot_bytes,
+        coalesce(t.last_id, c.snapshot_through) AS last_id, coalesce(t.n, 0) AS tail_count, coalesce(t.bytes, 0) AS tail_bytes
+      FROM note_crdt c
+      LEFT JOIN LATERAL (
+        SELECT max(u.id) AS last_id, count(*) AS n, sum(octet_length(u.update)) AS bytes FROM note_updates u
+        WHERE u.note_id = c.note_id AND u.id > c.snapshot_through AND u.rejected_at IS NULL
+      ) t ON true
+      WHERE c.note_id = ${noteId} FOR UPDATE OF c`)) as unknown as Array<Record<string, string | number | null>>
+    if (!row) return null
+    const lastId = Number(row.last_id)
+    if (lastId === cached.lastId && row.fold_error === null && Number(row.folded_seq) === open.seq) {
+      materialised.cached++
+      return {
+        noteId,
+        doc: open.base,
+        snapshotThrough: Number(row.snapshot_through),
+        foldedThrough: Number(row.folded_through),
+        foldedSeq: Number(row.folded_seq),
+        foldError: null,
+        rejected: null,
+        lastId,
+        tailCount: Number(row.tail_count),
+        tailBytes: Number(row.tail_bytes),
+        snapshotBytes: Number(row.snapshot_bytes),
+        storedStateVector: cached.stateVector,
+      }
+    }
+    storedStates.delete(open.live)
+  }
+  materialised.full++
+  return materialise(tx, noteId)
+}
+
+/** How readNoteCrdt served its callers: from an open document's cached state, or materialised (for tests and measurements). */
+export const materialised = { cached: 0, full: 0 }
+
+/** `snapshot ⊕` the non-rejected tail, rejecting a stored update that does not apply (see readNoteCrdt). */
+async function materialise(tx: Tx, noteId: string): Promise<NoteCrdt | null> {
   const [row] = await tx.select().from(noteCrdt).where(eq(noteCrdt.noteId, noteId)).for('update')
   if (!row) return null
   const doc = new Y.Doc()
@@ -131,6 +227,7 @@ export async function readNoteCrdt(tx: Tx, noteId: string): Promise<NoteCrdt | n
     tailCount: 0,
     tailBytes: 0,
     snapshotBytes: snapshot.byteLength,
+    storedStateVector: null,
   }
   for (const { id, update } of tail) {
     try {
@@ -169,6 +266,7 @@ export async function insertNoteCrdt(tx: Tx, noteId: string, doc: Y.Doc, seq: nu
     tailCount: 0,
     tailBytes: 0,
     snapshotBytes: snapshot.byteLength,
+    storedStateVector: null,
   }
 }
 

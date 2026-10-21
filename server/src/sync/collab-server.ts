@@ -12,6 +12,7 @@ import { notes } from '../db/schema.js'
 import { compactCollabState, keepRefusedTyping, loadCollabState, updateNote } from '../notes/store.js'
 import { NoteNotMigratedError, StoreBusyError, collabNoteMigrated, noteMigrated, storeMigrationPending } from '../notes/store-tx.js'
 import { docState, forgetLivePath, livePath, parseDocName, registerLiveDocs, setLivePath, type LiveDocument } from './live-docs.js'
+import { rememberLoadedState } from './note-crdt.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { affects, onPermissionChange } from './permission-events.js'
@@ -242,8 +243,10 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     async onLoadDocument({ documentName, document }) {
       const name = parseDocName(documentName)
       if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
-      const { state, path } = await loadCollabState(name.vaultId, name.noteId)
+      const { state, path, lastId } = await loadCollabState(name.vaultId, name.noteId)
       Y.applyUpdate(document, state)
+      // The stored state this document holds, so its stores need not materialise it again (§5.4 "Before S3").
+      if (lastId !== null) rememberLoadedState(document, name.noteId, lastId)
       documentNotes.set(document, name.noteId)
       setLivePath(name.noteId, name.vaultId, path)
       return document
