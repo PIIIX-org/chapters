@@ -5,9 +5,9 @@
 -- replace of the live text. Kept 24 hours, pruned on every read like
 -- write_idempotency (0025); deleting the connection or purging the note
 -- deletes its rows. Additive (the 0021 rule, backup.md §5): a new table no
--- older code reads or writes. Numbered after 0026 (#861) and 0027 (#858),
--- which must be applied first: the migrator skips a migration older than the
--- newest applied one.
+-- older code reads or writes. Numbered after 0026 (#861) and 0027 (#869),
+-- which must be applied first: the migrator skips a migration whose `when`
+-- is at or below the newest applied one.
 CREATE TABLE "note_reads" (
   "connection_id" uuid NOT NULL,
   "note_id" uuid NOT NULL,
