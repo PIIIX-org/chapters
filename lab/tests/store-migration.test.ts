@@ -109,14 +109,14 @@ const test: LabTest = {
       checks.push(...(await storeInvariants(V, 'after the backfill')))
 
       // 4. Rerun with a SIGKILL after the first note of a batch.
-      const settled = { rows: await psql(`SELECT md5(string_agg(id || seq || body || frontmatter::text, ',' ORDER BY id)) FROM notes WHERE vault_id = '${V}'`), files: await shaFiles() }
+      const settled = { rows: await psql(`SELECT md5(string_agg(id::text || ':' || seq::text || ':' || body || frontmatter::text, ',' ORDER BY id)) FROM notes WHERE vault_id = '${V}'`), files: await shaFiles() }
       const revisions = await psql(`SELECT count(*) FROM note_revisions r JOIN notes n ON n.id = r.note_id WHERE n.vault_id = '${V}'`)
       await stopApp()
       await psql(RESET_STORE)
       await recreateApp(ctx.baseUrl, 'migration.mid-batch', false)
       await Bun.sleep(5_000)
       await recreateApp(ctx.baseUrl, '')
-      const again = { rows: await psql(`SELECT md5(string_agg(id || seq || body || frontmatter::text, ',' ORDER BY id)) FROM notes WHERE vault_id = '${V}'`), files: await shaFiles() }
+      const again = { rows: await psql(`SELECT md5(string_agg(id::text || ':' || seq::text || ':' || body || frontmatter::text, ',' ORDER BY id)) FROM notes WHERE vault_id = '${V}'`), files: await shaFiles() }
       checks.push({ name: 'mid-batch: rows equal the uninterrupted run', expected: settled.rows, actual: again.rows, ok: again.rows === settled.rows })
       checks.push({ name: 'mid-batch: note files equal the uninterrupted run', expected: 'same sha256 list', actual: again.files === settled.files ? 'same' : 'differs', ok: again.files === settled.files })
       const revisionsAgain = await psql(`SELECT count(*) FROM note_revisions r JOIN notes n ON n.id = r.note_id WHERE n.vault_id = '${V}'`)

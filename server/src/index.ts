@@ -16,10 +16,18 @@ import { holdSharedLockOrExit } from './notes/maintenance-lock.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 
-// Before anything that can fail: a boot that dies in migrations still marks
-// this process `running`, so the next boot reports it as unclean (#583). So
-// does a SIGTERM that arrives before the handlers below are installed
-// (during migrations and catch-ups): Node's default exit writes nothing.
+// ADR-003 §5.1/§9: the shared instance lock on a reserved connection, held
+// from before migrations until exit. Refused (exit 2) while
+// store-export-legacy runs; a dropped connection pauses writes until it is
+// held again (maintenance-lock.ts). Taken before the boot is recorded: a
+// start refused here wrote nothing, so the marker keeps saying how the last
+// server that ran ended (a refused start is not an unclean shutdown).
+await holdSharedLockOrExit()
+
+// Before anything else that can fail: a boot that dies in migrations still
+// marks this process `running`, so the next boot reports it as unclean
+// (#583). So does a SIGTERM that arrives before the handlers below are
+// installed (during migrations and catch-ups): Node's default exit writes nothing.
 const bootRecord = recordBoot()
 console.log(bootLogLine(bootRecord))
 if (process.env.ELARA_MONITORING_TOKEN && !config.monitoringToken) {
@@ -27,12 +35,6 @@ if (process.env.ELARA_MONITORING_TOKEN && !config.monitoringToken) {
 }
 
 const app = await buildApp()
-
-// ADR-003 §5.1/§9: the shared instance lock on a reserved connection, held
-// from before migrations until exit. Refused (exit 2) while
-// store-export-legacy runs; a dropped connection pauses writes until it is
-// held again (maintenance-lock.ts).
-await holdSharedLockOrExit()
 
 try {
   await runMigrations()

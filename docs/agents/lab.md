@@ -64,7 +64,7 @@ The ADR-003 store tests (`lab/lib/store.ts` helpers):
   --wait-idle --fail-on-pending`), I5 (no `*.tmp`) and the operation's
   own effect are checked.
 - `store-migration`: builds the image from before S2a
-  (`LAB_PRE_S2A_REF`, default the `dev` commit #828 was based on; `git
+  (`LAB_PRE_S2A_REF`, default 87ccfad, the `dev` commit #828 was based on; `git
   fetch` + `docker build`, cached per runner as `elara-lab-pre-s2a`),
   runs it with the store bookkeeping reset, makes every damage class
   (SIGKILL in old-code writes, unparseable file, hand edit, hand-formatted

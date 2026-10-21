@@ -1,7 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { execFile } from 'node:child_process'
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { promisify } from 'node:util'
 import postgres from 'postgres'
 import { sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
@@ -11,6 +13,7 @@ import { db } from '../src/db/client.js'
 import { createNote, renameNote } from '../src/notes/store.js'
 import { flushProjections, renderNoteFile, sweepOrphanFiles } from '../src/notes/projector.js'
 import { bootStore } from '../src/notes/store-reconcile.js'
+import { setStoreMigrationPending } from '../src/notes/store-tx.js'
 import { MaintenanceInProgressError, holdInstanceLock } from '../src/notes/maintenance-lock.js'
 import { BackfillPendingError, exportLegacyFiles } from '../src/notes/store-export.js'
 import { createActiveUser, loginCookie } from './helpers.js'
@@ -86,6 +89,50 @@ describe('boot step 7: verify after an unclean shutdown (§7)', () => {
     expect(await conflictCopiesOf('torn')).toHaveLength(1)
     expect((await readFile(file('docs/intact.md'))).equals(before)).toBe(true)
     expect(await conflictCopiesOf('intact')).toHaveLength(0)
+  })
+
+  it('runs when the backfill still has failures too (the notes it did process are written meanwhile)', async () => {
+    const done = await createNote(vaultId, { type: 'docs', name: 'bf-done', body: 'processed' })
+    await flushProjections()
+    await writeFile(file('docs/bf-done.md'), '')
+    const [state] = (await db.execute(sql`SELECT store_migrated_at FROM instance_state WHERE id = 'singleton'`)) as unknown as Array<{
+      store_migrated_at: string | null
+    }>
+    // A note the backfill cannot read: its file path is a directory (EISDIR), so the backfill fails for it.
+    const failing = randomUUID()
+    await db.execute(sql`
+      INSERT INTO notes (id, vault_id, type, name, path, frontmatter, body)
+      VALUES (${failing}, ${vaultId}, 'docs', 'bf-fail', 'docs/bf-fail', '{"type":"docs"}'::jsonb, 'row')`)
+    await mkdir(file('docs/bf-fail.md'), { recursive: true })
+    await db.execute(sql`UPDATE instance_state SET store_migrated_at = NULL WHERE id = 'singleton'`)
+    try {
+      const boot = await bootStore({ lastShutdown: 'unclean' })
+      expect(boot.migrated).toBe(false)
+      expect(boot.verified).toBeGreaterThan(0)
+      await flushProjections()
+      expect(await readFile(file('docs/bf-done.md'), 'utf8')).toBe(await rendered(done.id))
+    } finally {
+      setStoreMigrationPending(false)
+      await rm(file('docs/bf-fail.md'), { recursive: true, force: true })
+      await db.execute(sql`DELETE FROM notes WHERE id = ${failing}`)
+      await db.execute(sql`UPDATE instance_state SET store_migrated_at = ${state?.store_migrated_at ?? new Date().toISOString()} WHERE id = 'singleton'`)
+    }
+  })
+})
+
+describe('boot clears the claims a killed process left (§7)', () => {
+  it('a store job leased by the process before (a rename refactor holds 10 minutes) runs at the next boot', async () => {
+    await createNote(vaultId, { type: 'docs', name: 'leased-dir', body: 'x' })
+    await flushProjections()
+    await rm(file('docs/index.md'), { force: true })
+    const [job] = (await db.execute(sql`
+      INSERT INTO jobs (kind, payload, lease_until, attempts)
+      VALUES ('store_dir_index', ${JSON.stringify({ vaultId, dirs: ['docs'] })}::jsonb, now() + interval '10 minutes', 1)
+      RETURNING id`)) as unknown as Array<{ id: string }>
+    await bootStore({ lastShutdown: 'unclean' })
+    const [row] = (await db.execute(sql`SELECT done_at FROM jobs WHERE id = ${job!.id}`)) as unknown as Array<{ done_at: string | null }>
+    expect(row?.done_at).not.toBeNull()
+    expect(await readFile(file('docs/index.md'), 'utf8')).toContain('leased-dir')
   })
 })
 
@@ -164,4 +211,37 @@ describe('store-export-legacy (§9)', () => {
     // The lock is released: a server can start again.
     await (await holdInstanceLock('shared')).release()
   })
+
+  it('verifies every file, not only pending ones: a file an unclean stop truncated is rewritten for the old image', async () => {
+    const note = await createNote(vaultId, { type: 'docs', name: 'export-torn', body: 'whole body' })
+    await flushProjections()
+    await writeFile(file('docs/export-torn.md'), '')
+    const report = await exportLegacyFiles()
+    expect(report.ok).toBe(true)
+    expect(await readFile(file('docs/export-torn.md'), 'utf8')).toBe(await rendered(note.id))
+    expect(report.conflictCopies.some((c) => c.path === 'docs/export-torn.md')).toBe(true)
+  })
+
+  it('runs a pending rename refactor as the CLI, in a process that never loaded the note store', async () => {
+    const target = await createNote(vaultId, { type: 'docs', name: 'cli-target', body: 'target' })
+    const referrer = await createNote(vaultId, { type: 'docs', name: 'cli-ref', body: 'see [[docs/cli-target]]' })
+    // The rename committed and its refactor job is left for later (the renaming process died), leased as a rename leases it.
+    await db.execute(sql`UPDATE notes SET path = 'docs/cli-moved', name = 'cli-moved' WHERE id = ${target.id}`)
+    await db.execute(sql`
+      INSERT INTO jobs (kind, payload, lease_until, attempts)
+      VALUES ('store_rename_refactor',
+        ${JSON.stringify({ vaultId, noteId: target.id, fromPath: 'docs/cli-target', referrers: [referrer.id] })}::jsonb,
+        now() + interval '1 hour', 1)`)
+    const run = await promisify(execFile)(process.execPath, ['--import', 'tsx', 'src/scripts/store-export-legacy.ts'], {
+      cwd: join(import.meta.dirname, '..'),
+      env: process.env,
+    }).then(
+      (out) => ({ code: 0, out: out.stdout + out.stderr }),
+      (err: { code?: number; stdout?: string; stderr?: string }) => ({ code: err.code ?? -1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` }),
+    )
+    expect(run.out).toContain('store-export-legacy: done')
+    expect(run.code).toBe(0)
+    const [row] = (await db.execute(sql`SELECT body FROM notes WHERE id = ${referrer.id}`)) as unknown as Array<{ body: string }>
+    expect(row?.body).toBe('see [[docs/cli-moved]]')
+  }, 60_000)
 })

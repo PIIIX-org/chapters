@@ -53,6 +53,8 @@ export interface InstanceLockOptions {
   maxBackoffMs?: number
   /** How often the reserved connection is probed (a half-open socket closes no connection). */
   heartbeatMs?: number
+  /** Tests only: the database the reserved connection uses (default `config.databaseUrl`), e.g. through a proxy that can cut it. */
+  databaseUrl?: string
 }
 
 export interface InstanceLock {
@@ -76,8 +78,8 @@ export function holdsExclusiveLock(): boolean {
 
 type Client = postgres.Sql
 
-function reservedClient(onclose: () => void): Client {
-  return postgres(config.databaseUrl, {
+function reservedClient(databaseUrl: string, onclose: () => void): Client {
+  return postgres(databaseUrl, {
     max: 1,
     idle_timeout: null as unknown as undefined,
     max_lifetime: null,
@@ -113,17 +115,25 @@ export async function holdInstanceLock(mode: InstanceLockMode, options: Instance
     heartbeat = undefined
   }
 
-  /** Opens a reserved connection and tries the lock; returns the client when held. */
+  /**
+   * Opens a reserved connection and tries the lock; returns the client when
+   * held. Only a connection that held the lock reports a drop: postgres.js
+   * also calls `onclose` when a connection attempt fails, and counting that
+   * as a drop would start a second re-acquire loop for every failed attempt.
+   */
   async function acquire(): Promise<Client | null> {
     const mine = ++epoch
-    const next = reservedClient(() => dropped(mine))
+    let held = false
+    const next = reservedClient(options.databaseUrl ?? config.databaseUrl, () => {
+      if (held) dropped(mine)
+    })
     try {
-      if (await tryLock(next, mode)) return next
+      held = await tryLock(next, mode)
     } catch (err) {
       await next.end({ timeout: 0 }).catch(() => {})
       throw err
     }
-    epoch++ // the close below is not a drop
+    if (held) return next
     await next.end({ timeout: 0 }).catch(() => {})
     return null
   }

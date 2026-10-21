@@ -17,7 +17,7 @@ import { failpoint } from '../failpoints.js'
 import { atomicWrite } from './atomic-write.js'
 import { orderKeys, sameContent } from './frontmatter-order.js'
 import { parseNote, type OkfNote } from './okf.js'
-import { PROJECTION_VERSIONS, flushProjections, noteFileRel, renderNoteFile, sha256, verifyAllProjections } from './projector.js'
+import { PROJECTION_VERSIONS, STORE_JOBS, flushProjections, noteFileRel, renderNoteFile, sha256, verifyAllProjections } from './projector.js'
 import type { ShutdownKind } from '../lifecycle.js'
 import {
   BACKFILL_MARKER,
@@ -147,19 +147,24 @@ export async function reconcileStore(): Promise<Reconciled> {
 }
 
 /**
- * The store's part of boot (ADR-003 §7 boot steps 2-3), before `listen`:
- * 1. clear the projection claims a stopped or killed process left (their
- *    lease would keep those projections from running for up to a minute;
- *    nothing else runs yet, and file IO stays guarded by the path lock);
+ * The store's part of boot (ADR-003 §7 boot steps 2-8), before `listen`:
+ * 1. clear the claims a stopped or killed process left on projections and
+ *    on store jobs (a rename's referrer refactor is leased for 10 minutes
+ *    while the renaming call runs it; after a crash that lease would hold it
+ *    back for as long). Nothing else runs yet, and file IO stays guarded by
+ *    the path lock;
  * 2. the one-time backfill while `store_migrated_at` is unset; while it has
  *    failures the marker stays unset and reconciliation does not run, so a
  *    note the backfill could not read gets no projection rows and is
  *    backfilled (file wins, Q5) on a later boot, never skipped as done;
- * 3. reconciliation of rows written around the store;
- * 4. boot step 7: after an `unclean` or `unknown` previous shutdown
- *    (`lastShutdown`), every `file` and `dir_index` projection is marked for
- *    verification against the disk (files are written without fsync, so a
- *    power loss can leave one truncated: conflict copy, then rewrite);
+ * 3. boot step 7: after an `unclean` or `unknown` previous shutdown
+ *    (`lastShutdown`), every existing `file` and `dir_index` projection is
+ *    marked for verification against the disk (files are written without
+ *    fsync, so a power loss can leave one truncated: conflict copy, then
+ *    rewrite). This runs also when the backfill still has failures: the
+ *    notes it did process are written and projected meanwhile, and the next
+ *    boot may see a graceful shutdown and never check them;
+ * 4. reconciliation of rows written around the store;
  * 5. the projector runs until nothing is pending, so files equal rows when
  *    serving starts.
  */
@@ -167,20 +172,24 @@ export async function bootStore(
   options: { lastShutdown?: ShutdownKind } = {},
 ): Promise<{ migrated: boolean; reconciled: Reconciled | null; verified: number }> {
   await db.execute(sql`UPDATE note_projections SET lease_until = NULL WHERE lease_until IS NOT NULL`)
-  if (!(await storeMigrated())) {
+  await db.execute(sql`
+    UPDATE jobs SET lease_until = NULL WHERE done_at IS NULL AND lease_until IS NOT NULL AND kind IN ${Object.values(STORE_JOBS)}`)
+  let migrated = await storeMigrated()
+  if (!migrated) {
     await runStoreBackfill()
-    if (!(await storeMigrated())) {
-      // Notes the backfill could not process are refused for writes until it can (Q5).
-      setStoreMigrationPending(true)
-      return { migrated: false, reconciled: null, verified: 0 }
-    }
+    migrated = await storeMigrated()
   } else {
     const removed = await sweepTempFiles()
     if (removed > 0) console.log(`removed ${removed} orphan temp file(s)`)
   }
+  const verified = options.lastShutdown && options.lastShutdown !== 'graceful' ? await verifyAllProjections() : 0
+  if (!migrated) {
+    // Notes the backfill could not process are refused for writes until it can (Q5).
+    setStoreMigrationPending(true)
+    return { migrated: false, reconciled: null, verified }
+  }
   setStoreMigrationPending(false)
   const reconciled = await reconcileStore()
-  const verified = options.lastShutdown && options.lastShutdown !== 'graceful' ? await verifyAllProjections() : 0
   await flushProjections()
   return { migrated: true, reconciled, verified }
 }

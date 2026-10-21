@@ -242,17 +242,22 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   connection drops, writes pause at once: store transactions answer
   `StoreBusyError`, the relay's `beforeSync` closes the socket with 1013
   `store-paused` before applying an update (unacked; the editor reconnects
-  and resends). The process retries the lock with backoff (250 ms doubling
-  to 10 s) while Postgres is unreachable, resumes when it holds it, and
-  exits only when the retry returns false (an exporter holds it).
-- **Boot** (`index.ts`): shared lock → migrations → the one-time backfill
-  (`store_migrated_at`; else the temp-file sweep) → reconciliation of rows
-  written around the store (projection rows, raised targets, a revision at
-  every `seq`; renderer version bumps) → after an `unclean` or `unknown`
-  previous shutdown (`lifecycle.json`), every `file` and `dir_index`
-  projection is verified against the disk before `listen` (files are
-  written without fsync) → `listen` → in the background, after the first
-  projector drain, the **orphan sweep**: `*.md` under `vaults/<id>/`,
+  and resends). The process retries the lock in one loop with backoff
+  (250 ms doubling to 10 s) while Postgres is unreachable, resumes when it
+  holds it, and exits only when the retry returns false (an exporter holds
+  it). Only a connection that held the lock reports a drop: postgres.js
+  also calls `onclose` for a failed connection attempt.
+- **Boot** (`index.ts`, `bootStore`): shared lock (before the
+  `lifecycle.json` boot record, so a refused start leaves the previous
+  shutdown kind alone) → migrations → leases left on projections and store
+  jobs cleared → the one-time backfill (`store_migrated_at`; else the
+  temp-file sweep) → after an `unclean` or `unknown` previous shutdown,
+  every `file` and `dir_index` projection is marked for verification
+  against the disk (files are written without fsync; also while the
+  backfill has failures) → reconciliation of rows written around the store
+  (projection rows, raised targets, a revision at every `seq`; renderer
+  version bumps) → the projector drains → `listen` → in the background,
+  the **orphan sweep**: `*.md` under `vaults/<id>/`,
   outside `assets/` and every dot-directory, with no `projected_files` row
   and no owner in the DB (a live note at the path, or the `dir_index` of a
   directory with live notes) is moved to `.orphans/<path>`, never deleted.
@@ -263,9 +268,12 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
 - **Code-only rollback**: `store-export-legacy` (`notes/store-export.ts`)
   with no server running: exclusive lock; refused while the backfill has
   failures (`store_migrated_at` unset: those notes' files must still win);
-  reconciliation; every pending `file`/`dir_index` projection and store
-  job rendered synchronously (the per-note `backfill` marker rows are not
-  projections and are left alone); a report
+  reconciliation; every `file`/`dir_index` projection verified against the
+  disk (offline, so always: a file an unclean stop truncated is rewritten)
+  and every store job (also leased, out of attempts or failed ones) run
+  synchronously (the per-note `backfill` marker rows are not projections
+  and are left alone); the CLI loads `store.ts` so the rename refactor
+  runner is registered; a report
   `DATA_DIR/store-export-legacy-<utc>.json`; exit 0 only when nothing is
   pending. Roll-forward is the boot above. Operator procedure:
   `docs/self-hosting/backup.md` §5.

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
+import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import postgres from 'postgres'
 import type { FastifyInstance } from 'fastify'
 import { HocuspocusProvider } from '@hocuspocus/provider'
@@ -93,6 +94,64 @@ async function hold(mode: 'shared' | 'exclusive', options: InstanceLockOptions =
 }
 
 describe('instance maintenance lock (§5.1, §9)', () => {
+  it('re-acquires in one loop while Postgres is unreachable: bounded attempts, one connection after the resume, none after release', async () => {
+    // A TCP proxy in front of Postgres that can be cut, as a network outage or a Postgres restart would
+    // (pg_terminate_backend leaves Postgres reachable, so the first re-acquire always works).
+    const target = new URL(config.databaseUrl)
+    const live = new Set<Socket>()
+    let down = false
+    let attempts = 0
+    const proxy: Server = createServer((client) => {
+      attempts++
+      if (down) {
+        client.destroy()
+        return
+      }
+      const upstream = createConnection({ host: target.hostname, port: Number(target.port || 5432) })
+      live.add(client)
+      client.on('close', () => {
+        live.delete(client)
+        upstream.destroy()
+      })
+      client.on('error', () => upstream.destroy())
+      upstream.on('error', () => client.destroy())
+      upstream.on('close', () => client.destroy())
+      client.pipe(upstream).pipe(client)
+    })
+    await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve))
+    const address = proxy.address()
+    const proxied = new URL(config.databaseUrl)
+    proxied.hostname = '127.0.0.1'
+    proxied.port = String(typeof address === 'object' && address ? address.port : 0)
+    try {
+      const lock = await hold('shared', { databaseUrl: proxied.toString(), backoffMs: 50, maxBackoffMs: 400, heartbeatMs: 200 })
+      expect(live.size).toBe(1)
+      down = true
+      for (const socket of live) socket.destroy()
+      await waitFor(() => writesPaused())
+      const before = attempts
+      // The outage itself is real time: the backoff runs on the real clock against a real socket.
+      await new Promise((r) => setTimeout(r, 1500))
+      const during = attempts - before
+      down = false
+      await waitFor(() => !writesPaused())
+      // One loop at 50 ms doubling to 400 ms makes about 6 attempts in 1.5 s; a loop per failed attempt makes dozens.
+      expect(during).toBeGreaterThanOrEqual(2)
+      expect(during).toBeLessThanOrEqual(10)
+      await new Promise((r) => setTimeout(r, 500))
+      expect(live.size).toBe(1)
+      // The cut connection's backend ends once Postgres sees its socket close.
+      await waitFor(async () => (await lockHolders()).length === 1)
+      held.splice(held.indexOf(lock), 1)
+      await lock.release()
+      await waitFor(() => live.size === 0)
+      await waitFor(async () => (await lockHolders()).length === 0)
+    } finally {
+      for (const socket of live) socket.destroy()
+      await new Promise((resolve) => proxy.close(resolve))
+    }
+  }, 30_000)
+
   it('holds the shared form on its own connection; the exclusive form is refused while it is held, and the reverse', async () => {
     await hold('shared')
     expect(await lockHolders()).toHaveLength(1)

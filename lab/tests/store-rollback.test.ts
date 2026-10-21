@@ -38,6 +38,10 @@ const test: LabTest = {
       const exported = await runCli(['src/scripts/store-export-legacy.ts'])
       data.export = (exported.stdout + exported.stderr).trim().slice(-2000)
       checks.push({ name: 'export: completes with the server stopped', expected: 'exit 0', actual: `exit ${exported.code}`, ok: exported.code === 0 })
+      // An incomplete export must not be followed by the old image (backup.md §5): stop here, as an operator would.
+      if (exported.code !== 0) {
+        return { summary: 'store-export-legacy did not complete; the old image was not started.', checks, data }
+      }
       const conflictsBefore = (await listFiles(V, '.conflicts')).length
 
       // The old image: what old code does while rolled back.

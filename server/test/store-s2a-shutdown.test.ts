@@ -12,6 +12,9 @@ import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 // which flushes every due store) that starts while a server write holds the
 // note's lock and a relay store is due completes; nothing deadlocks and the
 // row keeps both the write and the typing. Own file: the test destroys the relay.
+// A regression guard for the R5-1 case the ADR lists (§11): it exercises
+// #828's write path and `collab.destroy()`, and passes on `dev` as well; the
+// bounded projector drain index.ts runs after `destroy()` is not under test here.
 
 let app: FastifyInstance
 let collab: CollabRelay

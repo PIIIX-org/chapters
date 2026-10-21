@@ -7,8 +7,8 @@ import { COMPOSE, appExec, exec, psql, psqlRows, waitHealthy, type ExecResult } 
 /** DATA_DIR inside the app container. */
 export const DATA = '/data/elara'
 
-/** The commit of `dev` just before ADR-003 S2a (S1 + S5 + #826 ord): the "old image" of §11 migration and rollback. */
-export const PRE_S2A_REF = process.env.LAB_PRE_S2A_REF ?? '1b41f780d3efabfb0ac5aa49d8712b321969763a'
+/** The `dev` commit #828 (ADR-003 S2a-1) was based on (S1 + S5 + #826 ord): the "old image" of §11 migration and rollback. */
+export const PRE_S2A_REF = process.env.LAB_PRE_S2A_REF ?? '87ccfadafe288110d12c853e5e1384da8d1f8bd0'
 export const PRE_S2A_TAG = 'elara-lab-pre-s2a:latest'
 
 /** The app container, running or stopped (`compose ps -a`): the image switch and kill checks run while it is down. */
