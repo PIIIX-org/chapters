@@ -52,11 +52,6 @@
     },
     {
       "test": "browser",
-      "check": "lost typing is recoverable from note history (note_revisions)",
-      "issue": 408
-    },
-    {
-      "test": "browser",
       "check": "no page errors in the browser console",
       "issue": 617
     },
@@ -69,21 +64,6 @@
       "test": "browser",
       "check": "read_note returns what the live editor shows",
       "issue": 474
-    },
-    {
-      "test": "browser",
-      "check": "S1-type-while-agent-appends: no lost user typing",
-      "issue": 408
-    },
-    {
-      "test": "browser",
-      "check": "S1: caret stays where the user types when the agent writes",
-      "issue": 408
-    },
-    {
-      "test": "browser",
-      "check": "S1: user typing stays contiguous while the agent writes",
-      "issue": 408
     },
     {
       "test": "browser",
