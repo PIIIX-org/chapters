@@ -1,6 +1,7 @@
 // #475: an edit made from an older revision is merged per line with what
 // changed since; only changes that touch the same base lines (or insert at
-// the same point) conflict.
+// the same point) conflict. #408: lines an edit only appended at the end go
+// after whatever was added or typed there since.
 import { describe, expect, it } from 'vitest'
 import { mergeFrontmatter, mergeText } from '../src/sync/three-way-merge.js'
 
@@ -43,9 +44,37 @@ describe('mergeText', () => {
     expect(mergeText(base, theirs, base.replace('three', 'tres'))).toEqual({ text: null, conflicts: [{ line: 7, removed: 1, added: 1 }] })
   })
 
-  it('conflicts on two insertions at one point, unless they are the same', () => {
-    expect(mergeText(base, `${base}typed`, `${base}appended\n`)).toEqual({ text: null, conflicts: [{ line: 6, removed: 0, added: 1 }] })
+  it('conflicts on two insertions at one point inside the text, unless they are the same', () => {
+    expect(mergeText('a\nb\n', 'a\ntyped\nb\n', 'a\nappended\nb\n')).toEqual({ text: null, conflicts: [{ line: 2, removed: 0, added: 1 }] })
     expect(mergeText(base, `${base}same\n`, `${base}same\n`)).toEqual({ text: `${base}same\n`, concurrent: [] })
+  })
+
+  describe('lines the edit appended at the end while the end changed too (#408)', () => {
+    it('go after a new last line a person is typing, on a line of their own', () => {
+      expect(mergeText(base, `${base}typed`, `${base}appended\n`)).toEqual({ text: `${base}typed\nappended\n`, concurrent: [{ line: 6, removed: 0, added: 1 }] })
+      expect(mergeText(base, `${base}theirs\n`, `${base}mine\n`)).toEqual({ text: `${base}theirs\nmine\n`, concurrent: [{ line: 6, removed: 0, added: 1 }] })
+    })
+
+    it('go after a last line without a newline that a person extended, which the edit ended (the lab S1 agent)', () => {
+      expect(mergeText('a\n a01 a0', 'a\n a01 a02 a', 'a\n a01 a0\nAGENT\n')).toEqual({
+        text: 'a\n a01 a02 a\nAGENT\n',
+        concurrent: [{ line: 2, removed: 1, added: 1 }],
+      })
+    })
+
+    it('land when a person deleted the last line', () => {
+      expect(mergeText('a\nb', 'a\n', 'a\nb\nc\n')).toEqual({ text: 'a\nc\n', concurrent: [{ line: 2, removed: 1, added: 0 }] })
+    })
+
+    it('are not added again when the end already holds them (an append sent twice from one base)', () => {
+      expect(mergeText('a\nb', 'a\nb typed\nM1\n', 'a\nb\nM1\nM2\n')).toEqual({ text: 'a\nb typed\nM1\nM2\n', concurrent: [{ line: 2, removed: 1, added: 2 }] })
+      expect(mergeText('a\nb', 'a\nb typed\nM1\n', 'a\nb\nM1\n')).toEqual({ text: 'a\nb typed\nM1\n', concurrent: [{ line: 2, removed: 1, added: 2 }] })
+    })
+
+    it('still conflict when the edit also changed the last line', () => {
+      expect(mergeText('a\nb', 'a\nb typed', 'a\nB\nc\n')).toEqual({ text: null, conflicts: [{ line: 2, removed: 1, added: 1 }] })
+      expect(mergeText('a\nb', 'a\nb typed', 'a\nbc\n')).toEqual({ text: null, conflicts: [{ line: 2, removed: 1, added: 1 }] })
+    })
   })
 
   it('conflicts on an insertion inside a range the other side replaced', () => {
@@ -65,13 +94,13 @@ describe('mergeText', () => {
 
   it('handles a last line without a newline', () => {
     expect(mergeText('a\nb', 'A\nb', 'a\nb\nc')).toEqual({ text: 'A\nb\nc', concurrent: [{ line: 1, removed: 1, added: 1 }] })
-    expect(mergeText('a\nb', 'a\nbx', 'a\nb\nc\n')).toEqual({ text: null, conflicts: [{ line: 2, removed: 1, added: 1 }] })
+    expect(mergeText('a\nb', 'a\nbx', 'a\nB\nc\n')).toEqual({ text: null, conflicts: [{ line: 2, removed: 1, added: 1 }] })
   })
 
   it('merges into and from an empty text', () => {
     expect(mergeText('', 'typed\n', '')).toEqual({ text: 'typed\n', concurrent: [{ line: 1, removed: 0, added: 1 }] })
     expect(mergeText('', '', 'written\n')).toEqual({ text: 'written\n', concurrent: [] })
-    expect(mergeText('', 'typed', 'written\n')).toEqual({ text: null, conflicts: [{ line: 1, removed: 0, added: 1 }] })
+    expect(mergeText('', 'typed', 'written\n')).toEqual({ text: 'typed\nwritten\n', concurrent: [{ line: 1, removed: 0, added: 1 }] })
   })
 })
 
