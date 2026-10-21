@@ -26,14 +26,21 @@ CREATE TABLE "note_revision_compaction" (
   "examined_through" bigint NOT NULL
 );--> statement-breakpoint
 -- A delta is a JSON array of pieces, concatenated: a string is literal text,
--- a pair [from, count] copies `count` characters of the base from `from`
--- (1-based, as substr counts them).
+-- a pair [from, count] copies `count` bytes of the base's UTF-8 encoding from
+-- byte `from` (1-based). Pieces are cut on line boundaries, never inside a
+-- character. The base is converted to bytes once (a MATERIALIZED CTE, so the
+-- planner cannot inline the conversion into every piece) and every piece is
+-- a bytea substring (constant time), so a patch costs the size of the
+-- result, not pieces x base size (a character offset makes substr walk the
+-- text from its start for every piece).
 CREATE FUNCTION note_revision_patch(base text, delta jsonb) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
-  SELECT coalesce(string_agg(
-    CASE jsonb_typeof(piece) WHEN 'string' THEN piece #>> '{}' ELSE substr(base, (piece->>0)::int, (piece->>1)::int) END,
-    '' ORDER BY i), '')
-  FROM jsonb_array_elements(delta) WITH ORDINALITY AS pieces(piece, i)
+  WITH src AS MATERIALIZED (SELECT convert_to(base, 'UTF8') AS bytes)
+  SELECT convert_from(coalesce(string_agg(
+    CASE jsonb_typeof(piece) WHEN 'string' THEN convert_to(piece #>> '{}', 'UTF8')
+      ELSE substring(src.bytes FROM (piece->>0)::int FOR (piece->>1)::int) END,
+    ''::bytea ORDER BY i), ''::bytea), 'UTF8')
+  FROM src, jsonb_array_elements(delta) WITH ORDINALITY AS pieces(piece, i)
 $$;--> statement-breakpoint
 -- A revision's body: `body` when it is stored whole, else its delta applied to its base's body.
 CREATE FUNCTION note_revision_body(body text, delta jsonb, base_id uuid) RETURNS text

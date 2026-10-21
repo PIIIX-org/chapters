@@ -70,21 +70,12 @@ const YIELD_POLL_MS = 50
 
 /**
  * The pieces that rebuild a body from its base, concatenated in order: a
- * string is literal text, `[from, count]` copies `count` characters of the
- * base starting at `from` (1-based, counted as Postgres `substr` counts them:
- * code points, not UTF-16 units).
+ * string is literal text, `[from, count]` copies `count` bytes of the base's
+ * UTF-8 encoding starting at byte `from` (1-based). Pieces are whole lines,
+ * so a copy never starts or ends inside a character, and SQL
+ * `note_revision_patch` copies each with a bytea substring in constant time.
  */
 export type RevisionDelta = Array<string | [number, number]>
-
-/** Characters of `text` as Postgres counts them: a surrogate pair is one. */
-function codePoints(text: string): number {
-  let n = text.length
-  for (let i = 0; i < text.length; i++) {
-    const unit = text.charCodeAt(i)
-    if (unit >= 0xd800 && unit <= 0xdbff) n -= 1
-  }
-  return n
-}
 
 /** The delta from `base` to `body`, per whole line (sync/text-diff.ts `diffLines`). */
 export function encodeDelta(base: string, body: string, timeLimitMs?: number): RevisionDelta {
@@ -94,13 +85,13 @@ export function encodeDelta(base: string, body: string, timeLimitMs?: number): R
   let from = 1
   const copyTo = (end: number) => {
     let count = 0
-    for (; line < end; line++) count += codePoints(lines[line]!)
+    for (; line < end; line++) count += Buffer.byteLength(lines[line]!)
     if (count > 0) delta.push([from, count])
     from += count
   }
   for (const hunk of hunks) {
     copyTo(hunk.start)
-    for (; line < hunk.end; line++) from += codePoints(lines[line]!)
+    for (; line < hunk.end; line++) from += Buffer.byteLength(lines[line]!)
     if (hunk.lines.length > 0) delta.push(hunk.lines.join(''))
   }
   copyTo(lines.length)

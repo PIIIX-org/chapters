@@ -759,9 +759,15 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   what they read before; nothing is deleted. Every read of a revision's
   content uses `revisionBody` (SQL `note_revision_body`). A delta is a
   JSON array of pieces from `diffLines` (a string is literal text,
-  `[from, count]` copies code points of the base) against the nearest
-  older revision of the note stored whole; a base is never compacted
-  (one level: a read costs one more row and one patch). A revision is
+  `[from, count]` copies `count` bytes of the base's UTF-8 encoding from
+  byte `from`; pieces are whole lines, so never inside a character)
+  against the nearest older revision of the note stored whole; a base is
+  never compacted (one level: a read costs one more row and one patch).
+  `note_revision_patch` converts the base to bytea once (a `MATERIALIZED`
+  CTE) and copies each piece with a bytea `substring`, so a patch costs
+  the size of the result: a 2,400-piece delta on a 1 MB multibyte base
+  takes about 57 ms (character offsets, where `substr` walks the text from
+  its start for every piece, took about 1.7 s). A revision is
   encoded only when its delta is under half its size and the deltas
   against that base stay under the base's own size; otherwise it stays
   whole and is the next base (about two full copies per segment of small

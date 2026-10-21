@@ -119,12 +119,60 @@ describe('the revision delta (#501)', () => {
       ['crlf\r\nline two\r\n', 'crlf\r\nline 2\r\nline three\r\n'],
       ['emoji 😀 first\nsecond 👩‍💻\nthird\n', 'emoji 😀 first\nsecond 👩‍💻 edited\nthird\n𝄞 fourth\n'],
       ['combining é and ü\n\n\nblank lines\n', 'combining é and ü\n\nblank lines\nmore\n'],
+      ['日本語の行\n中文行\n한국어 줄\n', '日本語の行\n中文的新行\n한국어 줄\n追加 😀\n'],
+      ['😀😀😀\n中\né\n', '中\n😀😀😀\né\n😀'],
     ]
     for (const [base, body] of cases) {
       const delta = JSON.stringify(encodeDelta(base, body))
       const [row] = (await db.execute(sql`SELECT note_revision_patch(${base}, ${delta}::jsonb) AS out`)) as unknown as Array<{ out: string }>
       expect(row!.out, JSON.stringify({ base, body, delta })).toBe(body)
     }
+  })
+
+  it('rebuilds random multibyte texts exactly in SQL (fuzz)', async () => {
+    // A seeded generator, so a failure names a case that replays.
+    let seed = 501
+    const next = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31
+      return seed / 2 ** 31
+    }
+    const pieces = ['a', 'Z', ' ', '\r', 'é', 'ü', '中', '語', '한', '😀', '👩‍💻', '𝄞', '\u0301', '\t']
+    const line = () => Array.from({ length: Math.floor(next() * 12) }, () => pieces[Math.floor(next() * pieces.length)]).join('')
+    for (let n = 0; n < 200; n++) {
+      const baseLines = Array.from({ length: Math.floor(next() * 30) }, line)
+      const bodyLines = baseLines.flatMap((l) => {
+        const r = next()
+        return r < 0.15 ? [] : r < 0.3 ? [line()] : r < 0.4 ? [l, line()] : [l]
+      })
+      const ends = (lines: string[]) => lines.join('\n') + (next() < 0.5 ? '\n' : '')
+      const base = ends(baseLines)
+      const body = ends(bodyLines)
+      const delta = JSON.stringify(encodeDelta(base, body))
+      const [row] = (await db.execute(sql`SELECT note_revision_patch(${base}, ${delta}::jsonb) AS out`)) as unknown as Array<{ out: string }>
+      expect(row!.out, `case ${n}: ${JSON.stringify({ base, body, delta })}`).toBe(body)
+    }
+  })
+
+  it('patches a many-piece delta on a big multibyte base quickly (byte offsets, not character offsets)', async () => {
+    // 900 KiB of mixed ASCII and CJK lines, and a revision with 1,200 scattered line edits: about 2,400 pieces.
+    const base = Array.from({ length: 20_000 }, (_, i) => `line ${i} 日本語のテキスト ${randomBytes(8).toString('hex')}\n`)
+    const edited = [...base]
+    for (let k = 0; k < 1_200; k++) edited[(k * 16 + 7) % edited.length] = `edited ${k} 中文 ${randomBytes(6).toString('hex')}\n`
+    const delta = encodeDelta(base.join(''), edited.join(''))
+    expect(delta.length).toBeGreaterThan(2_000)
+    const elapsed = await db.transaction(async (tx) => {
+      await tx.execute(sql`CREATE TEMP TABLE patch_probe (base text, delta jsonb, sum text) ON COMMIT DROP`)
+      await tx.execute(sql`
+        INSERT INTO patch_probe VALUES (${base.join('')}, ${JSON.stringify(delta)}::jsonb, md5(${edited.join('')}))`)
+      const started = performance.now()
+      const [row] = (await tx.execute(sql`
+        SELECT md5(note_revision_patch(base, delta)) = sum AS same FROM patch_probe`)) as unknown as Array<{ same: boolean }>
+      const ms = performance.now() - started
+      expect(row!.same).toBe(true)
+      return ms
+    })
+    // Character offsets took about 750 ms here (substr walks the text from its start for every piece); bytes, about 40.
+    expect(elapsed).toBeLessThan(250)
   })
 })
 
