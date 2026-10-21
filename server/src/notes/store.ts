@@ -6,6 +6,7 @@ import * as Y from 'yjs'
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
+import { recordJob } from '../monitoring/metrics.js'
 import { config } from '../config.js'
 import { kickEmbeddings } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
@@ -53,8 +54,10 @@ import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from
 import { orderKeys, presentedFrontmatter, sameContent } from './frontmatter-order.js'
 import {
   BACKFILL_MARKER,
+  NoteNotMigratedError,
   StoreBusyError,
   applyRowChange,
+  collabNoteMigrated,
   enqueueEmbeddingTx,
   insertRevision,
   insertStoreJob,
@@ -443,6 +446,7 @@ async function foldCrdt(tx: Tx, row: StoredNote, crdt: NoteCrdt, detail: Record<
     { frontmatterOrder: orderKeys(row.frontmatterSrc, state.frontmatter) },
   )
   await markFolded(tx, crdt, folded.seq)
+  failpoint('fold.before-commit')
   return { row: folded, crdt, refused: null, rebased: null }
 }
 
@@ -1986,6 +1990,8 @@ export async function loadCollabState(vaultId: string, noteId: string): Promise<
           await catchUp(tx, locked, stored, null, { storeRow: true })
           return Y.encodeStateAsUpdate(stored.doc)
         }
+        // Its bin is still to be attached at the next restart: a seed now would make the backfill skip it.
+        if (!collabNoteMigrated(noteId)) throw new NoteNotMigratedError()
         const seed = seedDocument(noteId, { frontmatter: locked.frontmatter as Record<string, unknown>, body: locked.body })
         await insertNoteCrdt(tx, noteId, seed, locked.seq)
         return Y.encodeStateAsUpdate(seed)
@@ -2099,12 +2105,13 @@ export async function foldPendingCollab(): Promise<{ folded: number; failed: num
       folded++
     } catch (err) {
       failed++
-      const reason = err instanceof Error ? err.message : String(err)
+      const message = err instanceof Error ? err.message : String(err)
       console.error(`[collab] boot fold of note ${noteId} failed:`, err)
       recordJob('collab-store', { error: err }, noteId)
+      // §7: a failure sets fold_error (monitoring, the doctor); the next fold clears it.
       await db
-        .execute(sql`UPDATE note_crdt SET fold_error = ${`boot fold failed: ${reason}`}, updated_at = now() WHERE note_id = ${noteId}`)
-        .catch((setErr) => console.error(`[collab] fold error of note ${noteId} not recorded:`, setErr))
+        .execute(sql`UPDATE note_crdt SET fold_error = ${`boot fold failed: ${message}`}, updated_at = now() WHERE note_id = ${noteId}`)
+        .catch((setErr: unknown) => console.error(`[collab] note ${noteId}: fold_error not recorded:`, setErr))
     }
   }
   return { folded, failed }

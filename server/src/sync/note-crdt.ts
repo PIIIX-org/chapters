@@ -15,6 +15,7 @@ import * as Y from 'yjs'
 import type { db } from '../db/client.js'
 import { noteCrdt, noteUpdates } from '../db/schema.js'
 import type { Tx } from '../notes/store-tx.js'
+import { recordJob } from '../monitoring/metrics.js'
 import { SERVER_CLIENT_ID, type DocState } from './live-docs.js'
 
 /** The seed format version (§5.4 "Seed"): part of the hash, so a changed seed recipe never shares a client id with an old one. */
@@ -84,6 +85,12 @@ export interface NoteCrdt {
   foldedThrough: number
   foldedSeq: number
   foldError: string | null
+  /**
+   * Why a stored update was rejected while this transaction materialised the
+   * state (§5.4 fold step 2), or null: a fold in the same transaction keeps it
+   * as `fold_error` instead of clearing it.
+   */
+  rejected: string | null
   /** The highest non-rejected update id applied to `doc` (the snapshot's own `snapshot_through` when none). */
   lastId: number
   /** Size of the tail and of the snapshot, for the compaction rule. */
@@ -120,6 +127,7 @@ export async function readNoteCrdt(tx: Tx, noteId: string): Promise<NoteCrdt | n
     foldedThrough: row.foldedThrough,
     foldedSeq: row.foldedSeq,
     foldError: row.foldError,
+    rejected: null,
     lastId: row.snapshotThrough,
     tailCount: 0,
     tailBytes: 0,
@@ -137,7 +145,9 @@ export async function readNoteCrdt(tx: Tx, noteId: string): Promise<NoteCrdt | n
         .update(noteUpdates)
         .set({ rejectedAt: new Date(), rejectReason: reason })
         .where(eq(noteUpdates.id, id))
-      crdt.foldError = `update ${id} rejected: ${reason}`
+      crdt.rejected = `update ${id} rejected: ${reason}`
+      await setFoldError(tx, crdt, crdt.rejected)
+      recordJob('collab-store', { error: { name: 'UpdateRejected', message: crdt.rejected } }, noteId)
       console.error(`[collab] note ${noteId}: stored update ${id} does not apply and was rejected: ${reason}`)
     }
   }
@@ -155,6 +165,7 @@ export async function insertNoteCrdt(tx: Tx, noteId: string, doc: Y.Doc, seq: nu
     foldedThrough: 0,
     foldedSeq: seq,
     foldError: null,
+    rejected: null,
     lastId: 0,
     tailCount: 0,
     tailBytes: 0,
@@ -235,14 +246,17 @@ export async function compactNoteCrdt(tx: Tx, crdt: NoteCrdt): Promise<void> {
 
 /**
  * Records that the CRDT state agrees with the row at `seq` (§5.4 fold step
- * 4): `folded_through` advances to the last update and `fold_error` clears.
+ * 4): `folded_through` advances to the last update and `fold_error` clears,
+ * unless this transaction rejected a stored update (then it names it).
  * With `foldError` the state does not agree (the relay would refuse it):
  * `folded_through` stays and the error is kept for monitoring and the
  * doctor. Compacts when the tail has outgrown the snapshot.
  */
 export async function markFolded(tx: Tx, crdt: NoteCrdt, seq: number, options: { foldError?: string | null } = {}): Promise<void> {
-  const foldError = options.foldError ?? null
-  const foldedThrough = foldError === null ? crdt.lastId : crdt.foldedThrough
+  const refused = options.foldError ?? null
+  // A rejected update (readNoteCrdt) does not hold the fold back, but its error stays visible.
+  const foldError = refused ?? crdt.rejected
+  const foldedThrough = refused === null ? crdt.lastId : crdt.foldedThrough
   await tx
     .update(noteCrdt)
     .set({ foldedThrough, foldedSeq: seq, foldError, updatedAt: new Date() })

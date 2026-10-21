@@ -139,6 +139,24 @@ export async function noteMigrated(client: Tx | typeof db, noteId: string): Prom
   return (done as unknown as unknown[]).length > 0
 }
 
+/**
+ * Notes whose S2b backfill failed at this boot (collab-backfill.ts): their
+ * `.crdt` bin is still to be attached at the next restart. Until then the
+ * relay refuses editors for them (`note-not-migrated`) and never seeds them,
+ * so the rerun finds the note without CRDT state and attaches its bin
+ * instead of skipping it and retiring the bin with `.crdt/`.
+ */
+let collabNotMigrated: ReadonlySet<string> = new Set()
+
+export function setCollabNotMigrated(noteIds: Iterable<string>): void {
+  collabNotMigrated = new Set(noteIds)
+}
+
+/** Whether note `noteId` can be opened in the relay: false while its S2b backfill is pending after a failure. */
+export function collabNoteMigrated(noteId: string): boolean {
+  return !collabNotMigrated.has(noteId)
+}
+
 /** The note row `id`, locked FOR UPDATE; null when it does not exist. */
 export async function lockedNote(tx: Tx, id: string): Promise<StoredNote | null> {
   const [row] = await tx.select(storedColumns).from(notes).where(eq(notes.id, id)).for('update')

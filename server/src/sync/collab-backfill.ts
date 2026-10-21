@@ -34,9 +34,9 @@ import { failpoint } from '../failpoints.js'
 import { sameContent } from '../notes/frontmatter-order.js'
 import { parseNote } from '../notes/okf.js'
 import { foldPendingCollab } from '../notes/store.js'
-import { BACKFILL_MARKER, storeTransaction, type Tx } from '../notes/store-tx.js'
+import { BACKFILL_MARKER, setCollabNotMigrated, storeTransaction, type Tx } from '../notes/store-tx.js'
 import { crdtFile, loadCrdtState } from './crdt-store.js'
-import { cloneDocument, compileChange, docState } from './live-docs.js'
+import { SERVER_CLIENT_ID, cloneDocument, compileChange, docState } from './live-docs.js'
 import { appendUpdate, insertNoteCrdt, readNoteCrdt } from './note-crdt.js'
 
 const BATCH = 100
@@ -49,10 +49,15 @@ export interface CollabBackfillReport {
   notes: number
   /** Bins attached: equal to the row, or with a diff to the row on top. */
   attached: { equal: number; diffed: number }
-  /** Bins merged into existing CRDT state (roll-forward). */
+  /** Bins merged into existing CRDT state (roll-forward): only bins that share history with it. */
   merged: number
-  /** Bins that matched neither row, file nor any revision, moved to `.migration/<date>/bins/`. */
-  setAside: Array<{ noteId: string; vaultId: string; path: string; movedTo: string }>
+  /**
+   * Bins moved to `.migration/<date>/bins/`: `unknown-text` (backfill: the
+   * text matched neither row, file nor any revision), `unrelated` (roll-forward:
+   * no history in common with the note's CRDT state, e.g. a bin older code
+   * seeded afresh from the file), `undecodable`.
+   */
+  setAside: Array<{ noteId: string; vaultId: string; path: string; movedTo: string; reason: 'unknown-text' | 'unrelated' | 'undecodable' }>
   noBin: number
   /** Notes the S2a backfill has not processed yet: not done, so the marker stays unset. */
   waiting: number
@@ -100,6 +105,25 @@ async function moveAside(vaultId: string, path: string, date: string): Promise<s
   return target
 }
 
+/**
+ * The client's `sharesHistory` rule (client/src/hooks/useCollabDoc.ts) for a
+ * roll-forward bin against the note's CRDT state: a Yjs client in common
+ * other than this process's SERVER_CLIENT_ID. A bin older code seeded
+ * afresh from the file has a random client of its own and shares none.
+ * The note's seed id does count: it names byte-identical items (§5.4, two
+ * seeds of the same input merge item for item), so a bin that shares only
+ * the seed holds those very items and merging it doubles nothing; it is the
+ * exported bin of a note nobody typed in under S2b, which must merge, or an
+ * old tab's browser copy holding the same items would double against the
+ * rebased text.
+ */
+function sharesHistory(bin: Y.Doc, stored: Y.Doc): boolean {
+  for (const client of bin.store.clients.keys()) {
+    if (client !== SERVER_CLIENT_ID && stored.store.clients.has(client)) return true
+  }
+  return false
+}
+
 async function backfillNote(tx: Tx, id: string, report: CollabBackfillReport, date: string): Promise<void> {
   const [row] = (await tx.execute(sql`
     SELECT id, vault_id, path, seq, frontmatter, body FROM notes WHERE id = ${id} AND deleted_at IS NULL FOR UPDATE`)) as unknown as Row[]
@@ -126,18 +150,23 @@ async function backfillNote(tx: Tx, id: string, report: CollabBackfillReport, da
   } catch {
     decoded = false
   }
+  const setAside = async (reason: CollabBackfillReport['setAside'][number]['reason']) => {
+    report.setAside.push({ noteId: id, vaultId: row.vault_id, path: row.path, reason, movedTo: await moveAside(row.vault_id, row.path, date) })
+  }
+  if (!decoded) return setAside('undecodable')
   if (existing) {
-    // Roll-forward: the bin descends from the exported state; boot then rebases what old code changed in the row.
-    if (decoded && (await appendUpdate(tx, existing, Y.diffUpdate(bin, Y.encodeStateVector(existing.doc)), { type: 'collab' }, { kind: 'rollback-bin' }))) {
+    // Roll-forward: a bin the old relay saved from the exported state descends
+    // from the note's CRDT state and merges; boot then rebases what old code
+    // changed in the row. A bin with no history in common (old code seeded it
+    // afresh from the file) would double the text: set aside, never merged.
+    if (!sharesHistory(doc, existing.doc)) return setAside('unrelated')
+    if (await appendUpdate(tx, existing, Y.diffUpdate(bin, Y.encodeStateVector(existing.doc)), { type: 'collab' }, { kind: 'rollback-bin' })) {
       report.merged++
     }
     return
   }
   const state = docState(doc)
-  if (!decoded || !(await knownText(tx, row, state.body))) {
-    report.setAside.push({ noteId: id, vaultId: row.vault_id, path: row.path, movedTo: await moveAside(row.vault_id, row.path, date) })
-    return
-  }
+  if (!(await knownText(tx, row, state.body))) return setAside('unknown-text')
   const target = { frontmatter: row.frontmatter, body: row.body }
   if (state.body === target.body && sameContent(state.frontmatter, target.frontmatter)) {
     report.attached.equal++
@@ -196,6 +225,8 @@ async function attachBins(kind: CollabBackfillReport['kind']): Promise<CollabBac
       failpoint('migration.mid-batch')
     }
   }
+  // A note whose backfill failed takes no editor until a restart attaches its bin (relay: note-not-migrated).
+  if (kind === 'adr-003-collab-backfill') setCollabNotMigrated(report.failed.map((f) => f.noteId))
   if (report.failed.length === 0 && report.waiting === 0) {
     if (kind === 'adr-003-collab-backfill') {
       await db.execute(sql`
