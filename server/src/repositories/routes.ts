@@ -21,7 +21,7 @@ import {
   resolveRepositoryAccess,
 } from './permissions.js'
 import { createSyncToken, listSyncTokens, revokeSyncToken } from './sync-tokens.js'
-import { syncGitRepository, type RepositorySyncStatus } from './git-sync.js'
+import { syncGitRepository } from './git-sync.js'
 import { prepareGitRemote } from './git-remote.js'
 import {
   stopWatchingLocalRepository,
@@ -43,14 +43,12 @@ async function requireOwner(userId: string, repositoryId: string): Promise<boole
  * gets an immediate answer and watches `syncStatus` for the outcome. Both sync
  * functions record success and failure on the row themselves, so nothing here
  * needs to await them. `agent_push` has no puller — an agent is the only thing
- * that can move its files — and never reaches this. `previousStatus` is the
- * row's status before the caller claimed it as `syncing`, so a retry of a
- * repository already in `error` is reported as a repeat (#705).
+ * that can move its files — and never reaches this.
  */
-export function startSync(repo: typeof repositories.$inferSelect, previousStatus?: RepositorySyncStatus): void {
+export function startSync(repo: typeof repositories.$inferSelect): void {
   const fail = (err: unknown) => console.error(`sync failed for repository ${repo.id}:`, err)
   if (repo.ingestionMethod !== 'local_path') {
-    void syncGitRepository(repo.id, previousStatus).catch(fail)
+    void syncGitRepository(repo.id).catch(fail)
     return
   }
   // The watcher and this pass both write `repository_files`, which is uniquely
@@ -62,7 +60,7 @@ export function startSync(repo: typeof repositories.$inferSelect, previousStatus
   // longer exists until the next restart; re-read the row here if that stops
   // being only a log line.
   stopWatchingLocalRepository(repo.id)
-  void syncLocalRepository(repo.id, previousStatus)
+  void syncLocalRepository(repo.id)
     .catch(fail)
     .finally(() => {
       if (repo.localPath) watchLocalRepository(repo.id, repo.localPath)
@@ -402,7 +400,7 @@ export function repositoryRoutes(app: FastifyInstance) {
       .where(claimFilter)
       .returning()
     if (!claimed) return reply.code(409).send({ error: 'a sync is already running' })
-    startSync(claimed, repo.syncStatus)
+    startSync(claimed)
     return { status: 'syncing' }
   })
 

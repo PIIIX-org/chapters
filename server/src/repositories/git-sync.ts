@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { simpleGit } from 'simple-git'
-import { eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositories } from '../db/schema.js'
 import { decryptCredential } from './credentials.js'
@@ -20,28 +20,47 @@ const MAX_INDEXED_FILES = 10_000
 export type RepositorySyncStatus = (typeof repositories.$inferSelect)['syncStatus']
 
 /**
+ * Records a failed sync of a git or local-folder repository: counts it, then
+ * puts the row in `error` with the (already redacted) `message`.
+ *
+ * A repository that is already failing (a dead remote the poller retries every
+ * POLL_INTERVAL_MS, a user or agent retrying by hand) failing again is not a
+ * new failure: one report on the transition into `error`, not one alert per
+ * retry (#705). The transition is `lastSyncError` going from null to a
+ * message, taken with one conditional update. Only syncs write that column (a
+ * success clears it, a failure sets it); the `syncing` claims of the manual
+ * sync route, MCP `sync_repository` and of a sync itself leave it alone. So
+ * however many syncs of one repository overlap (a poll and a webhook
+ * delivery), exactly one failure per transition counts as new (#775).
+ * Counted before `syncStatus` reads `error`, so whoever sees `error` sees
+ * the count.
+ */
+export async function recordSyncFailure(repositoryId: string, error: unknown, message: string): Promise<void> {
+  const entered = await db
+    .update(repositories)
+    .set({ lastSyncError: message })
+    .where(and(eq(repositories.id, repositoryId), isNull(repositories.lastSyncError)))
+    .returning({ id: repositories.id })
+  recordJob('sync', { error, repeat: entered.length === 0 }, repositoryId)
+  await db
+    .update(repositories)
+    .set({ syncStatus: 'error', lastSyncError: message })
+    .where(eq(repositories.id, repositoryId))
+}
+
+/**
  * Git URL ingestion (spec 8): a fresh shallow clone (depth 1, no
  * history) into a scratch temp directory on every sync — simpler and
  * more robust than reusing/fetching into a persistent working copy, at
  * the cost of a full re-clone each time. The clone is discarded after
  * its tree is read; only the extracted file content is durable.
- *
- * `previousStatus` is the row's status before a caller claimed it as
- * `syncing` (the manual sync route and MCP `sync_repository` do): a retry of
- * a repository already in `error` is then still a repeat failure, not a new
- * one (#705). Without it the status read here is the previous one.
  */
-export async function syncGitRepository(repositoryId: string, previousStatus?: RepositorySyncStatus): Promise<void> {
+export async function syncGitRepository(repositoryId: string): Promise<void> {
   const repo = (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]
   if (!repo || repo.ingestionMethod !== 'git' || !repo.gitUrl) return
-  const wasFailing = (previousStatus ?? repo.syncStatus) === 'error'
 
   if (!isSafeGitUrl(repo.gitUrl)) {
-    await db
-      .update(repositories)
-      .set({ syncStatus: 'error', lastSyncError: 'Invalid or forbidden git clone URL' })
-      .where(eq(repositories.id, repositoryId))
-    recordJob('sync', { error: { name: 'UnsafeGitUrl' }, repeat: wasFailing }, repositoryId)
+    await recordSyncFailure(repositoryId, { name: 'UnsafeGitUrl' }, 'Invalid or forbidden git clone URL')
     return
   }
 
@@ -125,19 +144,12 @@ export async function syncGitRepository(repositoryId: string, previousStatus?: R
       .where(eq(repositories.id, repositoryId))
     recordJob('sync', 'ok', repositoryId)
   } catch (err) {
-    // A repository that was already in `error` (the poller retries it every
-    // POLL_INTERVAL_MS, a user or agent may retry it by hand) failing again
-    // is not a new failure: one report on the transition into `error`, not
-    // one alert per retry (#705).
-    recordJob('sync', { error: err, repeat: wasFailing }, repositoryId)
     // The raw message can carry the authenticated clone URL, and lastSyncError
     // is served to every viewer: store and rethrow only the redacted text (#383).
     const raw = err instanceof Error ? err.message : String(err)
     const errorMsg = redactGitSecrets(raw, [credential, urlCredential]).replace(/\0/g, '')
-    await db
-      .update(repositories)
-      .set({ syncStatus: 'error', lastSyncError: errorMsg })
-      .where(eq(repositories.id, repositoryId))
+    // New or repeat (#705, #775): see recordSyncFailure.
+    await recordSyncFailure(repositoryId, err, errorMsg)
     throw new Error(errorMsg)
   } finally {
     await rm(workDir, { recursive: true, force: true })
