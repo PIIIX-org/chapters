@@ -110,7 +110,11 @@ describe('instance maintenance lock (§5.1, §9)', () => {
     await hold('shared', { backoffMs: 600 })
     await dropLockConnection()
     await waitFor(() => writesPaused())
-    await expect(createNote(vaultId, { type: 'docs', name: 'paused-agent', body: 'x' })).rejects.toBeInstanceOf(StoreBusyError)
+    const paused = await createNote(vaultId, { type: 'docs', name: 'paused-agent', body: 'x' }).catch((err: unknown) => err)
+    expect(paused).toBeInstanceOf(StoreBusyError)
+    // Safe to show in production (app.ts hides other 5xx messages): it names no path or content.
+    expect((paused as StoreBusyError).expose).toBe(true)
+    expect((paused as StoreBusyError).message).toMatch(/maintenance lock connection lost/)
     const res = await app.inject({
       method: 'PUT',
       url: `/api/vaults/${vaultId}/notes/${note.path}`,
@@ -118,6 +122,7 @@ describe('instance maintenance lock (§5.1, §9)', () => {
       body: { body: 'during pause' },
     })
     expect(res.statusCode).toBe(503)
+    expect(res.json().message).toMatch(/maintenance lock connection lost/)
     expect((await getLiveNote(vaultId, note.path))?.body).toBe('before')
     await waitFor(() => !writesPaused())
     expect(await lockHolders()).toHaveLength(1)
@@ -149,7 +154,7 @@ describe('instance maintenance lock (§5.1, §9)', () => {
     await waitFor(() => !provider.hasUnsyncedChanges)
   }, 30_000)
 
-  it('while paused, a note the migration has not processed is refused at authentication (permission-denied), never with the pause close', async () => {
+  it('while paused, a note the migration has not processed is refused at authentication (note-not-migrated), never with the pause close', async () => {
     const migrated = await createNote(vaultId, { type: 'docs', name: 'paused-migrated', body: 'migrated' })
     const unmigrated = await createNote(vaultId, { type: 'docs', name: 'paused-unmigrated', body: 'unmigrated' })
     await db.execute(sql`DELETE FROM note_projections WHERE note_id = ${unmigrated.id} AND projection = 'backfill'`)
@@ -177,7 +182,7 @@ describe('instance maintenance lock (§5.1, §9)', () => {
       const blocked = open(unmigrated.path, 'unmigrated')
       const editor = open(migrated.path, 'migrated')
       await waitFor(() => refused !== '' && editor.isSynced)
-      expect(refused).toBe('permission-denied')
+      expect(refused).toBe('note-not-migrated')
       expect(blocked.isSynced).toBe(false)
       expect(closes.unmigrated).not.toContain('store-paused')
       // The migrated note authenticates and syncs (reads are not paused); its first update gets the pause close.
