@@ -26,7 +26,6 @@ import {
   compactNoteCrdt,
   storedStateOf,
   insertNoteCrdt,
-  logUpdate,
   markFolded,
   notesNeedingFold,
   readNoteCrdt,
@@ -56,6 +55,7 @@ import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from
 import { orderKeys, presentedFrontmatter, sameContent } from './frontmatter-order.js'
 import {
   BACKFILL_MARKER,
+  INSTANCE_LOCK_KEY,
   NoteNotMigratedError,
   StoreBusyError,
   applyRowChange,
@@ -2031,33 +2031,49 @@ export async function loadCollabState(
 
 /**
  * Logs a collab update the relay checked (§5.4 "Append", S3) before the
- * relay applies and acks it: one short store transaction (lock timeout,
- * the instance check) that inserts the row if the note is live. It takes
- * neither the note's queue lock nor its advisory lock, so a fold or a write
- * holding them never delays an ack; it holds the note's append gate
- * (appendGate) from its id to its COMMIT instead, which is what lets a fold
- * stop at a boundary no later append falls under. Returns the row id, or
- * null when the note is trashed or purged (nothing stored; the relay
- * refuses the update). A throw (Postgres down, a lock timeout,
- * maintenance) leaves nothing stored either; the relay then closes the
- * connection unacked and the editor resends.
+ * relay applies and acks it. Appends of one note are group-committed (ADR
+ * Q7): those that arrive while a commit is running wait for it and then go
+ * together, in arrival order, in one statement (the instance check, the
+ * note re-checked live, one multi-row INSERT; see commitAppends), so the
+ * commit rate never caps the typing rate. The statement takes neither
+ * the note's queue lock nor its advisory lock, so a fold or a write holding
+ * them never delays an ack; it holds the note's append gate (appendGate)
+ * from its ids to its COMMIT instead, which is what lets a fold stop at a
+ * boundary no later append falls under. Resolves to the row id (and the id
+ * before it), or null when the note is trashed or purged (nothing stored;
+ * the relay refuses the update). A throw (Postgres down, a lock timeout,
+ * maintenance, too many waiting) leaves nothing stored either; the relay
+ * then closes the connection unacked and the editor resends.
  */
-export async function appendCollabUpdate(vaultId: string, noteId: string, update: Uint8Array, actor: UpdateActor): Promise<LoggedUpdate | null> {
-  // Backpressure: past the bound the relay closes the socket unacked (retryable) instead of queueing without end.
-  const waiting = pendingAppends.get(noteId) ?? 0
-  if (waiting >= MAX_PENDING_APPENDS) throw new StoreBusyError('too many collab updates are waiting for this note')
-  pendingAppends.set(noteId, waiting + 1)
-  try {
-    return await appendLogged(vaultId, noteId, update, actor)
-  } finally {
-    const left = (pendingAppends.get(noteId) ?? 1) - 1
-    if (left > 0) pendingAppends.set(noteId, left)
-    else pendingAppends.delete(noteId)
+export function appendCollabUpdate(vaultId: string, noteId: string, update: Uint8Array, actor: UpdateActor): Promise<LoggedUpdate | null> {
+  let queue = appendQueues.get(noteId)
+  if (!queue) {
+    queue = { waiting: [], inFlight: 0, running: false }
+    appendQueues.set(noteId, queue)
   }
+  // Backpressure: past the bound the relay closes the socket unacked (retryable) instead of queueing without end.
+  if (queue.waiting.length + queue.inFlight >= MAX_PENDING_APPENDS) return Promise.reject(new StoreBusyError('too many collab updates are waiting for this note'))
+  const waiting = queue
+  const promise = new Promise<LoggedUpdate | null>((resolve, reject) => waiting.waiting.push({ vaultId, update, actor, resolve, reject }))
+  if (!queue.running) void drainAppends(noteId, queue)
+  return promise
 }
 
-/** Collab appends of one note waiting for (or holding) its append gate; bounded by MAX_PENDING_APPENDS. */
-const pendingAppends = new Map<string, number>()
+interface PendingAppend {
+  vaultId: string
+  update: Uint8Array
+  actor: UpdateActor
+  resolve: (logged: LoggedUpdate | null) => void
+  reject: (err: unknown) => void
+}
+
+/** Per note: the collab appends waiting for the next group commit, those in the running one, and whether one is running. */
+interface AppendQueue {
+  waiting: PendingAppend[]
+  inFlight: number
+  running: boolean
+}
+const appendQueues = new Map<string, AppendQueue>()
 const MAX_PENDING_APPENDS = 256
 
 /** A logged collab update: its id, and the note's previous stored id (its last non-rejected update, or `snapshot_through` after a compaction): what an open document's cached state must be at to advance to it. */
@@ -2066,24 +2082,68 @@ export interface LoggedUpdate {
   previous: number
 }
 
-async function appendLogged(vaultId: string, noteId: string, update: Uint8Array, actor: UpdateActor): Promise<LoggedUpdate | null> {
-  return withKeyLock(appendGate(noteId), () =>
-    storeTransaction([], async (tx) => {
-      const [note] = await tx
-        .select({ id: notes.id })
-        .from(notes)
-        .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
-      if (!note) return null
-      const id = await logUpdate(tx, noteId, update, actor, { kind: 'collab' })
-      const [prev] = (await tx.execute(sql`
-        SELECT greatest(
-          (SELECT coalesce(max(id), 0) FROM note_updates WHERE note_id = ${noteId} AND id < ${id} AND rejected_at IS NULL),
-          (SELECT coalesce(max(snapshot_through), 0) FROM note_crdt WHERE note_id = ${noteId})) AS id`)) as unknown as Array<{
-        id: string | number
-      }>
-      return { id, previous: Number(prev!.id) }
-    }),
+async function drainAppends(noteId: string, queue: AppendQueue): Promise<void> {
+  queue.running = true
+  try {
+    while (queue.waiting.length > 0) {
+      const batch = queue.waiting.splice(0)
+      queue.inFlight = batch.length
+      try {
+        const logged = await commitAppends(noteId, batch)
+        batch.forEach((item, i) => item.resolve(logged ? logged[i]! : null))
+      } catch (err) {
+        for (const item of batch) item.reject(err)
+      }
+      queue.inFlight = 0
+    }
+  } finally {
+    queue.running = false
+    appendQueues.delete(noteId)
+  }
+}
+
+/**
+ * One group commit: the note's rows for `batch`, in order, or null when the
+ * note is not live in the batch's vault. A single autocommit statement (one
+ * round trip, one WAL flush): the instance check (the shared form of the
+ * maintenance lock, as every store transaction takes it), the live check,
+ * the id before the batch and the multi-row INSERT. Under the gate no other
+ * append of this note is in flight, so the last stored id read here is the
+ * one before the batch, and ids are drawn in VALUES order.
+ */
+async function commitAppends(noteId: string, batch: PendingAppend[]): Promise<LoggedUpdate[] | null> {
+  const vaultId = batch[0]!.vaultId
+  const values = sql.join(
+    batch.map((item, i) => sql`(${i}::int, ${Buffer.from(item.update)}::bytea, ${item.actor.type}::actor_type, ${item.actor.id ?? null}::uuid)`),
+    sql`, `,
   )
+  const [result] = (await withKeyLock(appendGate(noteId), () =>
+    db.execute(sql`
+      WITH inst AS (SELECT pg_try_advisory_xact_lock_shared(${INSTANCE_LOCK_KEY}) AS ok),
+      st AS (
+        SELECT EXISTS (SELECT 1 FROM notes WHERE id = ${noteId} AND vault_id = ${vaultId} AND deleted_at IS NULL) AS live,
+          greatest(
+            (SELECT coalesce(max(id), 0) FROM note_updates WHERE note_id = ${noteId} AND rejected_at IS NULL),
+            (SELECT coalesce(max(snapshot_through), 0) FROM note_crdt WHERE note_id = ${noteId})) AS previous),
+      ins AS (
+        INSERT INTO note_updates (note_id, update, actor_type, actor_id, actor_detail)
+        SELECT ${noteId}::uuid, v.u, v.t, v.a, ${JSON.stringify({ kind: 'collab' })}::jsonb
+        FROM (VALUES ${values}) AS v(i, u, t, a)
+        WHERE (SELECT ok FROM inst) AND (SELECT live FROM st)
+        ORDER BY v.i
+        RETURNING id)
+      SELECT (SELECT ok FROM inst) AS ok, (SELECT live FROM st) AS live, (SELECT previous FROM st) AS previous,
+        (SELECT coalesce(array_agg(id ORDER BY id), '{}') FROM ins) AS ids`),
+  )) as unknown as Array<{ ok: boolean; live: boolean; previous: string | number; ids: Array<string | number> }>
+  if (!result?.ok) throw new StoreBusyError('maintenance in progress')
+  if (!result.live) return null
+  let previous = Number(result.previous)
+  return result.ids.map((raw) => {
+    const id = Number(raw)
+    const logged = { id, previous }
+    previous = id
+    return logged
+  })
 }
 
 /**
