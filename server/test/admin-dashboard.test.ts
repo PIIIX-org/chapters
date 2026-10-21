@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
+import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
+import { db } from '../src/db/client.js'
+import { noteRevisions } from '../src/db/schema.js'
+import { createNote, type Actor } from '../src/notes/store.js'
 import { resolveMcpToken } from '../src/vaults/mcp-connection-routes.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -8,6 +12,7 @@ let app: FastifyInstance
 let adminCookie: string
 let adminUser: { id: string; email: string }
 let ownerCookie: string
+let ownerActor: Actor
 let granteeCookie: string
 let vaultId: string
 let shareId: string
@@ -20,6 +25,7 @@ beforeAll(async () => {
   const admin = await createActiveUser({ role: 'admin' })
   adminUser = admin
   const owner = await createActiveUser()
+  ownerActor = { type: 'user', id: owner.id }
   const grantee = await createActiveUser()
   adminCookie = await loginCookie(app, admin.email)
   ownerCookie = await loginCookie(app, owner.email)
@@ -136,6 +142,36 @@ describe('admin oversight dashboard', () => {
     const rows = res.json() as Array<{ notePath: string; actorType: string }>
     expect(rows.some((r) => r.notePath === 'docs/secret')).toBe(true)
     expect(res.body).not.toContain('TOP-SECRET-CONTENT')
+  })
+
+  it('audit trail lists revisions in the order they were recorded, not by the database clock (#854)', async () => {
+    // The test database's clock steps back by seconds (3.5 s measured): fifty
+    // revisions recorded before such a step are dated after a write recorded
+    // once it had. Inserted dated 5 s ahead, they stand in for those.
+    const before = await createNote(vaultId, { path: 'docs/before-the-step', body: 'v0' }, ownerActor)
+    await db.insert(noteRevisions).values(
+      Array.from({ length: 50 }, (_, i) => ({
+        noteId: before.id,
+        actorType: 'user' as const,
+        actorId: ownerActor.id,
+        action: 'update',
+        frontmatter: { type: 'docs' },
+        body: `v${i + 1}`,
+        createdAt: sql`now() + interval '5 seconds'`,
+      })),
+    )
+    await createNote(vaultId, { path: 'docs/after-the-step', body: 'recorded last' }, ownerActor)
+
+    const page = async (query: string) => {
+      const res = await app.inject({ method: 'GET', url: `/api/admin/audit-trail?${query}`, headers: { cookie: adminCookie } })
+      expect(res.statusCode).toBe(200)
+      return res.json() as Array<{ id: string; notePath: string }>
+    }
+    const first = await page('limit=50&offset=0')
+    expect(first[0]?.notePath).toBe('docs/after-the-step')
+    // The fifty share one timestamp; offset pages still split them exactly once.
+    const single = await Promise.all([0, 1, 2, 3].map((offset) => page(`limit=1&offset=${offset}`)))
+    expect(single.flat().map((r) => r.id)).toEqual(first.slice(0, 4).map((r) => r.id))
   })
 
   it('non-admins get nothing', async () => {
