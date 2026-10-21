@@ -9,6 +9,7 @@ import { metricsSnapshot } from '../src/monitoring/metrics.js'
 import * as archive from '../src/export/archive.js'
 import type * as Archive from '../src/export/archive.js'
 import { executeBackup, getBackupStatus, startBackupScheduler } from '../src/export/backup-service.js'
+import { DrizzleQueryError } from 'drizzle-orm/errors'
 
 // Building the archive (database dump, vault files) fails, not the destination (#771).
 vi.mock('../src/export/archive.js', async (importOriginal) => {
@@ -104,9 +105,11 @@ describe('a backup whose archive cannot be built (#771)', () => {
     }
   }, 30_000)
 
-  it('answers POST /api/admin/backup/run with the safe error and records it', async () => {
+  it('answers POST /api/admin/backup/run with the safe error, records it and logs the cause', async () => {
     vi.spyOn(config.backup, 'localPath', 'get').mockReturnValue(testBackupDir)
-    build.mockRejectedValue(readFailure())
+    const failure = readFailure()
+    build.mockRejectedValue(failure)
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const res = await app.inject({ method: 'POST', url: '/api/admin/backup/run', headers: { cookie: adminCookie } })
     expect(res.statusCode).toBe(500)
@@ -114,5 +117,20 @@ describe('a backup whose archive cannot be built (#771)', () => {
     expect(body.error).toMatch(/backup archive/i)
     expect(body.error).not.toContain(NOTE_PATH)
     expect(getBackupStatus()).toMatchObject({ lastStatus: 'error', lastError: body.error })
+    // "details in the server log" holds on the on-demand path too.
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('[backup]'), failure)
+  })
+
+  it('reports the SQLSTATE of a database failure wrapped by drizzle', async () => {
+    vi.spyOn(config.backup, 'localPath', 'get').mockReturnValue(testBackupDir)
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const pgError = Object.assign(new Error('permission denied for table users'), { code: '42501' })
+    build.mockRejectedValue(new DrizzleQueryError('select "password_hash" from "users"', [], pgError))
+
+    await expect(executeBackup()).rejects.toThrow(/backup archive failed \(42501\)/)
+    expect(getBackupStatus().lastError).toContain('42501')
+    expect(getBackupStatus().lastError).not.toContain('password_hash')
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('[backup]'), pgError)
+    expect(JSON.stringify(logged.mock.calls.map((args) => args.map(String)))).not.toContain('password_hash')
   })
 })
