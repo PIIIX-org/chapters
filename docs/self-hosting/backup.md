@@ -133,9 +133,34 @@ After either restore path, check that every note file on disk can be opened and 
 docker compose exec app pnpm check-notes --wait-idle
 ```
 
-It prints one `BROKEN` line per problem: a missing file (`missing-file`), damaged frontmatter (`unparseable`), or a file whose frontmatter or body differs from the database row (`frontmatter-mismatch`, `body-mismatch`, e.g. when the database and the files were restored from different points in time). It exits with code 1 if there are any. A clean restore ends with `checked N notes, 0 broken`.
+It prints one `BROKEN` line per problem: a missing file (`missing-file`), damaged frontmatter (`unparseable`), a file whose frontmatter or body differs from the database row (`frontmatter-mismatch`, `body-mismatch`, e.g. when the database and the files were restored from different points in time), or a `.md` file no note owns (`orphan-file`; the next start moves it to `.orphans/`). It exits with code 1 if there are any. A clean restore ends with `checked N notes, 0 broken`.
 
 Files are written by a background projector after each save, so the check compares a file only once its projection has caught up and lists the rest as pending; `--wait-idle[=<seconds>]` waits for it first (default 60 s), `--fail-on-pending` turns anything still pending into a failure. It only reads.
+
+### The doctor
+
+For a deeper check than `check-notes`, run the doctor. It compares every copy of every note with the database row: the file, the latest revision, the editor state (`.crdt` files and `note_crdt`), the full-text index, the embedding, the link index and the projection state:
+
+```bash
+docker compose exec app pnpm doctor                 # text report, exit 1 on any problem
+docker compose exec app pnpm doctor --report        # the same as JSON
+docker compose exec app pnpm doctor --repair        # queue the safe repairs, then run it again
+```
+
+It only reads unless you pass `--repair`, and `--repair` never changes a note: it asks the server to write a note's file or a folder's `index.md` again (a file Elara did not write is copied to `.conflicts/` first), to rebuild a note's links, or to compute its embedding again. Run the doctor again after a minute to see them done. Anything it cannot repair (for example `revision-missing` or a `crdt-*` class) is a bug: open an issue with the report. Run it while the instance is quiet: an edit in progress can show up for a moment.
+
+### Last resort: rebuild notes from the files
+
+The database is the backup that matters: it alone holds revisions, editor history and edits not yet written to a file. If it is lost and no dump can be restored, `rows-from-files` rebuilds the missing notes from the `.md` files in the data volume (each note gets one `create` revision; history is gone):
+
+```bash
+docker compose stop app
+docker compose run --rm app pnpm rows-from-files --dry-run                     # see what it would do
+docker compose run --rm app pnpm rows-from-files --owner you@example.com       # do it
+docker compose start app
+```
+
+It refuses to run while the app is up (exit 2). It never overwrites a note that exists: one whose file differs is listed and left alone. Folders whose vault no longer exists are skipped unless you pass `--owner <email>`, which recreates them as `Restored <id>` vaults owned by that user (rename and share them afterwards). Run `pnpm doctor` afterwards.
 
 ### Files Elara set aside
 

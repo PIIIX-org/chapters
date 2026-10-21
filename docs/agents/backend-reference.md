@@ -132,7 +132,7 @@ chapters/
 │   │   ├── export/                 # backup/restore, vault export, share links, import
 │   │   ├── repositories/           # codebase ingestion (git/local/agent-push), extraction
 │   │   ├── email/                  # nodemailer wrapper
-│   │   └── scripts/                # CLI entry points (reindex, restore-backup, check-notes, migrate-store)
+│   │   └── scripts/                # CLI entry points (reindex, restore-backup, check-notes, doctor, rows-from-files, migrate-store)
 │   └── test/                       # one file per subsystem, Vitest
 ├── shared/                         # types shared server ↔ client (UI phase, not started)
 └── client/                         # React + Vite (UI phase — do not start yet)
@@ -282,7 +282,14 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   `store-failpoints` test uses them.
 - `check-notes` is read-only: it compares a file with its row only where
   the `file` projection is applied; `--wait-idle[=<s>]` waits for the
-  projector, `--fail-on-pending` fails on pending projections (CI).
+  projector, `--fail-on-pending` fails on pending projections (CI). It
+  also reports orphan `.md` files (`orphan-file`, #495).
+- **Doctor** (`doctor.ts`, `pnpm doctor`, ADR-003 S6, #495): compares
+  every copy of a note with its row and reports each mismatch by class
+  (below). Read-only by default; `--repair` only re-raises derived state.
+- **`rows-from-files`** (`rows-from-files.ts`, ADR-003 Q9): the
+  last-resort import that rebuilds missing note rows from the `.md` files
+  under the exclusive instance maintenance lock (below).
 
 ### Repositories (codebase mapping)
 
@@ -683,7 +690,54 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   before they end, and tests that insert note rows without files delete
   their fixture vaults. One exception: the MCP storage-failure test pins
   the known row-ahead-of-file bug (#486, #489) with an assertion and then
-  soft-deletes that note so the gate skips it.
+  soft-deletes that note so the gate skips it. It also reports
+  `orphan-file`: a `.md` file outside `assets/` and the dot-directories
+  with no `projected_files` row, no live note at its path and (for an
+  `index.md`) no live note under its directory, i.e. what the boot orphan
+  sweep would move to `.orphans/` (#495). Shared helpers: `compareNoteFile`,
+  `vaultMarkdownFiles`, `orphanFiles`.
+- **`doctor.ts`** / `pnpm doctor` (ADR-003 S6, #495): `runDoctor({vaultId,
+  repair})` returns `{ok, checked, counts, problems, pending}`. Classes
+  (`DOCTOR_CLASSES`): `file-missing`, `file-unparseable`, `file-differs`
+  (content differs from the row), `file-edited` (same content, bytes not
+  the `projected_files.applied_hash`, a hand or `git` edit, Q2),
+  `file-unrecorded` (no `projected_files` row for this note) for note
+  files and `.trash/<id>.md` whose `file` projection is applied, and for
+  recorded generated `index.md` files; `file-orphan`; `conflict-copy`
+  (anything in `.conflicts/`); `projection-missing` (no `file` row),
+  `projection-failed` (pending with `last_error`), `projection-outdated`
+  (`index_version` below `PROJECTION_VERSIONS`); `revision-missing` (no
+  revision at `notes.seq`), `revision-differs`; `crdt-bin-differs`,
+  `crdt-bin-undecodable`, `crdt-bin-orphan` (`.crdt/<path>.bin`);
+  `crdt-fold-error`, `crdt-rejected-update`, `crdt-snapshot-differs`
+  (`note_crdt` snapshot ⊕ non-rejected tail against the row, only when
+  `folded_seq = seq` and no tail is pending); `fts-stale` (stored `fts`
+  against the 0002 expression); `vector-missing` (no embedding and no
+  job), `vector-failed` (the `embed_note` job of the current `seq`
+  failed); `links-differ` (`note_links` against `extractWikilinks(body)`).
+  Pending projections, embedding jobs and unfolded CRDT tails are listed
+  in `pending`, not as problems. `repair: true` re-raises only: the
+  note's `file` projection reset to `applied_seq = 0` (the projector
+  renders it again under the ownership rules, so bytes it did not write
+  are copied to `.conflicts/` first; content-equal bytes are adopted),
+  a generated index's `dir_index` projections reset, a missing `file`
+  projection row inserted, a failed one's backoff cleared, an outdated
+  one re-rendered, link rows rederived under the note lock, an
+  `embed_note` job inserted (not run in the CLI: the server's worker
+  polls). It never writes note content; every other class is
+  report-only. A snapshot read while the server writes: run it idle.
+- **`rows-from-files.ts`** / `pnpm rows-from-files` (ADR-003 Q9): for
+  every vault directory (or `--vault`), each `*.md` outside `assets/` and
+  the dot-directories: no live row → `createNote` from the file (row,
+  revision, links, projections, embedding job; the projector then adopts
+  the file), a row with the same content → nothing, a row that differs →
+  reported and left alone, a generated `index.md` (no frontmatter) →
+  skipped, anything the parser or store refuses → `failed`. A directory
+  with no vault row is skipped, or with `--owner <email>` gets a vault row
+  with that id (`Restored <id8>`). The real run holds the exclusive
+  instance maintenance lock (`holdInstanceLock('exclusive')`), so it
+  refuses (exit 2) while a server or writing CLI is up; `--dry-run` reads
+  only and takes no lock. Revisions and CRDT history are not recovered.
 - **Damaged files** (`sync/crdt-write.ts`, #391): every write loads the
   collab document from the note's file first, so a file that does not
   parse used to block edit and revert too. When the load fails on a
@@ -1854,7 +1908,25 @@ full edit with the intended content, which rewrites both. On a running
 server, an edit in flight between its row update and its file write also
 shows as a mismatch for a moment: re-run the check (or `-- --vault
 <uuid>`) before acting on a single mismatch, or run it while writes are
-stopped.
+stopped. An `orphan-file` is a `.md` file nothing owns (a hand-made file,
+a leftover of a rename by old code); the next start moves it to
+`.orphans/`.
+
+**Doctor**: `pnpm -C server doctor [-- --vault <uuid>] [--repair]
+[--report [<file>]]` checks every copy of every note (file, row, revision,
+CRDT, FTS, vector, links, projections) and prints one `PROBLEM <class>`
+line per mismatch and one `PENDING` line per job still running; exit 1 on
+any problem, 2 on bad arguments. `--report` prints the JSON report,
+`--report <file>` writes it to a new file. `--repair` queues the safe
+re-raises (marked `[repair queued]`); run the doctor again once the
+projector is idle to confirm. Report-only classes need a person:
+`revision-*` and `crdt-*` are store bugs (file an issue with the report),
+`conflict-copy` and `file-orphan` need a look before deleting, `fts-stale`
+needs `UPDATE notes SET body = body WHERE id = …` by hand (the generated
+column is recomputed, `seq` does not move).
+
+**Rows from files** (last resort, ADR-003 Q9): `pnpm -C server
+rows-from-files -- --dry-run` then without `--dry-run`, server stopped.
 
 **A quarantined write** (#492, §5.3): a `collab-store` report named
 `NoteWriteQuarantinedError` (monitoring, subject = vault id) or an agent's
