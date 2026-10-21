@@ -5,11 +5,13 @@ import { NoteTooLargeError, noteTransportLimit } from './size-cap.js'
 import { NoteWriteQuarantinedError } from './growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
-import { requestedEdit, writeThroughCollab } from '../sync/crdt-write.js'
+import { NoteEditConflictError, requestedEdit, writeThroughCollab, type WriteReport } from '../sync/crdt-write.js'
 import { NoteEditError } from '../sync/edit-ops.js'
 import {
   createNote,
+  getBaseRevision,
   getIncomingLinks,
+  getLiveNote,
   getLocalGraph,
   getRevision,
   listAssets,
@@ -99,9 +101,14 @@ export function noteRoutes(app: FastifyInstance) {
   // `frontmatter` merges per top-level key; `replace: true` swaps the whole
   // map and `removeKeys` deletes keys, as edit_note does (#438). `ops` are
   // edit_note's alone (#408): validated by its schema only, so refused here.
+  // `baseRev` (#865: the `rev` GET returned, or a revision id) is the state
+  // the body was made from: the edit is three-way merged onto the live note
+  // as edit_note's `base_rev` (#475), so typing done since stays; an overlap
+  // writes nothing, keeps the body as a proposal and answers 409. Without it
+  // a `body` replaces the live text, typing done since the GET included.
   app.put<{
     Params: { id: string; '*': string }
-    Body: { frontmatter?: Record<string, unknown>; body?: string; replace?: boolean; removeKeys?: string[]; allowGrowth?: boolean }
+    Body: { frontmatter?: Record<string, unknown>; body?: string; replace?: boolean; removeKeys?: string[]; allowGrowth?: boolean; baseRev?: number | string }
   }>(
     '/vaults/:id/notes/*',
     {
@@ -115,6 +122,7 @@ export function noteRoutes(app: FastifyInstance) {
             replace: { type: 'boolean' },
             removeKeys: { type: 'array', items: { type: 'string' } },
             allowGrowth: { type: 'boolean' },
+            baseRev: { type: ['integer', 'string'] },
           },
         },
       },
@@ -123,18 +131,37 @@ export function noteRoutes(app: FastifyInstance) {
       if (!(await guard(req, reply, 'edit'))) return
       splitPath(req.params['*'])
       if (Object.hasOwn(req.body, 'ops')) {
-        throw new NoteEditError('`ops` is an edit_note (MCP) argument; REST PUT takes `body`, `frontmatter`, `replace`, `removeKeys` and `allowGrowth`')
+        throw new NoteEditError('`ops` is an edit_note (MCP) argument; REST PUT takes `body`, `frontmatter`, `replace`, `removeKeys`, `allowGrowth` and `baseRev`')
       }
-      const { allowGrowth, frontmatter, body, replace, removeKeys } = req.body
-      const updated = await writeThroughCollab(
-        req.params.id,
-        req.params['*'],
-        requestedEdit({ frontmatter, body, replace, removeKeys }),
-        { type: 'user', id: req.user!.id },
-        { quarantine: allowGrowth ? undefined : 'all' },
-      )
+      const { allowGrowth, frontmatter, body, replace, removeKeys, baseRev } = req.body
+      const vaultId = req.params.id
+      const path = req.params['*']
+      const edit = requestedEdit({ frontmatter, body, replace, removeKeys })
+      if (baseRev !== undefined) {
+        const base = await getBaseRevision(vaultId, path, baseRev)
+        if (!base) {
+          if (!(await getLiveNote(vaultId, path))) return reply.code(404).send({ error: 'note not found' })
+          return reply.code(400).send({ error: `baseRev ${JSON.stringify(baseRev)} is not a revision of ${path}: send the \`rev\` GET returned` })
+        }
+        edit.base = { id: base.id, frontmatter: base.frontmatter as Record<string, unknown>, body: base.body }
+      }
+      const report: WriteReport = {}
+      let updated
+      try {
+        updated = await writeThroughCollab(vaultId, path, edit, { type: 'user', id: req.user!.id }, { quarantine: allowGrowth ? undefined : 'all', report })
+      } catch (err) {
+        if (!(err instanceof NoteEditConflictError)) throw err
+        return reply.code(409).send({
+          error: `not saved: lines or frontmatter keys you changed were also changed since baseRev ${JSON.stringify(baseRev)}; your version is kept as revision ${err.proposalId}`,
+          status: 'conflicted',
+          baseRev,
+          proposalId: err.proposalId,
+          conflicts: err.conflicts,
+        })
+      }
       if (!updated) return reply.code(404).send({ error: 'note not found' })
-      return updated
+      if (baseRev === undefined) return updated
+      return { ...updated, status: report.status ?? 'applied', concurrentChanges: report.concurrentChanges ?? null, baseRev }
     },
   )
 

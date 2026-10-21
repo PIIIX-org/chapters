@@ -237,12 +237,12 @@ The write is committed when the call returns; a connection lost before the answe
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
-  - `body` (string, required): the whole body. On an existing note it **replaces the whole body** as `edit_note`'s `body` does (only the characters that differ change).
+  - `body` (string, required): the whole body. On an existing note it **replaces the whole body** as `edit_note`'s `body` does (only the characters that differ change), merged from your connection's last read of the note like `edit_note`'s `body` without `base_rev`.
   - `frontmatter` (object, optional): on a note this call creates, its frontmatter (as `create_note`); on an existing note, **merged per top-level key** as in `edit_note`.
   - `allowGrowth` (boolean, optional, default `false`): as in `edit_note`.
-- **Returns**: the note row with the write result fields, plus `created` (`true` when this call created the note).
+- **Returns**: the note row with the write result fields, plus `created` (`true` when this call created the note). On an existing note your connection read in the past 24 hours, also `baseRev` (the `rev` of that read), with `status` `applied` or `merged`; or, when lines you changed were also changed since your read, `{ status: "conflicted", created: false, baseRev, proposalId, conflicts, message }` as `edit_note`: nothing changes and your version is kept as a `proposal` revision.
 - Create or replace in one step: a call that finds the note missing creates it, and one that loses that create to another caller (another upsert, `create_note`, `restore_note`) replaces the body of the note that was created instead of failing. Two concurrent `upsert_note` calls on a missing note create it once and neither fails with "already exists".
-- As with any whole `body`, text a person typed after you read the note is not in it; use `append_note` or `edit_note` `ops` for partial changes.
+- On an existing note, text a person typed after your read is kept when your connection read the note (`read_note` or `export_note`) in the past 24 hours; without such a read your `body` replaces the live text, typing included. Use `append_note` or `edit_note` `ops` for partial changes.
 - The size limit, the quarantine, the restore point and the "In this note now" row work as for `edit_note`; the call that creates the note keeps no restore point and is never quarantined, as with `create_note`.
 
 ### `rename_note`
