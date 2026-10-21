@@ -420,7 +420,10 @@ collab socket and live view it opened closes at once (#498, §5.7).
   deactivation left live is revoked then), and the user mints new ones.
 - **Admin dashboard** (`admin-dashboard-routes.ts`): metadata-only by
   explicit design — stats, audit trail, force-revoke a share or MCP
-  connection. No endpoint here can return note content.
+  connection. No endpoint here can return note content. The audit trail
+  (`GET /api/admin/audit-trail`, `limit`/`offset`) lists revisions newest
+  first in the order they were recorded (`note_revisions.ord`), not by
+  `created_at`, which follows the database clock (#854).
   - `docs/superpowers/specs/2026-07-15-admin-oversight-dashboard-design.md`
 
 ### 5.2 Vaults & sharing (`server/src/vaults/`)
