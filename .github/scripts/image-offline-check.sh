@@ -21,7 +21,7 @@ check() {
   if grep -q '^usage: check-notes' <<<"$out"; then
     echo "ok: $1"
   else
-    echo "::error::$1: 'pnpm check-notes --help' did not print its usage within 120 s without a network (#872)."
+    echo "::error::$1: 'pnpm check-notes --help' did not print its usage with no network (output above; 120 s limit) (#872)."
     failed=1
   fi
 }
