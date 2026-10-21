@@ -18,6 +18,7 @@ import { recordJob } from '../monitoring/metrics.js'
 import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
 import { bodyMeasured, updateFits } from './collab-size.js'
+import { forgetAgentPresence, stripAgentClaims } from './agent-presence.js'
 
 export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
@@ -255,6 +256,11 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       if (!updateFits(document, payload, limit)) throw new NoteTooLargeRefusal(documentName, limit)
     },
 
+    /** Only the relay puts agents in presence (#481, agent-presence.ts). */
+    async beforeHandleAwareness({ documentName, states }) {
+      stripAgentClaims(documentName, states)
+    },
+
     async onStoreDocument({ documentName, document, lastContext }) {
       const { vaultId, path } = parseDocName(documentName)
       const state = docState(document)
@@ -303,6 +309,10 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       const { vaultId, path } = parseDocName(documentName)
       publishNoteState(vaultId, path, docState(document))
     },
+
+    async afterUnloadDocument({ documentName }) {
+      forgetAgentPresence(documentName)
+    },
   })
 
   const hocuspocus = server.hocuspocus
@@ -350,6 +360,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       for (const client of wss.clients) client.terminate()
       wss.close()
       currentInstance = null
+      forgetAgentPresence()
     },
   }
 }

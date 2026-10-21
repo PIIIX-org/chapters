@@ -49,6 +49,10 @@ jobs:
       # agent trial grader, tool mapping, provider formats, loop caps, credential gate (#571).
       - name: Test benchmark harness
         run: node --test 'benchmarks/lib/*.test.ts' 'benchmarks/agent-trial/lib/*.test.ts'
+      # Lab helpers that need no lab instance: SIGKILL recovery (#658), file-count
+      # diffs (#663), the pinned git fixture restart-extraction syncs (#767).
+      - name: Test lab helpers
+        run: node --test 'lab/lib/*.test.ts'
       - name: Test
         run: pnpm test
         env:

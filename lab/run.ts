@@ -7,7 +7,8 @@
 //                                     their long parts in the fast tier
 //   LAB_ALSO="browser"                tests added to the tier's selection
 // Before each test the instance must answer /health (else that test counts
-// as crashed); after a test times out the rest are not run (it may still be
+// as crashed and the rest are not run: they would only find it down again,
+// #658); after a test times out the rest are not run either (it may still be
 // driving the instance). Writes lab-results/<test>.json, summary.md and
 // run.json (tier, filters, selected tests; read by the gate). Exit code is
 // non-zero only when nothing was selected: whether the run passes is decided
@@ -90,7 +91,7 @@ interface Row {
 }
 const rows: Row[] = []
 
-/** Set once a test times out: it may still be driving the instance, so later tests are not run. */
+/** Set once a test times out (it may still be driving the instance) or the instance is down: later tests are not run. */
 let abort: string | undefined
 
 for (const { file, name, test, loadError } of selected) {
@@ -104,8 +105,10 @@ for (const { file, name, test, loadError } of selected) {
   try {
     if (abort) throw new Error(`not run: ${abort}`)
     if (!test) throw new Error(`failed to load: ${loadError}`)
-    // A test that left the app down must not be blamed on the next one.
+    // A test that left the app down must not be blamed on the next one, and
+    // the tests after it must not each wait for it again (#658).
     healthyMs = Math.round(await waitHealthy(env.baseUrl, 180_000).catch(() => {
+      abort = `the instance was not healthy within 180 s before ${name} started`
       throw new Error('the instance was not healthy within 180 s before this test started')
     }))
     let timer: Timer | undefined
