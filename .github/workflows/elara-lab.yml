@@ -379,19 +379,33 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       # Transformers.js caches models in `.cache` inside its installed package.
-      - uses: actions/cache@v4
+      # The key is the model id plus the lockfile hash (a new Transformers.js
+      # may change the cache layout); restore-keys falls back to the last cache
+      # of the same model.
+      - id: restore
+        uses: actions/cache/restore@v6
         with:
           path: node_modules/.pnpm/@huggingface+transformers@*/node_modules/@huggingface/transformers/.cache
           key: transformers-model-Xenova/bge-small-en-v1.5-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: transformers-model-Xenova/bge-small-en-v1.5-
-      - name: Real-model embedding test
-        run: pnpm -C server exec vitest run test/embedding-worker.test.ts --reporter=verbose
+      - id: test
+        name: Real-model embedding test
+        run: |
+          pnpm -C server exec vitest run test/embedding-worker.test.ts --reporter=verbose --reporter=json --outputFile.json="$RUNNER_TEMP/real-model.json"
+          echo "passed=$(node -p 'require(process.argv[1]).numPassedTests' "$RUNNER_TEMP/real-model.json")" >> "$GITHUB_OUTPUT"
         env:
           ELARA_REAL_MODEL_TESTS: '1'
           DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           TEST_DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           ADMIN_DATABASE_URL: postgres://elara:elara@localhost:5432/elara
           DATA_DIR: ${{ runner.temp }}/elara-test-data
+      # Save only a model the test loaded and passed with: a download cut short
+      # (the test skipped) must not freeze a partial cache under this key.
+      - if: steps.test.outputs.passed == '1' && steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules/.pnpm/@huggingface+transformers@*/node_modules/@huggingface/transformers/.cache
+          key: ${{ steps.restore.outputs.cache-primary-key }}
 
   # #706: a red nightly opens (or comments on) the `lab-nightly` issue, the
   # next green nightly closes it. Live only for the schedule on dev; a

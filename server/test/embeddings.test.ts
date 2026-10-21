@@ -81,11 +81,12 @@ describe('local embedder', () => {
   it('keeps the event loop responsive while a batch holds the embedding thread (#496)', async () => {
     const embedder = new LocalEmbedder(FAKE_WORKER)
     expect(batchOf(await embedder.embed(['warm']))).toEqual([0])
-    // Three batches that each block their thread for 600 ms, like an ONNX run
-    // of 8 texts on a slow runner. A /health probe is a timer callback away: it
+    // Three batches that each block their thread for 300 ms, like an ONNX run
+    // of 8 texts (0.45 s on a fast laptop). On the main thread one batch alone
+    // would exceed the 200 ms limit. A /health probe is a timer callback away: it
     // answers only while the main event loop is free.
     // A real interval on purpose: the lag of the real event loop is what is measured.
-    const texts = ['busy:600', ...Array(7).fill('a'), 'busy:600', ...Array(7).fill('b'), 'busy:600']
+    const texts = ['busy:300', ...Array(7).fill('a'), 'busy:300', ...Array(7).fill('b'), 'busy:300']
     let maxLagMs = 0
     let last = performance.now()
     const timer = setInterval(() => {

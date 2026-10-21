@@ -1,5 +1,6 @@
 import { pipeline } from '@huggingface/transformers'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { isTransientDownloadFailure } from './fixtures/model-download.js'
 
 // The real bge-small model (#496): Transformers.js downloads it into its cache
 // on the first run (~133 MB), so the timeout leaves room for that.
@@ -8,9 +9,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // loop against the fake worker (embeddings.test.ts).
 const MODEL_TIMEOUT_MS = 300_000
 const REAL_MODEL = process.env.ELARA_REAL_MODEL_TESTS === '1'
-
-/** Errors of a model download that did not finish: the network, not the code under test. */
-const DOWNLOAD_FAILURE = /fetch failed|terminated|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|Could not locate file/i
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -34,12 +32,13 @@ describe.skipIf(!REAL_MODEL)('local embedder off the main thread, real model (#4
       vi.resetModules()
       const { embedder } = await import('../src/search/embeddings.js')
       // Model download and load stay outside the measured window. A download
-      // that fails is reported as skipped, with the reason.
+      // cut by the network or a Hugging Face outage is reported as skipped,
+      // with the reason; a 404 or a wrong model id fails (fixtures/model-download.ts).
       try {
         await embedder.embed(['warm up'])
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        if (DOWNLOAD_FAILURE.test(message)) ctx.skip(`model download failed: ${message}`)
+        if (isTransientDownloadFailure(message)) ctx.skip(`model download failed: ${message}`)
         throw err
       }
 
