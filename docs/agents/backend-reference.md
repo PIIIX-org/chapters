@@ -458,7 +458,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   An attributed write (`mcp`, `user`) of the state the relay just stored
   is recorded, so an edit through the relay leaves the relay's `collab`
   revision and the attributed one; the `collab` row is never
-  re-attributed, since it may bundle a person's typing (#403).
+  re-attributed, since it may bundle a person's typing (#403). Only
+  content writes (`create`, `update`) are deduped, against the newest
+  content revision: `quarantine`, `restore_point` (#482) and `delete`
+  rows are never the baseline, and a `delete` is always recorded.
 - **Progressive indexes** (`regenProgressiveIndices`): run on create,
   rename, delete, restore, and on updates whose frontmatter really
   changed (`isDeepStrictEqual`, so key order alone never counts: `jsonb`
@@ -565,19 +568,25 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   MCP is stateless Streamable HTTP (no session id), so a session is the
   connection on that note until it has recorded no non-quarantine
   revision there for `RESTORE_POINT_IDLE_MINUTES` (30). On the first write
-  of a session it reads the stored row before the write and, only when
-  the write returns a result, inserts a `restore_point` revision of that
-  state attributed to the connection, dated with the database clock at
-  the read (so it sorts before the write's own revisions). It bypasses
+  of a session it reads the database clock, then the stored row, and,
+  only when the write returns a result, inserts a `restore_point`
+  revision of that state attributed to the connection, dated at that
+  clock read (so it sorts before the write's own revisions and every
+  revision the row can contain sorts before it). It bypasses
   `recordRevision`'s dedupe (kept even when equal to the latest
   revision) and is skipped only when the latest non-quarantine revision
-  already is this connection's restore point of the same state. Writes by
-  one connection to one note are serialized (`restore-point:` key lock),
-  so concurrent first writes keep one. Unsaved relay typing is not in it
-  (stored row only). Revert's `revert` relabel never relabels a restore
-  point. History lists (`listRevisionPage`, `listRevisionMeta`) add
-  `actorName` (the MCP connection's name, null otherwise); the History
-  tab labels a restore point "Before <name> edited".
+  already is this connection's restore point of the same state; it is
+  never `recordRevision`'s dedupe baseline, so the connection's next
+  write or delete is still recorded. Writes by one connection to one
+  note are serialized (`restore-point:<connection>:<note id>` key lock,
+  so also across a rename), so concurrent first writes keep one. A
+  restore point that fails to insert (the note was purged in between) is
+  logged and the landed write still succeeds. Unsaved relay typing is
+  not in it (stored row only). Revert's `revert` relabel never relabels
+  a restore point. History lists (`listRevisionPage`, `listRevisionMeta`)
+  add `actorName` (the MCP connection's name, null otherwise; anyone with
+  edit access to the vault sees it); the History tab labels a restore
+  point "Before <name> edited".
 - Every mutation is attributed (`Actor {type: 'user'|'mcp'|'collab',
   id?}`), which is what makes `noteRevisions` a real audit trail across
   the UI, MCP, and live-collaboration write paths.

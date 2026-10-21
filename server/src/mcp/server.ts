@@ -1183,7 +1183,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       pinPermission: 'edit',
       description:
-        'Change history for a note (actor-attributed), newest first, metadata only: id, action, actorType, actorId, actorName (the MCP connection name), createdAt, bodyBytes. One page of `limit` revisions (default 20, max 100); when `hasMore`, pass `nextCursor` as `cursor` for the next page. Read one revision\'s content with get_revision. A `restore_point` revision is the note as it was before a connection\'s first write in a session; revert_note to it undoes that session. Requires edit access.',
+        'Change history for a note (actor-attributed), newest first, metadata only: id, action, actorType, actorId, actorName (the MCP connection name), createdAt, bodyBytes. One page of `limit` revisions (default 20, max 100); when `hasMore`, pass `nextCursor` as `cursor` for the next page. Read one revision\'s content with get_revision. A `restore_point` revision is the note as it was before a connection\'s first write in a session; revert_note to it undoes that session (and every later change by others). Requires edit access.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
         path: z.string(),

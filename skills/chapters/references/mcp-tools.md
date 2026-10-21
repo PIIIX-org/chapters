@@ -260,7 +260,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `vaultId` (uuid, optional).
   - `path` (string, required).
   - `revisionId` (uuid, required).
-- **Returns**: the updated note row. The revert is recorded as a new revision. Reverting to a `restore_point` revision undoes everything that connection did to the note in that session. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert.
+- **Returns**: the updated note row. The revert is recorded as a new revision. Reverting to a `restore_point` revision undoes everything that connection did to the note in that session, and also discards every later change by anyone else. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert.
 - The same body size limit as `edit_note` applies: reverting to a revision whose body is over the limit and larger than the current body is refused with an error naming the limit.
 
 ### `purge_revision`
