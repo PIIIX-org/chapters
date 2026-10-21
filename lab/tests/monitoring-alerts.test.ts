@@ -8,13 +8,15 @@
 // Method: run that script against this instance with a state file and
 // ALERT_WEBHOOK_URL pointed at a stub sink on the runner (file mode: nothing
 // reaches GitHub, so never the real alert issue). Baseline; then inject a
-// server error (a note directory made read-only under the app, then a PUT to
-// that note: EACCES -> 500, with a marker in the path, the body and the query
-// and a token-shaped secret in the query) and a failing job (a git
-// repository on an unresolvable `.invalid` host with the secret as its URL
-// credential: the first sync fails). The next run must post `errors` and
-// `jobs` alerts to the stub; neither the marker nor the secret may appear in
-// the payload, the endpoint or the report log lines.
+// failing file write (a note directory made read-only under the app, then a
+// PUT to that note, with a marker in the path, the body and the query and a
+// token-shaped secret in the query). Since ADR-003 S2a the database is the
+// authority: the PUT commits and answers 200, and the note's file projection
+// fails afterwards as a `projection` job. Then a failing job of another kind
+// (a git repository on an unresolvable `.invalid` host with the secret as its
+// URL credential: the first sync fails). The next run must post a `jobs`
+// alert naming both; neither the marker nor the secret may appear in the
+// payload, the endpoint or the report log lines.
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -74,7 +76,7 @@ const test: LabTest = {
   name: 'monitoring-alerts',
   tier: 'fast',
   description:
-    '#705: an injected server error (read-only note directory -> 500) and a failing git sync each produce an alert from the uptime monitor via ALERT_WEBHOOK_URL (stub sink), with no note text or secret in the payload, the endpoint or the report log lines.',
+    '#705: an injected file write failure (read-only note directory: the PUT commits, the projection job fails) and a failing git sync each produce a jobs alert from the uptime monitor via ALERT_WEBHOOK_URL (stub sink), with no note text or secret in the payload, the endpoint or the report log lines.',
   async run(ctx) {
     const checks: Check[] = []
     const token = monitoringToken()
@@ -127,7 +129,9 @@ const test: LabTest = {
         severity: 'high',
       })
 
-      // Injected server error: the note's directory read-only under the app.
+      // Injected failure: the note's directory read-only under the app. The PUT
+      // commits (the database is the authority, ADR-003); the file write fails
+      // in the projector, a `projection` job failure.
       const vault = await ctx.createVault('admin', ctx.uniq('lab-monitoring'))
       await admin.must('POST', `/api/vaults/${vault.id}/notes`, {
         type: 'docs',
@@ -140,14 +144,20 @@ const test: LabTest = {
       const put = await admin.request('PUT', `/api/vaults/${vault.id}/notes/docs/${marker}?q=${marker}&access_token=${secret}`, {
         body: `edited note text ${marker} ${secret}`,
       })
+      const projectionFailed = await poll(async () => {
+        const m = (await (await fetch(`${ctx.baseUrl}${ENDPOINT}`, { headers: { authorization: `Bearer ${token}` } })).json()) as {
+          jobs?: Record<string, { failed?: number }>
+        }
+        return (m.jobs?.projection?.failed ?? 0) > 0 ? true : undefined
+      }, 60_000, 500)
       await ctx.docker.appExec(['chmod', '0755', noteDir])
       noteDir = null
       const repaired = await admin.request('PUT', `/api/vaults/${vault.id}/notes/docs/${marker}`, { body: `repaired ${marker}` })
       checks.push({
-        name: 'injected error: a PUT to a note whose directory is read-only answers 500',
-        expected: '500, then 200 once writable again',
-        actual: `${put.status}, then ${repaired.status}`,
-        ok: put.status === 500 && repaired.status === 200,
+        name: 'injected file failure: a PUT to a note whose directory is read-only commits (200) and its file projection fails as a job',
+        expected: '200 (the database is the authority), a projection job failure on the endpoint, then 200 once writable again',
+        actual: `${put.status}, projection failure ${projectionFailed ? 'seen' : 'not seen in 60 s'}, then ${repaired.status}`,
+        ok: put.status === 200 && projectionFailed === true && repaired.status === 200,
         severity: 'high',
       })
 
@@ -171,18 +181,14 @@ const test: LabTest = {
       })
 
       const alerted = await monitor(ctx, state, env)
-      const errors = alerted.alerts.find((a) => a.kind === 'errors')
       const jobs = alerted.alerts.find((a) => a.kind === 'jobs')
       const posted = received.map((r) => JSON.parse(r) as { text: string; alerts: Alert[] })
       const postedKinds = posted.flatMap((p) => p.alerts.map((a) => a.kind))
       checks.push({
-        name: 'the injected server error produces an errors alert with the route template, through the webhook',
-        expected: "alerts include errors with a 500 on 'PUT /api/vaults/:id/notes/*'; one POST to the stub carrying it",
-        actual: `alerts [${kinds(alerted)}]; errors ${JSON.stringify(errors?.recent ?? null)}; ${received.length} POST(s) with [${postedKinds.join(',')}]`,
-        ok:
-          !!errors?.recent?.some((e) => e.route === 'PUT /api/vaults/:id/notes/*' && e.status === 500) &&
-          received.length === 1 &&
-          postedKinds.includes('errors'),
+        name: 'the failed file write produces a jobs alert naming the projection, through the webhook',
+        expected: 'alerts include jobs with a projection failure; one POST to the stub carrying it',
+        actual: `alerts [${kinds(alerted)}]; jobs ${JSON.stringify(jobs?.recent ?? null)}; ${received.length} POST(s) with [${postedKinds.join(',')}]`,
+        ok: !!jobs?.recent?.some((e) => e.job === 'projection') && received.length === 1 && postedKinds.includes('jobs'),
         severity: 'critical',
       })
       checks.push({
@@ -208,12 +214,9 @@ const test: LabTest = {
       ]
       checks.push({
         name: 'no note text, path, query or secret in the alert, the endpoint or the report log lines',
-        expected: `marker and secret absent; at least one server_error and one job_failure log line`,
+        expected: `marker and secret absent; at least one job_failure log line`,
         actual: `${found.length ? found.join('; ') : 'absent'}; ${reportLines.filter((l) => l.includes('server_error')).length} server_error, ${reportLines.filter((l) => l.includes('job_failure')).length} job_failure line(s)`,
-        ok:
-          found.length === 0 &&
-          reportLines.some((l) => l.includes('"server_error"')) &&
-          reportLines.some((l) => l.includes('"job_failure"')),
+        ok: found.length === 0 && reportLines.some((l) => l.includes('"job_failure"')),
         severity: 'critical',
       })
 
@@ -223,12 +226,12 @@ const test: LabTest = {
         name: 'each failure is alerted once',
         expected: 'next run: no errors or jobs alert, no new POST',
         actual: `alerts [${kinds(again)}], ${received.length - postsBefore} new POST(s)`,
-        ok: !again.alerts.some((a) => a.kind === 'errors' || a.kind === 'jobs') && received.length === postsBefore,
+        ok: !again.alerts.some((a) => a.kind === 'jobs') && received.length === postsBefore,
         severity: 'high',
       })
 
       return {
-        summary: `Monitor runs (file mode, webhook to a stub sink): no token [${kinds(unset)}], baseline [${kinds(baseline)}], after a 500 and a failed sync [${kinds(alerted)}], again [${kinds(again)}]; ${received.length} webhook POST(s); leaks: ${found.length ? found.join('; ') : 'none'}.`,
+        summary: `Monitor runs (file mode, webhook to a stub sink): no token [${kinds(unset)}], baseline [${kinds(baseline)}], after a failed file projection and a failed sync [${kinds(alerted)}], again [${kinds(again)}]; ${received.length} webhook POST(s); leaks: ${found.length ? found.join('; ') : 'none'}.`,
         checks,
         data: { runs: { unset, baseline, alerted, again }, webhook: posted, reportLines },
       }

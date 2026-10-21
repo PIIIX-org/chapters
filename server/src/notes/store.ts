@@ -14,7 +14,9 @@ import {
   cloneDocument,
   docState,
   liveDocumentsOf,
-  pushToDocument,
+  mergeDocuments,
+  pushToDocuments,
+  sharesHistory,
   updateBin,
   type DocState,
   type LiveDocument,
@@ -36,6 +38,7 @@ import { assertBodyFits, NoteTooLargeError } from './size-cap.js'
 import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from './growth-guard.js'
 import { orderKeys, presentedFrontmatter, sameContent } from './frontmatter-order.js'
 import {
+  BACKFILL_MARKER,
   StoreBusyError,
   applyRowChange,
   enqueueEmbeddingTx,
@@ -340,14 +343,17 @@ function plainRow(row: StoredNote): NoteRow {
 /**
  * The relay's loaded documents of a note (by the note id each recorded at
  * load, never by path: a renamed note can be open at its old path, and a new
- * note at that old path is another note), each cloned before a write
- * (ADR-003 §5.2 step 3, S2a). The state of the document at the note's
- * current path (else the first) is what the editors see, which the write
- * stores first and compiles its change against; the clones are the bases the
- * committed change is pushed into the documents from (step 8).
+ * note at that old path is another note), before a write (ADR-003 §5.2 step
+ * 3, S2a). Documents of the note that share history are merged into each
+ * other first (the §5.5 two-documents rule), so the state the write stores
+ * and compiles its change against holds every tab's typing. `base` is a
+ * clone of the primary document (at the note's current path, else the
+ * first): the committed change is compiled against it once and the same
+ * update is pushed into every document (step 8).
  */
 interface Fold {
-  docs: Array<{ live: LiveDocument; base: Y.Doc }>
+  primary: LiveDocument
+  base: Y.Doc
   editors: string[]
   state: DocState
 }
@@ -355,13 +361,16 @@ interface Fold {
 function foldSource(vaultId: string, noteId: string, path: string): Fold | null {
   const loaded = liveDocumentsOf(noteId)
   if (loaded.length === 0) return null
-  const docs = loaded.map((live) => ({ live, base: cloneDocument(live.doc) }))
-  const primary = docs.find((d) => d.live.name === `${vaultId}/${path}`) ?? docs[0]!
-  return { docs, editors: [...new Set(loaded.flatMap((d) => d.editors))], state: docState(primary.base) }
+  const primary = loaded.find((d) => d.name === `${vaultId}/${path}`) ?? loaded[0]!
+  for (const other of loaded) {
+    if (other !== primary && sharesHistory(other.doc, primary.doc)) mergeDocuments(primary.doc, other.doc)
+  }
+  const base = cloneDocument(primary.doc)
+  return { primary, base, editors: [...new Set(loaded.flatMap((d) => d.editors))], state: docState(base) }
 }
 
 function releaseFold(fold: Fold | null): void {
-  for (const d of fold?.docs ?? []) d.base.destroy()
+  fold?.base.destroy()
 }
 
 /**
@@ -429,12 +438,15 @@ async function pushCommitted(
   failpoint('edit.after-commit-before-live-apply')
   const frontmatter = committed.frontmatter as Record<string, unknown>
   const loaded = liveDocumentsOf(committed.id)
-  for (const live of loaded) {
-    const base = fold?.docs.find((d) => d.live.doc === live.doc)?.base ?? cloneDocument(live.doc)
-    pushToDocument(live.doc, base, { frontmatter, body: keepLiveBody ? docState(base).body : committed.body })
+  if (loaded.length > 0) {
+    const primary = (fold && loaded.find((d) => d.doc === fold.primary.doc)) || loaded[0]!
+    const base = fold && primary.doc === fold.primary.doc ? fold.base : cloneDocument(primary.doc)
+    if (base !== fold?.base) releaseFold(fold)
+    const docs = [primary.doc, ...loaded.filter((d) => d !== primary).map((d) => d.doc)]
+    pushToDocuments(docs, base, (current) => ({ frontmatter, body: keepLiveBody ? current.body : committed.body }))
+    return
   }
-  for (const d of fold?.docs ?? []) if (!loaded.some((live) => live.doc === d.live.doc)) d.base.destroy()
-  if (loaded.length > 0) return
+  releaseFold(fold)
   try {
     await updateBin(vaultId, binPath, { frontmatter, body: committed.body })
   } catch (err) {
@@ -487,6 +499,8 @@ export async function createNote(
         await insertRevision(tx, id, 1, { action: 'create', actor }, { frontmatter, body })
         await replaceLinks(tx, id, body)
         await raiseProjections(tx, id, 1, ['file', 'dir_index'])
+        // Written by the store: nothing for the S2a backfill to do.
+        await tx.execute(sql`INSERT INTO note_projections (note_id, projection, target_seq, applied_seq) VALUES (${id}, ${BACKFILL_MARKER}, 1, 1)`)
         await enqueueEmbeddingTx(tx, id, 1)
         return inserted!
       })

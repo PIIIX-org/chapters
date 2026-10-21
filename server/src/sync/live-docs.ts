@@ -104,15 +104,38 @@ export function compileChange(base: Y.Doc, next: DocState): Uint8Array {
 /** The transaction origin of a pushed change: a Hocuspocus local origin, so its store runs (and is not re-screened, #492). */
 const PUSH_ORIGIN = { source: 'local', context: { userId: 'server', directWrite: true } }
 
+/** The origin of a merge of two documents of one note: a local change, stored (and screened) by the relay. */
+export const MERGE_ORIGIN = { source: 'local', context: { userId: 'server' } }
+
+/** Merges two documents of one note into each other, so each holds the other's typing (§5.5, S2a). */
+export function mergeDocuments(a: Y.Doc, b: Y.Doc): void {
+  Y.applyUpdate(a, Y.encodeStateAsUpdate(b, Y.encodeStateVector(a)), MERGE_ORIGIN)
+  Y.applyUpdate(b, Y.encodeStateAsUpdate(a, Y.encodeStateVector(b)), MERGE_ORIGIN)
+}
+
 /**
- * Pushes a committed write into the loaded document (§5.2 step 8, S2a):
- * `base` is the clone taken before the write, `committed` the state the
- * transaction stored.
+ * Pushes a committed write into the loaded documents of a note (§5.2 step 8,
+ * S2a). The change is compiled once, against `base` (the clone of `docs[0]`
+ * taken before the write), and the same Yjs update is applied to every
+ * document that shares that history, so no document is diffed separately
+ * (which would delete typing only it holds). A document without shared
+ * history gets a diff compiled against its own state. `committedFor` gives
+ * the state to push given a document's current state (S2a keeps the editors'
+ * body when the write did not change it).
  */
-export function pushToDocument(live: Y.Doc, base: Y.Doc, committed: DocState): void {
-  const update = compileChange(base, committed)
+export function pushToDocuments(docs: Y.Doc[], base: Y.Doc, committedFor: (current: DocState) => DocState): void {
+  const primary = docs[0]!
+  const update = compileChange(base, committedFor(docState(base)))
   base.destroy()
-  Y.applyUpdate(live, update, PUSH_ORIGIN)
+  for (const doc of docs) {
+    if (doc === primary || sharesHistory(doc, primary)) {
+      Y.applyUpdate(doc, update, PUSH_ORIGIN)
+    } else {
+      const own = cloneDocument(doc)
+      Y.applyUpdate(doc, compileChange(own, committedFor(docState(own))), PUSH_ORIGIN)
+      own.destroy()
+    }
+  }
 }
 
 /**

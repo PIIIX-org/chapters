@@ -11,7 +11,7 @@ import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { noteLock, readNote, updateNote, splitPath } from '../notes/store.js'
 import { withKeyLock } from '../notes/key-lock.js'
-import { docState, liveDocumentsOf, registerLiveDocs, sharesHistory, type LiveDocument } from './live-docs.js'
+import { docState, liveDocumentsOf, mergeDocuments, registerLiveDocs, sharesHistory, type LiveDocument } from './live-docs.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { affects, onPermissionChange } from './permission-events.js'
@@ -91,9 +91,6 @@ interface ConnectionContext {
 
 /** The note each loaded document was loaded from (ADR-003 §5.5, S2a): its stores go to that note only. */
 const documentNotes = new WeakMap<Y.Doc, string>()
-
-/** The origin of the two-way merge of two documents of one renamed note: a local change, stored by the relay. */
-const MERGE_ORIGIN = { source: 'local', context: { userId: 'server' } }
 
 /**
  * The sync relay (spec 5 + audit hardening). It has no listener of its own:
@@ -307,8 +304,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
             return
           }
           // Each tab sees the other's typing; the current-path document stores the merged state.
-          Y.applyUpdate(current.doc, Y.encodeStateAsUpdate(document, Y.encodeStateVector(current.doc)), MERGE_ORIGIN)
-          Y.applyUpdate(document, Y.encodeStateAsUpdate(current.doc, Y.encodeStateVector(document)), MERGE_ORIGIN)
+          mergeDocuments(current.doc, document)
           return
         }
       }
