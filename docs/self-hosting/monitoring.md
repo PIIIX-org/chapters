@@ -12,7 +12,7 @@ Every finished request is counted per **route template** (`PUT /api/vaults/:id/n
 | `route`, `status`, `durationMs` | route template, HTTP status, time taken | |
 | `reqId` | Fastify's request id: find the full error in the log with it | |
 | `actor` | `user` (session), `token` (bearer token), `anonymous` | |
-| `job`, `subjectId` | | `embedding`, `extraction`, `sync`, `collab-store` or `backup`; the note, file, repository or vault id |
+| `job`, `subjectId` | | `embedding`, `extraction`, `sync`, `collab-store`, `backup`, `projection` or `compaction`; the note, file, repository or vault id |
 | `error` | `{name, code}`: the error's class and code (`Error`, `EACCES`, `PostgresError 23505`) | same |
 
 **No error message, no note text, no path, no query string, no credential** is ever part of a report: an error message can quote a note's text, its path (its title) or a URL with a token in it, so it is left out entirely rather than filtered. The full error still goes to the app's log (`docker compose logs app`) as before, on your own host; each report also adds one JSON line there, `{"event":"server_error",...}` or `{"event":"job_failure",...}`, with exactly the fields above.
@@ -25,6 +25,7 @@ What counts as a failed job:
 - `collab-store`: a live (collaborative) edit could not be saved to the note, for example because its frontmatter was invalid. **The note keeps its last valid version while the editors keep seeing their edit**: look at it;
 - `backup`: a scheduled backup failed (an on-demand one that fails is a 500 instead). A scheduled backup that fails after the previous backup (scheduled or on demand) also failed only adds to `repeated`, so `ELARA_BACKUP_INTERVAL_HOURS=1` with a broken destination is one alert, not one an hour. Any backup that succeeds, including "run backup now" after a fix, ends that: the next scheduled failure alerts again (the state restarts with the process);
 - `projection`: a note's `.md` file or a folder's `index.md` could not be written (a read-only or full disk), or a file the server did not write was found where it writes and copied to `.conflicts/` first (error name `ConflictCopy`). The database holds the note, so the write that caused it **succeeded** (no 500): reads, search and agents are unaffected, and the file is written once the disk accepts it (retried with a backoff; the retries only add to `repeated`). `pnpm check-notes` lists files still pending.
+- `compaction`: the compaction of a note's long revision history (see [backup.md](backup.md), revision history) failed 3 attempts (retried after 1 and 2 minutes; the earlier failures only add to `repeated`). **Nothing is lost:** every revision stays readable exactly as it was, and the history just takes more space until the note's next 25 writes or the next restart queue it again.
 
 `repeated` per job kind is on the endpoint and in the jobs alert's "since the process started" line.
 
