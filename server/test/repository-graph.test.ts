@@ -5,6 +5,7 @@ import { db } from '../src/db/client.js'
 import { repositories } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 import { buildApp } from '../src/app.js'
 
@@ -104,6 +105,9 @@ describe('buildGraph over repositories', () => {
       headers: { cookie },
       body: { type: 'docs', name: 'rocket', body: 'Rocket engine guidance software design.' },
     })
+    // The note's embedding job is committed with the note (ADR-003 S2a) and runs
+    // in the background: embed it before the file, whose extraction then finds it.
+    await flushEmbeddings()
     const repo = await makeRepo()
     await syncRepositoryFiles(
       repo.id,
@@ -111,6 +115,7 @@ describe('buildGraph over repositories', () => {
       ['guidance.py'],
     )
     await flushExtraction()
+    await flushEmbeddings()
 
     const graph = await buildGraph({ vaultIds: [vault.id], repositoryIds: [repo.id] })
     const semantic = graph.edges.filter((e) => e.kind === 'semantic')

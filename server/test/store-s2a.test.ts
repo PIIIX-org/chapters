@@ -14,7 +14,7 @@ import { flushProjections } from '../src/notes/projector.js'
 import { bootStore, reconcileStore, runStoreBackfill } from '../src/notes/store-reconcile.js'
 import { serializeNote } from '../src/notes/okf.js'
 import { checkNoteFiles } from '../src/notes/integrity.js'
-import { StoreBusyError } from '../src/notes/store-tx.js'
+import { StoreBusyError, setStoreMigrationPending } from '../src/notes/store-tx.js'
 import { metricsSnapshot } from '../src/monitoring/metrics.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
 import { crdtFile, saveCrdtState } from '../src/sync/crdt-store.js'
@@ -26,12 +26,13 @@ import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
 let vaultId: string
+let cookie: string
 
 beforeAll(async () => {
   app = await buildApp()
   await app.ready()
   const owner = await createActiveUser()
-  const cookie = await loginCookie(app, owner.email)
+  cookie = await loginCookie(app, owner.email)
   vaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'S2a vault' } })).json().id
 })
 
@@ -373,6 +374,28 @@ describe('backfill and boot reconciliation (§7 step 3, §8)', () => {
     const jobs = (await db.execute(sql`SELECT 1 FROM jobs WHERE kind = 'embed_note' AND payload->>'noteId' = ${id}`)) as unknown as unknown[]
     expect(jobs.length).toBeGreaterThan(0)
     await flushProjections()
+  })
+})
+
+describe('a REST write to a note the store migration has not processed (§8, Q5)', () => {
+  it('answers 503 with the restart instruction, also in production', async () => {
+    const id = randomUUID()
+    await db.execute(sql`
+      INSERT INTO notes (id, vault_id, type, name, path, frontmatter, body)
+      VALUES (${id}, ${vaultId}, 'unmig', 'rest', 'unmig/rest', '{"type":"unmig"}'::jsonb, 'from before the store')`)
+    setStoreMigrationPending(true)
+    const wasProd = config.isProd
+    Object.assign(config, { isProd: true })
+    try {
+      const res = await app.inject({ method: 'PUT', url: `/api/vaults/${vaultId}/notes/unmig/rest`, headers: { cookie }, body: { body: 'refused' } })
+      expect(res.statusCode).toBe(503)
+      expect(res.json().error).toMatch(/restart the server/)
+      expect(res.json().error).not.toBe('Internal server error')
+    } finally {
+      Object.assign(config, { isProd: wasProd })
+      setStoreMigrationPending(false)
+      await db.execute(sql`DELETE FROM notes WHERE id = ${id}`)
+    }
   })
 })
 

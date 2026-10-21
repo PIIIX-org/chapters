@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
+import { sql } from '../src/db/client.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 /**
@@ -131,8 +132,11 @@ describe('GET /vaults/:id/history/* — ordering', () => {
   it('returns newest first', async () => {
     const rows = (await history(ownerCookie, 'people/paged')).json() as Row[]
     expect(rows.map((r) => r.action)).toEqual(['update', 'update', 'update', 'update', 'create'])
-    const times = rows.map((r) => new Date(r.createdAt).getTime())
-    expect(times).toEqual([...times].sort((a, b) => b - a))
+    // Newest = highest `ord` (#825, #826): the database clock behind `created_at` can step back or tie.
+    const byOrd = (await sql<Array<{ id: string }>>`
+      SELECT r.id FROM note_revisions r JOIN notes n ON n.id = r.note_id
+      WHERE n.path = 'people/paged' AND n.vault_id = ${vaultId} ORDER BY r.ord DESC`).map((r) => r.id)
+    expect(rows.map((r) => r.id)).toEqual(byOrd)
   })
 })
 
