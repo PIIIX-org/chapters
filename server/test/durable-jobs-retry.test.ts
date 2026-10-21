@@ -211,3 +211,71 @@ describe('durable job limits (#494 review)', () => {
     expect((await jobByKey(key))?.lastError).toBe('PostgresError: deadlock detected')
   })
 })
+
+describe('boot re-runs failed jobs of the current version (#494 review round 2)', () => {
+  it('a file that kept its old embedding and failed on its new content is re-extracted at the next boot', async () => {
+    const { repo, file } = await unextractedFile('jobs-v2-failure', 'version one')
+    // Version 1 extracted: the file has an embedding.
+    scheduleExtraction(file.id)
+    await flushExtraction()
+    // Version 2 pushed; its extraction fails until the embedder is back.
+    const v2 = 'version two'
+    const v2Hash = createHash('sha256').update(v2).digest('hex')
+    await db.update(repositoryFiles).set({ content: v2, contentHash: v2Hash, size: v2.length }).where(eq(repositoryFiles.id, file.id))
+    const key = `extract:${file.id}:${v2Hash}`
+    await db.insert(jobs).values({
+      kind: 'extract',
+      payload: { fileId: file.id, repositoryId: repo.id },
+      idempotencyKey: key,
+      attempts: MAX_JOB_ATTEMPTS,
+      lastError: 'Error: model download failed',
+      doneAt: new Date(),
+    })
+    const [before] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file.id))
+    expect(before?.embedding).not.toBeNull()
+    let calls = 0
+    const embed = embedder.embed.bind(embedder)
+    vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => {
+      if (texts[0] === `${file.path}\n${v2}`) calls++
+      return embed(texts)
+    })
+
+    await scheduleMissingExtractions()
+    await flushExtraction()
+
+    expect(calls).toBe(1)
+    const job = await jobByKey(key)
+    expect(job?.doneAt).not.toBeNull()
+    expect(job?.lastError).toBeNull()
+    expect((await extractionFailures(repo.id)).total).toBe(0)
+  })
+
+  it('a note that kept its old embedding and failed on its new version is re-embedded at the next boot', async () => {
+    const user = await createActiveUser()
+    const [vault] = await db.insert(vaults).values({ name: 'jobs-v2-vault', ownerId: user.id }).returning()
+    createdVaultIds.push(vault!.id)
+    const [note] = await db
+      .insert(notes)
+      .values({ vaultId: vault!.id, type: 'note', name: 'n', path: `v2-${Date.now()}.md`, body: 'version one', frontmatter: {} })
+      .returning()
+    await db.update(notes).set({ embedding: new Array(384).fill(0.1) }).where(eq(notes.id, note!.id))
+    await db.update(notes).set({ body: 'version two' }).where(eq(notes.id, note!.id))
+    const [{ seq }] = (await db.execute(sql`SELECT seq FROM notes WHERE id = ${note!.id}`)) as unknown as [{ seq: string }]
+    const key = `embed_note:${note!.id}:${seq}`
+    await db.insert(jobs).values({
+      kind: 'embed_note',
+      payload: { noteId: note!.id, seq: Number(seq) },
+      idempotencyKey: key,
+      attempts: MAX_JOB_ATTEMPTS,
+      lastError: 'Error: model download failed',
+      doneAt: new Date(),
+    })
+
+    await scheduleMissingEmbeddings()
+    await flushEmbeddings()
+
+    const job = await jobByKey(key)
+    expect(job?.lastError).toBeNull()
+    expect(job?.doneAt).not.toBeNull()
+  })
+})
