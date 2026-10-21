@@ -1,17 +1,12 @@
 // What does a SIGKILL in the middle of note writes leave behind?
 //
-// The write path has no transaction spanning DB and disk:
-//   createNote  (notes/store.ts:208-258): INSERT row -> atomicWrite(file)
-//               -> regen index.md -> links -> recordRevision
-//   updateNote  (notes/store.ts:313-345): UPDATE row -> atomicWrite(file)
-//               -> links -> recordRevision
-//   edit_note   goes through the relay first (sync/crdt-write.ts:35-80):
-//               DirectConnection.transact, disconnect (Hocuspocus 4 stores
-//               on disconnect: updateNote as actor 'collab' + .crdt bin,
-//               sync/collab-server.ts:176-190), then updateNote as actor 'mcp'
-//   atomicWrite = writeFile(`${file}.tmp`) + rename, no fsync (store.ts:92-97)
-// so a kill between steps can leave: row != file, row without file, file
-// without row, missing revision, stale .crdt bin, orphan .tmp.
+// Each write runs in one Postgres transaction (ADR-003 S2a/S2b): the row,
+// its revision, the projection targets and the note's Yjs update in
+// `note_updates` commit together; the projector writes the file after
+// commit, and the relay pushes the update into the open document after
+// commit. Collab documents are named `<vaultId>/~<noteId>`. A kill can still
+// leave: file behind the row (until the projector catches up), CRDT state
+// (`note_crdt` + `note_updates`) that disagrees with the file, orphan .tmp.
 //
 // Method: a control round without a kill (pure concurrency), then rounds
 // that fire N edit_note + M create_note concurrently and SIGKILL the app at a
@@ -19,16 +14,19 @@
 // dirty doc (typed, acked, inside the
 // 2 s store debounce) and another client typed and closed its tab. After the
 // restart every note touched in the round is compared: file on disk (parsed
-// in-container with the app's parseNote), notes row, latest revision, .crdt
-// bin; .tmp files are listed; `check-notes` (server/src/scripts) is run.
+// in-container with the app's parseNote), notes row, latest revision, the
+// note's CRDT state read from Postgres (the check keeps its old ".crdt bin"
+// name so the known-defects baseline still matches); .tmp files are listed;
+// `check-notes` (server/src/scripts) is run.
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
-import { CollabClient } from '../lib/collab.ts'
+import { CollabClient, collabDocName } from '../lib/collab.ts'
 import { stringField } from '../lib/mcp.ts'
 import { RestSession } from '../lib/rest.ts'
 import {
   appLogsSince,
   checkNotes,
   count,
+  dbNoteId,
   dbNotes,
   dumpVault,
   genBody,
@@ -191,7 +189,8 @@ const test: LabTest = {
     // Collab notes: one client stays connected, one types and leaves before each kill.
     const livePaths = ['cw/live-stays', 'cw/live-leaves']
     for (const p of livePaths) await editMcp.must('create_note', { vaultId: vault.id, path: p, body: `live note ${p}\n` })
-    const stays = new CollabClient(ctx.baseUrl, `${vault.id}/${livePaths[0]}`, sess)
+    const liveIds = await Promise.all(livePaths.map((p) => dbNoteId(ctx, vault.id, p)))
+    const stays = new CollabClient(ctx.baseUrl, collabDocName(vault.id, liveIds[0]!), sess)
     if (!(await stays.connect())) throw new Error(`collab client could not connect: ${stays.status} ${stays.authFailed}`)
 
     const baseline = analyse(await dumpVault(vault.id), await dbNotes(ctx, vault.id))
@@ -214,7 +213,7 @@ const test: LabTest = {
       const stayMarker = `@CW-STAY-r${round}@`
       stays.type(`\n${stayMarker}`)
       const stayAcked = await stays.waitAcked()
-      const leaver = new CollabClient(ctx.baseUrl, `${vault.id}/${livePaths[1]}`, sess)
+      const leaver = new CollabClient(ctx.baseUrl, collabDocName(vault.id, liveIds[1]!), sess)
       const leaverConnected = await leaver.connect()
       const leaveMarker = `@CW-LEAVE-r${round}@`
       leaver.type(`\n${leaveMarker}`)

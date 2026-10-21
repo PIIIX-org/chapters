@@ -98,13 +98,14 @@ async function ownerWithNote(name: string) {
       })
     ).json() as { id: string }
   ).id
-  await app.inject({
+  const created = await app.inject({
     method: 'POST',
     url: `/api/vaults/${vaultId}/notes`,
     headers: { cookie },
     body: { type: 'docs', name, body: `Start of ${name}.` },
   })
-  return { user, cookie, vaultId, path: `docs/${name}`, docName: `${vaultId}/docs/${name}`, start: `Start of ${name}.` }
+  const docName = `${vaultId}/~${(created.json() as { id: string }).id}`
+  return { user, cookie, vaultId, path: `docs/${name}`, docName, start: `Start of ${name}.` }
 }
 
 async function storedBody(vaultId: string, path: string): Promise<string> {
