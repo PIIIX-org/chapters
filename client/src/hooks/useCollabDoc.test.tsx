@@ -734,6 +734,35 @@ describe('useCollabDoc', () => {
     expect(view.result.current.writable).toBe(true)
   })
 
+  it('a reconnect ticket that fails with a 5xx is retried on a new provider, and the refusal that follows is not a revocation (S3)', async () => {
+    vi.useFakeTimers()
+    try {
+      const view = mount()
+      await vi.waitFor(() => expect(stub.providers).toHaveLength(1))
+      const provider = stub.providers[0]!
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      await provider.options.token()
+      act(() => view.result.current.ydoc.getText('body').insert(0, 'typed while the server was away'))
+      act(() => provider.options.onStatus({ status: 'disconnected' }))
+      ticket.mockRejectedValueOnce(new ApiError(503, { error: 'database unreachable' }))
+      await act(async () => {
+        await expect(provider.options.token()).rejects.toBeInstanceOf(ApiError)
+      })
+      // What the provider reports after a token failure.
+      act(() => provider.options.onAuthenticationFailed({ reason: 'permission-denied' }))
+      expect(view.result.current.status).toBe('reconnecting')
+      expect(provider.destroyed).toBe(true)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(stub.providers).toHaveLength(2)
+      expect(stub.providers[1]!.options.document).toBe(view.result.current.ydoc)
+      expect(view.result.current.status).not.toBe('revoked')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('resets the document when logging in after being disabled (logout then login)', async () => {
     const view = renderHook(
       ({ enabled }: { enabled: boolean }) =>

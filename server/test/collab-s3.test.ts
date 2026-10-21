@@ -167,7 +167,8 @@ describe('an acknowledged collab edit is in Postgres at the ack (#487)', () => {
     const marker = '@S3-KILL-BEFORE-ACK@'
     crashOnceAt('collab.after-log-before-ack')
     text.insert(text.length, `\n${marker}`)
-    // The connection closes unacked, reconnects and resends; the second append finds it already logged.
+    // The connection closes unacked, reconnects and resends. The live document never took the first copy, so the resend
+    // is logged as a second row with the same items; applying it twice is harmless and the text lands once.
     await waitFor(() => !provider.hasUnsyncedChanges, 15_000)
     expect(count(await storedText(note.id), marker)).toBe(1)
     expect(count(text.toString(), marker)).toBe(1)

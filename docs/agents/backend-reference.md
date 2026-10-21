@@ -963,12 +963,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   passes the size cap, is skipped when the live document already holds it
   (`Y.snapshotContainsUpdate`, a reconnect repeating known items), and
   otherwise `Y.diffUpdate` against the live document is inserted into
-  `note_updates` (actor `collab`, `actor_detail.kind = 'collab'`) in one
-  short store transaction (lock timeout, the instance check, the note
-  re-checked live). The append takes neither the note's queue lock nor its
-  advisory lock, so a fold or a write holding them never delays an ack. It
-  holds the note's in-process append gate (`appendGate` in `note-crdt.ts`)
-  from its id to its COMMIT, and every materialisation of the note's CRDT
+  `note_updates` (actor `collab`, `actor_detail.kind = 'collab'`).
+  Appends of one note are group-committed: those that arrive while a
+  commit runs go together, each batch as a single autocommit statement
+  (the instance check, the note re-checked live, the id before the batch,
+  one multi-row INSERT; `commitAppends`). The append takes neither the
+  note's queue lock nor its advisory lock, so a fold or a write holding
+  them never delays an ack. It holds the note's in-process append gate
+  (`appendGate` in `note-crdt.ts`) from its ids to its COMMIT, and every materialisation of the note's CRDT
   state holds that gate around its tail read only. The tail read is
   therefore a clean boundary (`lastId`): every lower id is committed and
   seen, every later append gets a higher id. Folds mark `folded_through`
@@ -992,11 +994,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   therefore loses nothing: boot folds the logged update. Lab failpoints
   `collab.after-log-before-ack` and `collab.after-ack-before-fold` mark
   the two crash boundaries. A fold that stores the row (boot, load,
-  unload) wakes the projector, so the file follows at once. A load that
-  finds the store busy refuses the connection with reason `store-busy`
-  (not a revocation): `useCollabDoc` shows "reconnecting", keeps the text
-  and connects again after 5 s on a new provider, which resends what is
-  unsynced. Backpressure: a socket with more than 16 MiB sent and not yet
+  unload) wakes the projector, so the file follows at once. A reconnect
+  that finds the store busy or unreachable (`storeUnavailable` in
+  `store-tx.ts`: a busy store, a connection refused, lost or timed out,
+  Postgres shutting down or not accepting connections) in `onAuthenticate`
+  or `onLoadDocument` is refused with reason `store-busy`, not a
+  revocation. `useCollabDoc` shows "reconnecting", keeps the text and
+  connects again after 5 s on a new provider, which resends what is
+  unsynced; a reconnect ticket that fails with anything but 401/403 is
+  retried the same way. Backpressure: a socket with more than 16 MiB sent and not yet
   handled, or a note with 256 appends waiting for its append gate, is
   closed with 1013 (retryable) instead of queueing without end.
 - **Size cap on the relay** (#491, `collab-size.ts`): ws refuses a frame

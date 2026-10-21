@@ -10,7 +10,7 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { appendCollabUpdate, compactCollabState, keepRefusedTyping, loadCollabState, updateNote, type LoggedUpdate } from '../notes/store.js'
-import { NoteNotMigratedError, StoreBusyError, collabNoteMigrated, noteMigrated, storeMigrationPending } from '../notes/store-tx.js'
+import { NoteNotMigratedError, StoreBusyError, collabNoteMigrated, noteMigrated, storeMigrationPending, storeUnavailable } from '../notes/store-tx.js'
 import { docState, forgetLivePath, livePath, parseDocName, registerLiveDocs, setLivePath, type LiveDocument } from './live-docs.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
@@ -192,6 +192,53 @@ function toBytes(data: RawData): Uint8Array {
   return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
 }
 
+/**
+ * Identity only (`onAuthenticate`). A browser presents a single-use ticket;
+ * server-side callers and the tests present a raw session token. Either way
+ * the connection belongs to that session and ends with it (#498).
+ */
+async function authenticate({ token, documentName }: { token: string; documentName: string }): Promise<ConnectionContext> {
+  const name = parseDocName(documentName)
+  // A bundle from before S2b names documents by path: refused before anything else, nothing it sends is stored.
+  if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
+  const ticket = token ? consumeTicket(token) : null
+  let sessionHash: string | null = null
+  let userId: string | null = null
+  if (ticket) {
+    if (await sessionActive(ticket.sessionHash)) {
+      userId = ticket.userId
+      sessionHash = ticket.sessionHash
+    }
+  } else if (token) {
+    userId = (await getSessionUser(token))?.id ?? null
+    sessionHash = hashToken(token)
+  }
+  if (!userId || !sessionHash) throw new Error('authentication required')
+  const { vaultId, noteId } = name
+  const access = await resolveAccess(userId, vaultId)
+  if (!atLeast(access, 'edit')) {
+    await logSecurityEvent({
+      type: 'permission_denied',
+      actorUserId: userId,
+      detail: { surface: 'collab', documentName },
+    })
+    throw new Error('edit access required')
+  }
+  // The note by id, in that vault, live: a trashed or purged note takes no editor.
+  const [note] = await db
+    .select({ id: notes.id, deletedAt: notes.deletedAt })
+    .from(notes)
+    .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId)))
+  if (!note || note.deletedAt) throw new NoteDeletedRefusal(documentName)
+  // A note the store migration has not processed yet takes no writes, so no
+  // editor either: nothing may be typed that could not be stored. The
+  // refusal carries its own reason, which the editor shows as such.
+  if (storeMigrationPending() && !(await noteMigrated(db, note.id))) throw new NoteNotMigratedRefusal()
+  // The same for a note whose S2b backfill failed at this boot: its bin is attached at the next restart.
+  if (!collabNoteMigrated(note.id)) throw new NoteNotMigratedRefusal()
+  return { userId, sessionHash } satisfies ConnectionContext
+}
+
 /** The running relay instance, if any — MCP writes route through it. */
 export function getCollab(): Hocuspocus | null {
   return currentInstance
@@ -216,46 +263,14 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * *do* — that is the live `edit` check below, and `beforeHandleMessage`
      * on every message after it.
      */
-    async onAuthenticate({ token, documentName }) {
-      const name = parseDocName(documentName)
-      // A bundle from before S2b names documents by path: refused before anything else, nothing it sends is stored.
-      if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
-      const ticket = token ? consumeTicket(token) : null
-      let sessionHash: string | null = null
-      let userId: string | null = null
-      if (ticket) {
-        if (await sessionActive(ticket.sessionHash)) {
-          userId = ticket.userId
-          sessionHash = ticket.sessionHash
-        }
-      } else if (token) {
-        userId = (await getSessionUser(token))?.id ?? null
-        sessionHash = hashToken(token)
+    async onAuthenticate(payload) {
+      try {
+        return await authenticate(payload)
+      } catch (err) {
+        // The store unreachable while a tab reconnects is a pause, not a revocation (S3): the editor retries.
+        if (storeUnavailable(err)) throw new StoreBusyRefusal(err instanceof Error ? err.message : String(err))
+        throw err
       }
-      if (!userId || !sessionHash) throw new Error('authentication required')
-      const { vaultId, noteId } = name
-      const access = await resolveAccess(userId, vaultId)
-      if (!atLeast(access, 'edit')) {
-        await logSecurityEvent({
-          type: 'permission_denied',
-          actorUserId: userId,
-          detail: { surface: 'collab', documentName },
-        })
-        throw new Error('edit access required')
-      }
-      // The note by id, in that vault, live: a trashed or purged note takes no editor.
-      const [note] = await db
-        .select({ id: notes.id, deletedAt: notes.deletedAt })
-        .from(notes)
-        .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId)))
-      if (!note || note.deletedAt) throw new NoteDeletedRefusal(documentName)
-      // A note the store migration has not processed yet takes no writes, so no
-      // editor either: nothing may be typed that could not be stored. The
-      // refusal carries its own reason, which the editor shows as such.
-      if (storeMigrationPending() && !(await noteMigrated(db, note.id))) throw new NoteNotMigratedRefusal()
-      // The same for a note whose S2b backfill failed at this boot: its bin is attached at the next restart.
-      if (!collabNoteMigrated(note.id)) throw new NoteNotMigratedRefusal()
-      return { userId, sessionHash } satisfies ConnectionContext
     },
 
     /**
@@ -273,7 +288,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       try {
         loaded = await loadCollabState(name.vaultId, name.noteId)
       } catch (err) {
-        if (err instanceof StoreBusyError) throw new StoreBusyRefusal(err.message)
+        if (storeUnavailable(err)) throw new StoreBusyRefusal(err instanceof Error ? err.message : String(err))
         throw err
       }
       const { state, path, lastId } = loaded

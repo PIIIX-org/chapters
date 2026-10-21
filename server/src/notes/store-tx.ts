@@ -48,6 +48,39 @@ export class StoreBusyError extends Error {
 }
 
 /** Drizzle wraps driver errors; the Postgres code may sit on `cause`. */
+/** Driver codes of a connection that could not be made or was lost (postgres-js and Node). */
+const CONNECTION_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EHOSTUNREACH',
+  'ENOTFOUND',
+  'CONNECT_TIMEOUT',
+  'CONNECTION_CLOSED',
+  'CONNECTION_ENDED',
+  'CONNECTION_DESTROYED',
+])
+
+/**
+ * Whether `err` means the store could not be reached right now: a busy store
+ * (StoreBusyError), a connection refused, lost or timed out, or Postgres
+ * shutting down or not accepting connections (SQLSTATE class 08, 57P01-57P03).
+ * Such a failure is retryable: nothing was stored, and the caller says "try
+ * again", never "access removed" (S3).
+ */
+export function storeUnavailable(err: unknown): boolean {
+  let current: unknown = err
+  while (current instanceof Error) {
+    if (current instanceof StoreBusyError) return true
+    const code = 'code' in current ? current.code : undefined
+    if (typeof code === 'string' && (CONNECTION_CODES.has(code) || code.startsWith('08') || /^57P0[123]$/.test(code))) return true
+    if (/connection terminated|connection ended|terminating connection|not currently accepting connections|the database system is (starting up|shutting down)/i.test(current.message)) return true
+    current = current.cause
+  }
+  return false
+}
+
 export function pgErrorCode(err: unknown): string | undefined {
   let current: unknown = err
   while (current instanceof Error) {
