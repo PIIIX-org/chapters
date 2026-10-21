@@ -17,7 +17,7 @@ import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { jobTiming } from '../src/jobs/durable.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
 
 // #705: server errors and failed background jobs are reported (the
 // monitoring endpoint the uptime monitor reads, and one structured log line
@@ -313,8 +313,9 @@ describe('error and job reports carry no note text (#705)', () => {
     expect(mcpRetried.totals.jobFailures).toBe(before.totals.jobFailures + 1)
     expect(mcpRetried.jobs.sync).toMatchObject({ failed: before.jobs.sync!.failed + 1, repeated: before.jobs.sync!.repeated + 5 })
 
-    // Out of `error` (a sync that worked) and failing again is a new failure.
-    await db.update(repositories).set({ syncStatus: 'idle' }).where(eq(repositories.id, git!.id))
+    // Out of `error` (a sync that worked clears the status and the error) and
+    // failing again is a new failure.
+    await db.update(repositories).set({ syncStatus: 'idle', lastSyncError: null }).where(eq(repositories.id, git!.id))
     await expect(syncGitRepository(git!.id)).rejects.toThrow()
     const again = (await snapshot()).body
     expect(again.totals.jobFailures).toBe(before.totals.jobFailures + 2)
@@ -325,7 +326,7 @@ describe('error and job reports carry no note text (#705)', () => {
     const before = (await snapshot()).body
     const provider = new HocuspocusProvider({
       url: `ws://127.0.0.1:${port}/collab`,
-      name: `${vaultId}/${notePath}`,
+      name: await noteDocName(vaultId, notePath),
       token: ownerToken,
       document: new Y.Doc(),
     })

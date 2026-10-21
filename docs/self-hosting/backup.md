@@ -23,10 +23,14 @@ mkdir -p ./backups/${BACKUP_DATE}
 # 2. Dump the PostgreSQL database
 docker compose exec -T db pg_dump -U ${POSTGRES_USER:-elara} ${POSTGRES_DB:-elara} > ./backups/${BACKUP_DATE}/chapters-db.sql
 
-# 3. Archive the files volume (raw markdown files & vaults)
+# 3. Only if you added roles of your own (e.g. a read-only reporting user): dump the roles too.
+#    The file holds each role's password hash; section 2 step 4 sets the app role's password back to the .env value after loading it.
+docker compose exec -T db pg_dumpall -U ${POSTGRES_USER:-elara} --globals-only > ./backups/${BACKUP_DATE}/globals.sql
+
+# 4. Archive the files volume (raw markdown files & vaults)
 docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/${BACKUP_DATE}:/backup alpine tar czf /backup/chapters-data.tar.gz -C /data .
 
-# 4. Save your encryption key and configuration (DO NOT commit to public repos)
+# 5. Save your encryption key and configuration (DO NOT commit to public repos)
 cp .env ./backups/${BACKUP_DATE}/env-backup
 ```
 
@@ -45,22 +49,36 @@ Add a nightly cron job on your host (`crontab -e`):
 To restore Chapters onto a fresh machine or server:
 
 ```bash
-# 1. Start the database service first
-docker compose up -d db
-docker compose exec db pg_isready
-
-# 2. Restore PostgreSQL database
-docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} < ./backups/<TIMESTAMP>/chapters-db.sql
-
-# 3. Restore the data volume (raw markdown notes)
-docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/<TIMESTAMP>:/backup alpine tar xzf /backup/chapters-data.tar.gz -C /data
-
-# 4. Restore your .env configuration (ensuring CREDENTIALS_ENCRYPTION_KEY matches)
+# 1. Restore your .env configuration first (ensuring CREDENTIALS_ENCRYPTION_KEY matches): the database takes
+#    POSTGRES_USER and POSTGRES_PASSWORD from it when its volume is created, and the app connects with the same values
 cp ./backups/<TIMESTAMP>/env-backup .env
 
-# 5. Start the full application
+# 2. Start the database service first, and wait until it accepts connections
+docker compose up -d --wait db
+docker compose exec db pg_isready
+
+# 3. Only if the backup has a globals.sql (section 1 step 3): load the roles. "role ... already exists" is expected
+docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d postgres < ./backups/<TIMESTAMP>/globals.sql
+
+# 4. Set the app role's password to the POSTGRES_PASSWORD in .env (run it even without a globals.sql)
+docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -v role="$POSTGRES_USER" -v pw="$POSTGRES_PASSWORD"' <<'SQL'
+ALTER ROLE :"role" PASSWORD :'pw';
+SQL
+
+# 5. Restore PostgreSQL database
+docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} < ./backups/<TIMESTAMP>/chapters-db.sql
+
+# 6. Restore the data volume (raw markdown notes)
+docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/<TIMESTAMP>:/backup alpine tar xzf /backup/chapters-data.tar.gz -C /data
+
+# 7. Check that the password in .env works over the network, as the app connects (prints 1)
+docker compose exec -T db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h db -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT 1"'
+
+# 8. Start the full application
 docker compose up -d
 ```
+
+Step 4 is why the app connects on its first boot. A `globals.sql` from `pg_dumpall --globals-only` sets every role's password to the one it had on the backed-up instance (`ALTER ROLE ... PASSWORD`), and a database volume keeps the password it was first created with (a later change to `POSTGRES_PASSWORD` in `.env` is ignored). Either way the role's password can differ from the `.env` the app reads, and the app exits on `password authentication failed` (SQLSTATE `28P01`) while the db reports healthy. Step 4 reads the user and password from the db container's environment, so the password is not typed on the host or kept in your shell history. Roles of your own from `globals.sql` keep the passwords they had. Step 7 connects over the network on purpose: inside the db container, connections to `localhost` are trusted and succeed with any password.
 
 ---
 
@@ -165,3 +183,4 @@ Database migrations only run forward. Going back to an older image keeps the new
 - **Migration 0021 (ADR-003 store schema)** is additive: it adds columns with lasting defaults, a trigger that only maintains `notes.seq`, new tables whose foreign keys cascade, and two marker columns. Older code runs on it with **no SQL**. Before the store migration itself ships, see [migration.md](migration.md) for the read-only dry run that reports what it will do to your notes.
 - **Migration 0023 (history events, #479)** is additive: three nullable columns on `note_revisions` (`source_revision_id`, `from_path`, `to_path`). Older code runs on it with **no SQL**. It stops recording restore and rename events and leaves the new columns empty; the events the newer code recorded stay in the history. It also brings back the older revert: it relabels the newest revision `revert` instead of adding one (code with #482 skips relabelling a `restore_point`). When that newest row is an event the newer code recorded (a `rename` or `restore`), the relabelled row keeps its `from_path`/`to_path` and has no `source_revision_id`. Code from before #482 also does not record a delete by the author of the latest revision when the note is unchanged.
 - **Migration 0024 (revision order, #825)** is additive: `note_revisions.ord`, numbered from a sequence (its default), so older code records revisions with **no SQL**. Older code lists history by the database clock again, so revisions recorded in the same instant, or after the clock stepped back, can show out of order; the newer code lists every revision in the order it was recorded. An instance backup made by the newer code carries `ord` on every revision, and older code refuses it (`column "ord" is unknown to this version`): restore it with the newer release. A backup made before 0024 restores on the newer release with its revisions numbered in time order.
+- **ADR-003 S2b (collab state in Postgres).** Before upgrading to the release that ships S2b, **reload every open editor tab, or make sure nobody types during the upgrade.** From S2b the editor names a note's live document by the note id, and the server refuses a tab still running the older page (it shows "Reload to keep editing"; the older page shows its own disconnected state). A tab from a release that keeps unsent typing in the browser (#720) gets that typing back once after the reload; a tab from an older release keeps it on screen only, so copy it out before closing the tab. The first boot of S2b moves each note's `.crdt/<path>.bin` into the database (a bin whose text matches nothing the note ever held goes to `vaults/<id>/.migration/<date>/bins/`), writes `DATA_DIR/collab-migration-report-<time>.json`, and renames each vault's `.crdt/` to `.crdt.pre-adr-003/`; keep that directory until the next release. If that boot cannot move a note's bin, the note stays closed to editors ("waiting for the store migration") until you fix the cause in the report and restart. A code-only rollback over S2b needs `store-export-legacy` to write each note's current `.crdt` bin from the database first; until a release adds that to the export, roll back over S2b only by restoring the pre-upgrade backup. If older code did run and wrote `.crdt/` bins again, the next S2b boot merges a bin into the database only when it continues the note's own editing history; any other bin (for example one the older code started afresh from the file) goes to `vaults/<id>/.migration/<date>/bins/` instead, and what the older code wrote to the note reaches the database through the boot's merge of changed notes. `.crdt/` then moves to `.crdt.rollback-<time>/`.
