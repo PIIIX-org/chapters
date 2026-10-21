@@ -737,7 +737,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   the background and `flushEmbeddings()` awaits that insert and the
   drain. The job embeds the note as it is when it runs. A boot-time scan
   (`scheduleMissingEmbeddings`) adds a job (idempotently) for any live
-  note with a null embedding. `pnpm reindex` re-runs finished jobs
+  note with a null embedding, and re-runs its job if that failed with an
+  error (not a `LeaseExpired` crash loop). `pnpm reindex` re-runs finished jobs
   (`enqueueEmbeddings(ids, 'finished')`). A failure is logged and
   retried with backoff, never stops the drain.
 - **`semantic-edges.ts`**: `recomputeSemanticEdges()` — kNN against
@@ -1227,7 +1228,9 @@ re-sync (unchanged files are never re-extracted).
 repositoryId}`, key `extract:<fileId>:<contentHash>`; `syncRepositoryFiles`
 enqueues the changed files in one statement after the batch is persisted.
 Enqueueing a key whose job already succeeded runs it again (content went
-back to an earlier version); a pending or failed job is left alone. One
+back to an earlier version) under a new id, so it queues behind the
+repository's pending files; a pending or failed job is left alone, and a
+file id listed twice in a batch is enqueued once. One
 serial worker, fair across repositories (#497): each turn claims at most
 10 jobs (`EXTRACTION_TURN_FILES`) of one repository in enqueue order, then
 the repository with claimable jobs that was served least recently goes
@@ -1254,24 +1257,37 @@ texts (the 700 KB lab bundle with 900 declarations: 33 batches instead of
 (`scheduleMissingExtractions`) adds a job, idempotently, for every file
 with a null embedding that has none for its current content (rows from
 before the jobs table; a re-sync only enqueues files whose content
-changed, #404), and wakes the worker. `repository_status` reports
-`filesPendingExtraction` (null embedding: queued, running or failed) and
-`extractionFailures: {total, files: [{path, attempts, lastError}]}` (the
-first 5 by path whose job for the current content gave up).
+changed, #404), re-runs such a file's job if it failed with an error (an
+outage that outlasted the retries; a restart repaired that before #494
+too), and wakes the worker. A job failed as `LeaseExpired` is not re-run
+at boot, so a file whose extraction kills the process cannot crash every
+boot. `repository_status` reports `filesPendingExtraction` (files whose
+extraction for the current content is still to come: a pending job, or
+no job and no embedding; 0 means extraction is finished) and
+`extractionFailures: {total, files: [{path, attempts, lastError}]}` (all
+files whose job for the current content gave up, counted in `total`, the
+first 5 by path listed).
 
 **Durable jobs** (`jobs/durable.ts`, ADR-003 S5, #494; table `jobs` from
 migration 0021). A job is claimable when `done_at` is null and
 `lease_until` is null or past. `claimJob` is one statement (`UPDATE … WHERE
 id = (SELECT … ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)`) that sets
-`lease_until = now() + 60 s` and `attempts + 1`; `completeJob` sets
-`done_at` and clears `last_error`; `failJob` stores `last_error` (error
-name and message, URL credentials redacted, at most 500 characters) and,
-as the table has no `run_after`, pushes `lease_until` out by the backoff
-(5 s · 2^(attempt−1), at most 5 min). After `MAX_JOB_ATTEMPTS` = 3 claims
-the job gets `done_at` with `last_error` kept: that is "failed", and
-monitoring gets one report then (earlier failures count as `repeated`).
-`attempts` counts claims, so a job that kills the process each time also
-stops at 3. Crash recovery: a job a dead process held becomes claimable
+`lease_until = now() + 60 s` and `attempts + 1`, and only claims a job
+with `attempts < MAX_JOB_ATTEMPTS`; `completeJob` sets `done_at` and
+clears `last_error`; `failJob` stores `last_error` (error name and
+message, or those of its `Error` cause, so a Drizzle "Failed query: <SQL>"
+keeps the Postgres error; URL credentials redacted, at most 500
+characters) and, as the table has no `run_after`, pushes `lease_until`
+out by the backoff (1 min · 2^(attempt−1), at most 2 min: the three
+attempts span about 3 minutes, so a short embedder or database outage
+does not fail the backlog). After `MAX_JOB_ATTEMPTS` = 3 claims the job
+gets `done_at` with `last_error` kept: that is "failed", and monitoring
+gets one report then (earlier failures count as `repeated`). `attempts`
+counts claims, so a job whose runs kill the process stops at 3 too:
+before claiming, each drain runs `failCrashedJobs`, which marks failed
+every job of its kind with 3 claims and an expired lease (`last_error`
+`LeaseExpired: …`) and reports it once. A job running at a graceful
+shutdown also keeps its claim (leases are not released). Crash recovery: a job a dead process held becomes claimable
 when its lease runs out; every drainer is woken every 5 s
 (`startJobPolling`, started at boot) for such jobs and for backoffs.
 Boot deletes successful jobs finished more than 7 days ago
@@ -1609,6 +1625,7 @@ moment a second instance runs against the same database**:
 | Subsystem | File | Failure mode with 2+ instances |
 |---|---|---|
 | Login lockout | `auth/lockout.ts` | each instance has its own counter — the effective threshold multiplies by instance count |
+| Embedding and extraction jobs | `jobs/durable.ts`, `search/embedding-queue.ts`, `repositories/extraction-queue.ts` | jobs are shared through the `jobs` table (claims use `FOR UPDATE SKIP LOCKED`), but a job that runs past its 60 s lease can be claimed and run by another instance too (`completeJob`/`failJob` do not check the lease holder), and the per-repository fairness state (`lastTurn`) is per process |
 | Permission-change bus | `sync/permission-events.ts` | an instance that didn't receive the in-process event never kicks its own live connections — a revoked user could keep a session open on a *different* instance |
 | MCP rate limiter | `mcp/rate-limit.ts` | a client can get up to N× the intended limit by landing requests across N instances behind a load balancer |
 | Git polling scheduler | `repositories/scheduler.ts` | multiple instances independently poll/clone the same repos on their own schedules |

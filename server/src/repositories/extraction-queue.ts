@@ -1,4 +1,4 @@
-import { and, count, eq, isNull, sql } from 'drizzle-orm'
+import { and, eq, isNull, sql } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFileSymbols, repositoryFiles } from '../db/schema.js'
@@ -7,7 +7,16 @@ import { recomputeSemanticEdges } from '../search/semantic-edges.js'
 import { extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import { resolveImportPath } from './import-resolution.js'
 import { recordJob } from '../monitoring/metrics.js'
-import { MAX_JOB_ATTEMPTS, claimJob, completeJob, failJob, jobDrainer, onJobConflict } from '../jobs/durable.js'
+import {
+  MAX_JOB_ATTEMPTS,
+  claimJob,
+  completeJob,
+  failCrashedJobs,
+  failJob,
+  jobDrainer,
+  onJobConflict,
+  type JobRerun,
+} from '../jobs/durable.js'
 
 /**
  * Extraction runs from durable `jobs` rows (#494, ADR-003 S5; see
@@ -65,17 +74,16 @@ async function getRepoSiblings(repositoryId: string) {
   return cached
 }
 
-/** Inserts extraction jobs for these files at their current content, in this order. */
-export async function enqueueExtractions(
-  fileIds: string[],
-  rerun: 'never' | 'succeeded' = 'succeeded',
-): Promise<void> {
+/** Inserts extraction jobs for these files at their current content, in this order (a repeated id counts once). */
+export async function enqueueExtractions(fileIds: string[], rerun: JobRerun = 'succeeded'): Promise<void> {
   if (fileIds.length === 0) return
+  // A push may list one path twice; ON CONFLICT DO UPDATE refuses a key twice in one statement.
+  const ids = [...new Set(fileIds)]
   await db.execute(sql`
     INSERT INTO jobs (kind, payload, idempotency_key)
     SELECT ${EXTRACTION_JOB}, jsonb_build_object('fileId', f.id::text, 'repositoryId', f.repository_id::text),
       ${EXTRACTION_JOB} || ':' || f.id || ':' || f.content_hash
-    FROM unnest(${`{${fileIds.join(',')}}`}::uuid[]) WITH ORDINALITY AS u(id, ord)
+    FROM unnest(${`{${ids.join(',')}}`}::uuid[]) WITH ORDINALITY AS u(id, ord)
     JOIN repository_files f ON f.id = u.id
     ORDER BY u.ord
     ${onJobConflict(rerun)}`)
@@ -145,8 +153,11 @@ export async function backfillUnresolvedImports(): Promise<number> {
 /**
  * Boot catch-up: enqueue every file with a null embedding (its extraction
  * never completed) and wake the worker, which also reclaims jobs whose lease
- * a dead process left. Idempotent: a file with a pending or failed job for its
- * current content gets no second one. Returns the files found.
+ * a dead process left. Idempotent: a pending job is left as it is. A job that
+ * failed with an error runs again (the outage that failed it may be over, as
+ * a restart repaired it before #494); one whose runs ended with the process
+ * (`LeaseExpired`) does not, so a crash loop is not restarted at every boot.
+ * Returns the files found.
  */
 export async function scheduleMissingExtractions(): Promise<number> {
   const missing = await db
@@ -156,18 +167,25 @@ export async function scheduleMissingExtractions(): Promise<number> {
     .orderBy(repositoryFiles.repositoryId, repositoryFiles.path)
   await enqueueExtractions(
     missing.map((r) => r.id),
-    'never',
+    'errored',
   )
   extraction.kick()
   return missing.length
 }
 
-/** Files of a repository whose extraction has not completed (queued, running or failed). */
+/**
+ * Files of a repository whose extraction for their current content is still
+ * to come: a pending (queued or running) job, or no job and no embedding
+ * (written before the jobs table; the boot scan adds its job). Failed files
+ * are not counted: `extractionFailures` lists them. 0 = extraction finished.
+ */
 export async function countPendingExtractions(repositoryId: string): Promise<number> {
-  const [row] = await db
-    .select({ pending: count() })
-    .from(repositoryFiles)
-    .where(and(eq(repositoryFiles.repositoryId, repositoryId), isNull(repositoryFiles.embedding)))
+  const [row] = (await db.execute(sql`
+    SELECT count(*)::int AS pending
+    FROM repository_files f
+    LEFT JOIN jobs j ON j.idempotency_key = ${EXTRACTION_JOB} || ':' || f.id || ':' || f.content_hash
+    WHERE f.repository_id = ${repositoryId}
+      AND (j.id IS NOT NULL AND j.done_at IS NULL OR j.id IS NULL AND f.embedding IS NULL)`)) as unknown as [{ pending: number }]
   return row?.pending ?? 0
 }
 
@@ -198,6 +216,7 @@ async function nextRepository(): Promise<string | null> {
     SELECT payload->>'repositoryId' AS "repositoryId", min(id) AS first
     FROM jobs
     WHERE kind = ${EXTRACTION_JOB} AND done_at IS NULL AND (lease_until IS NULL OR lease_until < now())
+      AND attempts < ${MAX_JOB_ATTEMPTS}
     GROUP BY 1`)) as unknown as Array<{ repositoryId: string; first: string | number }>
   let best: { repositoryId: string; turn: number; first: number } | null = null
   for (const row of rows) {
@@ -209,6 +228,7 @@ async function nextRepository(): Promise<string | null> {
 
 async function drainOnce(): Promise<void> {
   try {
+    await failCrashedJobs(EXTRACTION_JOB, 'extraction', 'fileId')
     for (;;) {
       const repositoryId = await nextRepository()
       if (!repositoryId) return

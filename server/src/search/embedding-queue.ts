@@ -4,7 +4,16 @@ import { notes } from '../db/schema.js'
 import { embedder } from './embeddings.js'
 import { recomputeSemanticEdges } from './semantic-edges.js'
 import { recordJob } from '../monitoring/metrics.js'
-import { MAX_JOB_ATTEMPTS, claimJob, completeJob, failJob, jobDrainer, onJobConflict } from '../jobs/durable.js'
+import {
+  MAX_JOB_ATTEMPTS,
+  claimJob,
+  completeJob,
+  failCrashedJobs,
+  failJob,
+  jobDrainer,
+  onJobConflict,
+  type JobRerun,
+} from '../jobs/durable.js'
 
 /**
  * Note embeddings run from durable `jobs` rows (#494; see jobs/durable.ts):
@@ -15,14 +24,18 @@ import { MAX_JOB_ATTEMPTS, claimJob, completeJob, failJob, jobDrainer, onJobConf
  */
 export const EMBEDDING_JOB = 'embed_note'
 
-/** Inserts embedding jobs for these live notes at their current `seq`. `rerun: 'finished'` re-embeds (`pnpm reindex`). */
-export async function enqueueEmbeddings(noteIds: string[], rerun: 'never' | 'finished' = 'never'): Promise<void> {
+/**
+ * Inserts embedding jobs for these live notes at their current `seq` (a
+ * repeated id counts once). `rerun: 'finished'` re-embeds (`pnpm reindex`).
+ */
+export async function enqueueEmbeddings(noteIds: string[], rerun: JobRerun = 'never'): Promise<void> {
   if (noteIds.length === 0) return
+  const ids = [...new Set(noteIds)]
   await db.execute(sql`
     INSERT INTO jobs (kind, payload, idempotency_key)
     SELECT ${EMBEDDING_JOB}, jsonb_build_object('noteId', n.id::text, 'seq', n.seq),
       ${EMBEDDING_JOB} || ':' || n.id || ':' || n.seq
-    FROM unnest(${`{${noteIds.join(',')}}`}::uuid[]) WITH ORDINALITY AS u(id, ord)
+    FROM unnest(${`{${ids.join(',')}}`}::uuid[]) WITH ORDINALITY AS u(id, ord)
     JOIN notes n ON n.id = u.id
     WHERE n.deleted_at IS NULL
     ORDER BY u.ord
@@ -40,19 +53,27 @@ export async function flushEmbeddings(): Promise<void> {
   await embedding.flush()
 }
 
-/** Boot catch-up: enqueue live notes that never got an embedding, and wake the worker. */
+/**
+ * Boot catch-up: enqueue live notes without an embedding, and wake the
+ * worker. A job that failed with an error runs again; one whose runs ended
+ * with the process (`LeaseExpired`) does not (see scheduleMissingExtractions).
+ */
 export async function scheduleMissingEmbeddings(limit?: number): Promise<number> {
   const query = db
     .select({ id: notes.id })
     .from(notes)
     .where(and(isNull(notes.deletedAt), sql`${notes.embedding} is null`))
   const missing = limit ? await query.limit(limit) : await query
-  await enqueueEmbeddings(missing.map((r) => r.id))
+  await enqueueEmbeddings(
+    missing.map((r) => r.id),
+    'errored',
+  )
   embedding.kick()
   return missing.length
 }
 
 async function drainOnce(): Promise<void> {
+  await failCrashedJobs(EMBEDDING_JOB, 'embedding', 'noteId')
   for (;;) {
     const job = await claimJob<{ noteId: string }>(EMBEDDING_JOB)
     if (!job) return

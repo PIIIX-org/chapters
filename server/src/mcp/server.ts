@@ -1438,7 +1438,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'repository',
       capability: 'read',
       description:
-        'Sync freshness for a repository (last synced time, sync state, files whose symbol/embedding extraction has not completed, and files whose extraction gave up after its retries with the error) — check before trusting results if freshness matters.',
+        'Sync freshness for a repository (last synced time, sync state, files whose symbol/embedding extraction is still queued or running, and files whose extraction gave up after its retries with the error) — check before trusting results if freshness matters.',
       inputSchema: { repositoryId: z.string().uuid().optional() },
     },
     async (_args, { repositoryId: target }) => {

@@ -344,7 +344,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Scope**: repository. Repository access.
 - **Capability**: `read`.
 - **Parameters**: `repositoryId` (uuid, optional).
-- **Returns**: `{ syncStatus, lastSyncedAt, lastSyncError, filesPendingExtraction, extractionFailures }`. `syncStatus` is `idle`, `syncing`, or `error`. `filesPendingExtraction` counts files with no embedding yet (queued, running, or failed; extraction jobs survive a restart), so `idle` with a count above `extractionFailures.total` means symbols are still arriving. `extractionFailures` is `{ total, files: [{ path, attempts, lastError }] }`: files whose extraction gave up after 3 attempts (the first 5 by path); they are retried only when their content changes. The indexed commit is not reported.
+- **Returns**: `{ syncStatus, lastSyncedAt, lastSyncError, filesPendingExtraction, extractionFailures }`. `syncStatus` is `idle`, `syncing`, or `error`. `filesPendingExtraction` counts files whose extraction for their current content is still queued or running (extraction jobs survive a restart), so `idle` with a non-zero count means symbols are still arriving, and 0 means extraction is finished. `extractionFailures` is `{ total, files: [{ path, attempts, lastError }] }`: files whose extraction gave up after 3 attempts over about 3 minutes (`total` counts all of them, the first 5 by path are listed); they are not in `filesPendingExtraction`, and are retried when their content changes or the server restarts. The indexed commit is not reported.
 
 ### `sync_repository`
 - **Scope**: repository. Repository access.
