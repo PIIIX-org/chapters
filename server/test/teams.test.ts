@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { randomUUID } from 'node:crypto'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { notifications } from '../src/db/schema.js'
+import { noteRevisions, notifications } from '../src/db/schema.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -149,6 +149,29 @@ describe('GET /api/teams/:id/stats', () => {
     })
   }
 
+  /**
+   * `actorId`'s revisions of a note as the stats read them (#852): the time
+   * stored on each (`created_at`, the DB clock at the insert) and the order
+   * they were recorded in (`ord`, #825).
+   */
+  async function revisionsOf(noteId: string, actorId: string) {
+    const rows = await db
+      .select({ createdAt: noteRevisions.createdAt, ord: noteRevisions.ord })
+      .from(noteRevisions)
+      .where(and(eq(noteRevisions.noteId, noteId), eq(noteRevisions.actorId, actorId)))
+    return rows.map((r) => ({ createdAt: r.createdAt, ord: r.ord }))
+  }
+
+  /**
+   * The latest `created_at` among `revisions`, as the stats' max() returns
+   * it. Read from the rows, not from notes.updated_at (the transaction's
+   * start on create, the app's clock on update): the Docker test Postgres
+   * clock steps back by seconds, so no window around another clock holds.
+   */
+  function latestTime(revisions: Array<{ createdAt: Date }>): string {
+    return new Date(Math.max(...revisions.map((r) => r.createdAt.getTime()))).toISOString()
+  }
+
   it('counts distinct notes and vaults, using the latest edit as lastActivityAt', async () => {
     const { member, ownerCookie, memberCookie, team } = await createTeamWithMember()
     const vaultA = await createVault(ownerCookie, 'Vault A')
@@ -161,7 +184,6 @@ describe('GET /api/teams/:id/stats', () => {
     // not 2 (that would mean revisions were counted instead of distinct notes).
     const editRes = await updateNoteBody(memberCookie, vaultA.id, noteA.path, 'edited body')
     expect(editRes.statusCode).toBe(200)
-    const editedNoteA = editRes.json()
     const noteB = await writeNote(memberCookie, vaultB.id, 'note-b')
 
     const res = await app.inject({
@@ -173,15 +195,14 @@ describe('GET /api/teams/:id/stats', () => {
     const row = res.json().find((r: { userId: string }) => r.userId === member.id)
     expect(row.notesTouched).toBe(2)
     expect(row.vaultsTouched).toBe(2)
-    // Must reflect the LATEST revision (vault B's write), not the earlier
-    // create-then-edit on vault A's note. Compare only against DB-issued
-    // timestamps (never the test process's own clock) to avoid clock skew
-    // against the dockerized Postgres instance.
     expect(row.lastActivityAt).not.toBeNull()
-    const lastMs = new Date(row.lastActivityAt).getTime()
-    expect(lastMs).toBeGreaterThanOrEqual(new Date(editedNoteA.updatedAt).getTime())
-    expect(lastMs).toBeGreaterThanOrEqual(new Date(noteB.updatedAt).getTime() - 1000)
-    expect(lastMs).toBeLessThanOrEqual(new Date(noteB.updatedAt).getTime() + 1000)
+    // Must reflect the member's latest revision across both vaults (vault
+    // B's write, unless the DB clock stepped back), not only vault A's.
+    const aRevisions = await revisionsOf(noteA.id, member.id)
+    const bRevisions = await revisionsOf(noteB.id, member.id)
+    expect(aRevisions).toHaveLength(2)
+    for (const a of aRevisions) expect(a.ord).toBeLessThan(bRevisions[0]!.ord)
+    expect(new Date(row.lastActivityAt).toISOString()).toBe(latestTime([...aRevisions, ...bRevisions]))
   })
 
   it('excludes activity in vaults the caller cannot access (privacy)', async () => {
@@ -190,7 +211,7 @@ describe('GET /api/teams/:id/stats', () => {
     const vaultB = await createVault(ownerCookie, 'Vault B')
     await shareVault(ownerCookie, vaultA.id, member.id)
     await shareVault(ownerCookie, vaultB.id, member.id)
-    await writeNote(memberCookie, vaultA.id, 'note-a')
+    const noteA = await writeNote(memberCookie, vaultA.id, 'note-a')
     const noteB = await writeNote(memberCookie, vaultB.id, 'note-b')
 
     // A third vault owned by the member, shared with nobody. Its edit is the
@@ -208,15 +229,13 @@ describe('GET /api/teams/:id/stats', () => {
     expect(row.notesTouched).toBe(2)
     expect(row.vaultsTouched).toBe(2)
     expect(row.lastActivityAt).not.toBeNull()
-    // Compare only against DB-issued timestamps (avoids clock skew against
-    // the dockerized Postgres instance). The invisible (private-vault) edit
-    // is strictly the most recent write overall; if it leaked in,
-    // lastActivityAt would equal or exceed privateNote's timestamp instead
-    // of staying pinned to the last visible write (noteB).
-    const lastMs = new Date(row.lastActivityAt).getTime()
-    expect(lastMs).toBeLessThan(new Date(privateNote.updatedAt).getTime())
-    expect(lastMs).toBeGreaterThanOrEqual(new Date(noteB.updatedAt).getTime() - 1000)
-    expect(lastMs).toBeLessThanOrEqual(new Date(noteB.updatedAt).getTime() + 1000)
+    // The invisible (private-vault) write is the latest of all; if it leaked
+    // in, lastActivityAt would be its revision's time instead of the latest
+    // visible one.
+    const visible = [...(await revisionsOf(noteA.id, member.id)), ...(await revisionsOf(noteB.id, member.id))]
+    const [privateRevision] = await revisionsOf(privateNote.id, member.id)
+    for (const v of visible) expect(privateRevision!.ord).toBeGreaterThan(v.ord)
+    expect(new Date(row.lastActivityAt).toISOString()).toBe(latestTime(visible))
   })
 
   it('includes members with zero activity as 0 / 0 / null', async () => {

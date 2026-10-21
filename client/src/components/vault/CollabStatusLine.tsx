@@ -41,6 +41,7 @@ const WHISPER: Record<
   'not-migrated': { tone: 'error', label: 'Waiting for migration', detail: 'an admin needs to restart the server' },
   'reload-required': { tone: 'error', label: 'Reload to keep editing', detail: 'the server was updated' },
   deleted: { tone: 'error', label: 'Deleted', detail: 'this note is in the trash' },
+  paused: { tone: 'error', label: 'Saving paused', detail: 'your edits are staying in this tab' },
 }
 
 /**
