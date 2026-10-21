@@ -17,8 +17,7 @@ import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
 import { noteRevisions } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
-import { createNote, getLiveNote, type Actor } from '../src/notes/store.js'
-import { requestedEdit, writeThroughCollab } from '../src/sync/crdt-write.js'
+import { getLiveNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
@@ -35,7 +34,6 @@ let collab: CollabRelay
 let baseUrl: string
 let ownerCookie: string
 let ownerToken: string
-let ownerId: string
 let vaultId: string
 const agents: Agent[] = []
 const providers: HocuspocusProvider[] = []
@@ -108,7 +106,6 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
   collab = startCollabServer(app.server)
   const owner = await createActiveUser()
-  ownerId = owner.id
   ownerCookie = await loginCookie(app, owner.email)
   ownerToken = await loginToken(app, owner.email)
   const vault = await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie: ownerCookie }, body: { name: 'Atomic append' } })
@@ -175,6 +172,10 @@ describe('append_note (#478)', () => {
     for (let i = 0; i < 10; i++) expect(occurrences(row.body, `first ${i}\n`), row.body).toBe(1)
     expect(row.frontmatter).toMatchObject({ type: 'docs', title: 'New log', tags: ['log'] })
     expect(await creates(row.id)).toHaveLength(1)
+    // Every call that did not create the note edited it, with a restore point of its session (#482).
+    const points = (await revisions(row.id)).filter((r) => r.action === 'restore_point')
+    const creator = results.findIndex(created)
+    expect(points.map((r) => r.actorId).sort()).toEqual(agents.slice(0, 10).filter((_, i) => i !== creator).map((a) => a.id).sort())
   }, 30_000)
 
   it('without createIfMissing a missing note is "not found" and nothing is created', async () => {
@@ -241,25 +242,6 @@ describe('upsert_note (#478)', () => {
       expect(await creates(row.id)).toHaveLength(1)
     }
   }, 30_000)
-
-  it('a create that a writer outside the lock wins (create_note) falls back to editing that note', async () => {
-    const path = 'docs/lost-create'
-    const agent: Actor = { type: 'mcp', id: agents[6]!.id }
-    const row = await writeThroughCollab(vaultId, path, requestedEdit({ body: 'upserted\n' }), agent, {
-      create: async () => {
-        // create_note takes only the store's lock, so it can land between the exists-check and this create.
-        await createNote(vaultId, { path, body: 'created elsewhere\n' }, { type: 'user', id: ownerId })
-        return createNote(vaultId, { path, body: 'upserted\n' }, agent)
-      },
-    })
-    expect(row?.body).toBe('upserted\n')
-    // The relay's own store of the document (actor `collab`) may add a row too; the attributed ones are these.
-    const revs = (await revisions(row!.id)).filter((r) => r.actorType !== 'collab')
-    expect(revs.map((r) => [r.action, r.actorType, r.body])).toEqual([
-      ['create', 'user', 'created elsewhere\n'],
-      ['update', 'mcp', 'upserted\n'],
-    ])
-  })
 
   it('replaces the body of an existing note, merges frontmatter per key, and keeps a restore point', async () => {
     const path = 'docs/upsert-existing'

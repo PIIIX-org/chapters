@@ -242,16 +242,43 @@ describe('restore point edge cases (#482)', () => {
     expect(await restorePoints(deletedId)).toMatchObject([{ actorId: betaId, body: 'to delete' }])
   })
 
+  it('a revert adds its own row and never relabels a restore point or an earlier edit (#479)', async () => {
+    const path = 'docs/restore-point-revert-row'
+    const noteId = await personNote(path, 'before the agent')
+    await must(alpha, 'edit_note', { vaultId, path, body: 'agent edit' })
+    const own = async () =>
+      (await db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.createdAt))).filter(
+        (r) => r.actorType !== 'collab',
+      )
+    const [, point, edit] = await own()
+    expect([point!.action, edit!.action]).toEqual(['restore_point', 'update'])
+
+    // To the agent's own newest state: nothing to write, still its own `revert` row.
+    await must(alpha, 'revert_note', { vaultId, path, revisionId: edit!.id })
+    // To the restore point: undoes the session, the restore point stays one.
+    await must(alpha, 'revert_note', { vaultId, path, revisionId: point!.id })
+    const rows = await own()
+    expect(rows.map((r) => [r.id, r.action, r.sourceRevisionId])).toEqual([
+      [rows[0]!.id, 'create', null],
+      [point!.id, 'restore_point', null],
+      [edit!.id, 'update', null],
+      [rows[3]!.id, 'revert', edit!.id],
+      [rows[4]!.id, 'revert', point!.id],
+    ])
+    expect(rows[4]!.body).toBe('before the agent')
+  })
+
   it('rename_note then delete_note from one connection records the delete', async () => {
     const path = 'docs/restore-point-rename-delete'
     const noteId = await personNote(path, 'renamed then deleted')
-    // The rename records no revision, so this connection's restore point is the newest one.
+    // The rename is a `rename` event (#479), after this connection's restore point.
     await must(alpha, 'rename_note', { vaultId, from: path, toName: 'restore-point-rename-deleted' })
     await must(alpha, 'delete_note', { vaultId, path: 'docs/restore-point-rename-deleted' })
     const rows = await db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.createdAt))
     expect(rows.map((r) => [r.action, r.actorType, r.actorId])).toEqual([
       ['create', 'user', ownerId],
       ['restore_point', 'mcp', alphaId],
+      ['rename', 'mcp', alphaId],
       ['delete', 'mcp', alphaId],
     ])
   })

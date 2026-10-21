@@ -31,6 +31,7 @@ import {
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 import {
   createNote,
+  createNoteIfMissing,
   getRevision,
   listNotes,
   listRevisionPage,
@@ -1108,12 +1109,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   )
 
   /**
-   * append_note and upsert_note (#478): `edit` applied under the note's write
-   * lock against the live text, or, when there is no live note and `create`
-   * is given, that note created under the same lock. Concurrent calls never
-   * read-then-write, so none of them loses another's change, and a missing
-   * note is created once. Restore point (#482), size cap, quarantine and
-   * presence (#481) as for edit_note.
+   * append_note and upsert_note (#478): when `create` is given and there is
+   * no live note, the note is created (once, however many calls race:
+   * createNoteIfMissing); otherwise `edit` is applied under the note's write
+   * lock against the live text, as edit_note does, restore point (#482)
+   * included, so a call that lost the create edits the note with one. No call
+   * read-then-writes, so none loses another's change. Size cap, quarantine
+   * and presence (#481) as for edit_note.
    */
   async function writeOrCreate(
     target: string,
@@ -1122,22 +1124,15 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     create: { frontmatter?: Record<string, unknown>; body: string } | undefined,
     allowGrowth: boolean | undefined,
   ) {
-    let created = false
-    const note = await withRestorePoint(target, path, auth.connection.id, () =>
-      writeThroughCollab(target, path, requestedEdit(edit), actor, {
-        quarantine: allowGrowth ? undefined : 'all',
-        create:
-          create &&
-          (async () => {
-            const row = await createNote(target, { path, ...create }, actor)
-            created = true
-            return row
-          }),
-      }),
-    )
+    const made = create ? await createNoteIfMissing(target, { path, ...create }, actor) : null
+    const note =
+      made ??
+      (await withRestorePoint(target, path, auth.connection.id, () =>
+        writeThroughCollab(target, path, requestedEdit(edit), actor, { quarantine: allowGrowth ? undefined : 'all' }),
+      ))
     if (!note) throw new McpToolError('note not found')
     showAgentPresence(target, note.path, presence, 'editing')
-    return { ...note, created }
+    return { ...note, created: made !== null }
   }
 
   tool(
@@ -1215,7 +1210,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     async ({ from, toName }: { from: string; toName: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
       const renamed = await withRestorePoint(target, from, auth.connection.id, () =>
-        renameNote(target, from, toName, writeThroughCollab),
+        renameNote(target, from, toName, actor, writeThroughCollab),
       )
       if (!renamed) throw new McpToolError('note not found')
       return renamed
@@ -1272,7 +1267,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async ({ noteId }: { noteId: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
-      const restored = await restoreNote(target, noteId)
+      const restored = await restoreNote(target, noteId, actor)
       if (!restored) throw new McpToolError('note not found or not trashed')
       return restored
     },
@@ -1306,7 +1301,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       pinPermission: 'edit',
       description:
-        'Change history for a note (actor-attributed), newest first, metadata only: id, action, actorType, actorId, actorName (the MCP connection name), createdAt, bodyBytes. One page of `limit` revisions (default 20, max 100); when `hasMore`, pass `nextCursor` as `cursor` for the next page. Read one revision\'s content with get_revision. A `restore_point` revision is the note as it was before a connection\'s first write in a session; revert_note to it undoes that session (and every later change by others). Requires edit access.',
+        'Change history for a note (actor-attributed), newest first, metadata only: id, action, actorType, actorId, actorName (the MCP connection name), createdAt, bodyBytes. Actions: create, update, delete, restore, rename (with fromPath, toPath), revert (with sourceRevisionId, the revision it brought back), quarantine, restore_point. One page of `limit` revisions (default 20, max 100); when `hasMore`, pass `nextCursor` as `cursor` for the next page. Read one revision\'s content with get_revision. A `restore_point` revision is the note as it was before a connection\'s first write in a session; revert_note to it undoes that session (and every later change by others). Requires edit access.',
       inputSchema: {
         vaultId: z.string().uuid().optional(),
         path: z.string(),

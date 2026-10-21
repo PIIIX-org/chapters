@@ -4,7 +4,7 @@ import { YAMLParseError } from 'yaml'
 import { getCollab } from './collab-server.js'
 import { applyBodyOps, applyFrontmatterOps, isFrontmatterOp, NoteEditError, type EditOp } from './edit-ops.js'
 import { applyTextDiff } from './text-diff.js'
-import { getLiveNote, NoteExistsError, readNote, refuseSuspiciousWrite, resolveNotePath, updateNote, type Actor, type BodyEdit, type NoteRow } from '../notes/store.js'
+import { getLiveNote, readNote, refuseSuspiciousWrite, resolveNotePath, updateNote, type Actor, type BodyEdit, type NoteRow } from '../notes/store.js'
 import type { QuarantineRules } from '../notes/growth-guard.js'
 import { assertBodyFits } from '../notes/size-cap.js'
 import { OkfValidationError, validateNote, type Frontmatter } from '../notes/okf.js'
@@ -145,32 +145,19 @@ async function noteFileDamaged(vaultId: string, path: string): Promise<boolean> 
  * checks, an op that does not resolve, validation) still disconnects, and
  * that store of the live document, which a person may have doubled, gets the
  * relay's check. A frontmatter-only edit leaves the body to the relay's check.
- *
- * `options.create` (append_note, upsert_note, #478) runs instead of the edit
- * when there is no live note, under the same lock, so concurrent writes of a
- * missing note create it once and edit what that created. A writer that does
- * not take this lock (create_note, restore_note) can still create it first:
- * the unique index refuses `create` (NoteExistsError), and the edit applies
- * to that note instead.
+ * `options.revertOf` (revertNote) records the attributed store write as a
+ * `revert` event naming that revision (#479).
  */
 export async function writeThroughCollab(
   vaultId: string,
   path: string,
   input: NoteEdit,
   actor: Actor,
-  options: { quarantine?: QuarantineRules; create?: () => Promise<NoteRow> } = {},
+  options: { quarantine?: QuarantineRules; revertOf?: string } = {},
 ): Promise<NoteRow | null> {
+  const record = { revertOf: options.revertOf }
   return withKeyLock(`collab:${vaultId}/${resolveNotePath(path).fullPath}`, async () => {
-    let found = await getLiveNote(vaultId, path)
-    if (!found && options.create) {
-      try {
-        return await options.create()
-      } catch (err) {
-        if (!(err instanceof NoteExistsError)) throw err
-      }
-      found = await getLiveNote(vaultId, path)
-    }
-    const existing = found
+    const existing = await getLiveNote(vaultId, path)
     if (!existing) return null
     const storedFrontmatter = existing.frontmatter as Record<string, unknown>
     const ops = input.ops ?? []
@@ -191,7 +178,7 @@ export async function writeThroughCollab(
         await screen(body, storedFrontmatter)
       }
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
-      return updateNote(vaultId, path, { frontmatter, body }, actor)
+      return updateNote(vaultId, path, { frontmatter, body }, actor, record)
     }
     const documentName = `${vaultId}/${path}`
     let connection: DirectConnection
@@ -210,7 +197,7 @@ export async function writeThroughCollab(
       if (!(await noteFileDamaged(vaultId, path))) throw err
       if (input.frontmatter === undefined || input.body === undefined) throw new NoteFileDamagedError(path)
       const frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
-      return updateNote(vaultId, path, { frontmatter, body: input.body }, actor)
+      return updateNote(vaultId, path, { frontmatter, body: input.body }, actor, record)
     }
     const next: { frontmatter?: Frontmatter; body?: string } = {}
     try {
@@ -254,7 +241,7 @@ export async function writeThroughCollab(
     } finally {
       await connection.disconnect()
     }
-    return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: next.body }, actor)
+    return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: next.body }, actor, record)
   })
 }
 

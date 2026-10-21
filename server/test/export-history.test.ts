@@ -5,7 +5,7 @@ import { and, asc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
 import { noteRevisions, notes, vaults, type users } from '../src/db/schema.js'
-import { createNote, saveAsset, softDeleteNote, updateNote } from '../src/notes/store.js'
+import { createNote, renameNote, revertNote, saveAsset, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // #499: a vault export carries every revision and the trash, and an import
@@ -98,10 +98,10 @@ async function ownedVaultCount(): Promise<number> {
   return rows.length
 }
 
-async function exportVault(): Promise<Buffer> {
+async function exportVault(vault = vaultId): Promise<Buffer> {
   const res = await app.inject({
     method: 'GET',
-    url: `/api/vaults/${vaultId}/export`,
+    url: `/api/vaults/${vault}/export`,
     headers: { cookie: ownerCookie },
   })
   expect(res.statusCode).toBe(200)
@@ -287,5 +287,64 @@ describe('vault export/import keeps history (#499)', () => {
     const res = await postArchive(zip.toBuffer(), ownerCookie)
     expect(res.statusCode).toBe(400)
     expect(await ownedVaultCount()).toBe(vaultsBefore)
+  })
+
+  it('rename and revert events keep their paths and source through export and import (#479)', async () => {
+    const events: { id: string } = (
+      await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie: ownerCookie }, body: { name: 'Events vault' } })
+    ).json()
+    const actor = { type: 'user' as const, id: owner.id }
+    await createNote(events.id, { path: 'concepts/before', body: 'first\n' }, actor)
+    await updateNote(events.id, 'concepts/before', { body: 'second\n' }, actor)
+    await renameNote(events.id, 'concepts/before', 'after', actor)
+    const [created] = await db.select().from(noteRevisions).innerJoin(notes, eq(notes.id, noteRevisions.noteId)).where(
+      and(eq(notes.vaultId, events.id), eq(noteRevisions.action, 'create')),
+    )
+    await revertNote(events.id, 'concepts/after', created!.note_revisions.id, actor)
+
+    type EventRow = { id: string; action: string; fromPath: string | null; toPath: string | null; sourceRevisionId: string | null }
+    const eventRows = async (vault: string): Promise<EventRow[]> =>
+      (
+        await db
+          .select({
+            id: noteRevisions.id,
+            action: noteRevisions.action,
+            fromPath: noteRevisions.fromPath,
+            toPath: noteRevisions.toPath,
+            sourceRevisionId: noteRevisions.sourceRevisionId,
+          })
+          .from(noteRevisions)
+          .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
+          .where(eq(notes.vaultId, vault))
+          .orderBy(asc(noteRevisions.createdAt), asc(noteRevisions.id))
+      )
+    const shape = (rows: EventRow[]) =>
+      rows.map((r) => [r.action, r.fromPath, r.toPath, r.sourceRevisionId === null ? null : rows.findIndex((s) => s.id === r.sourceRevisionId)])
+    const source = await eventRows(events.id)
+    expect(shape(source)).toEqual([
+      ['create', null, null, null],
+      ['update', null, null, null],
+      ['rename', 'concepts/before', 'concepts/after', null],
+      ['revert', null, null, 0],
+    ])
+
+    const archive = await exportVault(events.id)
+    const result = await importArchive(archive, ownerCookie)
+    const imported = await eventRows(result.vaultId)
+    // Same events, and the revert names the imported `create`, not the source vault's.
+    expect(shape(imported)).toEqual(shape(source))
+    expect(imported.some((r) => source.some((s) => s.id === r.id))).toBe(false)
+
+    // An archive without revision ids (exported before #479) still imports; a revert's source is then unknown.
+    const zip = new AdmZip(archive)
+    for (const entry of zip.getEntries()) {
+      if (!entry.entryName.startsWith('.elara/history/')) continue
+      const history: { revisions: Array<Record<string, unknown>> } = JSON.parse(entry.getData().toString('utf8'))
+      for (const r of history.revisions) delete r.id
+      zip.updateFile(entry.entryName, Buffer.from(JSON.stringify(history), 'utf8'))
+    }
+    const legacy = await eventRows((await importArchive(zip.toBuffer(), ownerCookie)).vaultId)
+    expect(shape(legacy).map((r) => r[3])).toEqual([null, null, null, null])
+    expect(shape(legacy)[2]).toEqual(['rename', 'concepts/before', 'concepts/after', null])
   })
 })

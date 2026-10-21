@@ -209,8 +209,8 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `frontmatter` (object, optional): on an existing note, **merged per top-level key** as in `edit_note`; on a note this call creates, its frontmatter.
   - `allowGrowth` (boolean, optional, default `false`): as in `edit_note`.
 - **Returns**: the note row (as `edit_note`), plus `created` (`true` when this call created the note).
-- The append is applied to the note as it is when the write runs (the live text, including what other agents and people added since you read it), under the note's write lock. Use it for logs, journals and running notes instead of `read_note` followed by `edit_note` with the whole body: concurrent appends by any number of agents all land, each exactly once and each as its own revision attributed to its connection. Concurrent `createIfMissing` calls on a missing note create it once; the others append to it.
-- The size limit, the quarantine, the restore point and the "In this note now" row work as for `edit_note`.
+- The append is applied to the note as it is when the write runs (the live text, including what other agents and people added since you read it), under the note's write lock. Use it for logs, journals and running notes instead of `read_note` followed by `edit_note` with the whole body: concurrent appends by any number of agents all land, each exactly once and each as its own revision attributed to its connection. Concurrent `createIfMissing` calls on a missing note create it once; the others append to it like to any existing note.
+- The size limit, the quarantine, the restore point and the "In this note now" row work as for `edit_note`. The call that creates the note keeps no restore point (there was nothing before it) and, like `create_note`, is never quarantined; every other call, including one that lost the create, keeps its restore point as usual.
 
 ### `upsert_note`
 - **Scope**: vault. Edit access.
@@ -222,9 +222,9 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `frontmatter` (object, optional): on a note this call creates, its frontmatter (as `create_note`); on an existing note, **merged per top-level key** as in `edit_note`.
   - `allowGrowth` (boolean, optional, default `false`): as in `edit_note`.
 - **Returns**: the note row, plus `created` (`true` when this call created the note).
-- Create or replace in one step, under the note's write lock: there is no window between checking that the note exists and creating it. Two concurrent `upsert_note` calls on a missing note create it once and neither fails; the second replaces the body of the note the first created. An upsert that races `create_note` never fails with "already exists": if `create_note` wins, the upsert replaces its body.
+- Create or replace in one step: a call that finds the note missing creates it, and one that loses that create to another caller (another upsert, `create_note`, `restore_note`) replaces the body of the note that was created instead of failing. Two concurrent `upsert_note` calls on a missing note create it once and neither fails with "already exists".
 - As with any whole `body`, text a person typed after you read the note is not in it; use `append_note` or `edit_note` `ops` for partial changes.
-- The size limit, the quarantine, the restore point and the "In this note now" row work as for `edit_note`.
+- The size limit, the quarantine, the restore point and the "In this note now" row work as for `edit_note`; the call that creates the note keeps no restore point and is never quarantined, as with `create_note`.
 
 ### `rename_note`
 - **Scope**: vault. Edit access.
@@ -279,7 +279,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `path` (string, required).
   - `limit` (integer 1-100, optional, default 20).
   - `cursor` (string, optional): `nextCursor` from the previous page, passed unchanged. Anything else is refused with `invalid cursor`.
-- **Returns**: `{ revisions, hasMore, nextCursor }`. `revisions` is one page, newest first, metadata only: `{ id, actorType: "user" | "mcp" | "collab", actorId, actorName, action, createdAt, bodyBytes }` (`actorName` is the MCP connection's name on a revision a connection recorded, else `null`; `bodyBytes` is the UTF-8 size of the body at that revision). `action` is `create`, `update`, `delete`, `revert`, `restore_point` for the note as it was before a connection's first write in a session (see `edit_note`), or `quarantine` for a write kept out of the note (see `edit_note`); a `quarantine` revision is not the note's content. `hasMore` says whether older revisions exist; `nextCursor` is the cursor for them, or `null` on the last page. A revision recorded while you page does not shift the pages: each revision comes back exactly once.
+- **Returns**: `{ revisions, hasMore, nextCursor }`. `revisions` is one page, newest first, metadata only: `{ id, actorType: "user" | "mcp" | "collab", actorId, actorName, action, createdAt, bodyBytes }` (`actorName` is the MCP connection's name on a revision a connection recorded, else `null`; `bodyBytes` is the UTF-8 size of the body at that revision). `action` is `create`, `update`, `delete` (moved to the trash), `restore` (back from the trash), `rename` (with `fromPath` and `toPath`, the paths before and after), `revert` (with `sourceRevisionId`, the revision it brought back), `restore_point` for the note as it was before a connection's first write in a session (see `edit_note`), or `quarantine` for a write kept out of the note (see `edit_note`); a `quarantine` revision is not the note's content. Each delete, restore, rename and revert is its own revision, attributed to whoever did it, even when the note's content did not change; `fromPath`, `toPath` and `sourceRevisionId` appear only on those rows. `hasMore` says whether older revisions exist; `nextCursor` is the cursor for them, or `null` on the last page. A revision recorded while you page does not shift the pages: each revision comes back exactly once.
 - No revision content: read one revision with `get_revision`.
 
 ### `get_revision`
@@ -289,7 +289,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `vaultId` (uuid, optional).
   - `revisionId` (uuid, required): an `id` from `note_history`.
   - `path` (string, optional), `noteId` (uuid, optional): when given, the revision must belong to that note. `path` is read like every note path (trimmed, `\` as `/`, a trailing `.md` dropped).
-- **Returns**: `{ id, noteId, path, actorType, actorId, action, frontmatter, body, createdAt }`: the note as it was at that revision (`path` is the note's current path). A revision that is not in the vault, or not of the named note, is `revision not found`.
+- **Returns**: `{ id, noteId, path, actorType, actorId, action, frontmatter, body, createdAt }`, plus `sourceRevisionId` on a `revert` and `fromPath` / `toPath` on a `rename`: the note as it was at that revision (`path` is the note's current path). A revision that is not in the vault, or not of the named note, is `revision not found`.
 - Unlike `note_history`, which answers `note not found` for a note in the trash, `get_revision` still returns the revisions of a trashed note (as the REST revision route does); it needs the same edit access.
 
 ### `revert_note`
@@ -299,7 +299,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `vaultId` (uuid, optional).
   - `path` (string, required).
   - `revisionId` (uuid, required).
-- **Returns**: the updated note row. The revert is recorded as a new revision. Reverting to a `restore_point` revision undoes everything that connection did to the note in that session, and also discards every later change by anyone else. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert.
+- **Returns**: the updated note row. The revert is recorded as a new `revert` revision whose `sourceRevisionId` is `revisionId`; earlier revisions are left as they were. Reverting to a `restore_point` revision undoes everything that connection did to the note in that session, and also discards every later change by anyone else. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert.
 - The same body size limit as `edit_note` applies: reverting to a revision whose body is over the limit and larger than the current body is refused with an error naming the limit.
 
 ### `purge_revision`
@@ -566,7 +566,7 @@ All team and user tools are **account only**.
 - **Scope**: vault. Edit access.
 - **Capability**: `read`.
 - **Parameters**: `vaultId` (uuid, optional).
-- **Returns**: `{ vaultId, zipBase64, sizeBytes }`. The zip holds the live notes as OKF `.md` files, `assets/`, `manifest.json` (format version, vault id, name, mergeable, shares) and `.elara/history/<noteId>.json` per note, live or trashed: every revision (action, actor, time, frontmatter, body) and the note's times; trashed notes carry their content there. The zip therefore carries the vault's full history, trash included, and the email of every past revision author, including people who no longer have access. Importing it (`POST /api/import`) recreates revisions and trash and points attachment links at the new vault.
+- **Returns**: `{ vaultId, zipBase64, sizeBytes }`. The zip holds the live notes as OKF `.md` files, `assets/`, `manifest.json` (format version, vault id, name, mergeable, shares) and `.elara/history/<noteId>.json` per note, live or trashed: every revision (id, action, actor, time, frontmatter, body, and a rename's paths or a revert's source) and the note's times; trashed notes carry their content there. The zip therefore carries the vault's full history, trash included, and the email of every past revision author, including people who no longer have access. Importing it (`POST /api/import`) recreates revisions and trash and points attachment links at the new vault; a revert in the imported history names the imported revision it brought back.
 
 ### `export_note`
 - **Scope**: vault. Read access.
