@@ -1,19 +1,29 @@
-import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, dirname, extname, join } from 'node:path'
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { basename, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
+import * as Y from 'yjs'
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
-import { scheduleEmbedding } from '../search/embedding-queue.js'
+import { kickEmbeddings } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
-import { deleteCrdtState, renameCrdtState } from '../sync/crdt-store.js'
+import { deleteCrdtState, renameCrdtState, saveCrdtState } from '../sync/crdt-store.js'
+import {
+  cloneDocument,
+  docState,
+  liveDocumentsOf,
+  mergeDocuments,
+  pushToDocuments,
+  sharesHistory,
+  updateBin,
+  type DocState,
+  type LiveDocument,
+} from '../sync/live-docs.js'
+import { failpoint } from '../failpoints.js'
 import {
   OkfValidationError,
-  extractWikilinks,
-  parseNote,
-  serializeNote,
   validateNote,
   isSlug,
   type Frontmatter,
@@ -23,10 +33,29 @@ import {
   type ResolvedNotePath,
   splitPath,
 } from './okf/paths.js'
-import { atomicWrite } from './atomic-write.js'
 import { withKeyLock, withKeyLocks } from './key-lock.js'
 import { assertBodyFits, NoteTooLargeError } from './size-cap.js'
 import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from './growth-guard.js'
+import { orderKeys, presentedFrontmatter, sameContent } from './frontmatter-order.js'
+import {
+  BACKFILL_MARKER,
+  StoreBusyError,
+  applyRowChange,
+  enqueueEmbeddingTx,
+  insertRevision,
+  insertStoreJob,
+  lockedNote,
+  pgErrorCode,
+  raiseProjections,
+  replaceLinks,
+  storeTransaction,
+  storedColumns,
+  toStored,
+  type StoredNote,
+  type Tx,
+} from './store-tx.js'
+import { STORE_JOBS, registerRenameRefactor, wakeProjector, type RenameRefactorPayload } from './projector.js'
+import { completeJob } from '../jobs/durable.js'
 
 export { splitPath, resolveNotePath, type ResolvedNotePath }
 
@@ -68,102 +97,7 @@ const NOT_A_NOTE_STATE = [QUARANTINE_ACTION, PROPOSAL_ACTION]
 export const RESTORE_POINT_IDLE_MINUTES = 30
 
 /**
- * What a history event records besides the note's state (#479): a delete or
- * restore of the note, a rename with its old and new path, a revert with the
- * revision it brought back.
- */
-export type HistoryEvent =
-  | { action: 'delete' | 'restore' }
-  | { action: 'rename'; fromPath: string; toPath: string }
-  | { action: 'revert'; sourceRevisionId: string }
 
-/** The `note_revisions.action` of every history event. */
-const EVENT_ACTIONS: HistoryEvent['action'][] = ['delete', 'restore', 'rename', 'revert']
-
-/** The revision actions recordRevision dedupes: content writes. */
-const DEDUPED_ACTIONS: Record<string, true> = { create: true, update: true }
-
-/** Revisions recordRevision never compares a write with: not a write's state (#475, #479, #482, #492). */
-const NOT_A_DEDUPE_BASELINE = [...NOT_A_NOTE_STATE, RESTORE_POINT_ACTION, ...EVENT_ACTIONS]
-
-/** Records a revision unless it repeats the note's latest content. Frontmatter
- * is compared as jsonb stores it (#480): deep equality on its JSON form, so
- * object key order (jsonb uses its own, the collab document and a
- * frontmatter merge keep theirs), `undefined` members and Date vs ISO string
- * never count, while array order and every value still do.
- *
- * An equal state is a repeat only from the same actor (kind and id), or from
- * the relay (`collab`), whose store of an already recorded state changes
- * nothing. An attributed write (`mcp`, `user`) of the state the relay just
- * stored is recorded: the relay's revision has no author (#403) and may
- * bundle a person's typing, so it is never re-attributed.
- *
- * Only content writes (DEDUPED_ACTIONS) are deduped; events (#479) go
- * through recordEvent and are always recorded. The write is compared with
- * the newest content revision: quarantined writes (#492), proposals (#475),
- * restore points (#482) and events are not a write's state, so they are
- * never the baseline. */
-async function recordRevision(
-  noteId: string,
-  action: string,
-  frontmatter: unknown,
-  body: string,
-  actor: Actor,
-): Promise<void> {
-  if (DEDUPED_ACTIONS[action]) {
-    const last = (
-      await db
-        .select({
-          frontmatter: noteRevisions.frontmatter,
-          body: noteRevisions.body,
-          actorType: noteRevisions.actorType,
-          actorId: noteRevisions.actorId,
-        })
-        .from(noteRevisions)
-        .where(and(eq(noteRevisions.noteId, noteId), notInArray(noteRevisions.action, NOT_A_DEDUPE_BASELINE)))
-        .orderBy(desc(noteRevisions.ord))
-        .limit(1)
-    )[0]
-    const repeatsAuthor = actor.type === 'collab' || (last?.actorType === actor.type && last.actorId === (actor.id ?? null))
-    if (
-      last &&
-      repeatsAuthor &&
-      last.body === body &&
-      isDeepStrictEqual(last.frontmatter, JSON.parse(JSON.stringify(frontmatter ?? null)))
-    ) {
-      return
-    }
-  }
-  await db.insert(noteRevisions).values({
-    noteId,
-    actorType: actor.type,
-    actorId: actor.id,
-    action,
-    frontmatter: frontmatter as Record<string, unknown>,
-    body,
-  })
-}
-
-/** Records a history event with the note's state. Always a new row: an event
- * is never a repeat of the state before it, whoever recorded that. */
-async function recordEvent(
-  noteId: string,
-  event: HistoryEvent,
-  frontmatter: unknown,
-  body: string,
-  actor: Actor,
-): Promise<void> {
-  await db.insert(noteRevisions).values({
-    noteId,
-    actorType: actor.type,
-    actorId: actor.id,
-    ...event,
-    frontmatter: frontmatter as Record<string, unknown>,
-    body,
-  })
-}
-
-/**
  * Runs an MCP connection's write to a note and, when it is the connection's
  * first write to that note in a session (#482), keeps the state the note had
  * just before it as a `restore_point` revision attributed to the connection:
@@ -382,143 +316,148 @@ export function trashFile(vaultId: string, noteId: string): string {
   return join(vaultDir(vaultId), '.trash', `${noteId}.md`)
 }
 
-/** Drizzle wraps driver errors; the Postgres code may sit on `cause`. */
 function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err
-  while (current instanceof Error) {
-    if ((current as { code?: string }).code === '23505') return true
-    current = current.cause
-  }
-  return false
+  return pgErrorCode(err) === '23505'
 }
 
 /**
  * The key-lock.ts key held by every writer of the note at `path`: create,
- * update, rename (both paths), delete, restore and purge (#401, #484).
+ * update, rename (both paths), delete, restore and purge (#401, #484), and
+ * the relay's load and store hooks of the path-named document (ADR-003
+ * §5.2, S2a). It stays keyed by path (#484, #803); the Postgres lock every
+ * store transaction takes is keyed by note id (store-tx.ts).
  */
-function noteLock(vaultId: string, path: string): string {
+export function noteLock(vaultId: string, path: string): string {
   return `note:${vaultId}/${path}`
 }
 
-/**
- * OKF v0.2 Progressive Disclosure: regenerates index.md for each directory in ancestorDirs.
- * Contains subsystems (child directories) and concepts & artifacts (direct child notes).
- * If a directory has 0 notes and 0 subdirectories, index.md is unlinked.
- * A directory whose `<dir>/index` is a live note is skipped entirely: that file is the
- * user's note, and the generated table would overwrite or unlink it (#384).
- *
- * Each directory's index is read and written under the `index:<vault>/<dir>` lock, and the
- * note list is read after the locks are held, so concurrent writers into one folder write
- * index.md in turn and the last write lists every note committed before it (#779). Lock
- * order: a caller may hold `note:` locks while calling this (every note writer in this
- * file does); nothing here takes a `note:` lock, so the two never wait on each other in a cycle.
- */
-export async function regenProgressiveIndices(
-  vaultId: string,
-  ancestorDirs: string[],
-): Promise<void> {
-  const uniqueDirs = [...new Set(ancestorDirs.filter(Boolean))]
-  if (uniqueDirs.length === 0) return
-  await withKeyLocks(
-    uniqueDirs.map((dir) => `index:${vaultId}/${dir}`),
-    () => writeProgressiveIndices(vaultId, uniqueDirs),
-  )
+/** A row as callers see it: the model's columns only (`seq` and `frontmatter_src` stay internal until #477). */
+function plainRow(row: StoredNote): NoteRow {
+  const plain: Partial<StoredNote> = { ...row }
+  delete plain.seq
+  delete plain.frontmatterSrc
+  // Only the two internal fields were removed: the rest is the model's row.
+  return plain as NoteRow
 }
 
-async function writeProgressiveIndices(vaultId: string, uniqueDirs: string[]): Promise<void> {
-  const rows = await db
-    .select({
-      path: notes.path,
-      type: notes.type,
-      name: notes.name,
-      frontmatter: notes.frontmatter,
-    })
-    .from(notes)
-    .where(and(eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
+/**
+ * The relay's loaded documents of a note (by the note id each recorded at
+ * load, never by path: a renamed note can be open at its old path, and a new
+ * note at that old path is another note), before a write (ADR-003 §5.2 step
+ * 3, S2a). Documents of the note that share history are merged into each
+ * other first (the §5.5 two-documents rule), so the state the write stores
+ * and compiles its change against holds every tab's typing. `base` is a
+ * clone of the primary document (at the note's current path, else the
+ * first): the committed change is compiled against it once and the same
+ * update is pushed into every document (step 8).
+ */
+interface Fold {
+  primary: LiveDocument
+  base: Y.Doc
+  editors: string[]
+  state: DocState
+}
 
-  const userIndexDirs = new Set(
-    rows.filter((note) => note.path.endsWith('/index')).map((note) => note.path.slice(0, -'/index'.length)),
-  )
-
-  for (const dir of uniqueDirs) {
-    if (userIndexDirs.has(dir)) continue
-    const prefix = `${dir}/`
-    const subdirCounts = new Map<string, number>()
-    const childNotes: Array<{
-      path: string
-      baseName: string
-      type: string
-      frontmatter: Record<string, unknown>
-    }> = []
-
-    for (const note of rows) {
-      if (note.path === 'index' || note.path.endsWith('/index')) continue
-      if (!note.path.startsWith(prefix)) continue
-
-      const remainder = note.path.slice(prefix.length)
-      if (!remainder) continue
-
-      const slashIndex = remainder.indexOf('/')
-      if (slashIndex === -1) {
-        childNotes.push({
-          path: note.path,
-          baseName: remainder,
-          type: note.type,
-          frontmatter: (note.frontmatter ?? {}) as Record<string, unknown>,
-        })
-      } else {
-        const subdir = remainder.slice(0, slashIndex)
-        subdirCounts.set(subdir, (subdirCounts.get(subdir) ?? 0) + 1)
-      }
-    }
-
-    const file = join(vaultDir(vaultId), dir, 'index.md')
-
-    if (subdirCounts.size === 0 && childNotes.length === 0) {
-      await unlink(file).catch(() => {})
-      continue
-    }
-
-    const sections: string[] = []
-
-    if (subdirCounts.size > 0) {
-      const sortedSubdirs = [...subdirCounts.entries()].sort(([a], [b]) => a.localeCompare(b))
-      const lines = [
-        '## Subsystems & Architectural Domains',
-        '',
-        '| Subsystem / Domain | Active Concepts | Index |',
-        '| :--- | :--- | :--- |',
-      ]
-      for (const [subdir, count] of sortedSubdirs) {
-        lines.push(`| **${subdir}** | ${count} notes | [[${dir}/${subdir}/index|View Domain]] |`)
-      }
-      sections.push(lines.join('\n'))
-    }
-
-    if (childNotes.length > 0) {
-      childNotes.sort((a, b) => a.path.localeCompare(b.path))
-      const lines = [
-        '## Concepts & Artifacts',
-        '',
-        '| Concept | Type | Status | Description |',
-        '| :--- | :--- | :--- | :--- |',
-      ]
-      for (const child of childNotes) {
-        const fm = child.frontmatter
-        const type = typeof fm.type === 'string' && fm.type ? String(fm.type) : child.type
-        const status = fm.status !== undefined && fm.status !== null ? String(fm.status) : ''
-        const description = typeof fm.description === 'string' ? fm.description : ''
-        const link =
-          typeof fm.title === 'string' && fm.title.trim() && fm.title.trim() !== child.baseName
-            ? `[[${child.path}|${fm.title.trim()}]]`
-            : `[[${child.path}]]`
-        lines.push(`| ${link} | \`${type}\` | ${status} | ${description} |`)
-      }
-      sections.push(lines.join('\n'))
-    }
-
-    await atomicWrite(file, `${sections.join('\n\n')}\n`)
+function foldSource(vaultId: string, noteId: string, path: string): Fold | null {
+  const loaded = liveDocumentsOf(noteId)
+  if (loaded.length === 0) return null
+  const primary = loaded.find((d) => d.name === `${vaultId}/${path}`) ?? loaded[0]!
+  for (const other of loaded) {
+    if (other !== primary && sharesHistory(other.doc, primary.doc)) mergeDocuments(primary.doc, other.doc)
   }
+  const base = cloneDocument(primary.doc)
+  return { primary, base, editors: [...new Set(loaded.flatMap((d) => d.editors))], state: docState(base) }
+}
+
+function releaseFold(fold: Fold | null): void {
+  fold?.base.destroy()
+}
+
+/**
+ * Whether the relay would refuse to store `state` over `row` (invalid, over
+ * the size cap, a repeated block: #491, #492). Such a state is never written
+ * on the editors' behalf, neither by a fold nor as the body a write keeps.
+ */
+function refusedState(row: NoteRow, state: DocState): boolean {
+  try {
+    validateNote(row.type, row.name, { ...state.frontmatter, type: row.type } as Frontmatter, state.body)
+    assertBodyFits(state.body, row.body)
+  } catch {
+    return true
+  }
+  return suspiciousWrite(row.body, state.body, 'repeated-block') !== null
+}
+
+/**
+ * The body a write that does not change the body keeps: what the editors
+ * see, unless the relay would refuse that state (then the stored body; the
+ * editors keep their text, as the relay's own quarantine leaves it).
+ */
+export function keptBody(row: NoteRow, current: DocState): string {
+  return current.body !== row.body && refusedState(row, current) ? row.body : current.body
+}
+
+/**
+ * Invariant W, S2a (§5.2 step 3): stores the loaded document's state as a
+ * revision of its editors before a write changes the note, in the write's
+ * transaction. A state the relay itself would refuse is not stored
+ * (`refused`); the write is then compiled against it and stands or falls on
+ * its own validation.
+ */
+async function foldLive(tx: Tx, row: StoredNote, fold: Fold | null): Promise<{ row: StoredNote; refused: boolean }> {
+  if (!fold) return { row, refused: false }
+  const frontmatter = { ...fold.state.frontmatter, type: row.type } as Frontmatter
+  if (fold.state.body === row.body && sameContent(frontmatter, row.frontmatter as Record<string, unknown>)) {
+    return { row, refused: false }
+  }
+  if (refusedState(row, fold.state)) return { row, refused: true }
+  const { row: folded } = await applyRowChange(
+    tx,
+    row,
+    { frontmatter, body: fold.state.body },
+    { action: 'update', actor: SYSTEM_ACTOR, actorDetail: { kind: 'fold', editors: fold.editors } },
+    { frontmatterOrder: orderKeys(row.frontmatterSrc, fold.state.frontmatter) },
+  )
+  return { row: folded, refused: false }
+}
+
+/**
+ * After commit, still under the note lock (§5.2 step 8, S2a): pushes the
+ * committed state into every loaded document of the note, or, when none is
+ * loaded, keeps the `.crdt` bin at `binPath` equal to it. When the fold was
+ * refused and the write left the body alone, only the frontmatter is pushed:
+ * the editors keep the text the relay would not store.
+ */
+async function pushCommitted(
+  vaultId: string,
+  binPath: string,
+  fold: Fold | null,
+  committed: StoredNote,
+  keepLiveBody: boolean,
+): Promise<void> {
+  failpoint('edit.after-commit-before-live-apply')
+  const frontmatter = committed.frontmatter as Record<string, unknown>
+  const loaded = liveDocumentsOf(committed.id)
+  if (loaded.length > 0) {
+    const primary = (fold && loaded.find((d) => d.doc === fold.primary.doc)) || loaded[0]!
+    const base = fold && primary.doc === fold.primary.doc ? fold.base : cloneDocument(primary.doc)
+    if (base !== fold?.base) releaseFold(fold)
+    const docs = [primary.doc, ...loaded.filter((d) => d !== primary).map((d) => d.doc)]
+    pushToDocuments(docs, base, (current) => ({ frontmatter, body: keepLiveBody ? current.body : committed.body }))
+    return
+  }
+  releaseFold(fold)
+  try {
+    await updateBin(vaultId, binPath, { frontmatter, body: committed.body })
+  } catch (err) {
+    console.warn(`[store] ${vaultId}/${binPath}: .crdt bin not updated: ${(err as Error).message}`)
+  }
+}
+
+/** Wakes the workers that follow a commit: the projector (files, index.md) and the embedding worker. */
+function afterCommit(): void {
+  wakeProjector()
+  kickEmbeddings()
 }
 
 export async function createNote(
@@ -547,31 +486,32 @@ export async function createNote(
   validateNote(resolved.type, resolved.name, frontmatter, body)
   assertBodyFits(body)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
+    const id = randomUUID()
     let row: NoteRow
     try {
-      const inserted = await db
-        .insert(notes)
-        .values({
-          vaultId,
-          type: resolved.type,
-          name: resolved.name,
-          path: resolved.fullPath,
-          frontmatter,
-          body,
-        })
-        .returning()
-      row = inserted[0]!
+      // One transaction (ADR-003 §5.3): row, revision at seq 1, links, projection targets, embedding job.
+      row = await storeTransaction([id], async (tx) => {
+        const [inserted] = await tx
+          .insert(notes)
+          .values({ id, vaultId, type: resolved.type, name: resolved.name, path: resolved.fullPath, frontmatter, body })
+          .returning()
+        await tx.execute(sql`UPDATE notes SET frontmatter_src = ${JSON.stringify(frontmatter)}::json WHERE id = ${id}`)
+        await insertRevision(tx, id, 1, { action: 'create', actor }, { frontmatter, body })
+        await replaceLinks(tx, id, body)
+        await raiseProjections(tx, id, 1, ['file', 'dir_index'])
+        // Written by the store: nothing for the S2a backfill to do.
+        await tx.execute(sql`INSERT INTO note_projections (note_id, projection, target_seq, applied_seq) VALUES (${id}, ${BACKFILL_MARKER}, 1, 1)`)
+        await enqueueEmbeddingTx(tx, id, 1)
+        return inserted!
+      })
     } catch (err) {
       if (isUniqueViolation(err)) {
         throw new NoteExistsError(resolved.fullPath)
       }
       throw err
     }
-    await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
-    await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
-    await syncLinks(row.id, body)
-    scheduleEmbedding(row.id)
-    await recordRevision(row.id, 'create', frontmatter, body, actor)
+    failpoint('create.after-commit-before-file')
+    afterCommit()
     return row
   })
 }
@@ -598,25 +538,9 @@ export async function createNoteIfMissing(
   }
 }
 
-/** Replaces the note's EXTRACTED link rows from its current wikilinks. */
+/** Replaces the note's EXTRACTED link rows from its current wikilinks (`pnpm reindex`). */
 export async function syncNoteLinks(noteId: string, body: string): Promise<void> {
-  return syncLinks(noteId, body)
-}
-
-/** In one transaction: a rename looking for the notes that link to it
- * (linkReferrers) never sees this note between the delete and the insert,
- * with no links (#803). */
-async function syncLinks(noteId: string, body: string): Promise<void> {
-  const targets = extractWikilinks(body)
-  await db.transaction(async (tx) => {
-    await tx.delete(noteLinks).where(eq(noteLinks.sourceNoteId, noteId))
-    if (targets.length > 0) {
-      await tx
-        .insert(noteLinks)
-        .values(targets.map((targetPath) => ({ sourceNoteId: noteId, targetPath })))
-        .onConflictDoNothing()
-    }
-  })
+  await db.transaction((tx) => replaceLinks(tx, noteId, body))
 }
 
 export async function getLiveNote(vaultId: string, path: string): Promise<NoteRow | null> {
@@ -629,31 +553,28 @@ export async function getLiveNote(vaultId: string, path: string): Promise<NoteRo
 }
 
 /**
- * Reads a note's current content from disk (canonical source), falling back
- * to the row when the file is gone. createNote inserts the row before it
- * writes the file, so a crash in between leaves a live note with no file —
- * permanently. Every read path (note view, export, backup, collab, MCP) used
- * to throw ENOENT on such a note; the instance backup, which walks every
- * vault, then failed entirely because of one note. The row mirrors the file
- * on every write, so it is the right recovery. Only ENOENT falls back: real
- * disk faults still surface.
+ * Reads a live note from the database, the only authority (ADR-003 §6):
+ * the row, with its frontmatter in the key order of its file
+ * (`frontmatter_src`). The `.md` file is a projection and is never read
+ * back, so a note whose file is missing, damaged or not yet written reads
+ * the same as any other.
  */
 export async function readNote(
   vaultId: string,
   path: string,
 ): Promise<{ row: NoteRow; frontmatter: Frontmatter; body: string } | null> {
-  const resolved = resolveNotePath(path)
-  const row = await getLiveNote(vaultId, resolved.fullPath)
+  const row = await readStored(vaultId, resolveNotePath(path).fullPath)
   if (!row) return null
-  let raw: string
-  try {
-    raw = await readFile(noteFile(vaultId, resolved.fullPath), 'utf8')
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-    return { row, frontmatter: row.frontmatter as Frontmatter, body: row.body }
-  }
-  const parsed = parseNote(raw)
-  return { row, frontmatter: parsed.frontmatter, body: parsed.body }
+  return { row: plainRow(row), frontmatter: presentedFrontmatter(row.frontmatter, row.frontmatterSrc) as Frontmatter, body: row.body }
+}
+
+/** The live note at `path` with `seq` and `frontmatter_src`, read without locks. */
+async function readStored(vaultId: string, path: string): Promise<StoredNote | null> {
+  const [row] = await db
+    .select(storedColumns)
+    .from(notes)
+    .where(and(eq(notes.vaultId, vaultId), eq(notes.path, path), isNull(notes.deletedAt)))
+  return row ? toStored(row) : null
 }
 
 /**
@@ -663,60 +584,139 @@ export async function readNote(
  */
 export type BodyEdit = string | ((current: string) => string)
 
+/** The state a write leaves the note in, computed from its current state (`compute` of writeNote). */
+export interface NextState {
+  frontmatter: Frontmatter
+  body: string
+}
+
+/** How a write is recorded and where it comes from. */
+export interface WriteOptions {
+  /** The revision this write brings back (revertNote): recorded as a `revert` event (#479). */
+  revertOf?: string
+  /** Recorded on the revision (#403): the MCP tool, the editors of a fold. */
+  actorDetail?: Record<string, unknown>
+  /**
+   * The relay's own store of its document (collab-server.ts): the note it
+   * loaded (`noteId`, the store goes nowhere else, §5.5). It is the live
+   * document, so nothing is folded first or pushed back.
+   */
+  relay?: { noteId: string }
+}
+
+/** Times a write recomputes when another process changed the note between its read and its lock. */
+const WRITE_ROUNDS = 3
+
 /**
- * Read-modify-write of one note's row, file, links and revision. Writes to the
- * same note are serialized (one at a time, in call order): run concurrently,
- * the row could end at one write and the file at another, and revisions could
- * be skipped or out of order. `options.quarantine` checks the body against
- * the stored one first (refuseSuspiciousWrite; the collab relay's store, which
- * passes the quarantine revision of the loaded document's episode, if any).
- * A `body` function (BodyEdit) gets the stored body.
- * `options.revertOf` names the revision this write brings back (revertNote):
- * the write is then recorded as its own `revert` event (#479).
+ * One server write to the live note at `path` (ADR-003 §5.2, Invariant W),
+ * under the note's lock:
+ * 1. the current state is the relay's loaded document if there is one (what
+ *    the editors see), else the row; `compute` turns it into the next state
+ *    and refuses by throwing (validation, size cap, quarantine, overlap);
+ * 2. one transaction: the instance and note locks, the row again (FOR
+ *    UPDATE; a row another process changed meanwhile recomputes), the loaded
+ *    document's state stored first, then the write: row, revision at the new
+ *    `seq`, links, projection targets, embedding job; COMMIT is the ack;
+ * 3. the committed state pushed into the loaded document, or the `.crdt` bin
+ *    kept equal to it; the projector woken.
+ * Null when no live note is at `path` (or it is not `options.relay.noteId`).
+ */
+export async function writeNote(
+  vaultId: string,
+  path: string,
+  compute: (current: { frontmatter: Record<string, unknown>; body: string }, row: NoteRow) => Promise<NextState> | NextState,
+  actor: Actor,
+  options: WriteOptions = {},
+): Promise<NoteRow | null> {
+  const resolved = resolveNotePath(path)
+  return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
+    for (let round = 0; round < WRITE_ROUNDS; round++) {
+      const seen = await readStored(vaultId, resolved.fullPath)
+      if (!seen || (options.relay && seen.id !== options.relay.noteId)) return null
+      const fold = options.relay ? null : foldSource(vaultId, seen.id, resolved.fullPath)
+      const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
+      let next: NextState
+      try {
+        next = await compute(current, plainRow(seen))
+      } catch (err) {
+        releaseFold(fold)
+        throw err
+      }
+      const committed = await storeTransaction([seen.id], async (tx) => {
+        const locked = await lockedNote(tx, seen.id)
+        if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
+        if (locked.seq !== seen.seq) return 'moved' as const
+        const { row, refused } = await foldLive(tx, locked, fold)
+        const { row: written } = await applyRowChange(
+          tx,
+          row,
+          { frontmatter: { ...next.frontmatter, type: row.type }, body: next.body },
+          options.revertOf
+            ? { action: 'revert', actor, sourceRevisionId: options.revertOf, actorDetail: options.actorDetail }
+            : { action: 'update', actor, actorDetail: options.actorDetail },
+        )
+        failpoint('edit.before-commit')
+        return { written, keepLiveBody: refused && written.body === locked.body }
+      })
+      if (committed === 'moved') {
+        releaseFold(fold)
+        continue
+      }
+      if (!committed) {
+        releaseFold(fold)
+        return null
+      }
+      if (!options.relay) await pushCommitted(vaultId, resolved.fullPath, fold, committed.written, committed.keepLiveBody)
+      afterCommit()
+      failpoint('edit.after-commit-before-ack')
+      return plainRow(committed.written)
+    }
+    throw new StoreBusyError('the note kept changing')
+  })
+}
+
+/**
+ * Writes `input` to the live note at `path` (writeNote): a field left out
+ * keeps its current value (a body the relay would refuse is not kept, see
+ * keptBody), a `body` function (BodyEdit) gets the current body. `input`
+ * may be a function, read under the note's lock: the relay's store passes
+ * its document's state that way, so a server write that held the lock (and
+ * pushed its change into the document) is in the state it stores.
+ * `options.quarantine` checks the body against the stored one first
+ * (refuseSuspiciousWrite; the collab relay's store passes the quarantine
+ * revision of the loaded document's episode, if any).
  */
 export async function updateNote(
   vaultId: string,
   path: string,
-  input: { frontmatter?: Record<string, unknown>; body?: BodyEdit },
+  input: NoteInput | (() => NoteInput),
   actor: Actor = SYSTEM_ACTOR,
-  options: { quarantine?: QuarantineRules; episode?: string; revertOf?: string } = {},
+  options: WriteOptions & { quarantine?: QuarantineRules; episode?: string } = {},
 ): Promise<NoteRow | null> {
-  const resolved = resolveNotePath(path)
-  return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
-    const row = await getLiveNote(vaultId, resolved.fullPath)
-    if (!row) return null
-    const edit = { frontmatter: input.frontmatter, body: typeof input.body === 'function' ? input.body(row.body) : input.body }
-    const frontmatter: Frontmatter = {
-      ...(input.frontmatter ?? (row.frontmatter as Frontmatter)),
-      type: row.type,
-    }
-    const body = edit.body ?? row.body
-    validateNote(row.type, row.name, frontmatter, body)
-    // The size cap first: an over-cap body is refused, never kept as a quarantine revision (#491).
-    assertBodyFits(body, row.body)
-    if (options.quarantine) await refuseSuspiciousWrite(row, edit, actor, options.quarantine, options.episode)
-    const [updated] = await db
-      .update(notes)
-      .set({ frontmatter, body, updatedAt: new Date() })
-      .where(eq(notes.id, row.id))
-      .returning()
-    await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
-    // ponytail: progressive directory index.md files only catalog metadata/types/titles - skip vault-wide scans on body-only edits (GRAPH-05).
-    // Key order is not compared: jsonb returns keys in its own order, while the collab store sends them in document order (#384).
-    const frontmatterChanged =
-      input.frontmatter !== undefined && !isDeepStrictEqual(row.frontmatter, frontmatter)
-    if (frontmatterChanged) {
-      await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
-    }
-    await syncLinks(row.id, body)
-    scheduleEmbedding(row.id)
-    if (options.revertOf) {
-      await recordEvent(row.id, { action: 'revert', sourceRevisionId: options.revertOf }, frontmatter, body, actor)
-    } else {
-      await recordRevision(row.id, 'update', frontmatter, body, actor)
-    }
-    return updated!
-  })
+  return writeNote(
+    vaultId,
+    path,
+    async (current, row) => {
+      const edit = typeof input === 'function' ? input() : input
+      const body = typeof edit.body === 'function' ? edit.body(current.body) : (edit.body ?? keptBody(row, current))
+      const frontmatter: Frontmatter = { ...(edit.frontmatter ?? current.frontmatter), type: row.type }
+      validateNote(row.type, row.name, frontmatter, body)
+      // The size cap first: an over-cap body is refused, never kept as a quarantine revision (#491).
+      assertBodyFits(body, row.body)
+      if (options.quarantine) {
+        await refuseSuspiciousWrite(row, { frontmatter: edit.frontmatter, body }, actor, options.quarantine, options.episode)
+      }
+      return { frontmatter, body }
+    },
+    actor,
+    options,
+  )
+}
+
+/** A write's new frontmatter and body; a field left out keeps its value. */
+export interface NoteInput {
+  frontmatter?: Record<string, unknown>
+  body?: BodyEdit
 }
 
 /**
@@ -732,35 +732,38 @@ export function refactorWikilinks(body: string, fromPath: string, toPath: string
   })
 }
 
+/** Writes a referrer's rewritten links: the rename's `updateFn` (MCP passes writeThroughCollab). */
+type ReferrerWrite = (
+  vaultId: string,
+  path: string,
+  input: { frontmatter?: Record<string, unknown>; body?: BodyEdit },
+  actor: Actor,
+) => Promise<NoteRow | null>
+
 /**
  * Renames or moves a note to `toName` (a slug in its folder, or a path),
  * rewriting the links to it; the move is recorded as a `rename` event by
- * `actor` (#479). The move itself (row, file, CRDT state, folder
- * indexes, the note's own links) runs under the locks of both the old and the
- * new path (#484; `withKeyLocks` takes them in sorted order, so two renames
- * between the same paths never wait on each other in a cycle): a write to the
- * note waits for the move and then finds no note at the old path instead of
- * writing there, and of two writers making one path live (rename, create,
- * restore) the second finds the first's note there.
+ * `actor` (#479). The move (ADR-003 §5.5) is one transaction under the
+ * note locks of both paths (#484; `withKeyLocks` takes them in sorted
+ * order): the editors' typing first, then row, revision, the note's own
+ * links, projection targets (the projector writes the new file, releases
+ * the old one and regenerates the index.md of both folders), and a
+ * `store_rename_refactor` job naming the notes that link to the old path,
+ * fixed inside the transaction, so a note later created at the old path
+ * never has its incoming links re-targeted.
  *
  * Links in other notes are rewritten after the locks are released, each by
- * `updateFn` under that note's own lock: `writeThroughCollab` waits for the
- * relay's store hook, which code holding a note lock must never wait for
- * (ADR-003 §5.1), and two renames rewriting each other's referrers under
- * their own locks would each wait for the other's. Each referrer is found
- * again by id when its links are rewritten (relinkReferrer, #803).
+ * `updateFn` under that note's own lock (two renames rewriting each other's
+ * referrers under their own locks would each wait for the other), and
+ * credited to the rename's actor (#403). The job is leased while this runs;
+ * after a crash the projector resumes it.
  */
 export async function renameNote(
   vaultId: string,
   from: string,
   toName: string,
   actor: Actor = SYSTEM_ACTOR,
-  updateFn: (
-    vaultId: string,
-    path: string,
-    input: { frontmatter?: Record<string, unknown>; body?: BodyEdit },
-    actor: Actor,
-  ) => Promise<NoteRow | null> = updateNote,
+  updateFn: ReferrerWrite = updateNote,
 ): Promise<NoteRow | null> {
   const fromResolved = resolveNotePath(from)
   let toPath: string
@@ -776,24 +779,40 @@ export async function renameNote(
     () => moveNote(vaultId, fromResolved, toResolved, renaming, actor),
   )
   if (!moved) return null
-
-  // Refactor incoming wikilinks across other notes in the vault.
-  for (const referrer of moved.referrers) {
-    try {
-      const relinked = await relinkReferrer(vaultId, referrer.id, moved.updated.id, fromResolved.fullPath, (path, body) =>
-        updateFn(vaultId, path, { body }, SYSTEM_ACTOR),
-      )
-      if (!relinked) console.warn(`[rename] ${renaming}: links in ${referrer.path} not rewritten: the notes kept moving`)
-    } catch (err) {
-      // Grown past the cap since the check: the rename is done, so the other
-      // referrers still get their links; this one keeps the old link.
-      if (!(err instanceof NoteTooLargeError)) throw err
-      console.warn(`[rename] ${renaming}: links in ${referrer.path} not rewritten: ${err.message}`)
-    }
+  failpoint('rename.after-commit-before-refactor')
+  if (moved.job !== null) {
+    await runRenameRefactor(
+      { vaultId, noteId: moved.updated.id, fromPath: fromResolved.fullPath, referrers: moved.referrers, actor },
+      updateFn,
+    )
+    await completeJob(moved.job)
   }
-
   return moved.updated
 }
+
+/**
+ * The referrer refactor of a rename (job `store_rename_refactor`): rewrites
+ * the links to `fromPath` in each referrer, by id. Grown past the size cap
+ * since the rename's check: that referrer keeps the old link, the others
+ * still get theirs.
+ */
+async function runRenameRefactor(payload: RenameRefactorPayload, updateFn: ReferrerWrite = updateNote): Promise<void> {
+  const renaming = `renaming ${payload.fromPath}`
+  const actor = payload.actor ?? SYSTEM_ACTOR
+  for (const referrerId of payload.referrers) {
+    try {
+      const relinked = await relinkReferrer(payload.vaultId, referrerId, payload.noteId, payload.fromPath, (path, body) =>
+        updateFn(payload.vaultId, path, { body }, actor),
+      )
+      if (!relinked) console.warn(`[rename] ${renaming}: links in note ${referrerId} not rewritten: the notes kept moving`)
+    } catch (err) {
+      if (!(err instanceof NoteTooLargeError)) throw err
+      console.warn(`[rename] ${renaming}: links in note ${referrerId} not rewritten: ${err.message}`)
+    }
+  }
+}
+
+registerRenameRefactor((payload) => runRenameRefactor(payload))
 
 /** Rounds relinkReferrer runs before it gives up on notes that keep moving. */
 const RELINK_ROUNDS = 5
@@ -843,11 +862,14 @@ async function relinkReferrer(
   return false
 }
 
+/** How long a rename holds its referrer refactor job while it runs it itself; after a crash the projector takes it over. */
+const RENAME_REFACTOR_LEASE_MS = 10 * 60_000
+
 /**
- * renameNote's move, run under the note locks of both paths. Records the
- * `rename` event by `actor` when the path changes (#479). Returns the
- * moved row and the notes (id, and the path they had) whose links to the old
- * path renameNote rewrites next, or null when no live note is at the old path.
+ * renameNote's move, run under the note locks of both paths. Returns the
+ * moved row, the ids of the notes whose links to the old path renameNote
+ * rewrites next, and the id of the leased `store_rename_refactor` job (null
+ * when there is nothing to rewrite), or null when no live note is at the old path.
  */
 async function moveNote(
   vaultId: string,
@@ -855,97 +877,87 @@ async function moveNote(
   toResolved: ResolvedNotePath,
   renaming: string,
   actor: Actor,
-): Promise<{ updated: NoteRow; referrers: { id: string; path: string }[] } | null> {
-  const row = await getLiveNote(vaultId, fromResolved.fullPath)
-  if (!row) return null
+): Promise<{ updated: NoteRow; referrers: string[]; job: number | null } | null> {
+  const seen = await readStored(vaultId, fromResolved.fullPath)
+  if (!seen) return null
   if (toResolved.fullPath !== fromResolved.fullPath && (await getLiveNote(vaultId, toResolved.fullPath))) {
     throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
   }
-
-  // Disk is canonical source (readNote), row is fallback.
-  const existing = await readNote(vaultId, fromResolved.fullPath)
-  const currentFrontmatter = (existing?.frontmatter ?? (row.frontmatter as Frontmatter)) as Frontmatter
-  const rawBody = existing?.body ?? row.body
   const isMoving = fromResolved.fullPath !== toResolved.fullPath
-
-  // Refactor any self-referential wikilinks in the note's own body
-  const currentBody = isMoving
-    ? refactorWikilinks(rawBody, fromResolved.fullPath, toResolved.fullPath)
-    : rawBody
-
-  const newFrontmatter: Frontmatter = {
-    ...currentFrontmatter,
-    type: toResolved.type,
-  }
-  validateNote(toResolved.type, toResolved.name, newFrontmatter, currentBody)
-  // #491: rewriting links can grow a body past the size cap. Every rewritten
-  // body (the note's own, then each referrer's) is checked before anything is
-  // written, so a refused rename leaves the vault as it was.
-  assertBodyFits(currentBody, rawBody, `${renaming} rewrites its own links`)
-  const referrers = isMoving ? await linkReferrers(vaultId, row.id, fromResolved.fullPath) : []
-  for (const { path } of referrers) {
-    const referrer = await readNote(vaultId, path)
-    if (!referrer) continue
-    const rewritten = refactorWikilinks(referrer.body, fromResolved.fullPath, toResolved.fullPath)
-    assertBodyFits(rewritten, referrer.body, `${renaming} rewrites its links in ${path}`)
-  }
-
-  const fromFile = noteFile(vaultId, fromResolved.fullPath)
-  const toFile = noteFile(vaultId, toResolved.fullPath)
-
-  if (isMoving) {
-    await atomicWrite(toFile, serializeNote({ frontmatter: newFrontmatter, body: currentBody }))
-    await unlink(fromFile).catch(() => {})
-    await renameCrdtState(vaultId, fromResolved.fullPath, toResolved.fullPath).catch(() => {})
-  } else {
-    await atomicWrite(toFile, serializeNote({ frontmatter: newFrontmatter, body: currentBody }))
-  }
-
-  let updated: NoteRow
+  const fold = foldSource(vaultId, seen.id, fromResolved.fullPath)
+  const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
+  // Self-referential wikilinks in the note's own body follow it.
+  const keptText = keptBody(plainRow(seen), current)
+  const newBody = isMoving ? refactorWikilinks(keptText, fromResolved.fullPath, toResolved.fullPath) : keptText
+  const newFrontmatter: Frontmatter = { ...current.frontmatter, type: toResolved.type }
+  let result: { updated: StoredNote; referrers: string[]; job: number | null; keepLiveBody: boolean } | null
   try {
-    const [u] = await db
-      .update(notes)
-      .set({
-        name: toResolved.name,
-        type: toResolved.type,
-        path: toResolved.fullPath,
-        body: currentBody,
-        frontmatter: newFrontmatter,
-        updatedAt: new Date(),
-      })
-      .where(eq(notes.id, row.id))
-      .returning()
-    updated = u!
+    validateNote(toResolved.type, toResolved.name, newFrontmatter, newBody)
+    // #491: rewriting links can grow a body past the size cap. Every rewritten
+    // body (the note's own, then each referrer's) is checked before anything is
+    // written, so a refused rename leaves the vault as it was.
+    assertBodyFits(newBody, current.body, `${renaming} rewrites its own links`)
+    result = await storeTransaction([seen.id], async (tx) => {
+      const locked = await lockedNote(tx, seen.id)
+      if (!locked || locked.deletedAt || locked.path !== fromResolved.fullPath) return null
+      const { row, refused } = await foldLive(tx, locked, fold)
+      const referrers = isMoving ? await linkReferrers(tx, vaultId, row.id, fromResolved.fullPath) : []
+      for (const referrer of referrers) {
+        const rewritten = refactorWikilinks(referrer.body, fromResolved.fullPath, toResolved.fullPath)
+        assertBodyFits(rewritten, referrer.body, `${renaming} rewrites its links in ${referrer.path}`)
+      }
+      const { row: updated } = await applyRowChange(
+        tx,
+        row,
+        { path: toResolved.fullPath, type: toResolved.type, name: toResolved.name, frontmatter: newFrontmatter, body: newBody },
+        isMoving
+          ? { action: 'rename', actor, fromPath: fromResolved.fullPath, toPath: toResolved.fullPath }
+          : { action: 'update', actor },
+      )
+      if (isMoving) {
+        // The folders the note left: their index.md no longer lists it.
+        await insertStoreJob(tx, STORE_JOBS.dirIndex, { vaultId, dirs: fromResolved.ancestorDirectories })
+      }
+      const job =
+        referrers.length > 0
+          ? await insertStoreJob(
+              tx,
+              STORE_JOBS.renameRefactor,
+              { vaultId, noteId: updated.id, fromPath: fromResolved.fullPath, referrers: referrers.map((r) => r.id), actor },
+              { leaseMs: RENAME_REFACTOR_LEASE_MS },
+            )
+          : null
+      return { updated, referrers: referrers.map((r) => r.id), job, keepLiveBody: refused && updated.body === locked.body }
+    })
   } catch (err) {
-    if (isMoving) {
-      await atomicWrite(fromFile, serializeNote({ frontmatter: currentFrontmatter, body: rawBody })).catch(() => {})
-      await unlink(toFile).catch(() => {})
-      await renameCrdtState(vaultId, toResolved.fullPath, fromResolved.fullPath).catch(() => {})
-    }
+    releaseFold(fold)
+    if (isUniqueViolation(err)) throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
     throw err
   }
-
-  const affectedDirs = [
-    ...new Set([...fromResolved.ancestorDirectories, ...toResolved.ancestorDirectories]),
-  ]
-  await regenProgressiveIndices(vaultId, affectedDirs)
-  await syncLinks(updated.id, currentBody)
-  if (isMoving) {
-    await recordEvent(
-      updated.id,
-      { action: 'rename', fromPath: fromResolved.fullPath, toPath: toResolved.fullPath },
-      newFrontmatter,
-      currentBody,
-      actor,
-    )
+  if (!result) {
+    releaseFold(fold)
+    return null
   }
-  return { updated, referrers }
+  // S2a (§5.5): every loaded document of the note (or its bin) gets the change, then the bin moves with the note.
+  await pushCommitted(vaultId, fromResolved.fullPath, fold, result.updated, result.keepLiveBody)
+  if (isMoving) {
+    const live = liveDocumentsOf(seen.id).find((d) => d.name === `${vaultId}/${fromResolved.fullPath}`)
+    if (live) await saveCrdtState(vaultId, fromResolved.fullPath, Y.encodeStateAsUpdate(live.doc)).catch(() => {})
+    await renameCrdtState(vaultId, fromResolved.fullPath, toResolved.fullPath).catch(() => {})
+  }
+  afterCommit()
+  return { updated: plainRow(result.updated), referrers: result.referrers, job: result.job }
 }
 
-/** The live notes (id and path), other than `noteId`, that link to `path`. */
-async function linkReferrers(vaultId: string, noteId: string, path: string): Promise<{ id: string; path: string }[]> {
-  const rows = await db
-    .select({ id: notes.id, path: notes.path })
+/** The live notes (id, path, body), other than `noteId`, that link to `path`. */
+async function linkReferrers(
+  tx: Tx,
+  vaultId: string,
+  noteId: string,
+  path: string,
+): Promise<{ id: string; path: string; body: string }[]> {
+  const rows = await tx
+    .select({ id: notes.id, path: notes.path, body: notes.body })
     .from(noteLinks)
     .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
     .where(
@@ -960,9 +972,11 @@ async function linkReferrers(vaultId: string, noteId: string, path: string): Pro
 }
 
 /**
- * Soft delete (spec 6: one consistent delete behavior): file → .trash, row
- * keeps everything. Under the note's lock (#484): a write to the note that
- * waited for the delete finds no note instead of writing a file back.
+ * Soft delete (spec 6: one consistent delete behavior): the row keeps
+ * everything; the projector moves the file to `.trash/<id>.md` and
+ * regenerates the folder indexes. One transaction under the note's lock
+ * (#484), after the editors' typing is stored (Invariant W): a write to the
+ * note that waited for the delete finds no note instead of writing.
  */
 export async function softDeleteNote(
   vaultId: string,
@@ -971,18 +985,22 @@ export async function softDeleteNote(
 ): Promise<NoteRow | null> {
   const resolved = resolveNotePath(path)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
-    const row = await getLiveNote(vaultId, resolved.fullPath)
-    if (!row) return null
-    const [updated] = await db
-      .update(notes)
-      .set({ deletedAt: new Date(), updatedAt: new Date() })
-      .where(eq(notes.id, row.id))
-      .returning()
-    await mkdir(join(vaultDir(vaultId), '.trash'), { recursive: true })
-    await rename(noteFile(vaultId, resolved.fullPath), trashFile(vaultId, row.id))
-    await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
-    await recordEvent(row.id, { action: 'delete' }, row.frontmatter, row.body, actor)
-    return updated!
+    const seen = await readStored(vaultId, resolved.fullPath)
+    if (!seen) return null
+    const fold = foldSource(vaultId, seen.id, resolved.fullPath)
+    try {
+      const deleted = await storeTransaction([seen.id], async (tx) => {
+        const locked = await lockedNote(tx, seen.id)
+        if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
+        const { row } = await foldLive(tx, locked, fold)
+        return (await applyRowChange(tx, row, { deletedAt: new Date() }, { action: 'delete', actor })).row
+      })
+      if (!deleted) return null
+      afterCommit()
+      return plainRow(deleted)
+    } finally {
+      releaseFold(fold)
+    }
   })
 }
 
@@ -1006,27 +1024,30 @@ async function withTrashedNote<T>(
   })
 }
 
+/** Restores a trashed note (one transaction, revision `restore`, #479); the projector moves its file back. */
 export async function restoreNote(
   vaultId: string,
   noteId: string,
   actor: Actor = SYSTEM_ACTOR,
 ): Promise<NoteRow | null> {
-  return withTrashedNote(vaultId, noteId, async (row) => {
-    const resolved = resolveNotePath(row.path)
-    if (await getLiveNote(vaultId, resolved.fullPath)) {
-      throw new OkfValidationError(`a live note already exists at ${resolved.fullPath}`)
+  return withTrashedNote(vaultId, noteId, async (seen) => {
+    if (await getLiveNote(vaultId, seen.path)) {
+      throw new OkfValidationError(`a live note already exists at ${seen.path}`)
     }
-    const [updated] = await db
-      .update(notes)
-      .set({ deletedAt: null, updatedAt: new Date() })
-      .where(eq(notes.id, row.id))
-      .returning()
-    await mkdir(dirname(noteFile(vaultId, resolved.fullPath)), { recursive: true })
-    await rename(trashFile(vaultId, row.id), noteFile(vaultId, resolved.fullPath))
-    await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
-    scheduleEmbedding(row.id)
-    await recordEvent(row.id, { action: 'restore' }, row.frontmatter, row.body, actor)
-    return updated!
+    let restored: StoredNote | null
+    try {
+      restored = await storeTransaction([seen.id], async (tx) => {
+        const locked = await lockedNote(tx, seen.id)
+        if (!locked || !locked.deletedAt) return null
+        return (await applyRowChange(tx, locked, { deletedAt: null }, { action: 'restore', actor })).row
+      })
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new OkfValidationError(`a live note already exists at ${seen.path}`)
+      throw err
+    }
+    if (!restored) return null
+    afterCommit()
+    return plainRow(restored)
   })
 }
 
@@ -1655,25 +1676,44 @@ export async function revertNote(
  * property. Owner/admin only — enforced by callers.
  */
 export async function purgeRevision(vaultId: string, revisionId: string): Promise<boolean> {
-  const rows = await db
-    .select({ revisionId: noteRevisions.id })
-    .from(noteRevisions)
-    .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
-    .where(and(eq(noteRevisions.id, revisionId), eq(notes.vaultId, vaultId)))
-  if (rows.length === 0) return false
+  const [found] = (await db.execute(sql`
+    SELECT r.seq = n.seq AS current FROM note_revisions r JOIN notes n ON n.id = r.note_id
+    WHERE r.id = ${revisionId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ current: boolean | null }>
+  if (!found) return false
+  // ADR-003 §5.5: the note's text still holds what this revision holds (invariant I2).
+  if (found.current) {
+    throw new OkfValidationError('this revision is the note as it is now; edit the note first, then purge the revision')
+  }
   await db.delete(noteRevisions).where(eq(noteRevisions.id, revisionId))
   return true
 }
 
-/** Permanently removes a trashed note (used by purge policies later), under its path's note lock (#484). */
+/**
+ * Permanently removes a trashed note (used by purge policies later), under
+ * its path's note lock (#484): one transaction deletes the row (revisions,
+ * links and projection rows cascade) and its semantic edges, and queues the
+ * removal of its files (`store_remove_file`, ADR-003 §5.5), which the
+ * projector runs under the file ownership rules.
+ */
 export async function purgeNote(vaultId: string, noteId: string): Promise<boolean> {
   const purged = await withTrashedNote(vaultId, noteId, async (row) => {
-    await db.delete(notes).where(eq(notes.id, row.id))
-    // semanticEdges is polymorphic and has no FK (spec 9), so it does not
-    // cascade — clear it by hand or the rows leak (#92).
-    await deleteSemanticEdgesFor('note', [row.id])
-    await rm(trashFile(vaultId, row.id), { force: true })
+    const done = await storeTransaction([row.id], async (tx) => {
+      const locked = await lockedNote(tx, row.id)
+      if (!locked || !locked.deletedAt) return false
+      await tx.delete(notes).where(eq(notes.id, row.id))
+      // semanticEdges is polymorphic and has no FK (spec 9), so it does not
+      // cascade — clear it by hand or the rows leak (#92).
+      await deleteSemanticEdgesFor('note', [row.id], tx)
+      await insertStoreJob(tx, STORE_JOBS.removeFile, { vaultId, ownerId: row.id, paths: [`.trash/${row.id}.md`] })
+      // The delete's dir_index projection cascades away with the row: the folders are queued here.
+      await insertStoreJob(tx, STORE_JOBS.dirIndex, { vaultId, dirs: resolveNotePath(row.path).ancestorDirectories })
+      return true
+    })
+    if (!done) return false
+    failpoint('purge.after-commit-before-remove')
+    // The unchanged S2a relay still keys its CRDT state by path (ADR-003 §8 step 2e).
     await deleteCrdtState(vaultId, row.path).catch(() => {})
+    wakeProjector()
     return true
   })
   return purged ?? false

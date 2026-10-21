@@ -10,6 +10,8 @@ import { scrubStoredGitCredentials } from './repositories/git-remote.js'
 import { startBackupScheduler } from './export/backup-service.js'
 import { config, MIN_MONITORING_TOKEN_LENGTH } from './config.js'
 import { sql } from './db/client.js'
+import { bootStore } from './notes/store-reconcile.js'
+import { flushProjections } from './notes/projector.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 
@@ -26,6 +28,14 @@ const app = await buildApp()
 
 try {
   await runMigrations()
+  // ADR-003 S2a, before anything is served (§7 boot steps 2-3): stale
+  // projection claims cleared, the one-time backfill (resumable), the
+  // reconciliation of rows written around the store, and the projector run
+  // until files equal rows. Nothing here aborts boot because of one note.
+  const store = await bootStore()
+  if (!store.migrated) console.warn('store backfill had failures: see the migration report; it runs again at the next boot')
+  const r = store.reconciled
+  if (r && r.projections + r.raised + r.revisions + r.failed > 0) console.log(`store reconciliation: ${JSON.stringify(r)}`)
   // Before anything serves or syncs a repository: remotes stored with a
   // credential in the URL (before #383 was fixed) are moved to encrypted storage.
   const scrub = await scrubStoredGitCredentials()
@@ -58,11 +68,14 @@ try {
   const collab = startCollabServer(app.server)
   // Hocuspocus used to install these itself inside its `listen()`. Without
   // them a redeploy drops every note edit still inside the store debounce.
+  // After the relay's last stores commit, the projector gets a bounded drain
+  // (ADR-003 §7) so their files land and no claim is left behind.
+  const drainProjector = () =>
+    Promise.race([flushProjections(), new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref())]).catch(() => {})
+  const shutdown = () => collab.destroy().then(drainProjector).then(() => app.close())
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
-      void collab
-        .destroy()
-        .then(() => app.close())
+      void shutdown()
         .then(() => sql.end({ timeout: 5 }))
         // Only once every flush finished: a shutdown that fails or that
         // Docker cuts short with SIGKILL stays `unclean`.
@@ -72,17 +85,13 @@ try {
   }
   process.on('uncaughtException', (err) => {
     app.log.error(err, 'uncaught exception, initiating shutdown')
-    void collab
-      .destroy()
-      .then(() => app.close())
+    void shutdown()
       .then(() => sql.end({ timeout: 5 }))
       .finally(() => process.exit(1))
   })
   process.on('unhandledRejection', (reason) => {
     app.log.error({ err: reason }, 'unhandled rejection, initiating shutdown')
-    void collab
-      .destroy()
-      .then(() => app.close())
+    void shutdown()
       .then(() => sql.end({ timeout: 5 }))
       .finally(() => process.exit(1))
   })

@@ -63,9 +63,11 @@ jobs:
       # Vault invariant gate (#578): every live note the server suite left
       # behind must have a file that parses and equals its row. Same database
       # and DATA_DIR as the Test step. A test that damages notes on purpose
-      # must repair them or delete its vault before it ends.
+      # must repair them or delete its vault before it ends. Every test file
+      # flushes the projector when it ends (ADR-003 §7), so a pending
+      # projection means the projector did not run: a failure.
       - name: Check note files left by the tests
-        run: pnpm -C server check-notes
+        run: pnpm -C server check-notes -- --fail-on-pending
         env:
           DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           DATA_DIR: ${{ runner.temp }}/elara-test-data

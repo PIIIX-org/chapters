@@ -7,6 +7,7 @@ import { users } from '../src/db/schema.js'
 import { hashPassword } from '../src/auth/passwords.js'
 import { serializeNote, type Frontmatter } from '../src/notes/okf.js'
 import { getLiveNote, noteFile } from '../src/notes/store.js'
+import { flushProjections } from '../src/notes/projector.js'
 
 let counter = 0
 export function uniqueEmail(prefix = 'user'): string {
@@ -80,6 +81,8 @@ export async function rewriteNoteFileFromRow(vaultId: string, path: string): Pro
  * create, so wiping the shared test database between files is safe.
  */
 export async function wipeInstance(): Promise<void> {
+  // The projector may hold a transaction on vaults and notes in the background: let it finish first.
+  await flushProjections()
   const tables = await sql<Array<{ tablename: string }>>`select tablename from pg_tables where schemaname = 'public'`
   await sql.unsafe(`truncate ${tables.map((t) => `"${t.tablename}"`).join(', ')} cascade`)
   await rm(join(config.dataDir, 'vaults'), { recursive: true, force: true })

@@ -52,18 +52,8 @@
     },
     {
       "test": "browser",
-      "check": "lost typing is recoverable from note history (note_revisions)",
-      "issue": 408
-    },
-    {
-      "test": "browser",
       "check": "no page errors in the browser console",
       "issue": 617
-    },
-    {
-      "test": "browser",
-      "check": "note_revisions credits edit_note to the agent (actor mcp)",
-      "issue": 403
     },
     {
       "test": "browser",

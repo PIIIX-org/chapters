@@ -653,7 +653,7 @@ describe('formatComment: monitoring alerts', () => {
   })
   it('lists the repeats (a subject already failing that failed again) next to the totals', () => {
     const [, r] = runMetrics([metrics(), metrics({ jobFailures: 1, errors: [jobRecord(1)], jobs: { sync: { failed: 1, repeated: 30 } } })])
-    assert.deepEqual(r.alerts[0].repeatedSinceBoot, { embedding: 0, extraction: 0, sync: 30, 'collab-store': 0, backup: 0 })
+    assert.deepEqual(r.alerts[0].repeatedSinceBoot, { embedding: 0, extraction: 0, sync: 30, 'collab-store': 0, backup: 0, projection: 0 })
     const md = formatComment(r.alerts, URL)
     assert.match(md, /Failed since the process started: `sync` 1\. Failed again while already failing \([^)]*\): `sync` 30\./)
     assert.doesNotMatch(md, new RegExp(NOTE))

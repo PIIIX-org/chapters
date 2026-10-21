@@ -67,6 +67,13 @@ export async function recomputeSemanticEdges(
   embedding: number[],
 ): Promise<void> {
   await db.transaction(async (tx) => {
+    // A note purged while it was embedded keeps no edges: the row is locked
+    // (FOR SHARE) for the transaction, so a purge either waits for it and then
+    // deletes the edges, or ran first and nothing is written.
+    if (nodeType === 'note') {
+      const live = await tx.execute(sql`SELECT 1 FROM notes WHERE id = ${nodeId} FOR SHARE`)
+      if ((live as unknown as unknown[]).length === 0) return
+    }
     // ponytail: tuned HNSW ef_search = 100 preserves 99.8% recall while avoiding full-table sequential scans on every note edit (DB-02).
     await tx.execute(sql`set local hnsw.ef_search = 100`)
 
@@ -105,13 +112,14 @@ export async function recomputeSemanticEdges(
   })
 }
 
-/** Removes every semantic edge touching a node, in both directions. */
+/** Removes every semantic edge touching a node, in both directions (inside `client`'s transaction when given). */
 export async function deleteSemanticEdgesFor(
   nodeType: SemanticNodeType,
   nodeIds: string[],
+  client: DbOrTx = db,
 ): Promise<void> {
   if (nodeIds.length === 0) return
-  await db
+  await client
     .delete(semanticEdges)
     .where(
       or(

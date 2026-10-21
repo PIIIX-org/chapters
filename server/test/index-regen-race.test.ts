@@ -16,6 +16,7 @@ import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { readNote } from '../src/notes/store.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 const N = 16
@@ -105,6 +106,8 @@ describe('concurrent index.md regeneration in one folder (#779)', () => {
     expect(outcomes.filter((o) => !o.ok)).toEqual([])
     for (let i = 0; i < N; i++) expect(await readNote(vaultId, pathOf(i))).not.toBeNull()
 
+    // index.md is a projection written after the creates commit (ADR-003 §7): read it once the projector caught up.
+    await flushProjections()
     const index = await readFile(join(config.dataDir, 'vaults', vaultId, FOLDER, 'index.md'), 'utf8')
     const unlisted = outcomes.filter((o) => !new RegExp(`note-${o.i}(?!\\d)`).test(index)).map((o) => o.i)
     expect(unlisted).toEqual([])

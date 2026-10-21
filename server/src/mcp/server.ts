@@ -1,5 +1,4 @@
-import { readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { ListToolsRequestSchema, type ListToolsResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
@@ -46,12 +45,12 @@ import {
   revertNote,
   revisionOfState,
   softDeleteNote,
-  vaultDir,
   withRestorePoint,
   type Actor,
   type RevisionPosition,
 } from '../notes/store.js'
 import { serializeNote } from '../notes/okf.js'
+import { indexRows, renderDirIndex } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
 import { getRepositoryFile, listFileSymbols, listRepositoryFiles } from '../repositories/store.js'
@@ -580,14 +579,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           .map(([name, count]) => ({ name, count }))
           .sort((a, b) => a.name.localeCompare(b.name))
 
-        const indexPath = join(vaultDir(target), dir, 'index.md')
-        let indexContent: string | null = null
-        try {
-          indexContent = await readFile(indexPath, 'utf8')
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-          indexContent = null
-        }
+        // Rendered from the rows like the dir_index projection (ADR-003 §6): never the file, which lags.
+        const userIndex = await readNote(target, `${dir}/index`).catch(() => null)
+        const indexContent = userIndex
+          ? serializeNote({ frontmatter: userIndex.frontmatter, body: userIndex.body })
+          : renderDirIndex(await indexRows(target), dir)
 
         return {
           directory: resolved.fullPath,

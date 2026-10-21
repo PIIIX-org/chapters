@@ -37,6 +37,11 @@ export type CollabStatus =
    *  document, without the undo history, when the deleted text that history
    *  keeps would not fit through the relay's frame limit). */
   | 'too-large'
+  /** The relay refused the note because the server's store migration has not
+   *  processed it yet (ADR-003, close reason `note-not-migrated`): nothing can
+   *  be stored until an administrator fixes the cause and restarts the server,
+   *  so the editor is closed rather than letting typing go nowhere. */
+  | 'not-migrated'
 
 /** A person editing this note, or an agent (an MCP connection) that read or wrote it. */
 export type CollabPeer =
@@ -108,7 +113,7 @@ export interface UseCollabDocOptions {
 }
 
 /** Dead ends: the states where a keystroke reaches no one. */
-const DEAD: readonly CollabStatus[] = ['revoked', 'signed-out', 'offline']
+const DEAD: readonly CollabStatus[] = ['revoked', 'signed-out', 'offline', 'not-migrated']
 
 /**
  * Awareness is whatever a peer chose to broadcast: every field of a person's
@@ -521,7 +526,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
      * reason stands: a signed-out tab's reconnect is refused as well, and
      * that refusal must not turn it into a revocation.
      */
-    const stop = (why: 'revoked' | 'signed-out') => {
+    const stop = (why: 'revoked' | 'signed-out' | 'not-migrated') => {
       if (stopped) return
       stopped = true
       setStatus(why)
@@ -645,7 +650,8 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
             settle()
           }
         },
-        onAuthenticationFailed: kicked,
+        // `note-not-migrated`: the server's store migration has not processed this note; anything else is a revocation.
+        onAuthenticationFailed: ({ reason }) => (reason === 'note-not-migrated' ? stop('not-migrated') : kicked()),
         // The relay closes the document with reason `note-too-large` for a
         // change over the cap (server/src/sync/collab-server.ts), ws closes
         // the socket with 1009 for a frame over its transport limit, and the

@@ -1,17 +1,10 @@
-import { isDeepStrictEqual } from 'node:util'
-import type { DirectConnection } from '@hocuspocus/server'
-import { YAMLParseError } from 'yaml'
-import { getCollab } from './collab-server.js'
 import { applyBodyOps, applyFrontmatterOps, isFrontmatterOp, NoteEditError, type EditOp } from './edit-ops.js'
-import { applyTextDiff } from './text-diff.js'
 import { mergeFrontmatter, mergeText, type LineChange } from './three-way-merge.js'
 import {
-  getLiveNote,
-  readNote,
   recordProposal,
   refuseSuspiciousWrite,
-  resolveNotePath,
-  updateNote,
+  keptBody,
+  writeNote,
   type Actor,
   type BodyEdit,
   type NoteRow,
@@ -19,17 +12,6 @@ import {
 import type { QuarantineRules } from '../notes/growth-guard.js'
 import { assertBodyFits } from '../notes/size-cap.js'
 import { OkfValidationError, validateNote, type Frontmatter } from '../notes/okf.js'
-import { withKeyLock } from '../notes/key-lock.js'
-
-/** A partial write to a note whose file cannot be parsed (#391). 409 over REST. */
-export class NoteFileDamagedError extends Error {
-  readonly statusCode = 409
-  constructor(path: string) {
-    super(
-      `note file for ${path} is damaged and cannot be read; repair it by writing both frontmatter and body, or by reverting to a recorded revision`,
-    )
-  }
-}
 
 /** Where an edit and the changes made since its base revision meet (#475): body lines and frontmatter keys. */
 export interface EditChanges {
@@ -151,17 +133,6 @@ function nextFrontmatter(current: Record<string, unknown>, edit: NoteEdit, type:
 /** An edit rebased onto the live note (#475): the state to write and what happened since the base, or what it overlaps. */
 type Rebased = { frontmatter?: Frontmatter; body?: string; report: WriteReport } | { conflicts: EditChanges }
 
-/** Thrown inside the document transaction when the rebase finds an overlap; the caller keeps a proposal. */
-class EditOverlap extends Error {
-  constructor(
-    readonly conflicts: EditChanges,
-    /** The live body the overlap was found on, which body ops in the proposal resolve against. */
-    readonly liveBody: string,
-  ) {
-    super('edit overlaps changes made since its base revision')
-  }
-}
-
 /**
  * `edit`, made from `edit.base`, three-way merged onto the live note (#475):
  * a `body` per line (mergeText), `frontmatter` and `removeKeys` per key on
@@ -209,199 +180,105 @@ async function propose(note: NoteRow, edit: NoteEdit & { base: EditBase }, actor
   throw new NoteEditConflictError(note.path, await recordProposal(note.id, proposal, actor, base.id), conflicts)
 }
 
-/** True when the note's file exists but does not parse; an I/O failure is rethrown. */
-async function noteFileDamaged(vaultId: string, path: string): Promise<boolean> {
-  try {
-    await readNote(vaultId, path)
-    return false
-  } catch (err) {
-    if (err instanceof OkfValidationError || err instanceof YAMLParseError) return true
-    throw err
-  }
-}
-
 /**
- * Note writes flow through the live CRDT engine when it's running (spec 6:
- * an external/REST/AI edit is a visible participant, never a sudden unexplained
- * change, and in-memory Yjs documents must not clobber external writes). The
- * attributed store write happens immediately here; the relay's debounced store
- * of the same state dedupes in the audit trail.
+ * One agent or REST write (edit_note, REST PUT, revert, a rename's referrer
+ * rewrite) through the transactional store (ADR-003 §5.2, `writeNote`).
+ * There is no relay connection any more (§5.1: a writer holding the note's
+ * lock never waits for the relay's store hook, which a `DirectConnection`'s
+ * disconnect does): the edit is computed against what the editors see (the
+ * relay's loaded document, else the row), committed with its own revision
+ * attributed to `actor` (#403), and then pushed into the loaded document as
+ * a minimal character diff (#408): characters the edit does not change keep
+ * their identity, so a person typing outside the changed region keeps their
+ * text and caret, and typing that reaches the relay meanwhile merges where it
+ * was typed. Body ops resolve against that same text, so text typed since
+ * the caller read the note is kept; one that cannot be resolved refuses the
+ * whole edit before anything changes.
  *
- * The body changes as a minimal character diff from the live text (#408):
- * characters the edit does not change keep their identity, so a person
- * typing outside the changed region keeps their text and caret, and typing
- * that reaches the relay after the edit merges where it was typed. Body ops
- * resolve against the live text inside the same transaction, so text typed
- * since the caller read the note is kept; one that cannot be resolved
- * refuses the whole edit before anything changes.
- *
- * A merge (#438) starts from the live document's frontmatter, which may hold
- * keys a person set that are not stored yet; without the relay it starts from
- * the stored row. The result is validated before the document is touched, so
- * a refused edit never reaches people with the note open, and the store gets
- * the whole resulting map.
- *
- * Writes to one note run one at a time, in call order: the document edit, the
- * relay's store of it and the attributed store write form one unit, so a
- * concurrent write can neither interleave its document edit nor land its store
- * write in between. (The store write takes its own, separate note lock.)
+ * A merge (#438) starts from the current frontmatter, which may hold keys a
+ * person set that the relay has not stored yet. The result is validated
+ * before anything is written, so a refused edit never reaches anyone.
  *
  * The size cap (#491) and `options.quarantine` (MCP edit_note, REST PUT
  * without `allowGrowth`) check the resulting body against the stored one
- * before it reaches the live document: a suspicious write (#492) is recorded
- * as a quarantine revision and thrown, and editors never see it. For body
- * ops that is their result on the live text when the connection opens; the
- * cap is checked again on the text the transaction writes. When this edit
- * changes the body, the relay's own store of the document it produces is not
- * checked again (`directWrite` in its context): the caller here decided. The
- * flag is set only once the edit is in the document: a refused edit (its
- * checks, an op that does not resolve, validation) still disconnects, and
- * that store of the live document, which a person may have doubled, gets the
- * relay's check. A frontmatter-only edit leaves the body to the relay's check.
+ * first: a suspicious write (#492) is recorded as a quarantine revision and
+ * thrown, and editors never see it.
  *
  * An edit with a `base` (edit_note `base_rev`, #475) was made from an older
- * revision: its body and frontmatter are three-way merged onto the live
- * document inside the same transaction (rebase), so only the lines and keys
- * it changed from its base are written and every change made since stays.
- * When one of its changes overlaps a change made since, nothing is written:
- * it is kept as a `proposal` revision and NoteEditConflictError is thrown.
+ * revision: its body and frontmatter are three-way merged onto the current
+ * note (rebase), so only the lines and keys it changed from its base are
+ * written and every change made since stays. When one of its changes
+ * overlaps a change made since, nothing is written: it is kept as a
+ * `proposal` revision and NoteEditConflictError is thrown.
  * `options.report` receives whether the note had changed since the base, and
- * where.
- * `options.revertOf` (revertNote) records the attributed store write as a
- * `revert` event naming that revision (#479).
+ * where. `options.revertOf` (revertNote) records the write as a `revert`
+ * event naming that revision (#479).
  */
 export async function writeThroughCollab(
   vaultId: string,
   path: string,
   input: NoteEdit,
   actor: Actor,
-  options: { quarantine?: QuarantineRules; revertOf?: string; report?: WriteReport } = {},
+  options: { quarantine?: QuarantineRules; revertOf?: string; report?: WriteReport; actorDetail?: Record<string, unknown> } = {},
 ): Promise<NoteRow | null> {
-  const record = { revertOf: options.revertOf }
-  return withKeyLock(`collab:${vaultId}/${resolveNotePath(path).fullPath}`, async () => {
-    const existing = await getLiveNote(vaultId, path)
-    if (!existing) return null
-    const storedFrontmatter = existing.frontmatter as Record<string, unknown>
-    const ops = input.ops ?? []
-    const bodyOps = ops.some((op) => !isFrontmatterOp(op))
-    const based = input.base ? { ...input, base: input.base } : null
-    // Before the document edit: a refused body must never reach the editors (#491, #492).
-    const screen = async (body: string, frontmatter: Record<string, unknown>): Promise<void> => {
-      assertBodyFits(body, existing.body)
-      if (!options.quarantine) return
-      await refuseSuspiciousWrite(existing, { frontmatter: nextFrontmatter(frontmatter, input, existing.type), body }, actor, options.quarantine)
-    }
-    const bodyFromStored = typeof input.body === 'function' ? input.body(existing.body) : input.body
-    if (bodyFromStored !== undefined) {
-      // A based edit's body is not what is written: its rebased body is screened below. Checked
-      // against the stored body, a body made from an older, longer state would be a false quarantine.
-      if (based) assertBodyFits(bodyFromStored, existing.body)
-      else await screen(bodyFromStored, storedFrontmatter)
-    }
-    // The edit written straight to the stored row (no relay, or a damaged file no document can load).
-    // With a base it is rebased onto the row first, like onto the live document below (#475).
-    const storeEdit = async (body: BodyEdit | undefined): Promise<NoteRow | null> => {
-      let frontmatter = nextFrontmatter(storedFrontmatter, input, existing.type)
-      if (based) {
-        const rebased = rebase(based, { frontmatter: storedFrontmatter, body: existing.body }, existing.type)
-        if ('conflicts' in rebased) return propose(existing, based, actor, rebased.conflicts, existing.body)
+  const ops = input.ops ?? []
+  const bodyOps = ops.some((op) => !isFrontmatterOp(op))
+  const based = input.base ? { ...input, base: input.base } : null
+  return writeNote(
+    vaultId,
+    path,
+    async (current, existing) => {
+      const merged = based ? rebase(based, current, existing.type) : null
+      if (based && merged && 'conflicts' in merged) return propose(existing, based, actor, merged.conflicts, current.body)
+      const rebased = merged && !('conflicts' in merged) ? merged : null
+      // An edit that leaves the body alone keeps what the editors see, unless
+      // the relay would refuse to store it (a doubled document, #488/#492):
+      // then the stored body, so the agent's write never carries it in.
+      let body = keptBody(existing, current)
+      let screened = false
+      if (bodyOps) {
+        body = applyBodyOps(current.body, ops, existing.body)
+        screened = true
+      } else if (typeof input.body === 'function') {
+        // Applied to the current text, which may hold typing not stored yet, and checked against it (#491).
+        body = input.body(current.body)
+        assertBodyFits(body, current.body)
+      } else if (rebased) {
         if (rebased.body !== undefined) {
           body = rebased.body
-          await screen(body, storedFrontmatter)
+          screened = true
         }
-        frontmatter = rebased.frontmatter
-        if (options.report) Object.assign(options.report, rebased.report)
+      } else if (input.body !== undefined) {
+        body = input.body
+        screened = true
       }
-      return updateNote(vaultId, path, { frontmatter, body }, actor, record)
-    }
-    const collab = getCollab()
-    if (!collab) {
-      let body = input.body
-      if (bodyOps) {
-        body = applyBodyOps(existing.body, ops)
-        await screen(body, storedFrontmatter)
-      }
-      return storeEdit(body)
-    }
-    const documentName = `${vaultId}/${path}`
-    let connection: DirectConnection
-    // The connection keeps this object as its context, which its stores read.
-    const context = { userId: actor.type === 'user' ? actor.id : 'mcp', directWrite: false }
-    try {
-      connection = await collab.openDirectConnection(documentName, context)
-    } catch (err) {
-      // Loading the collab document parses the note's file. When the file is
-      // damaged (e.g. #384's fence-less index), no document can load, so no
-      // live editor holds one: a full write (edit with frontmatter and body,
-      // or a revert) is written straight to the store, which rewrites, and so
-      // repairs, the file; a frontmatter merge merges onto the stored row. A
-      // body-only, frontmatter-only or ops write would have to keep content
-      // that cannot be read.
-      if (!(await noteFileDamaged(vaultId, path))) throw err
-      if (input.frontmatter === undefined || input.body === undefined) throw new NoteFileDamagedError(path)
-      return storeEdit(input.body)
-    }
-    const next: { frontmatter?: Frontmatter; body?: string } = {}
-    try {
-      const live = collab.documents.get(documentName)
-      if (bodyOps && live) {
-        await screen(applyBodyOps(live.getText('body').toString(), ops, existing.body), live.getMap('frontmatter').toJSON())
-      }
-      if (based && live) {
-        const liveFrontmatter = live.getMap('frontmatter').toJSON() as Record<string, unknown>
-        const liveBody = live.getText('body').toString()
-        const rebased = rebase(based, { frontmatter: liveFrontmatter, body: liveBody }, existing.type)
-        if ('conflicts' in rebased) throw new EditOverlap(rebased.conflicts, liveBody)
-        if (rebased.body !== undefined) await screen(rebased.body, liveFrontmatter)
-      }
-      await connection.transact((document) => {
-        const fm = document.getMap('frontmatter')
-        const current = fm.toJSON() as Record<string, unknown>
-        const text = document.getText('body')
-        // Rebased and resolved again here: typing may have reached the relay during the checks.
-        const rebased = based ? rebase(based, { frontmatter: current, body: text.toString() }, existing.type) : null
-        if (rebased && 'conflicts' in rebased) throw new EditOverlap(rebased.conflicts, text.toString())
-        next.frontmatter = rebased ? rebased.frontmatter : nextFrontmatter(current, input, existing.type)
-        if (bodyOps) {
-          next.body = applyBodyOps(text.toString(), ops, existing.body)
-          assertBodyFits(next.body, existing.body)
-        } else if (typeof input.body === 'function') {
-          // Applied to the live text, which may hold typing not stored yet, and checked against it (#491).
-          next.body = input.body(text.toString())
-          assertBodyFits(next.body, text.toString())
-        } else if (rebased) {
-          next.body = rebased.body
-          if (next.body !== undefined) assertBodyFits(next.body, existing.body)
-        } else {
-          next.body = input.body
+      if (screened) {
+        // Before anything is written: a refused body must never reach the editors (#491, #492).
+        assertBodyFits(body, existing.body)
+        if (options.quarantine) {
+          await refuseSuspiciousWrite(
+            existing,
+            { frontmatter: nextFrontmatter(current.frontmatter, input, existing.type), body },
+            actor,
+            options.quarantine,
+          )
         }
-        const nextNote = next.frontmatter ?? { ...storedFrontmatter, type: existing.type }
-        const body = next.body ?? existing.body
-        try {
-          validateNote(existing.type, existing.name, nextNote, body)
-        } catch (err) {
-          throw explainInheritedKeys(err, current, input, (candidate) => validateNote(existing.type, existing.name, candidate, body), nextNote)
-        }
-        if (next.body !== undefined) applyTextDiff(text, next.body)
-        if (next.frontmatter !== undefined) {
-          for (const key of Object.keys(current)) if (!Object.hasOwn(next.frontmatter, key)) fm.delete(key)
-          for (const [key, value] of Object.entries(next.frontmatter)) {
-            if (!isDeepStrictEqual(current[key], value)) fm.set(key, value)
-          }
-        }
-        // Before the transaction ends, so every store of its change already sees the flag.
-        context.directWrite = input.body !== undefined || bodyOps
-        if (rebased && options.report) Object.assign(options.report, rebased.report)
-      })
-    } catch (err) {
-      // Nothing was written: the edit is kept as a proposal instead.
-      if (err instanceof EditOverlap && based) await propose(existing, based, actor, err.conflicts, err.liveBody)
-      throw err
-    } finally {
-      await connection.disconnect()
-    }
-    return updateNote(vaultId, path, { frontmatter: next.frontmatter, body: next.body }, actor, record)
-  })
+      }
+      const frontmatter = (rebased ? rebased.frontmatter : nextFrontmatter(current.frontmatter, input, existing.type)) ?? {
+        ...current.frontmatter,
+        type: existing.type,
+      }
+      try {
+        validateNote(existing.type, existing.name, frontmatter, body)
+      } catch (err) {
+        throw explainInheritedKeys(err, current.frontmatter, input, (candidate) => validateNote(existing.type, existing.name, candidate, body), frontmatter)
+      }
+      if (rebased && options.report) Object.assign(options.report, rebased.report)
+      return { frontmatter, body }
+    },
+    actor,
+    { revertOf: options.revertOf, actorDetail: options.actorDetail },
+  )
 }
 
 /**

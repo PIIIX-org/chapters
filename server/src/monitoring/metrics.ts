@@ -24,7 +24,7 @@ export const LATENCY_BUCKETS_MS = [
   1, 2, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200, 250, 300, 400, 500, 750, 1000, 1500, 2000, 2500, 3000,
   4000, 5000, 7500, 10_000, 15_000, 20_000, 30_000, 60_000, Infinity,
 ]
-export const JOB_KINDS = ['embedding', 'extraction', 'sync', 'collab-store', 'backup'] as const
+export const JOB_KINDS = ['embedding', 'extraction', 'sync', 'collab-store', 'backup', 'projection'] as const
 export type JobKind = (typeof JOB_KINDS)[number]
 export type ActorKind = 'user' | 'token' | 'anonymous'
 

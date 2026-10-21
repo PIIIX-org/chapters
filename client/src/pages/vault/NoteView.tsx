@@ -934,6 +934,7 @@ function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: Colla
       notice={
         <CollabNotices
           revoked={revoked}
+          notMigrated={collab.status === 'not-migrated'}
           tooLarge={collab.tooLarge}
           unmerged={collab.unmerged}
           onDiscard={collab.discardUnmerged}

@@ -31,7 +31,6 @@ export async function purgeVaultRecord(vaultId: string): Promise<void> {
   const noteIds = (
     await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, vaultId))
   ).map((n) => n.id)
-  await deleteSemanticEdgesFor('note', noteIds)
   // notifications is the other polymorphic table with no FK (#101): a
   // grantee's feed would otherwise keep `vault_shared` rows pointing at a
   // vault that no longer exists.
@@ -41,6 +40,9 @@ export async function purgeVaultRecord(vaultId: string): Promise<void> {
 
   // Everything else referencing the vault cascades via FK.
   await db.delete(vaults).where(eq(vaults.id, vaultId))
+  // Edges after the rows: an embedding that locked its note before the delete
+  // has committed its edges by now, and none can be added after it.
+  await deleteSemanticEdgesFor('note', noteIds)
   await rm(join(config.dataDir, 'vaults', vaultId), { recursive: true, force: true })
 }
 

@@ -32,6 +32,7 @@ import {
   updateNote,
   type NoteRow,
 } from '../src/notes/store.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 const fsHooks = vi.hoisted(() => ({
@@ -71,8 +72,9 @@ const value = <T>(result: Settled<T>): T => {
   return result.value
 }
 
-/** The note body in `file`, or null when there is no such file. */
+/** The note body in `file` once the projector has written every committed write (ADR-003 §7), or null when there is no such file. */
 async function bodyIn(file: string): Promise<string | null> {
+  await flushProjections()
   try {
     return parseNote(await readFile(file, 'utf8')).body
   } catch (err) {
@@ -166,14 +168,13 @@ describe('two writers making one path live at the same time (#484)', () => {
   it('a create at the path a rename is moving into: exactly one wins, and the winner keeps its file', async () => {
     const target = 'docs/claimed'
     await seed('docs/claimant', 'Moved here by a rename.')
-    let create: Promise<Settled<unknown>> | undefined
-    // The create starts once the rename has checked the target is free and is writing its file.
-    fsHooks.before.set(`/${target}.md`, () => {
-      create = settle(createNote(vaultId, { path: target, body: 'Created here.' }))
-    })
-
-    const rename = await settle(renameNote(vaultId, 'docs/claimant', 'claimed'))
-    const created = await create!
+    // Both start at once. Files are projections written after commit (ADR-003
+    // §7), so there is no file write to start the create in; the path is
+    // decided by the note locks and the unique index.
+    const [rename, created] = await Promise.all([
+      settle(renameNote(vaultId, 'docs/claimant', 'claimed')),
+      settle(createNote(vaultId, { path: target, body: 'Created here.' })),
+    ])
 
     expect([rename, created].filter((r) => r.status === 'fulfilled')).toHaveLength(1)
     const lost = [rename, created].find((r) => r.status === 'rejected') as PromiseRejectedResult
@@ -313,13 +314,13 @@ describe('renames of notes that link to each other, at the same time (#803)', ()
     await seed('docs/chain-referrer', 'Links to [[docs/chain]].')
     let second: Promise<NoteRow | null> | undefined
     // The second rename looks for links to chain-2 while the first one's
-    // rewrite of the referrer is landing, before its links are stored.
-    fsHooks.late.add('/docs/chain-referrer.md')
-    fsHooks.before.set('/docs/chain-referrer.md', () => {
-      second = renameNote(vaultId, 'docs/chain-2', 'chain-3')
-    })
-
-    await renameNote(vaultId, 'docs/chain', 'chain-2')
+    // rewrite of the referrer is landing, before its links are stored: it
+    // starts from the first rename's referrer write.
+    const write: typeof updateNote = (...args) => {
+      second ??= renameNote(vaultId, 'docs/chain-2', 'chain-3')
+      return updateNote(...args)
+    }
+    await renameNote(vaultId, 'docs/chain', 'chain-2', { type: 'collab' }, write)
     expect((await second)?.path).toBe('docs/chain-3')
 
     const body = 'Links to [[docs/chain-3]].'

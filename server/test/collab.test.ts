@@ -9,6 +9,7 @@ import { buildApp } from '../src/app.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { config } from '../src/config.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+import { flushProjections } from '../src/notes/projector.js'
 
 let app: FastifyInstance
 let collab: CollabRelay
@@ -316,35 +317,19 @@ describe('real-time collaboration', () => {
     expect(read.json()).toMatchObject({ frontmatter, body: `STORED ${body}` })
   }, 10_000)
 
-  // #391: with the relay running, every write loads the collab document from
-  // the note's file first, so a damaged file (e.g. #384's fence-less index)
-  // made the note impossible to repair through edit or revert.
-  it('repairs a damaged note file through a full edit or a revert, and refuses a partial edit', async () => {
+  // #391, ADR-003 §6: reads and writes use the row, never the file, so a
+  // damaged file (e.g. #384's fence-less index) blocks nothing; the next
+  // projection copies it to .conflicts/ and writes the row's rendering.
+  it('a damaged note file blocks no read or edit, and the next projection repairs it', async () => {
     const send = (method: 'POST' | 'PUT' | 'GET', url: string, body?: object) =>
       app.inject({ method, url: `/api/vaults/${vaultId}${url}`, headers: { cookie: ownerCookie }, body })
     const file = join(config.dataDir, 'vaults', vaultId, 'docs', 'damaged.md')
-    const damage = () => writeFile(file, '## Concepts & Artifacts\n\n| Concept |\n', 'utf8')
-
     expect((await send('POST', '/notes', { type: 'docs', name: 'damaged', body: 'Good content.' })).statusCode).toBe(200)
-    await damage()
-    expect((await send('GET', '/notes/docs/damaged')).statusCode).toBe(400)
-
-    const partial = await send('PUT', '/notes/docs/damaged', { body: 'Only a body.' })
-    expect(partial.statusCode).toBe(409)
-    expect(partial.json().error).toMatch(/damaged/)
-
-    const full = await send('PUT', '/notes/docs/damaged', { frontmatter: { type: 'docs', title: 'Fixed' }, body: 'Repaired.' })
-    expect(full.statusCode).toBe(200)
-    expect(await readFile(file, 'utf8')).toMatch(/^---\n[\s\S]*title: Fixed[\s\S]*---\nRepaired\.$/)
-    // Repaired for good: a normal partial edit goes through the relay again.
-    expect((await send('PUT', '/notes/docs/damaged', { body: 'Edited after repair.' })).statusCode).toBe(200)
-    expect((await send('GET', '/notes/docs/damaged')).json()).toMatchObject({ body: 'Edited after repair.' })
-
-    const history = (await send('GET', '/history/docs/damaged')).json()
-    const created = history.find((r: { action: string }) => r.action === 'create')
-    await damage()
-    const reverted = await send('POST', '/revert/docs/damaged', { revisionId: created.id })
-    expect(reverted.statusCode).toBe(200)
+    await flushProjections()
+    await writeFile(file, '## Concepts & Artifacts\n\n| Concept |\n', 'utf8')
     expect((await send('GET', '/notes/docs/damaged')).json()).toMatchObject({ body: 'Good content.' })
+    expect((await send('PUT', '/notes/docs/damaged', { body: 'Only a body.' })).statusCode).toBe(200)
+    await flushProjections()
+    expect(await readFile(file, 'utf8')).toMatch(/^---\n[\s\S]*---\nOnly a body\.$/)
   })
 })

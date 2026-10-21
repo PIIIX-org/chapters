@@ -72,8 +72,10 @@ export async function buildApp(
     } else {
       req.log.info({ err: error }, error.message)
     }
+    // A 5xx message is hidden in production unless the error says it is safe to show (`expose`, e.g. StoreBusyError).
+    const exposed = 'expose' in error && error.expose === true
     const message =
-      statusCode >= 500 && config.isProd
+      statusCode >= 500 && config.isProd && !exposed
         ? 'Internal server error'
         : error.message || 'Internal server error'
     return reply.code(statusCode).send({
