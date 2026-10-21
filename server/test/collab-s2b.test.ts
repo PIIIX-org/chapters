@@ -60,6 +60,11 @@ afterAll(async () => {
   await app.close()
 })
 
+async function rowFrontmatter(id: string): Promise<Record<string, unknown>> {
+  const [row] = (await db.execute(sql`SELECT frontmatter FROM notes WHERE id = ${id}`)) as unknown as Array<{ frontmatter: Record<string, unknown> }>
+  return row!.frontmatter
+}
+
 async function create(name: string, body: string): Promise<{ id: string; path: string }> {
   const res = await app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/notes`, headers: { cookie }, body: { type: 'docs', name, body } })
   expect(res.statusCode).toBe(200)
@@ -369,16 +374,19 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
   }, 20_000)
 
   it('migrate-store --dry-run predicts what the backfill does with each bin', async () => {
-    const writeBin = async (path: string, text: string) => {
+    const writeBin = async (path: string, text: string, frontmatter: Record<string, unknown> = { type: 'docs' }) => {
       const doc = new Y.Doc()
       doc.getText('body').insert(0, text)
-      doc.getMap('frontmatter').set('type', 'docs')
+      for (const [key, value] of Object.entries(frontmatter)) doc.getMap('frontmatter').set(key, value)
       const bin = join(config.dataDir, 'vaults', vaultId, '.crdt', `${path}.bin`)
       await mkdir(dirname(bin), { recursive: true })
       await writeFile(bin, Y.encodeStateAsUpdate(doc))
     }
     const row = await create('plan-row', 'Row text.\n')
-    await writeBin(row.path, 'Row text.\n')
+    await writeBin(row.path, 'Row text.\n', await rowFrontmatter(row.id))
+    // #873: same body as the row, different frontmatter: the backfill attaches it with a diff.
+    const fm = await create('plan-frontmatter', 'Same body.\n')
+    await writeBin(fm.path, 'Same body.\n', { ...(await rowFrontmatter(fm.id)), tags: ['stale'] })
     const revision = await create('plan-revision', 'First text.\n')
     await writeBin(revision.path, 'First text.\n')
     await writeThroughCollab(vaultId, revision.path, { body: 'Second text.\n' }, { type: 'user' })
@@ -387,17 +395,22 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
     const none = await create('plan-none', 'No bin.\n')
     const opened = await create('plan-opened', 'Opened.\n')
     ;(await open(opened.id)).provider.destroy()
-    const notes = [row, revision, foreign, none, opened]
+    const notes = [row, fm, revision, foreign, none, opened]
     const plan = await (await dryRun()).planStoreMigration({ vaultId })
-    expect(notes.map((n) => plan.notes.find((p) => p.noteId === n.id)?.collab)).toEqual(['attach', 'attach', 'set-aside', 'seed', 'has-state'])
+    const actions = notes.map((n) => plan.notes.find((p) => p.noteId === n.id)?.collab)
+    expect(actions).toEqual(['attach-equal', 'attach-diffed', 'attach-diffed', 'set-aside', 'seed', 'has-state'])
     const report = await (await backfill()).runCollabBackfill()
     expect(report.failed).toEqual([])
+    // Other tests' bins are attached by the same run; this vault's predicted split must be contained in the report.
+    expect(report.attached.equal).toBeGreaterThanOrEqual(actions.filter((a) => a === 'attach-equal').length)
+    expect(report.attached.diffed).toBeGreaterThanOrEqual(actions.filter((a) => a === 'attach-diffed').length)
     const aside = new Set(report.setAside.map((s) => s.noteId))
     const states = (await db.execute(sql`
-      SELECT note_id FROM note_crdt WHERE note_id IN (${row.id}, ${revision.id}, ${foreign.id}, ${none.id}, ${opened.id})`)) as unknown as Array<{ note_id: string }>
+      SELECT note_id FROM note_crdt WHERE note_id IN (${row.id}, ${fm.id}, ${revision.id}, ${foreign.id}, ${none.id}, ${opened.id})`)) as unknown as Array<{ note_id: string }>
     const hasState = new Set(states.map((s) => s.note_id))
     // attach and has-state both leave the note with CRDT state; set-aside and seed leave none until first open.
     expect(notes.map((n) => (aside.has(n.id) ? 'set-aside' : hasState.has(n.id) ? 'state' : 'seed'))).toEqual([
+      'state',
       'state',
       'state',
       'set-aside',
