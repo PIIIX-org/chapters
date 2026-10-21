@@ -16,6 +16,8 @@ export function getVaultTree(vaultId: string): Promise<VaultTree> {
 }
 
 export interface NoteDetail {
+  /** The note's id: it names the note's collab document (`collabDocName`). */
+  id: string
   path: string
   frontmatter: Record<string, unknown>
   body: string

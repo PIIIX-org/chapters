@@ -17,6 +17,8 @@ export interface LiveNote {
   status: LiveStatus
   /** Latest content the server sent, or null before the first frame. */
   state: LiveNoteState | null
+  /** The note's new path once the server says it was renamed (a `moved` event, ADR-003 §5.4); the stream follows it. */
+  movedTo: string | null
 }
 
 export interface UseLiveNoteOptions {
@@ -40,6 +42,7 @@ export interface UseLiveNoteOptions {
 export function useLiveNote({ vaultId, path, enabled }: UseLiveNoteOptions): LiveNote {
   const [status, setStatus] = useState<LiveStatus>('connecting')
   const [state, setState] = useState<LiveNoteState | null>(null)
+  const [movedTo, setMovedTo] = useState<string | null>(null)
   const everOpen = useRef(false)
 
   useEffect(() => {
@@ -65,6 +68,15 @@ export function useLiveNote({ vaultId, path, enabled }: UseLiveNoteOptions): Liv
       setState(next)
       setStatus('live')
     }
+    // The note was renamed: the server already moved this stream to the new path.
+    source.addEventListener('moved', (event) => {
+      try {
+        const { path: to } = JSON.parse((event as MessageEvent).data as string) as { path: string }
+        setMovedTo(to)
+      } catch {
+        // An unreadable event changes nothing; the stream keeps sending states.
+      }
+    })
     source.onerror = () => {
       // CLOSED means EventSource has given up (a 404 on retry, i.e. access
       // gone). Anything else is its own retry loop, still running.
@@ -75,5 +87,5 @@ export function useLiveNote({ vaultId, path, enabled }: UseLiveNoteOptions): Liv
     return () => source.close()
   }, [vaultId, path, enabled])
 
-  return { status, state }
+  return { status, state, movedTo }
 }

@@ -54,3 +54,18 @@ export function publishNoteState(
     }
   }
 }
+
+/**
+ * A note moved from `from` to `to` (rename, ADR-003 §5.4 "Live viewers"):
+ * its viewers follow it, and each is told the new path once, as a `moved`
+ * event (`data: {"path": "<to>"}`); later states arrive as before.
+ */
+export function moveViewers(vaultId: string, from: string, to: string): void {
+  const payload = `event: moved\ndata: ${JSON.stringify({ path: to })}\n\n`
+  for (const viewer of viewers) {
+    if (viewer.vaultId === vaultId && viewer.path === from) {
+      viewer.path = to
+      viewer.reply.raw.write(payload)
+    }
+  }
+}
