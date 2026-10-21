@@ -6,20 +6,19 @@ import * as Y from 'yjs'
 import { getSessionUser, sessionActive } from '../auth/sessions.js'
 import { hashToken } from '../auth/tokens.js'
 import { atLeast, resolveAccess } from '../vaults/permissions.js'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
-import { getLiveNote, noteLock, readNote, updateNote, splitPath } from '../notes/store.js'
-import { NoteNotMigratedError, noteMigrated, storeMigrationPending } from '../notes/store-tx.js'
-import { withKeyLock } from '../notes/key-lock.js'
-import { docState, liveDocumentsOf, mergeDocuments, registerLiveDocs, sharesHistory, type LiveDocument } from './live-docs.js'
+import { compactCollabState, keepRefusedTyping, loadCollabState, updateNote } from '../notes/store.js'
+import { NoteNotMigratedError, StoreBusyError, collabNoteMigrated, noteMigrated, storeMigrationPending } from '../notes/store-tx.js'
+import { docState, forgetLivePath, livePath, parseDocName, registerLiveDocs, setLivePath, type LiveDocument } from './live-docs.js'
+import { rememberLoadedState } from './note-crdt.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { affects, onPermissionChange } from './permission-events.js'
 import { publishNoteState } from './viewers.js'
 import { consumeTicket } from './tickets.js'
 import { COLLAB_PATH } from './routes.js'
-import { loadCrdtState, saveCrdtState } from './crdt-store.js'
 import { recordJob } from '../monitoring/metrics.js'
 import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
@@ -63,6 +62,24 @@ class SessionEnded extends Error {
 }
 
 /**
+ * Why a note's editors are closed or refused (ADR-003 §5.5): the note is in
+ * the trash or purged. Passed to `close()` right after a delete or purge
+ * commits (live-docs.ts closeNoteEditors), and thrown from `onAuthenticate`
+ * for a note that is not live; the editor (client/src/hooks/useCollabDoc.ts)
+ * reads `note-deleted`, stops reconnecting and says the note is in the trash.
+ */
+class NoteDeletedRefusal extends Error {
+  readonly code = 4410
+  readonly reason = 'note-deleted'
+  constructor(documentName: string) {
+    super(`${documentName}: the note was deleted`)
+  }
+}
+
+/** Documents whose editors were closed because the note was deleted: their unload stores nothing and reports nothing. */
+const deletedDocuments = new WeakSet<Y.Doc>()
+
+/**
  * Thrown from `onAuthenticate` for a note the store migration has not
  * processed yet (ADR-003 §8, Q5): Hocuspocus sends `reason` to the client as
  * the authentication failure; the editor (client/src/hooks/useCollabDoc.ts)
@@ -76,21 +93,27 @@ class NoteNotMigratedRefusal extends Error {
 }
 
 /**
+ * Thrown from `onAuthenticate` for a document named by path (`<vault>/<path>`),
+ * the scheme of bundles from before ADR-003 S2b (§5.4): nothing such a tab
+ * sends is stored. The editor (client/src/hooks/useCollabDoc.ts) reads
+ * `reload-required` and says "Reload to keep editing"; the reload loads the
+ * bundle that names documents by note id, and the tab's unsent typing,
+ * kept in this browser (#720), is merged once or offered as text.
+ */
+class ReloadRequiredRefusal extends Error {
+  readonly reason = 'reload-required'
+  constructor(documentName: string) {
+    super(`refused ${documentName}: documents are named by note id since ADR-003 S2b; the editor must reload`)
+  }
+}
+
+/**
  * The quarantine revision of each loaded document's current episode (#492):
  * stores that continue it update that revision. A document loaded afresh
  * (after an unload) has none, so its quarantine never overwrites an earlier
  * episode's refused body, the only copy of what was typed then.
  */
 const quarantineEpisodes = new WeakMap<Y.Doc, string>()
-
-function parseDocName(name: string): { vaultId: string; path: string } {
-  const slash = name.indexOf('/')
-  if (slash === -1) throw new Error(`invalid document name: ${name}`)
-  const vaultId = name.slice(0, slash)
-  const path = name.slice(slash + 1)
-  splitPath(path) // validates type/name slugs
-  return { vaultId, path }
-}
 
 interface ConnectionContext {
   userId: string
@@ -103,7 +126,7 @@ interface ConnectionContext {
   directWrite?: boolean
 }
 
-/** The note each loaded document was loaded from (ADR-003 §5.5, S2a): its stores go to that note only. */
+/** The note each loaded document holds (its name says so; kept once the load finished). */
 const documentNotes = new WeakMap<Y.Doc, string>()
 
 /**
@@ -168,6 +191,9 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * on every message after it.
      */
     async onAuthenticate({ token, documentName }) {
+      const name = parseDocName(documentName)
+      // A bundle from before S2b names documents by path: refused before anything else, nothing it sends is stored.
+      if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
       const ticket = token ? consumeTicket(token) : null
       let sessionHash: string | null = null
       let userId: string | null = null
@@ -181,7 +207,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         sessionHash = hashToken(token)
       }
       if (!userId || !sessionHash) throw new Error('authentication required')
-      const { vaultId } = parseDocName(documentName)
+      const { vaultId, noteId } = name
       const access = await resolveAccess(userId, vaultId)
       if (!atLeast(access, 'edit')) {
         await logSecurityEvent({
@@ -191,62 +217,38 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         })
         throw new Error('edit access required')
       }
+      // The note by id, in that vault, live: a trashed or purged note takes no editor.
+      const [note] = await db
+        .select({ id: notes.id, deletedAt: notes.deletedAt })
+        .from(notes)
+        .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId)))
+      if (!note || note.deletedAt) throw new NoteDeletedRefusal(documentName)
       // A note the store migration has not processed yet takes no writes, so no
       // editor either: nothing may be typed that could not be stored. The
       // refusal carries its own reason, which the editor shows as such.
-      if (storeMigrationPending()) {
-        const note = await getLiveNote(vaultId, parseDocName(documentName).path)
-        if (note && !(await noteMigrated(db, note.id))) throw new NoteNotMigratedRefusal()
-      }
+      if (storeMigrationPending() && !(await noteMigrated(db, note.id))) throw new NoteNotMigratedRefusal()
+      // The same for a note whose S2b backfill failed at this boot: its bin is attached at the next restart.
+      if (!collabNoteMigrated(note.id)) throw new NoteNotMigratedRefusal()
       return { userId, sessionHash } satisfies ConnectionContext
     },
 
     /**
-     * Loads the path-named document from the note's row (the database is
-     * the authority, ADR-003 §6) and its `.crdt` bin, under the note's lock
-     * (§5.2, S2a): a write to the note either finished first (and kept the
-     * bin equal to the row, so nothing is rebuilt) or waits for the load and
-     * then pushes into the loaded document. Records the note's id: the
-     * document's stores go to that note only (§5.5).
+     * Loads the note's document from its CRDT state in the database
+     * (ADR-003 §5.4 "Load"), under the note's locks: seeded
+     * deterministically on first open, a row changed behind the store
+     * rebased into it. Never a file, never a `.crdt` bin, never a rebuild of
+     * the text, so a client holding the document's items never sees them
+     * twice (#488, #832).
      */
     async onLoadDocument({ documentName, document }) {
-      const { vaultId, path } = parseDocName(documentName)
-      await withKeyLock(noteLock(vaultId, path), async () => {
-        const note = await readNote(vaultId, path)
-        if (!note) throw new Error(`note does not exist: ${documentName}`)
-        if (!(await noteMigrated(db, note.row.id))) throw new NoteNotMigratedError()
-        documentNotes.set(document, note.row.id)
-        const savedUpdate = await loadCrdtState(vaultId, path)
-        if (savedUpdate) {
-          Y.applyUpdate(document, savedUpdate)
-          const body = document.getText('body')
-          const currentBody = body.toString()
-          if (currentBody !== note.body) {
-            body.delete(0, body.length)
-            body.insert(0, note.body)
-          }
-          const fm = document.getMap('frontmatter')
-          const currentFm = fm.toJSON() as Record<string, unknown>
-          for (const key of Object.keys(currentFm)) {
-            if (!(key in note.frontmatter)) {
-              fm.delete(key)
-            }
-          }
-          for (const [key, value] of Object.entries(note.frontmatter)) {
-            if (JSON.stringify(currentFm[key]) !== JSON.stringify(value)) {
-              fm.set(key, value)
-            }
-          }
-        } else {
-          const body = document.getText('body')
-          if (body.length === 0) body.insert(0, note.body)
-          const fm = document.getMap('frontmatter')
-          for (const [key, value] of Object.entries(note.frontmatter)) {
-            if (fm.get(key) === undefined) fm.set(key, value)
-          }
-          await saveCrdtState(vaultId, path, Y.encodeStateAsUpdate(document))
-        }
-      })
+      const name = parseDocName(documentName)
+      if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
+      const { state, path, lastId } = await loadCollabState(name.vaultId, name.noteId)
+      Y.applyUpdate(document, state)
+      // The stored state this document holds, so its stores need not materialise it again (§5.4 "Before S3").
+      if (lastId !== null) rememberLoadedState(document, name.noteId, lastId)
+      documentNotes.set(document, name.noteId)
+      setLivePath(name.noteId, name.vaultId, path)
       return document
     },
 
@@ -294,65 +296,60 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     },
 
     /**
-     * Stores the document into the note it loaded (ADR-003 §5.5, S2a), by
-     * id, through the transactional store, which takes the note's lock: a
-     * write holding it finishes (and pushes its change into this document)
-     * first. A document whose path the note no longer has (renamed while
-     * open) stores into the note at its current path, never into a note
-     * created later at the old path; when the note is also open at its
-     * current path, the two documents are merged into each other instead and
-     * the current-path document stores. A trashed or purged note stores nothing.
+     * Stores the document into its note through the transactional store
+     * (ADR-003 §5.4, S2b), which takes the note's lock: a write holding it
+     * finishes (and pushes its change into this document) first. The typing
+     * since the stored state is appended to the note's CRDT log and folded
+     * into the row in one transaction. A trashed or purged note stores
+     * nothing.
      */
     async onStoreDocument({ documentName, document, lastContext }) {
-      const { vaultId, path: docPath } = parseDocName(documentName)
+      const name = parseDocName(documentName)
       const context: Partial<ConnectionContext> | undefined = lastContext
       const noteId = documentNotes.get(document)
-      const [note] = noteId
-        ? await db.select({ path: notes.path, deletedAt: notes.deletedAt }).from(notes).where(eq(notes.id, noteId))
-        : []
-      if (!noteId || !note || note.deletedAt) {
-        const reason = !note ? 'the note was purged' : 'the note is in the trash'
-        console.error(`collab store of ${documentName} not stored: ${reason}`)
-        recordJob('collab-store', { error: { name: 'NoteGone', message: reason } }, vaultId)
-        return
-      }
-      const path = note.path
-      if (path !== docPath) {
-        const current = liveDocumentsOf(noteId).find((d) => d.name === `${vaultId}/${path}`)
-        if (current && current.doc !== document) {
-          if (!sharesHistory(document, current.doc)) {
-            console.error(`collab store of ${documentName} not stored: the note is open at ${path} with unrelated history`)
-            recordJob('collab-store', { error: { name: 'UnrelatedHistory', message: `${docPath} -> ${path}` } }, vaultId)
-            return
-          }
-          // Each tab sees the other's typing; the current-path document stores the merged state.
-          mergeDocuments(current.doc, document)
-          return
-        }
-      }
-      // A rejected store is a failed job (#705): the row keeps its last valid
-      // version while editors see their edit, so the owner must hear of it.
-      let failed = false
+      const { vaultId } = name
       try {
         // A document that repeats a block of the stored note (a stale client
-        // merged into a rebuilt document doubles it, #488) is quarantined
+        // merged into a rebuilt document doubled it, #488) is quarantined
         // (#492): kept as a revision, not stored. Editors keep what they see;
         // the next store without the repeat is written as usual and ends the episode.
-        // The state is read under the note's lock (updateNote calls it there):
-        // a server write that held the lock has pushed its change into this
-        // document by then, so a store never writes the editors' older state
-        // back over an acknowledged write.
-        const state = () => {
-          const now = docState(document)
-          bodyMeasured(document, now.body)
-          return now
+        // The state is the one the write appends to the CRDT log, taken under
+        // the note's lock: a server write that held the lock has pushed its
+        // change into this document by then, so a store never writes the
+        // editors' older state back over an acknowledged write.
+        // The note is looked up by id each round: a rename between the lookup and the lock finds it at its new path.
+        for (let round = 0; ; round++) {
+          const [note] = noteId
+            ? await db.select({ path: notes.path, deletedAt: notes.deletedAt }).from(notes).where(eq(notes.id, noteId))
+            : []
+          if (!noteId || !note || note.deletedAt || round === 3) {
+            // Closed by a delete or purge (§5.5): nothing to store, and nothing went wrong.
+            if (deletedDocuments.has(document) && (!note || note.deletedAt)) return
+            const reason = !note ? 'the note was purged' : note.deletedAt ? 'the note is in the trash' : 'the note kept moving'
+            console.error(`collab store of ${documentName} not stored: ${reason}`)
+            recordJob('collab-store', { error: { name: 'NoteGone', message: reason } }, vaultId)
+            return
+          }
+          const stored = await updateNote(
+            vaultId,
+            note.path,
+            (current) => {
+              bodyMeasured(document, current.body)
+              return current
+            },
+            undefined,
+            {
+              relay: { noteId, doc: document },
+              ...(context?.directWrite ? {} : { quarantine: 'repeated-block' as const, episode: quarantineEpisodes.get(document) }),
+            },
+          )
+          if (stored) break
         }
-        await updateNote(vaultId, path, state, undefined, {
-          relay: { noteId },
-          ...(context?.directWrite ? {} : { quarantine: 'repeated-block' as const, episode: quarantineEpisodes.get(document) }),
-        })
         quarantineEpisodes.delete(document)
+        recordJob('collab-store', 'ok', vaultId)
       } catch (err) {
+        // A rejected store is a failed job (#705): the row keeps its last valid
+        // version while editors see their edit, so the owner must hear of it.
         if (err instanceof NoteWriteQuarantinedError) {
           quarantineEpisodes.set(document, err.revisionId)
           // One report per episode: stores that continue it count as `repeated`.
@@ -363,25 +360,31 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
           console.error(`collab store rejected for ${documentName}:`, err)
           recordJob('collab-store', { error: err }, vaultId)
         }
-        failed = true
+        // Refused, not failed: the typing still goes into the CRDT log, with the reason (§5.4 fold step 5).
+        if (noteId && !(err instanceof StoreBusyError)) {
+          await keepRefusedTyping(vaultId, noteId, document, err instanceof Error ? err.message : String(err)).catch((keepErr) =>
+            console.error(`collab typing of ${documentName} not kept:`, keepErr),
+          )
+        }
       }
-      try {
-        await saveCrdtState(vaultId, path, Y.encodeStateAsUpdate(document))
-      } catch (err) {
-        console.error(`crdt state save rejected for ${documentName}:`, err)
-        recordJob('collab-store', { error: err }, vaultId)
-        failed = true
-      }
-      if (!failed) recordJob('collab-store', 'ok', vaultId)
     },
 
-    async onChange({ documentName, document }) {
-      const { vaultId, path } = parseDocName(documentName)
-      publishNoteState(vaultId, path, docState(document))
+    /** Live viewers stay keyed by path (§5.4): the note's current path, which a rename moves. */
+    async onChange({ document }) {
+      const noteId = documentNotes.get(document)
+      const at = noteId ? livePath(noteId) : undefined
+      if (at) publishNoteState(at.vaultId, at.path, docState(document))
     },
 
+    /** The document unloaded: its CRDT tail is compacted into the snapshot (§5.4 fold step 6). */
     async afterUnloadDocument({ documentName }) {
       forgetAgentPresence(documentName)
+      const name = parseDocName(documentName)
+      if ('legacy' in name) return
+      forgetLivePath(name.noteId)
+      await compactCollabState(name.vaultId, name.noteId).catch((err) =>
+        console.error(`collab compaction of ${documentName} failed:`, err),
+      )
     },
   })
 
@@ -421,14 +424,20 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
   const unbindKick = wireKick(hocuspocus)
   currentInstance = hocuspocus
   registerLiveDocs({
-    ofNote(noteId) {
-      const out: LiveDocument[] = []
-      hocuspocus.documents.forEach((doc, name) => {
-        if (doc.isLoading || documentNotes.get(doc) !== noteId) return
+    ofNote(noteId): LiveDocument | null {
+      for (const [name, doc] of hocuspocus.documents) {
+        if (doc.isLoading || documentNotes.get(doc) !== noteId) continue
         const editors = [...new Set([...doc.getConnections()].map((c) => (c.context as ConnectionContext).userId))]
-        out.push({ doc, name, editors })
-      })
-      return out
+        return { doc, name, editors }
+      }
+      return null
+    },
+    closeNote(noteId) {
+      for (const [name, doc] of hocuspocus.documents) {
+        if (documentNotes.get(doc) !== noteId) continue
+        deletedDocuments.add(doc)
+        doc.getConnections().forEach((connection) => connection.close(new NoteDeletedRefusal(name)))
+      }
     },
   })
 

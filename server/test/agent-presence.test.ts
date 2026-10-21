@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
-import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
 
 // #481: an agent that reads or writes a note people have open shows up in
 // their "In this note now" row, as an agent, until it goes quiet. Before, MCP
@@ -114,7 +114,7 @@ async function open(path: string, state?: Record<string, unknown>): Promise<Hocu
   const handshake = new Promise<void>((resolve) => (synced = resolve))
   const provider = new HocuspocusProvider({
     url: collabUrl,
-    name: `${vaultId}/${path}`,
+    name: await noteDocName(vaultId, path),
     token: sessionToken,
     document: new Y.Doc(),
     onSynced: () => synced(),
@@ -185,7 +185,7 @@ describe('agents in editor presence (#481)', () => {
   it('reading a note nobody has open does not load it into the relay', async () => {
     const path = await freshNote()
     await call('read_note', { path })
-    expect(collab.hocuspocus.documents.has(`${vaultId}/${path}`)).toBe(false)
+    expect(collab.hocuspocus.documents.has(await noteDocName(vaultId, path))).toBe(false)
   })
 
   it('a person cannot pose as an agent: the relay strips the claim', async () => {
