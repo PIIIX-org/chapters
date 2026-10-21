@@ -300,11 +300,19 @@ describe('edit_note ops (#408)', () => {
     expect(await rowBody(path)).toBe(`${base}more\n`)
   })
 
-  it('accepts base_rev and echoes it; it is not compared yet (#475)', async () => {
+  it('with base_rev, ops still apply to the live text, and the result says what changed since (#475)', async () => {
     const path = await fresh()
-    const r = await call('edit_note', { vaultId, path, base_rev: 'stale-or-not', ops: [{ op: 'append', text: 'ok' }] })
-    expect(r.isError, r.text).toBe(false)
-    expect(JSON.parse(r.text)).toMatchObject({ baseRev: 'stale-or-not', body: `${base}ok\n` })
+    const { rev } = await must<{ rev: string }>('read_note', { vaultId, path })
+    const applied = await must<Args>('edit_note', { vaultId, path, base_rev: rev, ops: [{ op: 'append', text: 'ok' }] })
+    expect(applied).toMatchObject({ baseRev: rev, status: 'applied', body: `${base}ok\n` })
+    expect(applied).not.toHaveProperty('concurrentChanges')
+    const merged = await must<Args>('edit_note', { vaultId, path, base_rev: rev, ops: [{ op: 'append', text: 'again' }] })
+    expect(merged).toMatchObject({
+      baseRev: rev,
+      status: 'merged',
+      body: `${base}ok\nagain\n`,
+      concurrentChanges: { lines: [{ line: 16, removed: 0, added: 1 }] },
+    })
   })
 
   it('checks the size cap and the growth quarantine on the body the ops produce', async () => {

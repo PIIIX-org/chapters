@@ -160,6 +160,18 @@ function lines(text: string): string[] {
   return out
 }
 
+/** Each line as a number, equal lines (in either list) as the same number, for diffTokens. */
+function lineTokens(aLines: readonly string[], bLines: readonly string[]): [Int32Array, Int32Array] {
+  const ids = new Map<string, number>()
+  const tokenize = (parts: readonly string[]): Int32Array =>
+    Int32Array.from(parts, (line) => {
+      let id = ids.get(line)
+      if (id === undefined) ids.set(line, (id = ids.size))
+      return id
+    })
+  return [tokenize(aLines), tokenize(bLines)]
+}
+
 /**
  * Character changes turning `from` into `to`, the slices at UTF-16 offset
  * `at` of the old text, added to `out`. False when the deadline cut the
@@ -256,13 +268,6 @@ export function diffText(from: string, to: string, timeLimitMs = DIFF_TIME_LIMIT
   if (characterEdits(from, to, 0, Date.now() + timeLimitMs, characters)) return characters
   // Too many changes to settle per character in time: per line, then per character inside each changed run.
   const deadline = Date.now() + timeLimitMs
-  const ids = new Map<string, number>()
-  const tokenize = (parts: string[]): Int32Array =>
-    Int32Array.from(parts, (line) => {
-      let id = ids.get(line)
-      if (id === undefined) ids.set(line, (id = ids.size))
-      return id
-    })
   const aLines = lines(from)
   const bLines = lines(to)
   const edits: TextEdit[] = []
@@ -285,7 +290,7 @@ export function diffText(from: string, to: string, timeLimitMs = DIFF_TIME_LIMIT
     removed = []
     inserted = []
   }
-  for (const run of diffTokens(tokenize(aLines), tokenize(bLines), deadline).runs) {
+  for (const run of diffTokens(...lineTokens(aLines, bLines), deadline).runs) {
     if (run.op === EQUAL) {
       flush()
       for (let i = 0; i < run.n; i++) aOffset += aLines[ai + i]!.length
@@ -307,6 +312,51 @@ export function diffText(from: string, to: string, timeLimitMs = DIFF_TIME_LIMIT
   }
   flush()
   return edits
+}
+
+/** A changed run of lines (#475): the old text's lines `start` to `end` (exclusive) replaced by `lines`. */
+export interface LineHunk {
+  start: number
+  end: number
+  lines: string[]
+}
+
+/** The lines of a text (split after each `\n`) and the runs of them a diff changes. */
+export interface LineDiff {
+  lines: string[]
+  hunks: LineHunk[]
+}
+
+/**
+ * The changes that turn `from` into `to`, per whole line: `from`'s lines and
+ * the hunks, in ascending order, never touching one another (an unchanged
+ * line separates any two). Past the time limit a part is one coarser hunk,
+ * still correct.
+ */
+export function diffLines(from: string, to: string, timeLimitMs = DIFF_TIME_LIMIT_MS): LineDiff {
+  const aLines = lines(from)
+  const bLines = lines(to)
+  const hunks: LineHunk[] = []
+  let ai = 0
+  let bi = 0
+  let open: LineHunk | null = null
+  for (const run of diffTokens(...lineTokens(aLines, bLines), Date.now() + timeLimitMs).runs) {
+    if (run.op === EQUAL) {
+      open = null
+      ai += run.n
+      bi += run.n
+      continue
+    }
+    if (!open) hunks.push((open = { start: ai, end: ai, lines: [] }))
+    if (run.op === DELETE) {
+      ai += run.n
+      open.end = ai
+    } else {
+      for (let i = 0; i < run.n; i++) open.lines.push(bLines[bi + i]!)
+      bi += run.n
+    }
+  }
+  return { lines: aLines, hunks }
 }
 
 /**
