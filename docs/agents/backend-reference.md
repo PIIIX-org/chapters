@@ -598,9 +598,12 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   text, when the agent only appended whole lines after the base's last
   one, ending it if it had no newline, its lines go after base → live's
   lines there instead of conflicting, with a newline after a live last
-  line left mid-line and without lines live already ends with: the lab's
-  browser S1 agent appends while a person types at the end, #408),
-  `frontmatter` and
+  line left mid-line and without lines live already ends with; an
+  appended line that is not blank and already sits elsewhere in those
+  live lines is a conflict instead (an append resent from an older base);
+  this runs before S2b's per-character fallback of
+  `mergeTextKeepingTheirs`: the lab's browser S1 agent appends while a
+  person types at the end, #408), `frontmatter` and
   `removeKeys` per key on the map they make from the base's (a key the
   agent left as the base had it keeps the live value; a key both changed
   to different values conflicts); `ops` still resolve against the live
@@ -632,8 +635,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   record, per connection and note id, the `rev` they served; an
   `edit_note` with `body` and no `base_rev` takes that revision as
   `NoteEdit.base` (stale-base merge above; the answer echoes it as
-  `baseRev`), and one whose result body is exactly the body sent moves it
-  to the result's `rev`. `create_note`, `append_note`, `upsert_note`,
+  `baseRev`). Each whole body the connection writes moves it to the
+  write's `rev`, with `note_reads.body` = the body it sent when the result
+  differs from it (merged): the agent's next body is built on what it
+  sent, so its earlier lines are not its change again. `create_note`, `append_note`, `upsert_note`,
   `ops`-only and frontmatter-only edits neither record nor use it, so a
   connection that never read the note still replaces the live text (a
   blind replace stays a replace). Kept in `note_reads` (above) for 24 h,
