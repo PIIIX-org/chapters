@@ -302,16 +302,15 @@ describe('edit_note ops (#408)', () => {
 
   it('with base_rev, ops still apply to the live text, and the result says what changed since (#475)', async () => {
     const path = await fresh()
-    const { rev } = await must<{ rev: string }>('read_note', { vaultId, path })
+    const { rev } = await must<{ rev: number }>('read_note', { vaultId, path })
     const applied = await must<Args>('edit_note', { vaultId, path, base_rev: rev, ops: [{ op: 'append', text: 'ok' }] })
-    expect(applied).toMatchObject({ baseRev: rev, status: 'applied', body: `${base}ok\n` })
-    expect(applied).not.toHaveProperty('concurrentChanges')
+    expect(applied).toMatchObject({ baseRev: rev, status: 'applied', body: `${base}ok\n`, concurrent_changes: null })
     const merged = await must<Args>('edit_note', { vaultId, path, base_rev: rev, ops: [{ op: 'append', text: 'again' }] })
     expect(merged).toMatchObject({
       baseRev: rev,
       status: 'merged',
       body: `${base}ok\nagain\n`,
-      concurrentChanges: { lines: [{ line: 16, removed: 0, added: 1 }] },
+      concurrent_changes: { lines: [{ line: 16, removed: 0, added: 1 }] },
     })
   })
 
