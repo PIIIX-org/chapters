@@ -123,7 +123,8 @@ describe('boot step 7: verify after an unclean shutdown (§7)', () => {
     const note = await createNote(vaultId, { type: 'docs', name: 'hand-format', body: 'same content\n', frontmatter: { type: 'docs', title: 'Formatted' } })
     await flushProjections()
     // Same content as the row, other YAML formatting: the first verify adopts it (bytes kept, hash recorded).
-    const hand = `---\ntitle:   'Formatted'\ntimestamp: ${JSON.stringify(note.frontmatter.timestamp)}\ntype:    docs\n---\nsame content\n`
+    const timestamp = (note.frontmatter as Record<string, unknown>).timestamp
+    const hand = `---\ntitle:   'Formatted'\ntimestamp: ${JSON.stringify(timestamp)}\ntype:    docs\n---\nsame content\n`
     await writeFile(file('docs/hand-format.md'), hand)
     for (let round = 0; round < 3; round++) {
       await verifyAllProjections()
