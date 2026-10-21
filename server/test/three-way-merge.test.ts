@@ -3,7 +3,7 @@
 // the same point) conflict. #408: lines an edit only appended at the end go
 // after whatever was added or typed there since.
 import { describe, expect, it } from 'vitest'
-import { mergeFrontmatter, mergeText } from '../src/sync/three-way-merge.js'
+import { mergeFrontmatter, mergeText, mergeTextKeepingTheirs } from '../src/sync/three-way-merge.js'
 
 const base = 'one\n\ntwo\n\nthree\n'
 
@@ -69,6 +69,20 @@ describe('mergeText', () => {
     it('are not added again when the end already holds them (an append sent twice from one base)', () => {
       expect(mergeText('a\nb', 'a\nb typed\nM1\n', 'a\nb\nM1\nM2\n')).toEqual({ text: 'a\nb typed\nM1\nM2\n', concurrent: [{ line: 2, removed: 1, added: 2 }] })
       expect(mergeText('a\nb', 'a\nb typed\nM1\n', 'a\nb\nM1\n')).toEqual({ text: 'a\nb typed\nM1\n', concurrent: [{ line: 2, removed: 1, added: 2 }] })
+    })
+
+    it('conflict when a line they append is already in the changed lines but not at their end (#864 review: resent from an older base)', () => {
+      expect(mergeText('a\nb\n', 'a\nb\nAGENT-ONE\nperson\n', 'a\nb\nAGENT-ONE\nAGENT-TWO\n')).toEqual({ text: null, conflicts: [{ line: 3, removed: 0, added: 2 }] })
+      expect(mergeText('x\n', 'x\nB1\nA1\nB2\n', 'x\nA1\nA2\n')).toEqual({ text: null, conflicts: [{ line: 2, removed: 0, added: 3 }] })
+    })
+
+    it('do not count blank lines as already there', () => {
+      expect(mergeText('a\n', 'a\n\nperson\n', 'a\n\nM\n')).toEqual({ text: 'a\n\nperson\n\nM\n', concurrent: [{ line: 2, removed: 0, added: 2 }] })
+    })
+
+    it('apply before the per-character fallback of mergeTextKeepingTheirs, which still merges a last line both changed otherwise', () => {
+      expect(mergeTextKeepingTheirs('a\nb', 'a\nb typed', 'a\nb\nc\n')).toEqual({ text: 'a\nb typed\nc\n', overlaps: [] })
+      expect(mergeTextKeepingTheirs('a\nb', 'a\nbX', 'a\nYb')).toEqual({ text: 'a\nYbX', overlaps: [] })
     })
 
     it('still conflict when the edit also changed the last line', () => {
