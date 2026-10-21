@@ -177,12 +177,6 @@
       "issue": 564
     },
     {
-      "test": "fix-crash-catchup",
-      "check": "filesPendingExtraction reaches 0",
-      "issue": 845,
-      "intermittent": "repository_status's filesPendingExtraction lags the SQL count by one poll after the boot catch-up (field 1, SQL pending 0); seen on four branches off dev 3616b53 that do not touch extraction (#845), reruns pass"
-    },
-    {
       "test": "multilingual-search",
       "check": "normalization: Arabic kaf ك (\"فرش كاشان\" vs stored \"فرش کاشان\")",
       "issue": 528
