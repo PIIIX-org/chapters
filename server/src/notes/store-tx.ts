@@ -151,7 +151,7 @@ export async function insertRevision(
       })
       .from(noteRevisions)
       .where(and(eq(noteRevisions.noteId, noteId), notInArray(noteRevisions.action, NOT_A_DEDUPE_BASELINE)))
-      .orderBy(desc(noteRevisions.createdAt))
+      .orderBy(desc(noteRevisions.ord))
       .limit(1)
     const repeatsAuthor =
       spec.actor.type === 'collab' || (last?.actorType === spec.actor.type && last.actorId === (spec.actor.id ?? null))
@@ -164,16 +164,16 @@ export async function insertRevision(
       return
     }
   }
-  // created_at is the clock after the note's locks, not the transaction start
-  // (`now()`): a transaction that waited for the lock still sorts after the
-  // one it waited for, so revisions list in commit order.
+  // `ord` (#825) takes its sequence value here, inside the transaction after
+  // the note's locks: writes to one note are serialised by those locks, so its
+  // revisions are numbered in commit order.
   await tx.execute(sql`
     INSERT INTO note_revisions
-      (note_id, actor_type, actor_id, action, frontmatter, body, seq, actor_detail, source_revision_id, from_path, to_path, created_at)
+      (note_id, actor_type, actor_id, action, frontmatter, body, seq, actor_detail, source_revision_id, from_path, to_path)
     VALUES (${noteId}, ${spec.actor.type}, ${spec.actor.id ?? null}, ${spec.action},
       ${JSON.stringify(state.frontmatter ?? {})}::jsonb, ${state.body}, ${seq},
       ${spec.actorDetail ? JSON.stringify(spec.actorDetail) : null}::jsonb,
-      ${spec.sourceRevisionId ?? null}, ${spec.fromPath ?? null}, ${spec.toPath ?? null}, clock_timestamp())`)
+      ${spec.sourceRevisionId ?? null}, ${spec.fromPath ?? null}, ${spec.toPath ?? null})`)
 }
 
 /** Replaces the note's EXTRACTED link rows from `body`, inside `tx`. */

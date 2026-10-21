@@ -54,7 +54,7 @@ async function state(noteId: string) {
     deleted_at: string | null
   }>
   const revisions = (await db.execute(sql`
-    SELECT seq, action, actor_type, actor_id, body FROM note_revisions WHERE note_id = ${noteId} ORDER BY created_at, id`)) as unknown as Array<{
+    SELECT seq, action, actor_type, actor_id, body FROM note_revisions WHERE note_id = ${noteId} ORDER BY ord`)) as unknown as Array<{
     seq: string | null
     action: string
     actor_type: string

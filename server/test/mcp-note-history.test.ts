@@ -90,13 +90,13 @@ async function createVault(name: string): Promise<string> {
   return field(res.json(), 'id')
 }
 
-/** Every revision id of the note, newest first, straight from the table. */
+/** Every revision id of the note, newest first (in the order recorded, #825), straight from the table. */
 async function revisionIdsInDb(): Promise<string[]> {
   const rows = await db
     .select({ id: noteRevisions.id })
     .from(noteRevisions)
     .where(eq(noteRevisions.noteId, noteId))
-    .orderBy(desc(noteRevisions.createdAt), desc(noteRevisions.id))
+    .orderBy(desc(noteRevisions.ord))
   return rows.map((r) => r.id)
 }
 
@@ -134,10 +134,8 @@ beforeAll(async () => {
   await must(owner, 'share_vault', { vaultId, granteeType: 'user', granteeId: viewerUser.id, permission: 'read' })
 
   noteId = (await must<{ id: string }>(owner, 'create_note', { vaultId, path: PATH, body: bodyOf(0) })).id
-  for (let i = 1; i <= EDITS; i++) {
-    await updateNote(vaultId, PATH, { body: bodyOf(i) }, { type: 'user', id: ownerUser.id })
-  }
-  // Revisions recorded in the same instant (one transaction's now()): pages must still split them exactly once.
+  // Revisions recorded in the same instant (one transaction's now()), dated before the create as by a clock
+  // that stepped back: pages must still split them exactly once, in the order recorded (#825).
   const [note] = await db.select({ frontmatter: notes.frontmatter }).from(notes).where(eq(notes.id, noteId))
   const at = new Date(Date.now() - 60_000)
   await db.insert(noteRevisions).values(
@@ -150,6 +148,9 @@ beforeAll(async () => {
       createdAt: at,
     })),
   )
+  for (let i = 1; i <= EDITS; i++) {
+    await updateNote(vaultId, PATH, { body: bodyOf(i) }, { type: 'user', id: ownerUser.id })
+  }
 }, 120_000)
 
 afterAll(async () => {
@@ -173,8 +174,6 @@ describe('note_history is metadata only and paginated (#411)', () => {
     const newest = page.revisions[0]!
     expect(Object.keys(newest).sort()).toEqual(['action', 'actorId', 'actorName', 'actorType', 'bodyBytes', 'createdAt', 'id'])
     expect(newest).toMatchObject({ action: 'update', actorType: 'user', bodyBytes: Buffer.byteLength(bodyOf(EDITS)) })
-    const times = page.revisions.map((rev) => Date.parse(rev.createdAt))
-    expect(times).toEqual([...times].sort((a, b) => b - a))
   })
 
   it('the largest page is bounded too', async () => {
@@ -217,25 +216,29 @@ describe('note_history is metadata only and paginated (#411)', () => {
     }
   })
 
-  it('refuses a well-formed cursor with an impossible time before it reaches the database', async () => {
-    const id = randomUUID()
-    for (const at of [
-      '2026-02-30T00:00:00.000000Z',
-      '0000-01-01T00:00:00.000000Z',
-      '2026-13-01T00:00:00.000000Z',
-      '2026-01-01T24:00:00.000000Z',
+  it('refuses a well-formed cursor that is no position before it reaches the database', async () => {
+    const ord = (await db.select({ ord: noteRevisions.ord }).from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(desc(noteRevisions.ord)))[0]!.ord
+    for (const json of [
+      { ord: 0 },
+      { ord: -1 },
+      { ord: 1.5 },
+      { ord: String(ord) },
+      { ord: Number.MAX_SAFE_INTEGER + 1 },
+      { ord, at: '2026-01-01T00:00:00.000000Z' },
+      // The cursor before #825.
+      { at: '2026-01-01T00:00:00.000000Z', id: randomUUID() },
     ]) {
-      const cursor = Buffer.from(JSON.stringify({ at, id })).toString('base64url')
+      const cursor = Buffer.from(JSON.stringify(json)).toString('base64url')
       const r = await call(owner, 'note_history', { vaultId, path: PATH, cursor })
-      expect(r.isError, at).toBe(true)
-      expect(r.text, at).toMatch(/invalid cursor/)
-      expect(r.text, at).not.toMatch(/Failed query|select/i)
+      expect(r.isError, JSON.stringify(json)).toBe(true)
+      expect(r.text, JSON.stringify(json)).toMatch(/invalid cursor/)
+      expect(r.text, JSON.stringify(json)).not.toMatch(/Failed query|select/i)
     }
-    // The earliest and latest times the cursor format can carry are accepted.
-    for (const at of ['0001-01-01T00:00:00.000000Z', '9999-12-31T23:59:59.999999Z']) {
-      const cursor = Buffer.from(JSON.stringify({ at, id })).toString('base64url')
+    // The smallest and largest positions the cursor format can carry are accepted.
+    for (const edge of [1, Number.MAX_SAFE_INTEGER]) {
+      const cursor = Buffer.from(JSON.stringify({ ord: edge })).toString('base64url')
       const r = await call(owner, 'note_history', { vaultId, path: PATH, cursor })
-      expect(r.isError, `${at}: ${r.text.slice(0, 200)}`).toBe(false)
+      expect(r.isError, `${edge}: ${r.text.slice(0, 200)}`).toBe(false)
     }
   })
 })
