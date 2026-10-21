@@ -118,5 +118,5 @@ describe('concurrent create_note into one folder (#490)', () => {
     const index = await readFile(join(config.dataDir, 'vaults', vaultId, FOLDER, 'index.md'), 'utf8')
     const unlisted = report.filter((r) => !new RegExp(`note-${r.i}(?!\\d)`).test(index)).map((r) => r.i)
     expect(unlisted).toEqual([])
-  }, 30_000)
+  })
 })

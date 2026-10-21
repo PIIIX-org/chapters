@@ -589,21 +589,57 @@ Every share/membership mutation calls `emitPermissionChange()` (see
 - **Edits are minimal diffs; `edit_note` takes ops** (#408):
   `writeThroughCollab` never deletes and re-inserts the whole Y.Text.
   `applyTextDiff` (`sync/text-diff.ts`) turns the live text into the new
-  body with a minimal character diff (Myers O(ND) with the linear-space
-  middle snake, over code points so no surrogate pair is split) inside
-  the one document transaction; past `DIFF_TIME_LIMIT_MS` (100 ms) it is
-  redone per line and refined per character inside each changed run as
-  far as a second limit allows (ADR-003 §5.2 step 5); a run still left
-  pairs its old and new lines in order and changes each pair only between
-  its common start and end (linear), so a rewrite of every line of a
-  large note (a `- ` before each) keeps every line's unchanged characters
-  rather than replacing the run. Pairing is in order: when such a run also
-  adds or removes lines partway through, the lines after that point are
-  paired with their neighbours and keep less. Untouched
-  characters keep their Yjs identity, so a person's caret stays on its
-  text, their Ctrl+Z (a `Y.UndoManager` that tracks only their own edits,
-  never the relay's updates) still finds what they typed (#483), and
-  typing that reaches the relay after the write merges where it was
+  body with a minimal diff inside the one document transaction, under one
+  time limit, `DIFF_TIME_LIMIT_MS` (100 ms, ADR-003 §5.2 step 5) (#833).
+  The common start and end are set aside first (a linear scan), so an
+  append or a change in one place costs about one read of the body. What
+  is left is diffed per character (Myers O(ND) with the linear-space
+  middle snake, over code points so no surrogate pair is split): exactly
+  when it is at most 256 UTF-16 units, so a small edit is as short as the
+  code-point edit distance, and up to 16,384 units only while the two
+  sides are alike: the edit distance is at most a quarter of their
+  length, or at most the text one side adds plus a tenth of the shorter
+  side, when four of eight 16-unit stretches of the shorter side are
+  found in the longer one before the search (a sentence added to a
+  paragraph that also had words changed, or a long passage put in front
+  of it). When the shorter side is under 64 units (stretches shorter than 16), the result must
+  also be at most 2 + 1/16 of the shorter side's units separate changes
+  (not a short line against a long unrelated one). The search stops at
+  1,024 edits (4,096 within one line), so a failed attempt is cheap.
+  Otherwise the whole lines around it are diffed per line (lines found on
+  one side only, and blank lines, skip the search, so a rewrite of every
+  line is linear and a paragraph added next to an edited one does not
+  take its blank line). A changed run with as many new lines as old ones
+  pairs them in order; another run is diffed per character if at most
+  16,384 units and alike (never exactly), else paired too: each line of
+  its shorter side pairs with one of the other side's lines, in order, by
+  the alignment with the most likeness (the characters a pair shares at
+  its start and end, plus 16 for each of up to eight word triples from the
+  middle of the line found in its candidate, looked up as hashes in a set
+  per line, so lines changed at both ends, such as wrapped in `**`, still
+  find their new versions). It is a dynamic programme over lines ×
+  shifts; past 2^15 cells, or when the time limit runs out during it, only
+  alignments that put the lines one side has more of in one block are
+  tried. The lines left over between
+  pairs are inserted or deleted where they stand. Each pair is diffed per
+  character if alike, otherwise changed only between its common start
+  and end. So a rewrite of every line of a large note (a `- ` before
+  each, a `**` wrap), with or without a paragraph added or removed, keeps
+  the unchanged characters of every line that is alike; a paragraph added
+  before, after or between edited ones leaves them in place; a long
+  paragraph changed at both ends, or in up to 4,096 edits, keeps the text
+  between the changes; and an unrelated rewrite is about one change per
+  line rather than thousands of fragments. Past the time limit the rest
+  is linear (pairs trimmed to their common start and end, so a line
+  changed at both ends is replaced). Not every unchanged character is
+  kept: a pair or run that fails the alike test keeps only its common
+  start and end, and a run with the same number of lines that also adds
+  one line and removes another partway through pairs the lines in
+  between with their neighbours. Kept characters keep their Yjs identity, so a
+  person's caret stays on its text, their Ctrl+Z (a
+  `Y.UndoManager` that tracks only their own edits, never the relay's
+  updates) still finds what they typed (#483), and typing that reaches
+  the relay after the write merges where it was
   typed. In each change the new text is inserted before the old is
   deleted, so a caret at the end of a replaced span lands after the new
   text and typing in flight joins after it. It used to delete the whole
@@ -2097,7 +2133,9 @@ file and `.crdt` bin in one `REPEATABLE READ READ ONLY` transaction (only
 pre-0021 columns, so it runs on a production copy before the upgrade) and
 reports what the S2a/S2b backfill will do: per-note classes (`crdt`: what
 the bin's text matches; `collab`: what the S2b backfill does with it,
-`attach`/`set-aside`/`seed`/`has-state`), the file ≠ row
+`attach-equal`/`attach-diffed`/`set-aside`/`seed`/`has-state`, equal or
+diffed against the row S2a leaves, the file's content when the file wins),
+the file ≠ row
 conflict list (Q5: the file wins; `row.updated_at` against the file mtime,
 both hashes), files that will change bytes, files with no row, sizes and
 timings.

@@ -84,7 +84,7 @@ describe('git URL ingestion', () => {
     expect(files.map((f) => f.path).sort()).toEqual(['a.ts', 'c.ts'])
     const a = await getRepositoryFile(repo.id, 'a.ts')
     expect(a?.content).toContain('999')
-  }, 30000)
+  })
 
   it('records a sync error without throwing the caller into an unhandled state', async () => {
     const repo = await makeRepo('file:///nonexistent/path/to/nowhere.git')
@@ -94,5 +94,5 @@ describe('git URL ingestion', () => {
     )[0]
     expect(updated?.syncStatus).toBe('error')
     expect(updated?.lastSyncError).toBeTruthy()
-  }, 15000)
+  })
 })

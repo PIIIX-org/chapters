@@ -157,7 +157,7 @@ describe('append_note (#478)', () => {
     expect(row.body.startsWith('TYPED Intro.\n')).toBe(true)
     for (let i = 0; i < 5; i++) expect(occurrences(row.body, `line ${i}\n`), row.body).toBe(1)
     await waitFor(() => text.toString() === row.body)
-  }, 30_000)
+  })
 
   for (const n of [5, 10, 20]) {
     it(`createIfMissing: ${n} concurrent appends to a missing note create it once, every line lands, every other session keeps a restore point`, async () => {
@@ -211,7 +211,7 @@ describe('append_note (#478)', () => {
     expect(over.text).toMatch(/limit is/)
     row = (await getLiveNote(vaultId, nearPath))!
     expect(row.body).toBe(near)
-  }, 30_000)
+  })
 })
 
 describe('upsert_note (#478)', () => {
@@ -230,7 +230,7 @@ describe('upsert_note (#478)', () => {
     // The one that did not create replaced the body after the create.
     const second = madeIt[0] ? 'from B\n' : 'from A\n'
     expect(row.body).toBe(second)
-  }, 30_000)
+  })
 
   it('an upsert racing create_note never fails: either create wins, the upsert replaces or creates', async () => {
     for (let round = 0; round < 5; round++) {
@@ -244,7 +244,7 @@ describe('upsert_note (#478)', () => {
       const row = (await getLiveNote(vaultId, path))!
       expect(await creates(row.id)).toHaveLength(1)
     }
-  }, 30_000)
+  })
 
   it('replaces the body of an existing note, merges frontmatter per key, and keeps a restore point', async () => {
     const path = 'docs/upsert-existing'

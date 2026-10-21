@@ -114,7 +114,7 @@ describe('a write to an open note (§5.1 R5-1, §5.2 step 8)', () => {
         AND r.ord > (SELECT min(ord) FROM note_revisions WHERE note_id = r.note_id AND body LIKE '%Agent line.%')
       ORDER BY r.ord`)) as unknown as Array<{ body: string }>
     expect(after.filter((r) => !r.body.includes('Agent line.'))).toEqual([])
-  }, 20_000)
+  })
 
   it('an agent edit reaches the open editor and is still in the row after the next debounced store', async () => {
     const path = await create('acked-stays', 'One.')
@@ -123,7 +123,7 @@ describe('a write to an open note (§5.1 R5-1, §5.2 step 8)', () => {
     await waitFor(() => editor.text.toString() === 'One.\nTwo.')
     await editor.type(0, 'Zero. ')
     await waitFor(async () => (await rowBody(path)) === 'Zero. One.\nTwo.')
-  }, 15_000)
+  })
 })
 
 describe('a renamed note open in a tab from before the rename and one after it (§5.5)', () => {
@@ -143,7 +143,7 @@ describe('a renamed note open in a tab from before the rename and one after it (
     expect(body.match(/ New tab\./g)).toHaveLength(1)
     // Nothing is stored at the old path.
     expect(await getLiveNote(vaultId, path)).toBeNull()
-  }, 20_000)
+  })
 })
 
 describe('live documents are named by note id (§5.4)', () => {
@@ -157,7 +157,7 @@ describe('live documents are named by note id (§5.4)', () => {
     // Past a debounced store of the old-path tab, the renamed note keeps its own text.
     await new Promise((r) => setTimeout(r, 600))
     expect(await rowBody('docs/reused-moved')).toBe('The first note.')
-  }, 15_000)
+  })
 
   it('an old-path tab of a renamed note keeps an acknowledged agent write when it stores', async () => {
     const path = await create('old-tab', 'Line one.')
@@ -167,7 +167,7 @@ describe('live documents are named by note id (§5.4)', () => {
     await waitFor(() => tab.text.toString().includes('Agent line.'))
     await tab.type(0, 'Typed. ')
     await waitFor(async () => (await rowBody('docs/old-tab-moved')) === 'Typed. Line one.\nAgent line.')
-  }, 15_000)
+  })
 
   it('a write while the note is open at its old and new path keeps the old tab\'s unstored typing in the row and both tabs', async () => {
     const path = await create('both-open', 'Shared.')
@@ -180,7 +180,7 @@ describe('live documents are named by note id (§5.4)', () => {
     expect(await rowBody('docs/both-open-moved')).toBe('Old tab. Shared.')
     await waitFor(() => newTab.text.toString() === 'Old tab. Shared.')
     expect(oldTab.text.toString()).toBe('Old tab. Shared.')
-  }, 15_000)
+  })
 })
 
 describe('a renamed note opened again at its new path (§5.4, #834)', () => {
@@ -197,7 +197,7 @@ describe('a renamed note opened again at its new path (§5.4, #834)', () => {
     expect(await rowBody('docs/unrelated-moved')).toBe(expected)
     await waitFor(() => newTab.text.toString() === expected && oldTab.text.toString() === expected)
     expect(newTab.text.toString().match(/paragraph 0:/g)).toHaveLength(1)
-  }, 15_000)
+  })
 })
 
 describe('a note the store migration has not processed (§8, Q5)', () => {
@@ -228,7 +228,7 @@ describe('a note the store migration has not processed (§8, Q5)', () => {
       setStoreMigrationPending(false)
       await db.execute(sql`DELETE FROM notes WHERE id = ${id}`)
     }
-  }, 15_000)
+  })
 })
 
 describe('a frontmatter-only edit while the editor holds a doubled note (#488, #492)', () => {
@@ -251,5 +251,5 @@ describe('a frontmatter-only edit while the editor holds a doubled note (#488, #
     expect((await getLiveNote(vaultId, path))?.frontmatter).toMatchObject({ status: 'active' })
     // The editor keeps what it shows.
     expect(editor.text.toString()).toBe(`${body}\n\n${body}`)
-  }, 15_000)
+  })
 })

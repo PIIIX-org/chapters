@@ -79,7 +79,7 @@ async function makeWebhookRepo(gitUrl: string) {
 }
 
 // waitFor gives up (an assertion failure) well before the test timeout.
-describe('polling scheduler and webhooks (#410)', { timeout: 30_000 }, () => {
+describe('polling scheduler and webhooks (#410)', () => {
   it('polls a repository whose last webhook synced successfully but is now stale', async () => {
     const remote = await makeRemote()
     await commitAndPush(remote, 'a.md', 'first')

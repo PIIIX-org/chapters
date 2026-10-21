@@ -118,7 +118,7 @@ describe('edit and rename of one note at the same time (#484)', () => {
     expect(await fileBody(to)).toBe(EDITED)
     expect(await getLiveNote(vaultId, from)).toBeNull()
     expect(await fileBody(from)).toBeNull()
-  }, 15_000)
+  })
 
   it('an edit started during a rename is refused or lands in the renamed note, never at the old path', async () => {
     const from = 'docs/rename-then-edit'
@@ -136,7 +136,7 @@ describe('edit and rename of one note at the same time (#484)', () => {
     expect((await getLiveNote(vaultId, to))?.body).toBe(expected)
     expect(await fileBody(to)).toBe(expected)
     expect(await fileBody(from)).toBeNull()
-  }, 15_000)
+  })
 })
 
 describe('two writers making one path live at the same time (#484)', () => {
@@ -163,7 +163,7 @@ describe('two writers making one path live at the same time (#484)', () => {
     expect((await getLiveNote(vaultId, `docs/contender-${loser}`))?.body).toBe(`Contender ${loser!.toUpperCase()}.`)
     expect(await fileBody(`docs/contender-${loser}`)).toBe(`Contender ${loser!.toUpperCase()}.`)
     expect(await fileBody(`docs/contender-${winner}`)).toBeNull()
-  }, 15_000)
+  })
 
   it('a create at the path a rename is moving into: exactly one wins, and the winner keeps its file', async () => {
     const target = 'docs/claimed'
@@ -184,7 +184,7 @@ describe('two writers making one path live at the same time (#484)', () => {
     expect((await getLiveNote(vaultId, target))?.body).toBe(winnerBody)
     expect(await fileBody(target)).toBe(winnerBody)
     if (rename.status === 'rejected') expect(await fileBody('docs/claimant')).toBe('Moved here by a rename.')
-  }, 15_000)
+  })
 
   it('renames of two notes that link to each other, at the same time, both finish', async () => {
     // Each rewrites the other as a referrer. Under its own locks, each would
@@ -198,7 +198,7 @@ describe('two writers making one path live at the same time (#484)', () => {
     ])
 
     expect(renamed.map((row) => row?.path)).toEqual(['docs/linked-x2', 'docs/linked-y2'])
-  }, 15_000)
+  })
 })
 
 describe('delete, restore and purge against other writes (#484)', () => {
@@ -219,7 +219,7 @@ describe('delete, restore and purge against other writes (#484)', () => {
     expect(row?.body).toBe(expected)
     expect(await bodyIn(trashFile(vaultId, created.id))).toBe(expected)
     expect(await fileBody(path)).toBeNull()
-  }, 15_000)
+  })
 
   it('a restore and a purge at the same time: exactly one acts, and the note is either live with its file or gone', async () => {
     const path = 'docs/restored-while-purged'
@@ -244,7 +244,7 @@ describe('delete, restore and purge against other writes (#484)', () => {
       expect(await fileBody(path)).toBeNull()
     }
     expect(await bodyIn(trashFile(vaultId, created.id))).toBeNull()
-  }, 15_000)
+  })
 })
 
 describe('renames of notes that link to each other, at the same time (#803)', () => {
@@ -280,7 +280,7 @@ describe('renames of notes that link to each other, at the same time (#803)', ()
     )
 
     for (const name of names) await expectLinkedAtNewPaths(name)
-  }, 15_000)
+  })
 
   it('a rewrite queued behind the other rename finds the moved note at its new path', async () => {
     await seedPair('queued')
@@ -293,7 +293,7 @@ describe('renames of notes that link to each other, at the same time (#803)', ()
     ])
 
     await expectLinkedAtNewPaths('queued')
-  }, 15_000)
+  })
 
   it('a note linking both renamed notes keeps both rewritten links', async () => {
     await seed('docs/hub-x', 'X.')
@@ -307,7 +307,7 @@ describe('renames of notes that link to each other, at the same time (#803)', ()
     const body = 'Links to [[docs/hub-x2]] and [[docs/hub-y2]].'
     expect((await getLiveNote(vaultId, 'docs/hub'))?.body).toBe(body)
     expect(await fileBody('docs/hub')).toBe(body)
-  }, 15_000)
+  })
 
   it('a note renamed again while its first rename rewrites a link ends up linked at its newest path', async () => {
     await seed('docs/chain', 'Renamed twice.')
@@ -326,5 +326,5 @@ describe('renames of notes that link to each other, at the same time (#803)', ()
     const body = 'Links to [[docs/chain-3]].'
     expect((await getLiveNote(vaultId, 'docs/chain-referrer'))?.body).toBe(body)
     expect(await fileBody('docs/chain-referrer')).toBe(body)
-  }, 15_000)
+  })
 })
