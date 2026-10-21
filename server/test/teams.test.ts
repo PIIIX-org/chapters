@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { randomUUID } from 'node:crypto'
-import { eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { notes, notifications } from '../src/db/schema.js'
+import { noteRevisions, notes, notifications } from '../src/db/schema.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -149,6 +149,24 @@ describe('GET /api/teams/:id/stats', () => {
     })
   }
 
+  /**
+   * `actorId`'s revisions of a note, as the stats query reads them (#852):
+   * `created_at` is clock_timestamp() at the revision insert (store-tx.ts
+   * insertRevision), not notes.updated_at, which is the write transaction's
+   * start on create and the app's clock on update, so a slow write puts the
+   * two any distance apart. `micros` orders revisions inside one millisecond.
+   */
+  async function revisionsOf(noteId: string, actorId: string) {
+    const rows = await db
+      .select({
+        createdAt: noteRevisions.createdAt,
+        micros: sql`(extract(epoch from ${noteRevisions.createdAt}) * 1000000)::bigint`.mapWith(BigInt),
+      })
+      .from(noteRevisions)
+      .where(and(eq(noteRevisions.noteId, noteId), eq(noteRevisions.actorId, actorId)))
+    return rows.map((r) => ({ createdAt: r.createdAt.toISOString(), micros: r.micros }))
+  }
+
   // TEMPORARY (#852 repro): an uncommitted row at the same path makes the
   // create's INSERT wait on the unique index inside its transaction, so the
   // revision's clock_timestamp() lands ~2 s after the row's now(), as on a
@@ -178,7 +196,6 @@ describe('GET /api/teams/:id/stats', () => {
     // not 2 (that would mean revisions were counted instead of distinct notes).
     const editRes = await updateNoteBody(memberCookie, vaultA.id, noteA.path, 'edited body')
     expect(editRes.statusCode).toBe(200)
-    const editedNoteA = editRes.json()
     const noteB = await slowWriteNote(memberCookie, vaultB.id, 'note-b')
 
     const res = await app.inject({
@@ -190,15 +207,14 @@ describe('GET /api/teams/:id/stats', () => {
     const row = res.json().find((r: { userId: string }) => r.userId === member.id)
     expect(row.notesTouched).toBe(2)
     expect(row.vaultsTouched).toBe(2)
-    // Must reflect the LATEST revision (vault B's write), not the earlier
-    // create-then-edit on vault A's note. Compare only against DB-issued
-    // timestamps (never the test process's own clock) to avoid clock skew
-    // against the dockerized Postgres instance.
     expect(row.lastActivityAt).not.toBeNull()
-    const lastMs = new Date(row.lastActivityAt).getTime()
-    expect(lastMs).toBeGreaterThanOrEqual(new Date(editedNoteA.updatedAt).getTime())
-    expect(lastMs).toBeGreaterThanOrEqual(new Date(noteB.updatedAt).getTime() - 1000)
-    expect(lastMs).toBeLessThanOrEqual(new Date(noteB.updatedAt).getTime() + 1000)
+    // Must reflect the LATEST revision (vault B's write), not the earlier
+    // create-then-edit on vault A's note: exactly noteB's revision time.
+    const aRevisions = await revisionsOf(noteA.id, member.id)
+    const [bRevision] = await revisionsOf(noteB.id, member.id)
+    expect(aRevisions).toHaveLength(2)
+    for (const a of aRevisions) expect(a.micros).toBeLessThan(bRevision!.micros)
+    expect(new Date(row.lastActivityAt).toISOString()).toBe(bRevision!.createdAt)
   })
 
   it('excludes activity in vaults the caller cannot access (privacy)', async () => {
@@ -225,15 +241,13 @@ describe('GET /api/teams/:id/stats', () => {
     expect(row.notesTouched).toBe(2)
     expect(row.vaultsTouched).toBe(2)
     expect(row.lastActivityAt).not.toBeNull()
-    // Compare only against DB-issued timestamps (avoids clock skew against
-    // the dockerized Postgres instance). The invisible (private-vault) edit
-    // is strictly the most recent write overall; if it leaked in,
-    // lastActivityAt would equal or exceed privateNote's timestamp instead
-    // of staying pinned to the last visible write (noteB).
-    const lastMs = new Date(row.lastActivityAt).getTime()
-    expect(lastMs).toBeLessThan(new Date(privateNote.updatedAt).getTime())
-    expect(lastMs).toBeGreaterThanOrEqual(new Date(noteB.updatedAt).getTime() - 1000)
-    expect(lastMs).toBeLessThanOrEqual(new Date(noteB.updatedAt).getTime() + 1000)
+    // The invisible (private-vault) write is strictly the latest of all; if
+    // it leaked in, lastActivityAt would be its revision time instead of
+    // the last visible write's (noteB).
+    const [bRevision] = await revisionsOf(noteB.id, member.id)
+    const [privateRevision] = await revisionsOf(privateNote.id, member.id)
+    expect(privateRevision!.micros).toBeGreaterThan(bRevision!.micros)
+    expect(new Date(row.lastActivityAt).toISOString()).toBe(bRevision!.createdAt)
   })
 
   it('includes members with zero activity as 0 / 0 / null', async () => {
