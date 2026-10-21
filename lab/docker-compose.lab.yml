@@ -16,6 +16,10 @@
 #   way publish.yml does it, so `/health` reports `version` (#583). Written
 #   to ./.env by the lab-instance action. `context: .` is the repo root:
 #   compose resolves paths against the first -f file.
+# - extra_hosts host.docker.internal: restart-extraction serves the commit
+#   under test as a git repository from the runner (lab/lib/git-fixture.ts)
+#   and the app clones it from there, so every sync in the test sees the
+#   same files while dev moves (#767).
 services:
   app:
     build:
@@ -32,6 +36,8 @@ services:
     depends_on:
       mailpit:
         condition: service_started
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
 
   mailpit:
     image: axllent/mailpit:v1.31

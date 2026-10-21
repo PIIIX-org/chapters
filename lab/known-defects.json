@@ -52,11 +52,6 @@
     },
     {
       "test": "browser",
-      "check": "agent visible in presence while it writes (edit_note says \"attributed to this connection\")",
-      "issue": 481
-    },
-    {
-      "test": "browser",
       "check": "lost typing is recoverable from note history (note_revisions)",
       "issue": 408
     },
@@ -83,7 +78,7 @@
     {
       "test": "browser",
       "check": "S1: caret stays where the user types when the agent writes",
-      "issue": 483
+      "issue": 408
     },
     {
       "test": "browser",
@@ -103,11 +98,6 @@
       "intermittent": "offline text lands at position 0 in about half the merges, depending on where the agent's insert falls among deleted characters"
     },
     {
-      "test": "browser",
-      "check": "undo (Ctrl+Z) removes the user's own last typing after an agent append",
-      "issue": 483
-    },
-    {
       "test": "collab-duplication",
       "match": "^S17 SIGKILL \\d+ ms after ack: @M17d\\d+@ kept exactly once on disk$",
       "issue": 488,
@@ -118,11 +108,6 @@
       "match": "^S17 SIGKILL \\d+ ms after ack: no duplicated text$",
       "issue": 488,
       "intermittent": "which kill delays duplicate text depends on where the SIGKILL lands between the relay's note write and its .crdt write (2-5 of 8 delays per run)"
-    },
-    {
-      "test": "collab-duplication",
-      "check": "S11 logout ends the live collab session",
-      "issue": 498
     },
     {
       "test": "collab-duplication",

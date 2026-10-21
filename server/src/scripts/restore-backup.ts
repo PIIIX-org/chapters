@@ -62,6 +62,7 @@ try {
       dryRun
         ? 'Dry run: nothing written.'
         : 'Restore complete. Sessions are not restored: everyone signs in again. ' +
+            'MCP tokens keep working (account, vault and repository tokens), except any a warning above lists as left out. ' +
             'Restart the server: it computes the embeddings when it starts, and repository indexes are rebuilt by the next sync.',
     )
   }

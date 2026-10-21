@@ -559,7 +559,13 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     await agentAppend('S3', m, page)
     await waitEditorIncludes(page, m)
     await Bun.sleep(500)
-    const texts: Array<string | null> = [(await readEditor(page)).text]
+    // The caret once the agent's line is in, before the click below moves it:
+    // still where the user stopped typing (#483), not at the top.
+    const afterAppend = await readEditor(page)
+    const typedAt = afterAppend.text?.indexOf(typedText(t)) ?? -1
+    undo.caretAfterAppend = afterAppend.head
+    undo.typingEndsAt = typedAt < 0 ? null : typedAt + typedText(t).length
+    const texts: Array<string | null> = [afterAppend.text]
     await page.locator('.cm-content').click()
     await page.keyboard.press('Control+End')
     for (const label of ['S3-undo-1', 'S3-undo-2']) {
@@ -1023,6 +1029,13 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
         ? 'removed'
         : `still there: ${cLeft.join(' ')}; Ctrl+Z changed the text: ${undoSteps.map((u) => `${u.label}=${u.changed}`).join(', ')}`,
     ok: cLeft.length === 0,
+    severity: 'medium',
+  })
+  checks.push({
+    name: "S3: caret stays after the user's typing when the agent appends",
+    expected: 'caret at the end of c01..c05 (where the user stopped typing), not at the top',
+    actual: `caret at ${String(undo.caretAfterAppend)}, typing ends at ${String(undo.typingEndsAt)}`,
+    ok: undo.typingEndsAt !== null && undo.caretAfterAppend === undo.typingEndsAt,
     severity: 'medium',
   })
   checks.push({

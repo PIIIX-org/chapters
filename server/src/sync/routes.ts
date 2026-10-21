@@ -3,6 +3,7 @@ import { atLeast, resolveAccess } from '../vaults/permissions.js'
 import { readNote, splitPath } from '../notes/store.js'
 import { addViewer } from './viewers.js'
 import { issueTicket } from './tickets.js'
+import { hashToken } from '../auth/tokens.js'
 import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
 
@@ -55,13 +56,15 @@ export function syncRoutes(app: FastifyInstance) {
    * Mints the websocket credential (`client/src/api/collab.ts` is written
    * against this shape). Authentication only — no vault is named here, and a
    * ticket confers no permission: the relay still resolves live access on
-   * connect and on every inbound message. `maxNoteBytes` is the body size cap
+   * connect and on every inbound message. The ticket is bound to the session
+   * asking (#498): the socket it opens closes when that session ends.
+   * `maxNoteBytes` is the body size cap
    * the relay enforces (#491), so the editor can say what to cut;
    * `maxFrameBytes` the largest websocket frame it reads, so the editor knows
    * when what it would send cannot arrive.
    */
   app.post('/collab/ticket', async (req) => {
-    const { token, expiresAt } = issueTicket(req.user!.id)
+    const { token, expiresAt } = issueTicket(req.user!.id, hashToken(req.sessionToken!))
     return {
       token,
       url: COLLAB_PATH,
@@ -91,7 +94,7 @@ export function syncRoutes(app: FastifyInstance) {
       reply.raw.write(
         `data: ${JSON.stringify({ frontmatter: note.frontmatter, body: note.body })}\n\n`,
       )
-      addViewer({ userId: req.user!.id, vaultId, path, reply })
+      addViewer({ userId: req.user!.id, sessionHash: hashToken(req.sessionToken!), vaultId, path, reply })
     },
   )
 }

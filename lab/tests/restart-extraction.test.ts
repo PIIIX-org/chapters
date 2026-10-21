@@ -15,9 +15,17 @@
 //            still cloning/inserting), then POST /sync, settle, measure
 // "Settled" = sync_status is not 'syncing' and the embedded-file count has
 // not moved for STALL_MS (or every file is embedded).
-import type { Check, LabContext, LabTest } from '../lib/context.ts'
+//
+// REPO is the commit under test, frozen in a one-commit git repository the
+// runner serves over HTTP for the whole test (lib/git-fixture.ts), so every
+// sync sees the same files: syncing the live default branch made a merge to
+// dev mid-run read as lost files (#767). LAB_RESTART_REPO_URL overrides it
+// with a public URL (which may then move during the run).
+import type { Check, LabContext, LabTest, TestOutput } from '../lib/context.ts'
+import { fileDiff } from '../lib/file-diff.ts'
+import { buildPinnedRepo, serveGit } from '../lib/git-fixture.ts'
 
-const REPO_URL = process.env.LAB_RESTART_REPO_URL ?? 'https://github.com/PIIIX-org/chapters'
+const REPO_URL_OVERRIDE = process.env.LAB_RESTART_REPO_URL
 const RESTART_AT = Number(process.env.LAB_RESTART_AT ?? 0.25)
 const STALL_MS = Number(process.env.LAB_RESTART_STALL_MS ?? 120_000)
 const SETTLE_TIMEOUT_MS = Number(process.env.LAB_RESTART_SETTLE_TIMEOUT_MS ?? 45 * 60_000)
@@ -89,8 +97,17 @@ function compare(clean: FileRow[], other: FileRow[]) {
   const lostEmbedding = clean.filter((f) => f.embedded && !byPath.get(f.path)?.embedded).map((f) => f.path)
   const lostSymbols = clean.filter((f) => f.symbols > 0 && (byPath.get(f.path)?.symbols ?? 0) === 0).map((f) => f.path)
   const sum = (rows: FileRow[]) => rows.reduce((n, f) => n + f.symbols, 0)
+  // Both counts and the differing paths in every comparison's `actual` (#663).
+  const files = fileDiff(
+    clean.map((f) => f.path),
+    other.map((f) => f.path),
+    'clean',
+  )
   return {
     files: other.length,
+    filesVsClean: files.text,
+    onlyHere: files.onlyHere,
+    onlyInClean: files.onlyInReference,
     embedded: other.filter((f) => f.embedded).length,
     filesWithSymbols: other.filter((f) => f.symbols > 0).length,
     symbols: sum(other),
@@ -100,144 +117,161 @@ function compare(clean: FileRow[], other: FileRow[]) {
   }
 }
 
+async function measure(ctx: LabContext, repoUrl: string, pinned: { sourceCommit: string; commit: string } | null): Promise<TestOutput> {
+  const checks: Check[] = []
+  const admin = ctx.rest('admin')
+
+  // ---- clean run
+  const cleanRepo = await ctx.connectRepo('admin', ctx.uniq('lab-clean'), repoUrl)
+  const cleanT0 = Date.now()
+  const cleanTimeline = await settle(ctx, cleanRepo.id, 'clean')
+  const cleanMs = Date.now() - cleanT0
+  const clean = await perFile(ctx, cleanRepo.id)
+  const cleanStats = compare(clean, clean)
+
+  // ---- restart run
+  const restartRepo = await ctx.connectRepo('admin', ctx.uniq('lab-restart'), repoUrl)
+  let atRestart: Progress | undefined
+  const waitT0 = Date.now()
+  for (;;) {
+    const p = await progress(ctx, restartRepo.id)
+    if (p.files > 0 && p.embedded >= p.files * RESTART_AT) {
+      atRestart = p
+      break
+    }
+    if (p.status === 'error' || Date.now() - waitT0 > SETTLE_TIMEOUT_MS) throw new Error(`never reached restart point: ${JSON.stringify(p)}`)
+    // Real time on purpose: catching a live queue mid-way.
+    await Bun.sleep(1_000)
+  }
+  ctx.log(`restarting app at embedded=${atRestart.embedded}/${atRestart.files} status=${atRestart.status}`)
+  const restart = await ctx.docker.app.restart(ctx.baseUrl)
+  const afterRestartTimeline = await settle(ctx, restartRepo.id, 'after-restart')
+  const afterRestart = await perFile(ctx, restartRepo.id)
+  const afterRestartStats = compare(clean, afterRestart)
+  const statusAfterRestart = afterRestartTimeline.at(-1)!
+
+  // ---- re-sync the restarted copy (what the poller / a webhook / sync_repository would do)
+  const sync = await admin.post(`/api/repositories/${restartRepo.id}/sync`, {})
+  const resyncTimeline = await settle(ctx, restartRepo.id, 'after-resync')
+  const afterResync = await perFile(ctx, restartRepo.id)
+  const afterResyncStats = compare(clean, afterResync)
+
+  // ---- restart during the FIRST sync (clone/insert), then a manual sync
+  const syncRepo = await ctx.connectRepo('admin', ctx.uniq('lab-restart-sync'), repoUrl)
+  const atSyncRestart = await progress(ctx, syncRepo.id)
+  ctx.log(`restarting app during first sync: ${JSON.stringify(atSyncRestart)}`)
+  const syncRestart = await ctx.docker.app.restart(ctx.baseUrl)
+  const afterSyncRestart = await progress(ctx, syncRepo.id)
+  const manualSync = await admin.post(`/api/repositories/${syncRepo.id}/sync`, {})
+  const duringSyncTimeline = await settle(ctx, syncRepo.id, 'during-sync+manual-sync')
+  const duringSyncStats = compare(clean, await perFile(ctx, syncRepo.id))
+
+  const appLogs = await ctx.docker.app.logs('app', 400)
+  const errorLines = appLogs.split('\n').filter((l) => /error|ENOENT|unhandled/i.test(l)).slice(0, 40)
+
+  checks.push(
+    {
+      name: 'clean run indexes every file',
+      expected: `embedded == files (${cleanStats.files})`,
+      actual: `embedded ${cleanStats.embedded}, files with symbols ${cleanStats.filesWithSymbols}, symbols ${cleanStats.symbols}, ${Math.round(cleanMs / 1000)} s`,
+      ok: cleanStats.embedded === cleanStats.files,
+      severity: 'medium',
+    },
+    {
+      name: 'restart mid-extraction: embeddings not lost',
+      expected: '0 files embedded in the clean run but not after restart',
+      actual: `${afterRestartStats.lostEmbedding} lost (embedded ${afterRestartStats.embedded}/${afterRestartStats.files}; restart at ${atRestart.embedded}/${atRestart.files}; ${afterRestartStats.filesVsClean})`,
+      ok: afterRestartStats.lostEmbedding === 0,
+      severity: 'high',
+    },
+    {
+      name: 'restart mid-extraction: symbols not lost',
+      expected: '0 files with symbols in the clean run but none after restart',
+      actual: `${afterRestartStats.lostSymbols} files lost all symbols (symbols ${afterRestartStats.symbols} vs clean ${cleanStats.symbols}; ${afterRestartStats.filesVsClean})`,
+      ok: afterRestartStats.lostSymbols === 0,
+      severity: 'high',
+    },
+    {
+      name: 'restart: repository not stuck',
+      expected: "sync_status 'idle' after restart",
+      actual: `${statusAfterRestart.status}${statusAfterRestart.lastSyncError ? ` (${statusAfterRestart.lastSyncError})` : ''}`,
+      ok: statusAfterRestart.status === 'idle',
+      severity: 'medium',
+    },
+    {
+      name: 're-sync repairs the lost extraction',
+      expected: '0 lost after POST /sync',
+      actual: `sync HTTP ${sync.status}; ${afterResyncStats.lostEmbedding} embeddings / ${afterResyncStats.lostSymbols} symbol files still lost; ${afterResyncStats.filesVsClean}`,
+      ok: afterResyncStats.lostEmbedding === 0 && afterResyncStats.lostSymbols === 0,
+      severity: 'high',
+    },
+    {
+      name: 'restart during first sync: not stuck in syncing',
+      expected: "sync_status != 'syncing' after restart (boot reconciliation)",
+      actual: `at restart ${atSyncRestart.status} files=${atSyncRestart.files}; after ${afterSyncRestart.status}${afterSyncRestart.lastSyncError ? ` (${afterSyncRestart.lastSyncError})` : ''}`,
+      ok: afterSyncRestart.status !== 'syncing',
+      severity: 'medium',
+    },
+    {
+      name: 'restart during first sync: manual sync then indexes everything',
+      expected: `0 lost vs clean, files == clean (${cleanStats.files})`,
+      actual: `sync HTTP ${manualSync.status}; embedded ${duringSyncStats.embedded}/${duringSyncStats.files}; ${duringSyncStats.lostEmbedding} embeddings / ${duringSyncStats.lostSymbols} symbol files lost; ${duringSyncStats.filesVsClean}`,
+      ok: duringSyncStats.lostEmbedding === 0 && duringSyncStats.lostSymbols === 0 && duringSyncStats.files === cleanStats.files,
+      severity: 'high',
+    },
+  )
+
+  return {
+    summary:
+      `Repo ${pinned ? `commit ${pinned.sourceCommit} (served pinned)` : repoUrl}. Clean: ${cleanStats.embedded}/${cleanStats.files} files embedded, ${cleanStats.symbols} symbols in ${Math.round(cleanMs / 1000)} s. ` +
+      `Restarted at ${atRestart.embedded}/${atRestart.files} embedded: after settling ${afterRestartStats.embedded}/${afterRestartStats.files} embedded, ` +
+      `${afterRestartStats.lostSymbols} files lost all symbols, status ${statusAfterRestart.status}. ` +
+      `After re-sync: ${afterResyncStats.lostEmbedding} embeddings and ${afterResyncStats.lostSymbols} symbol files still missing. ` +
+      `Restart during first sync (caught at status ${atSyncRestart.status}, ${atSyncRestart.files} files) -> ${afterSyncRestart.status}; after manual sync ${duringSyncStats.embedded}/${duringSyncStats.files} embedded, ${duringSyncStats.lostSymbols} symbol files lost.`,
+    checks,
+    data: {
+      repoUrl,
+      pinned,
+      restartAt: RESTART_AT,
+      stallMs: STALL_MS,
+      cleanRepoId: cleanRepo.id,
+      restartRepoId: restartRepo.id,
+      cleanMs,
+      clean: cleanStats,
+      atRestart,
+      restart,
+      afterRestart: afterRestartStats,
+      afterResync: { syncHttp: sync.status, syncBody: sync.text.slice(0, 300), ...afterResyncStats },
+      duringSync: {
+        repoId: syncRepo.id,
+        atRestart: atSyncRestart,
+        restart: syncRestart,
+        afterRestart: afterSyncRestart,
+        manualSync: { http: manualSync.status, body: manualSync.text.slice(0, 300) },
+        ...duringSyncStats,
+      },
+      timelines: { clean: cleanTimeline, afterRestart: afterRestartTimeline, afterResync: resyncTimeline, duringSync: duringSyncTimeline },
+      appErrorLines: errorLines,
+    },
+  }
+}
+
 const test: LabTest = {
   name: 'restart-extraction',
   description: 'Restart the app mid-extraction; compare per-file symbol/embedding coverage with a clean run, then after a re-sync.',
   async run(ctx) {
-    const checks: Check[] = []
-    const admin = ctx.rest('admin')
-
-    // ---- clean run
-    const cleanRepo = await ctx.connectRepo('admin', ctx.uniq('lab-clean'), REPO_URL)
-    const cleanT0 = Date.now()
-    const cleanTimeline = await settle(ctx, cleanRepo.id, 'clean')
-    const cleanMs = Date.now() - cleanT0
-    const clean = await perFile(ctx, cleanRepo.id)
-    const cleanStats = compare(clean, clean)
-
-    // ---- restart run
-    const restartRepo = await ctx.connectRepo('admin', ctx.uniq('lab-restart'), REPO_URL)
-    let atRestart: Progress | undefined
-    const waitT0 = Date.now()
-    for (;;) {
-      const p = await progress(ctx, restartRepo.id)
-      if (p.files > 0 && p.embedded >= p.files * RESTART_AT) {
-        atRestart = p
-        break
-      }
-      if (p.status === 'error' || Date.now() - waitT0 > SETTLE_TIMEOUT_MS) throw new Error(`never reached restart point: ${JSON.stringify(p)}`)
-      // Real time on purpose: catching a live queue mid-way.
-      await Bun.sleep(1_000)
-    }
-    ctx.log(`restarting app at embedded=${atRestart.embedded}/${atRestart.files} status=${atRestart.status}`)
-    const restart = await ctx.docker.app.restart(ctx.baseUrl)
-    const afterRestartTimeline = await settle(ctx, restartRepo.id, 'after-restart')
-    const afterRestart = await perFile(ctx, restartRepo.id)
-    const afterRestartStats = compare(clean, afterRestart)
-    const statusAfterRestart = afterRestartTimeline.at(-1)!
-
-    // ---- re-sync the restarted copy (what the poller / a webhook / sync_repository would do)
-    const sync = await admin.post(`/api/repositories/${restartRepo.id}/sync`, {})
-    const resyncTimeline = await settle(ctx, restartRepo.id, 'after-resync')
-    const afterResync = await perFile(ctx, restartRepo.id)
-    const afterResyncStats = compare(clean, afterResync)
-
-    // ---- restart during the FIRST sync (clone/insert), then a manual sync
-    const syncRepo = await ctx.connectRepo('admin', ctx.uniq('lab-restart-sync'), REPO_URL)
-    const atSyncRestart = await progress(ctx, syncRepo.id)
-    ctx.log(`restarting app during first sync: ${JSON.stringify(atSyncRestart)}`)
-    const syncRestart = await ctx.docker.app.restart(ctx.baseUrl)
-    const afterSyncRestart = await progress(ctx, syncRepo.id)
-    const manualSync = await admin.post(`/api/repositories/${syncRepo.id}/sync`, {})
-    const duringSyncTimeline = await settle(ctx, syncRepo.id, 'during-sync+manual-sync')
-    const duringSyncStats = compare(clean, await perFile(ctx, syncRepo.id))
-
-    const appLogs = await ctx.docker.app.logs('app', 400)
-    const errorLines = appLogs.split('\n').filter((l) => /error|ENOENT|unhandled/i.test(l)).slice(0, 40)
-
-    checks.push(
-      {
-        name: 'clean run indexes every file',
-        expected: `embedded == files (${cleanStats.files})`,
-        actual: `embedded ${cleanStats.embedded}, files with symbols ${cleanStats.filesWithSymbols}, symbols ${cleanStats.symbols}, ${Math.round(cleanMs / 1000)} s`,
-        ok: cleanStats.embedded === cleanStats.files,
-        severity: 'medium',
-      },
-      {
-        name: 'restart mid-extraction: embeddings not lost',
-        expected: '0 files embedded in the clean run but not after restart',
-        actual: `${afterRestartStats.lostEmbedding} lost (embedded ${afterRestartStats.embedded}/${afterRestartStats.files}; restart at ${atRestart.embedded}/${atRestart.files})`,
-        ok: afterRestartStats.lostEmbedding === 0,
-        severity: 'high',
-      },
-      {
-        name: 'restart mid-extraction: symbols not lost',
-        expected: '0 files with symbols in the clean run but none after restart',
-        actual: `${afterRestartStats.lostSymbols} files lost all symbols (symbols ${afterRestartStats.symbols} vs clean ${cleanStats.symbols})`,
-        ok: afterRestartStats.lostSymbols === 0,
-        severity: 'high',
-      },
-      {
-        name: 'restart: repository not stuck',
-        expected: "sync_status 'idle' after restart",
-        actual: `${statusAfterRestart.status}${statusAfterRestart.lastSyncError ? ` (${statusAfterRestart.lastSyncError})` : ''}`,
-        ok: statusAfterRestart.status === 'idle',
-        severity: 'medium',
-      },
-      {
-        name: 're-sync repairs the lost extraction',
-        expected: '0 lost after POST /sync',
-        actual: `sync HTTP ${sync.status}; ${afterResyncStats.lostEmbedding} embeddings / ${afterResyncStats.lostSymbols} symbol files still lost`,
-        ok: afterResyncStats.lostEmbedding === 0 && afterResyncStats.lostSymbols === 0,
-        severity: 'high',
-      },
-      {
-        name: 'restart during first sync: not stuck in syncing',
-        expected: "sync_status != 'syncing' after restart (boot reconciliation)",
-        actual: `at restart ${atSyncRestart.status} files=${atSyncRestart.files}; after ${afterSyncRestart.status}${afterSyncRestart.lastSyncError ? ` (${afterSyncRestart.lastSyncError})` : ''}`,
-        ok: afterSyncRestart.status !== 'syncing',
-        severity: 'medium',
-      },
-      {
-        name: 'restart during first sync: manual sync then indexes everything',
-        expected: '0 lost vs clean',
-        actual: `sync HTTP ${manualSync.status}; embedded ${duringSyncStats.embedded}/${duringSyncStats.files}; ${duringSyncStats.lostEmbedding} embeddings / ${duringSyncStats.lostSymbols} symbol files lost`,
-        ok: duringSyncStats.lostEmbedding === 0 && duringSyncStats.lostSymbols === 0 && duringSyncStats.files === cleanStats.files,
-        severity: 'high',
-      },
-    )
-
-    return {
-      summary:
-        `Repo ${REPO_URL}. Clean: ${cleanStats.embedded}/${cleanStats.files} files embedded, ${cleanStats.symbols} symbols in ${Math.round(cleanMs / 1000)} s. ` +
-        `Restarted at ${atRestart.embedded}/${atRestart.files} embedded: after settling ${afterRestartStats.embedded}/${afterRestartStats.files} embedded, ` +
-        `${afterRestartStats.lostSymbols} files lost all symbols, status ${statusAfterRestart.status}. ` +
-        `After re-sync: ${afterResyncStats.lostEmbedding} embeddings and ${afterResyncStats.lostSymbols} symbol files still missing. ` +
-        `Restart during first sync (caught at status ${atSyncRestart.status}, ${atSyncRestart.files} files) -> ${afterSyncRestart.status}; after manual sync ${duringSyncStats.embedded}/${duringSyncStats.files} embedded, ${duringSyncStats.lostSymbols} symbol files lost.`,
-      checks,
-      data: {
-        repoUrl: REPO_URL,
-        restartAt: RESTART_AT,
-        stallMs: STALL_MS,
-        cleanRepoId: cleanRepo.id,
-        restartRepoId: restartRepo.id,
-        cleanMs,
-        clean: cleanStats,
-        atRestart,
-        restart,
-        afterRestart: afterRestartStats,
-        afterResync: { syncHttp: sync.status, syncBody: sync.text.slice(0, 300), ...afterResyncStats },
-        duringSync: {
-          repoId: syncRepo.id,
-          atRestart: atSyncRestart,
-          restart: syncRestart,
-          afterRestart: afterSyncRestart,
-          manualSync: { http: manualSync.status, body: manualSync.text.slice(0, 300) },
-          ...duringSyncStats,
-        },
-        timelines: { clean: cleanTimeline, afterRestart: afterRestartTimeline, afterResync: resyncTimeline, duringSync: duringSyncTimeline },
-        appErrorLines: errorLines,
-      },
+    if (REPO_URL_OVERRIDE) return measure(ctx, REPO_URL_OVERRIDE, null)
+    // The commit under test (the workflow's checkout), served from the runner
+    // to the app container (host.docker.internal: lab/docker-compose.lab.yml).
+    const repo = buildPinnedRepo(process.cwd(), 'chapters')
+    const server = await serveGit(repo.root)
+    const url = `http://host.docker.internal:${server.port}/chapters.git`
+    ctx.log(`serving ${repo.sourceCommit} as ${url} (fixture commit ${repo.commit})`)
+    try {
+      return await measure(ctx, url, { sourceCommit: repo.sourceCommit, commit: repo.commit })
+    } finally {
+      await server.close()
+      repo.close()
     }
   },
 }

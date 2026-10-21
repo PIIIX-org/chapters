@@ -176,6 +176,14 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 /**
+ * The key-lock.ts key held by every writer of the note at `path`: create,
+ * update, rename (both paths), delete, restore and purge (#401, #484).
+ */
+function noteLock(vaultId: string, path: string): string {
+  return `note:${vaultId}/${path}`
+}
+
+/**
  * OKF v0.2 Progressive Disclosure: regenerates index.md for each directory in ancestorDirs.
  * Contains subsystems (child directories) and concepts & artifacts (direct child notes).
  * If a directory has 0 notes and 0 subdirectories, index.md is unlinked.
@@ -185,8 +193,8 @@ function isUniqueViolation(err: unknown): boolean {
  * Each directory's index is read and written under the `index:<vault>/<dir>` lock, and the
  * note list is read after the locks are held, so concurrent writers into one folder write
  * index.md in turn and the last write lists every note committed before it (#779). Lock
- * order: a caller may hold a `note:` lock while calling this (updateNote does); nothing
- * here takes a `note:` lock, so the two never wait on each other in a cycle.
+ * order: a caller may hold `note:` locks while calling this (every note writer in this
+ * file does); nothing here takes a `note:` lock, so the two never wait on each other in a cycle.
  */
 export async function regenProgressiveIndices(
   vaultId: string,
@@ -321,32 +329,34 @@ export async function createNote(
   const body = input.body ?? ''
   validateNote(resolved.type, resolved.name, frontmatter, body)
   assertBodyFits(body)
-  let row: NoteRow
-  try {
-    const inserted = await db
-      .insert(notes)
-      .values({
-        vaultId,
-        type: resolved.type,
-        name: resolved.name,
-        path: resolved.fullPath,
-        frontmatter,
-        body,
-      })
-      .returning()
-    row = inserted[0]!
-  } catch (err) {
-    if (isUniqueViolation(err)) {
-      throw new OkfValidationError(`a note already exists at ${resolved.fullPath}`)
+  return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
+    let row: NoteRow
+    try {
+      const inserted = await db
+        .insert(notes)
+        .values({
+          vaultId,
+          type: resolved.type,
+          name: resolved.name,
+          path: resolved.fullPath,
+          frontmatter,
+          body,
+        })
+        .returning()
+      row = inserted[0]!
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw new OkfValidationError(`a note already exists at ${resolved.fullPath}`)
+      }
+      throw err
     }
-    throw err
-  }
-  await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
-  await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
-  await syncLinks(row.id, body)
-  scheduleEmbedding(row.id)
-  await recordRevision(row.id, 'create', frontmatter, body, actor)
-  return row
+    await atomicWrite(noteFile(vaultId, resolved.fullPath), serializeNote({ frontmatter, body }))
+    await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
+    await syncLinks(row.id, body)
+    scheduleEmbedding(row.id)
+    await recordRevision(row.id, 'create', frontmatter, body, actor)
+    return row
+  })
 }
 
 /** Replaces the note's EXTRACTED link rows from its current wikilinks. */
@@ -354,15 +364,20 @@ export async function syncNoteLinks(noteId: string, body: string): Promise<void>
   return syncLinks(noteId, body)
 }
 
+/** In one transaction: a rename looking for the notes that link to it
+ * (linkReferrers) never sees this note between the delete and the insert,
+ * with no links (#803). */
 async function syncLinks(noteId: string, body: string): Promise<void> {
-  await db.delete(noteLinks).where(eq(noteLinks.sourceNoteId, noteId))
   const targets = extractWikilinks(body)
-  if (targets.length > 0) {
-    await db
-      .insert(noteLinks)
-      .values(targets.map((targetPath) => ({ sourceNoteId: noteId, targetPath })))
-      .onConflictDoNothing()
-  }
+  await db.transaction(async (tx) => {
+    await tx.delete(noteLinks).where(eq(noteLinks.sourceNoteId, noteId))
+    if (targets.length > 0) {
+      await tx
+        .insert(noteLinks)
+        .values(targets.map((targetPath) => ({ sourceNoteId: noteId, targetPath })))
+        .onConflictDoNothing()
+    }
+  })
 }
 
 export async function getLiveNote(vaultId: string, path: string): Promise<NoteRow | null> {
@@ -403,33 +418,42 @@ export async function readNote(
 }
 
 /**
+ * A note's new body, or a function of its current body that the writer
+ * applies under the note's lock: a rename's link rewrite (#803), which must
+ * keep what other writers stored since the caller last read the note.
+ */
+export type BodyEdit = string | ((current: string) => string)
+
+/**
  * Read-modify-write of one note's row, file, links and revision. Writes to the
  * same note are serialized (one at a time, in call order): run concurrently,
  * the row could end at one write and the file at another, and revisions could
  * be skipped or out of order. `options.quarantine` checks the body against
  * the stored one first (refuseSuspiciousWrite; the collab relay's store, which
  * passes the quarantine revision of the loaded document's episode, if any).
+ * A `body` function (BodyEdit) gets the stored body.
  */
 export async function updateNote(
   vaultId: string,
   path: string,
-  input: { frontmatter?: Record<string, unknown>; body?: string },
+  input: { frontmatter?: Record<string, unknown>; body?: BodyEdit },
   actor: Actor = SYSTEM_ACTOR,
   options: { quarantine?: QuarantineRules; episode?: string } = {},
 ): Promise<NoteRow | null> {
   const resolved = resolveNotePath(path)
-  return withKeyLock(`note:${vaultId}/${resolved.fullPath}`, async () => {
+  return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const row = await getLiveNote(vaultId, resolved.fullPath)
     if (!row) return null
+    const edit = { frontmatter: input.frontmatter, body: typeof input.body === 'function' ? input.body(row.body) : input.body }
     const frontmatter: Frontmatter = {
       ...(input.frontmatter ?? (row.frontmatter as Frontmatter)),
       type: row.type,
     }
-    const body = input.body ?? row.body
+    const body = edit.body ?? row.body
     validateNote(row.type, row.name, frontmatter, body)
     // The size cap first: an over-cap body is refused, never kept as a quarantine revision (#491).
     assertBodyFits(body, row.body)
-    if (options.quarantine) await refuseSuspiciousWrite(row, input, actor, options.quarantine, options.episode)
+    if (options.quarantine) await refuseSuspiciousWrite(row, edit, actor, options.quarantine, options.episode)
     const [updated] = await db
       .update(notes)
       .set({ frontmatter, body, updatedAt: new Date() })
@@ -463,6 +487,22 @@ export function refactorWikilinks(body: string, fromPath: string, toPath: string
   })
 }
 
+/**
+ * Renames or moves a note. The move itself (row, file, CRDT state, folder
+ * indexes, the note's own links) runs under the locks of both the old and the
+ * new path (#484; `withKeyLocks` takes them in sorted order, so two renames
+ * between the same paths never wait on each other in a cycle): a write to the
+ * note waits for the move and then finds no note at the old path instead of
+ * writing there, and of two writers making one path live (rename, create,
+ * restore) the second finds the first's note there.
+ *
+ * Links in other notes are rewritten after the locks are released, each by
+ * `updateFn` under that note's own lock: `writeThroughCollab` waits for the
+ * relay's store hook, which code holding a note lock must never wait for
+ * (ADR-003 §5.1), and two renames rewriting each other's referrers under
+ * their own locks would each wait for the other's. Each referrer is found
+ * again by id when its links are rewritten (relinkReferrer, #803).
+ */
 export async function renameNote(
   vaultId: string,
   from: string,
@@ -470,13 +510,11 @@ export async function renameNote(
   updateFn: (
     vaultId: string,
     path: string,
-    input: { frontmatter?: Record<string, unknown>; body?: string },
+    input: { frontmatter?: Record<string, unknown>; body?: BodyEdit },
     actor: Actor,
   ) => Promise<NoteRow | null> = updateNote,
 ): Promise<NoteRow | null> {
   const fromResolved = resolveNotePath(from)
-  const row = await getLiveNote(vaultId, fromResolved.fullPath)
-  if (!row) return null
   let toPath: string
   if (isSlug(toName)) {
     toPath = fromResolved.directory ? `${fromResolved.directory}/${toName}` : toName
@@ -484,6 +522,92 @@ export async function renameNote(
     toPath = toName
   }
   const toResolved = resolveNotePath(toPath)
+  const renaming = `renaming ${fromResolved.fullPath} to ${toResolved.fullPath}`
+  const moved = await withKeyLocks(
+    [noteLock(vaultId, fromResolved.fullPath), noteLock(vaultId, toResolved.fullPath)],
+    () => moveNote(vaultId, fromResolved, toResolved, renaming),
+  )
+  if (!moved) return null
+
+  // Refactor incoming wikilinks across other notes in the vault.
+  for (const referrer of moved.referrers) {
+    try {
+      const relinked = await relinkReferrer(vaultId, referrer.id, moved.updated.id, fromResolved.fullPath, (path, body) =>
+        updateFn(vaultId, path, { body }, SYSTEM_ACTOR),
+      )
+      if (!relinked) console.warn(`[rename] ${renaming}: links in ${referrer.path} not rewritten: the notes kept moving`)
+    } catch (err) {
+      // Grown past the cap since the check: the rename is done, so the other
+      // referrers still get their links; this one keeps the old link.
+      if (!(err instanceof NoteTooLargeError)) throw err
+      console.warn(`[rename] ${renaming}: links in ${referrer.path} not rewritten: ${err.message}`)
+    }
+  }
+
+  return moved.updated
+}
+
+/** Rounds relinkReferrer runs before it gives up on notes that keep moving. */
+const RELINK_ROUNDS = 5
+
+/**
+ * Rewrites the links in note `referrerId` that name `fromPath`, the path
+ * note `noteId` was renamed from, to the note's current path (renameNote,
+ * after its locks are released). Both notes are looked up by id each round,
+ * so one that another rename moved meanwhile is found where it is now
+ * (#803), and `write` applies the rewrite to the body it reads under the
+ * referrer's lock, so another rename's rewrite of the same note that landed
+ * meanwhile is kept. A rename of the note that looked for referrers before
+ * this write stored the new link did not find it: the note's path is read
+ * again under that path's lock, and if the note has moved, the next round
+ * rewrites the link to where it is now. False when the notes were still
+ * moving after RELINK_ROUNDS rounds.
+ */
+async function relinkReferrer(
+  vaultId: string,
+  referrerId: string,
+  noteId: string,
+  fromPath: string,
+  write: (path: string, body: (current: string) => string) => Promise<NoteRow | null>,
+): Promise<boolean> {
+  let linked = fromPath
+  for (let round = 0; round < RELINK_ROUNDS; round++) {
+    const [note] = await db.select({ path: notes.path }).from(notes).where(eq(notes.id, noteId))
+    const [referrer] = await db
+      .select({ path: notes.path, body: notes.body })
+      .from(notes)
+      .where(and(eq(notes.id, referrerId), eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
+    if (!note || note.path === linked || !referrer) return true
+    const from = linked
+    const to = note.path
+    const rewrite = (body: string) => refactorWikilinks(body, from, to)
+    // No link left to rewrite: another rename's rewrite, or an edit, got there first.
+    if (rewrite(referrer.body) === referrer.body) return true
+    // No note, or another one, at the referrer's path: it moved meanwhile.
+    if ((await write(referrer.path, rewrite))?.id !== referrerId) continue
+    const settled = await withKeyLock(noteLock(vaultId, to), async () => {
+      const [now] = await db.select({ path: notes.path }).from(notes).where(eq(notes.id, noteId))
+      return now?.path === to
+    })
+    if (settled) return true
+    linked = to
+  }
+  return false
+}
+
+/**
+ * renameNote's move, run under the note locks of both paths. Returns the
+ * moved row and the notes (id, and the path they had) whose links to the old
+ * path renameNote rewrites next, or null when no live note is at the old path.
+ */
+async function moveNote(
+  vaultId: string,
+  fromResolved: ResolvedNotePath,
+  toResolved: ResolvedNotePath,
+  renaming: string,
+): Promise<{ updated: NoteRow; referrers: { id: string; path: string }[] } | null> {
+  const row = await getLiveNote(vaultId, fromResolved.fullPath)
+  if (!row) return null
   if (toResolved.fullPath !== fromResolved.fullPath && (await getLiveNote(vaultId, toResolved.fullPath))) {
     throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
   }
@@ -507,10 +631,9 @@ export async function renameNote(
   // #491: rewriting links can grow a body past the size cap. Every rewritten
   // body (the note's own, then each referrer's) is checked before anything is
   // written, so a refused rename leaves the vault as it was.
-  const renaming = `renaming ${fromResolved.fullPath} to ${toResolved.fullPath}`
   assertBodyFits(currentBody, rawBody, `${renaming} rewrites its own links`)
   const referrers = isMoving ? await linkReferrers(vaultId, row.id, fromResolved.fullPath) : []
-  for (const path of referrers) {
+  for (const { path } of referrers) {
     const referrer = await readNote(vaultId, path)
     if (!referrer) continue
     const rewritten = refactorWikilinks(referrer.body, fromResolved.fullPath, toResolved.fullPath)
@@ -557,31 +680,13 @@ export async function renameNote(
   ]
   await regenProgressiveIndices(vaultId, affectedDirs)
   await syncLinks(updated.id, currentBody)
-
-  // Refactor incoming wikilinks across other notes in the vault. Each is
-  // re-read: it may have changed since the check above.
-  for (const path of referrers) {
-    const targetNote = await readNote(vaultId, path)
-    if (!targetNote) continue
-    const refactored = refactorWikilinks(targetNote.body, fromResolved.fullPath, toResolved.fullPath)
-    if (refactored === targetNote.body) continue
-    try {
-      await updateFn(vaultId, path, { body: refactored }, SYSTEM_ACTOR)
-    } catch (err) {
-      // Grown past the cap since the check: the rename is done, so the other
-      // referrers still get their links; this one keeps the old link.
-      if (!(err instanceof NoteTooLargeError)) throw err
-      console.warn(`[rename] ${renaming}: links in ${path} not rewritten: ${err.message}`)
-    }
-  }
-
-  return updated
+  return { updated, referrers }
 }
 
-/** Paths of the live notes, other than `noteId`, that link to `path`. */
-async function linkReferrers(vaultId: string, noteId: string, path: string): Promise<string[]> {
+/** The live notes (id and path), other than `noteId`, that link to `path`. */
+async function linkReferrers(vaultId: string, noteId: string, path: string): Promise<{ id: string; path: string }[]> {
   const rows = await db
-    .select({ sourceNotePath: notes.path })
+    .select({ id: notes.id, path: notes.path })
     .from(noteLinks)
     .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
     .where(
@@ -592,52 +697,73 @@ async function linkReferrers(vaultId: string, noteId: string, path: string): Pro
         or(eq(noteLinks.targetPath, path), eq(noteLinks.targetPath, `${path}.md`)),
       ),
     )
-  return [...new Set(rows.map((r) => r.sourceNotePath))]
+  return [...new Map(rows.map((r) => [r.id, r])).values()]
 }
 
-
-/** Soft delete (spec 6: one consistent delete behavior): file → .trash, row keeps everything. */
+/**
+ * Soft delete (spec 6: one consistent delete behavior): file → .trash, row
+ * keeps everything. Under the note's lock (#484): a write to the note that
+ * waited for the delete finds no note instead of writing a file back.
+ */
 export async function softDeleteNote(
   vaultId: string,
   path: string,
   actor: Actor = SYSTEM_ACTOR,
 ): Promise<NoteRow | null> {
   const resolved = resolveNotePath(path)
-  const row = await getLiveNote(vaultId, resolved.fullPath)
-  if (!row) return null
-  const [updated] = await db
-    .update(notes)
-    .set({ deletedAt: new Date(), updatedAt: new Date() })
-    .where(eq(notes.id, row.id))
-    .returning()
-  await mkdir(join(vaultDir(vaultId), '.trash'), { recursive: true })
-  await rename(noteFile(vaultId, resolved.fullPath), trashFile(vaultId, row.id))
-  await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
-  await recordRevision(row.id, 'delete', row.frontmatter, row.body, actor)
-  return updated!
+  return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
+    const row = await getLiveNote(vaultId, resolved.fullPath)
+    if (!row) return null
+    const [updated] = await db
+      .update(notes)
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
+      .where(eq(notes.id, row.id))
+      .returning()
+    await mkdir(join(vaultDir(vaultId), '.trash'), { recursive: true })
+    await rename(noteFile(vaultId, resolved.fullPath), trashFile(vaultId, row.id))
+    await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
+    await recordRevision(row.id, 'delete', row.frontmatter, row.body, actor)
+    return updated!
+  })
+}
+
+/**
+ * Runs `fn` on the trashed note `noteId` under the note lock of its path
+ * (#484), so a restore and a purge of one note, or a restore and another
+ * writer of its path, run one at a time. The row is read again inside the
+ * lock: null when a writer that held it first restored or purged the note.
+ */
+async function withTrashedNote<T>(
+  vaultId: string,
+  noteId: string,
+  fn: (row: NoteRow) => Promise<T>,
+): Promise<T | null> {
+  const trashed = and(eq(notes.id, noteId), eq(notes.vaultId, vaultId), isNotNull(notes.deletedAt))
+  const [seen] = await db.select().from(notes).where(trashed)
+  if (!seen) return null
+  return withKeyLock(noteLock(vaultId, seen.path), async () => {
+    const [row] = await db.select().from(notes).where(and(trashed, eq(notes.path, seen.path)))
+    return row ? fn(row) : null
+  })
 }
 
 export async function restoreNote(vaultId: string, noteId: string): Promise<NoteRow | null> {
-  const rows = await db
-    .select()
-    .from(notes)
-    .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId), isNotNull(notes.deletedAt)))
-  const row = rows[0]
-  if (!row) return null
-  const resolved = resolveNotePath(row.path)
-  if (await getLiveNote(vaultId, resolved.fullPath)) {
-    throw new OkfValidationError(`a live note already exists at ${resolved.fullPath}`)
-  }
-  const [updated] = await db
-    .update(notes)
-    .set({ deletedAt: null, updatedAt: new Date() })
-    .where(eq(notes.id, row.id))
-    .returning()
-  await mkdir(dirname(noteFile(vaultId, resolved.fullPath)), { recursive: true })
-  await rename(trashFile(vaultId, row.id), noteFile(vaultId, resolved.fullPath))
-  await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
-  scheduleEmbedding(row.id)
-  return updated!
+  return withTrashedNote(vaultId, noteId, async (row) => {
+    const resolved = resolveNotePath(row.path)
+    if (await getLiveNote(vaultId, resolved.fullPath)) {
+      throw new OkfValidationError(`a live note already exists at ${resolved.fullPath}`)
+    }
+    const [updated] = await db
+      .update(notes)
+      .set({ deletedAt: null, updatedAt: new Date() })
+      .where(eq(notes.id, row.id))
+      .returning()
+    await mkdir(dirname(noteFile(vaultId, resolved.fullPath)), { recursive: true })
+    await rename(trashFile(vaultId, row.id), noteFile(vaultId, resolved.fullPath))
+    await regenProgressiveIndices(vaultId, resolved.ancestorDirectories)
+    scheduleEmbedding(row.id)
+    return updated!
+  })
 }
 
 export async function listNotes(vaultId: string): Promise<
@@ -1195,21 +1321,18 @@ export async function purgeRevision(vaultId: string, revisionId: string): Promis
   return true
 }
 
-/** Permanently removes a trashed note (used by purge policies later). */
+/** Permanently removes a trashed note (used by purge policies later), under its path's note lock (#484). */
 export async function purgeNote(vaultId: string, noteId: string): Promise<boolean> {
-  const rows = await db
-    .select()
-    .from(notes)
-    .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId), isNotNull(notes.deletedAt)))
-  const row = rows[0]
-  if (!row) return false
-  await db.delete(notes).where(eq(notes.id, row.id))
-  // semanticEdges is polymorphic and has no FK (spec 9), so it does not
-  // cascade — clear it by hand or the rows leak (#92).
-  await deleteSemanticEdgesFor('note', [row.id])
-  await rm(trashFile(vaultId, row.id), { force: true })
-  await deleteCrdtState(vaultId, row.path).catch(() => {})
-  return true
+  const purged = await withTrashedNote(vaultId, noteId, async (row) => {
+    await db.delete(notes).where(eq(notes.id, row.id))
+    // semanticEdges is polymorphic and has no FK (spec 9), so it does not
+    // cascade — clear it by hand or the rows leak (#92).
+    await deleteSemanticEdgesFor('note', [row.id])
+    await rm(trashFile(vaultId, row.id), { force: true })
+    await deleteCrdtState(vaultId, row.path).catch(() => {})
+    return true
+  })
+  return purged ?? false
 }
 
 export const ASSET_MIME_TYPES: Record<string, string> = {

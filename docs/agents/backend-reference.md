@@ -240,6 +240,10 @@ would add fields to responses. The S1 dry run is
 
 Session-cookie auth (not JWT) — a random token, SHA-256-hashed before
 storage, resolved on every request via a Fastify `onRequest` hook.
+Ending a session (logout, password change for the other devices,
+password reset, deactivation) deletes its row and announces its hash
+(`sessionHashes` on the permission bus, `sessions.ts`); every live
+collab socket and live view it opened closes at once (#498, §5.7).
 
 - **Bootstrap** (`bootstrap.ts`): one-time `/setup` endpoint gated by an
   out-of-band token (`SETUP_TOKEN` env var or a generated/logged one);
@@ -370,10 +374,45 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   other's temp file (raw `ENOENT` naming server paths) and leave the row
   and the file on different writes. The MCP tool wrapper returns only the
   code of a Node system error (`internal storage error (ENOENT)`); the
-  full error goes to the server log. Rename, delete and restore do not
-  take the lock. The lock orders writes; it does not merge them: a body
-  write replaces the whole body, so two agents that each read a note and
-  write it back with a line appended still keep only the later one.
+  full error goes to the server log. The lock orders writes; it does not
+  merge them: a body write replaces the whole body, so two agents that
+  each read a note and write it back with a line appended still keep only
+  the later one.
+- **Rename, delete, restore, purge and create take the note lock too**
+  (#484): `createNote`, `softDeleteNote`, `restoreNote` and `purgeNote`
+  hold `note:<vault>/<path>` (restore and purge read the trashed row's
+  path, lock it, then read the row again); `renameNote` holds the keys of
+  the old and the new path (`withKeyLocks`, sorted) across the target
+  check, the file and CRDT move, the row update, the index regeneration
+  and its own links. An edit queued behind a rename or a delete then finds
+  no note at the old path (`note not found`) instead of writing there, and
+  of two writers making one path live (two renames, a rename and a create
+  or a restore) the second gets `a note already exists`. Before, a rename
+  copied a stale body over an acknowledged edit, an edit's file landed at
+  the path the note had left, the losing rename's rollback unlinked the
+  winner's file, and a restore could report success on a note a purge
+  removed. Links in other notes are rewritten after the rename's locks are
+  released, each through `updateFn` (`writeThroughCollab`) under that
+  note's own lock: no code holding a `note:` lock waits for the relay's
+  store hook (ADR-003 §5.1), and two renames rewriting each other's
+  referrers would otherwise wait on each other. Lock order: `note:` keys
+  (sorted when more than one), then `index:`. The keys are paths, not note
+  ids (ADR-003 S2a moves to id keys): an editor tab left open at the old
+  path after a rename still stores to a path with no note, as before.
+- **Renames of notes that link to each other** (#803): each referrer is
+  looked up again by note id when its links are rewritten
+  (`relinkReferrer`): another rename may have moved it, and before, it was
+  skipped, so two notes linking each other and renamed at once both kept
+  the old links. The rewrite goes to `updateFn` as a function of the body
+  (`BodyEdit`), applied under the referrer's lock to the stored body, or
+  through the relay to the live document's text, so two renames rewriting
+  one note both keep their link. The renamed note's path is read by id
+  too, and again under that path's lock after the write: a rename of the
+  note that looked for referrers before the new link was stored missed it,
+  so a note that has moved gets another round (at most 5, then
+  `[rename] … the notes kept moving` is logged). `syncLinks` replaces a
+  note's link rows in one transaction, so a rename never sees a referrer
+  with no links mid-write.
 - **Edits merge frontmatter per key** (#438): `edit_note` and REST
   `PUT /api/vaults/:id/notes/*` take `frontmatter`, `body`, `replace`
   and `removeKeys`; `requestedEdit()` (`sync/crdt-write.ts`) turns them
@@ -394,6 +433,21 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   default. The `sync_local_docs_to_vault` prompt tells the agent to
   update an existing note with `replace: true`, so the vault mirrors the
   file.
+- **A body write reaches open editors as the change alone** (#483):
+  `writeThroughCollab` makes the live document's `body` read the new
+  body with one change (`replaceText`): the longest common start and end
+  are kept, the span between is replaced, new text inserted before the
+  old is deleted, and the span never splits a UTF-16 surrogate pair (Yjs
+  stores half a pair as U+FFFD). Characters the write leaves alone keep
+  their Yjs identity, so a person's caret stays on its text and their
+  Ctrl+Z (a `Y.UndoManager` that tracks only their own edits, never the
+  relay's updates) still finds what they typed. It used to delete the
+  whole body and insert the new one: every open caret mapped to
+  position 0 and the person's undo had nothing left to undo. An agent's
+  edit is not undoable from the editor; note history reverts it. The
+  write still sets the whole body: text a person typed that is not in
+  the agent's body is deleted (#408). The relay's `onLoadDocument` still
+  replaces the whole body when the note's file changed outside it.
 - **Revision dedupe** (#480, `recordRevision`): a write that repeats the
   latest revision records nothing. Frontmatter is compared as jsonb
   stores it: deep equality on its JSON form, so object key order (nested
@@ -417,7 +471,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   into one folder write its `index.md` in turn and the last write lists
   every note committed before it; an older snapshot written last used to
   leave live notes out (#779). Lock order is `note:` before `index:`
-  (`updateNote` regenerates inside its note lock; nothing takes a `note:`
+  (every note writer regenerates inside its note locks; nothing takes a `note:`
   lock while holding an `index:` lock).
 - **`integrity.ts`** / `pnpm check-notes`: parses every live note's file
   from disk the way `readNote` does and compares it with the note's row.
@@ -615,7 +669,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `"<vaultId>/<path>"`. `onAuthenticate` requires live `edit` access.
   **`beforeHandleMessage` re-resolves access on every inbound Yjs
   message**, not just at connect time — dropping below `edit` mid-session
-  drops the next message and closes the connection. `onStoreDocument`
+  drops the next message and closes the connection.
+- **A connection ends with its session** (#498). `POST /api/collab/ticket`
+  binds the ticket (`tickets.ts`, single use, 60 s) to the user and the
+  hash of the session asking; `onAuthenticate` refuses a ticket whose
+  session ended or expired since, and keeps the session hash in the
+  connection context (a raw session token, as server callers and tests
+  use, keeps its own). When a session ends (§5.1) the relay closes every
+  document connection opened with it, in every tab, with code 4401 /
+  reason `signed-out`, and refuses any message already queued behind the
+  close; `beforeHandleMessage` also re-checks the session with its 10 s
+  access re-check (expiry, or a delete no event announced). Other
+  sessions of the same user are untouched (a password change spares the
+  session doing it). The editor (`useCollabDoc`) turns a `signed-out`
+  close, or a 401 from the ticket endpoint, into status `signed-out`: it
+  stops reconnecting, the editor turns read-only, the text stays on
+  screen and in this user's browser copy, which a logout in this browser
+  deletes (#720). The SSE live view (`viewers.ts`) ends with its
+  session the same way. `onStoreDocument`
   debounces (default 2s) persistence back through the same OKF write
   path used everywhere else; a write that fails validation is logged
   and the last good file state is kept, never corrupted. A store whose
@@ -658,7 +729,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   history are dropped (the notice says so); the browser's copy moves to
   the new document.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
-  Every share/team/deactivation mutation calls `emitPermissionChange()`;
+  Every share/team/deactivation mutation calls `emitPermissionChange()`,
+  and every session delete announces the ended sessions' hashes on it;
   the collab server and the SSE viewer hub both subscribe and actively
   close any connection that no longer qualifies — this is what makes
   revocation instant instead of "eventually, on reconnect."
@@ -670,6 +742,20 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   when one is open (`mcp/crdt-write.ts`), so a human editing a note
   sees an AI's edit streaming in like any other collaborator, not as a
   silent external change.
+- **`agent-presence.ts`** (#481): agents in the editors' "In this note
+  now" row. After an MCP `read_note` / `export_note` (reading) or
+  `edit_note` / `revert_note` (editing), the relay adds an awareness
+  state `{ agent: { name, activity } }` to that note's document, under
+  a client id of its own per MCP connection, but only when the document
+  is already loaded (a read never loads one). `name` is the MCP
+  connection's label; the token, its hash and the connection id are
+  never broadcast. The state has no `user` and no cursor. It stays
+  `editing` until the idle timeout after the agent's last write, is
+  renewed every 15 s (y-protocols drops remote states after 30 s) and is
+  removed after `COLLAB_AGENT_IDLE_MS` (default 60000) without a read or
+  write. `beforeHandleAwareness` strips `agent` from every state a
+  client sends and drops client updates for an agent's client id, so
+  only the relay can put an agent in presence.
 
 ### 5.8 MCP (`server/src/mcp/`)
 
@@ -1021,8 +1107,13 @@ repositories indexed before #398 gain their import edges without a
 re-sync (unchanged files are never re-extracted).
 
 **Extraction queue** (`extraction-queue.ts`): in-process and serial, like
-the note embedding queue. A file whose extraction throws is logged and
-skipped; the drain goes on. A file with a line longer than 1,000
+the note embedding queue, but fair across repositories (#497): one FIFO
+per repository, served round-robin in turns of at most 10 files
+(`EXTRACTION_TURN_FILES`), so a large repository's backlog delays another
+repository's files by at most one turn per other busy repository, not by
+the whole backlog; a repository's own files keep their order. A file
+whose extraction throws is logged and skipped; the drain goes on. A file
+with a line longer than 1,000
 characters (minified, bundled or generated code) gets its file embedding
 but no symbols or imports. **Per-file budget** (#496): a file's symbols
 are all stored, but only the first `ELARA_EMBED_MAX_SYMBOLS_PER_FILE`

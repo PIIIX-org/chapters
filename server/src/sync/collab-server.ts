@@ -3,7 +3,8 @@ import type { Duplex } from 'node:stream'
 import { Server, type Hocuspocus } from '@hocuspocus/server'
 import { WebSocketServer, type RawData } from 'ws'
 import * as Y from 'yjs'
-import { getSessionUser } from '../auth/sessions.js'
+import { getSessionUser, sessionActive } from '../auth/sessions.js'
+import { hashToken } from '../auth/tokens.js'
 import { atLeast, resolveAccess } from '../vaults/permissions.js'
 import { readNote, updateNote, splitPath } from '../notes/store.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
@@ -17,6 +18,7 @@ import { recordJob } from '../monitoring/metrics.js'
 import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
 import { bodyMeasured, updateFits } from './collab-size.js'
+import { forgetAgentPresence, stripAgentClaims } from './agent-presence.js'
 
 export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
@@ -41,6 +43,20 @@ class NoteTooLargeRefusal extends Error {
 }
 
 /**
+ * Why a connection whose session ended is closed (#498): logout here or in
+ * another tab, a password change or reset, deactivation, expiry. Thrown from
+ * `beforeHandleMessage` and passed to `close()`; the editor
+ * (client/src/hooks/useCollabDoc.ts) reads `signed-out` and stops.
+ */
+class SessionEnded extends Error {
+  readonly code = 4401
+  readonly reason = 'signed-out'
+  constructor(documentName: string) {
+    super(`the session that opened ${documentName} ended`)
+  }
+}
+
+/**
  * The quarantine revision of each loaded document's current episode (#492):
  * stores that continue it update that revision. A document loaded afresh
  * (after an unload) has none, so its quarantine never overwrites an earlier
@@ -59,6 +75,10 @@ function parseDocName(name: string): { vaultId: string; path: string } {
 
 interface ConnectionContext {
   userId: string
+  /** Hash of the session the connection was opened with; absent on direct connections. */
+  sessionHash?: string
+  /** That session ended: nothing more is taken from this connection. */
+  sessionEnded?: boolean
   accessVerifiedAt?: number
   /** A server-side body write through a direct connection (crdt-write.ts), whose caller already ran the quarantine check. */
   directWrite?: boolean
@@ -127,15 +147,26 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     /**
      * Identity only. A browser presents a single-use ticket (its session
      * cookie is httpOnly and unreadable from JS); server-side callers and the
-     * tests present a raw session token. Neither says what the connection may
+     * tests present a raw session token. Either way the connection belongs to
+     * that session and ends with it (#498): a ticket whose session ended
+     * since it was minted is refused. Neither says what the connection may
      * *do* — that is the live `edit` check below, and `beforeHandleMessage`
      * on every message after it.
      */
     async onAuthenticate({ token, documentName }) {
-      const ticketUser = token ? consumeTicket(token) : null
-      const userId =
-        ticketUser ?? (token ? ((await getSessionUser(token))?.id ?? null) : null)
-      if (!userId) throw new Error('authentication required')
+      const ticket = token ? consumeTicket(token) : null
+      let sessionHash: string | null = null
+      let userId: string | null = null
+      if (ticket) {
+        if (await sessionActive(ticket.sessionHash)) {
+          userId = ticket.userId
+          sessionHash = ticket.sessionHash
+        }
+      } else if (token) {
+        userId = (await getSessionUser(token))?.id ?? null
+        sessionHash = hashToken(token)
+      }
+      if (!userId || !sessionHash) throw new Error('authentication required')
       const { vaultId } = parseDocName(documentName)
       const access = await resolveAccess(userId, vaultId)
       if (!atLeast(access, 'edit')) {
@@ -146,7 +177,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         })
         throw new Error('edit access required')
       }
-      return { userId } satisfies ConnectionContext
+      return { userId, sessionHash } satisfies ConnectionContext
     },
 
     async onLoadDocument({ documentName, document }) {
@@ -189,17 +220,25 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
 
     /**
      * Per-operation enforcement (audit rule): every inbound message
-     * re-resolves live access. Throwing drops the message and kills the
-     * connection — independent of the event-driven kick below.
+     * re-resolves live access and the session behind the connection.
+     * Throwing drops the message and kills the connection — independent of
+     * the event-driven kick below, which flags `sessionEnded` so a message
+     * already queued behind the kick is refused too.
      */
     // ponytail: per-message DB re-check cached for 10s; wireKick handles instant event-driven revocation (GR-03)
     async beforeHandleMessage({ documentName, context }) {
       const ctx = context as ConnectionContext
+      if (ctx.sessionEnded) throw new SessionEnded(documentName)
       const now = Date.now()
       if (ctx.accessVerifiedAt && now - ctx.accessVerifiedAt < 10_000) {
         return
       }
       const { userId } = ctx
+      // Expiry, or an end no event announced.
+      if (ctx.sessionHash && !(await sessionActive(ctx.sessionHash))) {
+        ctx.sessionEnded = true
+        throw new SessionEnded(documentName)
+      }
       const { vaultId } = parseDocName(documentName)
       const access = await resolveAccess(userId, vaultId)
       if (!atLeast(access, 'edit')) throw new Error('access revoked')
@@ -215,6 +254,11 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       if (type !== SYNC_STEP_2 && type !== SYNC_UPDATE) return
       const limit = config.noteMaxBytes
       if (!updateFits(document, payload, limit)) throw new NoteTooLargeRefusal(documentName, limit)
+    },
+
+    /** Only the relay puts agents in presence (#481, agent-presence.ts). */
+    async beforeHandleAwareness({ documentName, states }) {
+      stripAgentClaims(documentName, states)
     },
 
     async onStoreDocument({ documentName, document, lastContext }) {
@@ -265,6 +309,10 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       const { vaultId, path } = parseDocName(documentName)
       publishNoteState(vaultId, path, docState(document))
     },
+
+    async afterUnloadDocument({ documentName }) {
+      forgetAgentPresence(documentName)
+    },
   })
 
   const hocuspocus = server.hocuspocus
@@ -312,17 +360,27 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       for (const client of wss.clients) client.terminate()
       wss.close()
       currentInstance = null
+      forgetAgentPresence()
     },
   }
 }
 
-/** Event-driven kick: revocation closes affected sockets immediately. */
+/**
+ * Event-driven kick: revocation closes affected sockets immediately. A
+ * connection whose session ended closes at once, before any access check
+ * (#498): every tab of that session, whatever its access.
+ */
 function wireKick(hocuspocus: Hocuspocus): () => void {
   return onPermissionChange((change) => {
     hocuspocus.documents.forEach((doc, documentName) => {
       const { vaultId } = parseDocName(documentName)
       doc.getConnections().forEach((connection) => {
         const ctx = connection.context as ConnectionContext
+        if (ctx.sessionHash && change.sessionHashes?.includes(ctx.sessionHash)) {
+          ctx.sessionEnded = true
+          connection.close(new SessionEnded(documentName))
+          return
+        }
         if (!affects(change, ctx.userId, vaultId)) return
         ctx.accessVerifiedAt = undefined
         void resolveAccess(ctx.userId, vaultId).then((access) => {
