@@ -189,7 +189,7 @@ what the code-only rollback below relies on.
 | `notes.frontmatter_src` | `json` copy of the frontmatter in its original key order (jsonb reorders keys); for rendering files and answering reads |
 | `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), actor detail (#403). `idempotency_key` stays unused: #477's keys need the call's arguments and its whole answer, also for writes that record no revision, so they live in `write_idempotency` |
 | `write_idempotency` (migration 0025) | the first answer of an MCP write sent with `idempotency_key` (#477, `mcp/write-result.ts` `runWrite`): PK (`connection_id`, `key`), `tool`, `args_hash` (sha256 of the tool, vault and canonical arguments), `note_id` (FK to `notes`, cascade: purging the note deletes its keys and the note text their answers hold), `result` jsonb, `created_at` (indexed). A write that commits inserts its row **inside its own store transaction** (`WriteOptions.recordKey`, called with the committed row by `createNote`, `writeNote`, the rename move, `softDeleteNote`, `restoreNote`), so a crash after COMMIT and before the answer still leaves the key and the retry replays (ADR-003 §4, §10); its recorded answer has `indexed: false`. Answers that commit nothing (`conflicted`) are inserted after the call. A repeat with the same hash answers `result` + `replayed: true`; another hash is refused. Every keyed call first deletes rows older than 24 h. Calls with one key run one at a time (in-process key lock). Rows also go with their connection (FK cascade) |
-| `note_crdt` | Yjs snapshot per note id (replaces `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
+| `note_crdt` | Yjs snapshot per note id (replaced `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
 | `note_projections` | per note and projection (`file`/`dir_index`/`embedding`): `target_seq`, `applied_seq`, `index_version`, lease and error columns; `note_projections_pending` indexes the work queue |
 | `projected_files` | per `(vault, path)`: owner (`note`/`trash`/`dir_index`), `applied_hash` of the bytes last written, `applied_seq` |
@@ -284,6 +284,59 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
 - `check-notes` is read-only: it compares a file with its row only where
   the `file` projection is applied; `--wait-idle[=<s>]` waits for the
   projector, `--fail-on-pending` fails on pending projections (CI).
+
+**S2b: the relay's state is `note_crdt` + `note_updates`**
+(`sync/note-crdt.ts`). A note's document is `snapshot ⊕` its non-rejected
+updates with `id > snapshot_through`. Every store write that changes a note
+with CRDT state appends its change as one Yjs update in the same
+transaction (`folded_seq` follows `notes.seq`); the relay's store appends
+the editors' delta and folds it; unload and `purge_revision` compact
+(snapshot re-encoded, compacted updates deleted). A note with no state is
+seeded on first load deterministically (`seedClientId`: the first 4 bytes of
+`sha256("elara-seed/1\0" ‖ noteId ‖ "\0" ‖ body ‖ "\0" ‖ canonicalJSON(frontmatter))`;
+later changes use the process's own client id), so two seeds of the same input merge. A load,
+store or write that finds `notes.seq > folded_seq` (the row changed outside
+the store) first merges that change into the state three-way against the
+revision at `folded_seq` (`mergeTextKeepingTheirs`: by lines, then per
+character inside lines both sides changed, so edits to different words of
+one line both stay; where characters overlap the typing stays) and
+never rebuilds the text (#488). There are no `.crdt` bins any more. Each
+open document caches the stored state it holds (`note-crdt.ts`
+`storedStates`: the state vector and the last update id, set at load and
+after every write that had the document in hand, dropped on `fold_error`
+and with the document). While the last non-rejected update id, a null
+`fold_error` and `folded_seq = notes.seq` still match it, a store or
+server write reads only the bookkeeping and works on the document's own
+clone, its typing being the delta over the cached vector, instead of
+materialising `snapshot ⊕ tail`; any other writer's append makes the next
+write materialise and refresh the cache.
+
+**S2b backfill and boot** (`sync/collab-backfill.ts`, `bootCollab` in
+`index.ts` before `listen`, after the S2a backfill): while
+`instance_state.collab_migrated_at` is null, each live note's
+`.crdt/<path>.bin` is attached when its text equals the row, the file or a
+revision (with a diff to the row's text on top) and otherwise moved to
+`vaults/<id>/.migration/<date>/bins/` (`setAside[].reason`: `unknown-text`,
+`undecodable`); one transaction per note, so a rerun resumes. A note whose
+backfill failed is refused by the relay with `note-not-migrated` and never
+seeded until a restart attaches its bin (`setCollabNotMigrated`, store-tx.ts);
+otherwise a seed would make the rerun skip it and retire its bin. The
+finish (no failure, no note waiting for S2a) sets the marker, renames each
+vault's `.crdt/` to `.crdt.pre-adr-003/` (kept for a code-only rollback) and
+writes `DATA_DIR/collab-migration-report-<time>.json`. Afterwards (roll-forward
+after a code-only rollback), a `.crdt/` bin left by older code is merged into
+`note_crdt` as a Yjs update only when it shares history with the note's state
+(a Yjs client in common other than the process's `SERVER_CLIENT_ID`: the
+bin the old relay saved from the exported state); a bin older code seeded
+afresh from the file shares none and is set aside (`unrelated`), since merging
+it would double the note. `.crdt/` then moves to `.crdt.rollback-<time>/`, and
+what older code changed in the row reaches the state through the rebase.
+Every boot then runs ADR §7 steps 4-5: merge rows changed outside the store
+(`notes.seq > folded_seq`), then fold every pending tail, each note in its
+own transaction (a failure sets `fold_error` to `boot fold failed: …`,
+records a failed `collab-store` job, and boot goes on). A stored update that
+does not apply is marked `rejected_at` and named in `fold_error`, which the
+fold of that transaction keeps; the next fold clears it.
 
 ### Repositories (codebase mapping)
 
@@ -930,7 +983,22 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 ### 5.7 Real-time collaboration (`server/src/sync/`)
 
 - **`collab-server.ts`**: the Hocuspocus relay. Document name is
-  `"<vaultId>/<path>"`. `onAuthenticate` requires live `edit` access.
+  `"<vaultId>/~<noteId>"` (ADR-003 S2b; `~` never occurs in a slug, client
+  `collabDocName`). A path-named connection (`"<vaultId>/<path>"`, sent by a
+  bundle from before S2b) is refused with reason `reload-required` and
+  nothing it sends is stored; the editor shows "Reload to keep editing"
+  and keeps the text (and its #720 browser copy, which it looks up under
+  both the id name and the old path name after the reload). Loading reads
+  the note's state from `note_crdt` + `note_updates` (seeding it when
+  absent), never a file. A rename keeps every editor connected (same id)
+  and moves the note's SSE viewers to the new path (a `moved` event);
+  agent presence is looked up by note id. A delete or purge closes the
+  note's editors right after it commits (`closeNoteEditors`, close code
+  4410, reason `note-deleted`), and `onAuthenticate` refuses a note in the
+  trash or purged with the same reason; the editor stops reconnecting, keeps
+  the text in this browser and says the note is in the trash (status
+  `deleted`). After a restore new connections are let in; a reload brings
+  the kept typing back. `onAuthenticate` requires live `edit` access.
   **`beforeHandleMessage` re-resolves access on every inbound Yjs
   message**, not just at connect time — dropping below `edit` mid-session
   drops the next message and closes the connection.
@@ -957,8 +1025,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   body repeats a block of the stored note is quarantined (§5.3, #492):
   row and file keep the previous body, the live document and its
   editors keep the text (nobody is reverted or disconnected), the
-  `.crdt` state is saved as for every rejected store (on the next load
-  the file text wins over it), and a `collab-store` job failure is
+  CRDT state keeps the typing (the delta stays in `note_updates` and
+  `fold_error` says why the row did not take it), and a `collab-store` job failure is
   reported; the next store without the repeat is written normally. A
   store caused by a server body write through a direct connection
   (`writeThroughCollab`, context `directWrite`; its caller ran the check
@@ -1292,8 +1360,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   is nothing to resume, and a re-insert would revive rows deleted since
   (shares, purged notes, rotated MFA backup codes). It only regenerates
   a missing generated `index.md` there. The CLI prints counts, and for
-  an unexpected error only the driver's message and code (a drizzle
-  error's message carries the query parameters).
+  an unexpected error only the driver's message and code, taken from
+  the `cause` chain (a drizzle error's message carries the query
+  parameters; a `DrizzleQueryError` whose driver error has no code
+  prints `a database query failed`, #813).
   Ids are the archive's — a true restore, not an import. Rows are
   inserted as stored, not re-validated through the OKF write path.
   Restored MCP and sync tokens keep working (their hashes are
@@ -1721,12 +1791,17 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     `repeat: true` only increments `jobs[kind].repeated`: no total, no
     ring record, no log line, so a dead remote, an expired credential or a
     broken backup destination is one report, not one per retry. Set for a
-    sync of a repository whose `syncStatus` was already `error` (the
-    poller in `scheduler.ts` retries those every `POLL_INTERVAL_MS`; the
-    manual sync route and MCP `sync_repository` claim the row as
-    `syncing` first, so they pass the status they read before the claim
-    through `startSync(repo, previousStatus)` to
-    `syncGitRepository`/`syncLocalRepository`), and for a scheduled backup
+    sync failure of a repository that was already failing:
+    `recordSyncFailure` (`git-sync.ts`, used by `syncGitRepository` and
+    `syncLocalRepository`) counts a failure as new only if its conditional
+    update moves `lastSyncError` from null to a message, then writes
+    `syncStatus = 'error'`. Only sync outcomes write `lastSyncError` (a
+    success clears it), not the `syncing` claims of the manual sync route,
+    MCP `sync_repository` or a sync itself, so a retry (the poller in
+    `scheduler.ts` retries an errored repository every `POLL_INTERVAL_MS`)
+    is a repeat however it was started, and of overlapping syncs of one
+    repository (a poll and a webhook delivery) exactly one failure is new
+    (#775); also for a scheduled backup
     that fails after the previous backup, scheduled or on demand, also
     failed (module flag `backupFailing` in `backup-service.ts`: set on any
     failure, cleared by any success).
@@ -1855,10 +1930,13 @@ Restart the server afterwards so it computes the embeddings.
 --dry-run [--report <file>] [--vault <uuid>]` reads every note row, `.md`
 file and `.crdt` bin in one `REPEATABLE READ READ ONLY` transaction (only
 pre-0021 columns, so it runs on a production copy before the upgrade) and
-reports what the S2a/S2b backfill will do: per-note classes, the file ≠ row
+reports what the S2a/S2b backfill will do: per-note classes (`crdt`: what
+the bin's text matches; `collab`: what the S2b backfill does with it,
+`attach`/`set-aside`/`seed`/`has-state`), the file ≠ row
 conflict list (Q5: the file wins; `row.updated_at` against the file mtime,
 both hashes), files that will change bytes, files with no row, sizes and
-timings. It writes only the `--report` file, which it creates exclusively
+timings.
+It writes only the `--report` file, which it creates exclusively
 before the walk (an existing file, a symlink or an unwritable directory
 exits 2 at once; a failed run removes the file); without `--report` the
 JSON goes to stdout. Without `--dry-run` it exits 2:

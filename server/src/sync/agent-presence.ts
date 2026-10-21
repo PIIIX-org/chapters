@@ -1,6 +1,7 @@
 import { randomInt } from 'node:crypto'
 import type { Document } from '@hocuspocus/server'
 import { getCollab } from './collab-server.js'
+import { collabDocName } from './live-docs.js'
 
 /**
  * Agents in editor presence (#481). An MCP connection that reads or writes a
@@ -105,11 +106,11 @@ function freeClientId(document: Document): number {
 }
 
 /**
- * Records that `agent` read or wrote the note at `vaultId/path`. A no-op
+ * Records that `agent` read or wrote note `noteId` of `vaultId`. A no-op
  * unless the relay runs and has that note's document loaded.
  */
-export function showAgentPresence(vaultId: string, path: string, agent: AgentIdentity, activity: AgentActivity): void {
-  const documentName = `${vaultId}/${path}`
+export function showAgentPresence(vaultId: string, noteId: string, agent: AgentIdentity, activity: AgentActivity): void {
+  const documentName = collabDocName(vaultId, noteId)
   const document = getCollab()?.documents.get(documentName)
   if (!document) return
   let agents = present.get(documentName)

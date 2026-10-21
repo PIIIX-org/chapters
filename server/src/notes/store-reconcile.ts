@@ -74,7 +74,7 @@ async function readMaybe(file: string): Promise<Buffer | null> {
  * row's content, otherwise a `migration:backfill` revision is inserted.
  * Returns what it did.
  */
-async function revisionAtSeq(tx: Tx, noteId: string, reason: string): Promise<'present' | 'adopted' | 'inserted'> {
+export async function revisionAtSeq(tx: Tx, noteId: string, reason: string): Promise<'present' | 'adopted' | 'inserted'> {
   const [present] = (await tx.execute(sql`
     SELECT 1 FROM note_revisions r JOIN notes n ON n.id = r.note_id WHERE n.id = ${noteId} AND r.seq = n.seq`)) as unknown as unknown[]
   if (present) return 'present'

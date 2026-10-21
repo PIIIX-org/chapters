@@ -17,7 +17,7 @@ committed baseline of known defects.
 | `lab/bootstrap.ts` | setup → signup → verify → approve → login, pinned vault + repo, 4 MCP tokens; writes `lab-env.json` (runner only, holds tokens) |
 | `lab/run.ts` | selects tests by tier or filter, waits for `/health` before each, runs them in file-name order, writes `lab-results/` |
 | `lab/redact.ts` | replaces this run's secrets (`.env` values, bootstrap passwords, cookies, tokens) with `***` in `lab-results/` before upload |
-| `lab/lib/*.ts` | helpers: `context` (types, `ctx`), `mcp`, `rest`, `docker` (compose, psql, app restart/crash/state/exec), `app-recovery` (bringing the app back after a SIGKILL), `collab` (Hocuspocus client), `datapath` (disk/DB/.crdt ground truth, memory and health samplers), `fixlab` (repo progress, local_path repos), `file-diff` (file-count comparison text), `git-fixture` (a pinned git repository served to the app over HTTP), `portability` (zip, fixtures, OKF), `bundle-test`; `lab/lib/*.test.ts` are node unit tests of the helpers that need no instance, run by CI `checks` |
+| `lab/lib/*.ts` | helpers: `context` (types, `ctx`), `mcp`, `rest`, `docker` (compose, psql, app restart/crash/state/exec), `app-recovery` (bringing the app back after a SIGKILL), `collab` (Hocuspocus client; documents are `<vaultId>/~<noteId>`, `collabDocName`), `datapath` (disk/DB/CRDT ground truth: `dumpVault` reads each note's CRDT state from `note_crdt` + `note_updates`, `saveCrdtState`/`restoreCrdtState` plant a stale one; memory and health samplers), `fixlab` (repo progress, local_path repos), `file-diff` (file-count comparison text), `git-fixture` (a pinned git repository served to the app over HTTP), `portability` (zip, fixtures, OKF), `bundle-test`; `lab/lib/*.test.ts` are node unit tests of the helpers that need no instance, run by CI `checks` |
 | `lab/tests/*.test.ts` | the tests |
 | `lab/known-defects.json` | the baseline: every check that fails or is inconclusive today, with its open issue |
 | `.github/scripts/lab-gate.mjs` | the gate; unit tests in `lab-gate.test.mjs` (run by `checks`) |
@@ -49,9 +49,12 @@ sync each produce a `jobs` alert, with no note text or secret in them; #705),
 instance through a graceful restart, a SIGKILL, a stop and a start; #583),
 `zz-fix-minified-bundle`.
 Full tier adds `attachments`, `backup-restore`, `big-notes`, `browser`
-(Playwright/Chromium), `crash-write`, `export-roundtrip`,
-`multilingual-search`, `restart-extraction`, `store-failpoints`,
-`store-migration`, `store-rollback`, `zz-fix-pretty-bundle`.
+(Playwright/Chromium), `collab-s2b` (ADR-003 §11 S2b scenarios: rename and
+a new note at the old path, a pre-S2b tab across the upgrade, a re-seeded
+copy, rename then SIGKILL, a row changed by SQL), `crash-write`,
+`export-roundtrip`, `multilingual-search`, `restart-extraction`,
+`store-failpoints`, `store-migration`, `store-rollback`,
+`zz-fix-pretty-bundle`.
 
 The ADR-003 store tests (`lab/lib/store.ts` helpers):
 

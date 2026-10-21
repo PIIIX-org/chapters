@@ -250,6 +250,11 @@ describe('store-export-legacy (§9)', { timeout: 60_000 }, () => {
       VALUES ('store_rename_refactor',
         ${JSON.stringify({ vaultId, noteId: target.id, fromPath: 'docs/cli-target', referrers: [referrer.id] })}::jsonb,
         now() + interval '1 hour', 1)`)
+    // Only the CLI may run the job: this test process's projector (woken by the creates above) must be idle
+    // first, or it can claim the job once the export clears its lease, and fail it (it holds no instance lock).
+    await flushProjections()
+    // The export refuses to run before the backfill finished; this file may run alone (the marker is set by boot).
+    await db.execute(sql`UPDATE instance_state SET store_migrated_at = coalesce(store_migrated_at, now()) WHERE id = 'singleton'`)
     const run = await promisify(execFile)(process.execPath, ['--import', 'tsx', 'src/scripts/store-export-legacy.ts'], {
       cwd: join(import.meta.dirname, '..'),
       env: process.env,

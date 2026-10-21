@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import { useNavigate, useOutletContext, useParams } from 'react-router'
 import { EditorView } from '@codemirror/view'
-import { useNote } from '../../hooks/useNote.js'
+import { useQueryClient } from '@tanstack/react-query'
+import { useNote, useNotePathById } from '../../hooks/useNote.js'
 import { useCreateNote } from '../../hooks/useCreateNote.js'
 import { useVaultTree } from '../../hooks/useVaultTree.js'
 import { useRepositories } from '../../hooks/useRepositories.js'
@@ -74,6 +75,19 @@ export function NoteView() {
   const path = useParams()['*']
   const vault = useOutletContext<Vault | undefined>()
   const note = useNote(vaultId!, path!)
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  // A note this page holds that is gone from its path on a refetch (window
+  // focus) was renamed elsewhere, or trashed. Its collab document is named
+  // by id, so the editor is still connected: look the id up and follow the
+  // rename, with the note primed at its new path so nothing remounts.
+  const lostId = note.error?.status === 404 ? note.data?.id : undefined
+  const movedTo = useNotePathById(vaultId!, lostId)
+  useEffect(() => {
+    if (!lostId || !note.data || !movedTo.data || movedTo.data === path) return
+    queryClient.setQueryData(['note', vaultId, movedTo.data], { ...note.data, path: movedTo.data })
+    navigate(`/vaults/${vaultId}/notes/${movedTo.data}`, { replace: true })
+  }, [lostId, movedTo.data, note.data, path, vaultId, navigate, queryClient])
 
   const breadcrumbItems =
     vaultId && path
@@ -118,24 +132,27 @@ export function NoteView() {
    * path, where the relay refuses the connection and the reader gets a blank
    * body under an "access removed" notice.
    */
-  const noteKey = `${vaultId}/${path}`
+  // By note id once known, so a rename (same note, new path) keeps the session.
+  const noteKey = note.data ? `${vaultId}/~${note.data.id}` : `${vaultId}/${path}`
   const [session, setSession] = useState({ noteKey, editing: editable })
   if (session.noteKey !== noteKey) setSession({ noteKey, editing: editable })
   else if (editable && !session.editing) setSession({ noteKey, editing: true })
 
   if (note.isPending) return null
-  if (note.isError) return <div className="p-8 text-muted-foreground">Note not found.</div>
+  // A held note whose rename is still being looked up keeps its editor on screen.
+  if (note.isError && !(lostId && movedTo.data !== null)) return <div className="p-8 text-muted-foreground">Note not found.</div>
 
-  // Remount key is the full note identity (vault + path), and nothing else:
-  // keying on path alone would reuse a stale editor across a cross-vault
-  // switch to the same path, and keying on access would destroy a live
-  // document the moment access changed. See `session` above.
+  // Remount key is the note's identity (vault + note id), and nothing else:
+  // a rename keeps the same id, so the editor and its live document survive
+  // it; keying on access would destroy a live document the moment access
+  // changed. See `session` above.
   const key = noteKey
 
   return session.editing ? (
     <CollabNote
       key={key}
       vaultId={vaultId!}
+      noteId={note.data!.id}
       path={path!}
       accessRevoked={!editable}
       initialBody={note.data!.body}
@@ -798,6 +815,8 @@ interface NoteIdentity {
 }
 
 interface CollabNoteProps extends NoteIdentity {
+  /** Names the note's collab document (ADR-003 §5.4). */
+  noteId: string
   /** The REST view of this vault says the edit access is gone. Same news the
    *  relay's kick carries, arriving over a different wire — a window-focus
    *  refetch can beat a dropped socket's next reconnect — and either one is
@@ -815,13 +834,14 @@ interface CollabNoteProps extends NoteIdentity {
  * The editor path: one Yjs document, shared with everyone else holding `edit`.
  * No `PUT`, no local copy of the body — the `Y.Text` is the document.
  */
-function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: CollabNoteProps) {
+function CollabNote({ vaultId, noteId, path, accessRevoked, initialBody, access }: CollabNoteProps) {
   const session = useSession()
   // isError before .data, as everywhere.
   const me = session.isPending || session.isError ? null : session.data
 
   const collab = useCollabDoc({
     vaultId,
+    noteId,
     path,
     // Until unit 4 gives users a display name, the presence label is the local
     // part of the address (unit 6 plan, gap 7) — never the full email, which
@@ -935,6 +955,8 @@ function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: Colla
         <CollabNotices
           revoked={revoked}
           notMigrated={collab.status === 'not-migrated'}
+          reloadRequired={collab.status === 'reload-required'}
+          deleted={collab.status === 'deleted'}
           tooLarge={collab.tooLarge}
           unmerged={collab.unmerged}
           onDiscard={collab.discardUnmerged}
@@ -983,6 +1005,11 @@ interface LiveNoteProps extends NoteIdentity {
 function LiveNote({ vaultId, path, initialFrontmatter, initialBody }: LiveNoteProps) {
   const live = useLiveNote({ vaultId, path, enabled: true })
   useShellStatus(LIVE_SHELL[live.status])
+  // The note was renamed while open: follow it to its new path (ADR-003 §5.4).
+  const navigate = useNavigate()
+  useEffect(() => {
+    if (live.movedTo && live.movedTo !== path) navigate(`/vaults/${vaultId}/notes/${live.movedTo}`, { replace: true })
+  }, [live.movedTo, path, vaultId, navigate])
   // The REST fetch is what is on screen until the first frame arrives.
   const state = live.state ?? { frontmatter: initialFrontmatter, body: initialBody }
   const wikilinks = useWikilinks(vaultId, false)
