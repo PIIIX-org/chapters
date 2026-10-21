@@ -206,6 +206,81 @@ describe('useCodeMirrorEditor with a collab binding', () => {
     expect(view.state.doc.toString()).toBe('initial')
   })
 
+  // #483. The agent's edit_note as the relay sends it (server/src/sync/crdt-write.ts):
+  // the change alone, never the whole body deleted and inserted again.
+  it("keeps the caret through an agent's append, and Ctrl+Z undoes only this person's typing", () => {
+    const { ydoc, ytext } = crdtNote('First line.')
+
+    const { getByTestId } = render(
+      <Harness doc="" onChange={vi.fn()} collab={{ ytext, awareness: null }} />,
+    )
+    const view = editorView(getByTestId('editor-container'))
+    const typed = 'First line. My words.'
+    view.dispatch({ changes: { from: ytext.length, insert: ' My words.' }, selection: { anchor: typed.length } })
+
+    // The relay's copy takes the append; the update reaches this editor with
+    // the provider as its origin.
+    const relay = new Y.Doc()
+    Y.applyUpdate(relay, Y.encodeStateAsUpdate(ydoc))
+    relay.getText('body').insert(typed.length, '\nAn agent line.\n')
+    Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(relay, Y.encodeStateVector(ydoc)), { provider: 'relay' })
+
+    expect(view.state.doc.toString()).toBe(`${typed}\nAn agent line.\n`)
+    expect(view.state.selection.main.head).toBe(typed.length)
+
+    applyFormat(view, 'undo')
+    expect(view.state.doc.toString()).toBe('First line.\nAn agent line.\n')
+    // Only one's own edits undo: the agent's line comes back out through the
+    // note's history, never through Ctrl+Z.
+    applyFormat(view, 'undo')
+    expect(view.state.doc.toString()).toBe('First line.\nAn agent line.\n')
+  })
+
+  // useCollabDoc swaps the document under the editor for another copy of the
+  // same note: a copy restored from this browser is merged into the live one
+  // when the relay's state arrives (#720), and a document is rebuilt after a
+  // too-large refusal (#491). The editor is rebuilt around the new Y.Text.
+  it('keeps the caret and focus on their text when the document is swapped for a merged copy', () => {
+    const restored = crdtNote('Typed offline, then more.')
+
+    const { getByTestId, rerender } = render(
+      <Harness doc="" onChange={vi.fn()} collab={{ ytext: restored.ytext, awareness: null }} />,
+    )
+    const container = getByTestId('editor-container')
+    const before = editorView(container)
+    before.dispatch({ selection: { anchor: 'Typed'.length, head: 'Typed offline'.length } })
+    before.focus()
+
+    // The live document holds the same history plus what an agent wrote meanwhile.
+    const live = new Y.Doc()
+    Y.applyUpdate(live, Y.encodeStateAsUpdate(restored.ydoc))
+    live.getText('body').insert(0, 'Agent line.\n')
+    rerender(<Harness doc="" onChange={vi.fn()} collab={{ ytext: live.getText('body'), awareness: null }} />)
+
+    const after = editorView(container)
+    expect(after.state.doc.toString()).toBe('Agent line.\nTyped offline, then more.')
+    expect(after.state.selection.main.anchor).toBe('Agent line.\nTyped'.length)
+    expect(after.state.selection.main.head).toBe('Agent line.\nTyped offline'.length)
+    expect(document.activeElement).toBe(after.contentDOM)
+  })
+
+  it('starts at the top when the new document shares no history with the old one', () => {
+    const first = crdtNote('One copy of the note.')
+
+    const { getByTestId, rerender } = render(
+      <Harness doc="" onChange={vi.fn()} collab={{ ytext: first.ytext, awareness: null }} />,
+    )
+    const container = getByTestId('editor-container')
+    editorView(container).dispatch({ selection: { anchor: 8 } })
+
+    const other = crdtNote('A note rebuilt from its text.')
+    rerender(<Harness doc="" onChange={vi.fn()} collab={{ ytext: other.ytext, awareness: null }} />)
+
+    const after = editorView(container)
+    expect(after.state.doc.toString()).toBe('A note rebuilt from its text.')
+    expect(after.state.selection.main.head).toBe(0)
+  })
+
   it('renders a remote caret in the peer ink once awareness arrives after connecting', () => {
     const { ytext } = crdtNote('shared line')
     const collab: EditorCollab = { ytext, awareness: null }

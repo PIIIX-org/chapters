@@ -7,7 +7,7 @@ import type { FastifyInstance } from 'fastify'
 import * as Y from 'yjs'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
-import { getRevision, listRevisionMeta, readNote, updateNote } from '../src/notes/store.js'
+import { createNote, getRevision, listRevisionMeta, readNote, renameNote, updateNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
@@ -102,5 +102,26 @@ describe('concurrent writes to one note', () => {
     const doc = new Y.Doc()
     Y.applyUpdate(doc, (await loadCrdtState(vaultId, path))!)
     expect(doc.getText('body').toString()).toBe(writes.at(-1))
+  }, 15_000)
+})
+
+describe('renames through the live collab engine (#803)', () => {
+  it('a note linking two notes renamed at the same time keeps both rewritten links in file, row and CRDT state', async () => {
+    await createNote(vaultId, { path: 'docs/relay-x', body: 'X.' })
+    await createNote(vaultId, { path: 'docs/relay-y', body: 'Y.' })
+    await createNote(vaultId, { path: 'docs/relay-hub', body: 'Links to [[docs/relay-x]] and [[docs/relay-y]].' })
+
+    await Promise.all([
+      renameNote(vaultId, 'docs/relay-x', 'relay-x2', { type: 'collab' }, writeThroughCollab),
+      renameNote(vaultId, 'docs/relay-y', 'relay-y2', { type: 'collab' }, writeThroughCollab),
+    ])
+
+    const body = 'Links to [[docs/relay-x2]] and [[docs/relay-y2]].'
+    const note = (await readNote(vaultId, 'docs/relay-hub'))!
+    expect(note.body).toBe(body)
+    expect(note.row.body).toBe(body)
+    const doc = new Y.Doc()
+    Y.applyUpdate(doc, (await loadCrdtState(vaultId, 'docs/relay-hub'))!)
+    expect(doc.getText('body').toString()).toBe(body)
   }, 15_000)
 })
