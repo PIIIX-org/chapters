@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { and, countDistinct, eq, inArray, max } from 'drizzle-orm'
+import { and, countDistinct, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { noteRevisions, notes, notifications, teamMemberships, teams, users, vaults, vaultShares } from '../db/schema.js'
 import { listAccessibleVaults } from './permissions.js'
@@ -154,7 +154,13 @@ export function teamRoutes(app: FastifyInstance) {
               actorId: noteRevisions.actorId,
               notesTouched: countDistinct(notes.id),
               vaultsTouched: countDistinct(notes.vaultId),
-              lastActivityAt: max(noteRevisions.createdAt),
+              // The time of the member's LATEST revision, by the order
+              // revisions were recorded in (`ord`, #825), not the largest
+              // `created_at`: the clock can step back between two writes,
+              // dating an older one after a newer one (#852).
+              lastActivityAt: sql`(array_agg(${noteRevisions.createdAt} order by ${noteRevisions.ord} desc))[1]`.mapWith(
+                noteRevisions.createdAt,
+              ),
             })
             .from(noteRevisions)
             .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
