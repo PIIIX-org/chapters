@@ -640,9 +640,17 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   blocks its thread for the whole batch (0.45 s per batch of 8 on a fast
   laptop, seconds on a lab runner), which on the main thread kept
   `/health` and every request waiting while a large file was embedded.
-  One worker, one model copy, one batch in flight, so memory is what it
-  was before; callers take turns batch by batch (round-robin), so a search
-  query waits for at most one batch of a large file. A worker that exits
+  One worker, one model copy, one batch in flight. The worker costs memory:
+  its own V8 isolate and its own Transformers.js runtime and tokenizer
+  (cause inferred, not profiled). In the lab's `docker stats` peaks the
+  minified-bundle test went from 607/606/614 MiB on `dev` (runs
+  38967769916, 39399916561, 38967768712) to 755/758 MiB (39400724898,
+  39402040044), about +150 MiB, and the pretty-bundle test from
+  1017/1037 MiB to 1324/1239 MiB, about +200 to 300 MiB under load (still
+  under the lab's 3 GiB bound). Callers take turns batch by batch
+  (round-robin over every active request), so a search query waits for
+  one batch per other active caller (the note queue and the extraction
+  queue: up to about 2 batches), plus the model load on first use. A worker that exits
   or dies on an uncaught exception fails the request whose batch it was
   running with `EmbeddingWorkerCrashError` (reported as an `embedding` job
   failure, see Error reports and metrics in §8) and the next batch starts a new worker; a batch
@@ -1122,7 +1130,10 @@ embedding; the rest have a null `embedding`, so `find_symbols` and
 `search` find them by name and snippet only. Such a file records why in
 `repository_files.embedding_note` (migration 0022; null when nothing was
 capped, cleared by the next extraction under the budget), logs a
-warning, and MCP `read_file` returns the text as `embeddingNote`. With
+warning, and MCP `read_file` returns the text as `embeddingNote`. Changing
+`ELARA_EMBED_MAX_SYMBOLS_PER_FILE` does not re-extract anything: a file
+keeps the embeddings and note of its last extraction until its content
+changes. With
 each text cut to 16,000 characters, one file costs at most 1 + budget
 texts (the 700 KB lab bundle with 900 declarations: 33 batches instead of
 113). The boot-time scan

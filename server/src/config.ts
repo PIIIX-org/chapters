@@ -38,6 +38,7 @@ export const DEFAULT_EMBED_MAX_SYMBOLS_PER_FILE = 256
 /** `ELARA_EMBED_MAX_SYMBOLS_PER_FILE` -> a whole number >= 0, or null when it is not one. */
 export function readEmbedMaxSymbolsPerFile(raw: string | undefined): number | null {
   if (raw === undefined || raw === '') return DEFAULT_EMBED_MAX_SYMBOLS_PER_FILE
+  if (raw.trim() === '') return null
   const max = Number(raw)
   return Number.isSafeInteger(max) && max >= 0 ? max : null
 }
