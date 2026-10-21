@@ -63,8 +63,8 @@
     {
       "test": "browser",
       "check": "S1-type-while-agent-appends: no lost agent edits",
-      "issue": 888,
-      "intermittent": "only when an agent's read misses an earlier agent line the relay has not folded yet, so its whole-body edit_note removes it (dev 3726050 run 39652447102; passes in most runs)"
+      "issue": 408,
+      "intermittent": "only when the agent's read-then-whole-body write splits around an earlier agent marker the relay has not folded yet, so the write removes it (the S1 split marker of #408; dev 3726050 run 39652447102; passes in most runs)"
     },
     {
       "test": "browser",
