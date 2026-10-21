@@ -196,15 +196,39 @@ describe('download headers and restore warnings (#493)', () => {
     }
   })
 
-  it('records notes whose file differed from the snapshot row, and the restore says so', async () => {
+  it('archives each note as its row renders (key order kept), never the file on disk (ADR-003 §8)', async () => {
     const { vaultId } = await fixture()
-    // A save after the snapshot: the file no longer matches the row.
-    await writeFile(noteFile(vaultId, 'concepts/kept'), '---\ntype: concepts\n---\nnewer than the row\n')
+    const owner = (await db.select({ id: users.id }).from(users))[0]!
+    await createNote(
+      vaultId,
+      { path: 'concepts/ordered', frontmatter: { type: 'concepts', zeta: 1, alpha: 2 }, body: 'ordered\n' },
+      { type: 'user', id: owner.id },
+    )
+    await flushProjections()
+    // A hand edit (or a projection still pending) leaves the file unlike the row.
+    await writeFile(noteFile(vaultId, 'concepts/kept'), '---\ntype: concepts\n---\nnot in the row\n')
     const archive = await buildInstanceBackup()
-    const manifest = JSON.parse(new AdmZip(archive).getEntry('backup.json')!.getData().toString('utf8')) as { notesFromRow?: number }
-    expect(manifest.notesFromRow).toBe(1)
+    const zip = new AdmZip(archive)
+    const kept = zip.getEntry(`vaults/${vaultId}/notes/concepts/kept.md`)!.getData().toString('utf8')
+    expect(kept).toContain('as in the row')
+    expect(kept).not.toContain('not in the row')
+    const ordered = zip.getEntry(`vaults/${vaultId}/notes/concepts/ordered.md`)!.getData().toString('utf8')
+    expect(ordered.indexOf('zeta:')).toBeGreaterThan(-1)
+    expect(ordered.indexOf('zeta:')).toBeLessThan(ordered.indexOf('alpha:'))
+    const manifest = JSON.parse(zip.getEntry('backup.json')!.getData().toString('utf8')) as { notesFromRow?: number }
+    expect(manifest.notesFromRow).toBeUndefined()
     await wipeInstance()
     const plan = await restoreBackup(archive)
+    expect(plan.warnings.filter((w) => /saved while the backup ran/.test(w))).toEqual([])
+  })
+
+  it('still reports the notes an archive made before S2a-2 left out (notesFromRow)', async () => {
+    await fixture()
+    const zip = new AdmZip(await buildInstanceBackup())
+    const manifest = JSON.parse(zip.getEntry('backup.json')!.getData().toString('utf8')) as Record<string, unknown>
+    zip.updateFile('backup.json', Buffer.from(JSON.stringify({ ...manifest, notesFromRow: 1 })))
+    await wipeInstance()
+    const plan = await restoreBackup(zip.toBuffer())
     expect(plan.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/^1 note\(s\) were saved while the backup ran/)]))
   })
 

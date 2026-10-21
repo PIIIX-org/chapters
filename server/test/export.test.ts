@@ -259,9 +259,9 @@ describe('export', () => {
       headers: { cookie: adminCookie },
     })
     expect(res.statusCode).toBe(200)
-    // The row (with its body) is in the archive; a restore writes the file from it.
+    // ADR-003 §8: note entries are rendered from the rows, so the note is in the archive whatever the disk holds.
     const zip = new AdmZip(res.rawPayload)
-    expect(zip.getEntry(`vaults/${orphanVault}/notes/people/orphan.md`)).toBeNull()
+    expect(zip.getEntry(`vaults/${orphanVault}/notes/people/orphan.md`)!.getData().toString('utf8')).toContain('Row outlived the file.')
     const rows = zip.getEntry('db/notes.jsonl')!.getData().toString('utf8').trim().split('\n')
     const orphan: unknown = rows.map((line) => JSON.parse(line)).find((r) => r.vaultId === orphanVault)
     expect(orphan).toMatchObject({ path: 'people/orphan', body: 'Row outlived the file.' })

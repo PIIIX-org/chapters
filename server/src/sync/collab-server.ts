@@ -24,6 +24,7 @@ import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
 import { bodyMeasured, updateFits } from './collab-size.js'
 import { forgetAgentPresence, stripAgentClaims } from './agent-presence.js'
+import { writesPaused } from '../notes/maintenance-lock.js'
 
 export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
@@ -45,6 +46,34 @@ class NoteTooLargeRefusal extends Error {
   constructor(documentName: string, limit: number) {
     super(`refused an update to ${documentName}: the note body would pass ${limit} bytes (ELARA_NOTE_MAX_BYTES)`)
   }
+}
+
+/**
+ * The store is not taking writes for a moment (ADR-003 §5.1: this process's
+ * maintenance-lock connection dropped and writes are paused; or a lock
+ * timeout): reason `store-busy`, one name for every such refusal. Nothing of
+ * the update is applied or stored. Where the relay can, it closes the
+ * socket with 1013 ("try again later"): a document-level close or a
+ * `permission-denied` leaves the provider detached, while a socket close
+ * makes even an older editor reconnect with backoff and resend what the
+ * relay never took. The editor (client/src/hooks/useCollabDoc.ts) treats
+ * `store-busy`, from a close or an authentication failure, as a temporary
+ * drop: it keeps the document and the typing, shows "Saving paused" and
+ * reconnects after a delay.
+ */
+class StoreBusyRefusal extends Error {
+  readonly code = 1013
+  readonly reason = 'store-busy'
+  constructor(documentName: string, cause: string) {
+    super(`refused ${documentName}: the note store is not taking writes (${cause}); retry later`)
+  }
+}
+
+/** Closes `socket` with the store-busy close (see StoreBusyRefusal) and returns the refusal to throw. */
+function refuseStoreBusy(socket: { close(code?: number, reason?: string): void } | undefined, documentName: string, cause: string): StoreBusyRefusal {
+  const refusal = new StoreBusyRefusal(documentName, cause)
+  socket?.close(refusal.code, refusal.reason)
+  return refusal
 }
 
 /**
@@ -124,6 +153,8 @@ interface ConnectionContext {
   accessVerifiedAt?: number
   /** A change the server pushed into the document (live-docs.ts), whose writer already ran the quarantine check. */
   directWrite?: boolean
+  /** The connection's socket (handleConnection's default context): closed when the store is busy (StoreBusyRefusal). */
+  socket?: { close(code?: number, reason?: string): void }
 }
 
 /** The note each loaded document holds (its name says so; kept once the load finished). */
@@ -240,10 +271,16 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * the text, so a client holding the document's items never sees them
      * twice (#488, #832).
      */
-    async onLoadDocument({ documentName, document }) {
+    async onLoadDocument({ documentName, document, context }) {
       const name = parseDocName(documentName)
       if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
-      const { state, path, lastId } = await loadCollabState(name.vaultId, name.noteId)
+      const { state, path, lastId } = await loadCollabState(name.vaultId, name.noteId).catch((err: unknown) => {
+        // Loading is a store transaction (seed, catch-up): a busy store refuses it like an update.
+        if (err instanceof StoreBusyError) {
+          throw refuseStoreBusy((context as Partial<ConnectionContext> | undefined)?.socket, documentName, err.message)
+        }
+        throw err
+      })
       Y.applyUpdate(document, state)
       // The stored state this document holds, so its stores need not materialise it again (§5.4 "Before S3").
       if (lastId !== null) rememberLoadedState(document, name.noteId, lastId)
@@ -280,12 +317,16 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     },
 
     /**
-     * The size cap (#491), before an update is applied: the relay never
-     * holds or stores a body over it. See collab-size.ts for how this stays
-     * off the whole document on ordinary keystrokes.
+     * Before an update is applied. While writes are paused (the maintenance
+     * lock's connection dropped, ADR-003 §5.1) the update is refused and the
+     * connection closed, so it stays unacked and the editor resends it after
+     * reconnecting. Then the size cap (#491): the relay never holds or stores
+     * a body over it. See collab-size.ts for how this stays off the whole
+     * document on ordinary keystrokes.
      */
-    async beforeSync({ type, payload, document, documentName }) {
+    async beforeSync({ type, payload, document, documentName, connection }) {
       if (type !== SYNC_STEP_2 && type !== SYNC_UPDATE) return
+      if (writesPaused()) throw refuseStoreBusy(connection.webSocket, documentName, 'writes paused')
       const limit = config.noteMaxBytes
       if (!updateFits(document, payload, limit)) throw new NoteTooLargeRefusal(documentName, limit)
     },
@@ -382,6 +423,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       const name = parseDocName(documentName)
       if ('legacy' in name) return
       forgetLivePath(name.noteId)
+      // Compaction is a store transaction; while writes are paused it waits for the next unload.
+      if (writesPaused()) return
       await compactCollabState(name.vaultId, name.noteId).catch((err) =>
         console.error(`collab compaction of ${documentName} failed:`, err),
       )
@@ -403,7 +446,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       return
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      const connection = hocuspocus.handleConnection(ws, toRequest(req))
+      const connection = hocuspocus.handleConnection(ws, toRequest(req), { socket: ws })
       ws.on('message', (data) => connection.handleMessage(toBytes(data)))
       ws.on('close', (code, reason) =>
         connection.handleClose({ code, reason: reason.toString() }),
