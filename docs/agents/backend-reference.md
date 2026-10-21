@@ -777,7 +777,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   reported; the next store without the repeat is written normally. A
   store caused by a server body write through a direct connection
   (`writeThroughCollab`, context `directWrite`; its caller ran the check
-  or passed `allowGrowth`) is not checked again.
+  or passed `allowGrowth`) is not checked again. The flag is set at the
+  end of the write's transaction, so a refused write (a check, an op that
+  does not resolve, validation) still gets this check on its connection's
+  disconnect store: a document a person doubled stays out of the row (#408).
 - **Size cap on the relay** (#491, `collab-size.ts`): ws refuses a frame
   over `noteTransportLimit()` before reading it (close 1009).
   `beforeSync` refuses a sync-step-2 or update message whose Yjs update

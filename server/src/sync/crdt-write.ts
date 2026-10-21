@@ -140,8 +140,11 @@ async function noteFileDamaged(vaultId: string, path: string): Promise<boolean> 
  * ops that is their result on the live text when the connection opens; the
  * cap is checked again on the text the transaction writes. When this edit
  * changes the body, the relay's own store of the document it produces is not
- * checked again (`directWrite` in its context): the caller here decided. A
- * frontmatter-only edit leaves the body to the relay's check.
+ * checked again (`directWrite` in its context): the caller here decided. The
+ * flag is set only once the edit is in the document: a refused edit (its
+ * checks, an op that does not resolve, validation) still disconnects, and
+ * that store of the live document, which a person may have doubled, gets the
+ * relay's check. A frontmatter-only edit leaves the body to the relay's check.
  */
 export async function writeThroughCollab(
   vaultId: string,
@@ -176,11 +179,10 @@ export async function writeThroughCollab(
     }
     const documentName = `${vaultId}/${path}`
     let connection: DirectConnection
+    // The connection keeps this object as its context, which its stores read.
+    const context = { userId: actor.type === 'user' ? actor.id : 'mcp', directWrite: false }
     try {
-      connection = await collab.openDirectConnection(documentName, {
-        userId: actor.type === 'user' ? actor.id : 'mcp',
-        directWrite: input.body !== undefined || bodyOps,
-      })
+      connection = await collab.openDirectConnection(documentName, context)
     } catch (err) {
       // Loading the collab document parses the note's file. When the file is
       // damaged (e.g. #384's fence-less index), no document can load, so no
@@ -230,6 +232,8 @@ export async function writeThroughCollab(
             if (!isDeepStrictEqual(current[key], value)) fm.set(key, value)
           }
         }
+        // Before the transaction ends, so every store of its change already sees the flag.
+        context.directWrite = input.body !== undefined || bodyOps
       })
     } finally {
       await connection.disconnect()
