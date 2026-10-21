@@ -172,6 +172,12 @@ interface AgentWrite {
   readBody: string
   /** Tokens the editor showed when the agent read, but read_note did not return. */
   missingFromRead: string[]
+  /**
+   * The editor was cut off from the relay when the agent read (S8a/S8b): its
+   * typing had not reached the server, so no read can return it. Where that
+   * typing lands after the reconnect is #485's subject, not #474's.
+   */
+  editorOffline: boolean
   peersDuring: string[][]
 }
 
@@ -438,7 +444,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
 
   const agentWrites: AgentWrite[] = []
   /** The realistic agent append: read_note, then edit_note with the full body + one line. */
-  const agentAppend = async (step: string, m: string, watchPage: Page | null): Promise<AgentWrite> => {
+  const agentAppend = async (step: string, m: string, watchPage: Page | null, editorOffline = false): Promise<AgentWrite> => {
     const peersDuring: string[][] = []
     let sampling = watchPage !== null
     const sampler = (async () => {
@@ -471,6 +477,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
       editorAtRead,
       readBody,
       missingFromRead: userToks.filter((t) => !readBody.includes(t)),
+      editorOffline,
       peersDuring,
     }
     agentWrites.push(w)
@@ -694,7 +701,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     await typeAtEnd(page, typedText(t))
     exp.user.push(...t)
     const m = marker('S8A')
-    await agentAppend('S8A', m, page)
+    await agentAppend('S8A', m, page, true)
     offline.agentReachedEditorWhileOfflineMs = await waitEditorIncludes(page, m, 5000)
     offline.setOfflineCutSocket = offline.agentReachedEditorWhileOfflineMs === null
     const t0 = performance.now()
@@ -746,7 +753,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     await typeAtEnd(page, typedText(t))
     exp.user.push(...t)
     const m = marker('S8B')
-    await agentAppend('S8B', m, page)
+    await agentAppend('S8B', m, page, true)
     offline.agentReachedEditorDuringPartitionMs = await waitEditorIncludes(page, m, 5000)
     const cut = await settle(page, 'S8b-socket-dropped', { expectConverged: false })
     offline.jIndexWhilePartitioned = cut.editor?.indexOf(' j01') ?? null
@@ -986,10 +993,11 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
     ok: failedWrites.length === 0,
     severity: 'high',
   })
-  const staleReads = agentWrites.filter((w) => w.missingFromRead.length > 0)
+  // Reads while the editor was offline are left out: its typing never reached the server (#485 covers where it lands).
+  const staleReads = agentWrites.filter((w) => !w.editorOffline && w.missingFromRead.length > 0)
   checks.push({
     name: 'read_note returns what the live editor shows',
-    expected: 'no token visible in the editor is missing from the agent read',
+    expected: 'no token visible in a connected editor is missing from the agent read',
     actual:
       staleReads.length === 0
         ? 'never stale'

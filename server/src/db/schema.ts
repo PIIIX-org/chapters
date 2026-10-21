@@ -531,6 +531,29 @@ export const jobs = pgTable(
   (t) => [index('jobs_pending').on(t.kind, t.createdAt).where(sql`done_at is null`)],
 )
 
+/** The first result of an MCP write sent with an `idempotency_key` (#477, migration 0025), per connection and key. */
+export const writeIdempotency = pgTable(
+  'write_idempotency',
+  {
+    connectionId: uuid('connection_id').notNull(),
+    key: text('key').notNull(),
+    tool: text('tool').notNull(),
+    argsHash: text('args_hash').notNull(),
+    noteId: uuid('note_id'),
+    result: jsonb('result').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'write_idempotency_pkey', columns: [t.connectionId, t.key] }),
+    foreignKey({ name: 'write_idempotency_connection_id_fkey', columns: [t.connectionId], foreignColumns: [mcpConnections.id] }).onDelete(
+      'cascade',
+    ),
+    foreignKey({ name: 'write_idempotency_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete('cascade'),
+    index('write_idempotency_created_at').on(t.createdAt),
+    index('write_idempotency_note_id').on(t.noteId),
+  ],
+)
+
 /** EXTRACTED edges: wikilink targets per note, replaced on every save. */
 export const noteLinks = pgTable(
   'note_links',
