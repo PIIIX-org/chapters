@@ -48,6 +48,16 @@ export class StoreBusyError extends Error {
 }
 
 /** Drizzle wraps driver errors; the Postgres code may sit on `cause`. */
+export function pgErrorCode(err: unknown): string | undefined {
+  let current: unknown = err
+  while (current instanceof Error) {
+    const code = 'code' in current ? current.code : undefined
+    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) return code
+    current = current.cause
+  }
+  return undefined
+}
+
 /** Driver codes of a connection that could not be made or was lost (postgres-js and Node). */
 const CONNECTION_CODES = new Set([
   'ECONNREFUSED',
@@ -79,16 +89,6 @@ export function storeUnavailable(err: unknown): boolean {
     current = current.cause
   }
   return false
-}
-
-export function pgErrorCode(err: unknown): string | undefined {
-  let current: unknown = err
-  while (current instanceof Error) {
-    const code = 'code' in current ? current.code : undefined
-    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) return code
-    current = current.cause
-  }
-  return undefined
 }
 
 /** Takes the transaction-scoped advisory lock of one note (by id, §5.1). */

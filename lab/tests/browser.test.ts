@@ -1012,7 +1012,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
   const staleReads = agentWrites.filter((w) => !w.editorOffline && w.missingFromRead.length > 0)
   checks.push({
     name: 'read_note returns what the live editor shows',
-    expected: 'no token visible in a connected editor is missing from the agent read',
+    expected: 'no token the connected editor showed as synced (acknowledged) is missing from the agent read',
     actual:
       staleReads.length === 0
         ? 'never stale'

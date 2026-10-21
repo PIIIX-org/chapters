@@ -268,14 +268,7 @@ describe('rebase of a row changed behind the store (§5.4)', () => {
     await db.execute(sql`UPDATE notes SET body = ${'alpha beta GAMMA\n'} WHERE id = ${note.id}`)
     collab = startCollabServer(app.server)
     await resynced()
-    await waitFor(() => text.toString() === 'NEW alpha beta GAMMA\n').catch(async (err) => {
-      // What each side holds when the editor did not converge (CI-only flake under S3 timing).
-      const live = collab.hocuspocus.documents.get(`${vaultId}/~${note.id}`)
-      process.stdout.write(
-        `[same-line] editor=${JSON.stringify(text.toString())} relay=${JSON.stringify(live?.getText('body').toString())} row=${JSON.stringify(await rowBody(note.path))} synced=${provider.isSynced} unsynced=${provider.hasUnsyncedChanges}\n`,
-      )
-      throw err
-    })
+    await waitFor(() => text.toString() === 'NEW alpha beta GAMMA\n')
     await waitFor(async () => (await rowBody(note.path)) === 'NEW alpha beta GAMMA\n')
     expect(count(text.toString(), 'NEW')).toBe(1)
   }, 30_000)

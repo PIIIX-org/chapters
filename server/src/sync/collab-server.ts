@@ -245,6 +245,8 @@ export function getCollab(): Hocuspocus | null {
 }
 
 export function startCollabServer(httpServer: HttpServer): CollabRelay {
+  /** Unload folds (afterUnloadDocument) still running: `destroy` waits for them. */
+  const unloadFolds = new Set<Promise<void>>()
   // Constructed but never `listen()`ed: we only want its hooks, its document
   // lifecycle and its `destroy()` (which flushes pending note writes).
   const server = new Server({
@@ -477,9 +479,15 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       const name = parseDocName(documentName)
       if ('legacy' in name) return
       forgetLivePath(name.noteId)
-      await compactCollabState(name.vaultId, name.noteId).catch((err) =>
+      const fold = compactCollabState(name.vaultId, name.noteId).catch((err) =>
         console.error(`collab compaction of ${documentName} failed:`, err),
       )
+      unloadFolds.add(fold)
+      try {
+        await fold
+      } finally {
+        unloadFolds.delete(fold)
+      }
     },
   })
 
@@ -551,6 +559,9 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       httpServer.off('upgrade', onUpgrade)
       unbindKick()
       await server.destroy()
+      // Hocuspocus resolves once the last document unloaded, which can be before another document's unload fold
+      // finished (S3: that fold stores the row). Shutdown waits for every one, so none lands after the relay is gone.
+      while (unloadFolds.size > 0) await Promise.all([...unloadFolds])
       for (const client of wss.clients) client.terminate()
       wss.close()
       currentInstance = null
