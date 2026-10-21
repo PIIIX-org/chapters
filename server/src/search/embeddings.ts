@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto'
+import { Worker } from 'node:worker_threads'
 import { config } from '../config.js'
+import { recordJob } from '../monitoring/metrics.js'
+import type { EmbedBatchRequest, EmbedBatchResponse } from './embedding-worker.js'
 
 export const EMBEDDING_DIM = 384
 
@@ -47,29 +50,115 @@ class FakeEmbedder implements Embedder {
   }
 }
 
-/** bge-small-en-v1.5 via Transformers.js ONNX — local CPU, content never leaves the instance. */
-class LocalEmbedder implements Embedder {
-  private pipe: Promise<unknown> | null = null
+/** The request whose batch was running when the embedding worker died (#496). */
+export class EmbeddingWorkerCrashError extends Error {
+  override name = 'EmbeddingWorkerCrash'
+}
 
-  private async pipeline() {
-    this.pipe ??= import('@huggingface/transformers').then(({ pipeline }) =>
-      pipeline('feature-extraction', 'Xenova/bge-small-en-v1.5'),
-    )
-    return (await this.pipe) as (
-      texts: string[],
-      opts: { pooling: string; normalize: boolean },
-    ) => Promise<{ tolist(): number[][] }>
+interface EmbedRequest {
+  batches: string[][]
+  next: number
+  vectors: number[][]
+  resolve(vectors: number[][]): void
+  reject(err: unknown): void
+}
+
+/**
+ * bge-small-en-v1.5 via Transformers.js ONNX — local CPU, content never
+ * leaves the instance. The model runs in one worker thread
+ * (embedding-worker.ts, #496): one model in memory, one batch in flight, so
+ * memory stays what it was on the main thread while the event loop stays free.
+ * Callers' requests take turns batch by batch, so a search query waits for at
+ * most one batch of a large file, not the whole file. A worker that dies fails
+ * the request it was running (reported as an `embedding` job failure) and the
+ * next batch starts a fresh one.
+ */
+export class LocalEmbedder implements Embedder {
+  private readonly workerUrl: URL
+  private worker: Worker | null = null
+  private readonly requests: EmbedRequest[] = []
+  /** Index in `requests` whose batch goes next. */
+  private turn = 0
+  private inFlight: { id: number; request: EmbedRequest } | null = null
+  private lastId = 0
+
+  constructor(workerUrl = new URL('./embedding-worker.ts', import.meta.url)) {
+    this.workerUrl = workerUrl
   }
 
-  async embed(texts: string[]): Promise<number[][]> {
-    const pipe = await this.pipeline()
-    const vectors: number[][] = []
-    for (let i = 0; i < texts.length; i += EMBED_BATCH_SIZE) {
-      const batch = texts.slice(i, i + EMBED_BATCH_SIZE).map((t) => t.slice(0, MAX_EMBED_CHARS))
-      const output = await pipe(batch, { pooling: 'mean', normalize: true })
-      vectors.push(...output.tolist())
+  embed(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return Promise.resolve([])
+    // Cut here, not in the worker: a 742 KB file is not copied to it whole.
+    const batches: string[][] = []
+    for (let i = 0; i < texts.length; i += EMBED_BATCH_SIZE)
+      batches.push(texts.slice(i, i + EMBED_BATCH_SIZE).map((t) => t.slice(0, MAX_EMBED_CHARS)))
+    return new Promise((resolve, reject) => {
+      this.requests.push({ batches, next: 0, vectors: [], resolve, reject })
+      this.pump()
+    })
+  }
+
+  private pump(): void {
+    if (this.inFlight) return
+    if (this.requests.length === 0) {
+      // Idle: a loaded model must not keep a script (reindex, tests) alive.
+      this.worker?.unref()
+      return
     }
-    return vectors
+    if (this.turn >= this.requests.length) this.turn = 0
+    const request = this.requests[this.turn]!
+    const id = ++this.lastId
+    this.inFlight = { id, request }
+    const worker = this.spawn()
+    worker.ref()
+    worker.postMessage({ id, texts: request.batches[request.next]! } satisfies EmbedBatchRequest)
+  }
+
+  private spawn(): Worker {
+    if (this.worker) return this.worker
+    const worker = new Worker(this.workerUrl)
+    let uncaught: unknown
+    worker.on('message', (res: EmbedBatchResponse) => this.onResponse(res))
+    worker.on('error', (err) => {
+      uncaught = err
+    })
+    worker.on('exit', (code) => {
+      this.worker = null
+      const crash = new EmbeddingWorkerCrashError(`embedding worker exited with code ${code}`, { cause: uncaught })
+      console.error('[embeddings] worker died, the next batch starts a new one:', crash)
+      recordJob('embedding', { error: crash })
+      const flight = this.inFlight
+      this.inFlight = null
+      if (flight) this.settle(flight.request, crash)
+      this.pump()
+    })
+    this.worker = worker
+    return worker
+  }
+
+  private onResponse(res: EmbedBatchResponse): void {
+    const flight = this.inFlight
+    if (!flight || flight.id !== res.id) return
+    this.inFlight = null
+    const { request } = flight
+    if ('error' in res) {
+      this.settle(request, Object.assign(new Error(res.error.message), { name: res.error.name }))
+    } else {
+      request.vectors.push(...res.vectors)
+      request.next++
+      if (request.next === request.batches.length) this.settle(request, null)
+      else this.turn = this.requests.indexOf(request) + 1
+    }
+    this.pump()
+  }
+
+  /** Takes a request out of the rotation; the one after it moves into its turn. */
+  private settle(request: EmbedRequest, err: unknown): void {
+    const index = this.requests.indexOf(request)
+    this.requests.splice(index, 1)
+    this.turn = index
+    if (err) request.reject(err)
+    else request.resolve(request.vectors)
   }
 }
 

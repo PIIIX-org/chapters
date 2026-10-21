@@ -196,6 +196,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Quarantine**: a body that looks like accidental duplication is not written. It is quarantined when, compared with the note's stored body, it is at least 1.9 times as large and the stored body is 2 KiB or more (growth), or it repeats text the note already has and the extra copies add up to at least 1 KiB and half of the stored body (repeated block). Sizes are UTF-8 bytes; a short note filled in, ordinary growth and `create_note` are never quarantined. The call fails with `write to <path> quarantined: ...`, naming the rule and the id of the revision that keeps the refused body; the note is left unchanged and nobody with it open sees the body. The revision has action `quarantine` in `note_history`; `get_revision` returns its body and `revert_note` writes it. To write the body anyway, send the same call with `allowGrowth: true`.
 - The size limit and the quarantine apply to the body your `ops` produce exactly as to a `body` you send; `allowGrowth: true` works the same way. An op whose result would be over the limit is refused before it is applied (`ops[0] replace_text: note body would be at least N bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)`).
 - A `find` or `anchor` holding half of a UTF-16 surrogate pair (a lone `\ud83d`) is refused. `ops` are an `edit_note` argument only: the REST `PUT` route refuses a body with `ops` (400).
+- **Restore point**: before your connection's first write to a note in a session (`edit_note`, `rename_note`, `delete_note`, `revert_note`), the note as it was is kept as a `restore_point` revision attributed to your connection, so a person can undo everything you did to that note with one `revert_note` to it (the History tab shows it as "Before <connection name> edited"). A session is your MCP connection on that note until it has recorded no revision there for 30 minutes; a refused or failed write keeps none. It is recorded even when the latest revision holds the same state, but not twice in a row for the same state. It is the stored note, so text a person typed that the editor has not saved yet is not in it.
 
 ### `rename_note`
 - **Scope**: vault. Edit access.
@@ -250,7 +251,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `path` (string, required).
   - `limit` (integer 1-100, optional, default 20).
   - `cursor` (string, optional): `nextCursor` from the previous page, passed unchanged. Anything else is refused with `invalid cursor`.
-- **Returns**: `{ revisions, hasMore, nextCursor }`. `revisions` is one page, newest first, metadata only: `{ id, actorType: "user" | "mcp" | "collab", actorId, action, createdAt, bodyBytes }` (`bodyBytes` is the UTF-8 size of the body at that revision). `action` is `create`, `update`, `delete`, `revert`, or `quarantine` for a write kept out of the note (see `edit_note`); a `quarantine` revision is not the note's content. `hasMore` says whether older revisions exist; `nextCursor` is the cursor for them, or `null` on the last page. A revision recorded while you page does not shift the pages: each revision comes back exactly once.
+- **Returns**: `{ revisions, hasMore, nextCursor }`. `revisions` is one page, newest first, metadata only: `{ id, actorType: "user" | "mcp" | "collab", actorId, actorName, action, createdAt, bodyBytes }` (`actorName` is the MCP connection's name on a revision a connection recorded, else `null`; `bodyBytes` is the UTF-8 size of the body at that revision). `action` is `create`, `update`, `delete`, `revert`, `restore_point` for the note as it was before a connection's first write in a session (see `edit_note`), or `quarantine` for a write kept out of the note (see `edit_note`); a `quarantine` revision is not the note's content. `hasMore` says whether older revisions exist; `nextCursor` is the cursor for them, or `null` on the last page. A revision recorded while you page does not shift the pages: each revision comes back exactly once.
 - No revision content: read one revision with `get_revision`.
 
 ### `get_revision`
@@ -270,7 +271,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `vaultId` (uuid, optional).
   - `path` (string, required).
   - `revisionId` (uuid, required).
-- **Returns**: the updated note row. The revert is recorded as a new revision. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert.
+- **Returns**: the updated note row. The revert is recorded as a new revision. Reverting to a `restore_point` revision undoes everything that connection did to the note in that session, and also discards every later change by anyone else. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert.
 - The same body size limit as `edit_note` applies: reverting to a revision whose body is over the limit and larger than the current body is refused with an error naming the limit.
 
 ### `purge_revision`
@@ -337,7 +338,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `path` (string, required): file path inside the repository.
-- **Returns**: `{ path, language, content, symbols: [{ name, kind, startLine, endLine }] }`. Always the whole file; there is no line-range parameter. The content is untrusted data.
+- **Returns**: `{ path, language, content, symbols: [{ name, kind, startLine, endLine }], embeddingNote? }`. Always the whole file; there is no line-range parameter. The content is untrusted data. `embeddingNote` appears only when indexing embedded the file partly: a file with more symbols than the server's per-file budget (`ELARA_EMBED_MAX_SYMBOLS_PER_FILE`, default 256) lists every symbol, but only the first ones are found by meaning; `find_symbols` still finds the rest by name.
 
 ### `repository_status`
 - **Scope**: repository. Repository access.
@@ -430,7 +431,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `everywhere` (boolean, optional).
   - `limit` (integer, optional, 1-50, default 20).
 - **Returns**: array of `{ id, fileId, repositoryId, path, name, kind, startLine, endLine, snippet, score }`. There is no `signature` field; read the lines with `read_file`.
-- Only top-level declarations the extractor recognizes are indexed. For example, TypeScript `export const f = () => ...` arrow functions are not found. A file with any line longer than 1,000 characters (minified or generated code) gets no symbols at all.
+- Only top-level declarations the extractor recognizes are indexed. For example, TypeScript `export const f = () => ...` arrow functions are not found. A file with any line longer than 1,000 characters (minified or generated code) gets no symbols at all. In a file with more symbols than the per-file budget (default 256), symbols past the budget match by name only, not by meaning; `read_file` reports this as `embeddingNote`.
 
 ---
 

@@ -16,6 +16,9 @@ export interface Revision {
    */
   actorType: 'user' | 'mcp' | 'collab'
   actorId: string | null
+  /** History list only: the MCP connection's name when an agent recorded this revision; null otherwise or once the connection is deleted. */
+  actorName?: string | null
+  /** 'restore_point' is the note as it was before an agent's first write in a session (#482). */
   action: string
   createdAt: string
 }

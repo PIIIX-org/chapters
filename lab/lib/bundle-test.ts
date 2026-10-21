@@ -11,6 +11,9 @@
 //   minified  ~900 declarations on one line: the minified guard applies
 //   pretty    the same declarations one per line (< 1000 chars each): no
 //             guard, so this measures the batched embedder alone on ~900 symbols
+// #496: embedding runs in a worker thread (on the main thread each batch held
+// /health past its probe on slow runners), and a file embeds at most 256
+// symbols; the pretty bundle still stores all ~900, the rest without a vector.
 //
 // Method: local_path repo = BUNDLE (~700 KB) + BATCH small TS files in the
 // same first sync (queue order = directory order, so some land behind the
