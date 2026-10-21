@@ -43,6 +43,12 @@ const AUTHOR: Record<Revision['actorType'], { label: string; className: string }
   mcp: { label: 'by AI via MCP', className: 'text-accent' },
 }
 
+/** A restore point (#482) is named after the agent it was kept for: reverting to it undoes that agent's session. */
+function actionLabel(revision: Revision): string {
+  if (revision.action === 'restore_point') return `Before ${revision.actorName ?? 'an AI agent'} edited`
+  return revision.action
+}
+
 interface RevisionHistoryProps {
   vaultId: string
   path: string
@@ -122,7 +128,7 @@ export function RevisionHistory({ vaultId, path, access }: RevisionHistoryProps)
               <span className="font-mono text-xs text-muted-foreground">
                 {formatStamp(revision.createdAt)}
               </span>
-              <span className="text-sm text-foreground">{revision.action}</span>
+              <span className="text-sm text-foreground">{actionLabel(revision)}</span>
               {/* Falls back rather than throwing: a new actor_type added
                   server-side should mislabel one row, never unmount the panel
                   the person is using to recover their work. */}
