@@ -158,7 +158,7 @@ describe('instance maintenance lock (§5.1, §9)', () => {
     await waitFor(() => writesPaused())
     setStoreMigrationPending(true)
     try {
-      const closes: Record<string, string[]> = { migrated: [], unmigrated: [] }
+      const closes: Record<'migrated' | 'unmigrated', string[]> = { migrated: [], unmigrated: [] }
       let refused = ''
       const open = (path: string, key: 'migrated' | 'unmigrated') => {
         const provider = new HocuspocusProvider({
@@ -166,7 +166,7 @@ describe('instance maintenance lock (§5.1, §9)', () => {
           name: `${vaultId}/${path}`,
           token,
           document: new Y.Doc(),
-          onClose: ({ event }) => void closes[key]!.push(event.reason),
+          onClose: ({ event }) => void closes[key].push(event.reason),
           onAuthenticationFailed: ({ reason }) => {
             if (key === 'unmigrated') refused = reason
           },
