@@ -26,7 +26,7 @@ import { getLiveNote } from '../src/notes/store.js'
 import { INSTANCE_LOCK_KEY } from '../src/notes/store-tx.js'
 import { FailpointError, setFailpointHandler } from '../src/failpoints.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
-import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
 
 type Args = Record<string, unknown>
 
@@ -86,10 +86,15 @@ async function waitFor(check: () => boolean | Promise<boolean>, ms = 8000): Prom
   }
 }
 
-function open(path: string): HocuspocusProvider {
+/** Document names of the notes opened, by path (`<vault>/~<noteId>`, ADR-003 §5.4). */
+const docNames = new Map<string, string>()
+
+async function open(path: string): Promise<HocuspocusProvider> {
+  const name = await noteDocName(vaultId, path)
+  docNames.set(path, name)
   const provider = new HocuspocusProvider({
     url: `${baseUrl.replace('http', 'ws')}/collab`,
-    name: `${vaultId}/${path}`,
+    name,
     token: ownerToken,
     document: new Y.Doc(),
   })
@@ -98,7 +103,7 @@ function open(path: string): HocuspocusProvider {
 }
 
 function liveBody(path: string): string | undefined {
-  return collab.hocuspocus.documents.get(`${vaultId}/${path}`)?.getText('body').toString()
+  return collab.hocuspocus.documents.get(docNames.get(path) ?? '')?.getText('body').toString()
 }
 
 async function seqOf(path: string): Promise<number> {
@@ -139,7 +144,7 @@ describe('read_note serves the live document (#474)', () => {
   it('returns typing the relay holds but has not stored yet, as a revision at rev = seq', async () => {
     const path = 'docs/live-read'
     await must('create_note', { vaultId, path, body: BODY })
-    const text = open(path).document.getText('body')
+    const text = (await open(path)).document.getText('body')
     await waitFor(() => text.toString() === BODY && liveBody(path) === BODY)
 
     text.insert(text.toString().indexOf('two.'), 'TYPED ')
@@ -167,7 +172,7 @@ describe('read_note serves the live document (#474)', () => {
   it('a read that cannot store the typing first (store busy) fails as a read, not a write', async () => {
     const path = 'docs/live-busy'
     await must('create_note', { vaultId, path, body: BODY })
-    const text = open(path).document.getText('body')
+    const text = (await open(path)).document.getText('body')
     await waitFor(() => text.toString() === BODY && liveBody(path) === BODY)
     text.insert(0, 'TYPED ')
     await waitFor(() => liveBody(path)!.startsWith('TYPED'))
@@ -188,7 +193,7 @@ describe('read_note serves the live document (#474)', () => {
   it('REST GET serves the live document too, with rev', async () => {
     const path = 'docs/live-rest'
     await must('create_note', { vaultId, path, body: BODY })
-    const text = open(path).document.getText('body')
+    const text = (await open(path)).document.getText('body')
     await waitFor(() => text.toString() === BODY && liveBody(path) === BODY)
     text.insert(0, 'TYPED ')
     const typed = text.toString()
@@ -201,7 +206,7 @@ describe('read_note serves the live document (#474)', () => {
   it('an agent that reads, then writes the whole body back, keeps the typing (#408)', async () => {
     const path = 'docs/live-write-back'
     await must('create_note', { vaultId, path, body: BODY })
-    const text = open(path).document.getText('body')
+    const text = (await open(path)).document.getText('body')
     await waitFor(() => text.toString() === BODY && liveBody(path) === BODY)
     text.insert(text.toString().indexOf('one.'), 'TYPED ')
     await waitFor(() => liveBody(path)!.includes('TYPED'))

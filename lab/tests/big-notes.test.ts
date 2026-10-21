@@ -23,13 +23,14 @@
 // fan-out; then push >1 MiB bodies through a Hocuspocus client, and a body
 // just under the limit, which must sync and take an agent's append.
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
-import { CollabClient, Y, type CollabEvent } from '../lib/collab.ts'
+import { CollabClient, Y, collabDocName, type CollabEvent } from '../lib/collab.ts'
 import { stringField } from '../lib/mcp.ts'
 import type { ContainerState } from '../lib/docker.ts'
 import { RestSession } from '../lib/rest.ts'
 import {
   MB,
   appLogsSince,
+  dbNoteId,
   dbNotes,
   fmtMB,
   genBody,
@@ -307,7 +308,7 @@ const test: LabTest = {
     // The instance's limit (ELARA_NOTE_MAX_BYTES), as the editor learns it.
     const ticket = await sess.request<{ maxNoteBytes?: number }>('POST', '/api/collab/ticket')
     const limit = ticket.json?.maxNoteBytes ?? MB
-    const client = new CollabClient(ctx.baseUrl, `${vault.id}/${cPath}`, sess)
+    const client = new CollabClient(ctx.baseUrl, collabDocName(vault.id, await dbNoteId(ctx, vault.id, cPath)), sess)
     /** A close the relay sends for a body over the limit, among the client's events since `from`. */
     const refusedSince = (from: number) =>
       client.events.slice(from).some((e) => e.kind === 'close' && /note-too-large|^1009\b/.test(e.detail ?? ''))

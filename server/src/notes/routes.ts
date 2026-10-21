@@ -93,7 +93,8 @@ export function noteRoutes(app: FastifyInstance) {
     // As the editors see it (#474): typing the relay holds is stored first; `rev` is the note's seq (#477).
     const note = await readLiveNote(req.params.id, req.params['*'])
     if (!note) return reply.code(404).send({ error: 'note not found' })
-    return { path: note.row.path, rev: note.row.seq, frontmatter: note.frontmatter, body: note.body, updatedAt: note.row.updatedAt }
+    // `id` names the note's collab document (`<vault>/~<id>`, ADR-003 §5.4).
+    return { id: note.row.id, path: note.row.path, rev: note.row.seq, frontmatter: note.frontmatter, body: note.body, updatedAt: note.row.updatedAt }
   })
 
   // `frontmatter` merges per top-level key; `replace: true` swaps the whole
