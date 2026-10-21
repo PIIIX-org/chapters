@@ -32,6 +32,9 @@ name: Elara lab
 #             start-up/config, the image's dependencies or the benchmark (~9 min)
 #   all       nightly on dev, every PR to prod, and by hand (-f bench=...)
 # Docs: benchmarks/README.md.
+# The real-model job (#851) runs server/test/embedding-worker.test.ts with
+# ELARA_REAL_MODEL_TESTS=1 (the real bge-small model, cached by actions/cache)
+# with the nightly and with a full-tier dispatch.
 #
 # The nightly-alert job (#706) keeps one issue labelled `lab-nightly` in step
 # with the scheduled run: a red nightly opens it (or comments on it) with the
@@ -341,11 +344,60 @@ jobs:
           path: bench-gate/
           retention-days: 90
 
+  # #851: the real bge-small model check (server/test/embedding-worker.test.ts),
+  # kept out of the unit suite because it downloads ~133 MB. Runs with the
+  # nightly and with a full-tier dispatch. A failed download reports the test
+  # as skipped with its reason; wrong vectors or a blocked event loop fail the
+  # job, which the nightly alert (#706) reports.
+  real-model:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.tier == 'full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      db:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: elara
+          POSTGRES_PASSWORD: elara
+          POSTGRES_DB: elara
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U elara"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # Transformers.js caches models in `.cache` inside its installed package.
+      - uses: actions/cache@v4
+        with:
+          path: node_modules/.pnpm/@huggingface+transformers@*/node_modules/@huggingface/transformers/.cache
+          key: transformers-model-Xenova/bge-small-en-v1.5-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: transformers-model-Xenova/bge-small-en-v1.5-
+      - name: Real-model embedding test
+        run: pnpm -C server exec vitest run test/embedding-worker.test.ts --reporter=verbose
+        env:
+          ELARA_REAL_MODEL_TESTS: '1'
+          DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
+          TEST_DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
+          ADMIN_DATABASE_URL: postgres://elara:elara@localhost:5432/elara
+          DATA_DIR: ${{ runner.temp }}/elara-test-data
+
   # #706: a red nightly opens (or comments on) the `lab-nightly` issue, the
   # next green nightly closes it. Live only for the schedule on dev; a
   # dispatch with alert_dry_run posts nothing. Never on PRs or pushes.
   nightly-alert:
-    needs: [plan, lab, bench, bench-gate]
+    needs: [plan, lab, bench, bench-gate, real-model]
     if: >-
       always() && github.repository == 'PIIIX-org/chapters' &&
       ((github.event_name == 'schedule' && github.ref == 'refs/heads/dev') ||

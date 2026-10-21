@@ -1491,7 +1491,8 @@ pnpm -C server test # vitest run — needs Postgres reachable at DATABASE_URL
   (a `busy:<ms>` text blocks the worker thread like an ONNX run). The
   real-model check, `test/embedding-worker.test.ts`, is opt-in:
   `ELARA_REAL_MODEL_TESTS=1 pnpm -C server exec vitest run test/embedding-worker.test.ts`;
-  a failed model download reports it as skipped with the reason.
+  a failed model download reports it as skipped with the reason. The
+  lab workflow's `real-model` job runs it nightly (see `lab.md`).
 - Live/e2e verification (booting a real server against a real database
   and exercising it over real HTTP) is a standing project discipline,
   not optional — several real bugs in this codebase (an extraction
