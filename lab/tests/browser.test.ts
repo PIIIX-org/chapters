@@ -932,7 +932,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
 
   const revisions = await ctx.docker.psqlRows<{ actor_type: string; action: string; created_at: string; body: string }>(
     `select r.actor_type, r.action, r.created_at, r.body from note_revisions r join notes n on n.id = r.note_id
-     where n.vault_id = '${vault.id}' and n.path = '${path}' order by r.created_at`,
+     where n.vault_id = '${vault.id}' and n.path = '${path}' order by r.ord`,
   )
   // Which actor the audit trail credits with each agent append: the first
   // revision whose body contains the agent's marker.

@@ -191,21 +191,11 @@ function toolErrorMessage(err: unknown): string {
 
 /**
  * note_history's cursor: where the previous page ended (store RevisionPosition), base64url JSON.
- * `at` must be a real UTC time Postgres stores (years 0001-9999): the
- * millisecond part must survive a Date round trip, which rejects rolled-over
- * dates such as 2026-02-30 that Date.parse accepts.
+ * `ord` is a revision's place in the order revisions were recorded (#825): a
+ * positive integer Postgres's bigint and a JS number both hold exactly.
  */
 const RevisionCursor = z
-  .object({
-    at: z
-      .string()
-      .regex(/^(?!0000)\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
-      .refine((at) => {
-        const ms = new Date(`${at.slice(0, 23)}Z`)
-        return !Number.isNaN(ms.getTime()) && ms.toISOString().slice(0, 23) === at.slice(0, 23)
-      }),
-    id: z.string().uuid(),
-  })
+  .object({ ord: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) })
   .strict()
 
 function decodeRevisionCursor(cursor: string): RevisionPosition {

@@ -75,7 +75,7 @@ async function revisionAtSeq(tx: Tx, noteId: string, reason: string): Promise<'p
     WHERE r.id = (
       SELECT id FROM note_revisions WHERE note_id = ${noteId}
         AND action NOT IN ('quarantine', 'proposal', 'restore_point')
-      ORDER BY created_at DESC, id DESC LIMIT 1)
+      ORDER BY ord DESC LIMIT 1)
       AND n.id = r.note_id AND r.seq IS NULL AND r.body = n.body AND r.frontmatter = n.frontmatter
     RETURNING r.id`)) as unknown as unknown[]
   if (adopted.length > 0) return 'adopted'
