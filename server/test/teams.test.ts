@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { notifications } from '../src/db/schema.js'
+import { notes, notifications } from '../src/db/schema.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -149,6 +149,23 @@ describe('GET /api/teams/:id/stats', () => {
     })
   }
 
+  // TEMPORARY (#852 repro): an uncommitted row at the same path makes the
+  // create's INSERT wait on the unique index inside its transaction, so the
+  // revision's clock_timestamp() lands ~2 s after the row's now(), as on a
+  // loaded machine. A real delay: the DB's clock is what is being forced.
+  async function slowWriteNote(cookie: string, vaultId: string, name: string) {
+    let written!: Promise<{ id: string; path: string; updatedAt: string }>
+    await db
+      .transaction(async (tx) => {
+        await tx.insert(notes).values({ vaultId, type: 'note', name, path: `note/${name}`, frontmatter: {}, body: '' })
+        written = writeNote(cookie, vaultId, name)
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        tx.rollback()
+      })
+      .catch(() => {})
+    return written
+  }
+
   it('counts distinct notes and vaults, using the latest edit as lastActivityAt', async () => {
     const { member, ownerCookie, memberCookie, team } = await createTeamWithMember()
     const vaultA = await createVault(ownerCookie, 'Vault A')
@@ -162,7 +179,7 @@ describe('GET /api/teams/:id/stats', () => {
     const editRes = await updateNoteBody(memberCookie, vaultA.id, noteA.path, 'edited body')
     expect(editRes.statusCode).toBe(200)
     const editedNoteA = editRes.json()
-    const noteB = await writeNote(memberCookie, vaultB.id, 'note-b')
+    const noteB = await slowWriteNote(memberCookie, vaultB.id, 'note-b')
 
     const res = await app.inject({
       method: 'GET',
@@ -191,7 +208,7 @@ describe('GET /api/teams/:id/stats', () => {
     await shareVault(ownerCookie, vaultA.id, member.id)
     await shareVault(ownerCookie, vaultB.id, member.id)
     await writeNote(memberCookie, vaultA.id, 'note-a')
-    const noteB = await writeNote(memberCookie, vaultB.id, 'note-b')
+    const noteB = await slowWriteNote(memberCookie, vaultB.id, 'note-b')
 
     // A third vault owned by the member, shared with nobody. Its edit is the
     // most recent of all three, so a missing accessible-vault filter shows
