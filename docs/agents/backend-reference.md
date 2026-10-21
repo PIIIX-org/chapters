@@ -228,11 +228,10 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   bytes. Rename refactors, file removal after purge and old-folder
   `index.md` are `jobs` rows inserted in the write's transaction.
   `flushProjections()` drains it (tests' teardown, restore, the export).
-- **The relay** (S2a, still path-named documents and `.crdt/<path>.bin`):
-  a server write never goes through a `DirectConnection`; after commit the
-  change is pushed into the loaded document as a diff under the note
-  lock, or into the bin of a note nobody has open. The store hook stores
-  into the note id recorded at load.
+- **The relay**: a server write never goes through a `DirectConnection`;
+  after commit the change is pushed into the loaded document as a diff
+  under the note lock. Since S2b documents are named by note id and their
+  state is `note_crdt` + `note_updates` (below).
 - **Maintenance lock** (`maintenance-lock.ts`, ADR §5.1 rev 5): every
   server (from before migrations until exit) and the writing CLIs
   (`restore-backup`, `reindex`) hold the shared form of a session advisory
@@ -241,10 +240,16 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   form, so it refuses to run next to a server and a server refuses to
   start during it (exit 2, "maintenance in progress"). If the reserved
   connection drops, writes pause at once: store transactions answer
-  `StoreBusyError`, the relay's `beforeSync` closes the socket with 1013
-  `store-paused` before applying an update (unacked; the editor reconnects
-  and resends). The process retries the lock in one loop with backoff
-  (250 ms doubling to 10 s) while Postgres is unreachable, resumes when it
+  `StoreBusyError`, and the relay refuses with reason `store-busy` (one
+  name for every busy-store refusal, also a lock timeout): `beforeSync`
+  before applying an update (unacked), and a document load (a store
+  transaction since S2b: seed, catch-up) that fails for a busy store,
+  instead of Hocuspocus's `permission-denied`. Both close the socket with
+  1013, so even an older editor reconnects; the editor shows "Saving
+  paused", keeps the document and its typing, reconnects after 5 s and
+  resends. Unload compaction is skipped while paused. The process retries
+  the lock in one loop with backoff (250 ms doubling to 10 s) while
+  Postgres is unreachable, resumes when it
   holds it, and exits only when the retry returns false (an exporter holds
   it). Only a connection that held the lock reports a drop: postgres.js
   also calls `onclose` for a failed connection attempt.
