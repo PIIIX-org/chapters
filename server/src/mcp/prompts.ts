@@ -60,7 +60,7 @@ TASK OBJECTIVE:
 "${taskDescription}"
 ${baselineContext ? `\nBASELINE KNOWLEDGE BASE CONTEXT:${baselineContext}` : ''}
 CONTINUOUS WORKFLOW MANDATE:
-1. ANCHOR: Establish or update a session log note at \`session/${new Date().toISOString().slice(0, 10)}-${projectName}\` using the \`create_note\` or \`edit_note\` tool.
+1. ANCHOR: Establish or update a session log note at \`session/${new Date().toISOString().slice(0, 10)}-${projectName}\`: add each entry with \`append_note\` (\`createIfMissing: true\` creates the note), not by reading the note and sending its whole body back to \`edit_note\`, which loses entries another agent appended in between.
 2. CONTINUOUS CAPTURE: As you make architectural decisions, discover invariants, or modify code, IMMEDIATELY record them in Elara notes. Never let technical context stay trapped in this chat session.
 3. AST CODE LINKS: Cross-link technical documentation directly to code using \`[[repo:${projectName}/<filepath>#<symbol>]]\` format.
 4. PERSISTENT BINDING: Ensure this project is permanently bound to Elara in project memory (\`AGENTS.md\`, \`GEMINI.md\`, \`.agents/rules/elara.md\`) so all future AI sessions keep its notes in sync with the code.

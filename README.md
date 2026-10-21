@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="#overview"><img src="assets/badges/badge-okf.svg" alt="Format: OKF v0.2 ISO 8601"/></a>
-  <a href="#model-context-protocol-mcp-interface"><img src="assets/badges/badge-mcp.svg" alt="AI MCP: 58 Tools and 20 Prompts"/></a>
+  <a href="#model-context-protocol-mcp-interface"><img src="assets/badges/badge-mcp.svg" alt="AI MCP: 60 Tools and 20 Prompts"/></a>
   <a href="LICENSE"><img src="assets/badges/badge-license.svg" alt="License: MIT Open Source"/></a>
 </p>
 
@@ -26,7 +26,7 @@ Software knowledge splits across two silos: human team wikis stored in closed cl
 
 **Elara** joins the two. It stores all documentation as plain, human-readable Markdown files directly on disk using the **Google Open Knowledge Format (OKF v0.2)** with strict ISO 8601 timestamps (explicit UTC or offset). It also connects to your Git repositories and indexes TypeScript, JavaScript, Python, and Go source files into a **Tree-sitter symbol and import index**.
 
-When you write notes, you link directly to code files using `[[repo:<repo>/<path>]]` syntax. When code changes, Elara re-syncs and re-indexes the repository, so links and symbols follow the codebase. For AI agents, Elara exposes a native **Model Context Protocol (MCP)** server with 58 tools and 20 engineering prompts.
+When you write notes, you link directly to code files using `[[repo:<repo>/<path>]]` syntax. When code changes, Elara re-syncs and re-indexes the repository, so links and symbols follow the codebase. For AI agents, Elara exposes a native **Model Context Protocol (MCP)** server with 60 tools and 20 engineering prompts.
 
 ---
 
@@ -45,7 +45,7 @@ How Elara compares against existing tools across core architectural dimensions:
 | **Multiplayer Engine** | **Yjs CRDT Relay (Hocuspocus)** | Manual Git Merge Conflicts | Git Pull-Request Flow | Single User CLI | Operational Transform | Proprietary Cloud OT |
 | **Code AST Ingestion** | **Tree-sitter WASM Engine** | None | IDE Extension Snippets | Headless AST Graph | None | Static Code Blocks |
 | **Unified Graph** | **Notes + Code (Louvain communities, shortest path)**| Notes Only Graph | Code Documentation Only| Code Syntax Only | Document Tree Only | Relational Tables Only |
-| **AI Interface** | **Native 58-Tool MCP Server** | Community REST Hacks | Webhook Ingestion | Stdout CLI Piping | REST API | Proprietary Cloud Copilot |
+| **AI Interface** | **Native 60-Tool MCP Server** | Community REST Hacks | Webhook Ingestion | Stdout CLI Piping | REST API | Proprietary Cloud Copilot |
 | **Vector Indexing** | **PostgreSQL + pgvector** | Third-party Plugins | Cloud Embedding API | Local Vector Store | None | Closed Embedding Service |
 
 ---
@@ -74,7 +74,7 @@ flowchart TD
   end
 
   subgraph Consumers ["Consumption & Agent Layer"]
-    MCP["Model Context Protocol (MCP)\n58 Tools · 20 Prompts"]
+    MCP["Model Context Protocol (MCP)\n60 Tools · 20 Prompts"]
     UI["Fastify + React Client\nDark Observatory Shell"]
     AGENTS["AI Agents\nCursor · Claude · Antigravity"]
     HUMANS["Engineering Teams\nReal-Time Collaborative Editing"]
@@ -141,8 +141,8 @@ A token's `tools/list` shows only the tools it can call: its allow-list, its acc
 
 ### Key MCP Capabilities
 
-- **58 tools**, documented with their exact parameters in [`skills/elara/references/mcp-tools.md`](skills/elara/references/mcp-tools.md):
-  - `list_vaults`, `browse_vault`, `read_note`, `create_note`, `edit_note`, `delete_note`
+- **60 tools**, documented with their exact parameters in [`skills/elara/references/mcp-tools.md`](skills/elara/references/mcp-tools.md):
+  - `list_vaults`, `browse_vault`, `read_note`, `create_note`, `edit_note`, `append_note`, `upsert_note`, `delete_note`
   - `list_repositories`, `browse_repository`, `read_file`, `find_symbols`, `repository_status`
   - `search` (hybrid full-text + 384d semantic search with permission scoping)
   - `graph` (nodes and edges with Louvain communities) and `find_graph_path` (shortest path, breadth-first)
@@ -173,7 +173,7 @@ chapters/
 │   ├── src/auth/               # Sessions, OIDC, MFA, lockout
 │   ├── src/sync/               # Hocuspocus WebSocket relay for live Yjs sync
 │   ├── src/graph/              # Graph assembly, Louvain communities, shortest path
-│   ├── src/mcp/                # Model Context Protocol server (58 tools, 20 prompts)
+│   ├── src/mcp/                # Model Context Protocol server (60 tools, 20 prompts)
 │   ├── src/notes/              # OKF v0.2 parser, validation, and disk storage
 │   ├── src/repositories/       # Git/local ingestion, Tree-sitter extraction, import resolution
 │   ├── src/search/             # Hybrid search (Postgres full-text + pgvector) and embeddings

@@ -31,6 +31,7 @@ import {
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 import {
   createNote,
+  createNoteIfMissing,
   getBaseRevision,
   getLiveNote,
   getRevision,
@@ -71,7 +72,7 @@ import { NoteEditConflictError, requestedEdit, writeThroughCollab, type WriteRep
 import { showAgentPresence } from '../sync/agent-presence.js'
 import { registerMcpPrompts } from './prompts.js'
 import { strictArgs } from './strict-input.js'
-import type { EditOp } from '../sync/edit-ops.js'
+import { applyBodyOps, type EditOp } from '../sync/edit-ops.js'
 
 class McpToolError extends Error {}
 
@@ -1139,6 +1140,91 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       showAgentPresence(target, updated.path, presence, 'editing')
       const rev = await revisionOfState(updated.id, updated)
       return baseRev === undefined ? { ...updated, rev } : { ...updated, rev, baseRev, ...report }
+    },
+  )
+
+  /**
+   * append_note and upsert_note (#478): when `create` is given and there is
+   * no live note, the note is created (once, however many calls race:
+   * createNoteIfMissing); otherwise `edit` is applied under the note's write
+   * lock against the live text, as edit_note does, restore point (#482)
+   * included, so a call that lost the create edits the note with one. No call
+   * read-then-writes, so none loses another's change. Size cap, quarantine
+   * and presence (#481) as for edit_note.
+   */
+  async function writeOrCreate(
+    target: string,
+    path: string,
+    edit: Parameters<typeof requestedEdit>[0],
+    create: { frontmatter?: Record<string, unknown>; body: string } | undefined,
+    allowGrowth: boolean | undefined,
+  ) {
+    const made = create ? await createNoteIfMissing(target, { path, ...create }, actor) : null
+    const note =
+      made ??
+      (await withRestorePoint(target, path, auth.connection.id, () =>
+        writeThroughCollab(target, path, requestedEdit(edit), actor, { quarantine: allowGrowth ? undefined : 'all' }),
+      ))
+    if (!note) throw new McpToolError('note not found')
+    showAgentPresence(target, note.path, presence, 'editing')
+    return { ...note, created: made !== null }
+  }
+
+  tool(
+    'append_note',
+    {
+      scope: 'vault',
+      capability: 'write',
+      pinPermission: 'edit',
+      description:
+        'Append `text` to the end of a note, as whole lines. The text is added to the note as it is when the write runs, including what other agents and people added since you read it, so concurrent appends all land; use this for logs and running notes instead of read_note + edit_note. ' +
+        '`createIfMissing: true` creates the note when there is none at `path`, with `text` as its body and `frontmatter` as its frontmatter; on an existing note `frontmatter` merges per top-level key (keys you leave out are kept). Returns the note and `created`. Requires edit access. ' +
+        'Text that doubles the note or repeats a large block of it is quarantined (note unchanged, kept as a revision); set `allowGrowth: true` if intended.',
+      inputSchema: {
+        vaultId: z.string().uuid().optional(),
+        path: z.string(),
+        text: z.string(),
+        createIfMissing: z.boolean().optional(),
+        frontmatter: z.record(z.string(), z.unknown()).optional(),
+        allowGrowth: z.boolean().optional(),
+      },
+    },
+    async (
+      args: { path: string; text: string; createIfMissing?: boolean; frontmatter?: Record<string, unknown>; allowGrowth?: boolean },
+      { vaultId: target },
+    ) => {
+      await requireAccess(target, 'edit')
+      const ops: EditOp[] = [{ op: 'append', text: args.text }]
+      const create = args.createIfMissing ? { frontmatter: args.frontmatter, body: applyBodyOps('', ops) } : undefined
+      return writeOrCreate(target, args.path, { frontmatter: args.frontmatter, ops }, create, args.allowGrowth)
+    },
+  )
+
+  tool(
+    'upsert_note',
+    {
+      scope: 'vault',
+      capability: 'write',
+      pinPermission: 'edit',
+      description:
+        'Create the note at `path`, or replace its body when it exists, in one step: no window between an exists-check and a create, so concurrent upserts of a missing note create it once and none fails with "already exists". ' +
+        '`body` replaces the whole body (only the characters that differ change); `frontmatter` is the new note\'s frontmatter, and on an existing note merges per top-level key (keys you leave out are kept). Returns the note and `created`. Requires edit access. ' +
+        'A body that doubles the note or repeats a large block of it is quarantined (note unchanged, body kept as a revision); set `allowGrowth: true` if intended.',
+      inputSchema: {
+        vaultId: z.string().uuid().optional(),
+        path: z.string(),
+        body: z.string(),
+        frontmatter: z.record(z.string(), z.unknown()).optional(),
+        allowGrowth: z.boolean().optional(),
+      },
+    },
+    async (
+      args: { path: string; body: string; frontmatter?: Record<string, unknown>; allowGrowth?: boolean },
+      { vaultId: target },
+    ) => {
+      await requireAccess(target, 'edit')
+      const content = { frontmatter: args.frontmatter, body: args.body }
+      return writeOrCreate(target, args.path, content, content, args.allowGrowth)
     },
   )
 

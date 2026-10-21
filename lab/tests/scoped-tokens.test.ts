@@ -47,7 +47,7 @@ const POLICY_DENY = new Set([
 /** 0 = read-only, 1 = mutating, 2 = destroys a fixture; run in this order. */
 const LEVEL: Record<string, number> = {
   create_vault: 1, update_vault: 1, set_vault_graph_preference: 1, update_vault_preferences: 1, share_vault: 1,
-  create_note: 1, edit_note: 1, rename_note: 1, restore_note: 1, revert_note: 1, connect_repository: 1,
+  create_note: 1, edit_note: 1, append_note: 1, upsert_note: 1, rename_note: 1, restore_note: 1, revert_note: 1, connect_repository: 1,
   sync_repository: 1, update_repository: 1, set_repository_graph_preference: 1, share_repository: 1,
   create_team: 1, add_team_member: 1, mark_notification_read: 1, save_graph_perspective: 1, restore_vault: 1,
   revoke_vault_share: 2, delete_note: 2, revoke_repository_share: 2, remove_team_member: 2,
@@ -124,6 +124,8 @@ function argsFor(tool: string, fx: Fixtures, v: VaultFixture | undefined, r: Rep
     read_note: () => ({ vaultId, path: v?.probe ?? 'concepts/lab-scope-probe' }),
     create_note: () => ({ vaultId, path: `concepts/lab-created-${seq()}`, frontmatter: { type: 'concepts' }, body: 'created by scope test' }),
     edit_note: () => ({ vaultId, path: v?.probe ?? 'concepts/lab-scope-probe', body: `${v === fx.O ? MARK.O : MARK.P}\nedited ${seq()}` }),
+    append_note: () => ({ vaultId, path: v?.probe ?? 'concepts/lab-scope-probe', text: `appended ${seq()}` }),
+    upsert_note: () => ({ vaultId, path: `concepts/lab-upserted-${seq()}`, frontmatter: { type: 'concepts' }, body: 'upserted by scope test' }),
     rename_note: () => ({ vaultId, from: v?.renameFrom ?? 'concepts/lab-rename-probe', toName: `lab-renamed-${seq()}` }),
     delete_note: () => ({ vaultId, path: v?.deletePath ?? 'concepts/lab-delete-probe' }),
     list_trash: () => ({ vaultId }),

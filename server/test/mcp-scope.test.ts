@@ -104,6 +104,8 @@ const CASES: Record<string, ScopeCase> = {
   read_note: { kind: 'vault', args: (fx) => ({ path: fx.O.onlyPath }) },
   create_note: { kind: 'vault', args: () => ({ type: 'docs', name: `scope-created-${next()}`, body: 'created' }) },
   edit_note: { kind: 'vault', args: (fx) => ({ path: fx.O.onlyPath, body: 'overwritten' }) },
+  append_note: { kind: 'vault', args: (fx) => ({ path: fx.O.onlyPath, text: 'appended' }) },
+  upsert_note: { kind: 'vault', args: () => ({ path: `docs/scope-upserted-${next()}`, body: 'upserted' }) },
   rename_note: { kind: 'vault', args: (fx) => ({ from: fx.O.onlyPath, toName: `renamed-${next()}` }) },
   delete_note: { kind: 'vault', args: (fx) => ({ path: fx.O.onlyPath }) },
   list_trash: { kind: 'vault' },
