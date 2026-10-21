@@ -437,17 +437,28 @@ Every share/membership mutation calls `emitPermissionChange()` (see
 - **Edits are minimal diffs; `edit_note` takes ops** (#408):
   `writeThroughCollab` never deletes and re-inserts the whole Y.Text.
   `applyTextDiff` (`sync/text-diff.ts`) turns the live text into the new
-  body with a minimal character diff (Myers O(ND) with the linear-space
-  middle snake, over code points so no surrogate pair is split) inside
-  the one document transaction; past `DIFF_TIME_LIMIT_MS` (100 ms) it is
-  redone per line and refined per character inside each changed run as
-  far as a second limit allows (ADR-003 §5.2 step 5); a run still left
-  pairs its old and new lines in order and changes each pair only between
-  its common start and end (linear), so a rewrite of every line of a
-  large note (a `- ` before each) keeps every line's unchanged characters
-  rather than replacing the run. Pairing is in order: when such a run also
-  adds or removes lines partway through, the lines after that point are
-  paired with their neighbours and keep less. Untouched
+  body with a minimal diff inside the one document transaction, under one
+  time limit, `DIFF_TIME_LIMIT_MS` (100 ms, ADR-003 §5.2 step 5) (#833).
+  The common start and end are set aside first (a linear scan), so an
+  append or a change in one place costs about one read of the body. What
+  is left is diffed per character (Myers O(ND) with the linear-space
+  middle snake, over code points so no surrogate pair is split): exactly
+  when it is at most 256 UTF-16 units, so a small edit is as short as the
+  code-point edit distance, and up to 4,096 units only while the two sides
+  are alike (edit distance at most a quarter of their length). Otherwise
+  the whole lines around it are diffed per line (lines found on one side
+  only skip the search, so a rewrite of every line is linear); a changed
+  run with as many new lines as old ones pairs them in order, another run
+  is diffed per character under the same rule, and a run still left pairs
+  its lines in order too. Each pair is diffed per character if alike,
+  otherwise changed only between its common start and end, so a rewrite
+  of every line of a large note (a `- ` before each) keeps every line's
+  unchanged characters, and an unrelated rewrite is about one change per
+  line rather than thousands of fragments. Past the time limit the rest is
+  linear (pairs trimmed to their common start and end). Pairing is in
+  order: when a large run also adds or removes lines partway through, the
+  lines after that point are paired with their neighbours and keep less.
+  Untouched
   characters keep their Yjs identity, so a person's caret stays on its
   text, their Ctrl+Z (a `Y.UndoManager` that tracks only their own edits,
   never the relay's updates) still finds what they typed (#483), and
