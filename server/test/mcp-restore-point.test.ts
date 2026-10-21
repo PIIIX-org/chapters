@@ -241,4 +241,45 @@ describe('restore point edge cases (#482)', () => {
     await must(beta, 'delete_note', { vaultId, path: deleted })
     expect(await restorePoints(deletedId)).toMatchObject([{ actorId: betaId, body: 'to delete' }])
   })
+
+  it('rename_note then delete_note from one connection records the delete', async () => {
+    const path = 'docs/restore-point-rename-delete'
+    const noteId = await personNote(path, 'renamed then deleted')
+    // The rename records no revision, so this connection's restore point is the newest one.
+    await must(alpha, 'rename_note', { vaultId, from: path, toName: 'restore-point-rename-deleted' })
+    await must(alpha, 'delete_note', { vaultId, path: 'docs/restore-point-rename-deleted' })
+    const rows = await db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.createdAt))
+    expect(rows.map((r) => [r.action, r.actorType, r.actorId])).toEqual([
+      ['create', 'user', ownerId],
+      ['restore_point', 'mcp', alphaId],
+      ['delete', 'mcp', alphaId],
+    ])
+  })
+
+  it('edit_note then delete_note from one connection records the delete', async () => {
+    const path = 'docs/restore-point-edit-delete'
+    const noteId = await personNote(path, 'edited then deleted')
+    await must(alpha, 'edit_note', { vaultId, path, body: 'alpha edit' })
+    await must(alpha, 'delete_note', { vaultId, path })
+    const own = (await db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.createdAt))).filter(
+      (r) => r.actorType !== 'collab',
+    )
+    expect(own.map((r) => [r.action, r.actorType])).toEqual([
+      ['create', 'user'],
+      ['restore_point', 'mcp'],
+      ['update', 'mcp'],
+      ['delete', 'mcp'],
+    ])
+  })
+
+  it('concurrent first writes from one connection keep one restore point', async () => {
+    const path = 'docs/restore-point-concurrent'
+    const noteId = await personNote(path, 'before the burst')
+    await Promise.all([
+      must(alpha, 'edit_note', { vaultId, path, body: 'burst one' }),
+      must(alpha, 'edit_note', { vaultId, path, frontmatter: { title: 'Burst' } }),
+      must(alpha, 'edit_note', { vaultId, path: `${path}.md`, body: 'burst three' }),
+    ])
+    expect(await restorePoints(noteId)).toMatchObject([{ actorId: alphaId, body: 'before the burst' }])
+  })
 })
