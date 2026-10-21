@@ -232,17 +232,117 @@ describe('applyTextDiff on a live document', () => {
     expect(tab.getText('body').toString()).toBe(server.getText('body').toString())
   })
 
-  /** Applies `next` on the server while a tab, offline, types `typed` at `at`; returns both bodies after they sync. */
-  const concurrent = (body: string, next: string, at: number, typed: string, timeLimitMs?: number): [string, string] => {
+  /** Applies `next` on the server while a tab, offline, types `typed` at each of `ats`; returns both bodies after they sync. */
+  const concurrent = (body: string, next: string, ats: readonly number[], typed: string, timeLimitMs?: number): [string, string] => {
     const server = new Y.Doc()
     server.getText('body').insert(0, body)
     const tab = new Y.Doc()
     Y.applyUpdate(tab, Y.encodeStateAsUpdate(server))
-    tab.getText('body').insert(at, typed)
+    for (const at of [...ats].sort((x, y) => y - x)) tab.getText('body').insert(at, typed)
     server.transact(() => applyTextDiff(server.getText('body'), next, timeLimitMs))
     Y.applyUpdate(server, Y.encodeStateAsUpdate(tab))
     Y.applyUpdate(tab, Y.encodeStateAsUpdate(server))
     return [server.getText('body').toString(), tab.getText('body').toString()]
+  }
+
+  /**
+   * Types `TYPED ` after each marker of `body` while the server writes `next`,
+   * and expects it after the same marker in `next` on both docs: each marker
+   * occurs once in each text, inside a line the write keeps but may change.
+   */
+  const expectTypingKept = (body: string, next: string, markers: readonly string[], timeLimitMs?: number): void => {
+    const [server, tab] = concurrent(
+      body,
+      next,
+      markers.map((marker) => body.indexOf(marker) + marker.length),
+      'TYPED ',
+      timeLimitMs,
+    )
+    let expected = next
+    for (const marker of markers) expected = expected.replace(marker, `${marker}TYPED `)
+    expect(server).toBe(expected)
+    expect(tab).toBe(expected)
+  }
+
+  /** A paragraph line of `n` random words after a unique `Paragraph <k> holds ` marker. */
+  const paragraphs = (seed: number) => {
+    const random = rng(seed)
+    const words = ['vault', 'note', 'graph', 'index', 'agent', 'search', 'yjs', 'crash']
+    return (k: number | string, n: number): string =>
+      `Paragraph ${k} holds ${Array.from({ length: n }, () => words[Math.floor(random() * words.length)]).join(' ')}.\n`
+  }
+
+  const removedUnits = (from: string, to: string, timeLimitMs?: number): number => diffText(from, to, timeLimitMs).reduce((sum, edit) => sum + edit.remove, 0)
+
+  // Review round 2 of #833: a new paragraph between two edited ones could
+  // line up with only one of them, and the other was replaced.
+  for (const timeLimitMs of [undefined, -1]) {
+    it(`keeps typing in both edited paragraphs a large new one is added between (limit ${timeLimitMs ?? 'default'})`, () => {
+      const paragraph = paragraphs(4)
+      const before = Array.from({ length: 30 }, (_, k) => `${paragraph(k, 30)}\n`)
+      const after = Array.from({ length: 30 }, (_, k) => `\n${paragraph(k + 100, 30)}`)
+      const [a, b] = [paragraph('A', 30), paragraph('B', 30)]
+      const added = paragraph('NEW', 80)
+      expect(added.length).toBeGreaterThan(400)
+      const body = [...before, a, '\n', b, ...after].join('')
+      // Each edited at its end; the person types near the start of each.
+      const editedA = a.replace(/ (\w+)\.\n$/, ' changed.\n')
+      const editedB = b.replace(/ (\w+)\.\n$/, ' edited.\n')
+      const next = [...before, editedA, '\n', added, '\n', editedB, ...after].join('')
+      expectTypingKept(body, next, ['Paragraph A holds ', 'Paragraph B holds '], timeLimitMs)
+      expect(removedUnits(body, next, timeLimitMs)).toBeLessThan(20)
+    })
+  }
+
+  // Review round 2 of #833: a long sentence added inside a paragraph that also
+  // had a word changed counted as unlike, so the line was replaced from the
+  // changed word to its end.
+  for (const where of ['appended', 'prepended'] as const) {
+    it(`keeps typing in a paragraph with a long sentence ${where} and a word changed`, () => {
+      const paragraph = paragraphs(5)
+      const line = paragraph('P', 40)
+      const sentence = paragraph('S', 80).slice(0, -1)
+      expect(sentence.length).toBeGreaterThan(400)
+      const words = line.slice(0, -2).split(' ')
+      // A word changed on the side away from the sentence; the person types in the middle.
+      const marker = `${words.slice(15, 18).join(' ')} `
+      expect(line.indexOf(marker)).toBe(line.lastIndexOf(marker))
+      const changed =
+        where === 'appended'
+          ? line.replace('Paragraph P holds ', 'Paragraph P now holds ').replace(/\.\n$/, `. ${sentence}\n`)
+          : `${sentence} ${line.replace(/ (\w+)\.\n$/, ' changed.\n')}`
+      const notes = Array.from({ length: 20 }, (_, k) => `${paragraph(k, 30)}\n`)
+      const body = [...notes, line, ...notes].join('')
+      const next = [...notes, changed, ...notes].join('')
+      expectTypingKept(body, next, [marker])
+      expect(removedUnits(body, next)).toBeLessThan(20)
+    })
+  }
+
+  // Review round 2 of #833: every paragraph changed (a `- ` before each) and
+  // one added or removed in the middle: nothing anchors the line diff, and one
+  // shift across the whole note lined up only one half, so the other half was
+  // replaced.
+  for (const size of [9_000, 24_000, 50_000]) {
+    for (const change of ['added', 'removed'] as const) {
+      for (const timeLimitMs of [undefined, -1]) {
+        it(`keeps typing when every paragraph of a ${size / 1000} KB note changes and one is ${change} in the middle (limit ${timeLimitMs ?? 'default'})`, () => {
+          const paragraph = paragraphs(size + (change === 'added' ? 1 : 2))
+          const lines: string[] = []
+          while (lines.join('').length < size) lines.push(paragraph(lines.length, 30))
+          const n = lines.length
+          const middle = Math.floor(n / 2)
+          const body = lines.map((line) => `${line}\n`).join('')
+          const listed = lines.map((line) => `- ${line}\n`)
+          if (change === 'added') listed.splice(middle, 0, `- ${paragraph('NEW', 30)}\n`)
+          else listed.splice(middle, 1)
+          const next = listed.join('')
+          const markers = [1, middle - 2, middle + 2, n - 2].map((k) => `Paragraph ${k} holds `)
+          expectTypingKept(body, next, markers, timeLimitMs)
+          expect(removedUnits(body, next, timeLimitMs)).toBeLessThanOrEqual(change === 'added' ? 0 : lines[middle]!.length + 1)
+        })
+      }
+    }
   }
 
   // Review of #833: a large new paragraph added before an existing one (with
@@ -264,7 +364,7 @@ describe('applyTextDiff on a live document', () => {
         const tail = far ? after.map((line, i) => (i === after.length - 1 ? `${line.slice(0, -1)} Appended far away.\n` : line)) : after
         const next = [...before, '\n', added, '\n', existing.replace('holds the words', 'holds all the words'), '\n', ...tail].join('')
         const at = body.indexOf('a person is') + 'a person '.length
-        const [server, tab] = concurrent(body, next, at, 'TYPED ', timeLimitMs)
+        const [server, tab] = concurrent(body, next, [at], 'TYPED ', timeLimitMs)
         const expected = next.replace('a person is', 'a person TYPED is')
         expect(server).toBe(expected)
         expect(tab).toBe(expected)
@@ -272,6 +372,19 @@ describe('applyTextDiff on a live document', () => {
       })
     }
   }
+
+  it('changes only the characters that differ in a 100 K-character line with 1,200 scattered changes', () => {
+    const random = rng(6)
+    const words = ['vault', 'note', 'graph', 'index', 'agent', 'search', 'yjs', 'crash']
+    const line = `${Array.from({ length: 18_000 }, () => words[Math.floor(random() * words.length)]).join(' ')}.\n`
+    expect(line.length).toBeGreaterThan(100_000)
+    const characters = [...line]
+    for (let i = 0; i < 1_200; i++) characters[50 + i * 80] = '#'
+    const next = characters.join('')
+    const edits = diffText(line, next)
+    expect(applied(line, edits)).toBe(next)
+    expect(edits.reduce((sum, edit) => sum + edit.remove, 0)).toBeLessThanOrEqual(1_200)
+  })
 
   it('keeps typing in the middle of a long paragraph changed only at both ends', () => {
     const random = rng(3)
@@ -287,7 +400,7 @@ describe('applyTextDiff on a live document', () => {
     ])
     const middle = '# Title\n\n'.length + Math.floor(long.length / 2)
     const at = body.indexOf(' ', middle) + 1
-    const [server, tab] = concurrent(body, next, at, 'TYPED ')
+    const [server, tab] = concurrent(body, next, [at], 'TYPED ')
     const expected = next.slice(0, at) + 'TYPED ' + next.slice(at)
     expect(server).toBe(expected)
     expect(tab).toBe(expected)

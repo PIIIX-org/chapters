@@ -445,32 +445,40 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   middle snake, over code points so no surrogate pair is split): exactly
   when it is at most 256 UTF-16 units, so a small edit is as short as the
   code-point edit distance, and up to 16,384 units only while the two
-  sides are alike (edit distance at most a quarter of their length, and
-  at most 1,024; the search stops at that many edits, so a failed attempt
-  is cheap). Otherwise the whole lines around it are diffed per line
-  (lines found on one side only, and blank lines, skip the search, so a
-  rewrite of every line is linear and a paragraph added before an edited
-  one does not take its blank line). A changed run with as many new lines
-  as old ones pairs them in order; another run is diffed per character if
-  at most 16,384 units and alike (never exactly), else paired too: the
-  shorter side pairs with the other side's consecutive lines at the shift
-  that keeps the most characters at the pairs' starts and ends (only the
-  first or the last lines when there are more than 4,096 pairings to
-  try), and the lines left over before and after are inserted or deleted.
-  Each pair is diffed per character if alike, at any length (bounded by
-  the edit count), otherwise changed only between its common start and
-  end, so a rewrite of every line of a large note (a `- ` before each)
-  keeps every line's unchanged characters, a long paragraph changed at
-  both ends keeps its middle, and an unrelated rewrite is about one change
-  per line rather than thousands of fragments. Past the time limit the
-  rest is linear (pairs trimmed to their common start and end). A run
-  with the same number of lines that also adds one line and removes
-  another partway through pairs the lines in between with their
-  neighbours and keeps less. Untouched
-  characters keep their Yjs identity, so a person's caret stays on its
-  text, their Ctrl+Z (a `Y.UndoManager` that tracks only their own edits,
-  never the relay's updates) still finds what they typed (#483), and
-  typing that reaches the relay after the write merges where it was
+  sides are alike: the edit distance is at most a quarter of their
+  length, or at most the text one side adds plus a tenth of the shorter
+  side (a sentence added to a paragraph that also had a word changed),
+  and at most 1,024 edits (4,096 within one line); the search stops at
+  that many edits, so a failed attempt is cheap. Otherwise the whole lines
+  around it are diffed per line (lines found on one side only, and blank
+  lines, skip the search, so a rewrite of every line is linear and a
+  paragraph added next to an edited one does not take its blank line). A
+  changed run with as many new lines as old ones pairs them in order;
+  another run is diffed per character if at most 16,384 units and alike
+  (never exactly), else paired too: each line of its shorter side pairs
+  with one of the other side's lines, in order, by the alignment that
+  keeps the most characters at the pairs' starts and ends (a dynamic
+  programme over lines × shifts; when the shifts times the shorter side's
+  units pass 2^20, or past the time limit, only alignments that put the
+  lines one side has more of in one block), and the lines left over
+  between pairs are inserted or deleted where they stand. Each pair is
+  diffed per character if alike, otherwise changed only between its
+  common start and end. So a rewrite of every line of a large note (a `- `
+  before each), with or without a paragraph added or removed, keeps every
+  line's unchanged characters; a paragraph added before, after or between
+  edited ones leaves them in place; a long paragraph changed at both ends
+  or in many places keeps the text between the changes; and an unrelated
+  rewrite is about one change per line rather than thousands of
+  fragments. Past the time limit the rest is linear (pairs trimmed to
+  their common start and end). Not every unchanged character is kept: a
+  pair or run that fails the alike test keeps only its common start and
+  end, and a run with the same number of lines that also adds one line
+  and removes another partway through pairs the lines in between with
+  their neighbours. Kept characters keep their Yjs identity, so a
+  person's caret stays on its text, their Ctrl+Z (a
+  `Y.UndoManager` that tracks only their own edits, never the relay's
+  updates) still finds what they typed (#483), and typing that reaches
+  the relay after the write merges where it was
   typed. In each change the new text is inserted before the old is
   deleted, so a caret at the end of a replaced span lands after the new
   text and typing in flight joins after it. It used to delete the whole
