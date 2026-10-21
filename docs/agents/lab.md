@@ -49,8 +49,11 @@ sync each produce a `jobs` alert, with no note text or secret in them; #705),
 instance through a graceful restart, a SIGKILL, a stop and a start; #583),
 `zz-fix-minified-bundle`.
 Full tier adds `attachments`, `backup-restore`, `big-notes`, `browser`
-(Playwright/Chromium), `crash-write`, `export-roundtrip`,
-`multilingual-search`, `restart-extraction`, `zz-fix-pretty-bundle`.
+(Playwright/Chromium), `collab-s2b` (ADR-003 §11 S2b scenarios: rename and
+a new note at the old path, a pre-S2b tab across the upgrade, a re-seeded
+copy, rename then SIGKILL, a row changed by SQL), `crash-write`,
+`export-roundtrip`, `multilingual-search`, `restart-extraction`,
+`zz-fix-pretty-bundle`.
 
 `browser` is the only test that drives the web client. A PR that changes
 the client's collab code (`client/src/hooks/useCollabDoc*`,
