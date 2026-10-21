@@ -21,7 +21,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { writeIdempotency } from '../db/schema.js'
 import { withKeyLock } from '../notes/key-lock.js'
-import { noteIndexed } from '../notes/store.js'
+import { noteIndexed, type RecordKey, type WrittenNote } from '../notes/store.js'
 import { StoreBusyError } from '../notes/store-tx.js'
 import { diffLines } from '../sync/text-diff.js'
 
@@ -57,16 +57,24 @@ export function diffStats(before: NoteState, after: NoteState): DiffStats {
 /** The empty note a create starts from. */
 export const NO_NOTE: NoteState = { frontmatter: {}, body: '' }
 
+/** How a write went, for its answer. */
+export interface WriteHow {
+  status: WriteStatus
+  before: NoteState | null
+  after?: NoteState
+  concurrent?: unknown
+  dryRun?: boolean
+}
+
 /**
  * The answer of a write to note `row` (#477): the row's fields (without
  * `seq`, which is `rev`), then `rev`, `status`, `diff_stats`,
  * `concurrent_changes` and `indexed`. A dry run answers `dry_run: true` and
- * the `rev` the note still has.
+ * the `rev` the note still has. Synchronous, so the answer can be recorded
+ * with an idempotency key inside the write's transaction (runWrite), where
+ * `indexed` is false: nothing is projected before the commit.
  */
-export async function writeResult(
-  row: { id: string; seq: number } & Record<string, unknown>,
-  how: { status: WriteStatus; before: NoteState | null; after?: NoteState; concurrent?: unknown; dryRun?: boolean },
-): Promise<Record<string, unknown>> {
+export function writeAnswer(row: { id: string; seq: number } & Record<string, unknown>, how: WriteHow, indexed: boolean): Record<string, unknown> {
   const { seq, ...fields } = row
   const after = how.after ?? { frontmatter: row.frontmatter as Record<string, unknown>, body: String(row.body ?? '') }
   return {
@@ -75,9 +83,14 @@ export async function writeResult(
     status: how.status,
     diff_stats: how.before ? diffStats(how.before, after) : null,
     concurrent_changes: how.concurrent ?? null,
-    indexed: how.dryRun ? false : await noteIndexed(row.id, seq),
+    indexed,
     ...(how.dryRun ? { dry_run: true } : {}),
   }
+}
+
+/** writeAnswer with `indexed` read now (false for a dry run). */
+export async function writeResult(row: { id: string; seq: number } & Record<string, unknown>, how: WriteHow): Promise<Record<string, unknown>> {
+  return writeAnswer(row, how, how.dryRun ? false : await noteIndexed(row.id, row.seq))
 }
 
 /** The answer of a write the store refused as busy (#477 `status: retry`): nothing was written. */
@@ -116,54 +129,67 @@ function argsHash(tool: string, target: string, args: Record<string, unknown>): 
 }
 
 /**
+ * Given how to answer from the row a write commits, the hook that records
+ * the call's key and that answer in the write's transaction (store
+ * RecordKey); undefined when the call has no key or is a dry run.
+ */
+export type KeyedAnswer = (answer: (row: WrittenNote) => Record<string, unknown>) => RecordKey | undefined
+
+/**
  * Runs one MCP write (#477): a write the store refuses as busy answers
- * `status: retry`. With `key` (not on a dry run), the first result of this
+ * `status: retry`. With `key` (not on a dry run), the first answer of this
  * connection's key is kept for IDEMPOTENCY_WINDOW_HOURS: the same tool and
  * arguments again answer it with `replayed: true` and write nothing; other
- * arguments are refused. Calls with one key run one at a time. Errors and
- * `retry` answers are not kept, so the caller can send the same call again.
+ * arguments are refused. Calls with one key run one at a time.
+ *
+ * A write that commits records its key and answer inside its own
+ * transaction (`write` passes `keyed(answer)` to the store as
+ * `recordKey`), so a process that dies after COMMIT but before answering
+ * still has the key, and the caller's retry replays instead of writing
+ * again (ADR-003 §4, §10). Outcomes that commit nothing but are answers
+ * (a `conflicted` edit) are recorded after; errors and `retry` answers are
+ * not, so the caller can send the same call again. A `retry` whose write
+ * did commit (a rename whose link rewrites hit a busy note afterwards)
+ * answers the committed write. Keys older than the window are pruned on
+ * every keyed call.
  */
 export async function runWrite(
   call: { connectionId: string; tool: string; target: string; args: Record<string, unknown>; key?: string; dryRun?: boolean },
-  write: () => Promise<Record<string, unknown>>,
+  write: (keyed: KeyedAnswer) => Promise<Record<string, unknown>>,
 ): Promise<Record<string, unknown>> {
-  const attempt = async () => {
+  const attempt = async (keyed: KeyedAnswer) => {
     try {
-      return await write()
+      return await write(keyed)
     } catch (err) {
       if (err instanceof StoreBusyError) return retryResult(err)
       throw err
     }
   }
-  const { key } = call
-  if (key === undefined || call.dryRun) return attempt()
-  return withKeyLock(`idempotency:${call.connectionId}:${key}`, async () => {
+  const { key, connectionId } = call
+  if (key === undefined || call.dryRun) return attempt(() => undefined)
+  return withKeyLock(`idempotency:${connectionId}:${key}`, async () => {
+    await db.delete(writeIdempotency).where(sql`${writeIdempotency.createdAt} < now() - make_interval(hours => ${IDEMPOTENCY_WINDOW_HOURS})`)
     const hash = argsHash(call.tool, call.target, call.args)
-    const [stored] = await db
-      .select({ argsHash: writeIdempotency.argsHash, result: writeIdempotency.result })
-      .from(writeIdempotency)
-      .where(
-        and(
-          eq(writeIdempotency.connectionId, call.connectionId),
-          eq(writeIdempotency.key, key),
-          sql`${writeIdempotency.createdAt} > now() - make_interval(hours => ${IDEMPOTENCY_WINDOW_HOURS})`,
-        ),
-      )
+    const thisKey = and(eq(writeIdempotency.connectionId, connectionId), eq(writeIdempotency.key, key))
+    const recorded = async () =>
+      (await db.select({ argsHash: writeIdempotency.argsHash, result: writeIdempotency.result }).from(writeIdempotency).where(thisKey))[0]
+    const stored = await recorded()
     if (stored) {
       if (stored.argsHash !== hash) throw new IdempotencyKeyReusedError(key, call.tool)
       return { ...(stored.result as Record<string, unknown>), replayed: true }
     }
-    const result = await attempt()
-    if (result.status !== 'retry') {
-      // An expired entry of the same key is replaced.
-      await db
+    const entry = { connectionId, key, tool: call.tool, argsHash: hash }
+    const keyed: KeyedAnswer = (answer) => async (tx, row) => {
+      const result = answer(row)
+      await tx
         .insert(writeIdempotency)
-        .values({ connectionId: call.connectionId, key, tool: call.tool, argsHash: hash, result })
-        .onConflictDoUpdate({
-          target: [writeIdempotency.connectionId, writeIdempotency.key],
-          set: { tool: call.tool, argsHash: hash, result, createdAt: sql`now()` },
-        })
+        .values({ ...entry, noteId: row.id, result })
+        .onConflictDoUpdate({ target: [writeIdempotency.connectionId, writeIdempotency.key], set: { ...entry, noteId: row.id, result, createdAt: sql`now()` } })
     }
+    const result = await attempt(keyed)
+    const committed = await recorded()
+    if (committed) return result.status === 'retry' ? (committed.result as Record<string, unknown>) : result
+    if (result.status !== 'retry') await db.insert(writeIdempotency).values({ ...entry, result }).onConflictDoNothing()
     return result
   })
 }

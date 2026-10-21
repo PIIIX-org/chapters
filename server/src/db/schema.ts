@@ -537,6 +537,7 @@ export const writeIdempotency = pgTable(
     key: text('key').notNull(),
     tool: text('tool').notNull(),
     argsHash: text('args_hash').notNull(),
+    noteId: uuid('note_id'),
     result: jsonb('result').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -545,6 +546,9 @@ export const writeIdempotency = pgTable(
     foreignKey({ name: 'write_idempotency_connection_id_fkey', columns: [t.connectionId], foreignColumns: [mcpConnections.id] }).onDelete(
       'cascade',
     ),
+    foreignKey({ name: 'write_idempotency_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete('cascade'),
+    index('write_idempotency_created_at').on(t.createdAt),
+    index('write_idempotency_note_id').on(t.noteId),
   ],
 )
 

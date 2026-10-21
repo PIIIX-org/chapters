@@ -51,6 +51,7 @@ import {
   type Actor,
   type RevisionPosition,
   type WriteOutcome,
+  type WrittenNote,
 } from '../notes/store.js'
 import { serializeNote } from '../notes/okf.js'
 import { indexRows, renderDirIndex } from '../notes/projector.js'
@@ -71,7 +72,7 @@ import { notify } from '../notifications/notify.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 import { NoteEditConflictError, requestedEdit, writeThroughCollab, type WriteReport } from './crdt-write.js'
-import { NO_NOTE, diffStats, runWrite, writeResult } from './write-result.js'
+import { NO_NOTE, diffStats, runWrite, writeAnswer, writeResult, type KeyedAnswer } from './write-result.js'
 import { showAgentPresence } from '../sync/agent-presence.js'
 import { registerMcpPrompts } from './prompts.js'
 import { strictArgs } from './strict-input.js'
@@ -1070,9 +1071,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       if (!args.path && (!args.type || !args.name)) {
         throw new McpToolError('either `path` or both `type` and `name` must be provided')
       }
-      return runWrite({ connectionId: auth.connection.id, tool: 'create_note', target, args, key, dryRun }, async () => {
+      return runWrite({ connectionId: auth.connection.id, tool: 'create_note', target, args, key, dryRun }, async (keyed) => {
         if (dryRun) return previewedCreate(await previewCreate(target, args))
-        return writeResult(await createNote(target, args, actor), { status: 'applied', before: NO_NOTE })
+        const how = { status: 'applied' as const, before: NO_NOTE }
+        return writeResult(await createNote(target, args, actor, { recordKey: keyed((row) => writeAnswer(row, how, false)) }), how)
       })
     },
   )
@@ -1142,7 +1144,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     ) => {
       await requireAccess(target, 'edit')
       const callArgs = { ...args, baseRev, allowGrowth }
-      return runWrite({ connectionId: auth.connection.id, tool: 'edit_note', target, args: callArgs, key, dryRun }, async () => {
+      return runWrite({ connectionId: auth.connection.id, tool: 'edit_note', target, args: callArgs, key, dryRun }, async (keyed) => {
         const edit = requestedEdit(args)
         if (baseRev !== undefined) {
           const base = await getBaseRevision(target, args.path, baseRev)
@@ -1156,8 +1158,15 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         }
         const report: WriteReport = {}
         const outcome: WriteOutcome = {}
+        // report and outcome are filled before the write's transaction, where the key records this answer.
+        const answer = (row: WrittenNote, indexed: boolean) => {
+          const how = { status: report.status ?? 'applied', before: outcome.before ?? null, concurrent: report.concurrentChanges, dryRun }
+          const result = writeAnswer(row, how, indexed)
+          return baseRev === undefined ? result : { ...result, baseRev }
+        }
+        const recordKey = keyed((row) => answer(row, false))
         const write = () =>
-          writeThroughCollab(target, args.path, edit, actor, { quarantine: allowGrowth ? undefined : 'all', report, outcome, dryRun })
+          writeThroughCollab(target, args.path, edit, actor, { quarantine: allowGrowth ? undefined : 'all', report, outcome, dryRun, recordKey })
         let updated
         try {
           updated = dryRun ? await write() : await withRestorePoint(target, args.path, auth.connection.id, write)
@@ -1184,13 +1193,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         }
         if (!updated) throw new McpToolError('note not found')
         if (!dryRun) showAgentPresence(target, updated.path, presence, 'editing')
-        const result = await writeResult(updated, {
-          status: report.status ?? 'applied',
-          before: outcome.before ?? null,
-          concurrent: report.concurrentChanges,
-          dryRun,
-        })
-        return baseRev === undefined ? result : { ...result, baseRev }
+        return answer(updated, dryRun ? false : await noteIndexed(updated.id, updated.seq))
       })
     },
   )
@@ -1211,22 +1214,32 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     create: { frontmatter?: Record<string, unknown>; body: string } | undefined,
     allowGrowth: boolean | undefined,
     dryRun: boolean | undefined,
+    keyed: KeyedAnswer,
   ): Promise<Record<string, unknown>> {
     if (dryRun && create && !(await getLiveNote(target, path))) {
       return { ...previewedCreate(await previewCreate(target, { path, ...create })), created: true }
     }
-    const made = create && !dryRun ? await createNoteIfMissing(target, { path, ...create }, actor) : null
+    const createdAnswer = (row: WrittenNote, indexed: boolean) => ({ ...writeAnswer(row, { status: 'applied', before: NO_NOTE }, indexed), created: true })
+    const made =
+      create && !dryRun
+        ? await createNoteIfMissing(target, { path, ...create }, actor, { recordKey: keyed((row) => createdAnswer(row, false)) })
+        : null
     if (made) {
       showAgentPresence(target, made.path, presence, 'editing')
-      return { ...(await writeResult(made, { status: 'applied', before: NO_NOTE })), created: true }
+      return createdAnswer(made, await noteIndexed(made.id, made.seq))
     }
     const outcome: WriteOutcome = {}
+    const editedAnswer = (row: WrittenNote, indexed: boolean) => ({
+      ...writeAnswer(row, { status: 'applied', before: outcome.before ?? null, dryRun }, indexed),
+      created: false,
+    })
+    const recordKey = keyed((row) => editedAnswer(row, false))
     const write = () =>
-      writeThroughCollab(target, path, requestedEdit(edit), actor, { quarantine: allowGrowth ? undefined : 'all', outcome, dryRun })
+      writeThroughCollab(target, path, requestedEdit(edit), actor, { quarantine: allowGrowth ? undefined : 'all', outcome, dryRun, recordKey })
     const note = dryRun ? await write() : await withRestorePoint(target, path, auth.connection.id, write)
     if (!note) throw new McpToolError('note not found')
     if (!dryRun) showAgentPresence(target, note.path, presence, 'editing')
-    return { ...(await writeResult(note, { status: 'applied', before: outcome.before ?? null, dryRun })), created: false }
+    return editedAnswer(note, dryRun ? false : await noteIndexed(note.id, note.seq))
   }
 
   tool(
@@ -1269,10 +1282,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       { vaultId: target },
     ) => {
       await requireAccess(target, 'edit')
-      return runWrite({ connectionId: auth.connection.id, tool: 'append_note', target, args, key, dryRun }, () => {
+      return runWrite({ connectionId: auth.connection.id, tool: 'append_note', target, args, key, dryRun }, (keyed) => {
         const ops: EditOp[] = [{ op: 'append', text: args.text }]
         const create = args.createIfMissing ? { frontmatter: args.frontmatter, body: applyBodyOps('', ops) } : undefined
-        return writeOrCreate(target, args.path, { frontmatter: args.frontmatter, ops }, create, args.allowGrowth, dryRun)
+        return writeOrCreate(target, args.path, { frontmatter: args.frontmatter, ops }, create, args.allowGrowth, dryRun, keyed)
       })
     },
   )
@@ -1315,9 +1328,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       { vaultId: target },
     ) => {
       await requireAccess(target, 'edit')
-      return runWrite({ connectionId: auth.connection.id, tool: 'upsert_note', target, args, key, dryRun }, () => {
+      return runWrite({ connectionId: auth.connection.id, tool: 'upsert_note', target, args, key, dryRun }, (keyed) => {
         const content = { frontmatter: args.frontmatter, body: args.body }
-        return writeOrCreate(target, args.path, content, content, args.allowGrowth, dryRun)
+        return writeOrCreate(target, args.path, content, content, args.allowGrowth, dryRun, keyed)
       })
     },
   )
@@ -1338,12 +1351,14 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async ({ idempotency_key: key, ...args }: { from: string; toName: string; idempotency_key?: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
-      return runWrite({ connectionId: auth.connection.id, tool: 'rename_note', target, args, key }, async () => {
+      return runWrite({ connectionId: auth.connection.id, tool: 'rename_note', target, args, key }, async (keyed) => {
+        const how = { status: 'applied' as const, before: null }
+        const recordKey = keyed((row) => writeAnswer(row, how, false))
         const renamed = await withRestorePoint(target, args.from, auth.connection.id, () =>
-          renameNote(target, args.from, args.toName, actor, writeThroughCollab),
+          renameNote(target, args.from, args.toName, actor, writeThroughCollab, { recordKey }),
         )
         if (!renamed) throw new McpToolError('note not found')
-        return writeResult(renamed, { status: 'applied', before: null })
+        return writeResult(renamed, how)
       })
     },
   )
@@ -1359,11 +1374,15 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async ({ idempotency_key: key, ...args }: { path: string; idempotency_key?: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
-      return runWrite({ connectionId: auth.connection.id, tool: 'delete_note', target, args, key }, async () => {
-        const deleted = await withRestorePoint(target, args.path, auth.connection.id, () => softDeleteNote(target, args.path, actor))
+      return runWrite({ connectionId: auth.connection.id, tool: 'delete_note', target, args, key }, async (keyed) => {
+        const answer = (row: WrittenNote, indexed: boolean) => {
+          const { rev, status } = writeAnswer(row, { status: 'applied', before: null }, indexed)
+          return { id: row.id, path: row.path, trashed: true, rev, status, diff_stats: null, concurrent_changes: null, indexed }
+        }
+        const recordKey = keyed((row) => answer(row, false))
+        const deleted = await withRestorePoint(target, args.path, auth.connection.id, () => softDeleteNote(target, args.path, actor, { recordKey }))
         if (!deleted) throw new McpToolError('note not found')
-        const { rev, status, indexed } = await writeResult(deleted, { status: 'applied', before: null })
-        return { id: deleted.id, path: deleted.path, trashed: true, rev, status, diff_stats: null, concurrent_changes: null, indexed }
+        return answer(deleted, await noteIndexed(deleted.id, deleted.seq))
       })
     },
   )
@@ -1402,10 +1421,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async ({ idempotency_key: key, ...args }: { noteId: string; idempotency_key?: string }, { vaultId: target }) => {
       await requireAccess(target, 'edit')
-      return runWrite({ connectionId: auth.connection.id, tool: 'restore_note', target, args, key }, async () => {
-        const restored = await restoreNote(target, args.noteId, actor)
+      return runWrite({ connectionId: auth.connection.id, tool: 'restore_note', target, args, key }, async (keyed) => {
+        const how = { status: 'applied' as const, before: null }
+        const restored = await restoreNote(target, args.noteId, actor, { recordKey: keyed((row) => writeAnswer(row, how, false)) })
         if (!restored) throw new McpToolError('note not found or not trashed')
-        return writeResult(restored, { status: 'applied', before: null })
+        return writeResult(restored, how)
       })
     },
   )
@@ -1512,13 +1532,15 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       { vaultId: target },
     ) => {
       await requireAccess(target, 'edit')
-      return runWrite({ connectionId: auth.connection.id, tool: 'revert_note', target, args, key, dryRun }, async () => {
+      return runWrite({ connectionId: auth.connection.id, tool: 'revert_note', target, args, key, dryRun }, async (keyed) => {
         const outcome: WriteOutcome = {}
-        const revert = () => revertNote(target, args.path, args.revisionId, actor, writeThroughCollab, { dryRun, outcome })
+        const how = () => ({ status: 'applied' as const, before: outcome.before ?? null, dryRun })
+        const recordKey = keyed((row) => writeAnswer(row, how(), false))
+        const revert = () => revertNote(target, args.path, args.revisionId, actor, writeThroughCollab, { dryRun, outcome, recordKey })
         const reverted = dryRun ? await revert() : await withRestorePoint(target, args.path, auth.connection.id, revert)
         if (!reverted) throw new McpToolError('note or revision not found')
         if (!dryRun) showAgentPresence(target, reverted.path, presence, 'editing')
-        return writeResult(reverted, { status: 'applied', before: outcome.before ?? null, dryRun })
+        return writeResult(reverted, how())
       })
     },
   )

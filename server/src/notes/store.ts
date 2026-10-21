@@ -501,7 +501,12 @@ export async function previewCreate(vaultId: string, input: NewNote): Promise<{ 
   return { path: resolved.fullPath, frontmatter, body }
 }
 
-export async function createNote(vaultId: string, input: NewNote, actor: Actor = SYSTEM_ACTOR): Promise<WrittenNote> {
+export async function createNote(
+  vaultId: string,
+  input: NewNote,
+  actor: Actor = SYSTEM_ACTOR,
+  options: Pick<WriteOptions, 'recordKey'> = {},
+): Promise<WrittenNote> {
   const { resolved, frontmatter, body } = newNoteState(input)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const id = randomUUID()
@@ -520,7 +525,9 @@ export async function createNote(vaultId: string, input: NewNote, actor: Actor =
         // Written by the store: nothing for the S2a backfill to do.
         await tx.execute(sql`INSERT INTO note_projections (note_id, projection, target_seq, applied_seq) VALUES (${id}, ${BACKFILL_MARKER}, 1, 1)`)
         await enqueueEmbeddingTx(tx, id, 1)
-        return { ...inserted!, seq: 1 }
+        const created = { ...inserted!, seq: 1 }
+        await options.recordKey?.(tx, created)
+        return created
       })
     } catch (err) {
       if (isUniqueViolation(err)) {
@@ -546,10 +553,11 @@ export async function createNoteIfMissing(
   vaultId: string,
   input: Parameters<typeof createNote>[1] & { path: string },
   actor: Actor,
+  options: Pick<WriteOptions, 'recordKey'> = {},
 ): Promise<WrittenNote | null> {
   if (await getLiveNote(vaultId, input.path)) return null
   try {
-    return await createNote(vaultId, input, actor)
+    return await createNote(vaultId, input, actor, options)
   } catch (err) {
     if (err instanceof NoteExistsError) return null
     throw err
@@ -610,8 +618,10 @@ function presented(row: StoredNote, foldError?: string): ReadNote {
  * `row.seq`, the `rev` a later `base_rev` names, and holds everything the
  * relay has. A note with no loaded document is read without a lock or a
  * write. A state the relay would refuse to store (#491, #492) is not
- * folded: the last valid row is served with `foldError`. Like a write, the
- * fold fails while the store refuses writes (StoreBusyError).
+ * folded: the last valid row is served with `foldError`. When the store
+ * cannot take the fold (lock timeout, maintenance), the read fails with
+ * NoteReadBusyError (HTTP 503): it would otherwise serve text without the
+ * typing.
  *
  * Never call it while holding the note's lock (the relay's load hook does):
  * key-lock.ts is not reentrant.
@@ -627,11 +637,17 @@ export async function readLiveNote(vaultId: string, path: string): Promise<ReadN
     const fold = foldSource(vaultId, row.id, resolved.fullPath)
     if (!fold) return presented(row)
     try {
-      const folded = await storeTransaction([row.id], async (tx) => {
-        const locked = await lockedNote(tx, row.id)
-        if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
-        return foldLive(tx, locked, fold)
-      })
+      let folded
+      try {
+        folded = await storeTransaction([row.id], async (tx) => {
+          const locked = await lockedNote(tx, row.id)
+          if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
+          return foldLive(tx, locked, fold)
+        })
+      } catch (err) {
+        if (err instanceof StoreBusyError) throw new NoteReadBusyError()
+        throw err
+      }
       if (!folded) return readNote(vaultId, resolved.fullPath)
       if (folded.row.seq !== row.seq) afterCommit()
       return presented(
@@ -642,6 +658,15 @@ export async function readLiveNote(vaultId: string, path: string): Promise<ReadN
       releaseFold(fold)
     }
   })
+}
+
+/** readLiveNote could not store the open editors' typing first (the store is busy): nothing was read. HTTP 503. */
+export class NoteReadBusyError extends StoreBusyError {
+  constructor() {
+    super('read')
+    this.message =
+      'the note is open in an editor and its unsaved typing could not be saved before the read, because the note store is busy; retry the read'
+  }
 }
 
 /** The live note at `path` with `seq` and `frontmatter_src`, read without locks. */
@@ -682,7 +707,17 @@ export interface WriteOptions {
   dryRun?: boolean
   /** Receives the state the write changed (what the editors saw, else the row): the base of its `diff_stats` (#477). */
   outcome?: WriteOutcome
+  /** The call's idempotency key (#477), recorded inside the write's transaction: see RecordKey. */
+  recordKey?: RecordKey
 }
+
+/**
+ * Runs inside a write's transaction, after its change, with the row the
+ * transaction commits (#477): the MCP layer records the call's
+ * `idempotency_key` and answer there, so a write that commits always has
+ * its key, also when the process dies before the answer (ADR-003 §4, §10).
+ */
+export type RecordKey = (tx: Tx, row: WrittenNote) => Promise<void>
 
 /** What writeNote reports besides the row (#477). */
 export interface WriteOutcome {
@@ -745,6 +780,7 @@ export async function writeNote(
             ? { action: 'revert', actor, sourceRevisionId: options.revertOf, actorDetail: options.actorDetail }
             : { action: 'update', actor, actorDetail: options.actorDetail },
         )
+        await options.recordKey?.(tx, plainRow(written))
         failpoint('edit.before-commit')
         return { written, keepLiveBody: refused && written.body === locked.body }
       })
@@ -854,6 +890,7 @@ export async function renameNote(
   toName: string,
   actor: Actor = SYSTEM_ACTOR,
   updateFn: ReferrerWrite = updateNote,
+  options: Pick<WriteOptions, 'recordKey'> = {},
 ): Promise<WrittenNote | null> {
   const fromResolved = resolveNotePath(from)
   let toPath: string
@@ -866,7 +903,7 @@ export async function renameNote(
   const renaming = `renaming ${fromResolved.fullPath} to ${toResolved.fullPath}`
   const moved = await withKeyLocks(
     [noteLock(vaultId, fromResolved.fullPath), noteLock(vaultId, toResolved.fullPath)],
-    () => moveNote(vaultId, fromResolved, toResolved, renaming, actor),
+    () => moveNote(vaultId, fromResolved, toResolved, renaming, actor, options.recordKey),
   )
   if (!moved) return null
   failpoint('rename.after-commit-before-refactor')
@@ -967,6 +1004,7 @@ async function moveNote(
   toResolved: ResolvedNotePath,
   renaming: string,
   actor: Actor,
+  recordKey: RecordKey | undefined,
 ): Promise<{ updated: WrittenNote; referrers: string[]; job: number | null } | null> {
   const seen = await readStored(vaultId, fromResolved.fullPath)
   if (!seen) return null
@@ -1017,6 +1055,7 @@ async function moveNote(
               { leaseMs: RENAME_REFACTOR_LEASE_MS },
             )
           : null
+      await recordKey?.(tx, plainRow(updated))
       return { updated, referrers: referrers.map((r) => r.id), job, keepLiveBody: refused && updated.body === locked.body }
     })
   } catch (err) {
@@ -1072,6 +1111,7 @@ export async function softDeleteNote(
   vaultId: string,
   path: string,
   actor: Actor = SYSTEM_ACTOR,
+  options: Pick<WriteOptions, 'recordKey'> = {},
 ): Promise<WrittenNote | null> {
   const resolved = resolveNotePath(path)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
@@ -1083,7 +1123,9 @@ export async function softDeleteNote(
         const locked = await lockedNote(tx, seen.id)
         if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
         const { row } = await foldLive(tx, locked, fold)
-        return (await applyRowChange(tx, row, { deletedAt: new Date() }, { action: 'delete', actor })).row
+        const deleted = (await applyRowChange(tx, row, { deletedAt: new Date() }, { action: 'delete', actor })).row
+        await options.recordKey?.(tx, plainRow(deleted))
+        return deleted
       })
       if (!deleted) return null
       afterCommit()
@@ -1119,6 +1161,7 @@ export async function restoreNote(
   vaultId: string,
   noteId: string,
   actor: Actor = SYSTEM_ACTOR,
+  options: Pick<WriteOptions, 'recordKey'> = {},
 ): Promise<WrittenNote | null> {
   return withTrashedNote(vaultId, noteId, async (seen) => {
     if (await getLiveNote(vaultId, seen.path)) {
@@ -1129,7 +1172,9 @@ export async function restoreNote(
       restored = await storeTransaction([seen.id], async (tx) => {
         const locked = await lockedNote(tx, seen.id)
         if (!locked || !locked.deletedAt) return null
-        return (await applyRowChange(tx, locked, { deletedAt: null }, { action: 'restore', actor })).row
+        const restored = (await applyRowChange(tx, locked, { deletedAt: null }, { action: 'restore', actor })).row
+        await options.recordKey?.(tx, plainRow(restored))
+        return restored
       })
     } catch (err) {
       if (isUniqueViolation(err)) throw new OkfValidationError(`a live note already exists at ${seen.path}`)
@@ -1739,9 +1784,9 @@ export async function revertNote(
     path: string,
     input: { frontmatter?: Record<string, unknown>; body?: string },
     actor: Actor,
-    options: { revertOf: string } & Pick<WriteOptions, 'dryRun' | 'outcome'>,
+    options: { revertOf: string } & Pick<WriteOptions, 'dryRun' | 'outcome' | 'recordKey'>,
   ) => Promise<WrittenNote | null> = updateNote,
-  options: Pick<WriteOptions, 'dryRun' | 'outcome'> = {},
+  options: Pick<WriteOptions, 'dryRun' | 'outcome' | 'recordKey'> = {},
 ): Promise<WrittenNote | null> {
   const row = await getLiveNote(vaultId, path)
   if (!row) return null

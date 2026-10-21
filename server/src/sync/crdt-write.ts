@@ -8,6 +8,7 @@ import {
   type Actor,
   type BodyEdit,
   type NoteRow,
+  type RecordKey,
   type WriteOutcome,
   type WrittenNote,
 } from '../notes/store.js'
@@ -244,6 +245,7 @@ export async function writeThroughCollab(
     actorDetail?: Record<string, unknown>
     dryRun?: boolean
     outcome?: WriteOutcome
+    recordKey?: RecordKey
   } = {},
 ): Promise<WrittenNote | null> {
   const dryRun = options.dryRun === true
@@ -304,7 +306,7 @@ export async function writeThroughCollab(
       return { frontmatter, body }
     },
     actor,
-    { revertOf: options.revertOf, actorDetail: options.actorDetail, dryRun, outcome: options.outcome },
+    { revertOf: options.revertOf, actorDetail: options.actorDetail, dryRun, outcome: options.outcome, recordKey: options.recordKey },
   )
 }
 

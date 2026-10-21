@@ -164,6 +164,27 @@ describe('read_note serves the live document (#474)', () => {
     expect(await revisionCount(path)).toBe(count)
   }, 20_000)
 
+  it('a read that cannot store the typing first (store busy) fails as a read, not a write', async () => {
+    const path = 'docs/live-busy'
+    await must('create_note', { vaultId, path, body: BODY })
+    const text = open(path).document.getText('body')
+    await waitFor(() => text.toString() === BODY && liveBody(path) === BODY)
+    text.insert(0, 'TYPED ')
+    await waitFor(() => liveBody(path)!.startsWith('TYPED'))
+    const held = await sql.reserve()
+    try {
+      await held`SELECT pg_advisory_lock(${INSTANCE_LOCK_KEY.toString()}::bigint)`
+      const r = await call('read_note', { vaultId, path })
+      expect(r.isError).toBe(true)
+      expect(r.text).toContain('retry the read')
+      expect(r.text).not.toContain('nothing was written')
+    } finally {
+      await held`SELECT pg_advisory_unlock(${INSTANCE_LOCK_KEY.toString()}::bigint)`
+      held.release()
+    }
+    expect((await must<{ body: string }>('read_note', { vaultId, path })).body.startsWith('TYPED')).toBe(true)
+  }, 20_000)
+
   it('REST GET serves the live document too, with rev', async () => {
     const path = 'docs/live-rest'
     await must('create_note', { vaultId, path, body: BODY })
