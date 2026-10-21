@@ -106,27 +106,12 @@
     },
     {
       "test": "collab-duplication",
-      "check": "S18 injected stale .crdt, fresh ydoc (page reload): disk = DB = .crdt = clients",
-      "issue": 488
-    },
-    {
-      "test": "collab-duplication",
-      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): disk = DB = .crdt = clients",
-      "issue": 488
-    },
-    {
-      "test": "collab-duplication",
       "check": "S18 injected stale .crdt, stale ydoc (tab kept open): no duplicated text",
       "issue": 488
     },
     {
       "test": "collab-duplication",
-      "check": "S19b same idle tab reconnects after the doc unloaded: disk = DB = .crdt = clients",
-      "issue": 488
-    },
-    {
-      "test": "collab-duplication",
-      "check": "S19b same idle tab reconnects after the doc unloaded: no duplicated text",
+      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): @INJSTALE@ kept exactly once on disk",
       "issue": 488
     },
     {
