@@ -181,7 +181,9 @@ passed (#573). The push to `prod` starts **CI**, and CI's `publish` job
 the same run, on the same commit. If `checks` fails, `publish` is skipped
 and the hosted instance stays on the previous image — fix on `dev` and
 promote again. (Before this, publish ran on every `prod` push regardless:
-promotion #334 shipped an image while its CI failed on lint.)
+promotion #334 shipped an image while its CI failed on lint.) Before it
+pushes, `publish` runs the image offline check (below) on the image it
+is about to push; if it fails, nothing is pushed.
 
 After the promotion, confirm the CI run on `prod` ended with `publish`
 succeeded (`gh run list --workflow ci.yml --branch prod`, then
@@ -522,6 +524,23 @@ the job summary. `bench-gate` is a required status check on `dev` and
 when a `bench` instance did not produce results.
 Method, thresholds and the only publishable numbers:
 `benchmarks/README.md`.
+
+**Image check** (`.github/workflows/image-check.yml`, job
+`offline-scripts`, #872) builds the root `Dockerfile` and runs the
+operator commands in it with `--network none`
+(`.github/actions/image-offline-check`, script
+`.github/scripts/image-offline-check.sh`). It runs on PRs that change
+what the image's dependencies come from: `Dockerfile`, `.dockerignore`,
+any `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc`,
+or the check itself. It also runs by hand
+(`gh workflow run image-check.yml --ref <branch>`). `publish.yml` runs
+the same action before every push. It runs `pnpm check-notes --help`
+twice: as shipped, and with every manifest touched and
+`pnpm_config_verify_deps_before_run=error`. The second run fails when a
+direct dependency's range differs from its override in
+`pnpm-workspace.yaml`: give the dependency the override's range. It is
+not a required check, since it only runs on those paths. Don't merge
+while it is red.
 
 **Production uptime monitor** (`.github/workflows/uptime.yml`, script
 `.github/scripts/uptime-monitor.mjs`, #583). Production once restarted
