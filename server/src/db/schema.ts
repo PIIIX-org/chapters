@@ -559,6 +559,8 @@ export const noteReads = pgTable(
     connectionId: uuid('connection_id').notNull(),
     noteId: uuid('note_id').notNull(),
     rev: bigint('rev', { mode: 'number' }).notNull(),
+    /** The body the connection last sent, when its write was merged; null when the revision at `rev` is what it has. */
+    body: text('body'),
     readAt: timestamp('read_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

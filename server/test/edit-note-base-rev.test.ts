@@ -455,15 +455,28 @@ describe("a whole body without base_rev merges against the connection's last rea
     await typeAtEnd(path, text, ' c01')
     const read = await must<Read>('read_note', { vaultId, path })
     await typeAtEnd(path, text, ' c02')
-    const first = await must<{ status: string; body: string }>('edit_note', { vaultId, path, body: appended(read.body, 'AGENT-ONE') })
+    const first = await must<{ status: string; body: string; rev: number }>('edit_note', { vaultId, path, body: appended(read.body, 'AGENT-ONE') })
     expect(first.status).toBe('merged')
     text.insert(text.toString().indexOf('\nAGENT-ONE'), ' c03')
     await waitFor(() => liveBody(path) === text.toString())
-    // The agent builds on the body it sent, without reading again.
+    // The agent builds on the body it sent, without reading again: that body, at the first write's rev, is its base.
     const second = await must<{ status: string; body: string }>('edit_note', { vaultId, path, body: appended(appended(read.body, 'AGENT-ONE'), 'AGENT-TWO') })
     const expected = `${BODY} c01 c02 c03\nAGENT-ONE\nAGENT-TWO\n`
-    expect(second).toMatchObject({ status: 'merged', baseRev: read.rev, body: expected })
+    expect(second).toMatchObject({ status: 'merged', baseRev: first.rev, body: expected })
     await waitFor(() => text.toString() === expected)
+  }, 20_000)
+
+  it("two appends from one read while another agent appends between them: the first agent's line is not written twice (#864 review)", async () => {
+    const path = 'docs/last-read-two-agents'
+    await must('create_note', { vaultId, path, body: BODY })
+    const other = await connect('edit-base-other')
+    const read = await must<Read>('read_note', { vaultId, path })
+    await must('append_note', { vaultId, path, text: 'B1' }, other)
+    const first = await must<{ status: string; body: string; rev: number }>('edit_note', { vaultId, path, body: appended(read.body, 'A1') })
+    expect(first).toMatchObject({ status: 'merged', body: `${BODY}B1\nA1\n` })
+    await must('append_note', { vaultId, path, text: 'B2' }, other)
+    const second = await must<{ status: string; body: string }>('edit_note', { vaultId, path, body: appended(appended(read.body, 'A1'), 'A2') })
+    expect(second).toMatchObject({ status: 'merged', baseRev: first.rev, body: `${BODY}B1\nA1\nB2\nA2\n` })
   }, 20_000)
 
   it("a whole body that was applied as sent is the agent's next base: a later edit from it keeps typing done since", async () => {
