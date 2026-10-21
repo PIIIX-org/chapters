@@ -1246,10 +1246,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
    * createNoteIfMissing); otherwise `edit` is applied under the note's write
    * lock against the live text, as edit_note does, restore point (#482)
    * included, so a call that lost the create edits the note with one. A
-   * whole `body` (upsert_note) is made from this connection's last read of
+   * whole `body` (upsert_note) is made from what this connection last had of
    * the note, as edit_note's without base_rev (#865): merged, or conflicted
-   * with a proposal. Size cap, quarantine and presence (#481) as for
-   * edit_note. Answered as every write (#477).
+   * with a proposal; a note upsert_note creates is what it then has. Size
+   * cap, quarantine and presence (#481) as for edit_note. Answered as every
+   * write (#477).
    */
   async function writeOrCreate(
     target: string,
@@ -1270,6 +1271,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         : null
     if (made) {
       showAgentPresence(target, made.id, presence, 'editing')
+      // The body it created is what this connection has: the base of its next whole body (#879 review).
+      if (edit.body !== undefined) await rememberRead(auth.connection.id, made.id, made.seq, made.body === edit.body ? null : edit.body)
       return createdAnswer(made, await noteIndexed(made.id, made.seq))
     }
     const requested = requestedEdit(edit)

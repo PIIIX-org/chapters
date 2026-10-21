@@ -650,7 +650,9 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   differs from it (merged): the agent's next body is built on what it
   sent, so its earlier lines are not its change again. `upsert_note` on an
   existing note uses it the same way (#865: `merged`, or `conflicted` with
-  a proposal, `created: false`). `create_note`, `append_note`, `ops`-only
+  a proposal, `created: false`), and a note `upsert_note` creates is
+  recorded as the connection's base (the created `rev`, with the body sent
+  when the stored one differs). `create_note`, `append_note`, `ops`-only
   and frontmatter-only edits neither record nor use it, so a connection
   that never read the note still replaces the live text (a blind replace
   stays a replace). Kept in `note_reads` (above) for 24 h,
