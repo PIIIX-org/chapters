@@ -10,10 +10,11 @@ import { buildApp } from '../src/app.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { getLiveNote } from '../src/notes/store.js'
 import { embedder } from '../src/search/embeddings.js'
-import { flushEmbeddings, scheduleEmbedding } from '../src/search/embedding-queue.js'
+import { enqueueEmbeddings, flushEmbeddings } from '../src/search/embedding-queue.js'
 import { syncGitRepository } from '../src/repositories/git-sync.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { jobTiming } from '../src/jobs/durable.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
@@ -204,11 +205,17 @@ describe('error and job reports carry no note text (#705)', () => {
   it('reports a permanently failed embedding job by note id, without the error text', async () => {
     const before = (await snapshot()).body
     const embed = vi.spyOn(embedder, 'embed').mockRejectedValue(new Error(`model failed on note text ${MARKER} ${SECRET}`))
+    // Retries claimable at once; monitoring reports the job once, when it gives up (#494).
+    const savedBackoff = jobTiming.backoffBaseMs
+    jobTiming.backoffBaseMs = 0
     try {
-      scheduleEmbedding(noteId)
+      // beforeAll embedded this version already, so a plain enqueue is a
+      // no-op (#494); re-run it the way `pnpm reindex` does.
+      await enqueueEmbeddings([noteId], 'finished')
       await flushEmbeddings()
     } finally {
       embed.mockRestore()
+      jobTiming.backoffBaseMs = savedBackoff
     }
     const { raw, body } = await snapshot()
     expect(body.jobs.embedding!.failed).toBe(before.jobs.embedding!.failed + 1)
@@ -228,12 +235,15 @@ describe('error and job reports carry no note text (#705)', () => {
       .insert(repositories)
       .values({ name: 'monitoring-extraction', ownerId: owner.id, ingestionMethod: 'agent_push' })
       .returning()
-    const embed = vi.spyOn(embedder, 'embed').mockRejectedValueOnce(new Error(`extraction saw ${MARKER} ${SECRET}`))
+    const embed = vi.spyOn(embedder, 'embed').mockRejectedValue(new Error(`extraction saw ${MARKER} ${SECRET}`))
+    const savedBackoff = jobTiming.backoffBaseMs
+    jobTiming.backoffBaseMs = 0
     try {
       await syncRepositoryFiles(pushed!.id, [{ path: `${MARKER}.txt`, content: `note text ${MARKER}` }], [`${MARKER}.txt`])
       await flushExtraction()
     } finally {
       embed.mockRestore()
+      jobTiming.backoffBaseMs = savedBackoff
     }
     const [file] = await db
       .select({ id: repositoryFiles.id })

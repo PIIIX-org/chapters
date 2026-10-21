@@ -8,7 +8,7 @@ import { db, sql } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { runMigrations } from '../db/migrate.js'
 import { syncNoteLinks } from '../notes/store.js'
-import { flushEmbeddings, scheduleEmbedding } from '../search/embedding-queue.js'
+import { enqueueEmbeddings, flushEmbeddings } from '../search/embedding-queue.js'
 
 await runMigrations()
 const rows = await db
@@ -18,8 +18,12 @@ const rows = await db
 console.log(`reindexing ${rows.length} notes...`)
 for (const row of rows) {
   await syncNoteLinks(row.id, row.body)
-  scheduleEmbedding(row.id)
 }
+// Re-embeds notes whose job for the current version already finished, too.
+await enqueueEmbeddings(
+  rows.map((r) => r.id),
+  'finished',
+)
 await flushEmbeddings()
 console.log('done')
 await sql.end()

@@ -159,24 +159,27 @@ describe('append_note (#478)', () => {
     await waitFor(() => text.toString() === row.body)
   }, 30_000)
 
-  it('createIfMissing: concurrent appends to a missing note create it once and every line lands', async () => {
-    const path = 'docs/new-log'
-    const frontmatter = { title: 'New log', tags: ['log'] }
-    const results = await Promise.all(
-      agents.slice(0, 10).map((agent, i) => call(agent, 'append_note', { vaultId, path, text: `first ${i}`, createIfMissing: true, frontmatter })),
-    )
-    expect(results.filter((r) => r.isError).map((r) => r.text)).toEqual([])
-    expect(results.filter(created)).toHaveLength(1)
+  for (const n of [5, 10, 20]) {
+    it(`createIfMissing: ${n} concurrent appends to a missing note create it once, every line lands, every other session keeps a restore point`, async () => {
+      const path = `docs/new-log-${n}`
+      const frontmatter = { title: 'New log', tags: ['log'] }
+      const writers = agents.slice(0, n)
+      const results = await Promise.all(
+        writers.map((agent, i) => call(agent, 'append_note', { vaultId, path, text: `first ${i}`, createIfMissing: true, frontmatter })),
+      )
+      expect(results.filter((r) => r.isError).map((r) => r.text)).toEqual([])
+      expect(results.filter(created)).toHaveLength(1)
 
-    const row = (await getLiveNote(vaultId, path))!
-    for (let i = 0; i < 10; i++) expect(occurrences(row.body, `first ${i}\n`), row.body).toBe(1)
-    expect(row.frontmatter).toMatchObject({ type: 'docs', title: 'New log', tags: ['log'] })
-    expect(await creates(row.id)).toHaveLength(1)
-    // Every call that did not create the note edited it, with a restore point of its session (#482).
-    const points = (await revisions(row.id)).filter((r) => r.action === 'restore_point')
-    const creator = results.findIndex(created)
-    expect(points.map((r) => r.actorId).sort()).toEqual(agents.slice(0, 10).filter((_, i) => i !== creator).map((a) => a.id).sort())
-  }, 30_000)
+      const row = (await getLiveNote(vaultId, path))!
+      for (let i = 0; i < n; i++) expect(occurrences(row.body, `first ${i}\n`), row.body).toBe(1)
+      expect(row.frontmatter).toMatchObject({ type: 'docs', title: 'New log', tags: ['log'] })
+      expect(await creates(row.id)).toHaveLength(1)
+      // Every call that did not create the note edited it, with a restore point of its session (#482).
+      const points = (await revisions(row.id)).filter((r) => r.action === 'restore_point')
+      const creator = results.findIndex(created)
+      expect(points.map((r) => r.actorId).sort()).toEqual(writers.filter((_, i) => i !== creator).map((a) => a.id).sort())
+    }, 60_000)
+  }
 
   it('without createIfMissing a missing note is "not found" and nothing is created', async () => {
     const r = await call(agents[0]!, 'append_note', { vaultId, path: 'docs/absent-log', text: 'x' })

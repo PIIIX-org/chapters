@@ -8,6 +8,7 @@ import {
   scheduleEmbedding,
   scheduleMissingEmbeddings,
 } from '../src/search/embedding-queue.js'
+import { jobTiming } from '../src/jobs/durable.js'
 import { createActiveUser } from './helpers.js'
 
 // Row-only fixtures (no note files): delete each vault after its test so the
@@ -59,6 +60,9 @@ describe('embedding queue reliability', () => {
       throw new Error(`Synthetic ONNX failure ${callCount}`)
     })
 
+    // Retries become claimable at once, so one flush runs every attempt.
+    const savedBackoff = jobTiming.backoffBaseMs
+    jobTiming.backoffBaseMs = 0
     try {
       scheduleEmbedding(note.id)
       await flushEmbeddings()
@@ -76,6 +80,7 @@ describe('embedding queue reliability', () => {
       warnSpy.mockRestore()
       errorSpy.mockRestore()
       embedSpy.mockRestore()
+      jobTiming.backoffBaseMs = savedBackoff
     }
   })
 

@@ -172,7 +172,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | Table | Purpose |
 |---|---|
 | `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed) |
-| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), or `quarantine` for a write kept out of the note (#492, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points nor quarantine rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; no FK, a purged source leaves it dangling). Revert never relabels an earlier row |
+| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
 
@@ -482,15 +482,59 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   again inside the transaction, where the cap is re-checked on the exact
   result. An op that cannot be resolved throws `NoteEditError` (400) and
   nothing changes; `ops` with `body` is refused in `requestedEdit`.
-  Without the relay, ops apply to the stored body. `base_rev` is
-  accepted and echoed as `baseRev`; compare-and-set and a three-way merge
-  are #475 (ADR-003's `seq`). REST PUT keeps `body`/`frontmatter` and
-  gets the minimal diff, not `ops`: the route builds the edit from its
-  named fields only and refuses a body holding `ops` with 400 (its JSON
-  schema does not validate them; edit_note's zod schema does). A whole `body` built from a stale
-  `read_note` (the file lags the editor by the relay's debounce) still
-  removes text typed since; serving `read_note` from the live document is
-  #474.
+  Without the relay, ops apply to the stored body. REST PUT keeps
+  `body`/`frontmatter` and gets the minimal diff, not `ops`: the route
+  builds the edit from its named fields only and refuses a body holding
+  `ops` with 400 (its JSON schema does not validate them; edit_note's zod
+  schema does). Every whole-markdown write (edit_note and REST PUT `body`,
+  revert, a rename's referrer rewrite) goes through `writeThroughCollab`,
+  so it reaches the live document as this diff from its text, never as
+  delete-all/insert-all (#476). Without `base_rev`, a whole `body` built
+  from a stale `read_note` (the file lags the editor by the relay's
+  debounce) still removes text typed since; serving `read_note` from the
+  live document is #474.
+- **Stale base: three-way merge or proposal** (#475): `read_note` returns
+  `rev` and `edit_note` returns `rev` of its result: the id of the newest
+  revision holding exactly that state (`revisionOfState`, the newest 20
+  revisions that held the note's content, frontmatter compared as jsonb;
+  null when none does). `edit_note` `base_rev` must be such a revision of
+  the note (`getBaseRevision`: not a `quarantine` or `proposal` row;
+  anything else, an integer included (the schema still takes one, as
+  #408's did), is refused and nothing changes).
+  With it, `writeThroughCollab` gets `NoteEdit.base` and rebases the edit
+  onto the live document inside the same transaction
+  (`sync/three-way-merge.ts`): `body` per whole line (`diffLines` in
+  `text-diff.ts`; base → live and base → agent hunks overlap when their
+  base lines intersect, when an insertion falls strictly inside the other
+  side's lines, or when both insert at one point; adjacent lines merge;
+  overlapping hunks with the same result merge as one), `frontmatter` and
+  `removeKeys` per key on the map they make from the base's (a key the
+  agent left as the base had it keeps the live value; a key both changed
+  to different values conflicts); `ops` still resolve against the live
+  text and map. The size cap is checked on the agent's raw body, but the
+  write quarantine (#492) only on the rebased body: compared with the
+  stored body, a body made from an older, longer state would be a false
+  growth finding after a person shortened the note. Without the relay,
+  and when the note's file is damaged so no document loads (#384/#391's
+  full-edit repair), the edit is rebased onto the stored row instead,
+  with the same proposal, screen and report. A clean merge goes
+  through the usual checks and
+  `applyTextDiff` live → merged, so only the agent's lines change, and
+  reports `status` `applied` (nothing changed since the base) or
+  `merged` with `concurrentChanges` (`lines` `{line, removed, added}`
+  numbered in the live body just before the edit, `frontmatterKeys`). An
+  overlap, found before the transaction or inside it, writes nothing:
+  `recordProposal` keeps the agent's version (its `frontmatter`,
+  `removeKeys` and frontmatter ops applied to the base's map; its `body`,
+  or its body ops applied to the live text, or the base's body) as a
+  `proposal` revision whose `source_revision_id` (#479's column, carried
+  by backups and the vault export/import) is the base; an identical retry
+  reuses the actor's latest one, and `edit_note` returns `status:
+  conflicted`, `proposalId` and `conflicts` (same shape) as a normal
+  result. `note_history`, `get_revision` and the REST history list show
+  it as `sourceRevisionId`; the History tab labels proposals "Proposed by
+  <connection name>". S2a replaces the revision-id `rev` with `seq`
+  (ADR-003 §5.2 step 9).
 - **Atomic append and upsert** (#478): MCP `append_note` is the `append`
   op and `upsert_note` a whole-`body` edit, both an ordinary
   `withRestorePoint` + `writeThroughCollab` edit, which applies them to
@@ -525,9 +569,9 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   revision and the attributed one; the `collab` row is never
   re-attributed, since it may bundle a person's typing (#403). Only
   content writes (`create`, `update`) are deduped, against the newest
-  content revision: `quarantine`, `restore_point` (#482) and the events
-  `delete`/`restore`/`rename`/`revert` (#479) are never the baseline, and
-  an event (`recordEvent`) is always recorded.
+  content revision: `quarantine`, `proposal` (#475), `restore_point`
+  (#482) and the events `delete`/`restore`/`rename`/`revert` (#479) are
+  never the baseline, and an event (`recordEvent`) is always recorded.
 - **Progressive indexes** (`regenProgressiveIndices`): run on create,
   rename, delete, restore, and on updates whose frontmatter really
   changed (`isDeepStrictEqual`, so key order alone never counts: `jsonb`
@@ -626,21 +670,21 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   afresh after an unload always adds a new revision and a new failure; an
   MCP/REST write continues only an identical retry of the newest quarantine
   by the same actor. `recordRevision`'s
-  dedupe skips quarantine rows. Restore one
+  dedupe skips quarantine and proposal rows. Restore one
   with `revert_note` / the REST revert route.
 - **Restore points** (`withRestorePoint` in `store.ts`, #482): the MCP
   write tools (`edit_note`, `rename_note`, `delete_note`, `revert_note`)
   run through `withRestorePoint(vaultId, path, connectionId, write)`.
   MCP is stateless Streamable HTTP (no session id), so a session is the
-  connection on that note until it has recorded no non-quarantine
-  revision there for `RESTORE_POINT_IDLE_MINUTES` (30). On the first write
+  connection on that note until it has recorded no revision there other
+  than a quarantine or a proposal for `RESTORE_POINT_IDLE_MINUTES` (30). On the first write
   of a session it reads the database clock, then the stored row, and,
   only when the write returns a result, inserts a `restore_point`
   revision of that state attributed to the connection, dated at that
   clock read (so it sorts before the write's own revisions and every
   revision the row can contain sorts before it). It bypasses
   `recordRevision`'s dedupe (kept even when equal to the latest
-  revision) and is skipped only when the latest non-quarantine revision
+  revision) and is skipped only when the latest revision other than a quarantine or a proposal
   already is this connection's restore point of the same state; it is
   never `recordRevision`'s dedupe baseline, so the connection's next
   write or delete is still recorded. Writes by one connection to one
@@ -690,7 +734,11 @@ one implementation, three callers. Nodes are the union of `notes` and
   set.
 
 Community detection runs `graphology-communities-louvain` over the
-fully assembled graph on every call. The merged cross-resource view
+fully assembled graph on every call, seeded from the node ids. Its result
+also depends on node and edge insertion order, so every query feeding it
+(notes, repository files, note links, code imports, semantic edges) has
+an `ORDER BY` on ids (#816): unordered, the row order followed the index
+the planner picked, and two calls over the same data could differ. The merged cross-resource view
 additionally requires the resource owner's `mergeable` flag and the
 viewing user's own per-resource opt-in — three independent gates, all
 re-resolved live.
@@ -753,12 +801,18 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   the repository, so it loads both under tsx (production's
   `node --import tsx`, inherited through `execArgv`) and under Node's own
   type stripping (vitest).
-- **`embedding-queue.ts`**: an in-process serial queue —
+- **`embedding-queue.ts`**: durable jobs (#494, see **Durable jobs**
+  below), kind `embed_note`, key `embed_note:<noteId>:<seq>` —
   `scheduleEmbedding()` never blocks the caller (notes/store.ts calls
-  it fire-and-forget on create/update/revert). A boot-time scan
-  (`scheduleMissingEmbeddings`) catches up any note left with a null
-  embedding. One bad note's embedding failure is logged and skipped,
-  never stops the drain.
+  it fire-and-forget on create/update/revert); it inserts the job in
+  the background and `flushEmbeddings()` awaits that insert and the
+  drain. The job embeds the note as it is when it runs. A boot-time scan
+  (`scheduleMissingEmbeddings`) adds a job (idempotently) for any live
+  note with a null embedding, and re-runs the job of the note's current
+  `seq` if it failed with an error (not a `LeaseExpired` crash loop),
+  also when an earlier version left an embedding. `pnpm reindex` re-runs finished jobs
+  (`enqueueEmbeddings(ids, 'finished')`). A failure is logged and
+  retried with backoff, never stops the drain.
 - **`semantic-edges.ts`**: `recomputeSemanticEdges()` — kNN against
   both notes and code, filtered to `similarity >= SEMANTIC_THRESHOLD`
   (default 0.75), capped to `SEMANTIC_K` (default 8) per node. Called
@@ -973,7 +1027,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   revision's frontmatter and body (`getRevision()`, the same query as
   the REST revision route), gated like `note_history`. Both, and the
   REST history list, add `sourceRevisionId` / `fromPath` / `toPath`
-  only on the rows that have them (#479), so a plain row costs no more.
+  only on the rows that have them (#479; `sourceRevisionId` also on a
+  `proposal`, #475), so a plain row costs no more.
   - *Repositories* (13): `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `get_repository_graph_preference`, `set_repository_graph_preference`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
   - *Teams & Users* (7): `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
   - *Export & Notifications* (4): `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`.
@@ -1247,13 +1302,21 @@ import row whose target is still null with the current rules, so
 repositories indexed before #398 gain their import edges without a
 re-sync (unchanged files are never re-extracted).
 
-**Extraction queue** (`extraction-queue.ts`): in-process and serial, like
-the note embedding queue, but fair across repositories (#497): one FIFO
-per repository, served round-robin in turns of at most 10 files
-(`EXTRACTION_TURN_FILES`), so a large repository's backlog delays another
+**Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
+**Durable jobs** below), kind `extract`, payload `{fileId,
+repositoryId}`, key `extract:<fileId>:<contentHash>`; `syncRepositoryFiles`
+enqueues the changed files in one statement after the batch is persisted.
+Enqueueing a key whose job already succeeded runs it again (content went
+back to an earlier version) under a new id, so it queues behind the
+repository's pending files; a pending or failed job is left alone, and a
+file id listed twice in a batch is enqueued once. One
+serial worker, fair across repositories (#497): each turn claims at most
+10 jobs (`EXTRACTION_TURN_FILES`) of one repository in enqueue order, then
+the repository with claimable jobs that was served least recently goes
+next (ties: oldest job), so a large repository's backlog delays another
 repository's files by at most one turn per other busy repository, not by
 the whole backlog; a repository's own files keep their order. A file
-whose extraction throws is logged and skipped; the drain goes on. A file
+whose extraction throws is logged and retried with backoff; the drain goes on. A file
 with a line longer than 1,000
 characters (minified, bundled or generated code) gets its file embedding
 but no symbols or imports. **Per-file budget** (#496): a file's symbols
@@ -1270,10 +1333,48 @@ changes. With
 each text cut to 16,000 characters, one file costs at most 1 + budget
 texts (the 700 KB lab bundle with 900 declarations: 33 batches instead of
 113). The boot-time scan
-(`scheduleMissingExtractions`) re-enqueues every file with a null
-embedding — the queue does not survive a restart, and a re-sync only
-enqueues files whose content changed (#404). `repository_status` reports
-the count as `filesPendingExtraction`.
+(`scheduleMissingExtractions`) adds a job, idempotently, for every file
+with a null embedding that has none for its current content (rows from
+before the jobs table; a re-sync only enqueues files whose content
+changed, #404), re-runs the job of a file's current content if it failed
+with an error (an outage that outlasted the retries; a restart repaired
+that before #494 too), also for an updated file that kept the embedding
+of its previous content, and wakes the worker. A job failed as `LeaseExpired` is not re-run
+at boot, so a file whose extraction kills the process cannot crash every
+boot. `repository_status` reports `filesPendingExtraction` (files whose
+extraction for the current content is still to come: a pending job, or
+no job and no embedding; 0 means extraction is finished) and
+`extractionFailures: {total, files: [{path, attempts, lastError}]}` (all
+files whose job for the current content gave up, counted in `total`, the
+first 5 by path listed).
+
+**Durable jobs** (`jobs/durable.ts`, ADR-003 S5, #494; table `jobs` from
+migration 0021). A job is claimable when `done_at` is null and
+`lease_until` is null or past. `claimJob` is one statement (`UPDATE … WHERE
+id = (SELECT … ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)`) that sets
+`lease_until = now() + 60 s` and `attempts + 1`, and only claims a job
+with `attempts < MAX_JOB_ATTEMPTS`; `completeJob` sets `done_at` and
+clears `last_error`; `failJob` stores `last_error` (error name and
+message, or those of its `Error` cause, so a Drizzle "Failed query: <SQL>"
+keeps the Postgres error; URL credentials redacted, at most 500
+characters) and, as the table has no `run_after`, pushes `lease_until`
+out by the backoff (1 min · 2^(attempt−1), at most 2 min: the three
+attempts span about 3 minutes, so a short embedder or database outage
+does not fail the backlog). After `MAX_JOB_ATTEMPTS` = 3 claims the job
+gets `done_at` with `last_error` kept: that is "failed", and monitoring
+gets one report then (earlier failures count as `repeated`). `attempts`
+counts claims, so a job whose runs kill the process stops at 3 too:
+before claiming, each drain runs `failCrashedJobs`, which marks failed
+every job of its kind with 3 claims and an expired lease (`last_error`
+`LeaseExpired: …`) and reports it once. A job running at a graceful
+shutdown also keeps its claim (leases are not released). Crash recovery: a job a dead process held becomes claimable
+when its lease runs out; every drainer is woken every 5 s
+(`startJobPolling`, started at boot) for such jobs and for backoffs.
+Boot deletes successful jobs finished more than 7 days ago
+(`pruneFinishedJobs`); failed ones stay as the per-file and per-note
+status. A job that outlives its lease while still running can run twice
+only if a second process shares the database; extraction and embedding
+are idempotent rewrites.
 
 `docs/superpowers/specs/2026-07-18-repository-ingestion-design.md` and
 `2026-07-18-code-graph-integration-design.md` are the full specs.
@@ -1499,8 +1600,9 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     and a ring of the last 50 error reports with a monotonic `seq`.
   - Jobs report through `recordJob(kind, 'ok' | { error, repeat? }, subjectId)`:
     `embedding` (`embedding-queue.ts`: success, or the third failed
-    attempt; `embeddings.ts`: an embedding worker that died, subject null),
-    `extraction` (`extraction-queue.ts`, per file), `sync`
+    attempt, earlier ones as `repeat`; `embeddings.ts`: an embedding worker that died, subject null),
+    `extraction` (`extraction-queue.ts`, per file: success, or the third
+    failed attempt, earlier ones as `repeat`), `sync`
     (`syncGitRepository` and `syncLocalRepository` themselves, so every
     caller is covered, including an unsafe stored URL), `collab-store`
     (`collab-server.ts` `onStoreDocument`: a rejected `updateNote` or CRDT
@@ -1603,8 +1705,7 @@ moment a second instance runs against the same database**:
 | Subsystem | File | Failure mode with 2+ instances |
 |---|---|---|
 | Login lockout | `auth/lockout.ts` | each instance has its own counter — the effective threshold multiplies by instance count |
-| Embedding queue | `search/embedding-queue.ts` | work scheduled on one instance never runs on another (no double-processing, but no load distribution either) |
-| Extraction queue | `repositories/extraction-queue.ts` | same as above |
+| Embedding and extraction jobs | `jobs/durable.ts`, `search/embedding-queue.ts`, `repositories/extraction-queue.ts` | jobs are shared through the `jobs` table (claims use `FOR UPDATE SKIP LOCKED`), but a job that runs past its 60 s lease can be claimed and run by another instance too (`completeJob`/`failJob` do not check the lease holder), and the per-repository fairness state (`lastTurn`) is per process |
 | Permission-change bus | `sync/permission-events.ts` | an instance that didn't receive the in-process event never kicks its own live connections — a revoked user could keep a session open on a *different* instance |
 | MCP rate limiter | `mcp/rate-limit.ts` | a client can get up to N× the intended limit by landing requests across N instances behind a load balancer |
 | Git polling scheduler | `repositories/scheduler.ts` | multiple instances independently poll/clone the same repos on their own schedules |
