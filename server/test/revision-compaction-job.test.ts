@@ -149,24 +149,31 @@ describe('compactNoteRevisions (#501)', { timeout: 60_000 }, () => {
       expect(rows[r.baseOrd!]!.delta).toBeNull()
     }
     const before = shape(rows)
-    expect(await compactNoteRevisions(noteId)).toEqual({ compacted: 0, examined: 0 })
+    expect(await compactNoteRevisions(noteId)).toEqual({ compacted: 0, examined: 0, kept: {} })
     expect(shape(await stored(noteId))).toEqual(before)
   })
 
-  it('diffs a history that does not compress once, not again at every run (#880)', async () => {
-    // A note rewritten whole each time: no delta pays, every revision stays whole.
-    const texts = Array.from({ length: 50 }, () => bodies(1, 60)[0]!)
-    const { noteId, ids } = await noteWithHistory(texts)
-    expect(await compactNoteRevisions(noteId)).toEqual({ compacted: 0, examined: texts.length - KEEP_RECENT_REVISIONS - 1 })
-    expect(await compactNoteRevisions(noteId)).toEqual({ compacted: 0, examined: 0 })
-    // Newer revisions are examined when they leave the newest 20, and only they.
-    for (const body of bodies(5)) {
-      await db.execute(sql`
-        INSERT INTO note_revisions (note_id, actor_type, actor_id, action, frontmatter, body)
-        VALUES (${noteId}, 'user', ${person.id!}, 'update', '{"type":"docs"}'::jsonb, ${body})`)
-    }
-    expect((await compactNoteRevisions(noteId)).examined).toBe(5)
-    expect((await stored(noteId)).slice(0, ids.length).map((r) => r.body)).toEqual(texts)
+  it('decides on a revision that stays whole once, not again at every run, whichever check keeps it whole (#880)', async () => {
+    const short = (n: number) => Array.from({ length: n }, () => `${randomBytes(4).toString('hex')}\n`)
+    const first = short(300)
+    const rewrite = short(300)
+    // Three times its base: refused by the size check, without a diff.
+    const grown = [...rewrite, ...rewrite, ...rewrite]
+    // Two lines in three kept, of 9-character lines: it passes the shared-lines check, but its
+    // delta (a copy piece per kept run, a literal per new line) is over half its size.
+    const patchy = grown.map((line, i) => (i % 3 === 2 ? `${randomBytes(4).toString('hex')}\n` : line))
+    const texts = [first, rewrite, grown, patchy].map((l) => l.join(''))
+    // The newest 20 stay whole and are not examined.
+    const recent = Array.from({ length: KEEP_RECENT_REVISIONS }, () => patchy.join(''))
+    const { noteId } = await noteWithHistory([...texts, ...recent])
+    expect(await compactNoteRevisions(noteId)).toEqual({ compacted: 0, examined: 3, kept: { rewritten: 1, grew: 1, delta: 1 } })
+    expect(await compactNoteRevisions(noteId)).toEqual({ compacted: 0, examined: 0, kept: {} })
+    // A revision is examined when it leaves the newest 20, and only it.
+    await db.execute(sql`
+      INSERT INTO note_revisions (note_id, actor_type, actor_id, action, frontmatter, body)
+      VALUES (${noteId}, 'user', ${person.id!}, 'update', '{"type":"docs"}'::jsonb, ${patchy.join('')})`)
+    expect(await compactNoteRevisions(noteId)).toEqual({ compacted: 1, examined: 1, kept: {} })
+    expect((await stored(noteId)).map((r) => r.body)).toEqual([...texts, ...recent, patchy.join('')])
   })
 
   it('leaves the projector first: writes to another note are projected promptly while a heavy history compacts (#880)', async () => {

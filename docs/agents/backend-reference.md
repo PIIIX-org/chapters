@@ -774,10 +774,16 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   delta rebuilds the body exactly and that the base is still whole (a
   mismatch keeps it whole and logs). **Low priority (#880):** a batch
   waits (up to 5 s) while any `file` or `dir_index` projection is
-  pending without an error, and ends early when one appears; each line
-  diff is limited to 20 ms (past it the delta is coarser, never wrong);
-  a revision that grew to more than twice its base is kept whole without
-  a diff; a base's body is read once per run. **Watermark:**
+  pending without an error, and ends early when one appears. Before any
+  diff, a revision that grew to more than twice its base (`grew`), or
+  whose lines are mostly not lines of its base (`rewritten`, a set lookup,
+  about 5 ms for 900 KiB), is kept whole; the line diff is limited to
+  5 ms (past it the delta is coarser, never wrong); the run yields to the
+  event loop between these steps, and a base's body and line set are read
+  once per run. Measured on 900 KiB revisions: an event-loop stall of
+  about 6 ms per rewritten revision and up to about 24 ms per diffed one.
+  `compactNoteRevisions` returns `{compacted, examined, kept}` (`kept`
+  counts `no-base`, `grew`, `rewritten`, `delta`, `mismatch`). **Watermark:**
   `note_revision_compaction (note_id, examined_through)` (FK cascade)
   holds the `ord` of the newest revision a run decided on, written in the
   batch's transaction; the next run starts after it, so a history that
