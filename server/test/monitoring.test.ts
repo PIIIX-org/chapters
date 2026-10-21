@@ -313,8 +313,9 @@ describe('error and job reports carry no note text (#705)', () => {
     expect(mcpRetried.totals.jobFailures).toBe(before.totals.jobFailures + 1)
     expect(mcpRetried.jobs.sync).toMatchObject({ failed: before.jobs.sync!.failed + 1, repeated: before.jobs.sync!.repeated + 5 })
 
-    // Out of `error` (a sync that worked) and failing again is a new failure.
-    await db.update(repositories).set({ syncStatus: 'idle' }).where(eq(repositories.id, git!.id))
+    // Out of `error` (a sync that worked clears the status and the error) and
+    // failing again is a new failure.
+    await db.update(repositories).set({ syncStatus: 'idle', lastSyncError: null }).where(eq(repositories.id, git!.id))
     await expect(syncGitRepository(git!.id)).rejects.toThrow()
     const again = (await snapshot()).body
     expect(again.totals.jobFailures).toBe(before.totals.jobFailures + 2)

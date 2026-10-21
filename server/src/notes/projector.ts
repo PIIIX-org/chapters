@@ -31,7 +31,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { claimJob, completeJob, failJob, jobDrainer, type ClaimedJob } from '../jobs/durable.js'
-import { recordJob } from '../monitoring/metrics.js'
+import { recordConflictCopy, recordJob } from '../monitoring/metrics.js'
 import { failpoint } from '../failpoints.js'
 import { atomicWrite } from './atomic-write.js'
 import { withKeyLock } from './key-lock.js'
@@ -92,7 +92,7 @@ async function conflictCopy(vaultId: string, rel: string, bytes: Buffer): Promis
   await atomicWrite(join(vaultRoot(vaultId), copy), bytes)
   conflictCopies.push({ vaultId, path: rel, copy })
   console.warn(`[projector] ${vaultId}/${rel} held bytes the projector did not write: copied to ${copy}`)
-  recordJob('projection', { error: { name: 'ConflictCopy', message: `${rel} -> ${copy}` }, repeat: false }, vaultId)
+  recordConflictCopy(vaultId, rel)
 }
 
 /** Takes the per-path lock of `rel` in `vaultId`: in-process, then a transaction-scoped advisory lock (§7 step 3). */

@@ -158,6 +158,21 @@ describe('projector: files owned by path (ADR-003 §7)', () => {
     expect(await readFile(file('.conflicts', 'hand', copy), 'utf8')).toContain('typed by hand')
   })
 
+  it('counts a conflict copy as its own outcome, not a `projection` job failure (#842)', async () => {
+    await createNote(vaultId, { type: 'hand', name: 'copied', body: 'v1' })
+    await flushProjections()
+    await writeFile(file('hand', 'copied.md'), 'not: [valid frontmatter\n')
+    const before = metricsSnapshot()
+    await updateNote(vaultId, 'hand/copied', { body: 'v2' }, agent())
+    await flushProjections()
+    const after = metricsSnapshot()
+    expect((await readdir(file('.conflicts', 'hand'))).some((c) => c.startsWith('copied.'))).toBe(true)
+    expect(after.jobs.projection.failed).toBe(before.jobs.projection.failed)
+    expect(after.totals.jobFailures).toBe(before.totals.jobFailures)
+    expect(after.errors.filter((e) => e.type === 'job' && e.error.name === 'ConflictCopy')).toEqual([])
+    expect(after.conflictCopies).toEqual({ copies: before.conflictCopies.copies + 1, paths: before.conflictCopies.paths + 1 })
+  })
+
   it('adopts a file whose content equals the row (other key order) without rewriting it', async () => {
     const note = await createNote(vaultId, { type: 'adopt', name: 'order', frontmatter: { title: 'T', status: 'draft' }, body: 'b' })
     await flushProjections()
