@@ -112,15 +112,30 @@ export class NoteWriteQuarantinedError extends Error {
     /** True when this extends the quarantine already recorded last (a live document that stays doubled). */
     readonly repeat: boolean,
   ) {
-    const why =
-      finding.rule === 'growth'
-        ? `the body would grow from ${finding.previousBytes} to ${finding.nextBytes} bytes (at least ${GROWTH_RATIO}x a note of ${GROWTH_MIN_PREVIOUS_BYTES} bytes or more)`
-        : `it repeats ${finding.repeatedBytes} bytes of text the note already has (a repeated block: at least ${REPEAT_MIN_BYTES} bytes and half of the note's ${finding.previousBytes})`
     super(
-      `write to ${path} quarantined: ${why}. The note keeps its current body; the refused body is kept as revision ${revisionId} ` +
+      `write to ${path} quarantined: ${suspicionText(finding)}. The note keeps its current body; the refused body is kept as revision ${revisionId} ` +
         `(action "quarantine": note_history / get_revision show it, revert_note restores it). ` +
         `If the change is intended, send it again with allowGrowth: true.`,
     )
+    this.code = finding.rule
+  }
+}
+
+/** Why `finding` makes a write suspicious, in words. */
+function suspicionText(finding: SuspiciousWrite): string {
+  return finding.rule === 'growth'
+    ? `the body would grow from ${finding.previousBytes} to ${finding.nextBytes} bytes (at least ${GROWTH_RATIO}x a note of ${GROWTH_MIN_PREVIOUS_BYTES} bytes or more)`
+    : `it repeats ${finding.repeatedBytes} bytes of text the note already has (a repeated block: at least ${REPEAT_MIN_BYTES} bytes and half of the note's ${finding.previousBytes})`
+}
+
+/** A `dry_run` write (#477) that a real write would quarantine: nothing was recorded. 409 over REST; an MCP tool error. */
+export class NoteWriteWouldQuarantineError extends Error {
+  override readonly name = 'NoteWriteWouldQuarantineError'
+  readonly statusCode = 409
+  readonly code: SuspiciousWrite['rule']
+
+  constructor(path: string, finding: SuspiciousWrite) {
+    super(`dry run: a write to ${path} would be quarantined: ${suspicionText(finding)}. Nothing was written. If the change is intended, send it with allowGrowth: true.`)
     this.code = finding.rule
   }
 }

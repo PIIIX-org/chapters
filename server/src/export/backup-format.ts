@@ -67,7 +67,8 @@ export interface BackupTable {
  * (short-lived credentials: people sign in again), `export_links` (expiring
  * download links), `note_links` (rebuilt from note bodies), `semantic_edges`
  * and every embedding (rebuilt on boot), `repository_files`, `_imports` and
- * `_symbols` (an index of the repository's source: the next sync rebuilds it).
+ * `_symbols` (an index of the repository's source: the next sync rebuilds it),
+ * `write_idempotency` (MCP write answers kept 24 h for retries, #477).
  */
 export const BACKUP_TABLES: BackupTable[] = [
   { name: 'users', table: users, unique: [{ columns: ['email'] }], legacyKey: 'users' },

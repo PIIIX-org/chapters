@@ -23,7 +23,7 @@ import * as Y from 'yjs'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
-import { getLiveNote, updateNote } from '../src/notes/store.js'
+import { getBaseRevision, getLiveNote, updateNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
 
@@ -31,7 +31,7 @@ type Args = Record<string, unknown>
 
 interface Read {
   body: string
-  rev?: string
+  rev?: number
 }
 
 interface HistoryRow {
@@ -158,12 +158,13 @@ afterAll(async () => {
 })
 
 describe('edit_note with a stale base_rev (#475)', () => {
-  it('read_note returns rev, the newest revision of what it returned', async () => {
+  it("read_note returns rev, the note's seq (#477); the revision at it is the note's newest", async () => {
     const path = 'docs/rev-read'
     await must('create_note', { vaultId, path, body: BODY })
     const read = await must<Read>('read_note', { vaultId, path })
-    expect(read.rev).toMatch(/^[0-9a-f-]{36}$/)
-    expect(read.rev).toBe((await history(path))[0]!.id)
+    expect(read.rev).toBe(1)
+    await must('edit_note', { vaultId, path, body: `${BODY}More.\n` })
+    expect((await must<Read>('read_note', { vaultId, path })).rev).toBe(2)
   })
 
   it("merges an agent's whole body made from an older revision: a person's typing in another paragraph is kept", async () => {
@@ -183,9 +184,9 @@ describe('edit_note with a stale base_rev (#475)', () => {
       status: 'merged',
       baseRev: read.rev,
       body: expected,
-      concurrentChanges: { lines: [{ line: 1, removed: 1, added: 1 }] },
+      concurrent_changes: { lines: [{ line: 1, removed: 1, added: 1 }] },
     })
-    expect(result.rev).toMatch(/^[0-9a-f-]{36}$/)
+    expect(typeof result.rev).toBe('number')
     await waitFor(() => text.toString() === expected && liveBody(path) === expected)
     await waitFor(async () => (await rowBody(path)) === expected)
   }, 20_000)
@@ -210,11 +211,12 @@ describe('edit_note with a stale base_rev (#475)', () => {
     expect(liveBody(path)).toBe(typed)
     expect(await rowBody(path)).not.toContain('rewritten by the agent')
 
-    // The agent's version is a revision linked to the base it was made from (#479's source_revision_id).
+    // The agent's version is a revision linked to the base it was made from (#479's source_revision_id): the revision at rev.
+    const baseId = (await getBaseRevision(vaultId, path, read.rev!))!.id
     const proposal = await must<{ action: string; body: string; sourceRevisionId: string }>('get_revision', { vaultId, path, revisionId: result.proposalId })
-    expect(proposal).toMatchObject({ action: 'proposal', body: agentBody, sourceRevisionId: read.rev })
+    expect(proposal).toMatchObject({ action: 'proposal', body: agentBody, sourceRevisionId: baseId })
     const listed = (await history(path)).find((row) => row.id === result.proposalId)
-    expect(listed).toMatchObject({ action: 'proposal', actorType: 'mcp', actorName: 'edit-base', sourceRevisionId: read.rev })
+    expect(listed).toMatchObject({ action: 'proposal', actorType: 'mcp', actorName: 'edit-base', sourceRevisionId: baseId })
 
     // The same edit sent again keeps one proposal.
     const again = JSON.parse((await call('edit_note', { vaultId, path, base_rev: read.rev, body: agentBody })).text) as { proposalId: string }
@@ -235,7 +237,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
     expect(JSON.parse(clean.text)).toMatchObject({
       status: 'merged',
       frontmatter: { title: 'Renamed by a person', status: 'active' },
-      concurrentChanges: { frontmatterKeys: ['title'] },
+      concurrent_changes: { frontmatterKeys: ['title'] },
     })
 
     const clash = await call('edit_note', { vaultId, path, base_rev: read.rev, frontmatter: { title: 'Agent title' } })
@@ -342,8 +344,8 @@ describe('edit_note with a stale base_rev (#475)', () => {
     await noteInTab(path)
     const other = 'docs/rev-other'
     await must('create_note', { vaultId, path: other, body: 'Other.\n' })
-    const otherRev = (await must<Read>('read_note', { vaultId, path: other })).rev
-    const bad = ['stale-or-not', '00000000-0000-4000-8000-000000000000', otherRev, 7]
+    const otherRevision = (await must<{ revisions: Array<{ id: string }> }>('note_history', { vaultId, path: other })).revisions[0]!.id
+    const bad = ['stale-or-not', '00000000-0000-4000-8000-000000000000', otherRevision, 999]
     for (const baseRev of bad) {
       const r = await call('edit_note', { vaultId, path, base_rev: baseRev, body: 'Replaced.\n' })
       expect(r.isError, `${String(baseRev)}: ${r.text}`).toBe(true)
@@ -363,7 +365,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
     expect(r.isError, r.text).toBe(false)
     const result = JSON.parse(r.text) as Record<string, unknown>
     expect(result.body).toBe(body)
-    expect(result).not.toHaveProperty('status')
+    expect(result).toMatchObject({ status: 'applied', concurrent_changes: null })
     expect(result).not.toHaveProperty('baseRev')
     await waitFor(() => text.toString() === body)
   }, 20_000)
