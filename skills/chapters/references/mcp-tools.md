@@ -148,13 +148,25 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - Any other top-level key must be a scalar or a list of scalars. `generated`, `sources`, `verified`, `usage_window`, and `properties` are the only keys allowed to hold objects.
 - The note must survive a save and reload unchanged: if its serialized file would parse back to different frontmatter or body, the write is refused (`note cannot be stored: ...`).
 
+**Every write answers the same way** (`create_note`, `edit_note`, `append_note`, `upsert_note`, `rename_note`, `delete_note`, `restore_note`, `revert_note`): the note (as before) plus
+- `rev` (integer): the note's version after the write. It goes up by one with every change of the note's body, frontmatter, path or trash state, by anyone; `read_note` returns the same `rev` for the same content. Send it as `edit_note` `base_rev`.
+- `status`: `applied`; `merged` or `conflicted` (`edit_note` with `base_rev`, below); or `retry`: the store was busy (a lock wait timed out, or maintenance is running), **nothing was written**, and `rev` is `null`: send the same call again.
+- `diff_stats`: `{ lines_added, lines_removed, frontmatter_keys }`: whole body lines added and removed, and the frontmatter keys whose value changed, from the note as it was when your write ran (what people editing it saw) to the result. `null` for `rename_note`, `delete_note` and `restore_note`.
+- `concurrent_changes`: what changed since your `base_rev` (`edit_note`, below), else `null`.
+- `indexed`: whether the note's file, its folder's `index.md` and its search embedding already show this `rev`. Right after a write it is normally `false`: they are rebuilt from the note within seconds. Full-text search sees the write at once.
+
+The write is committed when the call returns; a connection lost before the answer may still have written. So every write also takes:
+- `idempotency_key` (string, optional, 1-200 chars): your own id for this write. The same key with the same arguments from the same MCP connection within 24 hours returns the first call's answer with `replayed: true` and writes nothing; the same key with other arguments is refused, nothing written. The key is recorded in the same transaction as the write, so if the connection (or the server) dies after the write was made but before you got the answer, sending the call again with its key returns that answer instead of writing twice. A `retry` answer or an error before the write is not kept, so sending the call again with its key then writes. Keys are per connection and are deleted after 24 hours, or with the note when it is purged. A replayed answer is the answer as recorded when the write was made: its `indexed` is `false` even if indexing has finished since; call `read_note` for the current state.
+
+`create_note`, `edit_note`, `append_note`, `upsert_note` and `revert_note` also take `dry_run` (boolean, optional): the call is checked and computed as usual (validation, size limit, quarantine, `base_rev` merge) and answers what it would do, with `dry_run: true`, the resulting note, `status` and `diff_stats`, but **nothing is written**: no revision, no restore point, no proposal or quarantine revision, and `rev` is the note's current stored one (1 for a note a dry run would create). When the note is open in the editor with typing not saved yet, the dry run's `body` and `diff_stats` are computed from that live text, while its `rev` is still the stored version that does not hold the typing (a dry run saves nothing); `read_note` saves the typing and returns the higher `rev`. A dry run that would conflict answers `status: "conflicted"` with `proposalId: null`; one that would be quarantined fails with `dry run: a write to <path> would be quarantined: ...`.
+
 ### `read_note`
 - **Scope**: vault. Read access.
 - **Capability**: `read`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
-- **Returns**: `{ path, rev, frontmatter, body }`. `rev` is the id of the revision this content is (the newest one holding exactly it; `null` when no recent revision does). Send it back as `edit_note` `base_rev` when you edit what you read.
+- **Returns**: `{ path, rev, frontmatter, body, indexed }`. The content is what people editing the note see now: when the note is open in the editor, typing the editor has not saved yet is saved first (as a revision attributed to those people) and then returned, so `rev` is exactly this content's version. Send `rev` back as `edit_note` `base_rev` when you edit what you read. When the open editors hold a state the server refuses to store (invalid frontmatter, over the size limit, a repeated block), the last valid version is returned with `fold_error`. If that typing cannot be saved first (the server's note store is busy), the read fails with `… could not be saved before the read … retry the read` rather than return text without it; nothing is read, and you can send the read again.
 - People who have the note open in the editor see this connection, by its name, in the note's "In this note now" row as an agent that is reading, until 60 s after its last call on the note. Nothing is shown, and nothing is loaded, for a note nobody has open. The same goes for `export_note`.
 
 ### `create_note`
@@ -166,7 +178,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `type` (string, optional) and `name` (string, optional): used as `<type>/<name>` when `path` is omitted. You must give either `path` or both `type` and `name`.
   - `frontmatter` (object, optional): the YAML frontmatter as a JSON object. If `type` is omitted it is set to the first path segment; if given it must match. `timestamp` defaults to now.
   - `body` (string, optional, default `""`): the markdown body, **without** a frontmatter block. At most the server's note size limit, in UTF-8 bytes (`ELARA_NOTE_MAX_BYTES`, default 1048576 = 1 MiB); a larger body is refused with `isError: true` and `note body is N bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)`. Split such content across notes. The same limit applies to the editor, REST and import.
-- **Returns**: the created note row (`id`, `vaultId`, `type`, `name`, `path`, `frontmatter`, `body`, timestamps, ...).
+- **Returns**: the created note row (`id`, `vaultId`, `type`, `name`, `path`, `frontmatter`, `body`, timestamps, ...) with the write result fields above (`rev` 1).
 - There is no `content` argument. Passing one (or any other undeclared key) is refused with the parameter list, and no note is created.
 
 ### `edit_note`
@@ -187,16 +199,16 @@ Every write goes through the same validation (`validateNote` in `server/src/note
     - `{op: "delete_block", find}`: delete `find`, which must occur exactly once; a whole line given without its line break takes the line break with it.
     - `{op: "frontmatter_set", key, value}`: set a top-level key. `{op: "frontmatter_add", key, value}`: add `value` to the list at `key` (created if absent; a value already there is not added twice). `{op: "frontmatter_remove", key, value?}`: delete the key, or with `value` remove it from the list. `type` cannot be changed; list ops on a key that is not a list fail. Frontmatter ops apply after `frontmatter` and `removeKeys`.
     - If any op cannot be resolved (empty, missing or ambiguous `find`/`anchor`/`heading`, a count other than `expectedCount`), the call fails with an error naming the op (`ops[1] insert_after: "foo" occurs 2 times; give a longer \`anchor\` that occurs once`) and **nothing changes**, not even the ops before it. An unknown key inside an op is refused like any unknown argument.
-  - `base_rev` (string, optional; an integer is accepted and refused, as below): the `rev` that `read_note` (or your previous `edit_note`) returned for the content your `body` and `frontmatter` were made from. With it, your edit is merged with whatever changed since that revision, so text a person typed meanwhile is kept:
+  - `base_rev` (integer or string, optional): the `rev` that `read_note` (or your previous write) returned for the content your `body` and `frontmatter` were made from; a revision `id` from `note_history` (the `rev` before integer revs) works too. With it, your edit is merged with whatever changed since that revision, so text a person typed meanwhile is kept:
     - Your changed lines of `body`, and the frontmatter keys you changed (with `frontmatter`, `replace` or `removeKeys`) relative to that revision, are applied to the live note; everything else keeps its current value. A key you send with the value it had at `base_rev` is not a change. `ops` apply to the live text as always.
-    - When nothing changed since, the result has `status: "applied"`. When something changed elsewhere, it has `status: "merged"` and `concurrentChanges: { lines?: [{ line, removed, added }], frontmatterKeys? }`: each changed run of lines starts at `line` (1-based) of the body as it was just before your edit, where `added` lines replaced `removed` lines of your base.
-    - When a line or frontmatter key you changed was also changed since (two changes to the same line conflict even if they touch different words, and so do two insertions at the same place; editing a last line that has no line break while someone adds a line after it counts as the same line), **nothing changes**. The call succeeds with `{ status: "conflicted", path, baseRev, proposalId, conflicts, message }`: `conflicts` has the same shape (the changes made since that overlap yours), and your version of the note is kept as revision `proposalId` with action `proposal` and `sourceRevisionId` = your `base_rev`: your frontmatter (with `frontmatter`, `removeKeys` and frontmatter ops) applied to the base revision's, and your `body`, or your body `ops` applied to the live text. People see it in the note's history as "Proposed by <connection name>" and can restore it. Read the note again (new `rev`) and redo your change, or use `ops`. Sending the same edit again returns the same `proposalId`.
-    - A `base_rev` that is not a revision of this note (another note's, a `quarantine` or `proposal` revision, an integer, anything else) is refused and nothing changes.
+    - When nothing changed since, the result has `status: "applied"`. When something changed elsewhere, it has `status: "merged"` and `concurrent_changes: { lines?: [{ line, removed, added }], frontmatterKeys? }`: each changed run of lines starts at `line` (1-based) of the body as it was just before your edit, where `added` lines replaced `removed` lines of your base.
+    - When a line or frontmatter key you changed was also changed since (two changes to the same line conflict even if they touch different words, and so do two insertions at the same place; editing a last line that has no line break while someone adds a line after it counts as the same line), **nothing changes**. The call succeeds with `{ status: "conflicted", path, rev, baseRev, proposalId, conflicts, message }` (`rev` is the note's current one): `conflicts` has the same shape (the changes made since that overlap yours), and your version of the note is kept as revision `proposalId` with action `proposal` and `sourceRevisionId` = the id of the revision your `base_rev` names: your frontmatter (with `frontmatter`, `removeKeys` and frontmatter ops) applied to the base revision's, and your `body`, or your body `ops` applied to the live text. People see it in the note's history as "Proposed by <connection name>" and can restore it. Read the note again (new `rev`) and redo your change, or use `ops`. Sending the same edit again returns the same `proposalId`.
+    - A `base_rev` that is not a revision of this note (another note's revision id, a `quarantine` or `proposal` revision, a `rev` the note never had, anything else) is refused and nothing changes.
     - The size limit is checked on the body you send; the quarantine below is checked on the merged body that would be written, so a note a person shortened since your read does not quarantine your edit.
   - `allowGrowth` (boolean, optional, default `false`): write a body the quarantine below would keep out. Use it only for a change you mean, such as a large paste into a note. It does not lift the size limit, which is checked first.
   - Omit a field to keep it as it is: a body-only edit leaves the frontmatter untouched.
 - The resulting frontmatter is validated as a whole (the rules at the top of this section) before anything is written; if it is invalid (for example `status: "bogus"` or `title: null`), the call fails and neither the note nor the live document changes. If the invalid value is a key already on the note that you did not send (for example a value a person typed in the editor that the server refused to store), the error names that key: send a valid value for it, list it in `removeKeys`, or pass `replace: true` with the whole map.
-- **Returns**: the updated note row (its `body` is the resulting body, after `ops`) with `rev`, the revision of the result (send it as the next `base_rev`); with `base_rev` also `baseRev`, `status` and, when merged, `concurrentChanges` (above).
+- **Returns**: the updated note row (its `body` is the resulting body, after `ops`) with the write result fields above (`rev` is the next `base_rev`); with `base_rev` also `baseRev`.
 - The edit goes through the live collaboration document, so people with the note open see it change, as a minimal change: their text outside the region you changed, and their caret, stay where they were. Without `base_rev`, a `body` is still the whole body you send: text a person typed after you read the note is not in it and is removed; send `base_rev` to keep it, or use `ops`, which apply to the live text. Concurrent writes to one note run one at a time: two agents' `append` ops both land, while two whole `body` writes without `base_rev` are not merged (the later one wins).
 - While they have it open, they also see this connection, by its name (never its token), in the note's "In this note now" row as an agent that is editing, until 60 s after its last write (`revert_note` counts as a write).
 - **Quarantine**: a body that looks like accidental duplication is not written. It is quarantined when, compared with the note's stored body, it is at least 1.9 times as large and the stored body is 2 KiB or more (growth), or it repeats text the note already has and the extra copies add up to at least 1 KiB and half of the stored body (repeated block). Sizes are UTF-8 bytes; a short note filled in, ordinary growth and `create_note` are never quarantined. The call fails with `write to <path> quarantined: ...`, naming the rule and the id of the revision that keeps the refused body; the note is left unchanged and nobody with it open sees the body. The revision has action `quarantine` in `note_history`; `get_revision` returns its body and `revert_note` writes it. To write the body anyway, send the same call with `allowGrowth: true`.
@@ -214,7 +226,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `createIfMissing` (boolean, optional, default `false`): when there is no live note at `path`, create it with `text` (plus a line break) as its body and `frontmatter` as its frontmatter (as `create_note`: `type` is the first path segment). Without it, a missing note is `note not found` and nothing is created.
   - `frontmatter` (object, optional): on an existing note, **merged per top-level key** as in `edit_note`; on a note this call creates, its frontmatter.
   - `allowGrowth` (boolean, optional, default `false`): as in `edit_note`.
-- **Returns**: the note row (as `edit_note`), plus `created` (`true` when this call created the note).
+- **Returns**: the note row with the write result fields (as `edit_note`), plus `created` (`true` when this call created the note).
 - The append is applied to the note as it is when the write runs (the live text, including what other agents and people added since you read it), under the note's write lock. Use it for logs, journals and running notes instead of `read_note` followed by `edit_note` with the whole body: concurrent appends by any number of agents all land, each exactly once and each as its own revision attributed to its connection. Concurrent `createIfMissing` calls on a missing note create it once; the others append to it like to any existing note.
 - The size limit, the quarantine, the restore point and the "In this note now" row work as for `edit_note`. The call that creates the note keeps no restore point (there was nothing before it) and, like `create_note`, is never quarantined; every other call, including one that lost the create, keeps its restore point as usual.
 
@@ -227,7 +239,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `body` (string, required): the whole body. On an existing note it **replaces the whole body** as `edit_note`'s `body` does (only the characters that differ change).
   - `frontmatter` (object, optional): on a note this call creates, its frontmatter (as `create_note`); on an existing note, **merged per top-level key** as in `edit_note`.
   - `allowGrowth` (boolean, optional, default `false`): as in `edit_note`.
-- **Returns**: the note row, plus `created` (`true` when this call created the note).
+- **Returns**: the note row with the write result fields, plus `created` (`true` when this call created the note).
 - Create or replace in one step: a call that finds the note missing creates it, and one that loses that create to another caller (another upsert, `create_note`, `restore_note`) replaces the body of the note that was created instead of failing. Two concurrent `upsert_note` calls on a missing note create it once and neither fails with "already exists".
 - As with any whole `body`, text a person typed after you read the note is not in it; use `append_note` or `edit_note` `ops` for partial changes.
 - The size limit, the quarantine, the restore point and the "In this note now" row work as for `edit_note`; the call that creates the note keeps no restore point and is never quarantined, as with `create_note`.
@@ -239,7 +251,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `vaultId` (uuid, optional).
   - `from` (string, required): current note path.
   - `toName` (string, required): either a single slug (renames the note in its current directory) or a full path (moves the note; its `type` is rewritten to the new first segment).
-- **Returns**: the updated note row.
+- **Returns**: the updated note row with the write result fields.
 - Links in other live notes of the same vault that use the old **full path** (`[[domains/auth/tokens]]`) are rewritten. Bare-name links (`[[tokens]]`) are not, and break.
 - A longer path makes those links longer. If the rewrite would take the note itself or any linking note over the body size limit, the rename is refused with an error naming that note, and nothing is renamed or rewritten.
 - A rename runs one at a time with other writes to the note and to the target path. An edit, delete or rename of the old path sent while the rename runs fails with `note not found` once it is done; of two renames (or a rename and a create) into one path, one succeeds and the other fails with `a note already exists at <path>`. Links in other notes are rewritten right after the move, each as its own write that keeps the note's other changes, to the renamed note's path at that time: notes renamed at the same time that link to each other, or that one note links, all end up linked at their new paths.
@@ -250,7 +262,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
-- **Returns**: `{ status: "trashed", id }`. Keep the `id`: `restore_note` and `purge_note` need it.
+- **Returns**: `{ id, path, trashed: true, rev, status, diff_stats: null, concurrent_changes: null, indexed }`. Keep the `id`: `restore_note` and `purge_note` need it.
 
 ### `list_trash`
 - **Scope**: vault. Edit access.
@@ -267,7 +279,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `noteId` (uuid, required): the trashed note's id (from `delete_note` or `list_trash`).
-- **Returns**: the restored note row. Fails if a live note already holds that path.
+- **Returns**: the restored note row with the write result fields. Fails if a live note already holds that path.
 
 ### `purge_note`
 - **Scope**: vault. Owner only; the note must be in the trash.
@@ -306,7 +318,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
   - `vaultId` (uuid, optional).
   - `path` (string, required).
   - `revisionId` (uuid, required).
-- **Returns**: the updated note row. The revert is recorded as a new `revert` revision whose `sourceRevisionId` is `revisionId`; earlier revisions are left as they were. Reverting to a `restore_point` revision undoes everything that connection did to the note in that session, and also discards every later change by anyone else. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert. Reverting to a `proposal` writes the agent's whole version, so changes made since its base revision are lost.
+- **Returns**: the updated note row with the write result fields. The revert is recorded as a new `revert` revision whose `sourceRevisionId` is `revisionId`; earlier revisions are left as they were. Reverting to a `restore_point` revision undoes everything that connection did to the note in that session, and also discards every later change by anyone else. Reverting to a `quarantine` revision writes the body that was kept out; the quarantine check does not apply to a revert. Reverting to a `proposal` writes the agent's whole version, so changes made since its base revision are lost.
 - The same body size limit as `edit_note` applies: reverting to a revision whose body is over the limit and larger than the current body is refused with an error naming the limit.
 
 ### `purge_revision`

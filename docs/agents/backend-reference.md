@@ -185,9 +185,10 @@ what the code-only rollback below relies on.
 
 | Object | Purpose |
 |---|---|
-| `notes.seq` | `bigint NOT NULL DEFAULT 1`; the `notes_bump_seq` BEFORE UPDATE trigger adds 1 whenever `body`, `frontmatter`, `path` or `deleted_at` changes, so old code bumps it too. Becomes the note's `rev` (#477) |
+| `notes.seq` | `bigint NOT NULL DEFAULT 1`; the `notes_bump_seq` BEFORE UPDATE trigger adds 1 whenever `body`, `frontmatter`, `path` or `deleted_at` changes, so old code bumps it too. The note's `rev` on every MCP read and write (#477, S4) |
 | `notes.frontmatter_src` | `json` copy of the frontmatter in its original key order (jsonb reorders keys); for rendering files and answering reads |
-| `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), idempotent writes (`note_revisions_note_idem`, #477), actor detail (#403); null for revisions written by current code |
+| `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), actor detail (#403). `idempotency_key` stays unused: #477's keys need the call's arguments and its whole answer, also for writes that record no revision, so they live in `write_idempotency` |
+| `write_idempotency` (migration 0025) | the first answer of an MCP write sent with `idempotency_key` (#477, `mcp/write-result.ts` `runWrite`): PK (`connection_id`, `key`), `tool`, `args_hash` (sha256 of the tool, vault and canonical arguments), `note_id` (FK to `notes`, cascade: purging the note deletes its keys and the note text their answers hold), `result` jsonb, `created_at` (indexed). A write that commits inserts its row **inside its own store transaction** (`WriteOptions.recordKey`, called with the committed row by `createNote`, `writeNote`, the rename move, `softDeleteNote`, `restoreNote`), so a crash after COMMIT and before the answer still leaves the key and the retry replays (ADR-003 §4, §10); its recorded answer has `indexed: false`. Answers that commit nothing (`conflicted`) are inserted after the call. A repeat with the same hash answers `result` + `replayed: true`; another hash is refused. Every keyed call first deletes rows older than 24 h. Calls with one key run one at a time (in-process key lock). Rows also go with their connection (FK cascade) |
 | `note_crdt` | Yjs snapshot per note id (replaces `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
 | `note_projections` | per note and projection (`file`/`dir_index`/`embedding`): `target_seq`, `applied_seq`, `index_version`, lease and error columns; `note_projections_pending` indexes the work queue |
@@ -572,19 +573,44 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   schema does). Every whole-markdown write (edit_note and REST PUT `body`,
   revert, a rename's referrer rewrite) goes through `writeThroughCollab`,
   so it reaches the live document as this diff from its text, never as
-  delete-all/insert-all (#476). Without `base_rev`, a whole `body` built
-  from a stale `read_note` (the file lags the editor by the relay's
-  debounce) still removes text typed since; serving `read_note` from the
-  live document is #474.
-- **Stale base: three-way merge or proposal** (#475): `read_note` returns
-  `rev` and `edit_note` returns `rev` of its result: the id of the newest
-  revision holding exactly that state (`revisionOfState`, the newest 20
-  revisions that held the note's content, frontmatter compared as jsonb;
-  null when none does). `edit_note` `base_rev` must be such a revision of
-  the note (`getBaseRevision`: not a `quarantine` or `proposal` row;
-  anything else, an integer included (the schema still takes one, as
-  #408's did), is refused and nothing changes).
-  With it, `writeThroughCollab` gets `NoteEdit.base` and rebases the edit
+  delete-all/insert-all (#476). Without `base_rev`, a whole `body` still
+  removes text typed after the agent's `read_note`; `read_note` itself
+  serves the live document (#474, below).
+- **Reads serve the live document; `rev` is `seq`** (#474, #477, ADR-003
+  S4): `readLiveNote` (MCP `read_note` and `export_note`, REST GET of a
+  note) folds first when the relay has the note's document loaded: under
+  the note's key lock, one store transaction stores the document's state
+  as a revision of its editors (`foldLive`, the same S2a fold a write
+  makes first; one revision per fold, ADR Q8; nothing when it equals the
+  row), then the row is served. A state the relay would refuse to store
+  is not folded: the read serves the row with `fold_error`. A note with
+  no loaded document is read without a lock. `readNote` stays the
+  lock-free row read for callers that already hold the note's lock (the
+  relay's load hook; key-lock is not reentrant) or that serve no agent.
+  Reads and writes return `rev` = `notes.seq` (rows from the store carry
+  `seq`: `WrittenNote`), so the text read is exactly the revision at
+  `rev`. `edit_note` `base_rev` takes that integer (the revision with
+  `seq` = it) or a revision id (the `rev` before S4 and `note_history`
+  ids, #822): `getBaseRevision`, never a `quarantine` or `proposal` row;
+  anything else is refused and nothing changes.
+- **Write results** (#477, `mcp/write-result.ts`): every MCP note write
+  answers its row (without `seq`) plus `rev`, `status`
+  (`applied`/`merged`/`conflicted`, or `retry` when `StoreBusyError`
+  refused it: nothing written, `rev` null), `diff_stats` (`diffLines`
+  hunks from `WriteOutcome.before`, the state writeNote met, to the
+  result; frontmatter keys whose values differ; null for rename, delete
+  and restore), `concurrent_changes` (the `base_rev` report) and
+  `indexed` (`noteIndexed`: the `file` and `dir_index` projections
+  applied at `seq` and the `embed_note:<id>:<seq>` job done). `dry_run`
+  (create, edit, append, upsert, revert) runs `compute` and returns before
+  the transaction (`WriteOptions.dryRun`; `previewCreate` for a create):
+  no restore point, and `propose`/the quarantine screen throw without
+  recording (`proposalId: null`, `NoteWriteWouldQuarantineError`).
+  `idempotency_key`: `write_idempotency` (above). A read whose fold
+  the store refuses (StoreBusyError) fails as `NoteReadBusyError`, with a
+  read's wording.
+- **Stale base: three-way merge or proposal** (#475): with `base_rev`,
+  `writeThroughCollab` gets `NoteEdit.base` and rebases the edit
   onto the live document inside the same transaction
   (`sync/three-way-merge.ts`): `body` per whole line (`diffLines` in
   `text-diff.ts`; base → live and base → agent hunks overlap when their
@@ -604,7 +630,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   through the usual checks and
   `applyTextDiff` live → merged, so only the agent's lines change, and
   reports `status` `applied` (nothing changed since the base) or
-  `merged` with `concurrentChanges` (`lines` `{line, removed, added}`
+  `merged` with `concurrent_changes` (`lines` `{line, removed, added}`
   numbered in the live body just before the edit, `frontmatterKeys`). An
   overlap, found before the transaction or inside it, writes nothing:
   `recordProposal` keeps the agent's version (its `frontmatter`,
@@ -616,8 +642,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   conflicted`, `proposalId` and `conflicts` (same shape) as a normal
   result. `note_history`, `get_revision` and the REST history list show
   it as `sourceRevisionId`; the History tab labels proposals "Proposed by
-  <connection name>". S2a replaces the revision-id `rev` with `seq`
-  (ADR-003 §5.2 step 9).
+  <connection name>".
 - **Atomic append and upsert** (#478): MCP `append_note` is the `append`
   op and `upsert_note` a whole-`body` edit, both an ordinary
   `withRestorePoint` + `writeThroughCollab` edit, which applies them to

@@ -19,7 +19,7 @@ import {
   revertNote,
   listNotes,
   listTrash,
-  readNote,
+  readLiveNote,
   renameNote,
   restoreNote,
   saveAsset,
@@ -90,9 +90,10 @@ export function noteRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string; '*': string } }>('/vaults/:id/notes/*', async (req, reply) => {
     if (!(await guard(req, reply, 'read'))) return
     splitPath(req.params['*'])
-    const note = await readNote(req.params.id, req.params['*'])
+    // As the editors see it (#474): typing the relay holds is stored first; `rev` is the note's seq (#477).
+    const note = await readLiveNote(req.params.id, req.params['*'])
     if (!note) return reply.code(404).send({ error: 'note not found' })
-    return { path: note.row.path, frontmatter: note.frontmatter, body: note.body, updatedAt: note.row.updatedAt }
+    return { path: note.row.path, rev: note.row.seq, frontmatter: note.frontmatter, body: note.body, updatedAt: note.row.updatedAt }
   })
 
   // `frontmatter` merges per top-level key; `replace: true` swaps the whole
