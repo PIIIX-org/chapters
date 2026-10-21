@@ -12,23 +12,28 @@ Chapters stores its state across two locations:
 
 ### Creating a Full Backup
 
-Run the following commands on your host where `docker-compose.yml` is running:
+The repository ships no backup script. Save the following as `backup.sh` in the directory that holds your `docker-compose.yml` and `.env` (for example `/opt/chapters`), make it executable (`chmod 700 backup.sh`) and run it (`./backup.sh`). Each run writes a new `./backups/<date>_<time>/` next to it and keeps the older ones: prune them yourself.
 
-```bash
+```sh
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")"
+
 # 1. Create a timestamped backup directory, readable by you only (the dump holds password and token hashes)
 umask 077
 BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
 mkdir -p ./backups/${BACKUP_DATE}
 
-# 2. Dump the PostgreSQL database
-docker compose exec -T db pg_dump -U ${POSTGRES_USER:-elara} ${POSTGRES_DB:-elara} > ./backups/${BACKUP_DATE}/chapters-db.sql
+# 2. Dump the PostgreSQL database (user and database name come from the db container's environment, i.e. your .env)
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > ./backups/${BACKUP_DATE}/chapters-db.sql
 
-# 3. Only if you added roles of your own (e.g. a read-only reporting user): dump the roles too.
+# 3. Only if you added roles of your own (e.g. a read-only reporting user): dump the roles too (delete this line otherwise).
 #    The file holds each role's password hash; section 2 step 4 sets the app role's password back to the .env value after loading it.
-docker compose exec -T db pg_dumpall -U ${POSTGRES_USER:-elara} --globals-only > ./backups/${BACKUP_DATE}/globals.sql
+docker compose exec -T db sh -c 'pg_dumpall -U "$POSTGRES_USER" --globals-only' > ./backups/${BACKUP_DATE}/globals.sql
 
-# 4. Archive the files volume (raw markdown files & vaults)
-docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/${BACKUP_DATE}:/backup alpine tar czf /backup/chapters-data.tar.gz -C /data .
+# 4. Archive the files volume (raw markdown files & vaults). A one-off container of the app service mounts the same
+#    volume the app uses, whatever compose named it; tar runs as root there, so it reads every file and records the owners
+docker compose run --rm --no-deps -T -u root --entrypoint tar app czf - -C /data . > ./backups/${BACKUP_DATE}/chapters-data.tar.gz
 
 # 5. Save your encryption key and configuration (DO NOT commit to public repos)
 cp .env ./backups/${BACKUP_DATE}/env-backup
@@ -36,11 +41,13 @@ cp .env ./backups/${BACKUP_DATE}/env-backup
 
 ### Automating with Cron
 
-Add a nightly cron job on your host (`crontab -e`):
+Run the script above nightly from the crontab of a user that can run `docker` (`crontab -e`), with the path you saved it under:
 
 ```cron
-0 2 * * * cd /opt/chapters && ./scripts/backup.sh > /var/log/chapters-backup.log 2>&1
+0 2 * * * /opt/chapters/backup.sh >> /opt/chapters/backup.log 2>&1
 ```
+
+The script changes to its own directory first, so `docker compose` finds `docker-compose.yml` and `.env` there, and it stops at the first command that fails. To have Elara write its own instance backup (section 3) on a schedule instead, without cron: it runs every `ELARA_BACKUP_INTERVAL_HOURS` (default 24) once `ELARA_BACKUP_LOCAL_PATH` or an S3 bucket with its access keys is set. The stock `docker-compose.yml` passes the app only the variables listed under its `environment:`, so add those there.
 
 ---
 
@@ -58,7 +65,7 @@ docker compose up -d --wait db
 docker compose exec db pg_isready
 
 # 3. Only if the backup has a globals.sql (section 1 step 3): load the roles. "role ... already exists" is expected
-docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d postgres < ./backups/<TIMESTAMP>/globals.sql
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d postgres' < ./backups/<TIMESTAMP>/globals.sql
 
 # 4. Set the app role's password to the POSTGRES_PASSWORD in .env (run it even without a globals.sql)
 docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -v role="$POSTGRES_USER" -v pw="$POSTGRES_PASSWORD"' <<'SQL'
@@ -66,10 +73,11 @@ ALTER ROLE :"role" PASSWORD :'pw';
 SQL
 
 # 5. Restore PostgreSQL database
-docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} < ./backups/<TIMESTAMP>/chapters-db.sql
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < ./backups/<TIMESTAMP>/chapters-db.sql
 
-# 6. Restore the data volume (raw markdown notes)
-docker compose run --rm -v chapters-data:/data -v $(pwd)/backups/<TIMESTAMP>:/backup alpine tar xzf /backup/chapters-data.tar.gz -C /data
+# 6. Restore the data volume (raw markdown notes) into the volume the app service mounts, keeping the owners
+#    (builds the app image first if it is not there yet)
+docker compose run --rm --no-deps -T -u root --entrypoint tar app xzf - -C /data < ./backups/<TIMESTAMP>/chapters-data.tar.gz
 
 # 7. Check that the password in .env works over the network, as the app connects (prints 1)
 docker compose exec -T db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h db -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT 1"'
@@ -142,7 +150,7 @@ Archives written before #409 (an `account-dump.json`, no `backup.json`) still re
 - users who had MFA on can't sign in until it is cleared, after which they set it up again:
 
   ```bash
-  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "UPDATE users SET mfa_enabled_at = NULL WHERE mfa_enabled_at IS NOT NULL AND totp_secret IS NULL"
+  docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "UPDATE users SET mfa_enabled_at = NULL WHERE mfa_enabled_at IS NOT NULL AND totp_secret IS NULL"
   ```
 
 ---
@@ -168,7 +176,7 @@ Database migrations only run forward. Going back to an older image keeps the new
 - **Migrations 0019 and 0020 (MCP token capabilities, #548, #549)** add `mcp_connections.access` as `NOT NULL` and then drop its default. Code from before 0019 does not set `access` when it mints a token, so every new MCP connection fails until the column has its default back. Run this before starting the older code:
 
   ```bash
-  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "ALTER TABLE mcp_connections ALTER COLUMN access SET DEFAULT 'write'"
+  docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "ALTER TABLE mcp_connections ALTER COLUMN access SET DEFAULT 'write'"
   ```
 
   The older code does not read `access` or `allowed_tools`, so read-only and allow-listed tokens get every tool of their scope while it runs. Revoke any of those you would not trust with more. Note the time you rolled back.
@@ -177,9 +185,9 @@ Database migrations only run forward. Going back to an older image keeps the new
 
   ```bash
   # Account tokens minted while rolled back got 'write'; 0019 gives account tokens 'admin'.
-  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "UPDATE mcp_connections SET access = 'admin' WHERE scope = 'account' AND created_at > '<rollback time, e.g. 2026-10-20T12:00:00Z>'"
+  docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "UPDATE mcp_connections SET access = 'admin' WHERE scope = 'account' AND created_at > '<rollback time, e.g. 2026-10-20T12:00:00Z>'"
   # Back to the schema 0020 left: no default, so an insert that forgets the level fails.
-  docker compose exec -T db psql -U ${POSTGRES_USER:-elara} -d ${POSTGRES_DB:-elara} -c "ALTER TABLE mcp_connections ALTER COLUMN access DROP DEFAULT"
+  docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "ALTER TABLE mcp_connections ALTER COLUMN access DROP DEFAULT"
   ```
 
   Pinned tokens minted while rolled back keep `write`. The newer code lists and runs on them only what the user's permission on the pin allows, so a read-only member's token is not widened.
