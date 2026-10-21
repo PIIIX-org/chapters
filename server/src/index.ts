@@ -12,17 +12,27 @@ import { config, MIN_MONITORING_TOKEN_LENGTH } from './config.js'
 import { sql } from './db/client.js'
 import { bootStore } from './notes/store-reconcile.js'
 import { bootCollab } from './sync/collab-backfill.js'
-import { flushProjections } from './notes/projector.js'
+import { flushProjections, sweepOrphanFiles } from './notes/projector.js'
+import { holdSharedLockOrExit } from './notes/maintenance-lock.js'
 import { scheduleRevisionCompaction } from './notes/revision-compaction.js'
 import { COMPACT_REVISIONS_JOB } from './notes/store-tx.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 
-// Before anything that can fail: a boot that dies in migrations still marks
-// this process `running`, so the next boot reports it as unclean (#583). So
-// does a SIGTERM that arrives before the handlers below are installed
-// (during migrations and catch-ups): Node's default exit writes nothing.
-console.log(bootLogLine(recordBoot()))
+// ADR-003 §5.1/§9: the shared instance lock on a reserved connection, held
+// from before migrations until exit. Refused (exit 2) while
+// store-export-legacy runs; a dropped connection pauses writes until it is
+// held again (maintenance-lock.ts). Taken before the boot is recorded: a
+// start refused here wrote nothing, so the marker keeps saying how the last
+// server that ran ended (a refused start is not an unclean shutdown).
+await holdSharedLockOrExit()
+
+// Before anything else that can fail: a boot that dies in migrations still
+// marks this process `running`, so the next boot reports it as unclean
+// (#583). So does a SIGTERM that arrives before the handlers below are
+// installed (during migrations and catch-ups): Node's default exit writes nothing.
+const bootRecord = recordBoot()
+console.log(bootLogLine(bootRecord))
 if (process.env.ELARA_MONITORING_TOKEN && !config.monitoringToken) {
   console.warn(`ELARA_MONITORING_TOKEN is shorter than ${MIN_MONITORING_TOKEN_LENGTH} characters and is ignored: /api/admin/monitoring needs an admin session`)
 }
@@ -31,14 +41,17 @@ const app = await buildApp()
 
 try {
   await runMigrations()
-  // ADR-003 S2a, before anything is served (§7 boot steps 2-3): stale
+  // ADR-003 S2a, before anything is served (§7 boot steps 2-8): stale
   // projection claims cleared, the one-time backfill (resumable), the
-  // reconciliation of rows written around the store, and the projector run
-  // until files equal rows. Nothing here aborts boot because of one note.
-  const store = await bootStore()
+  // reconciliation of rows written around the store, after an unclean or
+  // unknown shutdown a verify of every file against its row, and the
+  // projector run until files equal rows. Nothing here aborts boot because
+  // of one note.
+  const store = await bootStore({ lastShutdown: bootRecord.boot.lastShutdown })
   if (!store.migrated) console.warn('store backfill had failures: see the migration report; it runs again at the next boot')
   const r = store.reconciled
   if (r && r.projections + r.raised + r.revisions + r.failed > 0) console.log(`store reconciliation: ${JSON.stringify(r)}`)
+  if (store.verified > 0) console.log(`verified ${store.verified} projection(s) after a ${bootRecord.boot.lastShutdown} shutdown`)
   // ADR-003 S2b (§7 boot steps 2, 4-5): `.crdt` bins attached to `note_crdt`
   // once (then `.crdt/` is retired), rows changed behind the store rebased,
   // unfolded collab tails folded. One note's failure never stops boot.
@@ -76,6 +89,14 @@ try {
   await app.listen({ port: config.port, host: '0.0.0.0' })
   // One process, one port: the relay rides Fastify's own HTTP server.
   const collab = startCollabServer(app.server)
+  // Boot step 9, in the background (bootStore already drained the
+  // projector): `.md` files no row or projection owns are moved to
+  // `.orphans/`, never deleted. Each path is decided under its path lock.
+  void sweepOrphanFiles()
+    .then((moved) => {
+      if (moved.length > 0) console.warn(`moved ${moved.length} orphan note file(s) to .orphans/`)
+    })
+    .catch((err: unknown) => console.error('orphan sweep failed:', err))
   // Hocuspocus used to install these itself inside its `listen()`. Without
   // them a redeploy drops every note edit still inside the store debounce.
   // After the relay's last stores commit, the projector gets a bounded drain

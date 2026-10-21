@@ -1,10 +1,10 @@
 # Backup & Restore Guide for Self-Hosters
 
 Chapters stores its state across two locations:
-1. **PostgreSQL Database (`db-data` volume)**: Users, teams, access control, metadata, repository indexing, security events, notifications, and vector embeddings.
-2. **Disk Filesystem (`chapters-data` volume)**: The raw Markdown files in your vaults, attachments, and local repository mirrors.
+1. **PostgreSQL Database (`db-data` volume)**: the authority for every note (body, frontmatter, every revision; since ADR-003 S2a), plus users, teams, access control, metadata, repository indexing, security events, notifications, and vector embeddings.
+2. **Disk Filesystem (`chapters-data` volume)**: attachments (`assets/`, which have no database rows), local repository mirrors, and the Markdown files of your vaults. Since S2a those files are a projection Elara writes from the database after each save: readable, greppable, but not read back. A hand or `git` edit of a `.md` file is not imported; Elara copies it to `.conflicts/` the next time it writes that path (see "Files Elara set aside" below).
 
-> **CRITICAL**: A database backup alone does **not** preserve your notes. You must back up both the database and the data volume.
+> **CRITICAL**: The database dump is the backup that matters for notes: the files alone no longer rebuild a vault exactly (revisions and anything not yet projected are only in the database). Back up both: the database, and the data volume for attachments.
 
 ---
 
@@ -96,7 +96,7 @@ Elara also writes a single-zip instance backup that restores onto another machin
 
 ### What the archive holds
 
-Format 2 (since #409): `backup.json` (format version, time, row count per table, and since #493 the SHA-256 and size of every other entry under `parts`), one `db/<table>.jsonl` per table (one row per line, as stored), and the files under `vaults/<vault id>/`: `notes/<path>.md` (live notes, as on disk), `trash/<note id>.md` (trashed notes) and `assets/<file>` (attachments; they have no database rows). All tables are read in one database snapshot. A note file that no longer matches its row in that snapshot (a save landed while the backup ran) is left out, and the restore writes that note's file from its row, so every note comes back as of the snapshot. `backup.json` counts these (`notesFromRow`) and the restore plan says how many.
+Format 2 (since #409): `backup.json` (format version, time, row count per table, and since #493 the SHA-256 and size of every other entry under `parts`), one `db/<table>.jsonl` per table (one row per line, as stored), and the files under `vaults/<vault id>/`: `notes/<path>.md` (live notes), `trash/<note id>.md` (trashed notes) and `assets/<file>` (attachments; they have no database rows). All tables are read in one database snapshot, and since ADR-003 S2a every note file in the archive is rendered from its row in that snapshot (with its frontmatter key order), never read from disk: a note whose file is still being written, or was edited by hand, is archived as the database has it. Archives made by earlier releases read the files and left out the ones that no longer matched their row (`notesFromRow` in `backup.json`); the restore plan still reports those.
 
 | In the archive | Left out, and how it comes back |
 | :--- | :--- |
@@ -160,12 +160,22 @@ Archives written before #409 (an `account-dump.json`, no `backup.json`) still re
 After either restore path, check that every note file on disk can be opened and matches the database:
 
 ```bash
-docker compose exec app pnpm check-notes
+docker compose exec app pnpm check-notes --wait-idle
 ```
 
 It prints one `BROKEN` line per problem: a missing file (`missing-file`), damaged frontmatter (`unparseable`), or a file whose frontmatter or body differs from the database row (`frontmatter-mismatch`, `body-mismatch`, e.g. when the database and the files were restored from different points in time). It exits with code 1 if there are any. A clean restore ends with `checked N notes, 0 broken`.
 
-If someone is editing while it runs, a note being saved at that moment can show up as a mismatch once. Run the check again before acting on a single mismatch.
+Files are written by a background projector after each save, so the check compares a file only once its projection has caught up and lists the rest as pending; `--wait-idle[=<seconds>]` waits for it first (default 60 s), `--fail-on-pending` turns anything still pending into a failure. It only reads.
+
+### Files Elara set aside
+
+Elara never silently overwrites or deletes a note file it did not write itself:
+
+- `vaults/<id>/.conflicts/<path>.<time>.md`: a file whose bytes differed from what Elara last wrote there (a hand or `git` edit, a file a power loss truncated), copied before Elara rewrote or removed it. The database holds the note; compare and copy back what you need by hand or with `edit_note`.
+- `vaults/<id>/.orphans/<path>.md`: a `.md` file no note and no directory index owns (moved there at boot, after the files caught up).
+- `vaults/<id>/.migration/<date>/unparseable/`: files the S2a migration could not parse (migration.md).
+
+These folders are never read as notes. Delete them when you no longer need them.
 
 ---
 
@@ -192,10 +202,25 @@ Database migrations only run forward. Going back to an older image keeps the new
 
   Pinned tokens minted while rolled back keep `write`. The newer code lists and runs on them only what the user's permission on the pin allows, so a read-only member's token is not widened.
 
-- **Migration 0021 (ADR-003 store schema)** is additive: it adds columns with lasting defaults, a trigger that only maintains `notes.seq`, new tables whose foreign keys cascade, and two marker columns. Older code runs on it with **no SQL**. Before the store migration itself ships, see [migration.md](migration.md) for the read-only dry run that reports what it will do to your notes.
+- **Migration 0021 and the S2a store (ADR-003).** 0021 is additive: it adds columns with lasting defaults, a trigger that only maintains `notes.seq`, new tables whose foreign keys cascade, and two marker columns. Older code runs on it with **no SQL**. Rolling back from an S2a release to the one before it, keeping the data written since, is supported for one release (code-only rollback), **as long as the instance has not booted a release with S2b** (below): the procedure writes note files only, and S2a still kept each note's `.crdt` bin current. Over S2b, restore the pre-upgrade backup until `store-export-legacy` also writes the bins. Do it when nobody is typing in an editor:
+
+  ```bash
+  # 1. Stop the new app (graceful: it stores every open editor's typing first).
+  docker compose stop app
+  # 2. With no server running, write every note file and index.md from the database.
+  #    It takes the instance maintenance lock: it refuses to run (exit 2) while any app or
+  #    writing CLI is up, and an app started during it refuses to start.
+  docker compose run --rm --no-deps app pnpm store-export-legacy
+  # 3. Check out the older release, build it and start it. No SQL is needed.
+  docker compose up -d --build app
+  ```
+
+  The export checks every note file and `index.md` against the database (rewriting one a crash left damaged, after a copy to `.conflicts/`) and finishes any pending link rewrite of a rename. It also runs again store jobs that earlier gave up (for example a rename's link rewrite that failed three times, possibly long ago): their work must be done before the old image starts, so a link rewrite that still fails shows in the report and the export exits 1. It prints a summary and writes `/data/elara/store-export-legacy-<time>.json`; it exits 1 when a file could not be written (the report lists it with its error): fix that and run it again before step 3. It also refuses (exit 1) while the S2a migration has not finished (failures in `migration-report-*.json`): start the new release until the migration completes, or restore the pre-upgrade backup instead. `.crdt/` needs nothing: S2a kept it current.
+
+  **Rolling forward again** needs nothing either: at boot, the S2a release gives every note the older code created, edited, renamed or restored its projection rows and a revision at its current version, and adopts the files the older code wrote (same content, its key order) without conflict copies. While rolled back, the older release's own defects (#486-#488) are back.
 - **Migration 0023 (history events, #479)** is additive: three nullable columns on `note_revisions` (`source_revision_id`, `from_path`, `to_path`). Older code runs on it with **no SQL**. It stops recording restore and rename events and leaves the new columns empty; the events the newer code recorded stay in the history. It also brings back the older revert: it relabels the newest revision `revert` instead of adding one (code with #482 skips relabelling a `restore_point`). When that newest row is an event the newer code recorded (a `rename` or `restore`), the relabelled row keeps its `from_path`/`to_path` and has no `source_revision_id`. Code from before #482 also does not record a delete by the author of the latest revision when the note is unchanged.
 - **Migration 0024 (revision order, #825)** is additive: `note_revisions.ord`, numbered from a sequence (its default), so older code records revisions with **no SQL**. Older code lists history by the database clock again, so revisions recorded in the same instant, or after the clock stepped back, can show out of order; the newer code lists every revision in the order it was recorded. An instance backup made by the newer code carries `ord` on every revision, and older code refuses it (`column "ord" is unknown to this version`): restore it with the newer release. A backup made before 0024 restores on the newer release with its revisions numbered in time order.
-- **ADR-003 S2b (collab state in Postgres).** Before upgrading to the release that ships S2b, **reload every open editor tab, or make sure nobody types during the upgrade.** From S2b the editor names a note's live document by the note id, and the server refuses a tab still running the older page (it shows "Reload to keep editing"; the older page shows its own disconnected state). A tab from a release that keeps unsent typing in the browser (#720) gets that typing back once after the reload; a tab from an older release keeps it on screen only, so copy it out before closing the tab. The first boot of S2b moves each note's `.crdt/<path>.bin` into the database (a bin whose text matches nothing the note ever held goes to `vaults/<id>/.migration/<date>/bins/`), writes `DATA_DIR/collab-migration-report-<time>.json`, and renames each vault's `.crdt/` to `.crdt.pre-adr-003/`; keep that directory until the next release. If that boot cannot move a note's bin, the note stays closed to editors ("waiting for the store migration") until you fix the cause in the report and restart. A code-only rollback over S2b needs `store-export-legacy` to write each note's current `.crdt` bin from the database first; until a release adds that to the export, roll back over S2b only by restoring the pre-upgrade backup. If older code did run and wrote `.crdt/` bins again, the next S2b boot merges a bin into the database only when it continues the note's own editing history; any other bin (for example one the older code started afresh from the file) goes to `vaults/<id>/.migration/<date>/bins/` instead, and what the older code wrote to the note reaches the database through the boot's merge of changed notes. `.crdt/` then moves to `.crdt.rollback-<time>/`.
+- **ADR-003 S2b (collab state in Postgres).** Before upgrading to the release that ships S2b, **reload every open editor tab, or make sure nobody types during the upgrade.** From S2b the editor names a note's live document by the note id, and the server refuses a tab still running the older page (it shows "Reload to keep editing"; the older page shows its own disconnected state). A tab from a release that keeps unsent typing in the browser (#720) gets that typing back once after the reload; a tab from an older release keeps it on screen only, so copy it out before closing the tab. The first boot of S2b moves each note's `.crdt/<path>.bin` into the database (a bin whose text matches nothing the note ever held goes to `vaults/<id>/.migration/<date>/bins/`), writes `DATA_DIR/collab-migration-report-<time>.json`, and renames each vault's `.crdt/` to `.crdt.pre-adr-003/`; keep that directory until the next release. If that boot cannot move a note's bin, the note stays closed to editors ("waiting for the store migration") until you fix the cause in the report and restart. A code-only rollback over S2b needs `store-export-legacy` to write each note's current `.crdt` bin from the database first; today it writes note files and `index.md` only (the S2a procedure above), so until a release adds the bins, roll back over S2b only by restoring the pre-upgrade backup. If older code did run and wrote `.crdt/` bins again, the next S2b boot merges a bin into the database only when it continues the note's own editing history; any other bin (for example one the older code started afresh from the file) goes to `vaults/<id>/.migration/<date>/bins/` instead, and what the older code wrote to the note reaches the database through the boot's merge of changed notes. `.crdt/` then moves to `.crdt.rollback-<time>/`.
 - **Migration 0026 (revision compaction, #501)** adds three nullable columns to `note_revisions` (`body_delta`, `delta_base_id`, `body_bytes`), a check on them that older code never touches, a foreign key that refuses to delete a revision others are stored against, a table `note_revision_compaction` (how far each note's history has been compacted; older code ignores it), and two SQL functions. Older code records and lists revisions with no SQL, but it reads every revision's `body` column directly, and a compacted revision's `body` is empty, so it would show and revert to empty revisions. **Before starting older code, store every revision whole again** (stop the newer app first, so no compaction runs; this only adds back the space compaction saved):
 
   ```bash
