@@ -38,6 +38,7 @@ const WHISPER: Record<
   revoked: { tone: 'error', label: 'Access removed', detail: 'this note stopped syncing' },
   'signed-out': { tone: 'error', label: 'Signed out', detail: 'log in again to keep editing' },
   'too-large': { tone: 'error', label: 'Too large', detail: 'not saved — shorten the note' },
+  'not-migrated': { tone: 'error', label: 'Waiting for migration', detail: 'an admin needs to restart the server' },
 }
 
 /**

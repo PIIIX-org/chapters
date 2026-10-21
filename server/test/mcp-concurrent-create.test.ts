@@ -15,6 +15,7 @@ import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { readNote } from '../src/notes/store.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // Every rename waits a beat, so a write's temp file sits on disk long enough
@@ -105,6 +106,15 @@ describe('concurrent create_note into one folder (#490)', () => {
     expect(report.filter((r) => r.ok !== r.exists)).toEqual([])
     expect(report.filter((r) => !r.ok)).toEqual([])
 
+    // What agents browse is rendered from the rows at once (ADR-003 §6)...
+    resetRateLimits()
+    const browsed = await clients[0]!.callTool({ name: 'browse_vault', arguments: { vaultId, path: FOLDER } })
+    const { indexContent } = JSON.parse((browsed.content as Array<{ text?: string }>).map((c) => c.text ?? '').join('')) as {
+      indexContent: string
+    }
+    expect(report.filter((r) => !new RegExp(`note-${r.i}(?!\\d)`).test(indexContent)).map((r) => r.i)).toEqual([])
+    // ...and the index.md file, a projection, lists every note once the projector caught up.
+    await flushProjections()
     const index = await readFile(join(config.dataDir, 'vaults', vaultId, FOLDER, 'index.md'), 'utf8')
     const unlisted = report.filter((r) => !new RegExp(`note-${r.i}(?!\\d)`).test(index)).map((r) => r.i)
     expect(unlisted).toEqual([])

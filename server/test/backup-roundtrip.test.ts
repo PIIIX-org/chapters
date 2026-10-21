@@ -37,6 +37,7 @@ import {
   vaults,
 } from '../src/db/schema.js'
 import { buildInstanceBackup } from '../src/export/archive.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { restoreBackup } from '../src/export/restore.js'
 import { issueBackupCodes } from '../src/auth/mfa.js'
 import { createNote, readNote, saveAsset, softDeleteNote, trashFile, updateNote } from '../src/notes/store.js'
@@ -284,6 +285,7 @@ describe('instance backup round trip (#409)', () => {
   it('restores every entity class with its ids after a wipe', async () => {
     await wipeInstance()
     fixture = await buildFixture()
+    await flushProjections()
     source = await snapshotDb()
     sourceFiles = await snapshotFiles()
     sourceEvents = await securityEventRows()
@@ -459,7 +461,10 @@ describe('instance backup round trip (#409)', () => {
     // The spy has the generic overload's type, which a wrapper can't name.
     vi.spyOn(db, 'transaction').mockImplementationOnce(afterSnapshot as typeof db.transaction)
     const raced = await buildInstanceBackup()
-    expect(new AdmZip(raced).getEntry(`vaults/${vaultId}/notes/concepts/racing.md`)).toBeNull()
+    // The file is a projection (ADR-003 §7): written after the save's commit, so the
+    // backup finds either the snapshot's version or a file it leaves out; never v2.
+    const racedEntry = new AdmZip(raced).getEntry(`vaults/${vaultId}/notes/concepts/racing.md`)
+    if (racedEntry) expect(racedEntry.getData().toString('utf8')).toContain('v1\n')
     // The saves queued embedding updates: let them land before the truncate.
     await flushEmbeddings()
 

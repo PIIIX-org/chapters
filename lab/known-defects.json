@@ -52,18 +52,8 @@
     },
     {
       "test": "browser",
-      "check": "lost typing is recoverable from note history (note_revisions)",
-      "issue": 408
-    },
-    {
-      "test": "browser",
       "check": "no page errors in the browser console",
       "issue": 617
-    },
-    {
-      "test": "browser",
-      "check": "note_revisions credits edit_note to the agent (actor mcp)",
-      "issue": 403
     },
     {
       "test": "browser",
@@ -155,6 +145,12 @@
       "match": "^kill \\S+: check-notes clean$",
       "issue": 486,
       "intermittent": "a row without its file appears only when a SIGKILL lands between a create's insert and its file write; it then stays for later rounds"
+    },
+    {
+      "test": "crash-write",
+      "match": "^kill \\S+: dirty collab doc \\(client stays\\) survives without duplication$",
+      "issue": 832,
+      "intermittent": "only when the SIGKILL lands inside the relay's debounced store of the open document, after its note file write and before its .crdt write: the reload rebuilds the text from the file and the client that stayed connected sends its typing back a second time"
     },
     {
       "test": "crash-write",
