@@ -40,6 +40,7 @@ const WHISPER: Record<
   'too-large': { tone: 'error', label: 'Too large', detail: 'not saved — shorten the note' },
   'not-migrated': { tone: 'error', label: 'Waiting for migration', detail: 'an admin needs to restart the server' },
   'reload-required': { tone: 'error', label: 'Reload to keep editing', detail: 'the server was updated' },
+  deleted: { tone: 'error', label: 'Deleted', detail: 'this note is in the trash' },
 }
 
 /**

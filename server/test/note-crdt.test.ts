@@ -47,4 +47,20 @@ describe('rebase merge (§5.4): an overlap keeps the CRDT side', () => {
     expect(merged.text).toBe('a typed\nb\n')
     expect(merged.overlaps).toHaveLength(1)
   })
+
+  it('merges edits to different words of one line per character: both stay, no overlap', () => {
+    expect(mergeTextKeepingTheirs('The quick fox\nend\n', 'The quick brown fox\nend\n', 'The slow fox\nend\n')).toEqual({
+      text: 'The slow brown fox\nend\n',
+      overlaps: [],
+    })
+  })
+
+  it('per character too, the typing wins only on the characters both changed', () => {
+    const merged = mergeTextKeepingTheirs('one two three\n', 'ONE two thr33\n', 'one 2 three!\n')
+    expect(merged.text).toBe('ONE 2 thr33!\n')
+    expect(merged.overlaps).toHaveLength(0)
+    const clash = mergeTextKeepingTheirs('one two\n', 'one TWO\n', 'one deux\n')
+    expect(clash.text).toBe('one TWO\n')
+    expect(clash.overlaps).toHaveLength(1)
+  })
 })

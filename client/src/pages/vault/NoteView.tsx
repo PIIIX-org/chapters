@@ -956,6 +956,7 @@ function CollabNote({ vaultId, noteId, path, accessRevoked, initialBody, access 
           revoked={revoked}
           notMigrated={collab.status === 'not-migrated'}
           reloadRequired={collab.status === 'reload-required'}
+          deleted={collab.status === 'deleted'}
           tooLarge={collab.tooLarge}
           unmerged={collab.unmerged}
           onDiscard={collab.discardUnmerged}

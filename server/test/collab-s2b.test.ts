@@ -8,10 +8,11 @@ import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
-import { getLiveNote, renameNote } from '../src/notes/store.js'
+import { getLiveNote, loadCollabState, purgeNote, renameNote, softDeleteNote } from '../src/notes/store.js'
+import { materialised, readNoteCrdt, rememberLoadedState } from '../src/sync/note-crdt.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
-import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, storedCrdtText } from './helpers.js'
 // Imported per test (not at the top), so the rest of this file also runs against code from before S2b (fails-before).
 const backfill = () => import('../src/sync/collab-backfill.js')
 const dryRun = () => import('../src/notes/migrate-store.js')
@@ -118,6 +119,54 @@ describe('document names (§5.4)', () => {
   })
 })
 
+describe('delete, purge and restore close and reopen the note (§5.5)', () => {
+  function tab(noteId: string) {
+    const closes: string[] = []
+    const refusals: string[] = []
+    const provider = new HocuspocusProvider({
+      url: `ws://127.0.0.1:${port}/collab`,
+      name: `${vaultId}/~${noteId}`,
+      token,
+      document: new Y.Doc(),
+      onAuthenticationFailed: ({ reason }) => refusals.push(reason),
+      onClose: ({ event }) => closes.push(event.reason),
+    })
+    providers.push(provider)
+    return { provider, closes, refusals, text: provider.document.getText('body') }
+  }
+
+  it('closes open editors at once with note-deleted, refuses reconnects until a restore, then lets editors in', async () => {
+    const note = await create('deleted-open', 'Still here.\n')
+    const open1 = tab(note.id)
+    await waitFor(() => open1.provider.isSynced && open1.text.length > 0)
+    const deleted = await app.inject({ method: 'DELETE', url: `/api/vaults/${vaultId}/notes/${note.path}`, headers: { cookie } })
+    expect(deleted.statusCode).toBeLessThan(300)
+    await waitFor(() => open1.closes.includes('note-deleted'), 3000)
+    open1.provider.destroy()
+
+    const refused = tab(note.id)
+    await waitFor(() => refused.refusals.length > 0)
+    expect(refused.refusals).toEqual(['note-deleted'])
+    refused.provider.destroy()
+
+    const restored = await app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/trash/${note.id}/restore`, headers: { cookie } })
+    expect(restored.statusCode).toBeLessThan(300)
+    const again = tab(note.id)
+    await waitFor(() => again.provider.isSynced && again.text.length > 0)
+    expect(again.text.toString()).toBe('Still here.\n')
+    expect(again.refusals).toEqual([])
+  }, 20_000)
+
+  it('purge refuses the note with note-deleted', async () => {
+    const note = await create('purged-open', 'Going.\n')
+    await softDeleteNote(vaultId, note.path)
+    expect(await purgeNote(vaultId, note.id)).toBe(true)
+    const late = tab(note.id)
+    await waitFor(() => late.refusals.length > 0)
+    expect(late.refusals).toEqual(['note-deleted'])
+  })
+})
+
 describe('a crash around the relay store (#832)', () => {
   it('a client that stays connected through a restart does not double its typing (store committed)', async () => {
     const note = await create('stays-after', 'live note\n')
@@ -203,6 +252,81 @@ describe('rebase of a row changed behind the store (§5.4)', () => {
       SELECT count(*)::int AS n FROM note_revisions WHERE note_id = ${note.id} AND action = 'migration:backfill'`)) as unknown as Array<{ n: number }>
     expect(outOfBand!.n).toBe(1)
   }, 30_000)
+
+  it('keeps both sides of edits to different words of the same line, across a reconnect', async () => {
+    const note = await create('same-line', 'alpha beta gamma\n')
+    const { provider, text, resynced } = await open(note.id)
+    await collab.destroy()
+    // While the relay is down the tab types at the start of the line; the
+    // relay had logged that update but not folded it (an acked, unfolded
+    // tail), and a writer outside the store changes the end of the same line.
+    let typing: Uint8Array | null = null
+    provider.document.once('update', (update: Uint8Array) => (typing = update))
+    text.insert(0, 'NEW ')
+    await db.execute(sql`
+      INSERT INTO note_updates (note_id, update, actor_type) VALUES (${note.id}, ${Buffer.from(typing!)}, 'user')`)
+    await db.execute(sql`UPDATE notes SET body = ${'alpha beta GAMMA\n'} WHERE id = ${note.id}`)
+    collab = startCollabServer(app.server)
+    await resynced()
+    await waitFor(() => text.toString() === 'NEW alpha beta GAMMA\n')
+    await waitFor(async () => (await rowBody(note.path)) === 'NEW alpha beta GAMMA\n')
+    expect(count(text.toString(), 'NEW')).toBe(1)
+  }, 30_000)
+})
+
+describe('the cached stored state of an open document (§5.4 "Before S3")', () => {
+  it('serves a store from the cache while it matches, and materialises when another write, fold_error or seq moved past it', async () => {
+    const note = await create('cached-state', 'Cached.\n')
+    const { state, lastId } = await loadCollabState(vaultId, note.id)
+    const live = new Y.Doc()
+    Y.applyUpdate(live, state)
+    rememberLoadedState(live, note.id, lastId!)
+    const seq = async () => Number(((await db.execute(sql`SELECT seq FROM notes WHERE id = ${note.id}`)) as unknown as Array<{ seq: string }>)[0]!.seq)
+    const read = async () => {
+      const base = new Y.Doc()
+      Y.applyUpdate(base, Y.encodeStateAsUpdate(live))
+      const s = await seq()
+      return db.transaction(async (tx) => {
+        const crdt = await readNoteCrdt(tx as never, note.id, { live, base, seq: s })
+        return crdt!.doc === base
+      })
+    }
+    expect(await read()).toBe(true)
+    // Another writer appended (the open document does not know): materialised, and the cache dropped.
+    await db.execute(sql`
+      INSERT INTO note_updates (note_id, update, actor_type) VALUES (${note.id}, ${Buffer.from(Y.encodeStateAsUpdate(new Y.Doc()))}, 'user')`)
+    expect(await read()).toBe(false)
+    expect(await read()).toBe(false)
+    const fresh = await loadCollabState(vaultId, note.id)
+    rememberLoadedState(live, note.id, fresh.lastId!)
+    expect(await read()).toBe(true)
+    await db.execute(sql`UPDATE note_crdt SET fold_error = 'refused' WHERE note_id = ${note.id}`)
+    expect(await read()).toBe(false)
+    await db.execute(sql`UPDATE note_crdt SET fold_error = NULL WHERE note_id = ${note.id}`)
+    rememberLoadedState(live, note.id, fresh.lastId!)
+    await db.execute(sql`UPDATE notes SET body = 'Changed behind the store.\n' WHERE id = ${note.id}`)
+    expect(await read()).toBe(false)
+  })
+
+  it('a typing store uses the cache, a move that changes the note in between makes the next store materialise; the row is right either way', async () => {
+    const note = await create('cached-store', 'One.\n')
+    const { text } = await open(note.id)
+    const before = { ...materialised }
+    text.insert(text.length, 'Two.\n')
+    await waitFor(async () => (await rowBody(note.path)) === 'One.\nTwo.\n')
+    expect(materialised.cached).toBeGreaterThan(before.cached)
+    // A move to another folder changes frontmatter `type`: the move appends its own update to the log.
+    await renameNote(vaultId, note.path, 'guides/cached-store')
+    const afterMove = { ...materialised }
+    text.insert(text.length, 'Three.\n')
+    await waitFor(async () => (await rowBody('guides/cached-store')) === 'One.\nTwo.\nThree.\n')
+    expect(materialised.full).toBeGreaterThan(afterMove.full)
+    text.insert(text.length, 'Four.\n')
+    const afterRefresh = { ...materialised }
+    await waitFor(async () => (await rowBody('guides/cached-store')) === 'One.\nTwo.\nThree.\nFour.\n')
+    expect(materialised.cached).toBeGreaterThan(afterRefresh.cached)
+    expect(await storedCrdtText(vaultId, 'guides/cached-store')).toBe('One.\nTwo.\nThree.\nFour.\n')
+  }, 20_000)
 })
 
 describe('the S2b backfill (§8 step 4, #488)', () => {

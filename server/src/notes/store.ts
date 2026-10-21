@@ -11,6 +11,7 @@ import { config } from '../config.js'
 import { kickEmbeddings } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import {
+  closeNoteEditors,
   cloneDocument,
   compileChange,
   docState,
@@ -23,11 +24,13 @@ import {
   appendGate,
   appendUpdate,
   compactNoteCrdt,
+  storedStateOf,
   insertNoteCrdt,
   logUpdate,
   markFolded,
   notesNeedingFold,
   readNoteCrdt,
+  rememberStoredState,
   seedDocument,
   setFoldError,
   type NoteCrdt,
@@ -368,6 +371,8 @@ function plainRow(row: StoredNote): WrittenNote {
  * edit when the change is pushed (step 8).
  */
 interface Fold {
+  /** The open document itself (whose cached stored state readNoteCrdt may use), and `base`, the clone taken now. */
+  live: Y.Doc
   base: Y.Doc
   editors: string[]
   state: DocState
@@ -378,7 +383,7 @@ function foldSource(noteId: string, relayDoc?: Y.Doc): Fold | null {
   const doc = relayDoc ?? live?.doc
   if (!doc) return null
   const base = cloneDocument(doc)
-  return { base, editors: live?.editors ?? [], state: docState(base) }
+  return { live: doc, base, editors: live?.editors ?? [], state: docState(base) }
 }
 
 function releaseFold(fold: Fold | null): void {
@@ -501,8 +506,11 @@ async function catchUp(
   const rebase = row.seq > crdt.foldedSeq ? await rebaseLocked(tx, row, crdt) : null
   const current = rebase?.row ?? row
   if (fold) {
-    const typing = Y.encodeStateAsUpdate(fold.base, Y.encodeStateVector(crdt.doc))
+    // Over the stored state: its cached vector when `crdt.doc` is the open document's clone (readNoteCrdt).
+    const typing = Y.encodeStateAsUpdate(fold.base, crdt.storedStateVector ?? Y.encodeStateVector(crdt.doc))
     await appendUpdate(tx, crdt, typing, SYSTEM_ACTOR, { kind: 'typing', editors: fold.editors })
+    // The stored state now holds everything `crdt.doc` does.
+    crdt.storedStateVector = null
   }
   const folded = options.storeRow
     ? await foldCrdt(tx, current, crdt, { kind: 'fold', editors: fold?.editors ?? [] })
@@ -866,7 +874,8 @@ export async function writeNote(
           const locked = await lockedNote(tx, seen.id)
           if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
           if (locked.seq !== seen.seq) return 'moved' as const
-          const crdt = await readNoteCrdt(tx, locked.id)
+          // With the open document in hand, its cached stored state spares materialising snapshot ⊕ tail.
+          const crdt = await readNoteCrdt(tx, locked.id, fold ? { live: fold.live, base: fold.base, seq: locked.seq } : undefined)
           // The row changed behind the store: merged into the CRDT state, then this write is computed again.
           if (crdt && locked.seq > crdt.foldedSeq) return { rebased: (await rebaseLocked(tx, locked, crdt)).rebased }
           const { row, refused } = await catchUp(tx, locked, crdt, fold, { storeRow: !options.relay })
@@ -885,7 +894,7 @@ export async function writeNote(
           const update = crdt ? await commitChange(tx, crdt, written, actor, options.actorDetail, keepLiveBody ? refused : null) : null
           await options.recordKey?.(tx, plainRow(written))
           failpoint('edit.before-commit')
-          return { written, update }
+          return { written, update, stored: crdt && fold ? storedStateOf(crdt) : null }
         })
       } finally {
         releaseFold(fold)
@@ -898,6 +907,8 @@ export async function writeNote(
       }
       failpoint('edit.after-commit-before-live-apply')
       pushToLiveDocument(seen.id, committed.update)
+      // The open document now holds what was committed (its typing was appended, the update pushed).
+      if (fold) rememberStoredState(fold.live, committed.stored)
       afterCommit()
       failpoint('edit.after-commit-before-ack')
       return plainRow(committed.written)
@@ -1231,6 +1242,8 @@ export async function softDeleteNote(
       })
       if (!deleted) return null
       pushToLiveDocument(seen.id, deleted.rebased)
+      // §5.5: the note's editors are closed now (`note-deleted`); a reconnect is refused until a restore.
+      closeNoteEditors(seen.id)
       afterCommit()
       return plainRow(deleted.row)
     } finally {
@@ -1963,6 +1976,7 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
     })
     if (!done) return false
     failpoint('purge.after-commit-before-remove')
+    closeNoteEditors(row.id)
     wakeProjector()
     return true
   })
@@ -1975,9 +1989,14 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
  * same transaction when it has none; a row changed behind the store is
  * rebased into it and folded first, and so is a tail left unfolded. Never
  * reads a file or a `.crdt` bin, and never rebuilds the text (#488).
- * Returns the state to apply to the document and the note's path.
+ * Returns the state to apply to the document, the note's path, and the last
+ * update id that state includes (null while `fold_error` is set: the open
+ * document then caches nothing, see note-crdt.ts readNoteCrdt).
  */
-export async function loadCollabState(vaultId: string, noteId: string): Promise<{ state: Uint8Array; path: string }> {
+export async function loadCollabState(
+  vaultId: string,
+  noteId: string,
+): Promise<{ state: Uint8Array; path: string; lastId: number | null }> {
   for (let round = 0; round < WRITE_ROUNDS; round++) {
     const [note] = await db
       .select({ path: notes.path })
@@ -1985,7 +2004,7 @@ export async function loadCollabState(vaultId: string, noteId: string): Promise<
       .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
     if (!note) throw new Error(`note does not exist: ${vaultId}/~${noteId}`)
     let foldedRow = false
-    const state = await withKeyLock(noteLock(vaultId, note.path), () =>
+    const loaded = await withKeyLock(noteLock(vaultId, note.path), () =>
       storeTransaction([noteId], async (tx) => {
         const locked = await lockedNote(tx, noteId)
         if (!locked || locked.deletedAt || locked.vaultId !== vaultId) throw new Error(`note does not exist: ${vaultId}/~${noteId}`)
@@ -1994,18 +2013,18 @@ export async function loadCollabState(vaultId: string, noteId: string): Promise<
         if (stored) {
           const { row } = await catchUp(tx, locked, stored, null, { storeRow: true })
           if (row.seq !== locked.seq) foldedRow = true
-          return Y.encodeStateAsUpdate(stored.doc)
+          return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null }
         }
         // Its bin is still to be attached at the next restart: a seed now would make the backfill skip it.
         if (!collabNoteMigrated(noteId)) throw new NoteNotMigratedError()
         const seed = seedDocument(noteId, { frontmatter: locked.frontmatter as Record<string, unknown>, body: locked.body })
         await insertNoteCrdt(tx, noteId, seed, locked.seq)
-        return Y.encodeStateAsUpdate(seed)
+        return { state: Y.encodeStateAsUpdate(seed), lastId: 0 }
       }),
     )
     // A fold that stored the row wakes the projector, so the file follows at once, not at its next poll.
     if (foldedRow) afterCommit()
-    if (state) return { state, path: note.path }
+    if (loaded) return { ...loaded, path: note.path }
   }
   throw new StoreBusyError('the note kept moving')
 }
@@ -2023,7 +2042,7 @@ export async function loadCollabState(vaultId: string, noteId: string): Promise<
  * maintenance) leaves nothing stored either; the relay then closes the
  * connection unacked and the editor resends.
  */
-export async function appendCollabUpdate(vaultId: string, noteId: string, update: Uint8Array, actor: UpdateActor): Promise<number | null> {
+export async function appendCollabUpdate(vaultId: string, noteId: string, update: Uint8Array, actor: UpdateActor): Promise<LoggedUpdate | null> {
   // Backpressure: past the bound the relay closes the socket unacked (retryable) instead of queueing without end.
   const waiting = pendingAppends.get(noteId) ?? 0
   if (waiting >= MAX_PENDING_APPENDS) throw new StoreBusyError('too many collab updates are waiting for this note')
@@ -2041,7 +2060,13 @@ export async function appendCollabUpdate(vaultId: string, noteId: string, update
 const pendingAppends = new Map<string, number>()
 const MAX_PENDING_APPENDS = 256
 
-async function appendLogged(vaultId: string, noteId: string, update: Uint8Array, actor: UpdateActor): Promise<number | null> {
+/** A logged collab update: its id, and the note's previous non-rejected update id (what an open document's cached state must be at to advance to it). */
+export interface LoggedUpdate {
+  id: number
+  previous: number
+}
+
+async function appendLogged(vaultId: string, noteId: string, update: Uint8Array, actor: UpdateActor): Promise<LoggedUpdate | null> {
   return withKeyLock(appendGate(noteId), () =>
     storeTransaction([], async (tx) => {
       const [note] = await tx
@@ -2049,7 +2074,12 @@ async function appendLogged(vaultId: string, noteId: string, update: Uint8Array,
         .from(notes)
         .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
       if (!note) return null
-      return logUpdate(tx, noteId, update, actor, { kind: 'collab' })
+      const id = await logUpdate(tx, noteId, update, actor, { kind: 'collab' })
+      const [prev] = (await tx.execute(sql`
+        SELECT coalesce(max(id), 0) AS id FROM note_updates WHERE note_id = ${noteId} AND id < ${id} AND rejected_at IS NULL`)) as unknown as Array<{
+        id: string | number
+      }>
+      return { id, previous: Number(prev!.id) }
     }),
   )
 }

@@ -104,7 +104,7 @@ describe('appends during a fold (S3)', () => {
       const locked = (await lockedNote(tx, note.id))!
       const crdt = (await readNoteCrdt(tx, note.id))!
       // The fold holds the note's locks; the append does not wait for them.
-      appended = await appendCollabUpdate(vaultId, note.id, update, { type: 'collab', id: randomUUID() })
+      appended = (await appendCollabUpdate(vaultId, note.id, update, { type: 'collab', id: randomUUID() }))?.id ?? null
       await markFolded(tx, crdt, locked.seq)
       await compactNoteCrdt(tx, crdt)
     })
@@ -186,6 +186,7 @@ describe('backpressure (S3)', () => {
     await expect(appendCollabUpdate(vaultId, note.id, update, { type: 'collab' })).rejects.toBeInstanceOf(StoreBusyError)
     release()
     await held
-    expect((await Promise.all(queued)).every((id) => id !== null)).toBe(true)
-  }, 30_000)
+    // 256 short transactions drain one after another through the gate.
+    expect((await Promise.all(queued)).every((logged) => logged !== null)).toBe(true)
+  }, 120_000)
 })

@@ -214,8 +214,19 @@ seeded on first load deterministically (`seedClientId`: the first 4 bytes of
 later changes use the process's own client id), so two seeds of the same input merge. A load,
 store or write that finds `notes.seq > folded_seq` (the row changed outside
 the store) first merges that change into the state three-way against the
-revision at `folded_seq` (by lines; on an overlap the typing stays) and
-never rebuilds the text (#488). There are no `.crdt` bins any more.
+revision at `folded_seq` (`mergeTextKeepingTheirs`: by lines, then per
+character inside lines both sides changed, so edits to different words of
+one line both stay; where characters overlap the typing stays) and
+never rebuilds the text (#488). There are no `.crdt` bins any more. Each
+open document caches the stored state it holds (`note-crdt.ts`
+`storedStates`: the state vector and the last update id, set at load and
+after every write that had the document in hand, dropped on `fold_error`
+and with the document). While the last non-rejected update id, a null
+`fold_error` and `folded_seq = notes.seq` still match it, a store or
+server write reads only the bookkeeping and works on the document's own
+clone, its typing being the delta over the cached vector, instead of
+materialising `snapshot ⊕ tail`; any other writer's append makes the next
+write materialise and refresh the cache.
 
 **S2b backfill and boot** (`sync/collab-backfill.ts`, `bootCollab` in
 `index.ts` before `listen`, after the S2a backfill): while
@@ -898,7 +909,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   the note's state from `note_crdt` + `note_updates` (seeding it when
   absent), never a file. A rename keeps every editor connected (same id)
   and moves the note's SSE viewers to the new path (a `moved` event);
-  agent presence is looked up by note id. `onAuthenticate` requires live `edit` access.
+  agent presence is looked up by note id. A delete or purge closes the
+  note's editors right after it commits (`closeNoteEditors`, close code
+  4410, reason `note-deleted`), and `onAuthenticate` refuses a note in the
+  trash or purged with the same reason; the editor stops reconnecting, keeps
+  the text in this browser and says the note is in the trash (status
+  `deleted`). After a restore new connections are let in; a reload brings
+  the kept typing back. `onAuthenticate` requires live `edit` access.
   **`beforeHandleMessage` re-resolves access on every inbound Yjs
   message**, not just at connect time — dropping below `edit` mid-session
   drops the next message and closes the connection.

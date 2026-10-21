@@ -47,6 +47,11 @@ export type CollabStatus =
    *  bundle this tab runs. Nothing typed here reaches it; what was typed is
    *  kept in this browser and comes back after a reload. */
   | 'reload-required'
+  /** The note was deleted (moved to the trash) or purged while open (ADR-003
+   *  §5.5, close reason `note-deleted`): the relay closed the document and
+   *  takes nothing more for it. What was typed stays on screen and in this
+   *  browser; after a restore from the trash a reload brings it back. */
+  | 'deleted'
 
 /** A person editing this note, or an agent (an MCP connection) that read or wrote it. */
 export type CollabPeer =
@@ -122,7 +127,7 @@ export interface UseCollabDocOptions {
 }
 
 /** Dead ends: the states where a keystroke reaches no one. */
-const DEAD: readonly CollabStatus[] = ['revoked', 'signed-out', 'offline', 'not-migrated', 'reload-required']
+const DEAD: readonly CollabStatus[] = ['revoked', 'signed-out', 'offline', 'not-migrated', 'reload-required', 'deleted']
 
 /**
  * Awareness is whatever a peer chose to broadcast: every field of a person's
@@ -548,7 +553,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
      * reason stands: a signed-out tab's reconnect is refused as well, and
      * that refusal must not turn it into a revocation.
      */
-    const stop = (why: 'revoked' | 'signed-out' | 'not-migrated' | 'reload-required') => {
+    const stop = (why: 'revoked' | 'signed-out' | 'not-migrated' | 'reload-required' | 'deleted') => {
       if (stopped) return
       stopped = true
       setStatus(why)
@@ -692,22 +697,27 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
           }
         },
         // `note-not-migrated`: the server's store migration has not processed this note; `reload-required`: the
-        // server names documents differently from this bundle (ADR-003 §5.4); `store-busy`: the relay could not load
-        // the note from its store just now (retried); anything else is a revocation.
+        // server names documents differently from this bundle (ADR-003 §5.4); `note-deleted`: the note is in the
+        // trash or purged; `store-busy`: the relay could not load the note from its store just now (retried);
+        // anything else is a revocation.
         onAuthenticationFailed: ({ reason }) =>
           reason === 'note-not-migrated'
             ? stop('not-migrated')
             : reason === 'reload-required'
               ? stop('reload-required')
-              : reason === 'store-busy'
-                ? storeBusy()
-                : kicked(),
+              : reason === 'note-deleted'
+                ? stop('deleted')
+                : reason === 'store-busy'
+                  ? storeBusy()
+                  : kicked(),
         // The relay closes the document with reason `note-too-large` for a
         // change over the cap (server/src/sync/collab-server.ts), ws closes
-        // the socket with 1009 for a frame over its transport limit, and the
-        // relay closes with `signed-out` when the session ended (#498).
+        // the socket with 1009 for a frame over its transport limit, the
+        // relay closes with `signed-out` when the session ended (#498), and
+        // with `note-deleted` when the note is deleted or purged.
         onClose: ({ event }) => {
           if (event.reason === 'signed-out') stop('signed-out')
+          else if (event.reason === 'note-deleted') stop('deleted')
           else if (event.reason === 'note-too-large' || event.code === 1009) refuse()
         },
         onSynced: () => {

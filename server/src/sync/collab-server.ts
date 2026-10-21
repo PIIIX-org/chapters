@@ -9,7 +9,7 @@ import { atLeast, resolveAccess } from '../vaults/permissions.js'
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
-import { appendCollabUpdate, compactCollabState, keepRefusedTyping, loadCollabState, updateNote } from '../notes/store.js'
+import { appendCollabUpdate, compactCollabState, keepRefusedTyping, loadCollabState, updateNote, type LoggedUpdate } from '../notes/store.js'
 import { NoteNotMigratedError, StoreBusyError, collabNoteMigrated, noteMigrated, storeMigrationPending } from '../notes/store-tx.js'
 import { docState, forgetLivePath, livePath, parseDocName, registerLiveDocs, setLivePath, type LiveDocument } from './live-docs.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
@@ -23,7 +23,7 @@ import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
 import { bodyMeasured, updateFits } from './collab-size.js'
 import { liveTookUpdate, updateToLog } from './collab-append.js'
-import { rejectUpdate } from './note-crdt.js'
+import { advanceStoredState, rejectUpdate, rememberLoadedState } from './note-crdt.js'
 import { failpoint } from '../failpoints.js'
 import { forgetAgentPresence, stripAgentClaims } from './agent-presence.js'
 
@@ -72,6 +72,24 @@ class SessionEnded extends Error {
     super(`the session that opened ${documentName} ended`)
   }
 }
+
+/**
+ * Why a note's editors are closed or refused (ADR-003 §5.5): the note is in
+ * the trash or purged. Passed to `close()` right after a delete or purge
+ * commits (live-docs.ts closeNoteEditors), and thrown from `onAuthenticate`
+ * for a note that is not live; the editor (client/src/hooks/useCollabDoc.ts)
+ * reads `note-deleted`, stops reconnecting and says the note is in the trash.
+ */
+class NoteDeletedRefusal extends Error {
+  readonly code = 4410
+  readonly reason = 'note-deleted'
+  constructor(documentName: string) {
+    super(`${documentName}: the note was deleted`)
+  }
+}
+
+/** Documents whose editors were closed because the note was deleted: their unload stores nothing and reports nothing. */
+const deletedDocuments = new WeakSet<Y.Doc>()
 
 /**
  * Thrown from `onAuthenticate` for a note the store migration has not
@@ -130,7 +148,7 @@ interface ConnectionContext {
   /** A change the server pushed into the document (live-docs.ts), whose writer already ran the quarantine check. */
   directWrite?: boolean
   /** The update this connection's current message logged (§5.4 Append), until the live document is seen to hold it. */
-  logged?: { id: number; update: Uint8Array }
+  logged?: { id: number; previous: number; noteId: string; update: Uint8Array }
 }
 
 /** The note each loaded document holds (its name says so; kept once the load finished). */
@@ -230,7 +248,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         .select({ id: notes.id, deletedAt: notes.deletedAt })
         .from(notes)
         .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId)))
-      if (!note || note.deletedAt) throw new Error(`note does not exist: ${documentName}`)
+      if (!note || note.deletedAt) throw new NoteDeletedRefusal(documentName)
       // A note the store migration has not processed yet takes no writes, so no
       // editor either: nothing may be typed that could not be stored. The
       // refusal carries its own reason, which the editor shows as such.
@@ -258,8 +276,10 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         if (err instanceof StoreBusyError) throw new StoreBusyRefusal(err.message)
         throw err
       }
-      const { state, path } = loaded
+      const { state, path, lastId } = loaded
       Y.applyUpdate(document, state)
+      // The stored state this document holds, so its stores need not materialise it again (§5.4 "Before S3").
+      if (lastId !== null) rememberLoadedState(document, name.noteId, lastId)
       documentNotes.set(document, name.noteId)
       setLivePath(name.noteId, name.vaultId, path)
       return document
@@ -315,16 +335,16 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       const noteId = documentNotes.get(document)
       const { vaultId } = parseDocName(documentName)
       const ctx = context as ConnectionContext
-      let id: number | null
+      let logged: LoggedUpdate | null
       try {
-        id = noteId ? await appendCollabUpdate(vaultId, noteId, toLog, { type: 'collab', id: ctx.userId }) : null
-        if (id !== null) failpoint('collab.after-log-before-ack')
+        logged = noteId ? await appendCollabUpdate(vaultId, noteId, toLog, { type: 'collab', id: ctx.userId }) : null
+        if (logged !== null) failpoint('collab.after-log-before-ack')
       } catch (err) {
         connection.webSocket.close(1013, 'store-unavailable')
         throw err
       }
-      if (id === null) throw new Error(`note does not exist: ${documentName}`)
-      ctx.logged = { id, update: toLog }
+      if (logged === null) throw new Error(`note does not exist: ${documentName}`)
+      ctx.logged = { ...logged, noteId: noteId!, update: toLog }
     },
 
     /**
@@ -339,7 +359,11 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       const logged = ctx.logged
       if (!logged) return
       ctx.logged = undefined
-      if (liveTookUpdate(document, logged.update)) return
+      if (liveTookUpdate(document, logged.update)) {
+        // Fully integrated (nothing pending): the open document's cached stored state may advance to this update.
+        if (!document.store.pendingStructs && !document.store.pendingDs) advanceStoredState(document, logged.noteId, logged.previous, logged.id)
+        return
+      }
       console.error(`[collab] logged update ${logged.id} did not apply to the live document; rejected`)
       await rejectUpdate(db, logged.id, 'the relay could not apply it to the live document')
     },
@@ -379,6 +403,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
             ? await db.select({ path: notes.path, deletedAt: notes.deletedAt }).from(notes).where(eq(notes.id, noteId))
             : []
           if (!noteId || !note || note.deletedAt || round === 3) {
+            // Closed by a delete or purge (§5.5): nothing to store, and nothing went wrong.
+            if (deletedDocuments.has(document) && (!note || note.deletedAt)) return
             const reason = !note ? 'the note was purged' : note.deletedAt ? 'the note is in the trash' : 'the note kept moving'
             console.error(`collab store of ${documentName} not stored: ${reason}`)
             recordJob('collab-store', { error: { name: 'NoteGone', message: reason } }, vaultId)
@@ -494,6 +520,13 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         return { doc, name, editors }
       }
       return null
+    },
+    closeNote(noteId) {
+      for (const [name, doc] of hocuspocus.documents) {
+        if (documentNotes.get(doc) !== noteId) continue
+        deletedDocuments.add(doc)
+        doc.getConnections().forEach((connection) => connection.close(new NoteDeletedRefusal(name)))
+      }
     },
   })
 
