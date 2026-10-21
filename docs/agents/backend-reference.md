@@ -455,7 +455,13 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   typing that reaches the relay after the write merges where it was
   typed. In each change the new text is inserted before the old is
   deleted, so a caret at the end of a replaced span lands after the new
-  text and typing in flight joins after it. It used to delete the whole
+  text and typing in flight joins after it. Changes are authored under
+  `SERVER_CLIENT_ID` (`sync/live-docs.ts`), 2^32 plus 48 random bits per
+  process: above every editor's uint32 id, so where Yjs orders two
+  inserts at one spot by client id, keystrokes in flight at the spot of a
+  server insert stay before it (an agent's line appended where a person
+  types no longer splits their word, #408), and a frontmatter key set by
+  both at the same moment keeps the server's value. It used to delete the whole
   body and insert the new one: every open caret mapped to position 0,
   the person's undo had nothing left, and late typing landed at the
   start of the note. Every body writer (edit_note, REST PUT, revert,
