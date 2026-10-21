@@ -99,7 +99,7 @@ describe('GET /vaults/:id/history/* — attribution without content', () => {
     for (const row of rows) {
       expect(row).not.toHaveProperty('body')
       expect(row).not.toHaveProperty('frontmatter')
-      expect(Object.keys(row).sort()).toEqual(['action', 'actorId', 'actorType', 'createdAt', 'id'])
+      expect(Object.keys(row).sort()).toEqual(['action', 'actorId', 'actorName', 'actorType', 'createdAt', 'id'])
       expect(row.actorType).toBe('user')
       expect(row.actorId).toBe(ownerId)
     }
