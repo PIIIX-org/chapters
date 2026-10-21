@@ -162,6 +162,8 @@ describe('planStoreMigration (ADR-003 §8 dry run)', () => {
   let before: Snapshot
 
   beforeAll(async () => {
+    // The dry run models an instance before the S2a backfill; another test file's backfill may have set the marker.
+    await sql`update instance_state set store_migrated_at = null`
     before = await snapshot()
     report = await planStoreMigration({ vaultId })
   })

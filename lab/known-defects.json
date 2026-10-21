@@ -62,11 +62,6 @@
     },
     {
       "test": "browser",
-      "check": "note_revisions credits edit_note to the agent (actor mcp)",
-      "issue": 403
-    },
-    {
-      "test": "browser",
       "check": "read_note returns what the live editor shows",
       "issue": 474
     },
