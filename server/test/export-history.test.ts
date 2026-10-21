@@ -25,7 +25,7 @@ interface RevisionState {
   at: string
 }
 
-/** A note's revisions, oldest first, with microsecond creation times. */
+/** A note's revisions, in the order recorded, with microsecond creation times. */
 async function revisionsOf(noteId: string): Promise<RevisionState[]> {
   return db
     .select({
@@ -37,7 +37,7 @@ async function revisionsOf(noteId: string): Promise<RevisionState[]> {
     })
     .from(noteRevisions)
     .where(eq(noteRevisions.noteId, noteId))
-    .orderBy(asc(noteRevisions.createdAt), asc(noteRevisions.id))
+    .orderBy(asc(noteRevisions.ord))
 }
 
 async function noteRows(vault: string) {
@@ -316,7 +316,7 @@ describe('vault export/import keeps history (#499)', () => {
           .from(noteRevisions)
           .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
           .where(eq(notes.vaultId, vault))
-          .orderBy(asc(noteRevisions.createdAt), asc(noteRevisions.id))
+          .orderBy(asc(noteRevisions.ord))
       )
     const shape = (rows: EventRow[]) =>
       rows.map((r) => [r.action, r.fromPath, r.toPath, r.sourceRevisionId === null ? null : rows.findIndex((s) => s.id === r.sourceRevisionId)])

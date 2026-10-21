@@ -80,7 +80,7 @@ async function restorePoints(noteId: string) {
     .select()
     .from(noteRevisions)
     .where(and(eq(noteRevisions.noteId, noteId), eq(noteRevisions.action, 'restore_point')))
-    .orderBy(asc(noteRevisions.createdAt))
+    .orderBy(asc(noteRevisions.ord))
 }
 
 /** Lets `minutes` pass for the note: every revision recorded on it moves that far into the past. */
@@ -247,7 +247,7 @@ describe('restore point edge cases (#482)', () => {
     const noteId = await personNote(path, 'before the agent')
     await must(alpha, 'edit_note', { vaultId, path, body: 'agent edit' })
     const own = async () =>
-      (await db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.createdAt))).filter(
+      (await db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.ord))).filter(
         (r) => r.actorType !== 'collab',
       )
     const [, point, edit] = await own()
@@ -274,7 +274,7 @@ describe('restore point edge cases (#482)', () => {
     // The rename is a `rename` event (#479), after this connection's restore point.
     await must(alpha, 'rename_note', { vaultId, from: path, toName: 'restore-point-rename-deleted' })
     await must(alpha, 'delete_note', { vaultId, path: 'docs/restore-point-rename-deleted' })
-    const rows = await db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.createdAt))
+    const rows = await db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.ord))
     expect(rows.map((r) => [r.action, r.actorType, r.actorId])).toEqual([
       ['create', 'user', ownerId],
       ['restore_point', 'mcp', alphaId],
@@ -288,7 +288,7 @@ describe('restore point edge cases (#482)', () => {
     const noteId = await personNote(path, 'edited then deleted')
     await must(alpha, 'edit_note', { vaultId, path, body: 'alpha edit' })
     await must(alpha, 'delete_note', { vaultId, path })
-    const own = (await db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.createdAt))).filter(
+    const own = (await db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.ord))).filter(
       (r) => r.actorType !== 'collab',
     )
     expect(own.map((r) => [r.action, r.actorType])).toEqual([

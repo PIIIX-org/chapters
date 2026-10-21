@@ -10,7 +10,7 @@ import * as OTPAuth from 'otpauth'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { and, eq, sql as dsql } from 'drizzle-orm'
+import { and, asc, eq, ne, sql as dsql } from 'drizzle-orm'
 import type { PgTable } from 'drizzle-orm/pg-core'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
@@ -481,6 +481,53 @@ describe('instance backup round trip (#409)', () => {
     await expect(restoreBackup(archive)).rejects.toThrow()
     expect(await userCount()).toBe(0)
     expect(Object.keys(await snapshotFiles())).toEqual([`${fixture.vaultId}/.trash/${fixture.trashedNoteId}.md/keep`])
+    await wipeInstance()
+  })
+
+  it('numbers new revisions after the restored ones, and those of an archive from before ord by time (#825)', async () => {
+    // On a fresh instance (the revision sequence at 1), restores `zip`, records one revision and returns every revision id in `ord` order.
+    const restoreAndRecord = async (zip: Buffer) => {
+      await wipeInstance()
+      await db.execute(dsql`select setval(pg_get_serial_sequence('note_revisions', 'ord'), 1, false)`)
+      await restoreBackup(zip)
+      const [note] = await db.select({ id: notes.id, frontmatter: notes.frontmatter }).from(notes).limit(1)
+      const [recorded] = await db
+        .insert(noteRevisions)
+        .values({ noteId: note!.id, actorType: 'collab', action: 'update', frontmatter: note!.frontmatter as Record<string, unknown>, body: 'after the restore' })
+        .returning({ id: noteRevisions.id })
+      const ids = (await db.select({ id: noteRevisions.id }).from(noteRevisions).orderBy(asc(noteRevisions.ord))).map((r) => r.id)
+      return { ids, recorded: recorded!.id }
+    }
+
+    const restored = await restoreAndRecord(archive)
+    expect(restored.ids.at(-1)).toBe(restored.recorded)
+
+    // The same archive as one written before migration 0024: no `ord` on its revisions, which it lists in any
+    // order (here the reverse of the recorded one).
+    const zip = new AdmZip(archive)
+    const lines = zip.getEntry('db/note_revisions.jsonl')!.getData().toString('utf8').trim().split('\n')
+    const data = Buffer.from(
+      [...lines]
+        .reverse()
+        .map((line) => {
+          const row = JSON.parse(line) as Record<string, unknown>
+          delete row.ord
+          return JSON.stringify(row)
+        })
+        .join('\n') + '\n',
+    )
+    zip.updateFile('db/note_revisions.jsonl', data)
+    const manifest = JSON.parse(zip.getEntry('backup.json')!.getData().toString('utf8'))
+    manifest.parts['db/note_revisions.jsonl'] = { sha256: createHash('sha256').update(data).digest('hex'), size: data.length }
+    zip.updateFile('backup.json', Buffer.from(JSON.stringify(manifest)))
+    const legacy = await restoreAndRecord(zip.toBuffer())
+    const byTime = await db
+      .select({ id: noteRevisions.id })
+      .from(noteRevisions)
+      .where(ne(noteRevisions.id, legacy.recorded))
+      .orderBy(asc(noteRevisions.createdAt), asc(noteRevisions.id))
+    expect(byTime).toHaveLength(lines.length)
+    expect(legacy.ids).toEqual([...byTime.map((r) => r.id), legacy.recorded])
     await wipeInstance()
   })
 })

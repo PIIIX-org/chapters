@@ -187,9 +187,9 @@ export async function dbNotes(ctx: LabContext, vaultId: string): Promise<DbNote[
       encode(sha256(convert_to(n.body, 'UTF8')), 'hex') as body_sha,
       (select count(*)::int from note_revisions r where r.note_id = n.id) as revs,
       (select encode(sha256(convert_to(r.body, 'UTF8')), 'hex') from note_revisions r
-        where r.note_id = n.id order by r.created_at desc limit 1) as last_rev_sha,
-      (select r.action from note_revisions r where r.note_id = n.id order by r.created_at desc limit 1) as last_rev_action,
-      (select r.actor_type::text from note_revisions r where r.note_id = n.id order by r.created_at desc limit 1) as last_rev_actor,
+        where r.note_id = n.id order by r.ord desc limit 1) as last_rev_sha,
+      (select r.action from note_revisions r where r.note_id = n.id order by r.ord desc limit 1) as last_rev_action,
+      (select r.actor_type::text from note_revisions r where r.note_id = n.id order by r.ord desc limit 1) as last_rev_actor,
       n.embedding is not null as embedded
     from notes n where n.vault_id = '${vaultId}' order by n.path`)
 }

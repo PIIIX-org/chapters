@@ -92,7 +92,7 @@ function occurrences(text: string, needle: string): number {
 }
 
 async function revisions(noteId: string) {
-  return db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.createdAt))
+  return db.select().from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(asc(noteRevisions.ord))
 }
 
 async function creates(noteId: string) {

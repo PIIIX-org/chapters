@@ -13,8 +13,9 @@ import { parseNote, OkfValidationError } from '../notes/okf.js'
  * live or trashed, next to the OKF tree. The `.md` files stay the live notes
  * exactly as stored; history carries what OKF has no place for: every
  * revision with its author and time, the note's own times, and trashed notes
- * (their content too, since they have no `.md`). Times are microsecond UTC
- * text, so revisions recorded within one millisecond keep their order.
+ * (their content too, since they have no `.md`). Revisions are listed in the
+ * order they were recorded (#825), which an import keeps; times are
+ * microsecond UTC text.
  */
 export const HISTORY_PREFIX = '.elara/history/'
 
@@ -154,7 +155,7 @@ export async function addHistoryToZip(zip: AdmZip, vaultId: string, prefix = '')
       })
       .from(noteRevisions)
       .where(eq(noteRevisions.noteId, row.id))
-      .orderBy(asc(noteRevisions.createdAt), asc(noteRevisions.id))
+      .orderBy(asc(noteRevisions.ord))
     const unknownUsers = [
       ...new Set(
         revisions.flatMap((r) => (r.actorType === 'user' && r.actorId && !emailById.has(r.actorId) ? [r.actorId] : [])),
@@ -289,7 +290,8 @@ export async function importVaultContent(
 
   /**
    * Replaces the revisions the import recorded with the archive's, and
-   * restores the note's times. Each revision gets a new id; a revert's source
+   * restores the note's times. Each revision gets a new id, and a new `ord`
+   * in the archive's order (one insert, rows in that order); a revert's source
    * is pointed at the new id of the archive revision it names, or left empty
    * when that revision is not in the note's history (purged, or an archive
    * from before revision ids were exported).
