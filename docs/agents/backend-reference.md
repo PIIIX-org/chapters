@@ -222,15 +222,27 @@ never rebuilds the text (#488). There are no `.crdt` bins any more.
 `instance_state.collab_migrated_at` is null, each live note's
 `.crdt/<path>.bin` is attached when its text equals the row, the file or a
 revision (with a diff to the row's text on top) and otherwise moved to
-`vaults/<id>/.migration/<date>/bins/`; one transaction per note, so a rerun
-resumes. The finish sets the marker, renames each vault's `.crdt/` to
-`.crdt.pre-adr-003/` (kept for a code-only rollback) and writes
-`DATA_DIR/collab-migration-report-<time>.json`. Afterwards, a `.crdt/` left by
-older code after a rollback is merged into `note_crdt` as Yjs updates and
-moved to `.crdt.rollback-<time>/`. Every boot then runs ADR §7 steps 4-5:
-merge rows changed outside the store (`notes.seq > folded_seq`), then fold
-every pending tail, each note in its own transaction (a failure sets
-`fold_error` and boot goes on).
+`vaults/<id>/.migration/<date>/bins/` (`setAside[].reason`: `unknown-text`,
+`undecodable`); one transaction per note, so a rerun resumes. A note whose
+backfill failed is refused by the relay with `note-not-migrated` and never
+seeded until a restart attaches its bin (`setCollabNotMigrated`, store-tx.ts);
+otherwise a seed would make the rerun skip it and retire its bin. The
+finish (no failure, no note waiting for S2a) sets the marker, renames each
+vault's `.crdt/` to `.crdt.pre-adr-003/` (kept for a code-only rollback) and
+writes `DATA_DIR/collab-migration-report-<time>.json`. Afterwards (roll-forward
+after a code-only rollback), a `.crdt/` bin left by older code is merged into
+`note_crdt` as a Yjs update only when it shares history with the note's state
+(a Yjs client in common other than the process's `SERVER_CLIENT_ID`: the
+bin the old relay saved from the exported state); a bin older code seeded
+afresh from the file shares none and is set aside (`unrelated`), since merging
+it would double the note. `.crdt/` then moves to `.crdt.rollback-<time>/`, and
+what older code changed in the row reaches the state through the rebase.
+Every boot then runs ADR §7 steps 4-5: merge rows changed outside the store
+(`notes.seq > folded_seq`), then fold every pending tail, each note in its
+own transaction (a failure sets `fold_error` to `boot fold failed: …`,
+records a failed `collab-store` job, and boot goes on). A stored update that
+does not apply is marked `rejected_at` and named in `fold_error`, which the
+fold of that transaction keeps; the next fold clears it.
 
 ### Repositories (codebase mapping)
 
