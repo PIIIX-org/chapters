@@ -9,7 +9,7 @@ import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
 import { FailpointError, setFailpointHandler, type Failpoint } from '../src/failpoints.js'
-import { createNote, purgeNote, readNote, renameNote, restoreNote, revertNote, softDeleteNote, updateNote } from '../src/notes/store.js'
+import { createNote, loadCollabState, purgeNote, readNote, renameNote, restoreNote, revertNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { bootStore, reconcileStore, runStoreBackfill } from '../src/notes/store-reconcile.js'
 import { serializeNote } from '../src/notes/okf.js'
@@ -17,8 +17,7 @@ import { checkNoteFiles } from '../src/notes/integrity.js'
 import { StoreBusyError, setStoreMigrationPending } from '../src/notes/store-tx.js'
 import { metricsSnapshot } from '../src/monitoring/metrics.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
-import { crdtFile, saveCrdtState } from '../src/sync/crdt-store.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, storedCrdtText } from './helpers.js'
 
 // ADR-003 S2a: Postgres is the only authority for server writes. Every write
 // is one transaction (row + revision at the new seq + links + projection
@@ -239,21 +238,19 @@ describe('rename: referrers fixed in the transaction (§5.5)', () => {
   })
 })
 
-describe('.crdt bins of notes no editor has open (§5.2, S2a)', () => {
-  it('keeps the bin equal to the row, as a diff from the bin\'s own text', async () => {
-    await createNote(vaultId, { type: 'bin', name: 'kept', body: 'hello world' })
-    const doc = new Y.Doc()
-    doc.getText('body').insert(0, 'hello world')
-    doc.getMap('frontmatter').set('type', 'bin')
-    await saveCrdtState(vaultId, 'bin/kept', Y.encodeStateAsUpdate(doc))
-    const original = doc.getText('body')
-    const item = Y.createRelativePositionFromTypeIndex(original, 6)
+describe('CRDT state of notes no editor has open (§5.2, S2b)', () => {
+  it('a write appends its change to note_crdt as a diff on the stored items, so the state stays equal to the row', async () => {
+    const note = await createNote(vaultId, { type: 'bin', name: 'kept', body: 'hello world' })
+    // The first open seeded the note's CRDT state; the document is not loaded now.
+    const seeded = new Y.Doc()
+    Y.applyUpdate(seeded, (await loadCollabState(vaultId, note.id)).state)
+    const item = Y.createRelativePositionFromTypeIndex(seeded.getText('body'), 6)
     await updateNote(vaultId, 'bin/kept', { body: 'hello brave world' }, agent())
-    const saved = new Y.Doc()
-    Y.applyUpdate(saved, await readFile(crdtFile(vaultId, 'bin/kept')))
-    expect(saved.getText('body').toString()).toBe('hello brave world')
-    // The bin's own items survive: a diff, not a delete-all/insert-all.
-    expect(Y.createAbsolutePositionFromRelativePosition(item, saved)?.index).toBe(12)
+    expect(await storedCrdtText(vaultId, 'bin/kept')).toBe('hello brave world')
+    const stored = new Y.Doc()
+    Y.applyUpdate(stored, (await loadCollabState(vaultId, note.id)).state)
+    // The seed's own items survive: a diff, not a delete-all/insert-all.
+    expect(Y.createAbsolutePositionFromRelativePosition(item, stored)?.index).toBe(12)
   })
 })
 

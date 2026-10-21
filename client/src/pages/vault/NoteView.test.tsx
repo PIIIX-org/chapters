@@ -96,6 +96,8 @@ class FakeEventSource {
   onmessage: ((event: { data: string }) => void) | null = null
   onerror: (() => void) | null = null
 
+  addEventListener() {}
+
   constructor(readonly url: string) {
     FakeEventSource.instances.push(this)
   }
@@ -120,6 +122,7 @@ vi.stubGlobal('EventSource', FakeEventSource)
 /* ------------------------------------------------------------------ */
 
 const NOTE = {
+  id: 'n-jane',
   path: 'people/jane',
   frontmatter: { type: 'people', resource: 'https://kintsugi.test/ada' },
   body: 'the REST copy',
@@ -260,7 +263,7 @@ describe('NoteView — editors take the collab path', () => {
     renderNote(EDIT_VAULT)
 
     const doc = await relay()
-    expect(doc.options.name).toBe('v1/people/jane')
+    expect(doc.options.name).toBe('v1/~n-jane')
     expect(doc.options.url).toBe('ws://relay.test:3001')
     // Editors never open the read-only stream: one transport per person.
     expect(FakeEventSource.instances).toHaveLength(0)

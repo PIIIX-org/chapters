@@ -136,6 +136,7 @@ export function NoteView() {
     <CollabNote
       key={key}
       vaultId={vaultId!}
+      noteId={note.data!.id}
       path={path!}
       accessRevoked={!editable}
       initialBody={note.data!.body}
@@ -798,6 +799,8 @@ interface NoteIdentity {
 }
 
 interface CollabNoteProps extends NoteIdentity {
+  /** Names the note's collab document (ADR-003 §5.4). */
+  noteId: string
   /** The REST view of this vault says the edit access is gone. Same news the
    *  relay's kick carries, arriving over a different wire — a window-focus
    *  refetch can beat a dropped socket's next reconnect — and either one is
@@ -815,13 +818,14 @@ interface CollabNoteProps extends NoteIdentity {
  * The editor path: one Yjs document, shared with everyone else holding `edit`.
  * No `PUT`, no local copy of the body — the `Y.Text` is the document.
  */
-function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: CollabNoteProps) {
+function CollabNote({ vaultId, noteId, path, accessRevoked, initialBody, access }: CollabNoteProps) {
   const session = useSession()
   // isError before .data, as everywhere.
   const me = session.isPending || session.isError ? null : session.data
 
   const collab = useCollabDoc({
     vaultId,
+    noteId,
     path,
     // Until unit 4 gives users a display name, the presence label is the local
     // part of the address (unit 6 plan, gap 7) — never the full email, which
@@ -935,6 +939,7 @@ function CollabNote({ vaultId, path, accessRevoked, initialBody, access }: Colla
         <CollabNotices
           revoked={revoked}
           notMigrated={collab.status === 'not-migrated'}
+          reloadRequired={collab.status === 'reload-required'}
           tooLarge={collab.tooLarge}
           unmerged={collab.unmerged}
           onDiscard={collab.discardUnmerged}
@@ -983,6 +988,11 @@ interface LiveNoteProps extends NoteIdentity {
 function LiveNote({ vaultId, path, initialFrontmatter, initialBody }: LiveNoteProps) {
   const live = useLiveNote({ vaultId, path, enabled: true })
   useShellStatus(LIVE_SHELL[live.status])
+  // The note was renamed while open: follow it to its new path (ADR-003 §5.4).
+  const navigate = useNavigate()
+  useEffect(() => {
+    if (live.movedTo && live.movedTo !== path) navigate(`/vaults/${vaultId}/notes/${live.movedTo}`, { replace: true })
+  }, [live.movedTo, path, vaultId, navigate])
   // The REST fetch is what is on screen until the first frame arrives.
   const state = live.state ?? { frontmatter: initialFrontmatter, body: initialBody }
   const wikilinks = useWikilinks(vaultId, false)

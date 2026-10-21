@@ -10,7 +10,7 @@
  * backfill (collab-backfill.ts), which attaches them here once.
  */
 import { createHash } from 'node:crypto'
-import { and, asc, eq, gt, inArray, isNull, lte, sql } from 'drizzle-orm'
+import { and, asc, eq, gt, isNull, lte, sql } from 'drizzle-orm'
 import * as Y from 'yjs'
 import { noteCrdt, noteUpdates } from '../db/schema.js'
 import type { Tx } from '../notes/store-tx.js'
@@ -244,13 +244,6 @@ export async function markFolded(tx: Tx, crdt: NoteCrdt, seq: number, options: {
 export async function setFoldError(tx: Tx, crdt: NoteCrdt, foldError: string): Promise<void> {
   await tx.update(noteCrdt).set({ foldError, updatedAt: new Date() }).where(eq(noteCrdt.noteId, crdt.noteId))
   crdt.foldError = foldError
-}
-
-/** Note ids among `ids` that have CRDT state. */
-export async function notesWithCrdt(tx: Tx, ids: readonly string[]): Promise<Set<string>> {
-  if (ids.length === 0) return new Set()
-  const rows = await tx.select({ noteId: noteCrdt.noteId }).from(noteCrdt).where(inArray(noteCrdt.noteId, [...ids]))
-  return new Set(rows.map((r) => r.noteId))
 }
 
 /** Notes whose CRDT state needs boot work (§7 steps 4-5): the row moved past `folded_seq`, or an unfolded, non-rejected tail. */

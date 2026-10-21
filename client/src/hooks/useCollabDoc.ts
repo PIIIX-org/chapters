@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as Y from 'yjs'
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider'
-import { collabDocName, collabSocketUrl, getCollabTicket } from '../api/collab.js'
+import { collabDocName, collabSocketUrl, getCollabTicket, legacyCollabDocName } from '../api/collab.js'
 import type { CollabTicket } from '../api/collab.js'
 import { ApiError } from '../lib/api.js'
 import { claimLeftoverCopies, keepCollabCopy } from '../lib/collabStash.js'
@@ -42,6 +42,11 @@ export type CollabStatus =
    *  be stored until an administrator fixes the cause and restarts the server,
    *  so the editor is closed rather than letting typing go nowhere. */
   | 'not-migrated'
+  /** The relay refused this tab's document name (ADR-003 §5.4, close reason
+   *  `reload-required`): the server names documents differently from the
+   *  bundle this tab runs. Nothing typed here reaches it; what was typed is
+   *  kept in this browser and comes back after a reload. */
+  | 'reload-required'
 
 /** A person editing this note, or an agent (an MCP connection) that read or wrote it. */
 export type CollabPeer =
@@ -104,6 +109,10 @@ export interface CollabSession {
 
 export interface UseCollabDocOptions {
   vaultId: string
+  /** The note's id: it names the collab document (`collabDocName`). */
+  noteId: string
+  /** The note's current path: copies this browser kept under the path-keyed
+   *  name of bundles before ADR-003 S2b are looked for there too. */
   path: string
   /** Local identity, broadcast in awareness so other editors can see who is here. */
   user: { id: string; name: string }
@@ -113,7 +122,7 @@ export interface UseCollabDocOptions {
 }
 
 /** Dead ends: the states where a keystroke reaches no one. */
-const DEAD: readonly CollabStatus[] = ['revoked', 'signed-out', 'offline', 'not-migrated']
+const DEAD: readonly CollabStatus[] = ['revoked', 'signed-out', 'offline', 'not-migrated', 'reload-required']
 
 /**
  * Awareness is whatever a peer chose to broadcast: every field of a person's
@@ -217,8 +226,13 @@ function utf8Length(text: string): number {
  * typed is still on screen for them to copy out. Destroying the document on a
  * kick would delete their unsaved work, which is the one thing this must not do.
  */
-export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptions): CollabSession {
-  const docName = collabDocName(vaultId, path)
+export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollabDocOptions): CollabSession {
+  const docName = collabDocName(vaultId, noteId)
+  // Read at mount through a ref: a rename changes the path, never the document.
+  const legacyNameRef = useRef(legacyCollabDocName(vaultId, path))
+  useEffect(() => {
+    legacyNameRef.current = legacyCollabDocName(vaultId, path)
+  })
 
   const [awareness, setAwareness] = useState<HocuspocusProvider['awareness']>(null)
   const [status, setStatus] = useState<CollabStatus>('connecting')
@@ -299,6 +313,11 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     let handingOff = false
 
     const stashName = userRef.current.id ? collabStashName(userRef.current.id, docName) : null
+    // Copies kept under the note's path-keyed name by a bundle before ADR-003
+    // S2b are looked for too (§5.4), until none is left in this browser; they
+    // meet the relay's document like any other copy (merged once if they
+    // share its history, else offered as text). New copies use the id name.
+    const legacyStashName = userRef.current.id ? collabStashName(userRef.current.id, legacyNameRef.current) : null
     // This browser's copy of the live document, kept while something is unsent.
     let live: CollabCopy | null = null
     // Copies left by earlier sessions, the first one shown, until the relay's
@@ -500,12 +519,15 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
     if (stashName) {
       void (async () => {
         let copies: CollabCopy[] = []
-        try {
-          if (await hasCollabStash(stashName)) {
-            copies = await claimLeftoverCopies(stashName, { signal: watching.signal, found })
+        for (const name of [stashName, legacyStashName]) {
+          if (!name) continue
+          try {
+            if (await hasCollabStash(name)) {
+              copies = [...copies, ...(await claimLeftoverCopies(name, { signal: watching.signal, found }))]
+            }
+          } catch {
+            // IndexedDB refused (private mode, quota): no copy to restore.
           }
-        } catch {
-          // IndexedDB refused (private mode, quota): no copy to restore.
         }
         const shown = copies[0]
         if (cancelled || !shown) {
@@ -526,7 +548,7 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
      * reason stands: a signed-out tab's reconnect is refused as well, and
      * that refusal must not turn it into a revocation.
      */
-    const stop = (why: 'revoked' | 'signed-out' | 'not-migrated') => {
+    const stop = (why: 'revoked' | 'signed-out' | 'not-migrated' | 'reload-required') => {
       if (stopped) return
       stopped = true
       setStatus(why)
@@ -650,8 +672,10 @@ export function useCollabDoc({ vaultId, path, user, enabled }: UseCollabDocOptio
             settle()
           }
         },
-        // `note-not-migrated`: the server's store migration has not processed this note; anything else is a revocation.
-        onAuthenticationFailed: ({ reason }) => (reason === 'note-not-migrated' ? stop('not-migrated') : kicked()),
+        // `note-not-migrated`: the server's store migration has not processed this note; `reload-required`: the
+        // server names documents differently from this bundle (ADR-003 §5.4); anything else is a revocation.
+        onAuthenticationFailed: ({ reason }) =>
+          reason === 'note-not-migrated' ? stop('not-migrated') : reason === 'reload-required' ? stop('reload-required') : kicked(),
         // The relay closes the document with reason `note-too-large` for a
         // change over the cap (server/src/sync/collab-server.ts), ws closes
         // the socket with 1009 for a frame over its transport limit, and the

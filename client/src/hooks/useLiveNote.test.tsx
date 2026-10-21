@@ -18,6 +18,11 @@ class FakeEventSource {
   onopen: (() => void) | null = null
   onmessage: ((event: { data: string }) => void) | null = null
   onerror: (() => void) | null = null
+  listeners: Record<string, (event: { data: string }) => void> = {}
+
+  addEventListener(type: string, listener: (event: { data: string }) => void) {
+    this.listeners[type] = listener
+  }
 
   constructor(
     readonly url: string,
@@ -153,6 +158,13 @@ describe('useLiveNote', () => {
 
     expect(FakeEventSource.instances).toHaveLength(0)
     expect(view.result.current.status).toBe('connecting')
+  })
+
+  it('reports where a renamed note moved, from the server\'s moved event (ADR-003 §5.4)', () => {
+    const { view, source } = mount()
+    source!.open()
+    act(() => source!.listeners.moved?.({ data: JSON.stringify({ path: 'notes/renamed.md' }) }))
+    expect(view.result.current.movedTo).toBe('notes/renamed.md')
   })
 
   it('closes the stream on unmount', () => {

@@ -25,7 +25,7 @@ import { config } from '../src/config.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { getLiveNote, updateNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
-import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
 
 type Args = Record<string, unknown>
 
@@ -85,11 +85,16 @@ async function waitFor(check: () => boolean | Promise<boolean>, ms = 8000): Prom
   }
 }
 
+/** The document name each opened path's note has (by note id, ADR-003 §5.4). */
+const docNames = new Map<string, string>()
+
 /** A browser tab on the note, through the real relay. */
-function open(path: string): HocuspocusProvider {
+async function open(path: string): Promise<HocuspocusProvider> {
+  const name = await noteDocName(vaultId, path)
+  docNames.set(path, name)
   const provider = new HocuspocusProvider({
     url: `${baseUrl.replace('http', 'ws')}/collab`,
-    name: `${vaultId}/${path}`,
+    name,
     token: ownerToken,
     document: new Y.Doc(),
   })
@@ -99,7 +104,7 @@ function open(path: string): HocuspocusProvider {
 
 /** The relay's live body of the note, or undefined when it is not loaded. */
 function liveBody(path: string): string | undefined {
-  return collab.hocuspocus.documents.get(`${vaultId}/${path}`)?.getText('body').toString()
+  return collab.hocuspocus.documents.get(docNames.get(path) ?? '')?.getText('body').toString()
 }
 
 async function rowBody(path: string): Promise<string | undefined> {
@@ -118,7 +123,7 @@ const LINES = Array.from({ length: 80 }, (_, i) => `Line ${String(i).padStart(2,
 /** A note with BODY, open in a tab; the tab's text is the person's editor. */
 async function noteInTab(path: string, frontmatter?: Args): Promise<Y.Text> {
   await must('create_note', { vaultId, path, body: BODY, ...(frontmatter ? { frontmatter } : {}) })
-  const text = open(path).document.getText('body')
+  const text = (await open(path)).document.getText('body')
   await waitFor(() => text.toString() === BODY && liveBody(path) === BODY)
   return text
 }

@@ -17,7 +17,7 @@ import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { jobTiming } from '../src/jobs/durable.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
 
 // #705: server errors and failed background jobs are reported (the
 // monitoring endpoint the uptime monitor reads, and one structured log line
@@ -325,7 +325,7 @@ describe('error and job reports carry no note text (#705)', () => {
     const before = (await snapshot()).body
     const provider = new HocuspocusProvider({
       url: `ws://127.0.0.1:${port}/collab`,
-      name: `${vaultId}/${notePath}`,
+      name: await noteDocName(vaultId, notePath),
       token: ownerToken,
       document: new Y.Doc(),
     })

@@ -41,6 +41,13 @@ describe('CollabNotices', () => {
     expect(screen.queryByText(/access to this note was removed/i)).toBeNull()
   })
 
+  it('says reload to keep editing when the server names documents differently, not that access was removed', () => {
+    render(<CollabNotices revoked={false} reloadRequired tooLarge={null} unmerged={null} onDiscard={() => {}} />)
+    expect(screen.getByText(/reload to keep editing/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy()
+    expect(screen.queryByText(/access to this note was removed/i)).toBeNull()
+  })
+
   it('renders nothing when there is nothing to say', () => {
     const { container } = render(<CollabNotices revoked={false} tooLarge={null} unmerged={null} onDiscard={() => {}} />)
     expect(container.textContent).toBe('')
