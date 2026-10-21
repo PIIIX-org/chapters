@@ -1,0 +1,32 @@
+name: Image offline check
+description: >-
+  Builds the root Dockerfile into the runner's Docker (from the gha build
+  cache) and runs .github/scripts/image-offline-check.sh on it: the
+  operator commands (`pnpm <script>`) must run with no network (#872).
+  Used by image-check.yml on PRs and by publish.yml before it pushes, so
+  the two cannot drift. Needs docker/setup-buildx-action first.
+  Docs: docs/agents/github-workflow.md.
+inputs:
+  tag:
+    description: Local tag for the built image
+    required: false
+    default: elara-offline-check:ci
+runs:
+  using: composite
+  steps:
+    - name: Build the image
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: ./Dockerfile
+        load: true
+        tags: ${{ inputs.tag }}
+        # Read-only: publish.yml's push build writes the cache. A cached
+        # install layer is also what first showed #872.
+        cache-from: type=gha
+
+    - name: Operator scripts run offline (#872)
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.tag }}
+      run: bash .github/scripts/image-offline-check.sh "$IMAGE"
