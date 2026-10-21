@@ -490,9 +490,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   schema does). Every whole-markdown write (edit_note and REST PUT `body`,
   revert, a rename's referrer rewrite) goes through `writeThroughCollab`,
   so it reaches the live document as this diff from its text, never as
-  delete-all/insert-all (#476). Without `base_rev`, a whole `body` still
-  removes text typed after the agent's `read_note`; `read_note` itself
-  serves the live document (#474, below).
+  delete-all/insert-all (#476). A whole edit_note `body` without
+  `base_rev` is rebased from the connection's last read (below), so it
+  keeps text typed after the agent's `read_note`, which itself serves the
+  live document (#474, below).
 - **Reads serve the live document; `rev` is `seq`** (#474, #477, ADR-003
   S4): `readLiveNote` (MCP `read_note` and `export_note`, REST GET of a
   note) folds first when the relay has the note's document loaded: under
@@ -533,7 +534,13 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `text-diff.ts`; base → live and base → agent hunks overlap when their
   base lines intersect, when an insertion falls strictly inside the other
   side's lines, or when both insert at one point; adjacent lines merge;
-  overlapping hunks with the same result merge as one), `frontmatter` and
+  overlapping hunks with the same result merge as one; at the end of the
+  text, when the agent only appended whole lines after the base's last
+  one, ending it if it had no newline, its lines go after base → live's
+  lines there instead of conflicting, with a newline after a live last
+  line left mid-line and without lines live already ends with: the lab's
+  browser S1 agent appends while a person types at the end, #408),
+  `frontmatter` and
   `removeKeys` per key on the map they make from the base's (a key the
   agent left as the base had it keeps the live value; a key both changed
   to different values conflicts); `ops` still resolve against the live
@@ -560,6 +567,18 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   result. `note_history`, `get_revision` and the REST history list show
   it as `sourceRevisionId`; the History tab labels proposals "Proposed by
   <connection name>".
+- **A whole body without `base_rev` uses the last read as its base**
+  (#408, #476, `mcp/last-read.ts`): MCP `read_note` and `export_note`
+  record, per connection and note id, the `rev` they served; an
+  `edit_note` with `body` and no `base_rev` takes that revision as
+  `NoteEdit.base` (stale-base merge above; the answer echoes it as
+  `baseRev`), and one whose result body is exactly the body sent moves it
+  to the result's `rev`. `create_note`, `append_note`, `upsert_note`,
+  `ops`-only and frontmatter-only edits neither record nor use it, so a
+  connection that never read the note still replaces the live text (a
+  blind replace stays a replace). In memory, the newest 50 000 pairs; a
+  restart forgets them, and a revision gone since (purged) falls back to
+  the live diff.
 - **Atomic append and upsert** (#478): MCP `append_note` is the `append`
   op and `upsert_note` a whole-`body` edit, both an ordinary
   `withRestorePoint` + `writeThroughCollab` edit, which applies them to
