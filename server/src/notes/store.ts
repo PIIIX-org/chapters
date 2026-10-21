@@ -48,6 +48,8 @@ import {
   pgErrorCode,
   raiseProjections,
   replaceLinks,
+  revisionBody,
+  revisionColumns,
   storeTransaction,
   storedColumns,
   toStored,
@@ -56,6 +58,7 @@ import {
 } from './store-tx.js'
 import { STORE_JOBS, registerRenameRefactor, wakeProjector, type RenameRefactorPayload } from './projector.js'
 import { completeJob } from '../jobs/durable.js'
+import { expandDependents, kickRevisionCompaction } from './revision-compaction.js'
 
 export { splitPath, resolveNotePath, type ResolvedNotePath }
 
@@ -170,7 +173,7 @@ async function pendingRestorePoint(noteId: string, connectionId: string) {
   if (active.length > 0) return null
   const last = (
     await db
-      .select()
+      .select(revisionColumns)
       .from(noteRevisions)
       .where(and(eq(noteRevisions.noteId, row.id), notInArray(noteRevisions.action, NOT_A_NOTE_STATE)))
       .orderBy(desc(noteRevisions.ord))
@@ -224,7 +227,7 @@ export async function refuseSuspiciousWrite(
   } else {
     const newest = (
       await db
-        .select()
+        .select(revisionColumns)
         .from(noteRevisions)
         .where(eq(noteRevisions.noteId, row.id))
         .orderBy(desc(noteRevisions.ord))
@@ -272,7 +275,7 @@ export async function recordProposal(
     .select({
       id: noteRevisions.id,
       frontmatter: noteRevisions.frontmatter,
-      body: noteRevisions.body,
+      body: revisionBody,
       sourceRevisionId: noteRevisions.sourceRevisionId,
     })
     .from(noteRevisions)
@@ -460,6 +463,7 @@ async function pushCommitted(
 function afterCommit(): void {
   wakeProjector()
   kickEmbeddings()
+  kickRevisionCompaction()
 }
 
 /** What createNote is asked for: `path`, or `type` and `name`. */
@@ -1291,7 +1295,8 @@ export interface RevisionPosition {
 /**
  * One page of a note's change history, newest first, metadata only (#411):
  * the bodies are never read (`octet_length` takes the size from the stored
- * value's header). Keyset-paged on `ord` after `before`, so a revision
+ * value's header; a compacted revision's size is its `body_bytes`, #501).
+ * Keyset-paged on `ord` after `before`, so a revision
  * recorded while a caller pages does not shift the pages. `next` is
  * the position to continue from, or null on the last page. Null when the note
  * does not exist. Edit/owner only — enforced by callers.
@@ -1311,7 +1316,7 @@ export async function listRevisionPage(
       actorId: noteRevisions.actorId,
       action: noteRevisions.action,
       createdAt: noteRevisions.createdAt,
-      bodyBytes: sql<number>`octet_length(${noteRevisions.body})`,
+      bodyBytes: sql<number>`coalesce(${noteRevisions}.body_bytes, octet_length(${noteRevisions.body}))`,
       ...eventColumns,
       ord: noteRevisions.ord,
     })
@@ -1384,7 +1389,7 @@ export async function getRevision(
       actorId: noteRevisions.actorId,
       action: noteRevisions.action,
       frontmatter: noteRevisions.frontmatter,
-      body: noteRevisions.body,
+      body: revisionBody,
       createdAt: noteRevisions.createdAt,
       ...eventColumns,
     })
@@ -1418,7 +1423,7 @@ export async function getBaseRevision(
     typeof rev === 'number' ? sql`note_revisions.seq = ${rev}` : UUID_PATTERN.test(rev) ? eq(noteRevisions.id, rev) : null
   if (!named) return null
   const [revision] = await db
-    .select({ id: noteRevisions.id, frontmatter: noteRevisions.frontmatter, body: noteRevisions.body })
+    .select({ id: noteRevisions.id, frontmatter: noteRevisions.frontmatter, body: revisionBody })
     .from(noteRevisions)
     .where(and(named, eq(noteRevisions.noteId, row.id), notInArray(noteRevisions.action, NOT_A_NOTE_STATE)))
   return revision ?? null
@@ -1792,7 +1797,7 @@ export async function revertNote(
   if (!row) return null
   const revision = (
     await db
-      .select()
+      .select(revisionColumns)
       .from(noteRevisions)
       .where(and(eq(noteRevisions.id, revisionId), eq(noteRevisions.noteId, row.id)))
   )[0]
@@ -1809,19 +1814,28 @@ export async function revertNote(
 /**
  * Hard purge (spec 6): permanently removes one recorded revision — for
  * accidentally-committed secrets, where "recoverable" is the wrong
- * property. Owner/admin only — enforced by callers.
+ * property. Owner/admin only — enforced by callers. One store transaction
+ * under the note's lock: the revisions stored as a delta from this one
+ * (#501) are stored whole again first, so none loses its base.
  */
 export async function purgeRevision(vaultId: string, revisionId: string): Promise<boolean> {
-  const [found] = (await db.execute(sql`
-    SELECT r.seq = n.seq AS current FROM note_revisions r JOIN notes n ON n.id = r.note_id
-    WHERE r.id = ${revisionId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ current: boolean | null }>
-  if (!found) return false
-  // ADR-003 §5.5: the note's text still holds what this revision holds (invariant I2).
-  if (found.current) {
-    throw new OkfValidationError('this revision is the note as it is now; edit the note first, then purge the revision')
-  }
-  await db.delete(noteRevisions).where(eq(noteRevisions.id, revisionId))
-  return true
+  const [owner] = (await db.execute(sql`
+    SELECT r.note_id FROM note_revisions r JOIN notes n ON n.id = r.note_id
+    WHERE r.id = ${revisionId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ note_id: string }>
+  if (!owner) return false
+  return storeTransaction([owner.note_id], async (tx) => {
+    const [found] = (await tx.execute(sql`
+      SELECT r.seq = n.seq AS current FROM note_revisions r JOIN notes n ON n.id = r.note_id
+      WHERE r.id = ${revisionId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ current: boolean | null }>
+    if (!found) return false
+    // ADR-003 §5.5: the note's text still holds what this revision holds (invariant I2).
+    if (found.current) {
+      throw new OkfValidationError('this revision is the note as it is now; edit the note first, then purge the revision')
+    }
+    await expandDependents(tx, revisionId)
+    await tx.delete(noteRevisions).where(eq(noteRevisions.id, revisionId))
+    return true
+  })
 }
 
 /**

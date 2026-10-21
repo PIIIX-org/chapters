@@ -12,6 +12,8 @@ import { config, MIN_MONITORING_TOKEN_LENGTH } from './config.js'
 import { sql } from './db/client.js'
 import { bootStore } from './notes/store-reconcile.js'
 import { flushProjections } from './notes/projector.js'
+import { scheduleRevisionCompaction } from './notes/revision-compaction.js'
+import { COMPACT_REVISIONS_JOB } from './notes/store-tx.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 
@@ -47,12 +49,14 @@ try {
   // scans add jobs (idempotently) for rows without an embedding and no job
   // (written before the jobs table), and re-run jobs of the current content or
   // `seq` that failed with an error (an outage that outlasted the retries).
-  const pruned = await pruneFinishedJobs([EMBEDDING_JOB, EXTRACTION_JOB])
+  const pruned = await pruneFinishedJobs([EMBEDDING_JOB, EXTRACTION_JOB, COMPACT_REVISIONS_JOB])
   if (pruned > 0) console.log(`pruned ${pruned} finished background job(s)`)
   const missing = await scheduleMissingEmbeddings()
   if (missing > 0) console.log(`embedding catch-up: ${missing} notes without an embedding or with a failed job`)
   const missingFiles = await scheduleMissingExtractions()
   if (missingFiles > 0) console.log(`extraction catch-up: ${missingFiles} repository files without an embedding or with a failed job`)
+  // Long revision histories stored whole (#501): queued in the background, never awaited by boot.
+  scheduleRevisionCompaction()
   startJobPolling()
   const reconciled = await reconcileOrphanedSyncs()
   if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)

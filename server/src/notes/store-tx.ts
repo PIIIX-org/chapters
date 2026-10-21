@@ -100,6 +100,17 @@ export function toStored(row: NoteRow & { seq: string | number; frontmatterSrc: 
 }
 
 /**
+ * A revision's body (#501): `body` when the revision is stored whole, else its
+ * delta applied to its base revision's body (migration 0026,
+ * notes/revision-compaction.ts). Every read of a revision's content goes
+ * through it: `body` alone is empty on a compacted revision.
+ */
+export const revisionBody = sql<string>`note_revision_body(${noteRevisions.body}, ${noteRevisions}.body_delta, ${noteRevisions}.delta_base_id)`
+
+/** A revision's model columns with its body as `revisionBody` reads it. */
+export const revisionColumns = { ...getTableColumns(noteRevisions), body: revisionBody }
+
+/**
  * Set by boot (store-reconcile.ts bootStore) while the S2a backfill has not
  * finished, cleared at the boot whose backfill finishes. A note the backfill
  * could not process yet is refused for writes (NoteNotMigratedError) and for
@@ -192,7 +203,7 @@ export async function insertRevision(
     const [last] = await tx
       .select({
         frontmatter: noteRevisions.frontmatter,
-        body: noteRevisions.body,
+        body: revisionBody,
         actorType: noteRevisions.actorType,
         actorId: noteRevisions.actorId,
       })
@@ -260,6 +271,26 @@ export async function enqueueEmbeddingTx(tx: Tx, noteId: string, seq: number): P
     ON CONFLICT (idempotency_key) DO NOTHING`)
 }
 
+/**
+ * The durable job that compacts a note's revision history (#501,
+ * notes/revision-compaction.ts): payload `{noteId, seq}`, key
+ * `compact_revisions:<noteId>:<seq>`, one per trigger, so a write that
+ * queues one while an earlier one runs is never lost.
+ */
+export const COMPACT_REVISIONS_JOB = 'compact_revisions'
+
+/** A write that moves a note to a `seq` that is a multiple of this queues the compaction of its history (#501). */
+export const COMPACT_EVERY_SEQ = 25
+
+/** Queues the compaction of a note's history at `seq`, inserted with the write (outbox). */
+export async function enqueueCompactionTx(tx: Tx, noteId: string, seq: number): Promise<void> {
+  await tx.execute(sql`
+    INSERT INTO jobs (kind, payload, idempotency_key)
+    VALUES (${COMPACT_REVISIONS_JOB}, jsonb_build_object('noteId', ${noteId}::text, 'seq', ${seq}::bigint),
+      ${`${COMPACT_REVISIONS_JOB}:${noteId}:${seq}`})
+    ON CONFLICT (idempotency_key) DO NOTHING`)
+}
+
 /** Inserts a `jobs` row for work that outlives the note row or spans notes (§5.5); returns its id. */
 export async function insertStoreJob(
   tx: Tx,
@@ -323,5 +354,6 @@ export async function applyRowChange(
   if (body !== current.body) await replaceLinks(tx, row.id, body)
   await raiseProjections(tx, row.id, row.seq, listed ? ['file', 'dir_index'] : ['file'])
   if (deletedAt === null) await enqueueEmbeddingTx(tx, row.id, row.seq)
+  if (row.seq % COMPACT_EVERY_SEQ === 0) await enqueueCompactionTx(tx, row.id, row.seq)
   return { row, changed }
 }

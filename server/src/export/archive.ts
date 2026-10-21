@@ -151,7 +151,7 @@ export async function buildInstanceBackup(): Promise<Buffer> {
     async (tx) => {
       const out = new Map<string, Row[]>()
       for (const spec of [...BACKUP_TABLES, INSTANCE_STATE]) {
-        out.set(spec.name, await tx.select(backupColumns(spec)).from(spec.table))
+        out.set(spec.name, await tx.select({ ...backupColumns(spec), ...spec.dumped }).from(spec.table))
       }
       return out
     },

@@ -1,0 +1,35 @@
+-- #501: long revision histories are compacted instead of keeping a full copy
+-- of the note per revision. A compacted revision keeps `body = ''` and stores
+-- `body_delta`, the edit from its base `delta_base_id` (a full revision of
+-- the same note, never itself compacted) to its body, and `body_bytes`, the
+-- UTF-8 size of that body. Compaction is lossless: `note_revision_body`
+-- returns every revision's body exactly (notes/revision-compaction.ts).
+--
+-- Additive (the 0021 rule, backup.md §5): nullable columns, a check older
+-- code cannot violate (it never sets them) and a foreign key with NO ACTION,
+-- so older code can never delete a base a delta still needs. Older code reads
+-- `body` directly and would see a compacted revision as empty: before
+-- running it, expand every revision with the UPDATE in backup.md §5.
+ALTER TABLE "note_revisions"
+  ADD COLUMN "body_delta" jsonb,
+  ADD COLUMN "delta_base_id" uuid,
+  ADD COLUMN "body_bytes" integer,
+  ADD CONSTRAINT "note_revisions_delta_base_id_fkey" FOREIGN KEY ("delta_base_id") REFERENCES "note_revisions"("id"),
+  ADD CONSTRAINT "note_revisions_delta_check" CHECK (("body_delta" IS NULL) = ("delta_base_id" IS NULL) AND ("body_delta" IS NULL) = ("body_bytes" IS NULL));--> statement-breakpoint
+CREATE INDEX "note_revisions_delta_base" ON "note_revisions" ("delta_base_id") WHERE "delta_base_id" IS NOT NULL;--> statement-breakpoint
+-- A delta is a JSON array of pieces, concatenated: a string is literal text,
+-- a pair [from, count] copies `count` characters of the base from `from`
+-- (1-based, as substr counts them).
+CREATE FUNCTION note_revision_patch(base text, delta jsonb) RETURNS text
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+  SELECT coalesce(string_agg(
+    CASE jsonb_typeof(piece) WHEN 'string' THEN piece #>> '{}' ELSE substr(base, (piece->>0)::int, (piece->>1)::int) END,
+    '' ORDER BY i), '')
+  FROM jsonb_array_elements(delta) WITH ORDINALITY AS pieces(piece, i)
+$$;--> statement-breakpoint
+-- A revision's body: `body` when it is stored whole, else its delta applied to its base's body.
+CREATE FUNCTION note_revision_body(body text, delta jsonb, base_id uuid) RETURNS text
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN delta IS NULL THEN body
+    ELSE (SELECT note_revision_patch(b.body, delta) FROM note_revisions b WHERE b.id = base_id) END
+$$;

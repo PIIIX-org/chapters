@@ -186,7 +186,7 @@ export async function dbNotes(ctx: LabContext, vaultId: string): Promise<DbNote[
     select n.id, n.path, n.deleted_at is not null as deleted, length(n.body) as body_len,
       encode(sha256(convert_to(n.body, 'UTF8')), 'hex') as body_sha,
       (select count(*)::int from note_revisions r where r.note_id = n.id) as revs,
-      (select encode(sha256(convert_to(r.body, 'UTF8')), 'hex') from note_revisions r
+      (select encode(sha256(convert_to(note_revision_body(r.body, r.body_delta, r.delta_base_id), 'UTF8')), 'hex') from note_revisions r
         where r.note_id = n.id order by r.ord desc limit 1) as last_rev_sha,
       (select r.action from note_revisions r where r.note_id = n.id order by r.ord desc limit 1) as last_rev_action,
       (select r.actor_type::text from note_revisions r where r.note_id = n.id order by r.ord desc limit 1) as last_rev_actor,

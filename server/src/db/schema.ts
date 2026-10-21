@@ -394,7 +394,9 @@ export const actorType = pgEnum('actor_type', ['user', 'mcp', 'collab'])
  * `fromPath` / `toPath` the paths of a `rename` row. Null on every other row.
  * Migration 0024 (#825, #811): `ord` is the order revisions were recorded in
  * (a sequence, not the clock: `created_at` can step back or tie); every list
- * of a note's revisions orders by it.
+ * of a note's revisions orders by it. Migration 0026 (#501) adds
+ * `body_delta`, `delta_base_id` and `body_bytes` (a compacted revision, kept
+ * out of this model like `seq`): read a body with store-tx.ts `revisionBody`.
  */
 export const noteRevisions = pgTable(
   'note_revisions',
