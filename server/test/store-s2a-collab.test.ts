@@ -8,13 +8,11 @@ import { sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { getLiveNote, renameNote, writeNote } from '../src/notes/store.js'
 import { setStoreMigrationPending } from '../src/notes/store-tx.js'
-import { crdtFile } from '../src/sync/crdt-store.js'
-import { rm } from 'node:fs/promises'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
-import { createActiveUser, loginCookie, loginToken } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
 
-// ADR-003 S2a with the unchanged path-named relay: a server write holding a
+// ADR-003 S2a write path through the S2b relay (documents named by note id): a server write holding a
 // note's lock never waits for the relay's store hook (§5.1, R5-1), its change
 // reaches the open editor (§5.2 step 8), and a renamed note open at both its
 // old and its new path keeps both tabs' typing exactly once (§5.5).
@@ -60,7 +58,7 @@ async function create(name: string, body: string): Promise<string> {
 }
 
 async function open(path: string) {
-  const provider = new HocuspocusProvider({ url: `ws://127.0.0.1:${port}/collab`, name: `${vaultId}/${path}`, token, document: new Y.Doc() })
+  const provider = new HocuspocusProvider({ url: `ws://127.0.0.1:${port}/collab`, name: await noteDocName(vaultId, path), token, document: new Y.Doc() })
   providers.push(provider)
   const text = provider.document.getText('body')
   await waitFor(() => provider.isSynced && text.length > 0)
@@ -127,7 +125,7 @@ describe('a write to an open note (§5.1 R5-1, §5.2 step 8)', () => {
   }, 15_000)
 })
 
-describe('a renamed note open at its old and its new path (§5.5, S2a)', () => {
+describe('a renamed note open in a tab from before the rename and one after it (§5.5)', () => {
   it('keeps the typing of both tabs, each exactly once', async () => {
     const path = await create('two-docs', 'Shared.')
     const oldTab = await open(path)
@@ -147,7 +145,7 @@ describe('a renamed note open at its old and its new path (§5.5, S2a)', () => {
   }, 20_000)
 })
 
-describe('live documents follow the note id recorded at load (§5.5, S2a)', () => {
+describe('live documents are named by note id (§5.4)', () => {
   it('a write to a new note at a renamed note\'s old path never reaches the renamed note', async () => {
     const path = await create('reused', 'The first note.')
     await open(path)
@@ -184,14 +182,12 @@ describe('live documents follow the note id recorded at load (§5.5, S2a)', () =
   }, 15_000)
 })
 
-describe('two unrelated documents of one note (§5.5, S2a)', () => {
-  it('server writes pushed into both never make them look related: no merge, no doubled text', async () => {
+describe('a renamed note opened again at its new path (§5.4, #834)', () => {
+  it('joins the same document: server writes reach both tabs once, no merge, no doubled text', async () => {
     const body = 'paragraph 0: the first line.\n\nparagraph 1: the second line.'
     const path = await create('unrelated', body)
     const oldTab = await open(path)
     await renameNote(vaultId, path, 'unrelated-moved', { type: 'mcp', id: randomUUID() })
-    // No bin at the new path: the new-path document is seeded afresh, with no history in common with the old one.
-    await rm(crdtFile(vaultId, 'docs/unrelated-moved'), { force: true })
     const newTab = await open('docs/unrelated-moved')
     const agent = { type: 'mcp' as const, id: randomUUID() }
     await writeThroughCollab(vaultId, 'docs/unrelated-moved', { body: `${body}\n\nfirst agent line.` }, agent)
@@ -214,7 +210,7 @@ describe('a note the store migration has not processed (§8, Q5)', () => {
       let refused = ''
       const provider = new HocuspocusProvider({
         url: `ws://127.0.0.1:${port}/collab`,
-        name: `${vaultId}/docs/unmigrated`,
+        name: `${vaultId}/~${id}`,
         token,
         document: new Y.Doc(),
         onAuthenticationFailed: ({ reason }) => {
@@ -226,7 +222,7 @@ describe('a note the store migration has not processed (§8, Q5)', () => {
       // The refusal's own reason (Hocuspocus sends `error.reason`); the editor reads it and asks for a restart.
       expect(refused).toBe('note-not-migrated')
       expect(provider.isSynced).toBe(false)
-      expect(collab.hocuspocus.documents.has(`${vaultId}/docs/unmigrated`)).toBe(false)
+      expect(collab.hocuspocus.documents.has(`${vaultId}/~${id}`)).toBe(false)
     } finally {
       setStoreMigrationPending(false)
       await db.execute(sql`DELETE FROM notes WHERE id = ${id}`)
