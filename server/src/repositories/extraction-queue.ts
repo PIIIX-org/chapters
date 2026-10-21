@@ -246,7 +246,7 @@ async function drainOnce(): Promise<void> {
         if (!job) break
         const { fileId } = job.payload
         try {
-          await processFile(fileId)
+          await extractionWork.processFile(fileId)
           await completeJob(job.id)
           recordJob('extraction', 'ok', fileId)
         } catch (err) {
@@ -264,6 +264,9 @@ async function drainOnce(): Promise<void> {
 }
 
 const extraction = jobDrainer('extraction', drainOnce)
+
+/** Mutable for tests only: the work for one claimed file (the fairness test swaps it to observe only the scheduler). */
+export const extractionWork = { processFile }
 
 async function processFile(fileId: string): Promise<void> {
   const row = (await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, fileId)))[0]
