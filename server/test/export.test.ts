@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { createActiveUser, loginCookie, rewriteNoteFileFromRow } from './helpers.js'
+import { flushProjections } from '../src/notes/projector.js'
 
 let app: FastifyInstance
 let ownerCookie: string
@@ -247,6 +248,7 @@ describe('export', () => {
       headers: { cookie },
       body: { type: 'people', name: 'orphan', body: 'Row outlived the file.' },
     })
+    await flushProjections()
     await rm(join(config.dataDir, 'vaults', orphanVault, 'people', 'orphan.md'))
 
     const admin = await createActiveUser({ role: 'admin' })

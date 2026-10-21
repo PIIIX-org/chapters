@@ -8,19 +8,22 @@
 // Method: run that script against this instance with a state file and
 // ALERT_WEBHOOK_URL pointed at a stub sink on the runner (file mode: nothing
 // reaches GitHub, so never the real alert issue). Baseline; then inject a
-// server error (a note directory made read-only under the app, then a PUT to
-// that note: EACCES -> 500, with a marker in the path, the body and the query
-// and a token-shaped secret in the query) and a failing job (a git
-// repository on an unresolvable `.invalid` host with the secret as its URL
-// credential: the first sync fails). The next run must post `errors` and
-// `jobs` alerts to the stub; neither the marker nor the secret may appear in
-// the payload, the endpoint or the report log lines.
+// failing file write (a note directory made read-only under the app, then a
+// PUT to that note, with a marker in the path, the body and the query and a
+// token-shaped secret in the query). Since ADR-003 S2a the database is the
+// authority: the PUT commits and answers 200, and the note's file projection
+// fails afterwards as a `projection` job. Then a failing job of another kind
+// (a git repository on an unresolvable `.invalid` host with the secret as its
+// URL credential: the first sync fails). The next run must post a `jobs`
+// alert naming both, and an injected 500 (an attachment upload into a
+// read-only assets directory) an `errors` alert; neither the marker nor the secret may appear in the
+// payload, the endpoint or the report log lines.
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
-import { poll } from '../lib/portability.ts'
+import { poll, postFile } from '../lib/portability.ts'
 
 const MONITOR = fileURLToPath(new URL('../../.github/scripts/uptime-monitor.mjs', import.meta.url))
 const ENDPOINT = '/api/admin/monitoring'
@@ -74,7 +77,7 @@ const test: LabTest = {
   name: 'monitoring-alerts',
   tier: 'fast',
   description:
-    '#705: an injected server error (read-only note directory -> 500) and a failing git sync each produce an alert from the uptime monitor via ALERT_WEBHOOK_URL (stub sink), with no note text or secret in the payload, the endpoint or the report log lines.',
+    '#705: an injected file write failure (read-only note directory: the PUT commits, the projection job fails) and a failing git sync each produce a jobs alert from the uptime monitor via ALERT_WEBHOOK_URL (stub sink), with no note text or secret in the payload, the endpoint or the report log lines.',
   async run(ctx) {
     const checks: Check[] = []
     const token = monitoringToken()
@@ -97,6 +100,7 @@ const test: LabTest = {
     const env = { ELARA_MONITORING_TOKEN: token, ALERT_WEBHOOK_URL: `http://127.0.0.1:${sink.port}/hook`, ALERT_SLOW_MS: '3600000' }
     const admin = ctx.rest('admin')
     let noteDir: string | null = null
+    let assetsDir: string | null = null
     try {
       // The workflow without the secret: metrics are skipped, the run passes.
       const unset = await monitor(ctx, join(dir, 'unset.json'), { ELARA_MONITORING_TOKEN: '' })
@@ -127,7 +131,9 @@ const test: LabTest = {
         severity: 'high',
       })
 
-      // Injected server error: the note's directory read-only under the app.
+      // Injected failure: the note's directory read-only under the app. The PUT
+      // commits (the database is the authority, ADR-003); the file write fails
+      // in the projector, a `projection` job failure.
       const vault = await ctx.createVault('admin', ctx.uniq('lab-monitoring'))
       await admin.must('POST', `/api/vaults/${vault.id}/notes`, {
         type: 'docs',
@@ -140,14 +146,45 @@ const test: LabTest = {
       const put = await admin.request('PUT', `/api/vaults/${vault.id}/notes/docs/${marker}?q=${marker}&access_token=${secret}`, {
         body: `edited note text ${marker} ${secret}`,
       })
+      const projectionFailed = await poll(async () => {
+        const m = (await (await fetch(`${ctx.baseUrl}${ENDPOINT}`, { headers: { authorization: `Bearer ${token}` } })).json()) as {
+          jobs?: Record<string, { failed?: number }>
+        }
+        return (m.jobs?.projection?.failed ?? 0) > 0 ? true : undefined
+      }, 60_000, 500)
       await ctx.docker.appExec(['chmod', '0755', noteDir])
       noteDir = null
       const repaired = await admin.request('PUT', `/api/vaults/${vault.id}/notes/docs/${marker}`, { body: `repaired ${marker}` })
       checks.push({
-        name: 'injected error: a PUT to a note whose directory is read-only answers 500',
-        expected: '500, then 200 once writable again',
-        actual: `${put.status}, then ${repaired.status}`,
-        ok: put.status === 500 && repaired.status === 200,
+        name: 'injected file failure: a PUT to a note whose directory is read-only commits (200) and its file projection fails as a job',
+        expected: '200 (the database is the authority), a projection job failure on the endpoint, then 200 once writable again',
+        actual: `${put.status}, projection failure ${projectionFailed ? 'seen' : 'not seen in 60 s'}, then ${repaired.status}`,
+        ok: put.status === 200 && projectionFailed === true && repaired.status === 200,
+        severity: 'high',
+      })
+
+      // Injected server error: an attachment upload into a read-only `assets`
+      // directory. Attachments are not projections: the upload writes the file
+      // on the request path, so EACCES answers 500.
+      const first = await postFile(ctx.baseUrl, `/api/vaults/${vault.id}/assets`, admin.cookie, 'first.txt', new TextEncoder().encode('x'), 'text/plain')
+      assetsDir = `/data/elara/vaults/${vault.id}/assets`
+      const lock = await ctx.docker.appExec(['chmod', '0555', assetsDir])
+      if (lock.code !== 0) throw new Error(`chmod failed: ${lock.stderr}`)
+      const upload = await postFile(
+        ctx.baseUrl,
+        `/api/vaults/${vault.id}/assets?q=${marker}&access_token=${secret}`,
+        admin.cookie,
+        `${marker}.txt`,
+        new TextEncoder().encode(`attachment ${marker} ${secret}`),
+        'text/plain',
+      )
+      await ctx.docker.appExec(['chmod', '0755', assetsDir])
+      assetsDir = null
+      checks.push({
+        name: 'injected server error: an attachment upload into a read-only assets directory answers 500',
+        expected: '200 for the first upload, then 500',
+        actual: `${first.status}, then ${upload.status}`,
+        ok: first.status === 200 && upload.status === 500,
         severity: 'high',
       })
 
@@ -171,18 +208,25 @@ const test: LabTest = {
       })
 
       const alerted = await monitor(ctx, state, env)
-      const errors = alerted.alerts.find((a) => a.kind === 'errors')
       const jobs = alerted.alerts.find((a) => a.kind === 'jobs')
+      const errors = alerted.alerts.find((a) => a.kind === 'errors')
       const posted = received.map((r) => JSON.parse(r) as { text: string; alerts: Alert[] })
       const postedKinds = posted.flatMap((p) => p.alerts.map((a) => a.kind))
       checks.push({
         name: 'the injected server error produces an errors alert with the route template, through the webhook',
-        expected: "alerts include errors with a 500 on 'PUT /api/vaults/:id/notes/*'; one POST to the stub carrying it",
+        expected: "alerts include errors with a 500 on 'POST /api/vaults/:id/assets'; one POST to the stub carrying it",
         actual: `alerts [${kinds(alerted)}]; errors ${JSON.stringify(errors?.recent ?? null)}; ${received.length} POST(s) with [${postedKinds.join(',')}]`,
         ok:
-          !!errors?.recent?.some((e) => e.route === 'PUT /api/vaults/:id/notes/*' && e.status === 500) &&
+          !!errors?.recent?.some((e) => e.route === 'POST /api/vaults/:id/assets' && e.status === 500) &&
           received.length === 1 &&
           postedKinds.includes('errors'),
+        severity: 'critical',
+      })
+      checks.push({
+        name: 'the failed file write produces a jobs alert naming the projection, through the webhook',
+        expected: 'alerts include jobs with a projection failure; the POST carries it',
+        actual: `jobs ${JSON.stringify(jobs?.recent ?? null)}`,
+        ok: !!jobs?.recent?.some((e) => e.job === 'projection') && postedKinds.includes('jobs'),
         severity: 'critical',
       })
       checks.push({
@@ -228,12 +272,13 @@ const test: LabTest = {
       })
 
       return {
-        summary: `Monitor runs (file mode, webhook to a stub sink): no token [${kinds(unset)}], baseline [${kinds(baseline)}], after a 500 and a failed sync [${kinds(alerted)}], again [${kinds(again)}]; ${received.length} webhook POST(s); leaks: ${found.length ? found.join('; ') : 'none'}.`,
+        summary: `Monitor runs (file mode, webhook to a stub sink): no token [${kinds(unset)}], baseline [${kinds(baseline)}], after a 500, a failed file projection and a failed sync [${kinds(alerted)}], again [${kinds(again)}]; ${received.length} webhook POST(s); leaks: ${found.length ? found.join('; ') : 'none'}.`,
         checks,
         data: { runs: { unset, baseline, alerted, again }, webhook: posted, reportLines },
       }
     } finally {
       if (noteDir) await ctx.docker.appExec(['chmod', '0755', noteDir])
+      if (assetsDir) await ctx.docker.appExec(['chmod', '0755', assetsDir])
       void sink.stop(true)
       rmSync(dir, { recursive: true, force: true })
     }

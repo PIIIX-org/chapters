@@ -204,6 +204,14 @@ describe('useCollabDoc', () => {
     expect(view.result.current.ydoc.isDestroyed).toBe(false)
   })
 
+  it('a note the server has not migrated yet stops the editor with its own state, not a revocation', async () => {
+    const { view, provider } = await connected()
+    act(() => provider.options.onAuthenticationFailed({ reason: 'note-not-migrated' }))
+    expect(view.result.current.status).toBe('not-migrated')
+    expect(view.result.current.writable).toBe(false)
+    expect(provider.disconnected).toBe(true)
+  })
+
   describe('a session that ended (#498)', () => {
     it('the relay closing with signed-out stops the editor and keeps the text on screen', async () => {
       const { view, provider } = await connected()

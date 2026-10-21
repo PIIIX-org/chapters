@@ -17,6 +17,7 @@ import { planStoreMigration, type StoreMigrationReport } from '../src/notes/migr
 import { parseNote, serializeNote } from '../src/notes/okf.js'
 import { noteFile, trashFile, vaultDir } from '../src/notes/store.js'
 import { crdtFile } from '../src/sync/crdt-store.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // ADR-003 S1: `migrate-store --dry-run` classifies every case of §8 on a
@@ -79,6 +80,8 @@ beforeAll(async () => {
     expect(res.statusCode).toBe(200)
     ids[name] = res.json().id
   }
+  // The files are projections (ADR-003 §7): written before the fixture damages them.
+  await flushProjections()
   // file ≠ row, row newer (the crash class the lab measures: row-new/file-old)
   await utimes(noteFile(vaultId, path('row-newer')), new Date('2020-01-01'), new Date('2020-01-01'))
   await setRow('row-newer', 'row-newer row text')
@@ -111,6 +114,7 @@ beforeAll(async () => {
     (await app.inject({ method: 'DELETE', url: `/api/vaults/${vaultId}/notes/${path('trashed')}`, headers: { cookie } }))
       .statusCode,
   ).toBe(200)
+  await flushProjections()
   // missing rows: files no note owns
   await writeFile(noteFile(vaultId, 'guides/stray'), serializeNote({ frontmatter: { type: 'guides' } as never, body: 'x' }))
   await writeFile(trashFile(vaultId, '00000000-0000-4000-8000-000000000000'), 'x')
@@ -158,6 +162,8 @@ describe('planStoreMigration (ADR-003 §8 dry run)', () => {
   let before: Snapshot
 
   beforeAll(async () => {
+    // The dry run models an instance before the S2a backfill; another test file's backfill may have set the marker.
+    await sql`update instance_state set store_migrated_at = null`
     before = await snapshot()
     report = await planStoreMigration({ vaultId })
   })

@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { refactorWikilinks } from '../src/notes/store.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -54,6 +55,7 @@ describe('notes CRUD + OKF on disk', () => {
     })
     expect(res.statusCode).toBe(200)
 
+    await flushProjections()
     const raw = await readFile(vaultFile('people', 'john-doe.md'), 'utf8')
     expect(raw).toMatch(/^---\n/)
     expect(raw).toContain('type: people')
@@ -121,6 +123,7 @@ describe('notes CRUD + OKF on disk', () => {
       body: { body: 'Updated body', frontmatter: { type: 'people', tags: ['vip'] } },
     })
     expect(res.statusCode).toBe(200)
+    await flushProjections()
     const raw = await readFile(vaultFile('people', 'john-doe.md'), 'utf8')
     expect(raw).toContain('Updated body')
     expect(raw).toContain('vip')
@@ -136,6 +139,7 @@ describe('notes CRUD + OKF on disk', () => {
       body: { type: 'docs', name: 'dashed', frontmatter, body },
     })
     expect(created.statusCode).toBe(200)
+    await flushProjections()
     expect(await readFile(vaultFile('docs', 'dashed.md'), 'utf8')).toContain('title: alpha---beta\n')
 
     const read = await app.inject({
@@ -155,6 +159,7 @@ describe('notes CRUD + OKF on disk', () => {
       body: { from: 'people/john-doe', to: 'john' },
     })
     expect(res.statusCode).toBe(200)
+    await flushProjections()
     await expect(stat(vaultFile('people', 'john.md'))).resolves.toBeTruthy()
     await expect(stat(vaultFile('people', 'john-doe.md'))).rejects.toThrow()
     const index = await readFile(vaultFile('people', 'index.md'), 'utf8')
@@ -179,6 +184,7 @@ describe('notes CRUD + OKF on disk', () => {
     })
     expect(res.statusCode).toBe(200)
 
+    await flushProjections()
     await expect(stat(vaultFile('projects', 'alpha.md'))).rejects.toThrow()
     await expect(stat(vaultFile('archive', 'alpha-retired.md'))).resolves.toBeTruthy()
 
@@ -203,6 +209,7 @@ describe('notes CRUD + OKF on disk', () => {
     })
     expect(del.statusCode).toBe(200)
     const { id } = del.json() as { id: string }
+    await flushProjections()
     await expect(stat(vaultFile('people', 'john.md'))).rejects.toThrow()
     await expect(stat(vaultFile('.trash', `${id}.md`))).resolves.toBeTruthy()
 
@@ -219,6 +226,7 @@ describe('notes CRUD + OKF on disk', () => {
       headers: { cookie: ownerCookie },
     })
     expect(restore.statusCode).toBe(200)
+    await flushProjections()
     await expect(stat(vaultFile('people', 'john.md'))).resolves.toBeTruthy()
   })
 
@@ -291,6 +299,7 @@ describe('notes CRUD + OKF on disk', () => {
     expect(refBody).toContain('[[guides/other]]')
     expect(refBody).not.toContain('original-doc')
 
+    await flushProjections()
     const diskContent = await readFile(vaultFile('guides', 'overview.md'), 'utf8')
     expect(diskContent).toContain('[[docs/renamed-doc]]')
     expect(diskContent).not.toContain('original-doc')
@@ -316,6 +325,7 @@ describe('notes CRUD + OKF on disk', () => {
     ).toBe(200)
     expect((await send('DELETE', '/notes/handbook/onboarding')).statusCode).toBe(200)
 
+    await flushProjections()
     const raw = await readFile(vaultFile('handbook', 'index.md'), 'utf8')
     expect(raw).toMatch(/^---\n/)
     expect(raw).toContain('Hand-written map of the handbook.')
@@ -343,6 +353,7 @@ describe('notes CRUD + OKF on disk', () => {
     const reordered = Object.fromEntries(Object.entries(stored).reverse())
     expect(Object.keys(reordered)).not.toEqual(Object.keys(stored))
     const indexFile = vaultFile('ledger', 'index.md')
+    await flushProjections()
     await writeFile(indexFile, 'sentinel\n', 'utf8')
 
     const res = await app.inject({
@@ -352,6 +363,7 @@ describe('notes CRUD + OKF on disk', () => {
       body: { body: 'new body', frontmatter: reordered },
     })
     expect(res.statusCode).toBe(200)
+    await flushProjections()
     expect(await readFile(indexFile, 'utf8')).toBe('sentinel\n')
   })
 })

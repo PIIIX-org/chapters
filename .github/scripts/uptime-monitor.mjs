@@ -15,7 +15,7 @@
 //     since the last check (the server's counters are cumulative since boot,
 //     so a late check loses nothing; a new bootId counts from zero)
 //   - jobs: any new failed background job (embedding, extraction, sync,
-//     collab-store, backup; a repository that keeps failing counts once, on
+//     collab-store, backup, projection; a repository that keeps failing counts once, on
 //     its way into `error`, a scheduled backup once until a backup succeeds; the
 //     server's `repeated` count of the rest is listed in the comment)
 //   - slow: a route that newly has p95 >= ALERT_SLOW_MS (default 2000) over
@@ -77,7 +77,7 @@ const SHA = /^[0-9a-f]{7,40}$/
 
 /** The server's monitoring endpoint (server/src/monitoring/routes.ts). */
 export const METRICS_PATH = '/api/admin/monitoring'
-export const JOB_KINDS = ['embedding', 'extraction', 'sync', 'collab-store', 'backup']
+export const JOB_KINDS = ['embedding', 'extraction', 'sync', 'collab-store', 'backup', 'projection']
 export const METRICS_DEFAULTS = { errorThreshold: 1, slowMs: 2000, slowMinCount: 5 }
 /** Error records listed per alert (the newest). */
 export const RECENT_ERRORS = 10

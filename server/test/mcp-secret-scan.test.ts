@@ -659,7 +659,8 @@ const destructiveSteps: Step[] = [
   { tool: 'purge_note', args: () => ({ vaultId: fx.vaultId, noteId: need(fx.agentNoteId, 'agentNoteId') }) },
   {
     tool: 'purge_revision',
-    args: async () => ({ vaultId: fx.vaultId, revisionId: (await revisionIds('docs/credentials'))[0] }),
+    // The oldest: the revision of the note as it is now cannot be purged (ADR-003 §5.5).
+    args: async () => ({ vaultId: fx.vaultId, revisionId: (await revisionIds('docs/credentials')).at(-1) }),
   },
   {
     tool: 'revoke_repository_share',

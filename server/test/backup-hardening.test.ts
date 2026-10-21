@@ -16,6 +16,7 @@ import { BackupInvalidError, restoreBackup } from '../src/export/restore.js'
 import { buildApp } from '../src/app.js'
 import { createNote, noteFile, saveAsset } from '../src/notes/store.js'
 import { createActiveUser, loginCookie, wipeInstance } from './helpers.js'
+import { flushProjections } from '../src/notes/projector.js'
 
 const root = join(process.cwd(), 'scratch/backup-hardening')
 
@@ -174,6 +175,7 @@ describe('download headers and restore warnings (#493)', () => {
     const owner = await createActiveUser({ role: 'admin' })
     const [vault] = await db.insert(vaults).values({ name: 'Warnings', ownerId: owner.id }).returning()
     await createNote(vault!.id, { path: 'concepts/kept', frontmatter: { type: 'concepts' }, body: 'as in the row\n' }, { type: 'user', id: owner.id })
+    await flushProjections()
     return { vaultId: vault!.id, email: owner.email }
   }
 
