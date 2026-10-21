@@ -14,6 +14,7 @@ import {
   compileChange,
   docState,
   liveDocumentOf,
+  livePath,
   noteMoved,
   pushToLiveDocument,
   type DocState,
@@ -22,13 +23,16 @@ import {
   appendUpdate,
   compactNoteCrdt,
   insertNoteCrdt,
+  logUpdate,
   markFolded,
   notesNeedingFold,
   readNoteCrdt,
   seedDocument,
   setFoldError,
   type NoteCrdt,
+  type UpdateActor,
 } from '../sync/note-crdt.js'
+import { recordJob } from '../monitoring/metrics.js'
 import { mergeFrontmatter, mergeTextKeepingTheirs } from '../sync/three-way-merge.js'
 import { revisionAtSeq } from './store-reconcile.js'
 import { failpoint } from '../failpoints.js'
@@ -1846,6 +1850,37 @@ export async function loadCollabState(vaultId: string, noteId: string): Promise<
 }
 
 /**
+ * Logs a collab update the relay checked (§5.4 "Append", S3) before the
+ * relay applies and acks it: one store transaction under the note's locks
+ * (so commit order is id order and no fold skips it), the note re-checked
+ * live. Returns the row id, or null when the note is trashed or purged
+ * (nothing stored; the relay refuses the update). A throw (Postgres down, a
+ * lock timeout, maintenance) leaves nothing stored either; the relay then
+ * closes the connection unacked and the editor resends.
+ */
+export async function appendCollabUpdate(
+  vaultId: string,
+  noteId: string,
+  update: Uint8Array,
+  actor: UpdateActor,
+): Promise<number | null> {
+  for (let round = 0; round < WRITE_ROUNDS; round++) {
+    const path = livePath(noteId)?.path ?? (await db.select({ path: notes.path }).from(notes).where(eq(notes.id, noteId)))[0]?.path
+    if (path === undefined) return null
+    const id = await withKeyLock(noteLock(vaultId, path), () =>
+      storeTransaction([noteId], async (tx) => {
+        const locked = await lockedNote(tx, noteId)
+        if (!locked || locked.deletedAt || locked.vaultId !== vaultId) return null
+        if (locked.path !== path) return 'moved' as const
+        return logUpdate(tx, noteId, update, actor, { kind: 'collab' })
+      }),
+    )
+    if (id !== 'moved') return id
+  }
+  throw new StoreBusyError('the note kept moving')
+}
+
+/**
  * A store of `doc` the relay refused (invalid, over the cap, quarantined):
  * the editors' typing is still appended to the note's CRDT log, and
  * `fold_error` says why the row keeps its last valid version (§5.4 fold
@@ -1874,14 +1909,22 @@ export async function keepRefusedTyping(vaultId: string, noteId: string, doc: Y.
   }
 }
 
-/** Compacts note `noteId`'s CRDT state (§5.4 fold step 6, "on unload"): the relay unloaded its document. */
+/**
+ * The relay unloaded note `noteId`'s document (§5.4 fold step 6, "on
+ * unload"): its tail is folded into the row first, then compacted into the
+ * snapshot. Compacting an unfolded tail would delete the rows that tell boot
+ * a fold is pending (S3: an acked update whose store never ran).
+ */
 export async function compactCollabState(vaultId: string, noteId: string): Promise<void> {
   const [note] = await db.select({ path: notes.path }).from(notes).where(eq(notes.id, noteId))
   if (!note) return
   await withKeyLock(noteLock(vaultId, note.path), () =>
     storeTransaction([noteId], async (tx) => {
-      const crdt = await readNoteCrdt(tx, noteId)
-      if (crdt && crdt.tailCount > 0) await compactNoteCrdt(tx, crdt)
+      const locked = await lockedNote(tx, noteId)
+      const crdt = locked ? await readNoteCrdt(tx, noteId) : null
+      if (!locked || !crdt) return
+      if (!locked.deletedAt) await catchUp(tx, locked, crdt, null, { storeRow: true })
+      if (crdt.tailCount > 0) await compactNoteCrdt(tx, crdt)
     }),
   )
 }
@@ -1889,7 +1932,8 @@ export async function compactCollabState(vaultId: string, noteId: string): Promi
 /**
  * Boot steps 4-5 (§7): every live note whose row moved past its CRDT state
  * is rebased, and every unfolded tail is folded, one transaction per note.
- * A failure is logged and counted; boot never stops for one note.
+ * A failure is recorded on the note (`fold_error`, a failed `collab-store`
+ * job) and counted; boot never stops for one note.
  */
 export async function foldPendingCollab(): Promise<{ folded: number; failed: number }> {
   let folded = 0
@@ -1908,7 +1952,12 @@ export async function foldPendingCollab(): Promise<{ folded: number; failed: num
       folded++
     } catch (err) {
       failed++
+      const reason = err instanceof Error ? err.message : String(err)
       console.error(`[collab] boot fold of note ${noteId} failed:`, err)
+      recordJob('collab-store', { error: err }, noteId)
+      await db
+        .execute(sql`UPDATE note_crdt SET fold_error = ${`boot fold failed: ${reason}`}, updated_at = now() WHERE note_id = ${noteId}`)
+        .catch((setErr) => console.error(`[collab] fold error of note ${noteId} not recorded:`, setErr))
     }
   }
   return { folded, failed }

@@ -9,7 +9,7 @@ import { atLeast, resolveAccess } from '../vaults/permissions.js'
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
-import { compactCollabState, keepRefusedTyping, loadCollabState, updateNote } from '../notes/store.js'
+import { appendCollabUpdate, compactCollabState, keepRefusedTyping, loadCollabState, updateNote } from '../notes/store.js'
 import { NoteNotMigratedError, StoreBusyError, noteMigrated, storeMigrationPending } from '../notes/store-tx.js'
 import { docState, forgetLivePath, livePath, parseDocName, registerLiveDocs, setLivePath, type LiveDocument } from './live-docs.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
@@ -22,6 +22,9 @@ import { recordJob } from '../monitoring/metrics.js'
 import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
 import { bodyMeasured, updateFits } from './collab-size.js'
+import { liveTookUpdate, updateToLog } from './collab-append.js'
+import { rejectUpdate } from './note-crdt.js'
+import { failpoint } from '../failpoints.js'
 import { forgetAgentPresence, stripAgentClaims } from './agent-presence.js'
 
 export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
@@ -105,6 +108,8 @@ interface ConnectionContext {
   accessVerifiedAt?: number
   /** A change the server pushed into the document (live-docs.ts), whose writer already ran the quarantine check. */
   directWrite?: boolean
+  /** The update this connection's current message logged (§5.4 Append), until the live document is seen to hold it. */
+  logged?: { id: number; update: Uint8Array }
 }
 
 /** The note each loaded document holds (its name says so; kept once the load finished). */
@@ -159,7 +164,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
   const server = new Server({
     debounce: DEBOUNCE_MS,
     maxDebounce: DEBOUNCE_MS * 5,
-    unloadImmediately: false,
+    // The last tab closing folds at once (#487); while tabs stay, the debounce (2 s, 10 s max) folds.
+    unloadImmediately: true,
     quiet: true,
 
     /**
@@ -257,14 +263,53 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     },
 
     /**
-     * The size cap (#491), before an update is applied: the relay never
-     * holds or stores a body over it. See collab-size.ts for how this stays
-     * off the whole document on ordinary keystrokes.
+     * Append before ack (ADR-003 §5.4, S3, #487). Awaited per message before
+     * Hocuspocus applies an update and sends SyncStatus(true), so an update
+     * is in `note_updates` before the editor shows it as saved. A malformed
+     * update (it must decode and apply to an empty document) or one over the
+     * size cap (#491) is refused; one the document already holds is not
+     * logged again; the rest is committed under the note's locks. A throw
+     * closes the document unacked and nothing is applied. When the log
+     * itself failed (Postgres down, a lock timeout, maintenance) the socket
+     * is closed as well (1013 "try again later"): the provider then
+     * reconnects and resends what is still unsynced, and Yjs applies a
+     * resend once. A refused note (trashed, purged) is refused again by
+     * `onAuthenticate` on that reconnect.
      */
-    async beforeSync({ type, payload, document, documentName }) {
+    async beforeSync({ type, payload, document, documentName, context, connection }) {
       if (type !== SYNC_STEP_2 && type !== SYNC_UPDATE) return
+      const toLog = updateToLog(document, payload)
       const limit = config.noteMaxBytes
       if (!updateFits(document, payload, limit)) throw new NoteTooLargeRefusal(documentName, limit)
+      if (!toLog) return
+      const noteId = documentNotes.get(document)
+      const { vaultId } = parseDocName(documentName)
+      const ctx = context as ConnectionContext
+      let id: number | null
+      try {
+        id = noteId ? await appendCollabUpdate(vaultId, noteId, toLog, { type: 'collab', id: ctx.userId }) : null
+        if (id !== null) failpoint('collab.after-log-before-ack')
+      } catch (err) {
+        connection.webSocket.close(1013, 'store-unavailable')
+        throw err
+      }
+      if (id === null) throw new Error(`note does not exist: ${documentName}`)
+      ctx.logged = { id, update: toLog }
+    },
+
+    /**
+     * The backstop of §5.4 Append step 5: an update logged in `beforeSync`
+     * that the live document then failed to apply (Hocuspocus closes the
+     * connection) is marked `rejected_at` at once, so no fold trips on it.
+     */
+    async afterHandleMessage({ document, context }) {
+      const ctx = context as ConnectionContext
+      const logged = ctx.logged
+      if (!logged) return
+      ctx.logged = undefined
+      if (liveTookUpdate(document, logged.update)) return
+      console.error(`[collab] logged update ${logged.id} did not apply to the live document; rejected`)
+      await rejectUpdate(db, logged.id, 'the relay could not apply it to the live document')
     },
 
     /** Only the relay puts agents in presence (#481, agent-presence.ts). */
@@ -281,6 +326,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * nothing.
      */
     async onStoreDocument({ documentName, document, lastContext }) {
+      // The #487 window: acked typing is in the log, the fold has not run yet.
+      failpoint('collab.after-ack-before-fold')
       const name = parseDocName(documentName)
       const context: Partial<ConnectionContext> | undefined = lastContext
       const noteId = documentNotes.get(document)

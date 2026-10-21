@@ -897,6 +897,31 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   end of the write's transaction, so a refused write (a check, an op that
   does not resolve, validation) still gets this check on its connection's
   disconnect store: a document a person doubled stays out of the row (#408).
+- **An ack means committed in Postgres** (ADR-003 §5.4 "Append", S3,
+  #487; `collab-append.ts`, `appendCollabUpdate` in `notes/store.ts`).
+  `beforeSync` runs on every sync-step-2 and update message before
+  Hocuspocus applies it and sends `SyncStatus(true)` (what the editor
+  shows as saved): the update must decode and apply to an empty scratch
+  document (else the document connection closes and nothing is stored),
+  passes the size cap, is skipped when the live document already holds it
+  (`Y.snapshotContainsUpdate`, a reconnect repeating known items), and
+  otherwise `Y.diffUpdate` against the live document is inserted into
+  `note_updates` (actor `collab`, `actor_detail.kind = 'collab'`) in one
+  store transaction under the note's queue lock, the instance check and
+  the note advisory lock, the note re-checked live. A failed insert
+  (Postgres down, a lock timeout, maintenance) closes the socket with
+  1013 `store-unavailable`: the editor keeps the change unsynced, reconnects and
+  resends; a trashed or purged note closes the document unacked and its
+  reconnect is refused. If the live apply then fails, `afterHandleMessage`
+  marks the row `rejected_at`. The fold into row + revision follows:
+  the debounced store (2 s pause, 10 s max), the last tab closing
+  (`unloadImmediately: true`), every server write (Invariant W), the
+  unload compaction (which folds before it compacts) and boot
+  (`foldPendingCollab`; a note whose fold fails gets `fold_error` and a
+  failed `collab-store` job, and boot continues). A SIGKILL after the ack
+  therefore loses nothing: boot folds the logged update. Lab failpoints
+  `collab.after-log-before-ack` and `collab.after-ack-before-fold` mark
+  the two crash boundaries.
 - **Size cap on the relay** (#491, `collab-size.ts`): ws refuses a frame
   over `noteTransportLimit()` before reading it (close 1009).
   `beforeSync` refuses a sync-step-2 or update message whose Yjs update

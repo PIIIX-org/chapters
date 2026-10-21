@@ -12,6 +12,7 @@
 import { createHash } from 'node:crypto'
 import { and, asc, eq, gt, isNull, lte, sql } from 'drizzle-orm'
 import * as Y from 'yjs'
+import type { db } from '../db/client.js'
 import { noteCrdt, noteUpdates } from '../db/schema.js'
 import type { Tx } from '../notes/store-tx.js'
 import { SERVER_CLIENT_ID, type DocState } from './live-docs.js'
@@ -185,6 +186,24 @@ export async function appendUpdate(
   crdt.tailCount++
   crdt.tailBytes += update.byteLength
   return true
+}
+
+/**
+ * Appends a relay update to the note's log without materialising its state
+ * (§5.4 Append step 4, S3): the caller holds the note's locks and has
+ * checked the update. Returns the row id.
+ */
+export async function logUpdate(tx: Tx, noteId: string, update: Uint8Array, actor: UpdateActor, detail?: Record<string, unknown>): Promise<number> {
+  const [row] = await tx
+    .insert(noteUpdates)
+    .values({ noteId, update: Buffer.from(update), actorType: actor.type, actorId: actor.id ?? null, actorDetail: detail ?? null })
+    .returning({ id: noteUpdates.id })
+  return row!.id
+}
+
+/** Marks a logged update `rejected_at` (§5.4 Append step 5): the live document did not take it, so no fold applies it. */
+export async function rejectUpdate(client: Tx | typeof db, id: number, reason: string): Promise<void> {
+  await client.update(noteUpdates).set({ rejectedAt: new Date(), rejectReason: reason }).where(eq(noteUpdates.id, id))
 }
 
 /** Tail size past which a fold also compacts (§5.4 fold step 6): scaled to the snapshot, so a big note does not rewrite it every few seconds. */

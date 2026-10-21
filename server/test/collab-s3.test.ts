@@ -38,11 +38,11 @@ async function waitFor(check: () => boolean | Promise<boolean>, ms = 10_000): Pr
 
 const count = (s: string | undefined, needle: string) => (s ?? '').split(needle).length - 1
 
-/** Simulates a crash at `point` (once, unless `always`): the code after it does not run. */
-function crashAt(point: string, always = false): void {
+/** Simulates a crash at `point`, once: the code after it does not run. */
+function crashOnceAt(point: Failpoint): void {
   let fired = false
   setFailpointHandler((name: Failpoint) => {
-    if (name !== point || (fired && !always)) return
+    if (name !== point || fired) return
     fired = true
     throw new FailpointError(name)
   })
@@ -115,26 +115,32 @@ describe('an acknowledged collab edit is in Postgres at the ack (#487)', () => {
     await typeAcked(provider, text, marker)
     // Inside the 2 s debounce, nothing has stored the document: the log alone holds the edit.
     expect(count(await storedText(note.id), marker)).toBe(1)
-    // The tab closes and the process dies before any fold (the store never runs to completion).
-    crashAt('collab.after-ack-before-fold', true)
+    // The tab closes and the process "dies" at the start of the fold the close triggers: nothing after that point runs.
+    let foldsCut = 0
+    setFailpointHandler((name) => {
+      if (name !== 'collab.after-ack-before-fold') return
+      foldsCut++
+      throw new FailpointError(name)
+    })
     provider.destroy()
-    await collab.destroy().catch(() => undefined)
+    await waitFor(() => foldsCut > 0)
     expect(count(await rowBody(note.path), marker)).toBe(0)
     setFailpointHandler(null)
+    // The dead process's memory is gone, and no hook of its runs: its unstored document goes with it.
+    collab.hocuspocus.documents.delete(`${vaultId}/~${note.id}`)
     // Boot (§7 step 5) folds every pending tail into row + revision.
     await foldPendingCollab()
     expect(count(await rowBody(note.path), marker)).toBe(1)
     const [revision] = (await db.execute(sql`
       SELECT body FROM note_revisions WHERE note_id = ${note.id} ORDER BY ord DESC LIMIT 1`)) as unknown as Array<{ body: string }>
     expect(count(revision!.body, marker)).toBe(1)
-    collab = startCollabServer(app.server)
   }, 30_000)
 
   it('a crash after the log commit and before the ack: the client resends, the text lands once', async () => {
     const note = await create('killed-before-ack', 'Before the kill.\n')
     const { provider, text } = await open(note.id)
     const marker = '@S3-KILL-BEFORE-ACK@'
-    crashAt('collab.after-log-before-ack')
+    crashOnceAt('collab.after-log-before-ack')
     text.insert(text.length, `\n${marker}`)
     // The connection closes unacked, reconnects and resends; the second append finds it already logged.
     await waitFor(() => !provider.hasUnsyncedChanges, 15_000)
