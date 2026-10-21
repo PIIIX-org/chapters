@@ -18,16 +18,10 @@ import { db } from '../db/client.js'
 import { noteLinks, noteRevisions, notes } from '../db/schema.js'
 import { extractWikilinks, type Frontmatter } from './okf.js'
 import { orderKeys, sameContent } from './frontmatter-order.js'
+import { holdsExclusiveLock, INSTANCE_LOCK_KEY, writesPaused } from './maintenance-lock.js'
 import type { Actor, NoteRow } from './store.js'
 
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
-
-/**
- * The advisory lock key of the instance maintenance lock (§5.1, §9). Every
- * store transaction takes its shared form; `store-export-legacy` takes the
- * exclusive form on a reserved connection, so no write lands while it runs.
- */
-export const INSTANCE_LOCK_KEY = 0x454c_4152_4100n
 
 /** How long a store transaction waits for a row or advisory lock before it answers "retry" (§5.1). */
 const LOCK_TIMEOUT = '5s'
@@ -61,16 +55,22 @@ export async function lockNote(tx: Tx, noteId: string): Promise<void> {
  * Runs `fn` in one store transaction: lock timeout, the instance check and,
  * for each id in `noteIds`, the note's advisory lock (sorted, so two
  * transactions over the same notes never wait on each other in a cycle).
- * A lock timeout or a held maintenance lock becomes StoreBusyError.
+ * A lock timeout, a held maintenance lock or a paused process (its own
+ * maintenance-lock connection dropped, maintenance-lock.ts) becomes
+ * StoreBusyError before anything is written. The exporter, which holds the
+ * exclusive form itself, skips the shared check.
  */
 export async function storeTransaction<T>(noteIds: readonly string[], fn: (tx: Tx) => Promise<T>): Promise<T> {
+  if (writesPaused()) throw new StoreBusyError('maintenance lock connection lost, reconnecting')
   try {
     return await db.transaction(async (tx) => {
       await tx.execute(sql.raw(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`))
-      const [instance] = (await tx.execute(
-        sql`SELECT pg_try_advisory_xact_lock_shared(${INSTANCE_LOCK_KEY}) AS ok`,
-      )) as unknown as Array<{ ok: boolean }>
-      if (!instance?.ok) throw new StoreBusyError('maintenance in progress')
+      if (!holdsExclusiveLock()) {
+        const [instance] = (await tx.execute(
+          sql`SELECT pg_try_advisory_xact_lock_shared(${INSTANCE_LOCK_KEY}) AS ok`,
+        )) as unknown as Array<{ ok: boolean }>
+        if (!instance?.ok) throw new StoreBusyError('maintenance in progress')
+      }
       for (const id of [...new Set(noteIds)].sort()) await lockNote(tx, id)
       return fn(tx)
     })

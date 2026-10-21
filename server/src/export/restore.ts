@@ -204,6 +204,7 @@ function readCurrentFormat(entries: Map<string, Buffer>, archive: string): Backu
 
   const warnings: string[] = []
   verifyParts(entries, manifest.parts, warnings)
+  // Archives made before ADR-003 S2a-2 read note files from disk and left out the ones that no longer matched their row.
   if (typeof manifest.notesFromRow === 'number' && manifest.notesFromRow > 0) {
     warnings.push(
       `${manifest.notesFromRow} note(s) were saved while the backup ran: their newer file was left out, they are restored as of the backup's snapshot`,
@@ -244,7 +245,7 @@ function readCurrentFormat(entries: Map<string, Buffer>, archive: string): Backu
       throw new BackupInvalidError(`db/notes.jsonl: note ${noteId} has an invalid path: ${err instanceof Error ? err.message : String(err)}`)
     }
     if (resolved !== path) throw new BackupInvalidError(`db/notes.jsonl: note ${noteId} has a non-canonical path`)
-    // The file as it was on disk; the row when the file was already lost.
+    // The archive's rendering of the row (older archives: the file as it was on disk); the row when the archive has no entry.
     if (note.deletedAt == null) {
       files.push({ kind: 'notes', vaultId, name: path, noteId, data: entries.get(noteEntry(vaultId, path)) ?? noteContent(note) })
     } else {

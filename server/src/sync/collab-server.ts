@@ -24,6 +24,7 @@ import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
 import { bodyMeasured, updateFits } from './collab-size.js'
 import { forgetAgentPresence, stripAgentClaims } from './agent-presence.js'
+import { writesPaused } from '../notes/maintenance-lock.js'
 
 export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
@@ -44,6 +45,21 @@ class NoteTooLargeRefusal extends Error {
   readonly reason = 'note-too-large'
   constructor(documentName: string, limit: number) {
     super(`refused an update to ${documentName}: the note body would pass ${limit} bytes (ELARA_NOTE_MAX_BYTES)`)
+  }
+}
+
+/**
+ * Thrown from `beforeSync` while writes are paused (ADR-003 §5.1): nothing
+ * of the update is applied or stored. The hook also closes the socket with
+ * 1013 ("try again later"): a document-level close leaves the provider
+ * detached, while a socket close makes it reconnect with backoff and resend
+ * what the relay never took. The editor treats the reason as a drop.
+ */
+class StorePausedRefusal extends Error {
+  readonly code = 1013
+  readonly reason = 'store-paused'
+  constructor(documentName: string) {
+    super(`refused an update to ${documentName}: writes are paused until the instance lock is held again`)
   }
 }
 
@@ -259,12 +275,20 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     },
 
     /**
-     * The size cap (#491), before an update is applied: the relay never
-     * holds or stores a body over it. See collab-size.ts for how this stays
-     * off the whole document on ordinary keystrokes.
+     * Before an update is applied. While writes are paused (the maintenance
+     * lock's connection dropped, ADR-003 §5.1) the update is refused and the
+     * connection closed, so it stays unacked and the editor resends it after
+     * reconnecting. Then the size cap (#491): the relay never holds or stores
+     * a body over it. See collab-size.ts for how this stays off the whole
+     * document on ordinary keystrokes.
      */
-    async beforeSync({ type, payload, document, documentName }) {
+    async beforeSync({ type, payload, document, documentName, connection }) {
       if (type !== SYNC_STEP_2 && type !== SYNC_UPDATE) return
+      if (writesPaused()) {
+        const refusal = new StorePausedRefusal(documentName)
+        connection.webSocket.close(refusal.code, refusal.reason)
+        throw refusal
+      }
       const limit = config.noteMaxBytes
       if (!updateFits(document, payload, limit)) throw new NoteTooLargeRefusal(documentName, limit)
     },

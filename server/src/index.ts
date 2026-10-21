@@ -11,6 +11,8 @@ import { startBackupScheduler } from './export/backup-service.js'
 import { config, MIN_MONITORING_TOKEN_LENGTH } from './config.js'
 import { sql } from './db/client.js'
 import { reconcileStore, runStoreBackfill, storeMigrated, sweepTempFiles } from './notes/store-reconcile.js'
+import { flushProjections, sweepOrphanFiles, verifyAllProjections } from './notes/projector.js'
+import { holdSharedLockOrExit } from './notes/maintenance-lock.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 
@@ -18,12 +20,19 @@ import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 // this process `running`, so the next boot reports it as unclean (#583). So
 // does a SIGTERM that arrives before the handlers below are installed
 // (during migrations and catch-ups): Node's default exit writes nothing.
-console.log(bootLogLine(recordBoot()))
+const bootRecord = recordBoot()
+console.log(bootLogLine(bootRecord))
 if (process.env.ELARA_MONITORING_TOKEN && !config.monitoringToken) {
   console.warn(`ELARA_MONITORING_TOKEN is shorter than ${MIN_MONITORING_TOKEN_LENGTH} characters and is ignored: /api/admin/monitoring needs an admin session`)
 }
 
 const app = await buildApp()
+
+// ADR-003 §5.1/§9: the shared instance lock on a reserved connection, held
+// from before migrations until exit. Refused (exit 2) while
+// store-export-legacy runs; a dropped connection pauses writes until it is
+// held again (maintenance-lock.ts).
+await holdSharedLockOrExit()
 
 try {
   await runMigrations()
@@ -39,6 +48,14 @@ try {
   const store = await reconcileStore()
   if (store.projections + store.raised + store.revisions + store.failed > 0) {
     console.log(`store reconciliation: ${JSON.stringify(store)}`)
+  }
+  // Boot step 7: files are written without fsync, so after an unclean or
+  // unknown shutdown every file projection is verified against the disk
+  // (ownership rules: a truncated file is conflict-copied and rewritten).
+  if (bootRecord.boot.lastShutdown !== 'graceful') {
+    const marked = await verifyAllProjections()
+    await flushProjections()
+    console.log(`verified ${marked} file projection(s) after a ${bootRecord.boot.lastShutdown} shutdown`)
   }
   // Before anything serves or syncs a repository: remotes stored with a
   // credential in the URL (before #383 was fixed) are moved to encrypted storage.
@@ -70,12 +87,22 @@ try {
   await app.listen({ port: config.port, host: '0.0.0.0' })
   // One process, one port: the relay rides Fastify's own HTTP server.
   const collab = startCollabServer(app.server)
+  // Boot step 9, in the background: once the projector has drained, `.md`
+  // files no row or projection owns are moved to `.orphans/` (never deleted).
+  void flushProjections()
+    .then(() => sweepOrphanFiles())
+    .then((moved) => {
+      if (moved.length > 0) console.warn(`moved ${moved.length} orphan note file(s) to .orphans/`)
+    })
+    .catch((err: unknown) => console.error('orphan sweep failed:', err))
   // Hocuspocus used to install these itself inside its `listen()`. Without
   // them a redeploy drops every note edit still inside the store debounce.
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
       void collab
         .destroy()
+        // A bounded projector drain (§7); not needed for correctness: the next boot resumes it.
+        .then(() => Promise.race([flushProjections(), new Promise((resolve) => setTimeout(resolve, 5000).unref())]))
         .then(() => app.close())
         .then(() => sql.end({ timeout: 5 }))
         // Only once every flush finished: a shutdown that fails or that

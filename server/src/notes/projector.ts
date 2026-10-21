@@ -24,8 +24,8 @@
  * the owner is read again under it.
  */
 import { createHash } from 'node:crypto'
-import { readFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { config } from '../config.js'
 import { and, eq, isNull, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
@@ -578,4 +578,109 @@ export async function pendingProjections(vaultId?: string): Promise<number> {
     WHERE p.applied_seq < p.target_seq AND p.projection IN ('file', 'dir_index')
       ${vaultId ? sql`AND n.vault_id = ${vaultId}` : sql``}`)) as unknown as Array<{ n: number }>
   return row?.n ?? 0
+}
+
+/**
+ * Boot step 7 (§7): after an unclean or unknown shutdown, every `file` and
+ * `dir_index` projection is verified against the disk. Files are written
+ * without fsync, so a power loss can leave one empty or old; marking every
+ * projection pending makes the projector compare each path under the
+ * ownership rules (equal: record; content equal to the row: adopt; anything
+ * else: conflict copy, then rewrite). Returns how many projections it marked.
+ */
+export async function verifyAllProjections(): Promise<number> {
+  const marked = (await db.execute(sql`
+    UPDATE note_projections SET applied_seq = 0, attempts = 0, lease_until = NULL, updated_at = now()
+    WHERE projection IN ('file', 'dir_index') AND applied_seq > 0
+    RETURNING note_id`)) as unknown as unknown[]
+  return marked.length
+}
+
+/** A file the orphan sweep moved. */
+export interface OrphanFile {
+  vaultId: string
+  path: string
+  movedTo: string
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** Whether the DB gives `rel` an owner: the live note `<path>`, or the `dir_index` of a directory with a live note under it. */
+async function hasOwner(tx: Tx, vaultId: string, rel: string): Promise<boolean> {
+  if (await pathHasLiveOwner(tx, vaultId, rel, null)) return true
+  if (!/(^|\/)index\.md$/.test(rel)) return false
+  const dir = rel === 'index.md' ? '' : rel.slice(0, -'/index.md'.length)
+  const rows = await tx.execute(sql`
+    SELECT 1 FROM notes WHERE vault_id = ${vaultId} AND deleted_at IS NULL
+      AND (${dir} = '' OR left(path, ${dir.length + 1}) = ${`${dir}/`}) LIMIT 1`)
+  return (rows as unknown as unknown[]).length > 0
+}
+
+/** Every `*.md` under a vault directory, outside `assets/` and every dot-directory, vault-relative. */
+async function sweepCandidates(root: string): Promise<string[]> {
+  const found: string[] = []
+  async function visit(rel: string): Promise<void> {
+    let entries
+    try {
+      entries = await readdir(join(root, rel), { withFileTypes: true })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw err
+    }
+    for (const entry of entries) {
+      const child = rel ? `${rel}/${entry.name}` : entry.name
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith('.') || child === 'assets') continue
+        await visit(child)
+      } else if (entry.isFile() && entry.name.endsWith('.md')) found.push(child)
+    }
+  }
+  await visit('')
+  return found
+}
+
+/**
+ * The orphan sweep (§7 boot step 9), after the projector's first drain:
+ * a `*.md` file under `vaults/<id>/` (outside `assets/` and every
+ * dot-directory: `.trash`, `.conflicts`, `.orphans`, `.migration`, `.crdt*`)
+ * that has no `projected_files` row and no owner in the DB is moved to
+ * `.orphans/<path>` and reported, never deleted. Each path is decided under
+ * its path lock, so a file the projector is writing for a new note is kept.
+ * Directories of vaults the DB does not have are left alone.
+ */
+export async function sweepOrphanFiles(): Promise<OrphanFile[]> {
+  const vaultsRoot = join(config.dataDir, 'vaults')
+  let dirs: string[]
+  try {
+    dirs = (await readdir(vaultsRoot)).filter((name) => UUID.test(name))
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw err
+  }
+  const moved: OrphanFile[] = []
+  for (const vaultId of dirs) {
+    const root = vaultRoot(vaultId)
+    for (const rel of await sweepCandidates(root)) {
+      const orphan = await withPathLock(vaultId, rel, async (tx) => {
+        if (!(await vaultLive(tx, vaultId))) return null
+        if (await projectedFile(tx, vaultId, rel)) return null
+        if (await hasOwner(tx, vaultId, rel)) return null
+        let target = `.orphans/${rel}`
+        if (await stat(join(root, target)).then(() => true, () => false)) {
+          target = `.orphans/${rel.replace(/\.md$/, '')}.${new Date().toISOString().replace(/[-:.]/g, '')}.md`
+        }
+        await mkdir(dirname(join(root, target)), { recursive: true })
+        await rename(join(root, rel), join(root, target))
+        return { vaultId, path: rel, movedTo: target }
+      }).catch((err: unknown) => {
+        // A file removed meanwhile, or a path another process holds: the next boot looks again.
+        console.error(`[projector] orphan sweep of ${vaultId}/${rel} skipped:`, err instanceof Error ? err.message : err)
+        return null
+      })
+      if (!orphan) continue
+      moved.push(orphan)
+      console.warn(`[projector] ${vaultId}/${rel} has no owner in the database: moved to ${orphan.movedTo}`)
+    }
+  }
+  return moved
 }
