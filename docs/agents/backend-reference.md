@@ -214,7 +214,9 @@ seeded on first load deterministically (`seedClientId`: the first 4 bytes of
 later changes use the process's own client id), so two seeds of the same input merge. A load,
 store or write that finds `notes.seq > folded_seq` (the row changed outside
 the store) first merges that change into the state three-way against the
-revision at `folded_seq` (by lines; on an overlap the typing stays) and
+revision at `folded_seq` (`mergeTextKeepingTheirs`: by lines, then per
+character inside lines both sides changed, so edits to different words of
+one line both stay; where characters overlap the typing stays) and
 never rebuilds the text (#488). There are no `.crdt` bins any more.
 
 **S2b backfill and boot** (`sync/collab-backfill.ts`, `bootCollab` in

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
-import { diffLines, type LineHunk } from './text-diff.js'
+import { diffLines, diffText, type LineHunk, type TextEdit } from './text-diff.js'
 
 /**
  * Three-way merge of an edit made from an older revision of a note (#475,
@@ -60,10 +60,13 @@ export function mergeText(base: string, theirs: string, mine: string): TextMerge
 }
 
 /**
- * `mine` merged onto `theirs` where an overlap keeps `theirs`' lines instead
+ * `mine` merged onto `theirs` where an overlap keeps `theirs`' text instead
  * of refusing the merge (ADR-003 §5.4 rebase: acked typing, `theirs`, stays
  * in the text; `mine`, a row changed behind the store, stays recoverable
- * from its own revision). `overlaps` lists where `mine` was dropped.
+ * from its own revision). Changed lines both sides touched are merged again
+ * per character (diffText), so two edits to different words of one line
+ * both stay; only characters both changed differently keep `theirs`.
+ * `overlaps` lists the line groups where some of `mine` was dropped.
  */
 export function mergeTextKeepingTheirs(base: string, theirs: string, mine: string): { text: string; overlaps: LineChange[] } {
   const merged = mergeLines(base, theirs, mine, true)
@@ -104,22 +107,86 @@ function mergeLines(
     for (let k = copied; k < start; k++) out.push(baseLines[k]!)
     const theirLines = sideLines(baseLines, group, false, start, end)
     const change: LineChange = { line: start + shift + 1, removed: end - start, added: theirLines.length }
-    let lines = theirLines
+    let text = theirLines.join('')
     if (group.every((hunk) => !hunk.mine)) {
       concurrent.push(change)
     } else {
-      lines = sideLines(baseLines, group, true, start, end)
-      if (group.some((hunk) => !hunk.mine) && lines.join('') !== theirLines.join('')) {
+      const mineText = sideLines(baseLines, group, true, start, end).join('')
+      if (!group.some((hunk) => !hunk.mine) || mineText === text) {
+        text = mineText
+      } else if (keepTheirs) {
+        // Both sides changed these lines: merged again per character, `theirs` kept where characters overlap.
+        const merged = mergeCharacters(baseLines.slice(start, end).join(''), text, mineText)
+        if (merged.overlap) conflicts.push(change)
+        text = merged.text
+      } else {
         conflicts.push(change)
-        if (keepTheirs) lines = theirLines
+        text = mineText
       }
     }
-    for (const line of lines) out.push(line)
+    out.push(text)
     shift += theirLines.length - (end - start)
     copied = end
   }
   for (let k = copied; k < baseLines.length; k++) out.push(baseLines[k]!)
   return { text: out.join(''), concurrent, conflicts }
+}
+
+interface SideEdit extends TextEdit {
+  mine: boolean
+}
+
+/** `base` from `start` to `end` with the edits of one side in that range applied. */
+function sideText(base: string, edits: readonly SideEdit[], mine: boolean, start: number, end: number): string {
+  let out = ''
+  let at = start
+  for (const edit of edits) {
+    if (edit.mine !== mine) continue
+    out += base.slice(at, edit.at) + edit.insert
+    at = edit.at + edit.remove
+  }
+  return out + base.slice(at, end)
+}
+
+/**
+ * The same merge per character, for one run of lines both sides changed:
+ * each side's changes are its diffText edits from `base`; edits that touch
+ * different characters (or are the same edit) all apply; where they overlap
+ * (shared characters, an insertion inside the other side's removal, or two
+ * different insertions at one point) `theirs` is kept and `overlap` is set.
+ */
+function mergeCharacters(base: string, theirs: string, mine: string): { text: string; overlap: boolean } {
+  const edits: SideEdit[] = [
+    ...diffText(base, theirs).map((edit) => ({ ...edit, mine: false })),
+    ...diffText(base, mine).map((edit) => ({ ...edit, mine: true })),
+  ]
+  edits.sort((x, y) => x.at - y.at || x.remove - y.remove)
+  let out = ''
+  let copied = 0
+  let overlap = false
+  for (let i = 0; i < edits.length; ) {
+    const group = [edits[i++]!]
+    const start = group[0]!.at
+    let end = start + group[0]!.remove
+    while (i < edits.length) {
+      const next = edits[i]!
+      if (!(next.at < end || (next.at === end && next.remove === 0 && start === end))) break
+      group.push(next)
+      end = Math.max(end, next.at + next.remove)
+      i++
+    }
+    out += base.slice(copied, start)
+    const theirText = sideText(base, group, false, start, end)
+    if (group.every((edit) => !edit.mine)) out += theirText
+    else {
+      const mineText = sideText(base, group, true, start, end)
+      const both = group.some((edit) => !edit.mine)
+      if (both && mineText !== theirText) overlap = true
+      out += both ? theirText : mineText
+    }
+    copied = end
+  }
+  return { text: out + base.slice(copied), overlap }
 }
 
 /** The merged frontmatter, the keys only `theirs` changed, and the keys both changed differently. */

@@ -251,6 +251,26 @@ describe('rebase of a row changed behind the store (§5.4)', () => {
       SELECT count(*)::int AS n FROM note_revisions WHERE note_id = ${note.id} AND action = 'migration:backfill'`)) as unknown as Array<{ n: number }>
     expect(outOfBand!.n).toBe(1)
   }, 30_000)
+
+  it('keeps both sides of edits to different words of the same line, across a reconnect', async () => {
+    const note = await create('same-line', 'alpha beta gamma\n')
+    const { provider, text, resynced } = await open(note.id)
+    await collab.destroy()
+    // While the relay is down the tab types at the start of the line; the
+    // relay had logged that update but not folded it (an acked, unfolded
+    // tail), and a writer outside the store changes the end of the same line.
+    let typing: Uint8Array | null = null
+    provider.document.once('update', (update: Uint8Array) => (typing = update))
+    text.insert(0, 'NEW ')
+    await db.execute(sql`
+      INSERT INTO note_updates (note_id, update, actor_type) VALUES (${note.id}, ${Buffer.from(typing!)}, 'user')`)
+    await db.execute(sql`UPDATE notes SET body = ${'alpha beta GAMMA\n'} WHERE id = ${note.id}`)
+    collab = startCollabServer(app.server)
+    await resynced()
+    await waitFor(() => text.toString() === 'NEW alpha beta GAMMA\n')
+    await waitFor(async () => (await rowBody(note.path)) === 'NEW alpha beta GAMMA\n')
+    expect(count(text.toString(), 'NEW')).toBe(1)
+  }, 30_000)
 })
 
 describe('the S2b backfill (§8 step 4, #488)', () => {
