@@ -10,7 +10,7 @@ import { eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { getLiveNote, noteLock, readNote, updateNote, splitPath } from '../notes/store.js'
-import { NoteNotMigratedError, noteMigrated } from '../notes/store-tx.js'
+import { NoteNotMigratedError, noteMigrated, storeMigrationPending } from '../notes/store-tx.js'
 import { withKeyLock } from '../notes/key-lock.js'
 import { docState, liveDocumentsOf, mergeDocuments, registerLiveDocs, sharesHistory, type LiveDocument } from './live-docs.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
@@ -59,6 +59,19 @@ class SessionEnded extends Error {
   readonly reason = 'signed-out'
   constructor(documentName: string) {
     super(`the session that opened ${documentName} ended`)
+  }
+}
+
+/**
+ * Thrown from `onAuthenticate` for a note the store migration has not
+ * processed yet (ADR-003 §8, Q5): Hocuspocus sends `reason` to the client as
+ * the authentication failure; the editor (client/src/hooks/useCollabDoc.ts)
+ * reads `note-not-migrated` and says an administrator must restart the server.
+ */
+class NoteNotMigratedRefusal extends Error {
+  readonly reason = 'note-not-migrated'
+  constructor() {
+    super(new NoteNotMigratedError().message)
   }
 }
 
@@ -179,11 +192,12 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         throw new Error('edit access required')
       }
       // A note the store migration has not processed yet takes no writes, so no
-      // editor either: nothing may be typed that could not be stored. The tab
-      // shows the relay's refusal ("this note stopped syncing"), not a silent editor.
-      const { path } = parseDocName(documentName)
-      const note = await getLiveNote(vaultId, path)
-      if (note && !(await noteMigrated(db, note.id))) throw new Error(new NoteNotMigratedError().message)
+      // editor either: nothing may be typed that could not be stored. The
+      // refusal carries its own reason, which the editor shows as such.
+      if (storeMigrationPending()) {
+        const note = await getLiveNote(vaultId, parseDocName(documentName).path)
+        if (note && !(await noteMigrated(db, note.id))) throw new NoteNotMigratedRefusal()
+      }
       return { userId, sessionHash } satisfies ConnectionContext
     },
 

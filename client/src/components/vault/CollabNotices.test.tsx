@@ -34,6 +34,13 @@ describe('CollabNotices', () => {
     expect(screen.queryByRole('button', { name: /discard this copy/i })).toBeNull()
   })
 
+  it('says a note waiting for the store migration needs an admin restart, not that access was removed', () => {
+    render(<CollabNotices revoked={false} notMigrated tooLarge={null} unmerged={null} onDiscard={() => {}} />)
+    expect(screen.getByText(/waiting for the store migration/i)).toBeTruthy()
+    expect(screen.getByText(/restart the server/i)).toBeTruthy()
+    expect(screen.queryByText(/access to this note was removed/i)).toBeNull()
+  })
+
   it('renders nothing when there is nothing to say', () => {
     const { container } = render(<CollabNotices revoked={false} tooLarge={null} unmerged={null} onDiscard={() => {}} />)
     expect(container.textContent).toBe('')

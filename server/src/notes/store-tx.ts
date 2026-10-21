@@ -32,10 +32,16 @@ export const INSTANCE_LOCK_KEY = 0x454c_4152_4100n
 /** How long a store transaction waits for a row or advisory lock before it answers "retry" (§5.1). */
 const LOCK_TIMEOUT = '5s'
 
-/** A write refused because the store is busy (lock timeout, maintenance): nothing was committed; retry later. HTTP 503. */
+/**
+ * A write refused because the store is busy (lock timeout, maintenance, a
+ * note not migrated yet): nothing was committed. HTTP 503. Its message names
+ * no path or content, so it is shown to the caller in production too
+ * (`expose`, app.ts), where other 5xx messages are hidden.
+ */
 export class StoreBusyError extends Error {
   readonly statusCode = 503
   readonly status = 'retry'
+  readonly expose = true
   constructor(reason: string) {
     super(`the note store is busy (${reason}); nothing was written, retry the write`)
   }
@@ -106,6 +112,11 @@ let migrationPending = false
 
 export function setStoreMigrationPending(pending: boolean): void {
   migrationPending = pending
+}
+
+/** Whether a backfill is pending (some notes may refuse writes and editors). */
+export function storeMigrationPending(): boolean {
+  return migrationPending
 }
 
 /** `note_projections.projection` of the per-note backfill marker: the backfill processed this note (or it needed none). */

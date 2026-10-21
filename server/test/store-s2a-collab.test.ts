@@ -223,8 +223,8 @@ describe('a note the store migration has not processed (§8, Q5)', () => {
       })
       providers.push(provider)
       await waitFor(() => refused !== '')
-      // Hocuspocus answers every onAuthenticate refusal as `permission-denied`; the client shows its refused state (`revoked`).
-      expect(refused).toBe('permission-denied')
+      // The refusal's own reason (Hocuspocus sends `error.reason`); the editor reads it and asks for a restart.
+      expect(refused).toBe('note-not-migrated')
       expect(provider.isSynced).toBe(false)
       expect(collab.hocuspocus.documents.has(`${vaultId}/docs/unmigrated`)).toBe(false)
     } finally {
