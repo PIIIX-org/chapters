@@ -1021,7 +1021,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireAccess(target, 'read')
       const note = await readLiveNote(target, path)
       if (!note) throw new McpToolError('note not found')
-      rememberRead(auth.connection.id, note.row.id, note.row.seq)
+      await rememberRead(auth.connection.id, note.row.id, note.row.seq)
       showAgentPresence(target, note.row.path, presence, 'reading')
       return {
         path: note.row.path,
@@ -1151,7 +1151,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         const edit = requestedEdit(args)
         // A whole body without base_rev is made from what this connection last read of the note (#408, #476).
         const live = baseRev === undefined && args.body !== undefined ? await getLiveNote(target, args.path) : null
-        const readRev = live ? lastRead(auth.connection.id, live.id) : undefined
+        const readRev = live ? await lastRead(auth.connection.id, live.id) : undefined
         const usedRev = baseRev ?? readRev
         if (usedRev !== undefined) {
           const base = await getBaseRevision(target, args.path, usedRev)
@@ -1203,7 +1203,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         if (!updated) throw new McpToolError('note not found')
         if (!dryRun) {
           showAgentPresence(target, updated.path, presence, 'editing')
-          if (args.body !== undefined && updated.body === args.body) advanceRead(auth.connection.id, updated.id, updated.seq)
+          if (args.body !== undefined && updated.body === args.body) await advanceRead(auth.connection.id, updated.id, updated.seq)
         }
         return answer(updated, dryRun ? false : await noteIndexed(updated.id, updated.seq))
       })
@@ -2149,7 +2149,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireAccess(target, 'read')
       const note = await readLiveNote(target, path)
       if (!note) throw new McpToolError('note not found')
-      rememberRead(auth.connection.id, note.row.id, note.row.seq)
+      await rememberRead(auth.connection.id, note.row.id, note.row.seq)
       showAgentPresence(target, note.row.path, presence, 'reading')
       return {
         path: note.row.path,

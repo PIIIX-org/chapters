@@ -552,6 +552,24 @@ export const writeIdempotency = pgTable(
   ],
 )
 
+/** The `rev` an MCP connection last read of a note (#408, #476, migration 0028): the base of a whole edit_note `body` sent without `base_rev`. */
+export const noteReads = pgTable(
+  'note_reads',
+  {
+    connectionId: uuid('connection_id').notNull(),
+    noteId: uuid('note_id').notNull(),
+    rev: bigint('rev', { mode: 'number' }).notNull(),
+    readAt: timestamp('read_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'note_reads_pkey', columns: [t.connectionId, t.noteId] }),
+    foreignKey({ name: 'note_reads_connection_id_fkey', columns: [t.connectionId], foreignColumns: [mcpConnections.id] }).onDelete('cascade'),
+    foreignKey({ name: 'note_reads_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete('cascade'),
+    index('note_reads_read_at').on(t.readAt),
+    index('note_reads_note_id').on(t.noteId),
+  ],
+)
+
 /** EXTRACTED edges: wikilink targets per note, replaced on every save. */
 export const noteLinks = pgTable(
   'note_links',

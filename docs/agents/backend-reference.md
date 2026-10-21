@@ -189,6 +189,7 @@ lasting default on a table old code writes, nothing dropped or renamed).
 | `notes.frontmatter_src` | `json` copy of the frontmatter in its original key order (jsonb reorders keys); for rendering files and answering reads |
 | `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), actor detail (#403). `idempotency_key` stays unused: #477's keys need the call's arguments and its whole answer, also for writes that record no revision, so they live in `write_idempotency` |
 | `write_idempotency` (migration 0025) | the first answer of an MCP write sent with `idempotency_key` (#477, `mcp/write-result.ts` `runWrite`): PK (`connection_id`, `key`), `tool`, `args_hash` (sha256 of the tool, vault and canonical arguments), `note_id` (FK to `notes`, cascade: purging the note deletes its keys and the note text their answers hold), `result` jsonb, `created_at` (indexed). A write that commits inserts its row **inside its own store transaction** (`WriteOptions.recordKey`, called with the committed row by `createNote`, `writeNote`, the rename move, `softDeleteNote`, `restoreNote`), so a crash after COMMIT and before the answer still leaves the key and the retry replays (ADR-003 §4, §10); its recorded answer has `indexed: false`. Answers that commit nothing (`conflicted`) are inserted after the call. A repeat with the same hash answers `result` + `replayed: true`; another hash is refused. Every keyed call first deletes rows older than 24 h. Calls with one key run one at a time (in-process key lock). Rows also go with their connection (FK cascade) |
+| `note_reads` (migration 0028, after #861's 0026 and #858's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
 | `note_crdt` | Yjs snapshot per note id (replaces `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
 | `note_projections` | per note and projection (`file`/`dir_index`/`embedding`): `target_seq`, `applied_seq`, `index_version`, lease and error columns; `note_projections_pending` indexes the work queue |
@@ -582,9 +583,9 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   to the result's `rev`. `create_note`, `append_note`, `upsert_note`,
   `ops`-only and frontmatter-only edits neither record nor use it, so a
   connection that never read the note still replaces the live text (a
-  blind replace stays a replace). In memory, the newest 50 000 pairs; a
-  restart forgets them, and a revision gone since (purged) falls back to
-  the live diff.
+  blind replace stays a replace). Kept in `note_reads` (above) for 24 h,
+  so a restart between the read and the edit keeps it; a read older than
+  that, or a revision gone since (purged), falls back to the live diff.
 - **Atomic append and upsert** (#478): MCP `append_note` is the `append`
   op and `upsert_note` a whole-`body` edit, both an ordinary
   `withRestorePoint` + `writeThroughCollab` edit, which applies them to
