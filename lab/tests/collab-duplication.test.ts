@@ -1,27 +1,31 @@
 // Is the #379 text-duplication bug class still alive?
 //
 // #379 (commit afed492) made the relay persist the Yjs state next to the
-// note (`.crdt/<path>.bin`, server/src/sync/crdt-store.ts) and reconcile the
-// file into it on load (collab-server.ts:119-155). Duplication happens when a
-// client holding Yjs items the server no longer knows (a stale Y.Doc)
-// reconnects to a server document rebuilt with NEW items for the same text.
+// note; since ADR-003 S2b that state lives in Postgres (`note_crdt` snapshot
+// plus the `note_updates` log, server/src/sync/note-crdt.ts), the relay
+// names documents `<vaultId>/~<noteId>`, and a load merges a row changed
+// behind the CRDT state into it instead of rebuilding the text. Duplication
+// happens when a client holding Yjs items the server no longer knows (a
+// stale Y.Doc) reconnects to a server document rebuilt with NEW items for
+// the same text.
 // This test drives a real @hocuspocus/provider client exactly like
 // client/src/hooks/useCollabDoc.ts (ticket per connect, same Y.Doc across
 // reconnects) through: typing, network blips, unmount/remount, offline edits,
 // MCP edit_note while connected / concurrent / while offline, logout+login,
 // graceful restart, SIGKILL, a SIGKILL timing sweep around the store
-// debounce, and a deterministic injection of the one crash window the code
-// leaves open: onStoreDocument writes the note (collab-server.ts:180) BEFORE
-// the .crdt bin (collab-server.ts:186).
+// debounce, and a deterministic injection of the crash window the old relay
+// left open (note written, CRDT state not): the note's CRDT state is saved
+// in the database and put back behind a newer row (S18, S19). Check names
+// keep ".crdt" so the known-defects baseline still matches.
 //
 // After every step: body on disk (parsed by the app's own parseNote inside
-// the container), notes.body in Postgres, the decoded .crdt bin and every
-// connected client are compared, and every marker ever typed is counted in
-// each. Any count > 1 = duplication.
+// the container), notes.body in Postgres, the note's CRDT state decoded from
+// Postgres and every connected client are compared, and every marker ever
+// typed is counted in each. Any count > 1 = duplication.
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
-import { CollabClient, Y } from '../lib/collab.ts'
+import { CollabClient, Y, collabDocName } from '../lib/collab.ts'
 import { RestSession } from '../lib/rest.ts'
-import { appLogsSince, containerCp, count, dbBody, dbNotes, dumpVault, genBody, sha } from '../lib/datapath.ts'
+import { appLogsSince, count, dbBody, dbNotes, dumpVault, genBody, restoreCrdtState, saveCrdtState, sha } from '../lib/datapath.ts'
 
 const SETTLE_MS = 3500 // COLLAB_DEBOUNCE_MS default 2000 (collab-server.ts:18) + margin
 
@@ -180,7 +184,7 @@ const test: LabTest = {
     markers.push(base)
     let expected = `${base}\n\n${genBody(2000, 11)}\nend of base`
     const n1 = { path: p1, id: await createNote(p1, expected) }
-    const docName = `${vault.id}/${p1}`
+    const docName = collabDocName(vault.id, n1.id)
 
     const A = new CollabClient(ctx.baseUrl, docName, sess)
     const okA = await A.connect()
@@ -399,27 +403,26 @@ const test: LabTest = {
     }
 
     // ------------------------------------------------------------ note 2: injected crash window
-    // collab-server.ts:176-190 writes the note (updateNote) and only then the
-    // .crdt bin. A SIGKILL between the two leaves file = new, bin = old. This
-    // reproduces that state deterministically: snapshot the bin, let one
-    // edit store, restart gracefully (doc unloaded), put the old bin back.
+    // The old relay wrote the note and only then its .crdt bin; a SIGKILL
+    // between the two left file = new, CRDT state = old. This reproduces that
+    // state deterministically: save the note's CRDT state, let one edit
+    // store, restart gracefully (doc unloaded), put the old state back.
     const p2 = 'dup/note-two'
     const base2 = mk('BASE2')
     markers.push(base2)
     const body2 = `${base2}\n\n${genBody(1500, 22)}\nend of base 2`
     const n2 = { path: p2, id: await createNote(p2, body2) }
-    const bin = `/data/elara/vaults/${vault.id}/.crdt/${p2}.bin`
     const injection: Record<string, unknown>[] = []
     for (const variant of ['fresh ydoc (page reload)', 'stale ydoc (tab kept open)'] as const) {
-      const C = new CollabClient(ctx.baseUrl, `${vault.id}/${p2}`, sess)
+      const C = new CollabClient(ctx.baseUrl, collabDocName(vault.id, n2.id), sess)
       await C.connect()
       await settle(C)
-      await containerCp(bin, `${bin}.lab-bak`)
+      await saveCrdtState(ctx, n2.id)
       const m = await typeMarker(C, variant.startsWith('fresh') ? 'INJFRESH' : 'INJSTALE')
       await settle(C)
       C.destroy()
       await ctx.docker.app.restart(ctx.baseUrl)
-      await containerCp(`${bin}.lab-bak`, bin)
+      await restoreCrdtState(ctx, n2.id)
       const before = await dumpVault(vault.id, [p2])
       const diskBefore = count(before.notes.find((n) => n.path === p2)?.body ?? '', m)
       const binBefore = count(before.crdt.find((c) => c.path === p2)?.body ?? '', m)
@@ -431,28 +434,26 @@ const test: LabTest = {
       C.destroy()
     }
 
-    // ------------------------------------------------------------ note 3: a stale .crdt is a lasting hazard
-    // onLoadDocument's reconcile (collab-server.ts:125-144) rewrites the body
-    // with NEW Yjs items but never saves the bin, and Hocuspocus attaches its
-    // store-on-update handler only after onLoadDocument (Hocuspocus.ts:445),
-    // so a session that only reads never persists that lineage. Chain after
-    // one crash-window leftover: a tab opens the note (fresh ydoc), stays idle,
-    // its network drops long enough for the doc to unload, it reconnects.
+    // ------------------------------------------------------------ note 3: a stale CRDT state is a lasting hazard
+    // The old relay's load rewrote the body with NEW Yjs items but never
+    // saved them, so a session that only reads never persisted that lineage.
+    // Chain after one crash-window leftover: a tab opens the note (fresh
+    // ydoc), stays idle, its network drops long enough for the doc to unload,
+    // it reconnects.
     const p3 = 'dup/note-three'
     const base3 = mk('BASE3')
     markers.push(base3)
     const n3 = { path: p3, id: await createNote(p3, `${base3}\n\n${genBody(1500, 33)}\nend of base 3`) }
-    const bin3 = `/data/elara/vaults/${vault.id}/.crdt/${p3}.bin`
-    const D = new CollabClient(ctx.baseUrl, `${vault.id}/${p3}`, sess)
+    const D = new CollabClient(ctx.baseUrl, collabDocName(vault.id, n3.id), sess)
     await D.connect()
     await settle(D)
-    await containerCp(bin3, `${bin3}.lab-bak`)
+    await saveCrdtState(ctx, n3.id)
     const m19 = await typeMarker(D, 'IDLE')
     await settle(D)
     D.destroy()
     await ctx.docker.app.restart(ctx.baseUrl)
-    await containerCp(`${bin3}.lab-bak`, bin3)
-    const E = new CollabClient(ctx.baseUrl, `${vault.id}/${p3}`, sess)
+    await restoreCrdtState(ctx, n3.id)
+    const E = new CollabClient(ctx.baseUrl, collabDocName(vault.id, n3.id), sess)
     const e1 = await E.connect()
     await Bun.sleep(SETTLE_MS) // read-only session: nothing typed
     await snap('S19a stale .crdt, fresh tab opens (reads only)', n3, { E }, { once: [base3, m19], checkConverged: false }, { reconnected: e1 })

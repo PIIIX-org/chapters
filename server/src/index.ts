@@ -11,6 +11,7 @@ import { startBackupScheduler } from './export/backup-service.js'
 import { config, MIN_MONITORING_TOKEN_LENGTH } from './config.js'
 import { sql } from './db/client.js'
 import { bootStore } from './notes/store-reconcile.js'
+import { bootCollab } from './sync/collab-backfill.js'
 import { flushProjections } from './notes/projector.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
@@ -36,6 +37,11 @@ try {
   if (!store.migrated) console.warn('store backfill had failures: see the migration report; it runs again at the next boot')
   const r = store.reconciled
   if (r && r.projections + r.raised + r.revisions + r.failed > 0) console.log(`store reconciliation: ${JSON.stringify(r)}`)
+  // ADR-003 S2b (§7 boot steps 2, 4-5): `.crdt` bins attached to `note_crdt`
+  // once (then `.crdt/` is retired), rows changed behind the store rebased,
+  // unfolded collab tails folded. One note's failure never stops boot.
+  const collabBoot = await bootCollab()
+  if (collabBoot.folded + collabBoot.failed > 0) console.log(`collab boot: ${collabBoot.folded} note(s) folded, ${collabBoot.failed} failed`)
   // Before anything serves or syncs a repository: remotes stored with a
   // credential in the URL (before #383 was fixed) are moved to encrypted storage.
   const scrub = await scrubStoredGitCredentials()
