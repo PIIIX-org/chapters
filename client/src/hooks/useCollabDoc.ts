@@ -734,12 +734,14 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
         // The relay closes the document with reason `note-too-large` for a
         // change over the cap (server/src/sync/collab-server.ts), ws closes
         // the socket with 1009 for a frame over its transport limit, the
-        // relay closes with `signed-out` when the session ended (#498), and
-        // with `note-deleted` when the note is deleted or purged.
+        // relay closes with `signed-out` when the session ended (#498), with
+        // `note-deleted` when the note is deleted or purged, and with
+        // `note-not-migrated` when its S2b roll-forward failed at this boot.
         onClose: ({ event }) => {
           if (event.reason === 'store-busy') storeBusy()
           else if (event.reason === 'signed-out') stop('signed-out')
           else if (event.reason === 'note-deleted') stop('deleted')
+          else if (event.reason === 'note-not-migrated') stop('not-migrated')
           else if (event.reason === 'note-too-large' || event.code === 1009) refuse()
         },
         onSynced: () => {

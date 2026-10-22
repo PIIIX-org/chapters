@@ -74,9 +74,13 @@ The ADR-003 store tests (`lab/lib/store.ts` helpers):
   file, row changed by SQL, orphan temp file), then boots the image under
   test and checks the backfill report and the invariants; a second run
   with a kill at `migration.mid-batch` must end in the same state.
-- `store-rollback`: `store-export-legacy` refused next to a running app,
-  run with the app stopped, the old image's edits (agent, collab, rename,
-  delete + restore), graceful stop, roll forward: I2, I4 and no new
+- `store-rollback`: a tab types into a note by id on the new image (it
+  gets CRDT state), `store-export-legacy` refused next to a running app,
+  run with the app stopped (it writes that note's `.crdt` bin), the old
+  image lists the bin and its editor opens the note by path with the row's
+  text and the new typing once, the old image's edits (agent, collab,
+  rename, delete + restore), graceful stop, roll forward: the report shows
+  the bin merged (shared history), both typings once, I2, I4 and no new
   `.conflicts/` entry.
 
 The image switch retags compose's `<project>-app` image and recreates the

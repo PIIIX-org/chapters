@@ -184,11 +184,14 @@ export async function noteMigrated(client: Tx | typeof db, noteId: string): Prom
 }
 
 /**
- * Notes whose S2b backfill failed at this boot (collab-backfill.ts): their
- * `.crdt` bin is still to be attached at the next restart. Until then the
- * relay refuses editors for them (`note-not-migrated`) and never seeds them,
- * so the rerun finds the note without CRDT state and attaches its bin
- * instead of skipping it and retiring the bin with `.crdt/`.
+ * Notes whose S2b backfill or roll-forward failed at this boot
+ * (collab-backfill.ts): their `.crdt` bin is still to be attached or merged
+ * at the next restart. Until then the relay refuses editors for them
+ * (`note-not-migrated`), nothing seeds them, writes refuse them
+ * (lockedNote, NoteNotMigratedError) and the boot fold leaves them alone.
+ * Otherwise the rerun would skip a seeded note's bin, or a rebase would put
+ * the older release's row change into the CRDT state as new items and the
+ * next boot would merge the same typing again from the bin (doubled).
  */
 let collabNotMigrated: ReadonlySet<string> = new Set()
 
@@ -196,7 +199,7 @@ export function setCollabNotMigrated(noteIds: Iterable<string>): void {
   collabNotMigrated = new Set(noteIds)
 }
 
-/** Whether note `noteId` can be opened in the relay: false while its S2b backfill is pending after a failure. */
+/** Whether note `noteId` can be opened in the relay and written: false while its S2b backfill or roll-forward is pending after a failure. */
 export function collabNoteMigrated(noteId: string): boolean {
   return !collabNotMigrated.has(noteId)
 }
@@ -204,7 +207,7 @@ export function collabNoteMigrated(noteId: string): boolean {
 /** The note row `id`, locked FOR UPDATE; null when it does not exist. */
 export async function lockedNote(tx: Tx, id: string): Promise<StoredNote | null> {
   const [row] = await tx.select(storedColumns).from(notes).where(eq(notes.id, id)).for('no key update')
-  if (row && !(await noteMigrated(tx, id))) throw new NoteNotMigratedError()
+  if (row && (!collabNoteMigrated(id) || !(await noteMigrated(tx, id)))) throw new NoteNotMigratedError()
   return row ? toStored(row) : null
 }
 

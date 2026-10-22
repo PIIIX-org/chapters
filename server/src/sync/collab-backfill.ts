@@ -31,6 +31,8 @@ import * as Y from 'yjs'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { failpoint } from '../failpoints.js'
+import { atomicWrite } from '../notes/atomic-write.js'
+import { sameContent } from '../notes/frontmatter-order.js'
 import { parseNote } from '../notes/okf.js'
 import { foldPendingCollab } from '../notes/store.js'
 import { BACKFILL_MARKER, setCollabNotMigrated, storeTransaction, type Tx } from '../notes/store-tx.js'
@@ -224,8 +226,9 @@ async function attachBins(kind: CollabBackfillReport['kind']): Promise<CollabBac
       failpoint('migration.mid-batch')
     }
   }
-  // A note whose backfill failed takes no editor until a restart attaches its bin (relay: note-not-migrated).
-  if (kind === 'adr-003-collab-backfill') setCollabNotMigrated(report.failed.map((f) => f.noteId))
+  // A note whose backfill or roll-forward failed takes no editor and no write, and the boot fold leaves it alone,
+  // until a restart attaches or merges its bin (relay: note-not-migrated). `.crdt/` stays in place for that rerun.
+  setCollabNotMigrated(report.failed.map((f) => f.noteId))
   if (report.failed.length === 0 && report.waiting === 0) {
     if (kind === 'adr-003-collab-backfill') {
       await db.execute(sql`
@@ -268,4 +271,62 @@ export async function bootCollab(): Promise<{ backfill: CollabBackfillReport | n
   else if ((await vaultsWithBins()).length > 0) backfill = await attachBins('adr-003-collab-roll-forward')
   const { folded, failed } = await foldPendingCollab()
   return { backfill, folded, failed }
+}
+
+/** What exportCrdtBins wrote for the old relay (ADR-003 §9 step 2). */
+export interface CrdtBinExport {
+  /** Bins written: live notes whose CRDT state equals their row. */
+  written: number
+  /**
+   * Live notes with CRDT state that got no bin: the state does not equal the
+   * row (`fold_error`, a fold that failed). The old relay seeds them from the
+   * file; the state stays in `note_crdt` with the typing it holds, and the
+   * roll-forward sets a bin the old relay wrote for them aside (`unrelated`).
+   */
+  skipped: Array<{ noteId: string; vaultId: string; path: string; reason: string }>
+  failed: Array<{ noteId: string; error: string }>
+}
+
+/**
+ * The stopped-server export's bins for a code-only rollback (ADR-003 §9
+ * step 2): `.crdt/<path>.bin` for every live note with CRDT state, the
+ * layout the relay before S2b reads (crdt-store.ts), keyed by the note's
+ * current path and written atomically. A bin is `note_crdt` ⊕ the
+ * non-rejected tail, written only when its text and frontmatter equal the
+ * row (the export folds every tail first): the old relay then loads it as
+ * it is and never takes its rebuild branch, so no tab holding those items
+ * doubles them, and the roll-forward finds the bins it wrote from it share
+ * that history and merges them. Run under the export's exclusive lock.
+ */
+export async function exportCrdtBins(): Promise<CrdtBinExport> {
+  const report: CrdtBinExport = { written: 0, skipped: [], failed: [] }
+  let after = '00000000-0000-0000-0000-000000000000'
+  for (;;) {
+    const rows = (await db.execute(sql`
+      SELECT n.id FROM notes n JOIN note_crdt c ON c.note_id = n.id
+      WHERE n.id > ${after}::uuid AND n.deleted_at IS NULL ORDER BY n.id LIMIT ${BATCH}`)) as unknown as Array<{ id: string }>
+    if (rows.length === 0) break
+    after = rows.at(-1)!.id
+    for (const { id } of rows) {
+      try {
+        await storeTransaction([id], async (tx) => {
+          const [row] = (await tx.execute(sql`
+            SELECT id, vault_id, path, seq, frontmatter, body FROM notes WHERE id = ${id} AND deleted_at IS NULL FOR UPDATE`)) as unknown as Row[]
+          const crdt = row ? await readNoteCrdt(tx, id) : null
+          if (!row || !crdt) return
+          const state = docState(crdt.doc)
+          if (state.body !== row.body || !sameContent({ ...state.frontmatter, type: row.frontmatter.type }, row.frontmatter)) {
+            const reason = crdt.foldError ?? 'the CRDT state differs from the row'
+            report.skipped.push({ noteId: id, vaultId: row.vault_id, path: row.path, reason })
+            return
+          }
+          await atomicWrite(crdtFile(row.vault_id, row.path), Y.encodeStateAsUpdate(crdt.doc))
+          report.written++
+        })
+      } catch (err) {
+        report.failed.push({ noteId: id, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+  }
+  return report
 }

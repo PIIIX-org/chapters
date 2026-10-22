@@ -276,14 +276,24 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
 - **Code-only rollback**: `store-export-legacy` (`notes/store-export.ts`)
   with no server running: exclusive lock; refused while the backfill has
   failures (`store_migrated_at` unset: those notes' files must still win);
-  reconciliation; every `file`/`dir_index` projection verified against the
+  reconciliation; every unfolded collab tail folded (boot steps 4-5);
+  every `file`/`dir_index` projection verified against the
   disk (offline, so always: a file an unclean stop truncated is rewritten)
   and every store job (also leased, out of attempts or failed ones) run
   synchronously (the per-note `backfill` marker rows are not projections
-  and are left alone); the CLI loads `store.ts` so the rename refactor
-  runner is registered; a report
+  and are left alone); then `.crdt/<path>.bin` for every live note with CRDT
+  state (`exportCrdtBins`, sync/collab-backfill.ts: `note_crdt` ⊕ the
+  non-rejected tail, atomically, the layout the relay before S2b reads),
+  written only where that state equals the row, so the old relay opens it
+  as it is and never rebuilds; a note whose state differs (a fold that
+  failed, `fold_error`) gets none and is listed in `bins.skipped` (a failed
+  fold also counts in `folded.failed` and makes the export not ok; a
+  refused state alone does not: the row is its last valid version); the CLI
+  loads `store.ts` so the rename refactor runner is registered; a report
   `DATA_DIR/store-export-legacy-<utc>.json`; exit 0 only when nothing is
-  pending. Roll-forward is the boot above. Operator procedure:
+  pending and no fold or bin failed. Roll-forward is the boot above (it
+  merges the bins the old relay wrote from the exported ones: shared
+  history). Operator procedure:
   `docs/self-hosting/backup.md` §5.
 - **Failpoints** (`failpoints.ts`): `ELARA_FAILPOINTS=<name>[,…]` SIGKILLs
   the process at that store boundary; inert when unset. The lab's
@@ -332,9 +342,14 @@ write materialise and refresh the cache.
 revision (with a diff to the row's text on top) and otherwise moved to
 `vaults/<id>/.migration/<date>/bins/` (`setAside[].reason`: `unknown-text`,
 `undecodable`); one transaction per note, so a rerun resumes. A note whose
-backfill failed is refused by the relay with `note-not-migrated` and never
-seeded until a restart attaches its bin (`setCollabNotMigrated`, store-tx.ts);
-otherwise a seed would make the rerun skip it and retire its bin. The
+backfill or roll-forward failed is gated until a restart attaches or merges
+its bin (`setCollabNotMigrated`, store-tx.ts): the relay refuses it with
+`note-not-migrated`, nothing seeds it, writes refuse it (`lockedNote`,
+`NoteNotMigratedError`, HTTP 503), S3's append refuses it, the boot fold
+skips it and `readLiveNote` serves its stored row without a fold, and `.crdt/`
+stays in place. Otherwise a seed would make the rerun skip the bin, or a
+rebase would add the older release's row change to the state as new items
+and the rerun would merge the same typing again from the bin. The
 finish (no failure, no note waiting for S2a) sets the marker, renames each
 vault's `.crdt/` to `.crdt.pre-adr-003/` (kept for a code-only rollback) and
 writes `DATA_DIR/collab-migration-report-<time>.json`. Afterwards (roll-forward
@@ -344,7 +359,8 @@ after a code-only rollback), a `.crdt/` bin left by older code is merged into
 bin the old relay saved from the exported state); a bin older code seeded
 afresh from the file shares none and is set aside (`unrelated`), since merging
 it would double the note. `.crdt/` then moves to `.crdt.rollback-<time>/`, and
-what older code changed in the row reaches the state through the rebase.
+what older code changed in the row reaches the state through the rebase
+(for a merged bin both sides hold that change, so it lands once).
 Every boot then runs ADR §7 steps 4-5: merge rows changed outside the store
 (`notes.seq > folded_seq`), then fold every pending tail, each note in its
 own transaction (a failure sets `fold_error` to `boot fold failed: …`,

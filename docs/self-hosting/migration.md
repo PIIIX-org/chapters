@@ -52,7 +52,8 @@ first boot of the S2a release.
 Restoring the pre-upgrade backup is the clean way back (backup.md §5).
 Keeping the data written since the upgrade is supported for one release
 with the stopped-server export, `store-export-legacy`: backup.md §5,
-"Migration 0021 and the S2a store".
+"Migration 0021 and the S2a store" (files) and "ADR-003 S2b" (the `.crdt`
+bins it writes for the older release).
 
 ## Run the dry run
 

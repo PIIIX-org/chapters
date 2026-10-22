@@ -724,7 +724,9 @@ export async function readLiveNote(vaultId: string, path: string): Promise<ReadN
   const seen = await readStored(vaultId, resolved.fullPath)
   if (!seen) return null
   // S3: acked typing is in note_updates even when no editor has the note open (a tab closed before its store, a crash).
-  if (!liveDocumentOf(seen.id) && !(await foldPending(seen.id))) return presented(seen)
+  // A note whose S2b backfill or roll-forward failed at this boot takes no fold until a restart merges its bin
+  // (collabNoteMigrated): its stored row is what can be read, and a fold attempt could never succeed.
+  if (!collabNoteMigrated(seen.id) || (!liveDocumentOf(seen.id) && !(await foldPending(seen.id)))) return presented(seen)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const row = await readStored(vaultId, resolved.fullPath)
     if (!row) return null
@@ -2027,8 +2029,6 @@ export async function loadCollabState(
           if (row.seq !== locked.seq) foldedRow = true
           return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null }
         }
-        // Its bin is still to be attached at the next restart: a seed now would make the backfill skip it.
-        if (!collabNoteMigrated(noteId)) throw new NoteNotMigratedError()
         const seed = seedDocument(noteId, { frontmatter: locked.frontmatter as Record<string, unknown>, body: locked.body })
         await insertNoteCrdt(tx, noteId, seed, locked.seq)
         return { state: Y.encodeStateAsUpdate(seed), lastId: 0 }
@@ -2126,6 +2126,8 @@ async function drainAppends(noteId: string, queue: AppendQueue): Promise<void> {
 async function commitAppends(noteId: string, batch: PendingAppend[]): Promise<LoggedUpdate[] | null> {
   // As every store transaction (storeTransaction): nothing is written while this process has lost its maintenance lock.
   if (writesPaused()) throw new StoreBusyError('maintenance lock connection lost, reconnecting')
+  // As lockedNote: a note whose S2b backfill or roll-forward failed at this boot takes nothing until its bin is merged.
+  if (!collabNoteMigrated(noteId)) throw new NoteNotMigratedError()
   const vaultId = batch[0]!.vaultId
   const values = sql.join(
     batch.map((item, i) => sql`(${i}::int, ${Buffer.from(item.update)}::bytea, ${item.actor.type}::actor_type, ${item.actor.id ?? null}::uuid)`),
@@ -2217,11 +2219,14 @@ export async function compactCollabState(vaultId: string, noteId: string): Promi
  * A failure is recorded on the note (`fold_error`, a failed `collab-store`
  * job) and counted; boot never stops for one note.
  * `onlyIds` (doctor --repair, #495): only those of these notes that need it.
+ * A note whose S2b backfill or roll-forward failed at this boot is left
+ * alone (collabNoteMigrated): its bin is merged at the next restart, and a
+ * rebase now would add the older release's change a second time then.
  */
 export async function foldPendingCollab(onlyIds?: readonly string[]): Promise<{ folded: number; failed: number }> {
   let folded = 0
   let failed = 0
-  const needing = await notesNeedingFold(db)
+  const needing = (await notesNeedingFold(db)).filter((id) => collabNoteMigrated(id))
   for (const noteId of onlyIds ? needing.filter((id) => onlyIds.includes(id)) : needing) {
     let vaultId: string | null = null
     try {
