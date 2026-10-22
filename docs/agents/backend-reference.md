@@ -917,9 +917,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   and `DATA_DIR` (#578), so a test that leaves a note in any of these
   states fails CI. Tests that damage a note on purpose restore its file
   before they end, and tests that insert note rows without files delete
-  their fixture vaults. One exception: the MCP storage-failure test pins
-  the known row-ahead-of-file bug (#486, #489) with an assertion and then
-  soft-deletes that note so the gate skips it. It also reports
+  their fixture vaults. It also reports
   `orphan-file`: a `.md` file outside `assets/` and the dot-directories
   with no `projected_files` row, no live note at its path and (for an
   `index.md`) no live note under its directory, i.e. what the boot orphan
