@@ -111,5 +111,5 @@ describe('concurrent index.md regeneration in one folder (#779)', () => {
     const index = await readFile(join(config.dataDir, 'vaults', vaultId, FOLDER, 'index.md'), 'utf8')
     const unlisted = outcomes.filter((o) => !new RegExp(`note-${o.i}(?!\\d)`).test(index)).map((o) => o.i)
     expect(unlisted).toEqual([])
-  }, 30_000)
+  })
 })

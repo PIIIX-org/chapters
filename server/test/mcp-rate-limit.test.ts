@@ -60,15 +60,14 @@ describe('mcp rate limiting over HTTP (#552)', () => {
 
   afterAll(async () => app.close())
 
-  async function mint(cookie: string): Promise<string> {
+  async function mint(cookie: string): Promise<{ id: string; token: string }> {
     const res = await app.inject({
       method: 'POST',
       url: '/api/mcp-connections',
       headers: { cookie },
       body: { name: 'rate-limit', scope: 'account' },
     })
-    const created: { token: string } = res.json()
-    return created.token
+    return res.json<{ id: string; token: string }>()
   }
 
   function post(token: string) {
@@ -83,22 +82,34 @@ describe('mcp rate limiting over HTTP (#552)', () => {
     })
   }
 
-  /** Sends `LIMIT` requests on the token (all must pass), then one more, and returns that response. */
-  async function exhaust(token: string): Promise<Response> {
+  /** Requests of the limit sent over HTTP; the rest are counted in the connection's bucket directly. */
+  const HTTP_CALLS = 2
+
+  /**
+   * Uses up the connection's `LIMIT` requests and sends one more, returning
+   * that response. The first `LIMIT - HTTP_CALLS` go straight into its bucket
+   * (`checkRateLimit`, as the route calls it) and the last `HTTP_CALLS` over
+   * HTTP, all of which must pass: request #121 is refused only if each HTTP
+   * request counts exactly once. 120 HTTP requests per test cost seconds
+   * under load without proving more (#862); the unit tests above pin the
+   * 120 itself.
+   */
+  async function exhaust(connection: { id: string; token: string }): Promise<Response> {
+    for (let i = 0; i < LIMIT - HTTP_CALLS; i++) checkRateLimit(connection.id)
     const statuses: number[] = []
-    for (let i = 0; i < LIMIT; i++) {
-      const res = await post(token)
+    for (let i = 0; i < HTTP_CALLS; i++) {
+      const res = await post(connection.token)
       await res.arrayBuffer()
       statuses.push(res.status)
     }
-    expect(statuses.filter((s) => s !== 200)).toEqual([])
-    return post(token)
+    expect(statuses).toEqual(Array(HTTP_CALLS).fill(200))
+    return post(connection.token)
   }
 
   it('refuses request #121 on one connection within a minute with HTTP 429', async () => {
     const user = await createActiveUser()
-    const token = await mint(await loginCookie(app, user.email))
-    const limited = await exhaust(token)
+    const connection = await mint(await loginCookie(app, user.email))
+    const limited = await exhaust(connection)
     expect(limited.status).toBe(429)
     await limited.arrayBuffer()
   })
@@ -114,7 +125,7 @@ describe('mcp rate limiting over HTTP (#552)', () => {
 
     // Same user, second connection: its own bucket. A user with N tokens
     // can therefore make N x the limit per minute.
-    const other = await post(second)
+    const other = await post(second.token)
     expect(other.status).toBe(200)
     await other.arrayBuffer()
   })
@@ -124,8 +135,8 @@ describe('mcp rate limiting over HTTP (#552)', () => {
   // changes these expectations.
   it('today: the 429 has no Retry-After header and a plain JSON body, not a JSON-RPC error (#440)', async () => {
     const user = await createActiveUser()
-    const token = await mint(await loginCookie(app, user.email))
-    const limited = await exhaust(token)
+    const connection = await mint(await loginCookie(app, user.email))
+    const limited = await exhaust(connection)
     expect(limited.status).toBe(429)
     expect(limited.headers.get('retry-after')).toBeNull()
     const body = (await limited.json()) as Record<string, unknown>

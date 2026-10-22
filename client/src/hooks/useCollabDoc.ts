@@ -318,6 +318,8 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     let refused = false
     // The server's store is busy (`store-busy`): reconnecting after RETRY_MS.
     let paused = false
+    /** The last reconnect ticket failed with a 5xx or the network: the refusal that follows is a pause, not a revocation (S3). */
+    let ticketUnavailable = false
     // The relay's body size cap and frame limit, from the latest ticket (the
     // provider only exists once the first ticket is in).
     let maxNoteBytes = 0
@@ -588,6 +590,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
      */
     const storeBusy = () => {
       if (stopped || refused || cancelled) return
+      ticketUnavailable = false
       paused = true
       handshake = false
       socketOpen = false
@@ -685,13 +688,18 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
           }
           try {
             const ticket = await getCollabTicket()
+            ticketUnavailable = false
             maxNoteBytes = ticket.maxNoteBytes
             maxFrameBytes = ticket.maxFrameBytes
             return ticket.token
           } catch (error) {
             // A reconnect ticket that 403s is the same revocation the relay
             // would have reported; swallowed here it reads as "reconnecting".
-            ticketFailed(error)
+            // Anything else (a 5xx, the network) is the service being away:
+            // the provider keeps retrying, and the refusal its failed attempt
+            // reports is treated as store-busy, never a revocation (S3).
+            if (error instanceof ApiError && (error.status === 401 || error.status === 403)) ticketFailed(error)
+            else ticketUnavailable = true
             throw error
           }
         },
@@ -712,18 +720,17 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
         },
         // `note-not-migrated`: the server's store migration has not processed this note; `reload-required`: the
         // server names documents differently from this bundle (ADR-003 §5.4); `note-deleted`: the note is in the
-        // trash or purged; `store-busy`: the server's store is not taking writes for a moment (a refused document
-        // load, reconnect later); anything else is a revocation.
-        onAuthenticationFailed: ({ reason }) =>
-          reason === 'store-busy'
-            ? storeBusy()
-            : reason === 'note-not-migrated'
-              ? stop('not-migrated')
-              : reason === 'reload-required'
-                ? stop('reload-required')
-                : reason === 'note-deleted'
-                  ? stop('deleted')
-                  : kicked(),
+        // trash or purged; `store-busy`: the server's store is not taking writes or cannot be reached for a moment
+        // (a refused load or session check, reconnect later); anything else is a revocation. While paused, a late
+        // refusal from the old provider (a reconnect ticket that failed with a 5xx) does not turn the pause into one.
+        onAuthenticationFailed: ({ reason }) => {
+          if (reason === 'store-busy' || ticketUnavailable) storeBusy()
+          else if (paused) return
+          else if (reason === 'note-not-migrated') stop('not-migrated')
+          else if (reason === 'reload-required') stop('reload-required')
+          else if (reason === 'note-deleted') stop('deleted')
+          else kicked()
+        },
         // The relay closes the document with reason `note-too-large` for a
         // change over the cap (server/src/sync/collab-server.ts), ws closes
         // the socket with 1009 for a frame over its transport limit, the
@@ -762,7 +769,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     return () => {
       cancelled = true
       watching.abort()
-      if (retry) clearTimeout(retry)
+      clearTimeout(retry)
       holdRelease()
       ydoc.off('update', onUpdate)
       window.removeEventListener('offline', wentOffline)
