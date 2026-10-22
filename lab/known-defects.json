@@ -94,13 +94,13 @@
     },
     {
       "test": "collab-duplication",
-      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): no duplicated text",
-      "issue": 488
+      "check": "S18 CRDT state put back by SQL, stale ydoc (tab kept open): no duplicated text",
+      "issue": 891
     },
     {
       "test": "collab-duplication",
-      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): @INJSTALE@ kept exactly once on disk",
-      "issue": 488
+      "check": "S18 CRDT state put back by SQL, stale ydoc (tab kept open): @INJSTALE@ kept exactly once on disk",
+      "issue": 891
     },
     {
       "test": "crash-write",
