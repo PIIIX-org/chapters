@@ -121,7 +121,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tbody><tr>
 <td>S1 schema + dry run</td>
 <td><a href="https://github.com/PIIIX-org/chapters/pull/783">#783</a></td>
-<td>Migration 0021 is additive (older code runs on it with no SQL). <code>migrate-store --dry-run</code> reads production in one read-only transaction and reports conflicts, files that change bytes, CRDT classes and timing.</td>
+<td>Migration 0021 is additive in schema (once the S2a migration has run, older code goes on it only through the backup.md §5 rollback). <code>migrate-store --dry-run</code> reads production in one read-only transaction and reports conflicts, files that change bytes, CRDT classes and timing.</td>
 <td><code>server/test/migrate-store.test.ts</code>, <code>store-schema.test.ts</code>; the #703 dry run.</td>
 </tr>
 <tr>
@@ -621,7 +621,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <td>backup.md §5</td>
 </tr>
 </tbody></table>
-<p><strong>Migrations</strong> (all run at boot; all additive in schema, so older code runs on them with no SQL except where noted):</p>
+<p><strong>Migrations</strong> (all run at boot; all additive in schema. Older code still goes on a database the S2a boot migration ran on only through the rollback below, never directly: backup.md §5, &quot;Which way back&quot;):</p>
 <table>
 <thead>
 <tr>
@@ -633,7 +633,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tbody><tr>
 <td>0021 <code>adr003_store</code></td>
 <td>#783</td>
-<td>Store tables and markers; builds two indexes on <code>note_revisions</code> under a write lock.</td>
+<td>Store tables and markers; builds two indexes on <code>note_revisions</code> under a write lock. The S2a backfill after it keeps the app down on the first boot (27–54 s on the #703 copy of production, step A; migration.md).</td>
 </tr>
 <tr>
 <td>0022 <code>repository_file_embedding_note</code></td>
@@ -675,11 +675,11 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <p><strong>Rollback</strong> (backup.md §5).</p>
 <ul>
 <li>Clean: restore the pre-upgrade backup.</li>
-<li>Code-only, keeping the data written since, supported for one release, with nobody typing:<ol>
+<li>Code-only, keeping the data written since, from step B (or later) to step A (<code>ae6ffb9</code>, <code>prod</code> commit <code>f3724d0</code>) or any older release, with nobody typing (step A itself has no export: restore-only, section 5.4):<ol>
 <li><code>docker compose stop app</code> (graceful: stores every open editor&#39;s typing).</li>
 <li><code>docker compose run --rm --no-deps app pnpm store-export-legacy</code>: under the exclusive maintenance lock (exit 2 while any app or writing CLI is up), folds every collab tail, renders every note file and <code>index.md</code>, and from S2b writes the <code>.crdt</code> bins (<a href="https://github.com/PIIIX-org/chapters/pull/885">#885</a>). Exit 1 means a file failed or the S2a migration has not finished: fix it and run it again. Report in <code>/data/elara/store-export-legacy-&lt;time&gt;.json</code>.</li>
 <li><strong>Rolling back over 0026:</strong> with the app still stopped, run backup.md §5&#39;s <code>UPDATE note_revisions SET body = note_revision_body(body, body_delta, delta_base_id), body_delta = NULL, delta_base_id = NULL, body_bytes = NULL WHERE body_delta IS NOT NULL; DELETE FROM note_revision_compaction</code>, so older code reads whole bodies (the export does not undo compaction).</li>
-<li>Start the older release. No other SQL. Roll-forward needs nothing: boot adopts what the older code wrote and merges bins the old relay wrote into <code>note_crdt</code>.</li>
+<li>Start the older release. No other SQL, unless backup.md §5 names some for a migration you roll back over (0019 and 0020, for releases before them). Roll-forward needs nothing: boot adopts what the older code wrote and merges bins the old relay wrote into <code>note_crdt</code>.</li>
 </ol>
 </li>
 <li>From S2a only this was rehearsed on #703 (comment 6314996795): counts and 944 row hashes unchanged.</li>

@@ -9,8 +9,9 @@ notes are migrated once, at the first boot; `store-export-legacy` for a
 rollback), **S2b** (the editors' live state moves from `.crdt/` files into
 the database, below) and **S3** (editor typing is committed to the database
 before the editor is told it is saved). The current release has all of
-them. Promotion step A (`ae6ffb9`) shipped S1 and the S2a migration only,
-without `store-export-legacy` and without S2b and S3.
+them. Promotion step A (`ae6ffb9`; `prod` commit `f3724d0`, which reports
+that `version`) shipped S1 and the S2a migration only, without
+`store-export-legacy` and without S2b and S3.
 
 ## Before you upgrade
 
@@ -81,18 +82,21 @@ few seconds.
 ## Rolling back
 
 Starting an older release on a database this migration has run on is not
-safe by itself: older releases read the `.md` files (and `.crdt/` bins) as
-the truth, and here they can lag behind the database. Which way back you
-have depends on the release you run; backup.md §5, "Which way back", has
-the table. In short:
+safe by itself. Releases before S2a read the `.md` files as the truth, and
+here they can lag behind the database. Promotion step A reads the rows, but
+its editor relay reads `.crdt/` bins, which S2b moved into the database, and
+it reads revision bodies whole, which migration 0026 compacts. Which way
+back you have depends on the release you run; backup.md §5, "Which way
+back", has the table. In short:
 
 - **From a release with `store-export-legacy`** (the current release, from
   promotion step B on) to promotion step A or any older release: stop the
   app, run the export, run the migration 0026 `UPDATE`, start the older
   release. This is the only way that keeps what was written since the
   upgrade.
-- **From promotion step A** (S2a without the export): restore the
-  pre-upgrade backup. What was written since the upgrade is lost.
+- **From promotion step A** (`ae6ffb9`, `prod` commit `f3724d0`: S2a
+  without the export): restore the pre-upgrade backup. What was written
+  since the upgrade is lost.
 - **Either way**, restoring the pre-upgrade backup works.
 
 ## Run the dry run
