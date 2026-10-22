@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import * as Y from 'yjs'
 import type { LabContext } from './context.ts'
-import { appContainerId, appExec, COMPOSE, exec, psqlRows } from './docker.ts'
+import { appContainerId, appExec, compose, COMPOSE, exec, psqlRows, waitHealthy } from './docker.ts'
 
 export const sha = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex')
 
@@ -230,9 +230,11 @@ export async function dbNoteId(ctx: LabContext, vaultId: string, path: string): 
 /**
  * Saves note `noteId`'s CRDT state (its `note_crdt` row and every
  * `note_updates` row) into lab tables; `restoreCrdtState` puts exactly that
- * back. Together they plant a stale CRDT state behind a newer row: the
- * state a crash between the row and the CRDT write would leave, had they not
- * shared a transaction (ADR-003 S2b; before it, a stale `.crdt` bin).
+ * back by SQL. Together they plant a stale CRDT state behind a newer row.
+ * Before ADR-003 S2b a crash between the row and the CRDT write left that
+ * state (a stale `.crdt` bin); since S2b they share a transaction, so only a
+ * manual change of those two tables does (#891). A real restore brings the
+ * row back with them: `backupInstance` / `restoreInstance`.
  */
 export async function saveCrdtState(ctx: LabContext, noteId: string): Promise<void> {
   if (!UUID.test(noteId)) throw new Error(`bad note id ${noteId}`)
@@ -255,6 +257,77 @@ export async function restoreCrdtState(ctx: LabContext, noteId: string): Promise
       from lab_bak_crdt_${t} b where c.note_id = b.note_id;
     drop table lab_bak_crdt_${t}; drop table lab_bak_upd_${t};
     commit;`)
+}
+
+/** The database dump `backupInstance` keeps in the db container, and its copy of a vault's files in the data volume (outside DATA_DIR). */
+const BACKUP_DUMP = '/tmp/lab-instance-backup.sql'
+const backupFiles = (vaultId: string) => `/data/lab-backup/${vaultId}.tgz`
+
+export interface InstanceBackup {
+  dumpBytes: number
+  dumpMs: number
+  tarMs: number
+}
+
+/**
+ * The infrastructure backup of docs/self-hosting/backup.md §1, taken while
+ * the app runs: `pg_dump` of the whole database (one snapshot, so rows,
+ * revisions, CRDT state and sessions come from the same moment) and a tar of
+ * the files of vault `vaultId` (the volume archive, narrowed to the vault
+ * under test). Both stay on the instance for `restoreInstance`.
+ */
+export async function backupInstance(vaultId: string): Promise<InstanceBackup> {
+  if (!UUID.test(vaultId)) throw new Error(`bad vault id ${vaultId}`)
+  const dump = await exec([
+    ...COMPOSE, 'exec', '-T', 'db', 'sh', '-c',
+    `pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f ${BACKUP_DUMP} && stat -c %s ${BACKUP_DUMP}`,
+  ])
+  if (dump.code !== 0) throw new Error(`pg_dump failed (${dump.code}): ${dump.stderr.slice(0, 1000)}`)
+  const tar = await exec([
+    ...COMPOSE, 'exec', '-T', '-u', 'root', 'app', 'sh', '-c',
+    `mkdir -p /data/lab-backup && tar czf ${backupFiles(vaultId)} -C /data/elara/vaults ${vaultId}`,
+  ])
+  if (tar.code !== 0) throw new Error(`archiving the vault's files failed (${tar.code}): ${tar.stderr.slice(0, 1000)}`)
+  return { dumpBytes: Number(dump.stdout.trim()), dumpMs: Math.round(dump.ms), tarMs: Math.round(tar.ms) }
+}
+
+export interface InstanceRestore {
+  stopMs: number
+  databaseMs: number
+  filesMs: number
+  healthyMs: number
+}
+
+/**
+ * The infrastructure restore of backup.md §2 from `backupInstance`, with
+ * downtime: the app stopped, the database dropped, created empty and loaded
+ * from the dump, the vault's files replaced by the tar's, the app started.
+ * Nobody tells open tabs: they reconnect afterwards with their own Y.Doc.
+ * Everything written since the backup is gone from the database, so call it
+ * only around steps of the calling test.
+ *
+ * If a step fails it throws and leaves the app stopped: an app started on a
+ * partly loaded database would fail every later test for this test's
+ * reason. run.ts then finds the instance down before the next test and runs
+ * no more (#658).
+ */
+export async function restoreInstance(baseUrl: string, vaultId: string): Promise<InstanceRestore> {
+  if (!UUID.test(vaultId)) throw new Error(`bad vault id ${vaultId}`)
+  const stop = await compose('stop', 'app')
+  const db = await exec([
+    ...COMPOSE, 'exec', '-T', 'db', 'sh', '-c',
+    String.raw`psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d postgres -c "drop database \"$POSTGRES_DB\" with (force)" -c "create database \"$POSTGRES_DB\"" && ` +
+      `psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f ${BACKUP_DUMP} && rm -f ${BACKUP_DUMP}`,
+  ])
+  if (db.code !== 0) throw new Error(`restoring the database failed (${db.code}), app left stopped: ${db.stderr.slice(0, 1000)}`)
+  const tar = await exec([
+    ...COMPOSE, 'run', '--rm', '--no-deps', '-T', '-u', 'root', '--entrypoint', 'sh', 'app', '-c',
+    `rm -rf /data/elara/vaults/${vaultId} && tar xzf ${backupFiles(vaultId)} -C /data/elara/vaults && rm -f ${backupFiles(vaultId)}`,
+  ])
+  if (tar.code !== 0) throw new Error(`restoring the vault's files failed (${tar.code}), app left stopped: ${tar.stderr.slice(0, 1000)}`)
+  await compose('start', 'app')
+  const healthyMs = await waitHealthy(baseUrl)
+  return { stopMs: Math.round(stop.ms), databaseMs: Math.round(db.ms), filesMs: Math.round(tar.ms), healthyMs: Math.round(healthyMs) }
 }
 
 // ---------------------------------------------------------------- container
