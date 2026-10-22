@@ -172,12 +172,28 @@ Files are written by a background projector after each save, so the check compar
 For a deeper check than `check-notes`, run the doctor. It compares every copy of every note with the database row: the file, the latest revision, the editor state (`.crdt` files and `note_crdt`), the full-text index, the embedding, the link index and the projection state:
 
 ```bash
-docker compose exec app pnpm doctor                 # text report, exit 1 on any problem
+docker compose exec app pnpm doctor                 # text report; exit code below
 docker compose exec app pnpm doctor --report        # the same as JSON
 docker compose exec app pnpm doctor --repair        # queue the safe repairs, then run it again
 ```
 
-It only reads unless you pass `--repair`. `--repair` asks the server to write a note's file or a folder's `index.md` again (a file Elara did not write is copied to `.conflicts/` first), to rebuild a note's links, or to compute its embedding again. It changes a note's text in one case only: editor typing that Elara acknowledged but did not save into the note (`crdt-tail-stale`, `crdt-fold-error`) is saved now, as the next restart would do. Run the doctor again after a minute to see them done. Anything it cannot repair (for example `revision-missing` or a `crdt-*` class) is a bug: open an issue with the report. Run it while the instance is quiet: an edit in progress can show up for a moment.
+It prints one `PROBLEM <class>` line per mismatch (`[--repair]` after the ones `--repair` fixes), one `PENDING` line per job still running and one `INFO` line per thing an upgrade left on purpose, then a summary. The exit code says what to do:
+
+| Exit | Status | Meaning |
+|---|---|---|
+| 0 | `ok` | No problem. `PENDING` and `INFO` lines never change the exit code. |
+| 3 | `repairable` | Every problem is one `--repair` fixes: run `pnpm doctor --repair`, then the doctor again. |
+| 1 | `broken` | At least one problem needs a person (below). |
+| 2 | | Bad arguments, or `--repair` while maintenance (`store-export-legacy`, `rows-from-files`) holds the instance. |
+
+It only reads unless you pass `--repair`. `--repair` asks the server to write a note's file or a folder's `index.md` again (a file Elara did not write is copied to `.conflicts/` first), to rebuild a note's links, or to compute its embedding again. It changes a note's text in one case only: editor typing that Elara acknowledged but did not save into the note (`crdt-tail-stale`, `crdt-fold-error`) is saved now, as the next restart would do. A `--repair` run exits with the status of what it found before repairing (3 when every problem was repairable); run the doctor again after a minute to see the repairs done. Anything it cannot repair (for example `revision-missing` or a `crdt-*` class) is a bug: open an issue with the report; a `conflict-copy` or `file-orphan` needs a look before you delete it. Run it while the instance is quiet: an edit in progress can show up for a moment.
+
+**Right after an upgrade.** `INFO migration-copy` is a `.conflicts/` copy of a file the S2a store migration could not parse: the migration kept the same bytes in `.migration/<date>/unparseable/` and wrote the note's row to the file, so nothing is lost (see "Files Elara set aside"). Review both and delete them when you no longer need them; once the `.migration/` copy is gone, the `.conflicts/` copy shows as a `conflict-copy` problem until you delete it too. `links-differ` on an instance that ran a release before the code-span fix for wikilinks (GRAPH-09) is link rows that older release wrote for wikilinks inside backticks or code blocks; no upgrade step rebuilds them, `--repair` does. So after an upgrade, run:
+
+```bash
+docker compose exec app pnpm doctor --repair        # exit 0, or 3 with the repairs it queued
+docker compose exec app pnpm doctor                 # exit 0: "0 problem(s)", INFO lines allowed
+```
 
 ### Last resort: rebuild notes from the files
 
@@ -200,7 +216,7 @@ Elara never silently overwrites or deletes a note file it did not write itself:
 
 - `vaults/<id>/.conflicts/<path>.<time>.md`: a file whose bytes differed from what Elara last wrote there (a hand or `git` edit, a file a power loss truncated), copied before Elara rewrote or removed it. The database holds the note; compare and copy back what you need by hand or with `edit_note`.
 - `vaults/<id>/.orphans/<path>.md`: a `.md` file no note and no directory index owns (moved there at boot, after the files caught up).
-- `vaults/<id>/.migration/<date>/unparseable/`: files the S2a migration could not parse (migration.md).
+- `vaults/<id>/.migration/<date>/unparseable/`: files the S2a migration could not parse (migration.md). The projector's `.conflicts/` copy of the same file is the same bytes; the doctor lists it as `INFO migration-copy`.
 
 These folders are never read as notes. Delete them when you no longer need them.
 

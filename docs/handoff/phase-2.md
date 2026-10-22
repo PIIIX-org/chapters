@@ -232,7 +232,7 @@ ADR-003 R3-2/Q4: S2b ships only after a promotion put the #720 client in product
 
 1. `/health`: up, new `bootId`, `lastShutdown: graceful`.
 2. Boot log: `[store] backfill:` summary with 0 failed (step A); collab backfill with 0 set aside and 0 failed, `.crdt.pre-adr-003/` present (step B); `DATA_DIR/migration-report-*.json` and `collab-migration-report-*.json`.
-3. `check-notes --wait-idle --fail-on-pending`: 0 broken, 0 pending. `doctor` (step B): no fold errors, no rejected updates.
+3. `check-notes --wait-idle --fail-on-pending`: 0 broken, 0 pending. `doctor` (step B): `doctor --repair` (exit 0, or 3 with the `links-differ` repairs it queued for link rows from before GRAPH-09), then `doctor`: exit 0, `0 problem(s)`, one `INFO migration-copy` line per unparseable file the migration report counts ([#908](https://github.com/PIIIX-org/chapters/issues/908)).
 4. `/api/admin/monitoring` answers with the token; `conflictCopies` matches the migration report's unparseable count; the next uptime run is green.
 5. Lab smoke: there is no staging server. The lab (`docs/agents/lab.md`) builds its own instance from the commit under test on the CI runner, bootstraps it and runs `lab/tests` against it, never against production (phase-1 section 10: "the lab instance is the staging server"). Run it on the promoted commit: `gh workflow run elara-lab.yml --ref prod -f tier=fast`.
 

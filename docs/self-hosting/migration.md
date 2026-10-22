@@ -69,7 +69,10 @@ few seconds.
   tries it again; the app still starts.
 - Once the backfill has finished, the projector writes every file that
   changes bytes, with the old bytes copied to `vaults/<id>/.conflicts/`
-  first, and the server starts serving only once files equal rows.
+  first, and the server starts serving only once files equal rows. (For an
+  unparseable file that copy holds the same bytes as its
+  `.migration/<date>/unparseable/` copy; `pnpm doctor` lists it as
+  `INFO migration-copy`, not as a problem: backup.md "The doctor".)
   While the app runs afterwards, each save is written to its file a moment
   after it commits.
 - On every later boot: rows changed outside the store (an older release
