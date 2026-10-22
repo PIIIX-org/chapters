@@ -181,6 +181,12 @@ describe('edit_note while a tab is offline (#485)', () => {
     const text = tab.document.getText('body')
     await waitFor(() => text.toString() === body && other.document.getText('body').toString() === body)
 
+    // Yjs orders concurrent inserts by client id, so under the old delete-all
+    // write the typing's place depended on the tab's random id against the
+    // relay document's (SERVER_CLIENT_ID, random per process): the test failed
+    // only about half the time without the fix. The lowest id is the losing
+    // side (typing at position 0 every time), so pin it.
+    tab.document.clientID = 1
     tab.disconnect()
     text.insert(text.length, ' i01 i02 i03')
     const read = await must<{ body: string }>('read_note', { vaultId, path })
