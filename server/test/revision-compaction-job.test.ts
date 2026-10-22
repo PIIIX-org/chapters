@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto'
 import AdmZip from 'adm-zip'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { sql } from 'drizzle-orm'
+import * as Y from 'yjs'
 import { db } from '../src/db/client.js'
 import { vaults } from '../src/db/schema.js'
 import { buildInstanceBackup } from '../src/export/archive.js'
@@ -257,7 +258,8 @@ describe('compactNoteRevisions (#501)', { timeout: 60_000 }, () => {
     // The proposal at 12 was made from revision 5; the CRDT state last agreed with revision 20 (ADR-003 §5.4).
     await db.execute(sql`UPDATE note_revisions SET source_revision_id = ${ids[5]!} WHERE id = ${ids[12]!}`)
     await db.execute(sql`UPDATE note_revisions SET seq = 20 WHERE id = ${ids[20]!}`)
-    await db.execute(sql`INSERT INTO note_crdt (note_id, snapshot, folded_seq) VALUES (${noteId}, '\\x'::bytea, 20)`)
+    // A valid (empty) Yjs state: zero bytes is not one, and later test files that fold or export every note would trip on it.
+    await db.execute(sql`INSERT INTO note_crdt (note_id, snapshot, folded_seq) VALUES (${noteId}, ${Buffer.from(Y.encodeStateAsUpdate(new Y.Doc()))}, 20)`)
     // The note as it is: revision 30 holds the row's seq.
     await db.execute(sql`UPDATE notes SET seq = 30 WHERE id = ${noteId}`)
     await db.execute(sql`UPDATE note_revisions SET seq = NULL WHERE note_id = ${noteId} AND seq = 1`)

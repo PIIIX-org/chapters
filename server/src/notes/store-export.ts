@@ -27,6 +27,10 @@
  * (`fold_error`: invalid, over the cap, a repeated block), the row is the
  * note's last valid version, the export stays ok, and the older release
  * opens the note from its file (the refused typing stays in the log).
+ * Revision compaction (#501) is left alone: its `compact_revisions` jobs
+ * are not store jobs (it is derived and lossless), and nothing here reads a
+ * revision body; an older release needs whole bodies, which the 0026
+ * rollback UPDATE in backup.md §5 restores before it starts.
  *
  * It refuses to run while the S2a backfill has not finished
  * (`store_migrated_at` unset): the notes it could not process have no

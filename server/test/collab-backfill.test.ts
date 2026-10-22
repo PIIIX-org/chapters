@@ -14,7 +14,7 @@ import { exportLegacyFiles } from '../src/notes/store-export.js'
 import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { appendCollabUpdate, foldPendingCollab, getLiveNote, loadCollabState, purgeNote, readLiveNote, softDeleteNote, updateNote } from '../src/notes/store.js'
-import { compactNoteRevisions } from '../src/notes/revision-compaction.js'
+import { compactNoteRevisions, flushRevisionCompaction } from '../src/notes/revision-compaction.js'
 import { NoteNotMigratedError, collabNoteMigrated, setCollabNotMigrated } from '../src/notes/store-tx.js'
 import { bootCollab, collabMigrated, runCollabBackfill } from '../src/sync/collab-backfill.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
@@ -310,6 +310,44 @@ describe('roll-forward after a code-only rollback (§9)', () => {
     const text = await storedCrdtText(vaultId, note.path)
     expect(text).toBe('Exported.\nAcked, not folded.\nTyped on the old image.\n')
     expect((await getLiveNote(vaultId, note.path))?.body).toBe(text)
+  })
+
+  it('a note with a compacted revision history exports ok: its bin and file equal the row, and every revision still reads whole', async () => {
+    await db.execute(sql`
+      INSERT INTO instance_state (id, store_migrated_at) VALUES ('singleton', now()) ON CONFLICT (id) DO UPDATE SET store_migrated_at = now()`)
+    const note = await create('export-compacted', 'Line 0.\n')
+    await loadCollabState(vaultId, note.id)
+    const texts = ['Line 0.\n']
+    for (let i = 1; i <= 60; i++) {
+      texts.push(`${texts.at(-1)!}Line ${i}.\n`)
+      await updateNote(vaultId, note.path, { body: texts.at(-1)! })
+    }
+    const compacted = await compactNoteRevisions(note.id)
+    expect(compacted.examined).toBeGreaterThan(0)
+    const [deltas] = (await db.execute(sql`
+      SELECT count(*)::int AS n FROM note_revisions WHERE note_id = ${note.id} AND body_delta IS NOT NULL`)) as unknown as Array<{ n: number }>
+    expect(deltas!.n).toBeGreaterThan(0)
+
+    // The writes queued compaction jobs, whose worker holds the shared instance lock while it runs; the export needs the
+    // exclusive one and runs with no server (so no worker) in a real rollback. Let the worker finish first.
+    await flushRevisionCompaction()
+    const report = await exportLegacyFiles()
+    expect({ ok: report.ok, folded: report.folded, binsFailed: report.bins.failed, pendingJobs: report.pendingJobs }).toEqual({
+      ok: true,
+      folded: { folded: report.folded.folded, failed: 0 },
+      binsFailed: [],
+      pendingJobs: [],
+    })
+    const bin = new Y.Doc()
+    Y.applyUpdate(bin, (await loadCrdtState(vaultId, note.path))!)
+    const file = parseNote(await readFile(join(config.dataDir, 'vaults', vaultId, `${note.path}.md`), 'utf8'))
+    expect(bin.getText('body').toString()).toBe(texts.at(-1))
+    expect(file.body).toBe(texts.at(-1))
+    const bodies = (await db.execute(sql`
+      SELECT note_revision_body(body, body_delta, delta_base_id) AS body FROM note_revisions
+      WHERE note_id = ${note.id} AND action IN ('create', 'update') ORDER BY ord`)) as unknown as Array<{ body: string }>
+    expect(bodies.map((b) => b.body)).toEqual(texts)
+    await rm(join(config.dataDir, 'vaults', vaultId, '.crdt'), { recursive: true, force: true })
   })
 
   it('a note whose tail cannot be folded gets no bin (its typing stays in the log) and the export says it is incomplete', async () => {
