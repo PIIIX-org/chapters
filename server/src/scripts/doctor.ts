@@ -8,8 +8,11 @@
  * boot does; it never invents or overwrites note content.
  * `--report` prints the JSON report instead of text; `--report <file>` writes
  * it to a new file (an existing file or symlink is refused). `--repair` holds
- * the shared instance maintenance lock like every writing CLI. Exits 1 when
- * it found a problem, 2 on bad arguments or while maintenance holds the lock.
+ * the shared instance maintenance lock like every writing CLI. Exit code, by
+ * the report's `status` (`INFO` lines and `PENDING` work never count): 0 no
+ * problem, 3 only problems `--repair` re-raises (run it, then the doctor
+ * again), 1 at least one problem that needs a person; 2 on bad arguments or
+ * while maintenance holds the lock.
  */
 import { open, type FileHandle } from 'node:fs/promises'
 import { sql } from '../db/client.js'
@@ -60,7 +63,8 @@ const summary =
   `checked ${report.checked.notes} notes, ${report.checked.files} files, ${report.checked.bins} .crdt bins, ` +
   `${report.checked.crdtRows} note_crdt rows: ${report.problems.length} problem(s)` +
   (repair ? `, ${report.problems.filter((p) => p.repaired).length} repair(s) queued` : '') +
-  `, ${report.pending.length} pending`
+  `, ${report.pending.length} pending, ${report.info.length} info` +
+  (report.status === 'repairable' ? `\nevery problem is repairable: ${repair ? 'run the doctor again once the projector is idle' : 'run with --repair'}` : '')
 let out: string
 if (json) out = `${JSON.stringify(report, null, 2)}\n`
 else {
@@ -69,6 +73,7 @@ else {
       (p) => `PROBLEM ${p.class}  ${p.vaultName} (${p.vaultId})  ${p.path}: ${p.detail}${p.repaired ? '  [repair queued]' : p.repairable ? '  [--repair]' : ''}`,
     ),
     ...report.pending.map((p) => `PENDING ${p.kind}  ${p.vaultName} (${p.vaultId})  ${p.path}: ${p.detail}`),
+    ...report.info.map((p) => `INFO ${p.kind}  ${p.vaultName} (${p.vaultId})  ${p.path}: ${p.detail}`),
     summary,
   ].join('\n')
   out += '\n'
@@ -82,4 +87,4 @@ if (file) {
   await new Promise<void>((resolve) => process.stdout.write(out, () => resolve()))
 }
 await sql.end()
-process.exit(report.ok ? 0 : 1)
+process.exit({ ok: 0, repairable: 3, broken: 1 }[report.status])

@@ -436,10 +436,10 @@ describe('doctor', () => {
       const reportFile = join(tmpdir(), `doctor-report-${randomUUID()}.json`)
       expect((await cli('--repair', '--report', reportFile)).code).toBe(2)
       expect(await stat(reportFile).then(() => true, () => false)).toBe(false)
-      // Read-only runs take no lock.
+      // Read-only runs take no lock. A file-missing alone is repairable: exit 3 (#908).
       const readRun = await cli()
       expect(readRun.out).toContain('PROBLEM file-missing')
-      expect(readRun.code).toBe(1)
+      expect(readRun.code).toBe(3)
     } finally {
       await other`SELECT pg_advisory_unlock_all()`
       await other.end()
