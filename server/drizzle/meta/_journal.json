@@ -185,6 +185,13 @@
       "breakpoints": true
     },
     {
+      "idx": 26,
+      "version": "7",
+      "when": 1791750000000,
+      "tag": "0026_revision_compaction",
+      "breakpoints": true
+    },
+    {
       "idx": 27,
       "version": "7",
       "when": 1791700000000,

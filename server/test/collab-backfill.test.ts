@@ -14,6 +14,7 @@ import { exportLegacyFiles } from '../src/notes/store-export.js'
 import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { appendCollabUpdate, foldPendingCollab, getLiveNote, loadCollabState, purgeNote, readLiveNote, softDeleteNote, updateNote } from '../src/notes/store.js'
+import { compactNoteRevisions } from '../src/notes/revision-compaction.js'
 import { NoteNotMigratedError, collabNoteMigrated, setCollabNotMigrated } from '../src/notes/store-tx.js'
 import { bootCollab, collabMigrated, runCollabBackfill } from '../src/sync/collab-backfill.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
@@ -147,6 +148,26 @@ describe('the S2b backfill (§8 step 4)', () => {
     expect(report.attached.diffed).toBeGreaterThanOrEqual(1)
     expect(await storedCrdtText(vaultId, note.path)).toBe('Row text.\n')
   })
+
+  it('attaches a bin whose text is a compacted revision (#501), with the row on top', async () => {
+    const lines = Array.from({ length: 30 }, (_, i) => `line ${i} of a note with a long history\n`)
+    const note = await create('compacted-history', lines.join(''))
+    for (let i = 1; i <= 60; i++) {
+      lines[i % 30] = `line ${i % 30} edited ${i} times over\n`
+      await updateNote(vaultId, note.path, { body: lines.join('') }, { type: 'user' })
+    }
+    await compactNoteRevisions(note.id)
+    // An old revision now stored as a delta (its `body` column is empty): the pre-S2b relay saved the bin from that text.
+    const [old] = (await db.execute(sql`
+      SELECT note_revision_body(body, body_delta, delta_base_id) AS text FROM note_revisions
+      WHERE note_id = ${note.id} AND body_delta IS NOT NULL ORDER BY ord LIMIT 1`)) as unknown as Array<{ text: string }>
+    expect(old?.text).toBeTruthy()
+    await writeBin(note.path, freshBin(old!.text))
+    const report = await runCollabBackfill()
+    expect(report.failed).toEqual([])
+    expect(report.setAside.map((s) => s.noteId)).not.toContain(note.id)
+    expect(await storedCrdtText(vaultId, note.path)).toBe(lines.join(''))
+  }, 60_000)
 
   it('sets aside an undecodable bin', async () => {
     const note = await create('garbage-bin', 'Kept.\n')

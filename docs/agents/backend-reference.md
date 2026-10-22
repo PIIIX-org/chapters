@@ -188,6 +188,7 @@ what the code-only rollback below relies on.
 | `notes.seq` | `bigint NOT NULL DEFAULT 1`; the `notes_bump_seq` BEFORE UPDATE trigger adds 1 whenever `body`, `frontmatter`, `path` or `deleted_at` changes, so old code bumps it too. The note's `rev` on every MCP read and write (#477, S4) |
 | `notes.frontmatter_src` | `json` copy of the frontmatter in its original key order (jsonb reorders keys); for rendering files and answering reads |
 | `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), actor detail (#403). `idempotency_key` stays unused: #477's keys need the call's arguments and its whole answer, also for writes that record no revision, so they live in `write_idempotency` |
+| `note_revisions.body_delta` / `delta_base_id` / `body_bytes` (migration 0026) | a compacted revision (#501, **Revision compaction** below): `body` is `''`, `body_delta` (jsonb) rebuilds the body from the revision `delta_base_id` (FK to `note_revisions`, NO ACTION, partial index `note_revisions_delta_base`), `body_bytes` is its UTF-8 size; all three null on a revision stored whole (check `note_revisions_delta_check`). SQL `note_revision_body(body, body_delta, delta_base_id)` returns any revision's body (`revisionBody` in store-tx.ts); `note_revision_patch(base, delta)` applies a delta. Kept out of the Drizzle model like `seq`. 0026 merged after 0027, so its journal `when` (1791750000000) is above 0027's: drizzle applies an entry only when its `when` is above the newest one already applied, so an instance that ran 0027 first still runs 0026 (`test/migration-order.test.ts`) |
 | `write_idempotency` (migration 0025) | the first answer of an MCP write sent with `idempotency_key` (#477, `mcp/write-result.ts` `runWrite`): PK (`connection_id`, `key`), `tool`, `args_hash` (sha256 of the tool, vault and canonical arguments), `note_id` (FK to `notes`, cascade: purging the note deletes its keys and the note text their answers hold), `result` jsonb, `created_at` (indexed). A write that commits inserts its row **inside its own store transaction** (`WriteOptions.recordKey`, called with the committed row by `createNote`, `writeNote`, the rename move, `softDeleteNote`, `restoreNote`), so a crash after COMMIT and before the answer still leaves the key and the retry replays (ADR-003 §4, §10); its recorded answer has `indexed: false`. Answers that commit nothing (`conflicted`) are inserted after the call. A repeat with the same hash answers `result` + `replayed: true`; another hash is refused. Every keyed call first deletes rows older than 24 h. Calls with one key run one at a time (in-process key lock). Rows also go with their connection (FK cascade) |
 | `note_crdt` | Yjs snapshot per note id (replaced `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
@@ -800,6 +801,67 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   content revision: `quarantine`, `proposal` (#475), `restore_point`
   (#482) and the events `delete`/`restore`/`rename`/`revert` (#479) are
   never the baseline, and an event (`recordEvent`) is always recorded.
+- **Revision compaction** (#501, `revision-compaction.ts`, migration
+  0026): old revisions are stored as a delta instead of a full copy of
+  the note. Lossless: every revision keeps its id, `ord`, metadata and
+  exact body, so `get_revision`, `note_history` (`bodyBytes` from
+  `body_bytes`), revert, `base_rev` merges (any old `rev` still merges),
+  restore points, the dedupe baseline, vault export/import (#499) and
+  instance backups (bodies written whole, archive format unchanged) read
+  what they read before; nothing is deleted. Every read of a revision's
+  content uses `revisionBody` (SQL `note_revision_body`). A delta is a
+  JSON array of pieces from `diffLines` (a string is literal text,
+  `[from, count]` copies `count` bytes of the base's UTF-8 encoding from
+  byte `from`; pieces are whole lines, so never inside a character)
+  against the nearest older revision of the note stored whole; a base is
+  never compacted (one level: a read costs one more row and one patch).
+  `note_revision_patch` converts the base to bytea once (a `MATERIALIZED`
+  CTE) and copies each piece with a bytea `substring`, so a patch costs
+  the size of the result: a 2,400-piece delta on a 1 MB multibyte base
+  takes about 57 ms (character offsets, where `substr` walks the text from
+  its start for every piece, took about 1.7 s). A revision is
+  encoded only when its delta is under half its size and the deltas
+  against that base stay under the base's own size; otherwise it stays
+  whole and is the next base (about two full copies per segment of small
+  edits). **Retention, always whole:** the newest 20 revisions
+  (`KEEP_RECENT_REVISIONS`), the revision at the note's `seq`, the
+  rebase base (`note_crdt.folded_seq`), `restore_point`, `quarantine`
+  and `proposal` rows (a quarantine is rewritten in place when
+  continued, so neither is a base), every revision a proposal names as
+  its base, and every base. **Job:** durable kind `compact_revisions`,
+  payload `{noteId, seq}`, key `compact_revisions:<noteId>:<seq>`,
+  inserted in the write transaction when `applyRowChange` moves `seq` to
+  a multiple of 25 (`COMPACT_EVERY_SEQ`), woken by `afterCommit`; boot
+  queues (not awaited) the notes with more than 45 revisions stored whole
+  at their current `seq`, again only after an errored run. Each batch is
+  one store transaction under the note's lock (at most 20 revisions or
+  about 50 ms) and each revision one UPDATE that checks in SQL that the
+  delta rebuilds the body exactly and that the base is still whole (a
+  mismatch keeps it whole and logs). **Low priority (#880):** a batch
+  waits (up to 5 s) while any `file` or `dir_index` projection is
+  pending without an error, and ends early when one appears. Before any
+  diff, a revision that grew to more than twice its base (`grew`), or
+  whose lines are mostly not lines of its base (`rewritten`, a set lookup,
+  about 5 ms for 900 KiB), is kept whole; the line diff is limited to
+  5 ms (past it the delta is coarser, never wrong); the run yields to the
+  event loop between these steps, and a base's body and line set are read
+  once per run. Measured on 900 KiB revisions: an event-loop stall of
+  about 6 ms per rewritten revision and up to about 24 ms per diffed one.
+  `compactNoteRevisions` returns `{compacted, examined, kept}` (`kept`
+  counts `no-base`, `grew`, `rewritten`, `delta`, `mismatch`). **Watermark:**
+  `note_revision_compaction (note_id, examined_through)` (FK cascade)
+  holds the `ord` of the newest revision a run decided on, written in the
+  batch's transaction; the next run starts after it, so a history that
+  does not compress (a note rewritten whole each time) is diffed once,
+  not again at every run. A revision the retention protected when a run
+  passed it stays whole; `expandDependents` moves the watermark back
+  before the revisions it stores whole again. Failpoints
+  `revisions.compact-before-commit` (the batch rolls back) and
+  `revisions.compact-after-commit` (the batch stays): a rerun starts at
+  the watermark, so it ends where an uninterrupted run ends. Failures are
+  monitoring job kind `compaction`. `purge_revision` runs in a store
+  transaction under the note's lock and first stores whole every
+  revision built on the one it purges (the FK refuses otherwise).
 - **Progressive indexes** (`regenProgressiveIndices`): run on create,
   rename, delete, restore, and on updates whose frontmatter really
   changed (`isDeepStrictEqual`, so key order alone never counts: `jsonb`
