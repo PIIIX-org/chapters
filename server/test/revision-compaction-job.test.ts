@@ -158,7 +158,8 @@ describe('the revision delta (#501)', () => {
     const base = Array.from({ length: 20_000 }, (_, i) => `line ${i} 日本語のテキスト ${randomBytes(8).toString('hex')}\n`)
     const edited = [...base]
     for (let k = 0; k < 1_200; k++) edited[(k * 16 + 7) % edited.length] = `edited ${k} 中文 ${randomBytes(6).toString('hex')}\n`
-    const delta = encodeDelta(base.join(''), edited.join(''))
+    // No time limit: past one, diffLines falls back to coarser hunks (fewer pieces) on a slow runner.
+    const delta = encodeDelta(base.join(''), edited.join(''), Number.POSITIVE_INFINITY)
     expect(delta.length).toBeGreaterThan(2_000)
     const elapsed = await db.transaction(async (tx) => {
       await tx.execute(sql`CREATE TEMP TABLE patch_probe (base text, delta jsonb, sum text) ON COMMIT DROP`)
