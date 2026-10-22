@@ -184,3 +184,31 @@ describe('collab ticket', () => {
     expect(r.document.getText('body').toString()).toBe('')
   })
 })
+
+describe('ticket rate limit (#907)', () => {
+  /** The ticket endpoint's own per-session budget (server/src/sync/routes.ts TICKET_RATE_LIMIT). */
+  const PER_SESSION = 600
+
+  async function burst(cookie: string, n: number): Promise<number[]> {
+    const statuses: number[] = []
+    for (let i = 0; i < n; i++) statuses.push((await mintTicket(cookie)).statusCode)
+    return statuses
+  }
+
+  it("counts tickets per session, apart from the shared budget: a stale tab's loop never holds back another user", async () => {
+    // A step-A tab refused with reload-required asks for a ticket about once a second until it is reloaded;
+    // a session of ten of them asks for 600 a minute, all granted.
+    const stale = await loginCookie(app, owner.email)
+    expect(new Set(await burst(stale, PER_SESSION))).toEqual(new Set([200]))
+    expect((await mintTicket(stale)).statusCode).toBe(429)
+    // Another user's tickets, from the same address (one address for everyone behind a reverse proxy), are untouched.
+    expect((await mintTicket(readerCookie)).statusCode).toBe(200)
+    // A second such session takes this address past the instance-wide budget (1000 a minute, app.ts):
+    // tickets do not count against it, so the API still answers everyone, the looping sessions included.
+    const second = await loginCookie(app, reader.email)
+    expect(new Set(await burst(second, PER_SESSION))).toEqual(new Set([200]))
+    for (const cookie of [readerCookie, ownerCookie, stale]) {
+      expect((await app.inject({ method: 'GET', url: '/api/vaults', headers: { cookie } })).statusCode).toBe(200)
+    }
+  }, 60_000)
+})

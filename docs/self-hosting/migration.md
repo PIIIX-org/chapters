@@ -207,7 +207,9 @@ editor names a note's live document by the note id instead of its path.
 - **Upgrade prerequisite:** reload every open editor tab before upgrading,
   or make sure nobody types during the upgrade. The server refuses a tab
   still running the older page; the newer page shows "Reload to keep
-  editing". Details and rollback: [backup.md §5](backup.md).
+  editing", a step-A page "Offline — not saved yet" (it keeps the typing
+  in the browser and gets it back after a reload; #907). Details and
+  rollback: [backup.md §5](backup.md).
 - **First boot:** before it serves requests, the server attaches each live
   note's bin when its text equals the note's row, its file or one of its
   revisions (with the change to the row's text on top), moves any other bin

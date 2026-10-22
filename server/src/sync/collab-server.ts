@@ -1,6 +1,6 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { Server, type Hocuspocus } from '@hocuspocus/server'
+import { OutgoingMessage, Server, type Hocuspocus } from '@hocuspocus/server'
 import { WebSocketServer, type RawData } from 'ws'
 import * as Y from 'yjs'
 import { getSessionUser, sessionActive } from '../auth/sessions.js'
@@ -139,16 +139,41 @@ class NoteNotMigratedRefusal extends Error {
 /**
  * Thrown from `onAuthenticate` for a document named by path (`<vault>/<path>`),
  * the scheme of bundles from before ADR-003 S2b (§5.4): nothing such a tab
- * sends is stored. The editor (client/src/hooks/useCollabDoc.ts) reads
- * `reload-required` and says "Reload to keep editing"; the reload loads the
- * bundle that names documents by note id, and the tab's unsent typing,
- * kept in this browser (#720), is merged once or offered as text.
+ * sends is stored. Only an older bundle sends a path name, and none of them
+ * knows `reload-required`: the step-A editor (`ae6ffb9`) reads any
+ * authentication failure but `note-not-migrated` as a revoked share and
+ * tells the person to ask the vault owner (#907). So the relay never lets
+ * this reach the tab as one (refuseReloadRequired): it closes the document
+ * and the socket with reason `reload-required`, which that editor takes for
+ * a dropped connection: it keeps the typing in this browser (#720), says
+ * "Offline, not saved yet" and reconnects every second or so until the
+ * person reloads, each time with a ticket counted against its own session
+ * only (routes.ts TICKET_RATE_LIMIT). The reload loads the bundle that names
+ * documents by note
+ * id, and the tab's unsent typing is merged once or offered as text. A
+ * bundle that knows the reason (client/src/hooks/useCollabDoc.ts) says
+ * "Reload to keep editing" for it.
  */
 class ReloadRequiredRefusal extends Error {
+  readonly code = 4426
   readonly reason = 'reload-required'
   constructor(documentName: string) {
     super(`refused ${documentName}: documents are named by note id since ADR-003 S2b; the editor must reload`)
   }
+}
+
+/**
+ * Closes the document, then the socket, with `refusal`'s reason (see
+ * ReloadRequiredRefusal); the authentication failure Hocuspocus then sends
+ * goes nowhere on the closing socket. The document close comes first because
+ * it is a message: the provider counts a socket that closes before any
+ * message as a failed attempt, and its retry and its reconnect then both run,
+ * so the attempts of a tab that keeps being closed multiply (hundreds a
+ * second). After a message it reconnects once, a second later.
+ */
+function refuseReloadRequired(socket: ConnectionContext['socket'], documentName: string, refusal: ReloadRequiredRefusal): void {
+  socket?.send(new OutgoingMessage(documentName).writeCloseMessage(refusal.reason).toUint8Array())
+  socket?.close(refusal.code, refusal.reason)
 }
 
 /**
@@ -170,8 +195,8 @@ interface ConnectionContext {
   directWrite?: boolean
   /** The update this connection's current message logged (§5.4 Append), until the live document is seen to hold it. */
   logged?: { id: number; previous: number; noteId: string; update: Uint8Array }
-  /** The connection's socket (handleConnection's default context): closed when the store is busy (StoreBusyRefusal). */
-  socket?: { close(code?: number, reason?: string): void }
+  /** The connection's socket (handleConnection's default context): closed when the store is busy (StoreBusyRefusal) or the editor must reload (ReloadRequiredRefusal). */
+  socket?: { send(data: Uint8Array): void; close(code?: number, reason?: string): void }
 }
 
 /** The note each loaded document holds (its name says so; kept once the load finished). */
@@ -292,10 +317,13 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       try {
         return await authenticate(payload)
       } catch (err) {
+        const socket = (payload.context as Partial<ConnectionContext> | undefined)?.socket
         // The store unreachable while a tab reconnects is a pause, not a revocation (S3): the editor retries.
         if (storeUnavailable(err)) {
-          throw refuseStoreBusy((payload.context as Partial<ConnectionContext> | undefined)?.socket, payload.documentName, err instanceof Error ? err.message : String(err))
+          throw refuseStoreBusy(socket, payload.documentName, err instanceof Error ? err.message : String(err))
         }
+        // An older bundle must never see this as an authentication failure (#907): closed, it is a drop it retries.
+        if (err instanceof ReloadRequiredRefusal) refuseReloadRequired(socket, payload.documentName, err)
         throw err
       }
     },

@@ -6,8 +6,9 @@
 // - rename A→B, a new note created at A, the old tab reconnects: its typing
 //   lands in B once, the new A is untouched (documents are named by id);
 // - a tab of a pre-S2b bundle (path-named document) with unsent typing: the
-//   relay refuses it with `reload-required` and stores nothing; after the
-//   reload its kept copy (#720) shares history with the note and merges once;
+//   relay closes it with `reload-required` (never an authentication failure,
+//   #907) and stores nothing; after the reload its kept copy (#720) shares
+//   history with the note and merges once;
 // - a kept copy whose history the note no longer has (a bin set aside, the
 //   note re-seeded): the client's sharesHistory rule offers it, nothing doubles;
 // - type, rename before the store debounce, SIGKILL: the typing is in the
@@ -113,14 +114,17 @@ const test: LabTest = {
       const stash = seen.ydoc
       const m = mk('UTAB')
       stash.getText('body').insert(stash.getText('body').length, `${m}\n`)
-      // The old bundle names the document by path.
+      // The old bundle names the document by path. It never syncs: the relay closes the document and the socket
+      // with reload-required, never an authentication failure, which the step-A bundle shows as "Access removed"
+      // (#907); to that bundle the close is a drop, so the provider keeps reconnecting until the tab reloads.
       const old = new CollabClient(ctx.baseUrl, `${vault.id}/${p}`, sess, stash)
-      await old.connect(15_000)
+      await old.connect(5_000)
+      const closes = [...new Set(old.events.filter((e) => e.kind === 'close').map((e) => e.detail))]
       checks.push({
-        name: 'S2b-upgrade: a path-named tab is refused with reload-required',
-        expected: 'reload-required',
-        actual: String(old.authFailed),
-        ok: old.authFailed === 'reload-required',
+        name: 'S2b-upgrade: a path-named tab is closed with reload-required, never refused as an authentication failure',
+        expected: 'close 4426 reload-required, no authentication failure',
+        actual: JSON.stringify({ authFailed: old.authFailed, closes }),
+        ok: old.authFailed === null && !old.synced && closes.includes('4426 reload-required'),
         severity: 'high',
       })
       old.destroy()

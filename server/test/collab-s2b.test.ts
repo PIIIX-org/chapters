@@ -75,13 +75,12 @@ async function create(name: string, body: string): Promise<{ id: string; path: s
   return { id: res.json().id, path: `docs/${name}` }
 }
 
-function connect(name: string, document = new Y.Doc(), onRefused?: (reason: string) => void): HocuspocusProvider {
+function connect(name: string, document = new Y.Doc()): HocuspocusProvider {
   const provider = new HocuspocusProvider({
     url: `ws://127.0.0.1:${port}/collab`,
     name,
     token,
     document,
-    onAuthenticationFailed: ({ reason }) => onRefused?.(reason),
   })
   providers.push(provider)
   return provider
@@ -107,17 +106,64 @@ async function open(noteId: string, document?: Y.Doc) {
 const rowBody = async (path: string) => (await getLiveNote(vaultId, path))?.body
 
 describe('document names (§5.4)', () => {
-  it('refuses a path-named connection from an older bundle with reason reload-required, and stores nothing from it', async () => {
+  /**
+   * What the step-A editor (`ae6ffb9`, the page production served before S2b;
+   * client/src/hooks/useCollabDoc.ts there, lines 654-661) makes of what the
+   * relay sent. It knows no `reload-required`: an authentication failure
+   * other than `note-not-migrated` reads "Access removed, ask the vault
+   * owner" (#907), and the closes it names stop the editor too. Any other
+   * close is a dropped connection: the provider reconnects, the editor stays
+   * writable and keeps the typing in this browser, which the reload's bundle
+   * merges (client/src/hooks/useCollabDoc.offline.test.tsx).
+   */
+  function stepAStatus(refusals: string[], closes: Array<{ code: number; reason: string }>): string {
+    if (refusals.length > 0) return refusals[0] === 'note-not-migrated' ? 'not-migrated' : 'revoked'
+    for (const { code, reason } of closes) {
+      if (reason === 'signed-out') return 'signed-out'
+      if (reason === 'note-too-large' || code === 1009) return 'too-large'
+    }
+    return 'reconnecting'
+  }
+
+  it('closes a path-named connection from an older bundle with reason reload-required, never an authentication failure, and stores nothing from it', async () => {
     const note = await create('legacy-name', 'Kept as it is.\n')
-    const reasons: string[] = []
+    const refusals: string[] = []
+    const closes: Array<{ code: number; reason: string }> = []
+    let tickets = 0
     const document = new Y.Doc()
     document.getText('body').insert(0, 'typed in an old tab ')
-    const old = connect(`${vaultId}/${note.path}`, document, (reason) => reasons.push(reason))
-    // Before S2b the relay served path names: it synced and stored the old tab's text.
-    await waitFor(() => reasons.length > 0 || old.isSynced)
-    expect(reasons).toEqual(['reload-required'])
+    const old = new HocuspocusProvider({
+      url: `ws://127.0.0.1:${port}/collab`,
+      name: `${vaultId}/${note.path}`,
+      // The step-A editor asks for a fresh ticket on every attempt.
+      token: () => {
+        tickets++
+        return token
+      },
+      document,
+      onAuthenticationFailed: ({ reason }) => refusals.push(reason),
+      onClose: ({ event }) => closes.push({ code: event.code, reason: event.reason }),
+    })
+    providers.push(old)
+    // Before S2b the relay served path names (it synced and stored the old tab's text); before #907 it refused
+    // them with an authentication failure, which the step-A editor shows as a revoked share.
+    await waitFor(() => refusals.length > 0 || old.isSynced || tickets >= 2, 15_000)
+    expect(refusals).toEqual([])
+    expect(old.isSynced).toBe(false)
+    // The document close (a message, code 1000 on the client), then the socket close.
+    expect(closes).toContainEqual({ code: 1000, reason: 'reload-required' })
+    expect(closes).toContainEqual({ code: 4426, reason: 'reload-required' })
+    // A dropped connection to the step-A editor: it reconnects by itself, keeping what was typed.
+    expect(stepAStatus(refusals, closes)).toBe('reconnecting')
+    // About once a second, not a storm: a socket closed before any message made its attempts multiply. Real time:
+    // the rate is the real provider's reconnect over real sockets, which fake timers cannot drive.
+    const before = tickets
+    await new Promise((r) => setTimeout(r, 3_000))
+    expect(tickets - before).toBeLessThanOrEqual(5)
+    expect(refusals).toEqual([])
     expect(await rowBody(note.path)).toBe('Kept as it is.\n')
-  })
+    old.destroy()
+  }, 25_000)
 
   it('loads the note by id and returns the note id on REST GET', async () => {
     const note = await create('by-id', 'Loaded by id.\n')
