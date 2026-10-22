@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { db } from '../db/client.js'
 import { mcpConnections, noteRevisions, notes, users } from '../db/schema.js'
 import { createNote, isSafeAssetName, softDeleteNote, writeAsset, type Actor } from '../notes/store.js'
+import { revisionBody } from '../notes/store-tx.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { parseNote, OkfValidationError } from '../notes/okf.js'
 
@@ -147,7 +148,7 @@ export async function addHistoryToZip(zip: AdmZip, vaultId: string, prefix = '')
         actorType: noteRevisions.actorType,
         actorId: noteRevisions.actorId,
         frontmatter: noteRevisions.frontmatter,
-        body: noteRevisions.body,
+        body: revisionBody,
         createdAt: utcText(noteRevisions.createdAt),
         fromPath: noteRevisions.fromPath,
         toPath: noteRevisions.toPath,

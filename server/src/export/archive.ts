@@ -124,7 +124,7 @@ export async function buildInstanceBackup(): Promise<Buffer> {
     async (tx) => {
       const out = new Map<string, Row[]>()
       for (const spec of [...BACKUP_TABLES, INSTANCE_STATE]) {
-        out.set(spec.name, await tx.select(backupColumns(spec)).from(spec.table))
+        out.set(spec.name, await tx.select({ ...backupColumns(spec), ...spec.dumped }).from(spec.table))
       }
       // `frontmatter_src` is outside the Drizzle model (schema.ts): read in the same snapshot.
       const order = (await tx.execute(sql`SELECT id, frontmatter_src FROM notes WHERE frontmatter_src IS NOT NULL`)) as unknown as Array<{
