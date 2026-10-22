@@ -946,14 +946,16 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   sweep would move to `.orphans/` (#495). Shared helpers: `compareNoteFile`,
   `vaultMarkdownFiles`, `orphanFiles`.
 - **`doctor.ts`** / `pnpm doctor` (ADR-003 S6, #495): `runDoctor({vaultId,
-  repair})` returns `{ok, checked, counts, problems, pending}`. Classes
+  repair})` returns `{ok, status, checked, counts, problems, pending,
+  info}`. Classes
   (`DOCTOR_CLASSES`): `file-missing`, `file-unparseable`, `file-differs`
   (content differs from the row), `file-edited` (same content, bytes not
   the `projected_files.applied_hash`, a hand or `git` edit, Q2),
   `file-unrecorded` (no `projected_files` row for this note) for note
   files and `.trash/<id>.md` whose `file` projection is applied, and for
   recorded generated `index.md` files; `file-orphan`; `conflict-copy`
-  (anything in `.conflicts/`); `projection-missing` (no `file` row),
+  (anything in `.conflicts/` that is not a migration copy, below);
+  `projection-missing` (no `file` row),
   `projection-failed` (pending with `last_error`), `projection-outdated`
   (`index_version` below `PROJECTION_VERSIONS`); `revision-missing` (no
   revision at `notes.seq`), `revision-differs`; `crdt-bin-differs`,
@@ -971,7 +973,17 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   job), `vector-failed` (the `embed_note` job of the current `seq`
   failed); `links-differ` (`note_links` against `extractWikilinks(body)`).
   Pending projections, embedding jobs and unfolded CRDT tails are listed
-  in `pending`, not as problems. `repair: true` re-raises only: the
+  in `pending`, not as problems. `info` (#908) lists `migration-copy`: a
+  `.conflicts/<path minus .md>.<stamp>.md` copy whose bytes equal a
+  `.migration/<date>/unparseable/<path>` file, i.e. the projector's copy of
+  a file the S2a backfill could not parse and kept itself; once that
+  `.migration/` file is gone, the copy is a `conflict-copy` again.
+  `status`: `ok` (no problems; `ok: true`), `repairable` (every problem
+  is in the repairable set), `broken` (at least one is report-only); the
+  CLI exits 0, 3 and 1 for them (2 on bad arguments or the lock). Link
+  rows from the extractor before GRAPH-09 (wikilinks in code spans) are
+  `links-differ`, rebuilt by `--repair` only (no boot or migration step
+  rebuilds links). `repair: true` re-raises only: the
   note's `file` projection reset to `applied_seq = 0` (the projector
   renders it again under the ownership rules, so bytes it did not write
   are copied to `.conflicts/` first; content-equal bytes are adopted),
@@ -1238,9 +1250,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `"<vaultId>/~<noteId>"` (ADR-003 S2b; `~` never occurs in a slug, client
   `collabDocName`). A path-named connection (`"<vaultId>/<path>"`, sent by a
   bundle from before S2b) is refused with reason `reload-required` and
-  nothing it sends is stored; the editor shows "Reload to keep editing"
-  and keeps the text (and its #720 browser copy, which it looks up under
-  both the id name and the old path name after the reload). Loading reads
+  nothing it sends is stored. The relay sends it as a document close and
+  then a socket close (code 4426), never as an authentication failure: the
+  step-A bundle (`ae6ffb9`) reads any authentication failure as a revoked
+  share, while a close is a drop it retries about once a second, showing
+  "Offline" and keeping the typing in the browser (#907). The current
+  editor shows "Reload to keep editing" for either and keeps the text (and
+  its #720 browser copy, which it looks up under both the id name and the
+  old path name after the reload). Loading reads
   the note's state from `note_crdt` + `note_updates` (seeding it when
   absent), never a file. A rename keeps every editor connected (same id)
   and moves the note's SSE viewers to the new path (a `moved` event);
@@ -1891,7 +1908,7 @@ are idempotent rewrites.
 - **CORS**: off by default (same-origin only — correct for a
   reverse-proxied self-hosted app); opt in per-instance via
   `CORS_ORIGIN` (comma-separated allowlist).
-- **Rate limiting & lockout**: global Fastify rate limit (1000/min), stricter limit on abuse-sensitive auth routes, per-connection MCP rate limit (120/min default), and automatic account/IP lockout with token invalidation after 5 failed 6-digit email verification attempts. The address-keyed ones (global, auth routes, `ip:` lockout) and the `ip` of security events use `req.ip`: the client only when `ELARA_TRUST_PROXY` names the reverse proxy in front (#911, §8), else the proxy for everyone.
+- **Rate limiting & lockout**: global Fastify rate limit (1000/min, keyed by `req.ip`), stricter limit on abuse-sensitive auth routes, `POST /api/collab/ticket` on its own counters per session (600/min, `TICKET_RATE_LIMIT` in `sync/routes.ts`, #907: a pre-S2b tab's reconnect loop never draws on the shared budget), per-connection MCP rate limit (120/min default), and automatic account/IP lockout with token invalidation after 5 failed 6-digit email verification attempts. The address-keyed ones (global, auth routes, `ip:` lockout, the ticket route's no-session fallback) and the `ip` of security events use `req.ip`: the client only when `ELARA_TRUST_PROXY` names the reverse proxy in front (#911, §8), else the proxy for everyone.
 - **SSRF & git argument-injection defense**: `isSafeGitUrl(gitUrl)` blocks cloud metadata services (`169.254.169.254`, `metadata.google.internal`), RFC 1918 private/loopback IPs in production, argument flags (`-`), control characters, and file protocols across API routes, MCP tools, and clone workers.
 - **SVG asset sandboxing**: `image/svg+xml` uploads served with `Content-Security-Policy: default-src 'none'; sandbox` and `Content-Disposition: attachment` to eliminate inline script execution vectors.
 - **Mermaid preview XSS defense**: Initialized with `securityLevel: 'strict'`, `htmlLabels: false`, and SVG sanitized with `DOMPurify.sanitize(..., { USE_PROFILES: { svg: true, svgFilters: true } })`.
@@ -2310,12 +2327,19 @@ a leftover of a rename by old code); the next start moves it to
 **Doctor**: `pnpm -C server doctor [-- --vault <uuid>] [--repair]
 [--report [<file>]]` checks every copy of every note (file, row, revision,
 CRDT, FTS, vector, links, projections) and prints one `PROBLEM <class>`
-line per mismatch and one `PENDING` line per job still running; exit 1 on
-any problem, 2 on bad arguments. `--report` prints the JSON report,
-`--report <file>` writes it to a new file. `--repair` queues the safe
-re-raises (marked `[repair queued]`) under the shared instance lock (exit
-2 during maintenance); run the doctor again once the projector is idle to
-confirm. Report-only classes need a person:
+line per mismatch, one `PENDING` line per job still running and one
+`INFO migration-copy` line per `.conflicts/` copy the S2a migration made
+of an unparseable file (same bytes as `.migration/<date>/unparseable/`).
+Exit 0 with no problem (`PENDING` and `INFO` do not count), 3 when every
+problem is repairable (run `--repair`, then the doctor again), 1 when at
+least one needs a person, 2 on bad arguments. `--report` prints the JSON
+report, `--report <file>` writes it to a new file. `--repair` queues the
+safe re-raises (marked `[repair queued]`) under the shared instance lock
+(exit 2 during maintenance) and exits with the status it found; run the
+doctor again once the projector is idle to confirm. After an upgrade:
+`doctor --repair`, then `doctor` exits 0 (`links-differ` from a release
+before GRAPH-09 is rebuilt by the repair; #908). Report-only classes need
+a person:
 `revision-*` and `crdt-*` are store bugs (file an issue with the report),
 `conflict-copy` and `file-orphan` need a look before deleting, `fts-stale`
 needs `UPDATE notes SET body = body WHERE id = …` by hand (the generated

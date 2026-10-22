@@ -260,6 +260,16 @@ describe('useCollabDoc', () => {
     expect(view.result.current.ydoc.getText('body').toString()).toBe('typed before the upgrade')
   })
 
+  it('reads reload-required from the socket close too, the way the relay sends it so an older bundle retries (#907)', async () => {
+    const { view, provider } = await connected()
+    act(() => view.result.current.ydoc.getText('body').insert(0, 'typed before the upgrade'))
+    act(() => provider.options.onClose({ event: { code: 4426, reason: 'reload-required' } }))
+    expect(view.result.current.status).toBe('reload-required')
+    expect(view.result.current.writable).toBe(false)
+    expect(provider.disconnected).toBe(true)
+    expect(view.result.current.ydoc.getText('body').toString()).toBe('typed before the upgrade')
+  })
+
   it('a relay whose store is busy is not a revocation: it reconnects after a pause and keeps the unsent text (S3)', async () => {
     vi.useFakeTimers()
     try {

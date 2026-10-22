@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { atLeast, resolveAccess } from '../vaults/permissions.js'
 import { readNote, splitPath } from '../notes/store.js'
 import { addViewer } from './viewers.js'
@@ -45,6 +45,25 @@ import { noteTransportLimit } from '../notes/size-cap.js'
 export const COLLAB_PATH = '/collab'
 
 /**
+ * The ticket endpoint's own rate limit (#907), in place of the instance-wide
+ * one (app.ts): its own counters, keyed by the session asking, so tickets
+ * never draw on the per-address budget every other request shares (behind a
+ * reverse proxy, one address for every user) and one session's tickets never
+ * hold back another's. A tab of a bundle from before ADR-003 S2b, refused
+ * with `reload-required`, asks for a ticket about once a second until it is
+ * reloaded (collab-server.ts ReloadRequiredRefusal): 600 a minute keeps ten
+ * such tabs of one browser connecting. The key is read in the route's
+ * onRequest hook, after the auth plugin's (app-level hooks run first) has
+ * resolved the session; a caller without one, whom requireAuth refuses, is
+ * counted by address.
+ */
+export const TICKET_RATE_LIMIT = {
+  max: 600,
+  timeWindow: '1 minute',
+  keyGenerator: (req: FastifyRequest) => (req.user && req.sessionToken ? `session:${hashToken(req.sessionToken)}` : `ip:${req.ip}`),
+}
+
+/**
  * Read-only live view: SSE stream of note states. Viewers get the same
  * real-time content as editors but never join the Yjs doc — no
  * awareness, no identity data, no cursor broadcast (audit rule).
@@ -63,7 +82,7 @@ export function syncRoutes(app: FastifyInstance) {
    * `maxFrameBytes` the largest websocket frame it reads, so the editor knows
    * when what it would send cannot arrive.
    */
-  app.post('/collab/ticket', async (req) => {
+  app.post('/collab/ticket', { config: { rateLimit: TICKET_RATE_LIMIT } }, async (req) => {
     const { token, expiresAt } = issueTicket(req.user!.id, hashToken(req.sessionToken!))
     return {
       token,

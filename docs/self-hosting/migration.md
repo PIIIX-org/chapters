@@ -69,7 +69,10 @@ few seconds.
   tries it again; the app still starts.
 - Once the backfill has finished, the projector writes every file that
   changes bytes, with the old bytes copied to `vaults/<id>/.conflicts/`
-  first, and the server starts serving only once files equal rows.
+  first, and the server starts serving only once files equal rows. (For an
+  unparseable file that copy holds the same bytes as its
+  `.migration/<date>/unparseable/` copy; `pnpm doctor` lists it as
+  `INFO migration-copy`, not as a problem: backup.md "The doctor".)
   While the app runs afterwards, each save is written to its file a moment
   after it commits.
 - On every later boot: rows changed outside the store (an older release
@@ -204,7 +207,9 @@ editor names a note's live document by the note id instead of its path.
 - **Upgrade prerequisite:** reload every open editor tab before upgrading,
   or make sure nobody types during the upgrade. The server refuses a tab
   still running the older page; the newer page shows "Reload to keep
-  editing". Details and rollback: [backup.md §5](backup.md).
+  editing", a step-A page "Offline — not saved yet" (it keeps the typing
+  in the browser and gets it back after a reload; #907). Details and
+  rollback: [backup.md §5](backup.md).
 - **First boot:** before it serves requests, the server attaches each live
   note's bin when its text equals the note's row, its file or one of its
   revisions (with the change to the row's text on top), moves any other bin

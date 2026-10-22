@@ -6,8 +6,8 @@
  *   projection is applied at the row's `seq`: missing, unparseable, content
  *   different from the row, bytes the projector did not write (a hand or
  *   `git` edit, Q2), or no `projected_files` record; generated `index.md`
- *   files against their recorded hash; orphan `.md` files; conflict copies
- *   waiting in `.conflicts/`.
+ *   files; orphan `.md` files; conflict copies waiting in `.conflicts/`,
+ *   except those of the S2a backfill (below).
  * - projections: a note without a `file` projection row, a projection whose
  *   render failed (`last_error`), one applied by an older renderer version.
  * - row: no revision at the row's `seq`, or that revision's content differs.
@@ -23,7 +23,13 @@
  * - links: the `note_links` rows differ from the wikilinks of the body.
  *
  * Work that is still running (pending projections, embedding jobs, CRDT
- * tails not folded yet) is listed apart and is not a problem. The doctor
+ * tails not folded yet) is listed apart and is not a problem. So is `info`:
+ * a `.conflicts/` copy holding the same bytes as the S2a backfill's
+ * `.migration/<date>/unparseable/` copy of that path (the backfill kept the
+ * file it could not parse, and the projector copied it again before
+ * rewriting it from the row; #908). The report's `status` is `ok` (no
+ * problem), `repairable` (every problem is one `repair` re-raises) or
+ * `broken` (at least one needs a person). The doctor
  * reads a snapshot while the server may be writing: run it idle (or with the
  * server stopped) for an exact answer.
  *
@@ -105,17 +111,29 @@ export interface DoctorPending {
   detail: string
 }
 
+/** Not a problem: something an upgrade left by design, for the operator to review (#908). */
+export interface DoctorInfo {
+  kind: 'migration-copy'
+  vaultId: string
+  vaultName: string
+  path: string
+  detail: string
+}
+
 export interface DoctorReport {
   kind: 'elara-doctor'
   startedAt: string
   finishedAt: string
   repair: boolean
-  /** No problems (pending work does not count). */
+  /** No problems (pending work and info do not count). */
   ok: boolean
+  /** `ok`: no problems; `repairable`: every problem is `repairable`; `broken`: at least one is not. */
+  status: 'ok' | 'repairable' | 'broken'
   checked: { notes: number; files: number; bins: number; crdtRows: number }
   counts: Partial<Record<DoctorClass, number>>
   problems: DoctorProblem[]
   pending: DoctorPending[]
+  info: DoctorInfo[]
 }
 
 type Client = Tx | typeof db
@@ -216,6 +234,21 @@ async function listFiles(root: string, dir: string): Promise<string[]> {
   return found.sort()
 }
 
+/** The projector's copy name (projector.ts `conflictCopy`): `.conflicts/<path without .md>.<UTC stamp>.md`. */
+const CONFLICT_COPY = /^\.conflicts\/(.+)\.\d{8}T\d{9}Z\.md$/
+/** Where the S2a backfill keeps a file it could not parse (store-reconcile.ts `backfillNote`): `.migration/<date>/unparseable/<path>`. */
+const UNPARSEABLE_KEPT = /^\.migration\/[^/]+\/unparseable\/(.+)$/
+
+/** The first of `candidates` (vault-relative) holding the same bytes as `copy`, or null. */
+async function sameBytes(root: string, copy: string, candidates: readonly string[]): Promise<string | null> {
+  if (candidates.length === 0) return null
+  const bytes = await readFile(join(root, copy))
+  for (const candidate of candidates) {
+    if ((await readMaybe(join(root, candidate)))?.equals(bytes)) return candidate
+  }
+  return null
+}
+
 function contentDiff(a: { frontmatter: Record<string, unknown>; body: string }, row: { frontmatter: Record<string, unknown>; body: string }): string | null {
   const parts: string[] = []
   if (!sameContent(a.frontmatter, row.frontmatter)) parts.push('frontmatter')
@@ -241,6 +274,7 @@ export async function runDoctor(
   const startedAt = new Date().toISOString()
   const problems: DoctorProblem[] = []
   const pending: DoctorPending[] = []
+  const info: DoctorInfo[] = []
   const checked = { notes: 0, files: 0, bins: 0, crdtRows: 0 }
   const vaultFilter = (column: SQL): SQL => (options.vaultId ? sql`AND ${column} = ${options.vaultId}` : sql``)
 
@@ -400,8 +434,24 @@ export async function runDoctor(
   }
   for (const vault of vaults) {
     const root = vaultDir(vault.id)
+    // The S2a backfill kept each file it could not parse; the projector's copy of the same bytes is that file again (#908).
+    const kept = new Map<string, string[]>() // note file path -> the backfill's copies of it
+    for (const file of await listFiles(root, '.migration')) {
+      const rel = UNPARSEABLE_KEPT.exec(file)?.[1]
+      if (rel) kept.set(rel, [...(kept.get(rel) ?? []), file])
+    }
     for (const copy of await listFiles(root, '.conflicts')) {
-      problem({ class: 'conflict-copy', vaultId: vault.id, noteId: null, path: copy, detail: 'bytes the projector replaced; review and delete' })
+      const name = CONFLICT_COPY.exec(copy)
+      const original = name ? await sameBytes(root, copy, kept.get(`${name[1]}.md`) ?? []) : null
+      if (original) {
+        info.push({
+          kind: 'migration-copy',
+          vaultId: vault.id,
+          vaultName: vault.name,
+          path: copy,
+          detail: `the S2a store migration could not parse this file, kept it as ${original} and wrote the note's row to the file; review, then delete both`,
+        })
+      } else problem({ class: 'conflict-copy', vaultId: vault.id, noteId: null, path: copy, detail: 'bytes the projector replaced; review and delete' })
     }
     for (const bin of await listFiles(root, '.crdt')) {
       if (!bin.endsWith('.bin')) continue
@@ -464,7 +514,8 @@ export async function runDoctor(
 
   const counts: Partial<Record<DoctorClass, number>> = {}
   for (const p of problems) counts[p.class] = (counts[p.class] ?? 0) + 1
-  return { kind: 'elara-doctor', startedAt, finishedAt: new Date().toISOString(), repair, ok: problems.length === 0, checked, counts, problems, pending }
+  const status = problems.length === 0 ? 'ok' : problems.every((p) => p.repairable) ? 'repairable' : 'broken'
+  return { kind: 'elara-doctor', startedAt, finishedAt: new Date().toISOString(), repair, ok: problems.length === 0, status, checked, counts, problems, pending, info }
 }
 
 /** The snapshot plus its non-rejected tail, against the row it was folded into; null when equal. */
