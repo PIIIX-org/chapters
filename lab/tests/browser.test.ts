@@ -1075,7 +1075,8 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
       lostTokens.length === 0
         ? 'nothing was lost'
         : `${lostTokens.length - unrecoverable.length}/${lostTokens.length} recoverable; never in any revision: ${unrecoverable.map((g) => g.token).slice(0, 25).join(' ')}`,
-    ok: lostTokens.length === 0 ? null : unrecoverable.length === 0,
+    // Nothing lost meets the expectation (#408: a whole body merges from the agent's read); it is not a broken precondition.
+    ok: unrecoverable.length === 0,
     severity: 'high',
   })
   // A jump = the caret falls back >10 chars while the user only types forward.
