@@ -84,7 +84,7 @@ export async function revisionAtSeq(tx: Tx, noteId: string, reason: string): Pro
       SELECT id FROM note_revisions WHERE note_id = ${noteId}
         AND action NOT IN ('quarantine', 'proposal', 'restore_point')
       ORDER BY ord DESC LIMIT 1)
-      AND n.id = r.note_id AND r.seq IS NULL AND r.body = n.body AND r.frontmatter = n.frontmatter
+      AND n.id = r.note_id AND r.seq IS NULL AND note_revision_body(r.body, r.body_delta, r.delta_base_id) = n.body AND r.frontmatter = n.frontmatter
     RETURNING r.id`)) as unknown as unknown[]
   if (adopted.length > 0) return 'adopted'
   await tx.execute(sql`

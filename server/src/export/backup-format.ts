@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { getTableColumns, type Column } from 'drizzle-orm'
+import { getTableColumns, type Column, type SQL } from 'drizzle-orm'
 import { getTableConfig, type PgColumn, type PgTable } from 'drizzle-orm/pg-core'
 import {
   graphPerspectives,
@@ -22,6 +22,7 @@ import {
   vaultShares,
   vaults,
 } from '../db/schema.js'
+import { revisionBody } from '../notes/store-tx.js'
 
 /**
  * Instance backup archive format (#409).
@@ -59,6 +60,8 @@ export interface BackupTable {
   legacyKey?: string
   /** Applied to each row before it is inserted. */
   onRestore?: (row: Row) => Row
+  /** Columns the archive holds as these expressions of the stored row (a value rebuilt from columns kept out of the model). */
+  dumped?: Record<string, SQL>
   /**
    * JS key of a column numbered from a sequence in the order rows were
    * recorded (#825, #858). A restore keeps the archive's numbers, numbers rows
@@ -124,7 +127,8 @@ export const BACKUP_TABLES: BackupTable[] = [
     omit: ['embedding'],
     unique: [{ columns: ['vaultId', 'path'], liveOnly: true }],
   },
-  { name: 'note_revisions', table: noteRevisions, sequence: 'ord' },
+  // Every body whole (#501): a compacted revision's delta is not in the archive, which any release restores.
+  { name: 'note_revisions', table: noteRevisions, sequence: 'ord', dumped: { body: revisionBody } },
 ]
 
 /** The setup/MFA-mandate row: restored by hand, never with the setup token. */
