@@ -93,7 +93,7 @@ async function fileBody(vaultId: string, path: string): Promise<string | null> {
 async function knownText(tx: Tx, row: Row, body: string): Promise<boolean> {
   if (body === row.body || body === (await fileBody(row.vault_id, row.path))) return true
   const [revision] = (await tx.execute(sql`
-    SELECT 1 FROM note_revisions WHERE note_id = ${row.id} AND body = ${body} LIMIT 1`)) as unknown as unknown[]
+    SELECT 1 FROM note_revisions WHERE note_id = ${row.id} AND note_revision_body(body, body_delta, delta_base_id) = ${body} LIMIT 1`)) as unknown as unknown[]
   return revision !== undefined
 }
 
