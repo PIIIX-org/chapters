@@ -24,6 +24,8 @@ export const FAILPOINTS = [
   'purge.after-commit-before-remove',
   'fold.before-commit',
   'migration.mid-batch',
+  'collab.after-log-before-ack',
+  'collab.after-ack-before-fold',
 ] as const
 
 export type Failpoint = (typeof FAILPOINTS)[number]

@@ -602,21 +602,57 @@ Every share/membership mutation calls `emitPermissionChange()` (see
 - **Edits are minimal diffs; `edit_note` takes ops** (#408):
   `writeThroughCollab` never deletes and re-inserts the whole Y.Text.
   `applyTextDiff` (`sync/text-diff.ts`) turns the live text into the new
-  body with a minimal character diff (Myers O(ND) with the linear-space
-  middle snake, over code points so no surrogate pair is split) inside
-  the one document transaction; past `DIFF_TIME_LIMIT_MS` (100 ms) it is
-  redone per line and refined per character inside each changed run as
-  far as a second limit allows (ADR-003 §5.2 step 5); a run still left
-  pairs its old and new lines in order and changes each pair only between
-  its common start and end (linear), so a rewrite of every line of a
-  large note (a `- ` before each) keeps every line's unchanged characters
-  rather than replacing the run. Pairing is in order: when such a run also
-  adds or removes lines partway through, the lines after that point are
-  paired with their neighbours and keep less. Untouched
-  characters keep their Yjs identity, so a person's caret stays on its
-  text, their Ctrl+Z (a `Y.UndoManager` that tracks only their own edits,
-  never the relay's updates) still finds what they typed (#483), and
-  typing that reaches the relay after the write merges where it was
+  body with a minimal diff inside the one document transaction, under one
+  time limit, `DIFF_TIME_LIMIT_MS` (100 ms, ADR-003 §5.2 step 5) (#833).
+  The common start and end are set aside first (a linear scan), so an
+  append or a change in one place costs about one read of the body. What
+  is left is diffed per character (Myers O(ND) with the linear-space
+  middle snake, over code points so no surrogate pair is split): exactly
+  when it is at most 256 UTF-16 units, so a small edit is as short as the
+  code-point edit distance, and up to 16,384 units only while the two
+  sides are alike: the edit distance is at most a quarter of their
+  length, or at most the text one side adds plus a tenth of the shorter
+  side, when four of eight 16-unit stretches of the shorter side are
+  found in the longer one before the search (a sentence added to a
+  paragraph that also had words changed, or a long passage put in front
+  of it). When the shorter side is under 64 units (stretches shorter than 16), the result must
+  also be at most 2 + 1/16 of the shorter side's units separate changes
+  (not a short line against a long unrelated one). The search stops at
+  1,024 edits (4,096 within one line), so a failed attempt is cheap.
+  Otherwise the whole lines around it are diffed per line (lines found on
+  one side only, and blank lines, skip the search, so a rewrite of every
+  line is linear and a paragraph added next to an edited one does not
+  take its blank line). A changed run with as many new lines as old ones
+  pairs them in order; another run is diffed per character if at most
+  16,384 units and alike (never exactly), else paired too: each line of
+  its shorter side pairs with one of the other side's lines, in order, by
+  the alignment with the most likeness (the characters a pair shares at
+  its start and end, plus 16 for each of up to eight word triples from the
+  middle of the line found in its candidate, looked up as hashes in a set
+  per line, so lines changed at both ends, such as wrapped in `**`, still
+  find their new versions). It is a dynamic programme over lines ×
+  shifts; past 2^15 cells, or when the time limit runs out during it, only
+  alignments that put the lines one side has more of in one block are
+  tried. The lines left over between
+  pairs are inserted or deleted where they stand. Each pair is diffed per
+  character if alike, otherwise changed only between its common start
+  and end. So a rewrite of every line of a large note (a `- ` before
+  each, a `**` wrap), with or without a paragraph added or removed, keeps
+  the unchanged characters of every line that is alike; a paragraph added
+  before, after or between edited ones leaves them in place; a long
+  paragraph changed at both ends, or in up to 4,096 edits, keeps the text
+  between the changes; and an unrelated rewrite is about one change per
+  line rather than thousands of fragments. Past the time limit the rest
+  is linear (pairs trimmed to their common start and end, so a line
+  changed at both ends is replaced). Not every unchanged character is
+  kept: a pair or run that fails the alike test keeps only its common
+  start and end, and a run with the same number of lines that also adds
+  one line and removes another partway through pairs the lines in
+  between with their neighbours. Kept characters keep their Yjs identity, so a
+  person's caret stays on its text, their Ctrl+Z (a
+  `Y.UndoManager` that tracks only their own edits, never the relay's
+  updates) still finds what they typed (#483), and typing that reaches
+  the relay after the write merges where it was
   typed. In each change the new text is inserted before the old is
   deleted, so a caret at the end of a replaced span lands after the new
   text and typing in flight joins after it. It used to delete the whole
@@ -1136,6 +1172,57 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   end of the write's transaction, so a refused write (a check, an op that
   does not resolve, validation) still gets this check on its connection's
   disconnect store: a document a person doubled stays out of the row (#408).
+- **An ack means committed in Postgres** (ADR-003 §5.4 "Append", S3,
+  #487; `collab-append.ts`, `appendCollabUpdate` in `notes/store.ts`).
+  `beforeSync` runs on every sync-step-2 and update message before
+  Hocuspocus applies it and sends `SyncStatus(true)` (what the editor
+  shows as saved): the update must decode and apply to an empty scratch
+  document (else the document connection closes and nothing is stored),
+  passes the size cap, is skipped when the live document already holds it
+  (`Y.snapshotContainsUpdate`, a reconnect repeating known items), and
+  otherwise `Y.diffUpdate` against the live document is inserted into
+  `note_updates` (actor `collab`, `actor_detail.kind = 'collab'`).
+  Appends of one note are group-committed: those that arrive while a
+  commit runs go together, each batch as a single autocommit statement
+  (the instance check, the note re-checked live, the id before the batch,
+  one multi-row INSERT; `commitAppends`). The append takes neither the
+  note's queue lock nor its advisory lock, so a fold or a write holding
+  them never delays an ack. It holds the note's in-process append gate
+  (`appendGate` in `note-crdt.ts`) from its ids to its COMMIT, and every materialisation of the note's CRDT
+  state holds that gate around its tail read only. The tail read is
+  therefore a clean boundary (`lastId`): every lower id is committed and
+  seen, every later append gets a higher id. Folds mark `folded_through`
+  and compact only up to that boundary, and a server-authored update a
+  write appends in its own transaction does not move it, so a row appended
+  during a fold or a write stays for the next fold (or boot). A write
+  computes its change against exactly the state it read (`compute` runs
+  inside the transaction), so typing appended meanwhile merges as a
+  concurrent edit and is never diffed away. `lockedNote` takes `FOR NO KEY
+  UPDATE`, so an append's foreign-key check never waits for it. A failed insert
+  (Postgres down, a lock timeout, maintenance) closes the socket with
+  1013 `store-unavailable`: the editor keeps the change unsynced, reconnects and
+  resends; a trashed or purged note closes the document unacked and its
+  reconnect is refused. If the live apply then fails, `afterHandleMessage`
+  marks the row `rejected_at`. The fold into row + revision follows:
+  the debounced store (2 s pause, 10 s max), the last tab closing
+  (`unloadImmediately: true`), every server write (Invariant W), the
+  unload compaction (which folds before it compacts) and boot
+  (`foldPendingCollab`; a note whose fold fails gets `fold_error` and a
+  failed `collab-store` job, and boot continues). A SIGKILL after the ack
+  therefore loses nothing: boot folds the logged update. Lab failpoints
+  `collab.after-log-before-ack` and `collab.after-ack-before-fold` mark
+  the two crash boundaries. A fold that stores the row (boot, load,
+  unload) wakes the projector, so the file follows at once. A reconnect
+  that finds the store busy or unreachable (`storeUnavailable` in
+  `store-tx.ts`: a busy store, a connection refused, lost or timed out,
+  Postgres shutting down or not accepting connections) in `onAuthenticate`
+  or `onLoadDocument` is refused with reason `store-busy`, not a
+  revocation. `useCollabDoc` shows "reconnecting", keeps the text and
+  connects again after 5 s on a new provider, which resends what is
+  unsynced; a reconnect ticket that fails with anything but 401/403 is
+  retried the same way. Backpressure: a socket with more than 16 MiB sent and not yet
+  handled, or a note with 256 appends waiting for its append gate, is
+  closed with 1013 (retryable) instead of queueing without end.
 - **Size cap on the relay** (#491, `collab-size.ts`): ws refuses a frame
   over `noteTransportLimit()` before reading it (close 1009).
   `beforeSync` refuses a sync-step-2 or update message whose Yjs update
@@ -1468,6 +1555,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   prints `a database query failed`, #813).
   Ids are the archive's — a true restore, not an import. Rows are
   inserted as stored, not re-validated through the OKF write path.
+  Revisions keep their `ord` and security events their `seq` (the
+  order they were recorded in, #825, #858; the admin security-event log
+  lists by `seq`, newest first); an archive from before those columns
+  gets them in (created_at, id) order, and the sequences are advanced
+  past the restored rows before the `instance_restored` event.
   Restored MCP and sync tokens keep working (their hashes are
   restored). Restored repositories get `last_synced_at`,
   `last_synced_commit` and `last_webhook_at` cleared so the next poll
@@ -1801,6 +1893,23 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     rather than `pnpm start`, so the server is PID 1 and `SIGTERM`
     reaches the shutdown handler in `index.ts` that flushes note edits
     still inside the collab store debounce.
+  - Sets `pnpm_config_verify_deps_before_run=false`, so the operator
+    commands (`pnpm check-notes`, `pnpm migrate-store`,
+    `pnpm restore-backup`, ...) run straight away and offline (#872).
+    pnpm 11's default checks the dependencies before every script and
+    installs the whole workspace from the registry when it thinks they
+    are stale. It compares manifests with the lockfile whenever a
+    `package.json` is newer than the last install, which `COPY server`
+    makes true in every image built on a cached install layer. That
+    comparison failed on the `adm-zip` override until
+    `server/package.json` said the same `>=0.6.1` as the override. Keep
+    a direct dependency's range equal to its override in
+    `pnpm-workspace.yaml`: pnpm compares the raw manifest, not the
+    overridden one. The image check (`.github/actions/image-offline-check`,
+    run by `image-check.yml` on PRs that change the image's dependency
+    inputs and by `publish.yml` before it pushes) runs
+    `pnpm check-notes --help` with `--network none` as shipped, and once
+    more with every manifest touched and the check set to `error`.
   - `HEALTHCHECK` hits `/health` with `node -e` + `fetch` (no curl in
     `node:*-slim`, and an apt layer for it is not worth it).
   - Exposes **`3000` only**. The Yjs relay rides Fastify's own HTTP
@@ -2042,7 +2151,9 @@ file and `.crdt` bin in one `REPEATABLE READ READ ONLY` transaction (only
 pre-0021 columns, so it runs on a production copy before the upgrade) and
 reports what the S2a/S2b backfill will do: per-note classes (`crdt`: what
 the bin's text matches; `collab`: what the S2b backfill does with it,
-`attach`/`set-aside`/`seed`/`has-state`), the file ≠ row
+`attach-equal`/`attach-diffed`/`set-aside`/`seed`/`has-state`, equal or
+diffed against the row S2a leaves, the file's content when the file wins),
+the file ≠ row
 conflict list (Q5: the file wins; `row.updated_at` against the file mtime,
 both hashes), files that will change bytes, files with no row, sizes and
 timings.

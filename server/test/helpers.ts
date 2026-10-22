@@ -8,6 +8,7 @@ import { hashPassword } from '../src/auth/passwords.js'
 import { serializeNote, type Frontmatter } from '../src/notes/okf.js'
 import { getLiveNote, noteFile } from '../src/notes/store.js'
 import { flushProjections } from '../src/notes/projector.js'
+import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import * as Y from 'yjs'
 
 let counter = 0
@@ -113,8 +114,12 @@ export async function storedCrdtText(vaultId: string, path: string): Promise<str
  * create, so wiping the shared test database between files is safe.
  */
 export async function wipeInstance(): Promise<void> {
-  // The projector may hold a transaction on vaults and notes in the background: let it finish first.
-  await flushProjections()
+  // The projector and the embedding queue may hold a transaction on notes and
+  // other tables in the background: the truncate locks every table, one by one,
+  // so it deadlocks with them (#862: the semantic-edge kNN of an embedding job,
+  // the projector's reads). Let both finish first. No caller syncs repository
+  // files, so the extraction queue has nothing running here.
+  await Promise.all([flushProjections(), flushEmbeddings()])
   const tables = await sql<Array<{ tablename: string }>>`select tablename from pg_tables where schemaname = 'public'`
   await sql.unsafe(`truncate ${tables.map((t) => `"${t.tablename}"`).join(', ')} cascade`)
   await rm(join(config.dataDir, 'vaults'), { recursive: true, force: true })

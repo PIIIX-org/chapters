@@ -115,10 +115,10 @@ docker compose exec app pnpm migrate-store --dry-run --report /data/elara/migrat
 | | `unparseable` | the file has no valid frontmatter: the row is kept, the file is copied aside and rewritten (`detail` has the parse error) |
 | `serializeNoteForm` | `true` / `false` / `null` | whether the file's bytes are exactly what Elara writes; `false` means hand-formatted YAML, kept as it is (adopted) |
 | `revision` | `consistent` / `gap` / `none` | whether the newest revision equals the row; a gap or no revision gets a backfill revision |
-| `crdt` (live notes) | `matches-row`, `matches-file`, `matches-revision` | the bin is attached to the note in S2b (its history is kept) |
+| `crdt` (live notes) | `matches-row`, `matches-file`, `matches-revision` | the bin is attached to the note in S2b (its history is kept); these compare the body only, `collab` says whether the frontmatter matches too |
 | | `mismatch`, `undecodable` | the bin is set aside in S2b and the note is seeded fresh on first open |
 | | `missing` | no bin; seeded on first open, as today |
-| `collab` (live notes) | `attach` / `set-aside` / `seed` / `has-state` | what the S2b backfill does with the note: attaches its bin, moves the bin to `.migration/<date>/bins/`, nothing until first open (no bin), or nothing because the note already has its CRDT state in the database; `counts.collab` has the totals |
+| `collab` (live notes) | `attach-equal` / `attach-diffed` / `set-aside` / `seed` / `has-state` | what the S2b backfill does with the note: attaches its bin as is (body and frontmatter equal the row as S2a leaves it: the file's content when the file wins) or with a diff to that row on top (the boot report's `attached.equal` / `attached.diffed`), moves the bin to `.migration/<date>/bins/`, nothing until first open (no bin), or nothing because the note already has its CRDT state in the database; `counts.collab` has the totals |
 | `projection` | `applied` / `adopted` / `create` / `rewrite` | what happens to the file: nothing, kept as it is, written, or rewritten after a conflict copy |
 | `embedding` | `applied` / `pending` | pending embeddings are computed after the migration |
 

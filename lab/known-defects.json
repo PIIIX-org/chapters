@@ -58,7 +58,8 @@
     {
       "test": "browser",
       "check": "S1-type-while-agent-appends: no lost user typing",
-      "issue": 408
+      "issue": 408,
+      "intermittent": "since S2b (#843) only when an agent's whole-body edit_note lands while a typed token is in flight: passed on dev (run 39641225039) and on #839 (run 39638878096), failed in the other 5 of 7 browser runs on S2b branches that leave edit_note alone (e.g. 39644992802); #864 removes it"
     },
     {
       "test": "browser",
@@ -68,8 +69,16 @@
     },
     {
       "test": "browser",
+      "check": "lost typing is recoverable from note history (note_revisions)",
+      "issue": 408,
+      "state": "inconclusive",
+      "intermittent": "inconclusive when the S1 step lost no typing, so there is nothing to recover (\"nothing was lost\" on dev, run 39641225039, and on #839, run 39638878096: 2 of 7 browser runs on S2b branches that leave edit_note alone); #864 removes it"
+    },
+    {
+      "test": "browser",
       "check": "S1: user typing stays contiguous while the agent writes",
-      "issue": 408
+      "issue": 408,
+      "intermittent": "failed on dev (run 39641225039), on #839 (run 39638878096) and in all 7 browser runs on S2b branches that leave edit_note alone; passes with #864's whole-body merge (runs 39638573189, 39635637393), which removes it"
     },
     {
       "test": "browser",
@@ -85,11 +94,6 @@
     },
     {
       "test": "collab-duplication",
-      "check": "S16 server-acknowledged collab edit survives SIGKILL after the tab closed",
-      "issue": 487
-    },
-    {
-      "test": "collab-duplication",
       "check": "S18 injected stale .crdt, stale ydoc (tab kept open): no duplicated text",
       "issue": 488
     },
@@ -97,11 +101,6 @@
       "test": "collab-duplication",
       "check": "S18 injected stale .crdt, stale ydoc (tab kept open): @INJSTALE@ kept exactly once on disk",
       "issue": 488
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: acked collab edit of a closed tab survives SIGKILL$",
-      "issue": 487
     },
     {
       "test": "crash-write",
@@ -168,12 +167,6 @@
       "issue": 564
     },
     {
-      "test": "fix-crash-catchup",
-      "check": "filesPendingExtraction reaches 0",
-      "issue": 845,
-      "intermittent": "repository_status's filesPendingExtraction lags the SQL count by one poll after the boot catch-up (field 1, SQL pending 0); seen on four branches off dev 3616b53 that do not touch extraction (#845), reruns pass"
-    },
-    {
       "test": "multilingual-search",
       "check": "normalization: Arabic kaf ك (\"فرش كاشان\" vs stored \"فرش کاشان\")",
       "issue": 528
@@ -213,6 +206,12 @@
       "test": "multilingual-search",
       "check": "vector retriever ranks Persian answers first as often as English (bge-small-en)",
       "issue": 530
+    },
+    {
+      "test": "browser",
+      "check": "S1-type-while-agent-appends: no lost agent edits",
+      "issue": 408,
+      "intermittent": "the agent marker is split, not lost: typing in flight during a whole-body edit_note lands inside it (runs 39633168223, 39615786659, 39595467134 failed; 39636198769 passed); #864 fixes the tie-break"
     }
   ]
 }

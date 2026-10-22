@@ -155,7 +155,7 @@ describe('rows-from-files', () => {
     // The drain moved the files where the rows say.
     expect((await readdir(join(vaultDir(vaultId), 'moving'))).sort()).toEqual(['index.md', 'new.md'])
     expect(await stat(trashFile(vaultId, trashed.id)).then(() => true, () => false)).toBe(true)
-  }, 30_000)
+  })
 
   it('stops with an error when its exclusive lock is lost during the run, even within one vault', async () => {
     await loseRow('recover/lost')
@@ -184,5 +184,5 @@ describe('rows-from-files', () => {
     await blocker
     await expect(run).rejects.toThrow(/lock was lost/)
     await flushProjections()
-  }, 30_000)
+  })
 })
