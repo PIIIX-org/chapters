@@ -197,6 +197,13 @@
       "when": 1791700000000,
       "tag": "0027_security_event_order",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1791800000000,
+      "tag": "0028_note_reads",
+      "breakpoints": true
     }
   ]
 }

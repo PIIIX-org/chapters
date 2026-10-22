@@ -16,6 +16,11 @@ import { diffLines, diffText, type LineHunk, type TextEdit } from './text-diff.j
  * already holds the change made since its base) merge as one. The unit is a
  * whole line: two changes to one line overlap even when they touch different
  * words, so a merge never interleaves two rewrites of the same sentence.
+ *
+ * One exception (#408): at the end of the text, when `mine` only added whole
+ * lines after the base's last one (an agent appending to the body it read
+ * while a person types at the end), its lines go after what `theirs` has
+ * there; see appendedAtEnd.
  */
 
 /**
@@ -51,6 +56,37 @@ function sideLines(base: readonly string[], hunks: readonly SideHunk[], mine: bo
   }
   for (let i = at; i < end; i++) out.push(base[i]!)
   return out
+}
+
+/**
+ * `theirs`' last lines followed by the lines `mine` appended, when both
+ * changed the end of the text and `mine` only added whole lines after the
+ * `base` lines there (ending the last one when it had no newline), else null.
+ * A line `theirs` left without a newline (a person typing) gets one before
+ * them; appended lines `theirs` already ends with (the same append sent again
+ * from the same base) are not added twice. When an appended line that is
+ * not blank is already somewhere else in `theirs`' changed lines (an append
+ * resent from an older base after someone added after it), adding it again
+ * would double it and dropping it may lose a line the author meant twice:
+ * null, a conflict.
+ */
+function appendedAtEnd(base: string, theirs: readonly string[], mine: string): string[] | null {
+  if (!mine.startsWith(base)) return null
+  let added = mine.slice(base.length)
+  if (base !== '' && !base.endsWith('\n')) {
+    if (!added.startsWith('\n')) return null
+    added = added.slice(1)
+  }
+  const lines = added.match(/[^\n]*\n|[^\n]+$/g) ?? []
+  let held = Math.min(lines.length, theirs.length)
+  while (held > 0 && !lines.slice(0, held).every((line, i) => line === theirs[theirs.length - held + i])) held--
+  const content = (line: string) => line.replace(/\n$/, '')
+  const present = new Set(theirs.map(content))
+  if (lines.slice(held).some((line) => content(line).trim() !== '' && present.has(content(line)))) return null
+  const out = [...theirs]
+  const last = out.at(-1)
+  if (held < lines.length && last !== undefined && !last.endsWith('\n')) out[out.length - 1] = `${last}\n`
+  return [...out, ...lines.slice(held)]
 }
 
 /** `mine` merged onto `theirs`, both made from `base` (see the top of this file). */
@@ -112,8 +148,16 @@ function mergeLines(
       concurrent.push(change)
     } else {
       const mineText = sideLines(baseLines, group, true, start, end).join('')
+      // Lines only appended at the end go after what was added or typed there (#408), before the per-character fallback.
+      const appended =
+        group.some((hunk) => !hunk.mine) && mineText !== text && end === baseLines.length
+          ? appendedAtEnd(baseLines.slice(start, end).join(''), theirLines, mineText)
+          : null
       if (!group.some((hunk) => !hunk.mine) || mineText === text) {
         text = mineText
+      } else if (appended) {
+        concurrent.push(change)
+        text = appended.join('')
       } else if (keepTheirs) {
         // Both sides changed these lines: merged again per character, `theirs` kept where characters overlap.
         const merged = mergeCharacters(baseLines.slice(start, end).join(''), text, mineText)

@@ -138,10 +138,18 @@ export function noteMoved(noteId: string, vaultId: string, from: string, to: str
 
 /**
  * The Yjs client id of every change this server process authors (ADR-003
- * §5.2 step 5): one random uint32 per process. Writes to a note are
- * serialised under its lock, so the id's clock never forks within a document.
+ * §5.2 step 5): one random id per process. Writes to a note are serialised
+ * under its lock, so the id's clock never forks within a document.
+ *
+ * It is 2^32 plus 48 random bits, above every editor's id (Yjs draws a
+ * uint32): Yjs orders two inserts at one spot by client id, larger last, so
+ * a server change compiled while a person's keystrokes were in flight at
+ * the same spot (an agent appending where they type) goes after their
+ * characters instead of splitting their word (#408). Yjs encodes client ids
+ * as variable-length integers up to 2^53, so the id survives every update
+ * and state vector.
  */
-export const SERVER_CLIENT_ID = randomBytes(4).readUInt32LE(0)
+export const SERVER_CLIENT_ID = 2 ** 32 + randomBytes(6).readUIntLE(0, 6)
 
 /** A copy of `doc`'s state: the base a write's change is compiled against. */
 export function cloneDocument(doc: Y.Doc): Y.Doc {

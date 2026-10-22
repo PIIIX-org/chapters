@@ -41,9 +41,9 @@ describe('migration order (journal `when`)', { timeout: 60_000 }, () => {
   it('an instance that applied 0027 before 0026 existed applies 0026 at its next start', async () => {
     const journal = JSON.parse(await readFile(join(source, 'meta', '_journal.json'), 'utf8')) as { entries: Entry[] }
     const compaction = journal.entries.find((e) => e.tag === '0026_revision_compaction')!
-    // The release before #501: the same journal without 0026.
+    // The release before #501: the journal without 0026 and without what merged after it (0028+, a larger `when`).
     partial = await mkdtemp(join(tmpdir(), 'migration-order-'))
-    const before = { ...journal, entries: journal.entries.filter((e) => e !== compaction) }
+    const before = { ...journal, entries: journal.entries.filter((e) => e.when < compaction.when) }
     expect(before.entries.some((e) => e.tag === '0027_security_event_order')).toBe(true)
     await mkdir(join(partial, 'meta'))
     await writeFile(join(partial, 'meta', '_journal.json'), JSON.stringify(before))

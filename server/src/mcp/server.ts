@@ -77,6 +77,7 @@ import { showAgentPresence } from '../sync/agent-presence.js'
 import { registerMcpPrompts } from './prompts.js'
 import { strictArgs } from './strict-input.js'
 import { applyBodyOps, type EditOp } from '../sync/edit-ops.js'
+import { advanceRead, lastRead, rememberRead } from './last-read.js'
 
 class McpToolError extends Error {}
 
@@ -1003,7 +1004,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   const IDEMPOTENCY_ARG = { idempotency_key: z.string().min(1).max(200).optional() }
   const DRY_RUN_ARG = { dry_run: z.boolean().optional() }
   const WRITE_DOC =
-    ' Returns `rev` (the note\'s version after the write; read_note returns the same `rev` for the same content), `status` (`applied`; `merged`/`conflicted` with base_rev; `retry`: the store was busy, nothing was written, send it again), `diff_stats` {lines_added, lines_removed, frontmatter_keys}, `concurrent_changes` and `indexed` (whether search, the file and index.md already show this rev). ' +
+    ' Returns `rev` (the note\'s version after the write; read_note returns the same `rev` for the same content), `status` (`applied`; `merged`/`conflicted` for an edit_note with base_rev or a `body` after a read; `retry`: the store was busy, nothing was written, send it again), `diff_stats` {lines_added, lines_removed, frontmatter_keys}, `concurrent_changes` and `indexed` (whether search, the file and index.md already show this rev). ' +
     '`idempotency_key`: the same key with the same arguments from this connection within 24 h returns the first result (`replayed: true`) and writes nothing; use one when you may retry after a lost connection.'
   const DRY_RUN_DOC = ' `dry_run: true` returns the result (status, diff_stats, the resulting note) without writing anything.'
 
@@ -1020,6 +1021,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireAccess(target, 'read')
       const note = await readLiveNote(target, path)
       if (!note) throw new McpToolError('note not found')
+      await rememberRead(auth.connection.id, note.row.id, note.row.seq)
       showAgentPresence(target, note.row.id, presence, 'reading')
       return {
         path: note.row.path,
@@ -1101,7 +1103,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description:
         'Update a note. Prefer `ops` for local changes: they apply to the live text, so text a person typed since you read the note is kept. `ops` run in order: replace_text {find, replace, expectedCount?}, insert_before/insert_after {anchor, text}, replace_section {heading, content}, append {text}, prepend {text} (each as whole lines), delete_block {find}, frontmatter_set {key, value}, frontmatter_add/frontmatter_remove {key, value} (list items; remove without value deletes the key). A `find`/`anchor` must occur exactly once (replace_text: `expectedCount` times) and a heading once, else the edit fails and nothing changes. ' +
         '`body` replaces the whole body (not with `ops`); only the characters that differ change. `frontmatter` merges per top-level key: keys you send are set, keys you leave out are kept; `replace: true` replaces the whole map instead, and `removeKeys` deletes keys. ' +
-        '`base_rev`: the `rev` read_note or edit_note returned for the content you edited (a note_history revision id works too). With it, your `body`/`frontmatter` merge with what changed since: `status` `applied`, `merged` (with `concurrent_changes`), or `conflicted` when you changed lines or keys that also changed (nothing changes; your version is kept as revision `proposalId`). Without it, a `body` also removes text typed since your read. ' +
+        '`base_rev`: the `rev` read_note or edit_note returned for the content you edited (a note_history revision id works too). With it, your `body`/`frontmatter` merge with what changed since: `status` `applied`, `merged` (with `concurrent_changes`), or `conflicted` when you changed lines or keys that also changed (nothing changes; your version is kept as revision `proposalId`). Lines you only added at the end go after text added or typed there since. ' +
+        'A `body` without `base_rev` merges the same way from this connection\'s last read_note or export_note of the note in the past 24 h, or from the last `body` this connection wrote to it since (its `rev`, echoed as `baseRev`), so text typed since is kept; only when this connection has not read the note in that time does a `body` replace the live text. ' +
         'The edit flows through the live collaboration engine — humans with the note open see it stream in, attributed to this connection. ' +
         'A body that doubles the note or repeats a large block of it is quarantined (note unchanged, body kept as a revision); set `allowGrowth: true` if intended.' +
         WRITE_DOC +
@@ -1146,23 +1149,30 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const callArgs = { ...args, baseRev, allowGrowth }
       return runWrite({ connectionId: auth.connection.id, tool: 'edit_note', target, args: callArgs, key, dryRun }, async (keyed) => {
         const edit = requestedEdit(args)
-        if (baseRev !== undefined) {
-          const base = await getBaseRevision(target, args.path, baseRev)
-          if (!base) {
+        // A whole body without base_rev is made from what this connection last had of the note (#408, #476).
+        const live = baseRev === undefined && args.body !== undefined ? await getLiveNote(target, args.path) : null
+        const lastHad = live ? await lastRead(auth.connection.id, live.id) : undefined
+        const usedRev = baseRev ?? lastHad?.rev
+        if (usedRev !== undefined) {
+          const base = await getBaseRevision(target, args.path, usedRev)
+          if (base) {
+            // After a merged write of its, the connection has the body it sent, not the revision.
+            edit.base = { id: base.id, frontmatter: base.frontmatter as Record<string, unknown>, body: lastHad?.body ?? base.body }
+          } else if (baseRev !== undefined) {
             if (!(await getLiveNote(target, args.path))) throw new McpToolError('note not found')
             throw new McpToolError(
               `base_rev ${JSON.stringify(baseRev)} is not a revision of ${args.path}: send the \`rev\` read_note or edit_note returned, or an id from note_history`,
             )
           }
-          edit.base = { id: base.id, frontmatter: base.frontmatter as Record<string, unknown>, body: base.body }
         }
+        const since = baseRev === undefined ? `since your last read of this note (rev ${String(usedRev)})` : 'since base_rev'
         const report: WriteReport = {}
         const outcome: WriteOutcome = {}
         // report and outcome are filled before the write's transaction, where the key records this answer.
         const answer = (row: WrittenNote, indexed: boolean) => {
           const how = { status: report.status ?? 'applied', before: outcome.before ?? null, concurrent: report.concurrentChanges, dryRun }
           const result = writeAnswer(row, how, indexed)
-          return baseRev === undefined ? result : { ...result, baseRev }
+          return edit.base ? { ...result, baseRev: usedRev } : result
         }
         const recordKey = keyed((row) => answer(row, false))
         const write = () =>
@@ -1180,19 +1190,22 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
             diff_stats: null,
             concurrent_changes: null,
             indexed: current ? await noteIndexed(current.row.id, current.row.seq) : false,
-            baseRev,
+            baseRev: usedRev,
             proposalId: err.proposalId,
             conflicts: err.conflicts,
             ...(dryRun ? { dry_run: true } : {}),
             message: err.proposalId
-              ? `Not applied: lines or frontmatter keys you changed were also changed since base_rev (\`conflicts\`: lines of the current body). ` +
+              ? `Not applied: lines or frontmatter keys you changed were also changed ${since} (\`conflicts\`: lines of the current body). ` +
                 `The note is unchanged; your version is kept as revision ${err.proposalId} (action "proposal": get_revision shows it, a person can restore it). ` +
                 `read_note for the current text and rev, then redo your change on it, or use ops, which apply to the live text.`
-              : `Dry run: this edit would conflict with changes made since base_rev (\`conflicts\`); nothing was written or kept.`,
+              : `Dry run: this edit would conflict with changes made ${since} (\`conflicts\`); nothing was written or kept.`,
           }
         }
         if (!updated) throw new McpToolError('note not found')
-        if (!dryRun) showAgentPresence(target, updated.id, presence, 'editing')
+        if (!dryRun) {
+          showAgentPresence(target, updated.id, presence, 'editing')
+          if (args.body !== undefined) await advanceRead(auth.connection.id, updated.id, updated.seq, updated.body === args.body ? null : args.body)
+        }
         return answer(updated, dryRun ? false : await noteIndexed(updated.id, updated.seq))
       })
     },
@@ -2137,6 +2150,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireAccess(target, 'read')
       const note = await readLiveNote(target, path)
       if (!note) throw new McpToolError('note not found')
+      await rememberRead(auth.connection.id, note.row.id, note.row.seq)
       showAgentPresence(target, note.row.id, presence, 'reading')
       return {
         path: note.row.path,
