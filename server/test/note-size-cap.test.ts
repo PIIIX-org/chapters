@@ -18,6 +18,7 @@ import { config } from '../src/config.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { serializeNote } from '../src/notes/okf.js'
 import { createNote, getLiveNote, readNote, updateNote } from '../src/notes/store.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { NoteTooLargeError } from '../src/notes/size-cap.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
 import { db } from '../src/db/client.js'
@@ -151,8 +152,7 @@ afterAll(async () => {
   await app.close()
 })
 
-// Megabyte bodies through a real relay and MCP client: past vitest's 5 s default.
-describe('note body size cap (#491)', { timeout: 30_000 }, () => {
+describe('note body size cap (#491)', () => {
   it('REST stores a body of exactly the cap and refuses one byte more with 413 naming the limit', async () => {
     await newNote('rest-cap', bodyOfBytes(CAP))
     expect(Buffer.byteLength(await restBody('docs/rest-cap'))).toBe(CAP)
@@ -236,6 +236,8 @@ describe('note body size cap (#491)', { timeout: 30_000 }, () => {
     const serverDoc = collab.hocuspocus.documents.get(provider.configuration.name)
     expect(serverDoc?.getText('body').toString() ?? 'small start').toBe('small start')
     expect(await restBody('docs/collab-over')).toBe('small start')
+    // Files are projections written after commit (ADR-003 §7): wait for the projector before reading one.
+    await flushProjections()
     const file = await readFile(join(config.dataDir, 'vaults', vaultId, 'docs', 'collab-over.md'), 'utf8')
     expect(file).not.toContain('OVER-CAP-MARKER')
     expect(await storedCrdtText(vaultId, 'docs/collab-over')).toBe('small start')

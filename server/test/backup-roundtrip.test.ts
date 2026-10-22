@@ -282,13 +282,27 @@ describe('instance backup round trip (#409)', () => {
   let sourceFiles: Record<string, string>
   let sourceEvents: string[]
 
-  it('restores every entity class with its ids after a wipe', async () => {
+  // The round trip the tests below start from: build an instance, back it up,
+  // wipe it, restore the archive. In a hook, so a slow run fails here once,
+  // not as one timed-out test and then every later test missing the fixture
+  // or the archive (#862). Each test after the first needs only the restored
+  // instance, the fixture's ids and the archive. Its own timeout: the same
+  // work took up to 1.4 s on CI and 17.2 s locally under heavy load.
+  beforeAll(async () => {
     await wipeInstance()
     fixture = await buildFixture()
     await flushProjections()
     source = await snapshotDb()
     sourceFiles = await snapshotFiles()
     sourceEvents = await securityEventRows()
+    archive = await buildInstanceBackup()
+
+    await wipeInstance()
+    expect(await userCount()).toBe(0)
+    await restoreBackup(archive)
+  }, 60_000)
+
+  it('restores every entity class with its ids after a wipe', async () => {
     expect(Object.keys(sourceFiles)).toEqual(
       expect.arrayContaining([
         `${fixture.vaultId}/assets/${fixture.assetName}`,
@@ -298,12 +312,6 @@ describe('instance backup round trip (#409)', () => {
         `${fixture.trashedVaultId}/concepts/inside.md`,
       ]),
     )
-    archive = await buildInstanceBackup()
-
-    await wipeInstance()
-    expect(await userCount()).toBe(0)
-    await restoreBackup(archive)
-
     const restored = await snapshotDb()
     for (const name of Object.keys(TABLES)) {
       expect({ table: name, rows: restored[name] }).toEqual({ table: name, rows: source[name] })
@@ -533,6 +541,53 @@ describe('instance backup round trip (#409)', () => {
       .orderBy(asc(noteRevisions.createdAt), asc(noteRevisions.id))
     expect(byTime).toHaveLength(lines.length)
     expect(legacy.ids).toEqual([...byTime.map((r) => r.id), legacy.recorded])
+    await wipeInstance()
+  })
+
+  it('numbers new security events after the restored ones, and those of an archive from before seq by time (#858)', async () => {
+    // On a fresh instance (the event sequence at 1), restores `zip`, records one event and returns every event in `seq` order.
+    const restoreAndRecord = async (zip: Buffer) => {
+      await wipeInstance()
+      await db.execute(dsql`select setval(pg_get_serial_sequence('security_events', 'seq'), 1, false)`)
+      await restoreBackup(zip)
+      const [recorded] = await db.insert(securityEvents).values({ type: 'after_the_restore' }).returning({ id: securityEvents.id })
+      const rows = await db.select({ id: securityEvents.id, type: securityEvents.type }).from(securityEvents).orderBy(asc(securityEvents.seq))
+      return { rows, recorded: recorded!.id }
+    }
+
+    const restored = await restoreAndRecord(archive)
+    expect(restored.rows.slice(-2).map((r) => r.type)).toEqual(['instance_restored', 'after_the_restore'])
+    expect(restored.rows.at(-1)!.id).toBe(restored.recorded)
+
+    // The same archive as one written before migration 0027: no `seq` on its events, which it lists in any
+    // order (here the reverse of the recorded one).
+    const zip = new AdmZip(archive)
+    const lines = zip.getEntry('db/security_events.jsonl')!.getData().toString('utf8').trim().split('\n')
+    expect(lines.length).toBeGreaterThan(1)
+    const data = Buffer.from(
+      [...lines]
+        .reverse()
+        .map((line) => {
+          const row = JSON.parse(line) as Record<string, unknown>
+          delete row.seq
+          return JSON.stringify(row)
+        })
+        .join('\n') + '\n',
+    )
+    zip.updateFile('db/security_events.jsonl', data)
+    const manifest = JSON.parse(zip.getEntry('backup.json')!.getData().toString('utf8'))
+    manifest.parts['db/security_events.jsonl'] = { sha256: createHash('sha256').update(data).digest('hex'), size: data.length }
+    zip.updateFile('backup.json', Buffer.from(JSON.stringify(manifest)))
+    const legacy = await restoreAndRecord(zip.toBuffer())
+    const archived = new Set(lines.map((line) => String(JSON.parse(line).id)))
+    const byTime = await db
+      .select({ id: securityEvents.id })
+      .from(securityEvents)
+      .orderBy(asc(securityEvents.createdAt), asc(securityEvents.id))
+    const archivedByTime = byTime.map((r) => r.id).filter((id) => archived.has(id))
+    expect(archivedByTime).toHaveLength(lines.length)
+    expect(legacy.rows.map((r) => r.id).slice(0, lines.length)).toEqual(archivedByTime)
+    expect(legacy.rows.slice(lines.length).map((r) => r.type)).toEqual(['instance_restored', 'after_the_restore'])
     await wipeInstance()
   })
 })

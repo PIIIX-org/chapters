@@ -1,25 +1,58 @@
-# Store migration (ADR-003): dry run and rehearsal
+# Store migration (ADR-003): dry run, migration and rollback
 
 Elara is moving to one authoritative store for notes: Postgres holds the
 truth, and the `.md` files, directory `index.md` files, `.crdt` state and
 embeddings become projections rebuilt from it (vault note
-`decision/adr-003-authoritative-store`). The move lands in slices. This
-release (S1) adds the database schema and a **read-only dry run** that tells
-you what the real migration will do to your data. Nothing about how Elara
-behaves changes yet.
+`decision/adr-003-authoritative-store`). The move lands in slices. S1 added
+the database schema and a **read-only dry run**; **S2a** makes Postgres the
+only authority for every server write and migrates your notes once, at the
+first boot of the S2a release.
 
-## What this release changes
+## Before you upgrade to S2a
 
-- **Migration 0021** runs at boot. It only adds: two columns and a trigger on
-  `notes`, three columns and two partial unique indexes on `note_revisions`,
-  five new tables (`note_crdt`, `note_updates`, `note_projections`,
-  `projected_files`, `jobs`) and two marker columns on `instance_state`.
-  Building the two indexes scans `note_revisions` once while holding a write
-  lock on it; the time grows with that table's size (the dry run reports it).
-- Nothing reads or writes the new objects yet.
-- Rolling back to an older release over 0021 needs **no SQL**: older code
-  ignores the new tables and columns, its inserts take the defaults and its
-  deletes cascade (backup.md §5).
+1. Take a verified backup: the pg_dump and the data volume (backup.md §1).
+   Once S2a runs, the database is the copy that matters.
+2. Run the dry run below on a copy (or on production: it is read-only) and
+   read its `conflicts` list: those notes' files win over their rows.
+3. Upgrade when nobody is typing in an editor.
+
+## What happens at the first boot of S2a
+
+- **Migration 0021** (if S1 has not applied it yet) runs first. It only
+  adds: two columns and a trigger on `notes`, three columns and two partial
+  unique indexes on `note_revisions`, five new tables (`note_crdt`,
+  `note_updates`, `note_projections`, `projected_files`, `jobs`) and two
+  marker columns on `instance_state`. Building the two indexes scans
+  `note_revisions` once while holding a write lock on it.
+- **The backfill** runs before the app answers any request (no write can
+  interleave), once: `instance_state.store_migrated_at` marks it done. It
+  walks every note, live and trashed, one transaction per note, so a crash
+  or a kill rolls back only the note in flight and the next boot resumes.
+  Per note it does what the dry run reports: a file that differs from its
+  row wins (the row's text is kept as a `migration:row-kept` revision), an
+  unparseable file is copied to `vaults/<id>/.migration/<date>/unparseable/`
+  and the row kept, a hand-formatted file whose content equals the row is
+  adopted with its bytes, and every note gets a revision at its current
+  `seq`. Leftover `*.tmp` files are deleted. `.crdt/` is not touched.
+- It writes `DATA_DIR/migration-report-<time>.json` (counts per class, the
+  conflict list, failures) and logs a one-line `[store] backfill:` summary.
+  A note that fails is listed and the marker is not set, so the next boot
+  tries it again; the app still starts.
+- Files that will change bytes are rewritten by the projector after boot,
+  with the old bytes copied to `vaults/<id>/.conflicts/` first.
+- On every later boot: rows changed outside the store (an older release
+  during a rollback, a restore, manual SQL) get their projection rows and a
+  revision at their `seq`; after an unclean shutdown every file is verified
+  against its row; `.md` files with no owner are moved to
+  `vaults/<id>/.orphans/` (never deleted). See backup.md "Files Elara set
+  aside".
+
+## Rolling back
+
+Restoring the pre-upgrade backup is the clean way back (backup.md §5).
+Keeping the data written since the upgrade is supported for one release
+with the stopped-server export, `store-export-legacy`: backup.md §5,
+"Migration 0021 and the S2a store".
 
 ## Run the dry run
 
@@ -60,8 +93,8 @@ docker compose exec app pnpm migrate-store --dry-run --report /data/elara/migrat
   write to (exit code 2, nothing read); if the run itself fails, it removes
   the file again. Without `--report` the JSON goes to stdout and a one-line
   summary to stderr. `--vault <uuid>` limits it to one vault.
-- It runs no migrations. Without `--dry-run` it exits with code 2: the
-  migration itself ships with the next slice (S2a).
+- It runs no migrations and needs `--dry-run` (exit code 2 without it): the
+  migration itself runs at the first boot of S2a (above).
 - **On a live instance, edits made during the run show up as conflicts.**
   The database is read from one snapshot taken at the start, but each file
   is read when the walk reaches it, so a note saved in between looks like
@@ -81,10 +114,10 @@ docker compose exec app pnpm migrate-store --dry-run --report /data/elara/migrat
 | | `unparseable` | the file has no valid frontmatter: the row is kept, the file is copied aside and rewritten (`detail` has the parse error) |
 | `serializeNoteForm` | `true` / `false` / `null` | whether the file's bytes are exactly what Elara writes; `false` means hand-formatted YAML, kept as it is (adopted) |
 | `revision` | `consistent` / `gap` / `none` | whether the newest revision equals the row; a gap or no revision gets a backfill revision |
-| `crdt` (live notes) | `matches-row`, `matches-file`, `matches-revision` | the bin is attached to the note in S2b (its history is kept) |
+| `crdt` (live notes) | `matches-row`, `matches-file`, `matches-revision` | the bin is attached to the note in S2b (its history is kept); these compare the body only, `collab` says whether the frontmatter matches too |
 | | `mismatch`, `undecodable` | the bin is set aside in S2b and the note is seeded fresh on first open |
 | | `missing` | no bin; seeded on first open, as today |
-| `collab` (live notes) | `attach` / `set-aside` / `seed` / `has-state` | what the S2b backfill does with the note: attaches its bin, moves the bin to `.migration/<date>/bins/`, nothing until first open (no bin), or nothing because the note already has its CRDT state in the database; `counts.collab` has the totals |
+| `collab` (live notes) | `attach-equal` / `attach-diffed` / `set-aside` / `seed` / `has-state` | what the S2b backfill does with the note: attaches its bin as is (body and frontmatter equal the row as S2a leaves it: the file's content when the file wins) or with a diff to that row on top (the boot report's `attached.equal` / `attached.diffed`), moves the bin to `.migration/<date>/bins/`, nothing until first open (no bin), or nothing because the note already has its CRDT state in the database; `counts.collab` has the totals |
 | `projection` | `applied` / `adopted` / `create` / `rewrite` | what happens to the file: nothing, kept as it is, written, or rewritten after a conflict copy |
 | `embedding` | `applied` / `pending` | pending embeddings are computed after the migration |
 
@@ -96,8 +129,8 @@ docker compose exec app pnpm migrate-store --dry-run --report /data/elara/migrat
 - **`filesThatChangeBytes`**: files the migration will create or rewrite.
 - **`missingRows`**: `.md` files with no live note at their path,
   `.trash/<id>.md` files with no trashed note, and `.crdt` bins with no live
-  note. They are not deleted; later slices move unowned `.md` files to
-  `.orphans/`. Generated directory `index.md` files are counted in
+  note. The dry run does not delete them; S2a's boot moves unowned `.md`
+  files to `.orphans/`. Generated directory `index.md` files are counted in
   `counts.dirIndexFiles`, not listed; `counts.tempFiles` counts leftover
   `*.tmp` files from interrupted writes.
 - **`database`**: whether the transaction was read-only, whether 0021 is

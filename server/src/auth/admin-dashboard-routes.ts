@@ -102,10 +102,14 @@ export function adminDashboardRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
+      // Newest first in the order events were recorded (`seq`, #858):
+      // `created_at` follows the database clock, which steps back and ties,
+      // so it would put older events on top and let offset pages repeat or
+      // skip events.
       return db
         .select()
         .from(securityEvents)
-        .orderBy(desc(securityEvents.createdAt))
+        .orderBy(desc(securityEvents.seq))
         .limit(req.query.limit ?? 50)
         .offset(req.query.offset ?? 0)
     },
@@ -125,7 +129,10 @@ export function adminDashboardRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      // Who/what changed which note, when — never the content itself.
+      // Who/what changed which note, when — never the content itself. Newest
+      // first in the order revisions were recorded (`ord`, #825): `created_at`
+      // follows the database clock, which steps back and ties, so it would put
+      // older rows on top and let offset pages repeat or skip rows (#854).
       return db
         .select({
           id: noteRevisions.id,
@@ -138,7 +145,7 @@ export function adminDashboardRoutes(app: FastifyInstance) {
         })
         .from(noteRevisions)
         .innerJoin(notes, eq(notes.id, noteRevisions.noteId))
-        .orderBy(desc(noteRevisions.createdAt))
+        .orderBy(desc(noteRevisions.ord))
         .limit(req.query.limit ?? 50)
         .offset(req.query.offset ?? 0)
     },

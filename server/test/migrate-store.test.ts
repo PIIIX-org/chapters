@@ -245,7 +245,8 @@ describe('planStoreMigration (ADR-003 §8 dry run)', () => {
       notSerializeNoteForm: 1,
       revision: { consistent: 10, gap: 3, none: 1 },
       crdt: { 'matches-row': 1, 'matches-file': 1, 'matches-revision': 1, mismatch: 1, undecodable: 1, missing: 8 },
-      collab: { attach: 3, 'set-aside': 2, seed: 8, 'has-state': 0 },
+      // the fixture's bins hold `status: draft` but no `type` or `timestamp`, which every row has: each is attached with a diff (#873)
+      collab: { 'attach-equal': 0, 'attach-diffed': 3, 'set-aside': 2, seed: 8, 'has-state': 0 },
       projection: { applied: 11, adopted: 1, create: 1, rewrite: 1 },
       filesWithoutRow: 1,
       dirIndexFiles: 1,

@@ -9,6 +9,10 @@ import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
 import { getLiveNote, loadCollabState, purgeNote, renameNote, softDeleteNote } from '../src/notes/store.js'
+import { serializeNote, type OkfNote } from '../src/notes/okf.js'
+import { flushProjections } from '../src/notes/projector.js'
+import { runStoreBackfill } from '../src/notes/store-reconcile.js'
+import { BACKFILL_MARKER } from '../src/notes/store-tx.js'
 import { materialised, readNoteCrdt, rememberLoadedState } from '../src/sync/note-crdt.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
@@ -59,6 +63,11 @@ afterAll(async () => {
   await collab.destroy()
   await app.close()
 })
+
+async function rowFrontmatter(id: string): Promise<Record<string, unknown>> {
+  const [row] = (await db.execute(sql`SELECT frontmatter FROM notes WHERE id = ${id}`)) as unknown as Array<{ frontmatter: Record<string, unknown> }>
+  return row!.frontmatter
+}
 
 async function create(name: string, body: string): Promise<{ id: string; path: string }> {
   const res = await app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/notes`, headers: { cookie }, body: { type: 'docs', name, body } })
@@ -155,7 +164,7 @@ describe('delete, purge and restore close and reopen the note (§5.5)', () => {
     await waitFor(() => again.provider.isSynced && again.text.length > 0)
     expect(again.text.toString()).toBe('Still here.\n')
     expect(again.refusals).toEqual([])
-  }, 20_000)
+  })
 
   it('purge refuses the note with note-deleted', async () => {
     const note = await create('purged-open', 'Going.\n')
@@ -181,7 +190,7 @@ describe('a crash around the relay store (#832)', () => {
     expect(count(text.toString(), marker)).toBe(1)
     expect(count(text.toString(), 'live note')).toBe(1)
     expect(count(await rowBody(note.path), marker)).toBe(1)
-  }, 30_000)
+  })
 
   it('a client that stays connected through a kill before the store committed does not double its typing', async () => {
     const note = await create('stays-before', 'live note\n')
@@ -232,7 +241,7 @@ describe('a renamed note open in two editors (#834, §5.5)', () => {
       expect(tab.text.toString()).toBe('Old tab. Shared text.\nAgent line.\n')
     }
     await waitFor(async () => (await rowBody('docs/renamed-typing-to')) === 'Old tab. Shared text.\nAgent line.\n')
-  }, 20_000)
+  })
 })
 
 describe('rebase of a row changed behind the store (§5.4)', () => {
@@ -251,7 +260,7 @@ describe('rebase of a row changed behind the store (§5.4)', () => {
     const [outOfBand] = (await db.execute(sql`
       SELECT count(*)::int AS n FROM note_revisions WHERE note_id = ${note.id} AND action = 'migration:backfill'`)) as unknown as Array<{ n: number }>
     expect(outOfBand!.n).toBe(1)
-  }, 30_000)
+  })
 
   it('keeps both sides of edits to different words of the same line, across a reconnect', async () => {
     const note = await create('same-line', 'alpha beta gamma\n')
@@ -271,7 +280,7 @@ describe('rebase of a row changed behind the store (§5.4)', () => {
     await waitFor(() => text.toString() === 'NEW alpha beta GAMMA\n')
     await waitFor(async () => (await rowBody(note.path)) === 'NEW alpha beta GAMMA\n')
     expect(count(text.toString(), 'NEW')).toBe(1)
-  }, 30_000)
+  })
 })
 
 describe('the cached stored state of an open document (§5.4 "Before S3")', () => {
@@ -326,7 +335,7 @@ describe('the cached stored state of an open document (§5.4 "Before S3")', () =
     await waitFor(async () => (await rowBody('guides/cached-store')) === 'One.\nTwo.\nThree.\nFour.\n')
     expect(materialised.cached).toBeGreaterThan(afterRefresh.cached)
     expect(await storedCrdtText(vaultId, 'guides/cached-store')).toBe('One.\nTwo.\nThree.\nFour.\n')
-  }, 20_000)
+  })
 })
 
 describe('the S2b backfill (§8 step 4, #488)', () => {
@@ -350,7 +359,7 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
     await waitFor(() => text.toString().includes('New body.'))
     expect(text.toString()).toBe(`New body.\n${marker}`)
     await waitFor(async () => (await rowBody(note.path)) === `New body.\n${marker}`)
-  }, 20_000)
+  })
 
   it('sets aside a bin that matches neither the row, the file nor any revision; the note is seeded instead', async () => {
     const note = await create('foreign-bin', 'Successor text.\n')
@@ -366,19 +375,24 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
     expect(await readFile(aside!.movedTo)).toEqual(Buffer.from(Y.encodeStateAsUpdate(predecessor)))
     const { text } = await open(note.id)
     expect(text.toString()).toBe('Successor text.\n')
-  }, 20_000)
+  })
 
   it('migrate-store --dry-run predicts what the backfill does with each bin', async () => {
-    const writeBin = async (path: string, text: string) => {
+    const bins = new Map<string, Uint8Array>()
+    const writeBin = async (path: string, text: string, frontmatter: Record<string, unknown> = { type: 'docs' }) => {
       const doc = new Y.Doc()
       doc.getText('body').insert(0, text)
-      doc.getMap('frontmatter').set('type', 'docs')
+      for (const [key, value] of Object.entries(frontmatter)) doc.getMap('frontmatter').set(key, value)
       const bin = join(config.dataDir, 'vaults', vaultId, '.crdt', `${path}.bin`)
       await mkdir(dirname(bin), { recursive: true })
-      await writeFile(bin, Y.encodeStateAsUpdate(doc))
+      bins.set(path, Y.encodeStateAsUpdate(doc))
+      await writeFile(bin, bins.get(path)!)
     }
     const row = await create('plan-row', 'Row text.\n')
-    await writeBin(row.path, 'Row text.\n')
+    await writeBin(row.path, 'Row text.\n', await rowFrontmatter(row.id))
+    // #873: same body as the row, different frontmatter: the backfill attaches it with a diff.
+    const fm = await create('plan-frontmatter', 'Same body.\n')
+    await writeBin(fm.path, 'Same body.\n', { ...(await rowFrontmatter(fm.id)), tags: ['stale'] })
     const revision = await create('plan-revision', 'First text.\n')
     await writeBin(revision.path, 'First text.\n')
     await writeThroughCollab(vaultId, revision.path, { body: 'Second text.\n' }, { type: 'user' })
@@ -387,22 +401,50 @@ describe('the S2b backfill (§8 step 4, #488)', () => {
     const none = await create('plan-none', 'No bin.\n')
     const opened = await create('plan-opened', 'Opened.\n')
     ;(await open(opened.id)).provider.destroy()
-    const notes = [row, revision, foreign, none, opened]
+    // #873 review: file-wins notes (Q5). S2a rewrites their row to the file before S2b compares the bin with it.
+    const fileWins = async (name: string, binText: 'file' | 'row') => {
+      const note = await create(name, 'Row side.\n')
+      const frontmatter = await rowFrontmatter(note.id)
+      await flushProjections() // the create's file projection must not overwrite the edited file
+      await writeFile(join(config.dataDir, 'vaults', vaultId, `${note.path}.md`), serializeNote({ frontmatter: { ...frontmatter, status: 'archived' }, body: 'File side.\n' } as OkfNote))
+      await writeBin(note.path, binText === 'file' ? 'File side.\n' : 'Row side.\n', binText === 'file' ? { ...frontmatter, status: 'archived' } : frontmatter)
+      await db.execute(sql`DELETE FROM note_projections WHERE note_id = ${note.id} AND projection = ${BACKFILL_MARKER}`)
+      return note
+    }
+    const binIsFile = await fileWins('plan-file-wins', 'file')
+    const binIsOldRow = await fileWins('plan-file-wins-old-row', 'row')
+    const notes = [row, fm, revision, binIsFile, binIsOldRow, foreign, none, opened]
     const plan = await (await dryRun()).planStoreMigration({ vaultId })
-    expect(notes.map((n) => plan.notes.find((p) => p.noteId === n.id)?.collab)).toEqual(['attach', 'attach', 'set-aside', 'seed', 'has-state'])
+    const actions = notes.map((n) => plan.notes.find((p) => p.noteId === n.id)?.collab)
+    expect(actions).toEqual(['attach-equal', 'attach-diffed', 'attach-diffed', 'attach-equal', 'attach-diffed', 'set-aside', 'seed', 'has-state'])
+    expect((await runStoreBackfill()).file.differs).toBeGreaterThanOrEqual(2)
     const report = await (await backfill()).runCollabBackfill()
     expect(report.failed).toEqual([])
+    // Per note: the backfill stores an equal bin as is and a diffed one with a change on top.
+    const attached = async (n: { id: string; path: string }) => {
+      const [stored] = (await db.execute(sql`SELECT snapshot FROM note_crdt WHERE note_id = ${n.id}`)) as unknown as Array<{ snapshot: Uint8Array }>
+      const doc = new Y.Doc()
+      Y.applyUpdate(doc, stored!.snapshot)
+      const bin = new Y.Doc()
+      Y.applyUpdate(bin, bins.get(n.path)!)
+      return Buffer.from(Y.encodeStateAsUpdate(doc)).equals(Buffer.from(Y.encodeStateAsUpdate(bin))) ? 'attach-equal' : 'attach-diffed'
+    }
+    const attaching = notes.filter((_, i) => actions[i]!.startsWith('attach'))
+    expect(await Promise.all(attaching.map(attached))).toEqual(actions.filter((a) => a!.startsWith('attach')))
     const aside = new Set(report.setAside.map((s) => s.noteId))
     const states = (await db.execute(sql`
-      SELECT note_id FROM note_crdt WHERE note_id IN (${row.id}, ${revision.id}, ${foreign.id}, ${none.id}, ${opened.id})`)) as unknown as Array<{ note_id: string }>
+      SELECT note_id FROM note_crdt WHERE note_id IN (${row.id}, ${fm.id}, ${revision.id}, ${binIsFile.id}, ${binIsOldRow.id}, ${foreign.id}, ${none.id}, ${opened.id})`)) as unknown as Array<{ note_id: string }>
     const hasState = new Set(states.map((s) => s.note_id))
     // attach and has-state both leave the note with CRDT state; set-aside and seed leave none until first open.
     expect(notes.map((n) => (aside.has(n.id) ? 'set-aside' : hasState.has(n.id) ? 'state' : 'seed'))).toEqual([
+      'state',
+      'state',
+      'state',
       'state',
       'state',
       'set-aside',
       'seed',
       'state',
     ])
-  }, 20_000)
+  })
 })

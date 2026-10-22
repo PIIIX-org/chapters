@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { checkNoteFiles } from '../src/notes/integrity.js'
 import { parseNote, serializeNote, type Frontmatter, type OkfNote } from '../src/notes/okf.js'
-import { noteFile } from '../src/notes/store.js'
+import { noteFile, vaultDir } from '../src/notes/store.js'
 import { createActiveUser, loginCookie, rewriteNoteFileFromRow } from './helpers.js'
 import { flushProjections } from '../src/notes/projector.js'
 
@@ -138,5 +139,22 @@ describe('checkNoteFiles', () => {
       'guides/stripped unparseable',
       'guides/vanished missing-file',
     ])
+  })
+
+  it('reports a .md file that no note, generated index or projector record owns as an orphan (#495)', async () => {
+    const stray = join(vaultDir(vaultId), 'loose/stray.md')
+    await mkdir(dirname(stray), { recursive: true })
+    await writeFile(stray, '---\ntype: loose\n---\nstray\n', 'utf8')
+    // Dot-directories and assets/ are not note files.
+    await mkdir(join(vaultDir(vaultId), '.orphans'), { recursive: true })
+    await writeFile(join(vaultDir(vaultId), '.orphans/old.md'), 'moved earlier', 'utf8')
+    const { problems } = await checkNoteFiles(vaultId)
+    expect(problems.filter((p) => p.problem === 'orphan-file')).toEqual([
+      expect.objectContaining({ vaultId, path: 'loose/stray.md', problem: 'orphan-file' }),
+    ])
+    // guides/index.md is the generated index of a directory with notes: owned.
+    expect(problems.some((p) => p.path === 'guides/index.md')).toBe(false)
+    await rm(join(vaultDir(vaultId), 'loose'), { recursive: true })
+    await rm(join(vaultDir(vaultId), '.orphans'), { recursive: true })
   })
 })
