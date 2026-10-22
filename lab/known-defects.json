@@ -91,30 +91,6 @@
       "issue": 891
     },
     {
-      "test": "crash-write",
-      "match": "^kill \\S+: check-notes clean$",
-      "issue": 486,
-      "intermittent": "a row without its file appears only when a SIGKILL lands between a create's insert and its file write; it then stays for later rounds"
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: file = row for every note written in the round$",
-      "issue": 486,
-      "intermittent": "a round only diverges when the SIGKILL lands between a note's row update and its file write"
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: latest revision = current body for every note written in the round$",
-      "issue": 486,
-      "intermittent": "a round only loses revisions when the SIGKILL lands between a write and its revision insert"
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: no orphan \\.tmp files in the vault$",
-      "issue": 489,
-      "intermittent": "a temp file is orphaned only when a SIGKILL lands between its write and its rename"
-    },
-    {
       "test": "export-roundtrip",
       "check": "attachment links in the exported bundle resolve inside the bundle (OKF §6.1 bundle-relative)",
       "issue": 565
