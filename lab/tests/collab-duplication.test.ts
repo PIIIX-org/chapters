@@ -13,12 +13,14 @@
 // reconnects) through: typing, network blips, unmount/remount, offline edits,
 // MCP edit_note while connected / concurrent / while offline, logout+login,
 // graceful restart, SIGKILL, a SIGKILL timing sweep around the store
-// debounce, a database restore with a tab left open (S18, the documented
-// infrastructure backup and restore), and the CRDT state put back by SQL
-// behind a newer row (S18, S19): the state the old relay's crash window left
-// (note written, CRDT state not), which since S2b only a manual change of
-// `note_crdt`/`note_updates` leaves (#891). S19's check names keep ".crdt"
-// so the known-defects baseline still matches.
+// debounce, a database restore with a tab left open (S18 backup restore,
+// the documented infrastructure backup and restore: it guards that path),
+// and the CRDT state put back by SQL behind a newer row (S18 SQL, S19): the
+// state the old relay's crash window left (note written, CRDT state not),
+// which since S2b only a manual change of `note_crdt`/`note_updates` leaves.
+// The S18 SQL step is the faithful reproduction of #488's mechanism; its
+// stale-tab checks are baselined under #891. S19 keeps ".crdt" in its check
+// names from before S2b.
 //
 // After every step: body on disk (parsed by the app's own parseNote inside
 // the container), notes.body in Postgres, the note's CRDT state decoded from

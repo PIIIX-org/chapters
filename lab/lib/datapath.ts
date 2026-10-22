@@ -305,31 +305,29 @@ export interface InstanceRestore {
  * Nobody tells open tabs: they reconnect afterwards with their own Y.Doc.
  * Everything written since the backup is gone from the database, so call it
  * only around steps of the calling test.
+ *
+ * If a step fails it throws and leaves the app stopped: an app started on a
+ * partly loaded database would fail every later test for this test's
+ * reason. run.ts then finds the instance down before the next test and runs
+ * no more (#658).
  */
 export async function restoreInstance(baseUrl: string, vaultId: string): Promise<InstanceRestore> {
   if (!UUID.test(vaultId)) throw new Error(`bad vault id ${vaultId}`)
   const stop = await compose('stop', 'app')
-  const timings = { databaseMs: 0, filesMs: 0 }
-  try {
-    const db = await exec([
-      ...COMPOSE, 'exec', '-T', 'db', 'sh', '-c',
-      String.raw`psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d postgres -c "drop database \"$POSTGRES_DB\" with (force)" -c "create database \"$POSTGRES_DB\"" && ` +
-        `psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f ${BACKUP_DUMP} && rm -f ${BACKUP_DUMP}`,
-    ])
-    if (db.code !== 0) throw new Error(`restoring the database failed (${db.code}): ${db.stderr.slice(0, 1000)}`)
-    timings.databaseMs = Math.round(db.ms)
-    const tar = await exec([
-      ...COMPOSE, 'run', '--rm', '--no-deps', '-T', '-u', 'root', '--entrypoint', 'sh', 'app', '-c',
-      `rm -rf /data/elara/vaults/${vaultId} && tar xzf ${backupFiles(vaultId)} -C /data/elara/vaults && rm -f ${backupFiles(vaultId)}`,
-    ])
-    if (tar.code !== 0) throw new Error(`restoring the vault's files failed (${tar.code}): ${tar.stderr.slice(0, 1000)}`)
-    timings.filesMs = Math.round(tar.ms)
-  } finally {
-    // Started whatever happened, so the tests after this one find an app.
-    await compose('start', 'app')
-  }
+  const db = await exec([
+    ...COMPOSE, 'exec', '-T', 'db', 'sh', '-c',
+    String.raw`psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d postgres -c "drop database \"$POSTGRES_DB\" with (force)" -c "create database \"$POSTGRES_DB\"" && ` +
+      `psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f ${BACKUP_DUMP} && rm -f ${BACKUP_DUMP}`,
+  ])
+  if (db.code !== 0) throw new Error(`restoring the database failed (${db.code}), app left stopped: ${db.stderr.slice(0, 1000)}`)
+  const tar = await exec([
+    ...COMPOSE, 'run', '--rm', '--no-deps', '-T', '-u', 'root', '--entrypoint', 'sh', 'app', '-c',
+    `rm -rf /data/elara/vaults/${vaultId} && tar xzf ${backupFiles(vaultId)} -C /data/elara/vaults && rm -f ${backupFiles(vaultId)}`,
+  ])
+  if (tar.code !== 0) throw new Error(`restoring the vault's files failed (${tar.code}), app left stopped: ${tar.stderr.slice(0, 1000)}`)
+  await compose('start', 'app')
   const healthyMs = await waitHealthy(baseUrl)
-  return { stopMs: Math.round(stop.ms), ...timings, healthyMs: Math.round(healthyMs) }
+  return { stopMs: Math.round(stop.ms), databaseMs: Math.round(db.ms), filesMs: Math.round(tar.ms), healthyMs: Math.round(healthyMs) }
 }
 
 // ---------------------------------------------------------------- container
