@@ -67,6 +67,8 @@ import {
   pgErrorCode,
   raiseProjections,
   replaceLinks,
+  revisionBody,
+  revisionColumns,
   storeTransaction,
   storedColumns,
   toStored,
@@ -75,6 +77,7 @@ import {
 } from './store-tx.js'
 import { STORE_JOBS, registerRenameRefactor, wakeProjector, type RenameRefactorPayload } from './projector.js'
 import { completeJob } from '../jobs/durable.js'
+import { expandDependents, kickRevisionCompaction } from './revision-compaction.js'
 
 export { splitPath, resolveNotePath, type ResolvedNotePath }
 
@@ -189,7 +192,7 @@ async function pendingRestorePoint(noteId: string, connectionId: string) {
   if (active.length > 0) return null
   const last = (
     await db
-      .select()
+      .select(revisionColumns)
       .from(noteRevisions)
       .where(and(eq(noteRevisions.noteId, row.id), notInArray(noteRevisions.action, NOT_A_NOTE_STATE)))
       .orderBy(desc(noteRevisions.ord))
@@ -243,7 +246,7 @@ export async function refuseSuspiciousWrite(
   } else {
     const newest = (
       await db
-        .select()
+        .select(revisionColumns)
         .from(noteRevisions)
         .where(eq(noteRevisions.noteId, row.id))
         .orderBy(desc(noteRevisions.ord))
@@ -291,7 +294,7 @@ export async function recordProposal(
     .select({
       id: noteRevisions.id,
       frontmatter: noteRevisions.frontmatter,
-      body: noteRevisions.body,
+      body: revisionBody,
       sourceRevisionId: noteRevisions.sourceRevisionId,
     })
     .from(noteRevisions)
@@ -467,7 +470,7 @@ async function foldCrdt(tx: Tx, row: StoredNote, crdt: NoteCrdt, detail: Record<
 async function rebaseLocked(tx: Tx, row: StoredNote, crdt: NoteCrdt): Promise<CaughtUp> {
   await revisionAtSeq(tx, row.id, 'out-of-band')
   const [base] = (await tx.execute(sql`
-    SELECT frontmatter, body FROM note_revisions WHERE note_id = ${row.id} AND seq = ${crdt.foldedSeq} LIMIT 1`)) as unknown as Array<{
+    SELECT frontmatter, note_revision_body(body, body_delta, delta_base_id) AS body FROM note_revisions WHERE note_id = ${row.id} AND seq = ${crdt.foldedSeq} LIMIT 1`)) as unknown as Array<{
     frontmatter: Record<string, unknown>
     body: string
   }>
@@ -545,6 +548,7 @@ async function commitChange(
 function afterCommit(): void {
   wakeProjector()
   kickEmbeddings()
+  kickRevisionCompaction()
 }
 
 /** What createNote is asked for: `path`, or `type` and `name`. */
@@ -720,7 +724,9 @@ export async function readLiveNote(vaultId: string, path: string): Promise<ReadN
   const seen = await readStored(vaultId, resolved.fullPath)
   if (!seen) return null
   // S3: acked typing is in note_updates even when no editor has the note open (a tab closed before its store, a crash).
-  if (!liveDocumentOf(seen.id) && !(await foldPending(seen.id))) return presented(seen)
+  // A note whose S2b backfill or roll-forward failed at this boot takes no fold until a restart merges its bin
+  // (collabNoteMigrated): its stored row is what can be read, and a fold attempt could never succeed.
+  if (!collabNoteMigrated(seen.id) || (!liveDocumentOf(seen.id) && !(await foldPending(seen.id)))) return presented(seen)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const row = await readStored(vaultId, resolved.fullPath)
     if (!row) return null
@@ -1411,7 +1417,8 @@ export interface RevisionPosition {
 /**
  * One page of a note's change history, newest first, metadata only (#411):
  * the bodies are never read (`octet_length` takes the size from the stored
- * value's header). Keyset-paged on `ord` after `before`, so a revision
+ * value's header; a compacted revision's size is its `body_bytes`, #501).
+ * Keyset-paged on `ord` after `before`, so a revision
  * recorded while a caller pages does not shift the pages. `next` is
  * the position to continue from, or null on the last page. Null when the note
  * does not exist. Edit/owner only — enforced by callers.
@@ -1431,7 +1438,7 @@ export async function listRevisionPage(
       actorId: noteRevisions.actorId,
       action: noteRevisions.action,
       createdAt: noteRevisions.createdAt,
-      bodyBytes: sql<number>`octet_length(${noteRevisions.body})`,
+      bodyBytes: sql<number>`coalesce(${noteRevisions}.body_bytes, octet_length(${noteRevisions.body}))`,
       ...eventColumns,
       ord: noteRevisions.ord,
     })
@@ -1504,7 +1511,7 @@ export async function getRevision(
       actorId: noteRevisions.actorId,
       action: noteRevisions.action,
       frontmatter: noteRevisions.frontmatter,
-      body: noteRevisions.body,
+      body: revisionBody,
       createdAt: noteRevisions.createdAt,
       ...eventColumns,
     })
@@ -1538,7 +1545,7 @@ export async function getBaseRevision(
     typeof rev === 'number' ? sql`note_revisions.seq = ${rev}` : UUID_PATTERN.test(rev) ? eq(noteRevisions.id, rev) : null
   if (!named) return null
   const [revision] = await db
-    .select({ id: noteRevisions.id, frontmatter: noteRevisions.frontmatter, body: noteRevisions.body })
+    .select({ id: noteRevisions.id, frontmatter: noteRevisions.frontmatter, body: revisionBody })
     .from(noteRevisions)
     .where(and(named, eq(noteRevisions.noteId, row.id), notInArray(noteRevisions.action, NOT_A_NOTE_STATE)))
   return revision ?? null
@@ -1912,7 +1919,7 @@ export async function revertNote(
   if (!row) return null
   const revision = (
     await db
-      .select()
+      .select(revisionColumns)
       .from(noteRevisions)
       .where(and(eq(noteRevisions.id, revisionId), eq(noteRevisions.noteId, row.id)))
   )[0]
@@ -1932,8 +1939,10 @@ export async function revertNote(
  * property. Owner/admin only — enforced by callers. Refused for the
  * revision at the note's `seq` (its text still holds it) and for the
  * rebase base (the revision at `note_crdt.folded_seq` while the row is
- * past it). The note's CRDT state is compacted in the same transaction:
- * only a re-encoded snapshot drops deleted text (ADR-003 §5.4, §5.5).
+ * past it). One store transaction under the note's lock: the revisions
+ * stored as a delta from this one (#501) are stored whole again first, so
+ * none loses its base, and the note's CRDT state is compacted: only a
+ * re-encoded snapshot drops deleted text (ADR-003 §5.4, §5.5).
  */
 export async function purgeRevision(vaultId: string, revisionId: string): Promise<boolean> {
   const [found] = (await db.execute(sql`
@@ -1950,6 +1959,7 @@ export async function purgeRevision(vaultId: string, revisionId: string): Promis
     throw new OkfValidationError('this revision is the base of a pending merge of the note; open or edit the note first, then purge the revision')
   }
   await storeTransaction([found.note_id], async (tx) => {
+    await expandDependents(tx, revisionId)
     await tx.delete(noteRevisions).where(eq(noteRevisions.id, revisionId))
     const crdt = await readNoteCrdt(tx, found.note_id)
     if (crdt) await compactNoteCrdt(tx, crdt)
@@ -2019,8 +2029,6 @@ export async function loadCollabState(
           if (row.seq !== locked.seq) foldedRow = true
           return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null }
         }
-        // Its bin is still to be attached at the next restart: a seed now would make the backfill skip it.
-        if (!collabNoteMigrated(noteId)) throw new NoteNotMigratedError()
         const seed = seedDocument(noteId, { frontmatter: locked.frontmatter as Record<string, unknown>, body: locked.body })
         await insertNoteCrdt(tx, noteId, seed, locked.seq)
         return { state: Y.encodeStateAsUpdate(seed), lastId: 0 }
@@ -2118,6 +2126,8 @@ async function drainAppends(noteId: string, queue: AppendQueue): Promise<void> {
 async function commitAppends(noteId: string, batch: PendingAppend[]): Promise<LoggedUpdate[] | null> {
   // As every store transaction (storeTransaction): nothing is written while this process has lost its maintenance lock.
   if (writesPaused()) throw new StoreBusyError('maintenance lock connection lost, reconnecting')
+  // As lockedNote: a note whose S2b backfill or roll-forward failed at this boot takes nothing until its bin is merged.
+  if (!collabNoteMigrated(noteId)) throw new NoteNotMigratedError()
   const vaultId = batch[0]!.vaultId
   const values = sql.join(
     batch.map((item, i) => sql`(${i}::int, ${Buffer.from(item.update)}::bytea, ${item.actor.type}::actor_type, ${item.actor.id ?? null}::uuid)`),
@@ -2209,11 +2219,14 @@ export async function compactCollabState(vaultId: string, noteId: string): Promi
  * A failure is recorded on the note (`fold_error`, a failed `collab-store`
  * job) and counted; boot never stops for one note.
  * `onlyIds` (doctor --repair, #495): only those of these notes that need it.
+ * A note whose S2b backfill or roll-forward failed at this boot is left
+ * alone (collabNoteMigrated): its bin is merged at the next restart, and a
+ * rebase now would add the older release's change a second time then.
  */
 export async function foldPendingCollab(onlyIds?: readonly string[]): Promise<{ folded: number; failed: number }> {
   let folded = 0
   let failed = 0
-  const needing = await notesNeedingFold(db)
+  const needing = (await notesNeedingFold(db)).filter((id) => collabNoteMigrated(id))
   for (const noteId of onlyIds ? needing.filter((id) => onlyIds.includes(id)) : needing) {
     let vaultId: string | null = null
     try {

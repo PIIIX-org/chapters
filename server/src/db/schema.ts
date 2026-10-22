@@ -402,7 +402,9 @@ export const actorType = pgEnum('actor_type', ['user', 'mcp', 'collab'])
  * `fromPath` / `toPath` the paths of a `rename` row. Null on every other row.
  * Migration 0024 (#825, #811): `ord` is the order revisions were recorded in
  * (a sequence, not the clock: `created_at` can step back or tie); every list
- * of a note's revisions orders by it.
+ * of a note's revisions orders by it. Migration 0026 (#501) adds
+ * `body_delta`, `delta_base_id` and `body_bytes` (a compacted revision, kept
+ * out of this model like `seq`): read a body with store-tx.ts `revisionBody`.
  */
 export const noteRevisions = pgTable(
   'note_revisions',
@@ -557,6 +559,26 @@ export const writeIdempotency = pgTable(
     foreignKey({ name: 'write_idempotency_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete('cascade'),
     index('write_idempotency_created_at').on(t.createdAt),
     index('write_idempotency_note_id').on(t.noteId),
+  ],
+)
+
+/** The `rev` an MCP connection last read of a note (#408, #476, migration 0028): the base of a whole edit_note `body` sent without `base_rev`. */
+export const noteReads = pgTable(
+  'note_reads',
+  {
+    connectionId: uuid('connection_id').notNull(),
+    noteId: uuid('note_id').notNull(),
+    rev: bigint('rev', { mode: 'number' }).notNull(),
+    /** The body the connection last sent, when its write was merged; null when the revision at `rev` is what it has. */
+    body: text('body'),
+    readAt: timestamp('read_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'note_reads_pkey', columns: [t.connectionId, t.noteId] }),
+    foreignKey({ name: 'note_reads_connection_id_fkey', columns: [t.connectionId], foreignColumns: [mcpConnections.id] }).onDelete('cascade'),
+    foreignKey({ name: 'note_reads_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete('cascade'),
+    index('note_reads_read_at').on(t.readAt),
+    index('note_reads_note_id').on(t.noteId),
   ],
 )
 

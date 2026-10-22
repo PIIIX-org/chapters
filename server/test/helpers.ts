@@ -85,22 +85,27 @@ export async function noteDocName(vaultId: string, path: string): Promise<string
 }
 
 /**
- * The body text of the live note's CRDT state in the database (`note_crdt`
- * snapshot ⊕ the non-rejected tail), or '' when it has none: what the relay
- * loads next (ADR-003 §5.4).
+ * The live note's CRDT state in the database (`note_crdt` snapshot ⊕ the
+ * non-rejected tail), read without a fold; an empty document when it has
+ * none: what the relay loads next (ADR-003 §5.4).
  */
-export async function storedCrdtText(vaultId: string, path: string): Promise<string> {
+export async function storedCrdtDoc(vaultId: string, path: string): Promise<Y.Doc> {
   const row = await getLiveNote(vaultId, path)
   if (!row) throw new Error(`no live note at ${path}`)
   const [crdt] = await sql<Array<{ snapshot: Uint8Array; snapshot_through: string }>>`
     SELECT snapshot, snapshot_through FROM note_crdt WHERE note_id = ${row.id}`
   const doc = new Y.Doc()
-  if (!crdt) return ''
+  if (!crdt) return doc
   Y.applyUpdate(doc, crdt.snapshot)
   const tail = await sql<Array<{ update: Uint8Array }>>`
     SELECT update FROM note_updates WHERE note_id = ${row.id} AND id > ${crdt.snapshot_through} AND rejected_at IS NULL ORDER BY id`
   for (const { update } of tail) Y.applyUpdate(doc, update)
-  return doc.getText('body').toString()
+  return doc
+}
+
+/** The body text of storedCrdtDoc, or '' when the note has no CRDT state. */
+export async function storedCrdtText(vaultId: string, path: string): Promise<string> {
+  return (await storedCrdtDoc(vaultId, path)).getText('body').toString()
 }
 
 /**

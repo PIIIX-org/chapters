@@ -953,7 +953,7 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
   await browser.close()
 
   const revisions = await ctx.docker.psqlRows<{ actor_type: string; action: string; created_at: string; body: string }>(
-    `select r.actor_type, r.action, r.created_at, r.body from note_revisions r join notes n on n.id = r.note_id
+    `select r.actor_type, r.action, r.created_at, note_revision_body(r.body, r.body_delta, r.delta_base_id) as body from note_revisions r join notes n on n.id = r.note_id
      where n.vault_id = '${vault.id}' and n.path = '${path}' order by r.ord`,
   )
   // Which actor the audit trail credits with each agent append: the first
@@ -1075,7 +1075,8 @@ async function runBrowser(ctx: LabContext, redact: (s: string) => string) {
       lostTokens.length === 0
         ? 'nothing was lost'
         : `${lostTokens.length - unrecoverable.length}/${lostTokens.length} recoverable; never in any revision: ${unrecoverable.map((g) => g.token).slice(0, 25).join(' ')}`,
-    ok: lostTokens.length === 0 ? null : unrecoverable.length === 0,
+    // Nothing lost meets the expectation (#408: a whole body merges from the agent's read); it is not a broken precondition.
+    ok: unrecoverable.length === 0,
     severity: 'high',
   })
   // A jump = the caret falls back >10 chars while the user only types forward.

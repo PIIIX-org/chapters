@@ -133,6 +133,17 @@ export function toStored(row: NoteRow & { seq: string | number; frontmatterSrc: 
 }
 
 /**
+ * A revision's body (#501): `body` when the revision is stored whole, else its
+ * delta applied to its base revision's body (migration 0026,
+ * notes/revision-compaction.ts). Every read of a revision's content goes
+ * through it: `body` alone is empty on a compacted revision.
+ */
+export const revisionBody = sql<string>`note_revision_body(${noteRevisions.body}, ${noteRevisions}.body_delta, ${noteRevisions}.delta_base_id)`
+
+/** A revision's model columns with its body as `revisionBody` reads it. */
+export const revisionColumns = { ...getTableColumns(noteRevisions), body: revisionBody }
+
+/**
  * Set by boot (store-reconcile.ts bootStore) while the S2a backfill has not
  * finished, cleared at the boot whose backfill finishes. A note the backfill
  * could not process yet is refused for writes (NoteNotMigratedError) and for
@@ -173,11 +184,14 @@ export async function noteMigrated(client: Tx | typeof db, noteId: string): Prom
 }
 
 /**
- * Notes whose S2b backfill failed at this boot (collab-backfill.ts): their
- * `.crdt` bin is still to be attached at the next restart. Until then the
- * relay refuses editors for them (`note-not-migrated`) and never seeds them,
- * so the rerun finds the note without CRDT state and attaches its bin
- * instead of skipping it and retiring the bin with `.crdt/`.
+ * Notes whose S2b backfill or roll-forward failed at this boot
+ * (collab-backfill.ts): their `.crdt` bin is still to be attached or merged
+ * at the next restart. Until then the relay refuses editors for them
+ * (`note-not-migrated`), nothing seeds them, writes refuse them
+ * (lockedNote, NoteNotMigratedError) and the boot fold leaves them alone.
+ * Otherwise the rerun would skip a seeded note's bin, or a rebase would put
+ * the older release's row change into the CRDT state as new items and the
+ * next boot would merge the same typing again from the bin (doubled).
  */
 let collabNotMigrated: ReadonlySet<string> = new Set()
 
@@ -185,7 +199,7 @@ export function setCollabNotMigrated(noteIds: Iterable<string>): void {
   collabNotMigrated = new Set(noteIds)
 }
 
-/** Whether note `noteId` can be opened in the relay: false while its S2b backfill is pending after a failure. */
+/** Whether note `noteId` can be opened in the relay and written: false while its S2b backfill or roll-forward is pending after a failure. */
 export function collabNoteMigrated(noteId: string): boolean {
   return !collabNotMigrated.has(noteId)
 }
@@ -193,7 +207,7 @@ export function collabNoteMigrated(noteId: string): boolean {
 /** The note row `id`, locked FOR UPDATE; null when it does not exist. */
 export async function lockedNote(tx: Tx, id: string): Promise<StoredNote | null> {
   const [row] = await tx.select(storedColumns).from(notes).where(eq(notes.id, id)).for('no key update')
-  if (row && !(await noteMigrated(tx, id))) throw new NoteNotMigratedError()
+  if (row && (!collabNoteMigrated(id) || !(await noteMigrated(tx, id)))) throw new NoteNotMigratedError()
   return row ? toStored(row) : null
 }
 
@@ -243,7 +257,7 @@ export async function insertRevision(
     const [last] = await tx
       .select({
         frontmatter: noteRevisions.frontmatter,
-        body: noteRevisions.body,
+        body: revisionBody,
         actorType: noteRevisions.actorType,
         actorId: noteRevisions.actorId,
       })
@@ -308,6 +322,26 @@ export async function enqueueEmbeddingTx(tx: Tx, noteId: string, seq: number): P
   await tx.execute(sql`
     INSERT INTO jobs (kind, payload, idempotency_key)
     VALUES ('embed_note', jsonb_build_object('noteId', ${noteId}::text, 'seq', ${seq}::bigint), ${`embed_note:${noteId}:${seq}`})
+    ON CONFLICT (idempotency_key) DO NOTHING`)
+}
+
+/**
+ * The durable job that compacts a note's revision history (#501,
+ * notes/revision-compaction.ts): payload `{noteId, seq}`, key
+ * `compact_revisions:<noteId>:<seq>`, one per trigger, so a write that
+ * queues one while an earlier one runs is never lost.
+ */
+export const COMPACT_REVISIONS_JOB = 'compact_revisions'
+
+/** A write that moves a note to a `seq` that is a multiple of this queues the compaction of its history (#501). */
+export const COMPACT_EVERY_SEQ = 25
+
+/** Queues the compaction of a note's history at `seq`, inserted with the write (outbox). */
+export async function enqueueCompactionTx(tx: Tx, noteId: string, seq: number): Promise<void> {
+  await tx.execute(sql`
+    INSERT INTO jobs (kind, payload, idempotency_key)
+    VALUES (${COMPACT_REVISIONS_JOB}, jsonb_build_object('noteId', ${noteId}::text, 'seq', ${seq}::bigint),
+      ${`${COMPACT_REVISIONS_JOB}:${noteId}:${seq}`})
     ON CONFLICT (idempotency_key) DO NOTHING`)
 }
 
@@ -380,5 +414,6 @@ export async function applyRowChange(
   // CRDT state does not hold). A row already past `folded_seq` changed behind
   // the store and stays so, for the rebase (ADR-003 §5.4).
   await tx.execute(sql`UPDATE note_crdt SET folded_seq = ${row.seq} WHERE note_id = ${row.id} AND folded_seq = ${current.seq}`)
+  if (row.seq % COMPACT_EVERY_SEQ === 0) await enqueueCompactionTx(tx, row.id, row.seq)
   return { row, changed }
 }

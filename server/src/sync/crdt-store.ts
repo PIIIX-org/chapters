@@ -4,9 +4,10 @@ import { config } from '../config.js'
 
 /**
  * `.crdt/<path>.bin`: the Yjs state of a note, keyed by path, as the relay
- * kept it before ADR-003 S2b. Nothing writes it any more; the S2b backfill
- * (collab-backfill.ts) attaches each bin to `note_crdt` once and then
- * renames `.crdt/` to `.crdt.pre-adr-003/`.
+ * kept it before ADR-003 S2b. The relay no longer reads or writes it; the
+ * S2b backfill (collab-backfill.ts) attaches each bin to `note_crdt` once and
+ * then renames `.crdt/` to `.crdt.pre-adr-003/`, and only the code-only
+ * rollback's export (exportCrdtBins) writes bins again, for the old relay.
  */
 export function crdtFile(vaultId: string, path: string): string {
   return join(config.dataDir, 'vaults', vaultId, '.crdt', `${path}.bin`)

@@ -56,75 +56,14 @@
       "issue": 617
     },
     {
-      "test": "browser",
-      "check": "S1-type-while-agent-appends: no lost user typing",
-      "issue": 408,
-      "intermittent": "since S2b (#843) only when an agent's whole-body edit_note lands while a typed token is in flight: passed on dev (run 39641225039) and on #839 (run 39638878096), failed in the other 5 of 7 browser runs on S2b branches that leave edit_note alone (e.g. 39644992802); #864 removes it"
-    },
-    {
-      "test": "browser",
-      "check": "lost typing is recoverable from note history (note_revisions)",
-      "issue": 408,
-      "intermittent": "only when the agent's read-then-whole-body write lands mid-token: the fold before the write stores the token's first characters, the write removes them and the rest lands after the agent's line (run 39593160125: \" a\" of a21 removed, \"21\" glued after AGENT-S1B-8AC681), so the whole token is in no revision"
-    },
-    {
-      "test": "browser",
-      "check": "lost typing is recoverable from note history (note_revisions)",
-      "issue": 408,
-      "state": "inconclusive",
-      "intermittent": "inconclusive when the S1 step lost no typing, so there is nothing to recover (\"nothing was lost\" on dev, run 39641225039, and on #839, run 39638878096: 2 of 7 browser runs on S2b branches that leave edit_note alone); #864 removes it"
-    },
-    {
-      "test": "browser",
-      "check": "S1: user typing stays contiguous while the agent writes",
-      "issue": 408,
-      "intermittent": "failed on dev (run 39641225039), on #839 (run 39638878096) and in all 7 browser runs on S2b branches that leave edit_note alone; passes with #864's whole-body merge (runs 39638573189, 39635637393), which removes it"
-    },
-    {
-      "test": "browser",
-      "check": "S8a-back-online: typing done while disconnected stays where it was typed",
-      "issue": 485,
-      "intermittent": "offline text lands at position 0 in about half the merges, depending on where the agent's insert falls among deleted characters"
-    },
-    {
-      "test": "browser",
-      "check": "S8b-reconnected: typing done while disconnected stays where it was typed",
-      "issue": 485,
-      "intermittent": "offline text lands at position 0 in about half the merges, depending on where the agent's insert falls among deleted characters"
+      "test": "collab-duplication",
+      "check": "S18 CRDT state put back by SQL, stale ydoc (tab kept open): no duplicated text",
+      "issue": 891
     },
     {
       "test": "collab-duplication",
-      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): no duplicated text",
-      "issue": 488
-    },
-    {
-      "test": "collab-duplication",
-      "check": "S18 injected stale .crdt, stale ydoc (tab kept open): @INJSTALE@ kept exactly once on disk",
-      "issue": 488
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: check-notes clean$",
-      "issue": 486,
-      "intermittent": "a row without its file appears only when a SIGKILL lands between a create's insert and its file write; it then stays for later rounds"
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: file = row for every note written in the round$",
-      "issue": 486,
-      "intermittent": "a round only diverges when the SIGKILL lands between a note's row update and its file write"
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: latest revision = current body for every note written in the round$",
-      "issue": 486,
-      "intermittent": "a round only loses revisions when the SIGKILL lands between a write and its revision insert"
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: no orphan \\.tmp files in the vault$",
-      "issue": 489,
-      "intermittent": "a temp file is orphaned only when a SIGKILL lands between its write and its rename"
+      "check": "S18 CRDT state put back by SQL, stale ydoc (tab kept open): @INJSTALE@ kept exactly once on disk",
+      "issue": 891
     },
     {
       "test": "export-roundtrip",
@@ -206,12 +145,6 @@
       "test": "multilingual-search",
       "check": "vector retriever ranks Persian answers first as often as English (bge-small-en)",
       "issue": 530
-    },
-    {
-      "test": "browser",
-      "check": "S1-type-while-agent-appends: no lost agent edits",
-      "issue": 408,
-      "intermittent": "the agent marker is split, not lost: typing in flight during a whole-body edit_note lands inside it (runs 39633168223, 39615786659, 39595467134 failed; 39636198769 passed); #864 fixes the tie-break"
     }
   ]
 }
