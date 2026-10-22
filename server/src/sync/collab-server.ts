@@ -125,8 +125,11 @@ const deletedDocuments = new WeakSet<Y.Doc>()
  * processed yet (ADR-003 §8, Q5): Hocuspocus sends `reason` to the client as
  * the authentication failure; the editor (client/src/hooks/useCollabDoc.ts)
  * reads `note-not-migrated` and says an administrator must restart the server.
+ * `beforeSync` also closes an open connection with it (code 4423) when an
+ * append is refused for that reason (a note whose S2b roll-forward failed).
  */
 class NoteNotMigratedRefusal extends Error {
+  readonly code = 4423
   readonly reason = 'note-not-migrated'
   constructor() {
     super(new NoteNotMigratedError().message)
@@ -380,6 +383,12 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         logged = noteId ? await appendCollabUpdate(vaultId, noteId, toLog, { type: 'collab', id: ctx.userId }) : null
         if (logged !== null) failpoint('collab.after-log-before-ack')
       } catch (err) {
+        // Its S2b backfill or roll-forward failed at this boot: final for this session, not a busy store to retry.
+        if (err instanceof NoteNotMigratedError) {
+          const refusal = new NoteNotMigratedRefusal()
+          connection.webSocket.close(refusal.code, refusal.reason)
+          throw refusal
+        }
         if (storeUnavailable(err)) throw refuseStoreBusy(connection.webSocket, documentName, err instanceof Error ? err.message : String(err))
         connection.webSocket.close(1013, 'store-busy')
         throw err

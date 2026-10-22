@@ -2118,6 +2118,8 @@ async function drainAppends(noteId: string, queue: AppendQueue): Promise<void> {
 async function commitAppends(noteId: string, batch: PendingAppend[]): Promise<LoggedUpdate[] | null> {
   // As every store transaction (storeTransaction): nothing is written while this process has lost its maintenance lock.
   if (writesPaused()) throw new StoreBusyError('maintenance lock connection lost, reconnecting')
+  // As lockedNote: a note whose S2b backfill or roll-forward failed at this boot takes nothing until its bin is merged.
+  if (!collabNoteMigrated(noteId)) throw new NoteNotMigratedError()
   const vaultId = batch[0]!.vaultId
   const values = sql.join(
     batch.map((item, i) => sql`(${i}::int, ${Buffer.from(item.update)}::bytea, ${item.actor.type}::actor_type, ${item.actor.id ?? null}::uuid)`),

@@ -303,6 +303,16 @@ describe('useCollabDoc', () => {
     expect(provider.disconnected).toBe(true)
   })
 
+  it('an open note the relay closes with note-not-migrated stops as not-migrated, keeping the text', async () => {
+    const { view, provider } = await connected()
+    act(() => provider.options.onStatus({ status: 'connected' }))
+    act(() => view.result.current.ydoc.getText('body').insert(0, 'typed during a failed roll-forward'))
+    act(() => provider.options.onClose({ event: { code: 4423, reason: 'note-not-migrated' } }))
+    expect(view.result.current.status).toBe('not-migrated')
+    expect(provider.disconnected).toBe(true)
+    expect(view.result.current.ydoc.getText('body').toString()).toBe('typed during a failed roll-forward')
+  })
+
   it('names the document by note id, so a rename keeps the same document', async () => {
     const view = renderHook(
       ({ path }: { path: string }) =>

@@ -13,7 +13,7 @@ import { parseNote, serializeNote } from '../src/notes/okf.js'
 import { exportLegacyFiles } from '../src/notes/store-export.js'
 import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { flushProjections } from '../src/notes/projector.js'
-import { foldPendingCollab, getLiveNote, loadCollabState, purgeNote, softDeleteNote, updateNote } from '../src/notes/store.js'
+import { appendCollabUpdate, foldPendingCollab, getLiveNote, loadCollabState, purgeNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { NoteNotMigratedError, collabNoteMigrated, setCollabNotMigrated } from '../src/notes/store-tx.js'
 import { bootCollab, collabMigrated, runCollabBackfill } from '../src/sync/collab-backfill.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
@@ -203,6 +203,10 @@ describe('roll-forward after a code-only rollback (§9)', () => {
       expect(collabNoteMigrated(note.id)).toBe(false)
       await expect(updateNote(vaultId, note.path, { body: 'written meanwhile\n' })).rejects.toBeInstanceOf(NoteNotMigratedError)
       await expect(loadCollabState(vaultId, note.id)).rejects.toBeInstanceOf(NoteNotMigratedError)
+      // S3's append path (an editor already connected): refused too, so nothing lands in the log before the merge.
+      const typed = new Y.Doc()
+      typed.getText('body').insert(0, 'x')
+      await expect(appendCollabUpdate(vaultId, note.id, Y.encodeStateAsUpdate(typed), { type: 'collab' })).rejects.toBeInstanceOf(NoteNotMigratedError)
     } finally {
       await chmod(binFile(note.path), 0o644)
     }
@@ -242,7 +246,13 @@ describe('roll-forward after a code-only rollback (§9)', () => {
     await db.execute(sql`
       INSERT INTO instance_state (id, store_migrated_at) VALUES ('singleton', now()) ON CONFLICT (id) DO UPDATE SET store_migrated_at = now()`)
     const note = await create('exported', 'Exported.\n')
-    await appendTyping(note.id, note.path, 'Acked, not folded.\n')
+    // An acked collab update logged by S3's append path, not folded yet (a tab closed, the server stopped).
+    const { state } = await loadCollabState(vaultId, note.id)
+    const tab = new Y.Doc()
+    Y.applyUpdate(tab, state)
+    const sv = Y.encodeStateVector(tab)
+    tab.getText('body').insert(tab.getText('body').length, 'Acked, not folded.\n')
+    expect(await appendCollabUpdate(vaultId, note.id, Y.encodeStateAsUpdate(tab, sv), { type: 'collab' })).not.toBeNull()
     // The tail is still unfolded: the row lacks the typing until the export folds it.
     expect((await getLiveNote(vaultId, note.path))!.body).toBe('Exported.\n')
     const stored = await storedCrdtDoc(vaultId, note.path)
