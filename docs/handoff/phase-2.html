@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Elara fix programme: hand-off after phase 2</title>
+<style>
+:root { --fg:#1d2433; --muted:#5b6475; --border:#d9dee7; --surface:#f6f8fb; --accent:#3b5bdb; --ok:#2b8a3e; }
+@media (prefers-color-scheme: dark) { :root { --fg:#e6e9ef; --muted:#9aa3b2; --border:#2f3645; --surface:#1a1f2a; --accent:#8da2fb; --ok:#69db7c; } body { background:#11151d; } }
+* { box-sizing: border-box; }
+body { margin:0; font:15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--fg); }
+main { max-width: 1040px; margin: 0 auto; padding: 32px 24px 64px; }
+h1 { font-size: 28px; margin: 0 0 8px; }
+h2 { font-size: 21px; margin: 36px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+p, li { max-width: 80ch; }
+a { color: var(--accent); }
+code { font: 13px/1.4 ui-monospace, "Cascadia Code", Consolas, monospace; background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+th { background: var(--surface); }
+.flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 16px 0 6px; }
+.step { border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; font-size: 13px; background: var(--surface); max-width: 170px; }
+.arrow { color: var(--muted); }
+.flow-note { color: var(--muted); font-size: 13px; }
+footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Elara fix programme: hand-off after phase 2</h1>
+<p>Date: 2026-10-22. Repository: <a href="https://github.com/PIIIX-org/chapters">PIIIX-org/chapters</a> (product name Elara). Written for whoever continues the work: the owner, another agent, or a future session. Phase 1&#39;s hand-off is <a href="phase-1.md">phase-1.md</a>; its working method (section 3) and gotchas (section 10) still apply.</p>
+<p>Every phase-2 pull request has merged; no line of this document waits on an open PR. The promotion results go into section 5 once it has run.</p>
+<h2>1. Where things stand</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>State</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Phase 2 (stop data loss), milestone 3</td>
+<td><strong>52 of 52 issues closed.</strong> The last ones: #408 and #476 (<a href="https://github.com/PIIIX-org/chapters/pull/864">#864</a>), #485 (<a href="https://github.com/PIIIX-org/chapters/pull/889">#889</a>), #488 (<a href="https://github.com/PIIIX-org/chapters/pull/892">#892</a>), #501 (<a href="https://github.com/PIIIX-org/chapters/pull/861">#861</a>), #486 and #489 (<a href="https://github.com/PIIIX-org/chapters/pull/896">#896</a>, section 1.1).</td>
+</tr>
+<tr>
+<td>Design</td>
+<td>ADR-003 (Elara <code>decision/adr-003-authoritative-store</code>, rev 7) signed off by the owner with every default on <a href="https://github.com/PIIIX-org/chapters/issues/704">#704</a>. Slices S1 to S6 are all on <code>dev</code> (S3 is <a href="https://github.com/PIIIX-org/chapters/pull/847">#847</a>), and so is the S2b bin export for rollback (<a href="https://github.com/PIIIX-org/chapters/pull/885">#885</a>).</td>
+</tr>
+<tr>
+<td>Rehearsal</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/703">#703</a>: restore + S2a migration + rollback (<a href="https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6314996795">comment 6314996795</a>) and S2b migration (<a href="https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6321492109">comment 6321492109</a>, <strong>GO with conditions</strong>) on a copy of production.</td>
+</tr>
+<tr>
+<td><code>dev</code></td>
+<td><code>e3ff312</code> (#885&#39;s merge, the last phase-2 PR), 609 commits ahead of <code>prod</code>.</td>
+</tr>
+<tr>
+<td><code>prod</code></td>
+<td><code>5c5bdc0</code> (phase 1). It does <strong>not</strong> ship the #720 client; the owner decided a two-step promotion (section 5).</td>
+</tr>
+</tbody></table>
+<h3>1.1 How #486 and #489 closed</h3>
+<p>ADR-003 removed the SIGKILL windows #486 and #489 measured: row, revision and CRDT update commit in one transaction and files are projections. The full-tier rerun of every SIGKILL boundary (<code>crash-write</code>, <code>collab-duplication</code>, <code>collab-s2b</code>, <code>store-failpoints</code>, <code>store-migration</code>, <code>store-rollback</code>, <code>fix-crash-catchup</code>, <code>restart-extraction</code>), each SHA run twice (<a href="https://github.com/PIIIX-org/chapters/issues/489">#489 comment</a>, mapping of #486&#39;s done-when in <a href="https://github.com/PIIIX-org/chapters/issues/486">#486&#39;s comment</a>):</p>
+<table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Commit</th>
+<th>crash-write</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="https://github.com/PIIIX-org/chapters/actions/runs/39734379501">39734379501</a></td>
+<td><code>dev</code> <code>927890d</code></td>
+<td>74/74 checks over boundaries a1, a4, a10, a20, a30, a38, t100, t400</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/actions/runs/39734384384">39734384384</a></td>
+<td>same SHA (branch <code>lab/rerun-489</code>)</td>
+<td>74/74</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/actions/runs/39739748260">39739748260</a></td>
+<td><code>dev</code> <code>5e07bd4</code></td>
+<td>74/74</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/actions/runs/39739753171">39739753171</a></td>
+<td>same SHA</td>
+<td>74/74</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/actions/runs/39739825944">39739825944</a></td>
+<td>#896&#39;s branch, entries removed</td>
+<td>gate green</td>
+</tr>
+</tbody></table>
+<p>The only collab-duplication failures in those runs are the S18 pair, baselined under #891 (section 3.2). <a href="https://github.com/PIIIX-org/chapters/pull/896">#896</a> then dropped the four <code>crash-write</code> entries (#486 ×3, #489 ×1), so a recurrence is a gate regression, and closed both issues.</p>
+<h2>2. What phase 2 delivered</h2>
+<h3>2.1 The store after phase 2</h3>
+<div class="flow"><div class="step">Agent / REST write</div><div class="arrow">→</div><div class="step">One Postgres transaction row + revision + links + Yjs update + projection targets</div><div class="arrow">→</div><div class="step">Editor typing</div><div class="arrow">→</div><div class="step">note_updates appended before ack</div><div class="arrow">→</div><div class="step">Projector worker</div><div class="arrow">→</div><div class="step">.md files, index.md</div><div class="arrow">→</div><div class="step">embeddings, semantic edges</div><div class="arrow">→</div><div class="step">Reads: row, or live doc folded first</div></div><p class="flow-note">Writes and editor typing meet in one transaction; the projector and reads follow from it.</p>
+<ul>
+<li><strong>One authoritative store: Postgres.</strong> <code>notes</code> (text, frontmatter with its key order in <code>frontmatter_src</code>, path, <code>seq</code>), <code>note_revisions</code> (one per <code>seq</code>, ordered by <code>ord</code>), <code>note_links</code>, <code>note_crdt</code> (Yjs snapshot) and <code>note_updates</code> (Yjs tail). Nothing outside Postgres is read back as truth. Every write (create, edit, append/upsert, rename, delete, restore, revert, purge, import, backup restore, the CLIs) is one transaction under the note&#39;s lock and the instance&#39;s shared maintenance lock, and folds pending collab typing first (Invariant W).</li>
+<li><strong>Files are projections.</strong> <code>.md</code> files, folder <code>index.md</code> and embeddings are written after commit by a worker that records <code>last_applied_seq</code>. Files are owned by path through the <code>projected_files</code> ledger: bytes Elara did not write are copied to <code>vaults/&lt;id&gt;/.conflicts/</code> before anything overwrites them, never lost. Hand or <code>git</code> edits are no longer an input (ADR Q2). FTS stays a generated column of the row.</li>
+<li><strong>Collab documents are named by note id</strong> (<code>&lt;vault&gt;/~&lt;noteId&gt;</code>). A rename never closes an editor; a tab on an older page is refused with <code>reload-required</code> and shows &quot;Reload to keep editing&quot;. <code>.crdt/*.bin</code> files are retired; their state lives in <code>note_crdt</code>.</li>
+<li><strong>Append before ack (S3, <a href="https://github.com/PIIIX-org/chapters/pull/847">#847</a>).</strong> Each collab update is decoded, size-checked and committed to <code>note_updates</code> before the relay acknowledges it, so &quot;saved&quot; in the editor means committed in Postgres. A failed append closes the socket with no ack, so the editor keeps the typing and resends it.</li>
+<li><strong>Reads</strong> (<code>read_note</code>, <code>export_note</code>, REST GET) fold a loaded live document first, so they return what the editor shows, with <code>rev</code>.</li>
+</ul>
+<h3>2.2 ADR-003 slices</h3>
+<table>
+<thead>
+<tr>
+<th>Slice</th>
+<th>PR</th>
+<th>What it guarantees</th>
+<th>Proof</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>S1 schema + dry run</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/783">#783</a></td>
+<td>Migration 0021 is additive (older code runs on it with no SQL). <code>migrate-store --dry-run</code> reads production in one read-only transaction and reports conflicts, files that change bytes, CRDT classes and timing.</td>
+<td><code>server/test/migrate-store.test.ts</code>, <code>store-schema.test.ts</code>; the #703 dry run.</td>
+</tr>
+<tr>
+<td>S2a-1 transactional store</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/828">#828</a></td>
+<td>Every server write is one transaction; <code>DirectConnection</code> gone from writes; projector with ownership and conflict copies; reads from the DB; resumable backfill (<code>store_migrated_at</code>) and boot reconciliation on every boot.</td>
+<td><code>store-s2a.test.ts</code>; lab <code>store-failpoints</code>; #703 S2a rehearsal (944/944 row hashes unchanged).</td>
+</tr>
+<tr>
+<td>S2a-2 maintenance lock, rollback export</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/838">#838</a></td>
+<td>Instance maintenance lock (a stopped-server export refuses to run beside a server, and a server refuses to start during it); <code>store-export-legacy</code>; verify-after-unclean-shutdown and orphan sweep at boot; instance backups read rows, not files.</td>
+<td><code>maintenance-lock.test.ts</code>, <code>store-s2a2-boot.test.ts</code>, <code>store-s2a-shutdown.test.ts</code>; lab <code>store-migration</code>, <code>store-rollback</code>; #703 rollback run.</td>
+</tr>
+<tr>
+<td>S2b relay through Postgres</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/843">#843</a></td>
+<td>CRDT state in <code>note_crdt</code> + <code>note_updates</code>, written in the note&#39;s transaction; id-named documents; three-way rebase when the row changed outside the store; deterministic seed; S2b backfill (<code>collab_migrated_at</code>) and <code>.crdt/</code> → <code>.crdt.pre-adr-003/</code>. Closes #832, #834.</td>
+<td><code>collab-s2b.test.ts</code>, <code>collab-backfill.test.ts</code>, <code>note-crdt.test.ts</code>; #703 S2b rehearsal (355 bins attached, 0 set aside, 0 <code>fold_error</code>).</td>
+</tr>
+<tr>
+<td>S2b bin export</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/885">#885</a></td>
+<td><code>store-export-legacy</code> first folds every collab tail into the rows, then writes <code>.crdt/&lt;path&gt;.bin</code> (snapshot ⊕ tail, in the pre-S2b layout) for every live note whose CRDT state equals its row, so a code-only rollback over S2b keeps editor history. A note with a <code>fold_error</code> gets no bin and is listed.</td>
+<td><code>store-rollback.test.ts</code>, <code>collab-backfill.test.ts</code>, <code>store-s2a2-boot.test.ts</code>, <code>revision-compaction-job.test.ts</code></td>
+</tr>
+<tr>
+<td>S3 durable acks</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/847">#847</a></td>
+<td>Collab updates committed before the ack; fold policy; compaction on unload. Closes #487.</td>
+<td><code>collab-s3.test.ts</code>, <code>collab-s3-sigkill.test.ts</code>, <code>collab-s3-races.test.ts</code>, <code>collab-s3-pg-outage.test.ts</code>, <code>collab-s3-shutdown.test.ts</code>, <code>collab-s3-perf.test.ts</code>; removed both #487 baseline entries (S16 and crash-write closed-tab).</td>
+</tr>
+<tr>
+<td>S4 read path + write result</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/840">#840</a></td>
+<td>Fold on read; <code>rev</code> on every read and write; <code>status: applied/merged/conflicted/retry</code>, <code>indexed</code>, <code>idempotency_key</code>, <code>dry_run</code>. Closes #474, #477.</td>
+<td><code>mcp-write-result.test.ts</code>, <code>edit-note-base-rev.test.ts</code>; browser <code>read_note</code> entry removed.</td>
+</tr>
+<tr>
+<td>S5 durable jobs</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/817">#817</a></td>
+<td>Extraction and embeddings on a <code>jobs</code> table with leases, attempts, <code>last_error</code>, idempotency keys; survives restarts. Closes #494. It also orders every query that feeds Louvain, the fix #816 asked for (#816 closed with that evidence).</td>
+<td><code>durable-jobs.test.ts</code>, <code>durable-jobs-retry.test.ts</code>; lab <code>restart-extraction</code> still green.</td>
+</tr>
+<tr>
+<td>S6 doctor</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/839">#839</a></td>
+<td><code>pnpm doctor</code> compares file, row, revision, CRDT, FTS, vectors, links and projections (23 classes, <code>DOCTOR_CLASSES</code>), <code>--repair</code>; <code>check-notes</code> reports orphans; last-resort <code>rows-from-files</code>. Closes #495.</td>
+<td><code>doctor.test.ts</code>, <code>note-integrity.test.ts</code>, <code>rows-from-files.test.ts</code>.</td>
+</tr>
+</tbody></table>
+<h3>2.3 Every milestone 3 item</h3>
+<p><strong>Agent writes and history</strong></p>
+<table>
+<thead>
+<tr>
+<th>Issue</th>
+<th>Fix</th>
+<th>PR</th>
+<th>Proof</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>#403</td>
+<td>Edits are attributed to the agent, not <code>collab</code>: actor-aware dedupe, then writes no longer pass through the relay (S2a).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/770">#770</a>, <a href="https://github.com/PIIIX-org/chapters/pull/828">#828</a></td>
+<td>11 lab attribution entries removed in #770 (<a href="https://github.com/PIIIX-org/chapters/actions/runs/39303323644">full tier 39303323644</a>).</td>
+</tr>
+<tr>
+<td>#408</td>
+<td><code>edit_note</code> applies a minimal diff and accepts ops; a whole body merges from the agent&#39;s last read.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/807">#807</a>, <a href="https://github.com/PIIIX-org/chapters/pull/886">#886</a>, <a href="https://github.com/PIIIX-org/chapters/pull/864">#864</a></td>
+<td><code>edit-note-ops.test.ts</code>, <code>text-diff.test.ts</code>, <code>last-read-restart.test.ts</code>, <code>server-client-id.test.ts</code>; #864 removed all 5 browser S1 #408 entries, so #408 closed with no entry left.</td>
+</tr>
+<tr>
+<td>#411</td>
+<td><code>note_history</code> returns metadata only, paginated; <code>get_revision</code> added.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/772">#772</a></td>
+<td><code>mcp-note-history.test.ts</code></td>
+</tr>
+<tr>
+<td>#437, #769</td>
+<td>Every tool schema is strict; unknown arguments are refused with the real parameter names, bounded, safe on <code>constructor</code>.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/768">#768</a>, <a href="https://github.com/PIIIX-org/chapters/pull/789">#789</a></td>
+<td><code>mcp-strict-args.test.ts</code>, <code>mcp-strict-args-limits.test.ts</code></td>
+</tr>
+<tr>
+<td>#438, #480</td>
+<td><code>edit_note</code> frontmatter merges per key (<code>replace</code>, <code>removeKeys</code>); revisions deduplicated by deep equality.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/770">#770</a></td>
+<td><code>note-frontmatter-merge.test.ts</code>, <code>revision-dedupe.test.ts</code></td>
+</tr>
+<tr>
+<td>#474, #477</td>
+<td><code>read_note</code> serves the live document; every write returns <code>rev</code>, <code>status</code>, <code>diff_stats</code>.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/840">#840</a></td>
+<td><code>mcp-write-result.test.ts</code></td>
+</tr>
+<tr>
+<td>#475</td>
+<td>A stale <code>base_rev</code> is three-way merged; overlaps become a linked proposal revision.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/822">#822</a></td>
+<td><code>edit-note-base-rev.test.ts</code>, <code>three-way-merge.test.ts</code></td>
+</tr>
+<tr>
+<td>#476</td>
+<td>A whole body without <code>base_rev</code> merges from the connection&#39;s last read (kept in Postgres, migration 0028), so typing done after the read stays. <code>upsert_note</code> and REST PUT do the same (<a href="https://github.com/PIIIX-org/chapters/pull/879">#879</a>, #865).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/864">#864</a>, <a href="https://github.com/PIIIX-org/chapters/pull/879">#879</a></td>
+<td><code>edit-note-base-rev.test.ts</code>, <code>three-way-merge.test.ts</code>, <code>last-read-restart.test.ts</code></td>
+</tr>
+<tr>
+<td>#478</td>
+<td>Atomic <code>append_note</code> / <code>upsert_note</code>; concurrent appends all land.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/819">#819</a></td>
+<td><code>mcp-append-note.test.ts</code>, <code>note-create-if-missing.test.ts</code></td>
+</tr>
+<tr>
+<td>#479</td>
+<td>Delete, restore and rename are history events; revert gets its own row (migration 0023).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/805">#805</a></td>
+<td><code>history-events.test.ts</code></td>
+</tr>
+<tr>
+<td>#482</td>
+<td>Restore point before an MCP connection&#39;s first write in a session (30 min idle).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/806">#806</a></td>
+<td><code>mcp-restore-point.test.ts</code></td>
+</tr>
+<tr>
+<td>#484, #803</td>
+<td>Rename, delete, restore, purge and create take the note lock; referrers of a renamed note rewritten by id under their own locks.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/804">#804</a>, <a href="https://github.com/PIIIX-org/chapters/pull/812">#812</a></td>
+<td><code>note-lifecycle-race.test.ts</code>, <code>note-write-race.test.ts</code></td>
+</tr>
+<tr>
+<td>#490</td>
+<td>Concurrent <code>create_note</code> into one folder: already fixed by #401, pinned by a test.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/778">#778</a></td>
+<td><code>mcp-concurrent-create.test.ts</code></td>
+</tr>
+<tr>
+<td>#491</td>
+<td>One body-size cap (<code>ELARA_NOTE_MAX_BYTES</code>, UTF-8 bytes) on every write path including the relay.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/781">#781</a></td>
+<td><code>note-size-cap.test.ts</code>, <code>collab-size.test.ts</code></td>
+</tr>
+<tr>
+<td>#492</td>
+<td>Writes that grow a note ≥ 1.9× or repeat a block are quarantined as a revision, not applied.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/782">#782</a></td>
+<td><code>growth-guard.test.ts</code>, <code>note-growth-quarantine.test.ts</code></td>
+</tr>
+<tr>
+<td>#501</td>
+<td>Long revision histories stored as lossless deltas (migration 0026); every revision reads exactly as before.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/861">#861</a></td>
+<td><code>revision-compaction.test.ts</code>, <code>revision-compaction-job.test.ts</code>, <code>migration-order.test.ts</code></td>
+</tr>
+<tr>
+<td>#779</td>
+<td>Folder <code>index.md</code> regeneration serialised per folder.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/793">#793</a></td>
+<td><code>index-regen-race.test.ts</code></td>
+</tr>
+</tbody></table>
+<p><strong>Editors and collab</strong></p>
+<table>
+<thead>
+<tr>
+<th>Issue</th>
+<th>Fix</th>
+<th>PR</th>
+<th>Proof</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>#481</td>
+<td>Agents show in editor presence.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/810">#810</a></td>
+<td><code>agent-presence.test.ts</code>, <code>agent-presence-renew.test.ts</code></td>
+</tr>
+<tr>
+<td>#483</td>
+<td>Agent edits keep the caret and the person&#39;s Ctrl+Z.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/809">#809</a></td>
+<td><code>collab-agent-edit.test.ts</code>; lab browser</td>
+</tr>
+<tr>
+<td>#485</td>
+<td>Offline typing stays where it was typed when an agent writes.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/889">#889</a></td>
+<td>Lab browser S8a/S8b; both #485 entries removed.</td>
+</tr>
+<tr>
+<td>#486</td>
+<td>One authoritative store (ADR-003, section 2.2).</td>
+<td>#783, #828, #838, #843, #847, #817, #840, #839, <a href="https://github.com/PIIIX-org/chapters/pull/896">#896</a></td>
+<td>SIGKILL rerun (section 1.1); 3 crash-write entries removed.</td>
+</tr>
+<tr>
+<td>#487</td>
+<td>Collab state saved before the ack (S3).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/847">#847</a></td>
+<td><code>collab-s3*.test.ts</code>; both #487 baseline entries removed.</td>
+</tr>
+<tr>
+<td>#488</td>
+<td>Never rebuild text from a stale CRDT state.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/843">#843</a>, <a href="https://github.com/PIIIX-org/chapters/pull/892">#892</a></td>
+<td>Lab S18 now plants a database restore with a tab open; the manual-SQL case moved to #891.</td>
+</tr>
+<tr>
+<td>#489</td>
+<td>SIGKILL boundary rerun.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/896">#896</a></td>
+<td>Four full-tier runs, 74/74 crash-write each (section 1.1); orphan-<code>.tmp</code> entry removed.</td>
+</tr>
+<tr>
+<td>#498</td>
+<td>Live collab sockets close when their session ends (logout, deactivation).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/796">#796</a></td>
+<td><code>collab-logout.test.ts</code></td>
+</tr>
+<tr>
+<td>#712</td>
+<td>Graph scope picker portalled so the toolbar can&#39;t clip it.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/762">#762</a></td>
+<td><code>client/src/components/shell/ScopePicker.test.tsx</code>, <code>client/src/components/graph/GraphCanvas.scopePicker.test.tsx</code></td>
+</tr>
+<tr>
+<td>#720</td>
+<td>Offline edits say Offline, survive a reload (<code>collabStash</code>), guard unload. <strong>Prerequisite of S2b in production.</strong></td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/763">#763</a></td>
+<td>Client tests and lab browser in the PR.</td>
+</tr>
+<tr>
+<td>#765, #766</td>
+<td>Offline stash keeps a restored copy when its write fails; open tabs claim a copy released by another tab.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/790">#790</a>, <a href="https://github.com/PIIIX-org/chapters/pull/808">#808</a></td>
+<td>Client tests in the PRs.</td>
+</tr>
+</tbody></table>
+<p><strong>Backup, restore, import, export</strong></p>
+<table>
+<thead>
+<tr>
+<th>Issue</th>
+<th>Fix</th>
+<th>PR</th>
+<th>Proof</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>#409</td>
+<td>Archive format 2: trash, revisions, attachments, repositories, MFA; restore by validate, plan, apply.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/776">#776</a></td>
+<td><code>backup-roundtrip.test.ts</code>, <code>restore.test.ts</code></td>
+</tr>
+<tr>
+<td>#493</td>
+<td>Backup files mode 600, directory 700; SHA-256 per part in <code>backup.json</code>; restore-and-verify in CI on backup PRs.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/777">#777</a></td>
+<td><code>backup-hardening.test.ts</code></td>
+</tr>
+<tr>
+<td>#499</td>
+<td>Vault export/import keeps revisions and trash and rewrites attachment links.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/802">#802</a></td>
+<td><code>export-history.test.ts</code>, <code>export-roundtrip.test.ts</code></td>
+</tr>
+<tr>
+<td>#500</td>
+<td>Restore CLI says which MCP tokens keep working.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/797">#797</a></td>
+<td><code>restore-tokens.test.ts</code></td>
+</tr>
+<tr>
+<td>#621</td>
+<td>Import grants manifest shares only with <code>?applyShares=true</code>.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/795">#795</a></td>
+<td><code>import-shares.test.ts</code></td>
+</tr>
+<tr>
+<td>#813</td>
+<td>Restore CLI recognises drizzle query errors by class.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/867">#867</a></td>
+<td><code>restore-cli-errors.test.ts</code></td>
+</tr>
+<tr>
+<td>#841</td>
+<td>Restore keeps the app role&#39;s password from <code>.env</code> (<code>globals.sql</code> reset it; found in the #703 rehearsal).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/855">#855</a></td>
+<td>Docs only.</td>
+</tr>
+</tbody></table>
+<p><strong>Sync, jobs, search, monitoring, lab</strong></p>
+<table>
+<thead>
+<tr>
+<th>Issue</th>
+<th>Fix</th>
+<th>PR</th>
+<th>Proof</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>#410</td>
+<td>A webhook repository is polled again once its webhook is stale or its sync failed.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/773">#773</a></td>
+<td>Tests in the PR.</td>
+</tr>
+<tr>
+<td>#494</td>
+<td>Durable jobs (S5).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/817">#817</a></td>
+<td><code>durable-jobs.test.ts</code></td>
+</tr>
+<tr>
+<td>#495</td>
+<td>Doctor (S6).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/839">#839</a></td>
+<td><code>doctor.test.ts</code></td>
+</tr>
+<tr>
+<td>#496</td>
+<td>Embedding runs in a worker thread; per-file symbol embedding budget.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/800">#800</a>, <a href="https://github.com/PIIIX-org/chapters/pull/857">#857</a></td>
+<td><code>embedding-worker.test.ts</code>, <code>embeddings.test.ts</code> (event-loop lag)</td>
+</tr>
+<tr>
+<td>#497</td>
+<td>Extraction served round-robin across repositories.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/801">#801</a>, <a href="https://github.com/PIIIX-org/chapters/pull/863">#863</a></td>
+<td><code>extraction-fairness.test.ts</code></td>
+</tr>
+<tr>
+<td>#705</td>
+<td>Server errors, failed jobs and slow endpoints recorded; <code>/api/admin/monitoring</code>; the uptime monitor alerts (#636, optional webhook).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/764">#764</a></td>
+<td><code>monitoring.test.ts</code>, <code>monitoring-metrics.test.ts</code>, lab <code>monitoring-alerts</code></td>
+</tr>
+<tr>
+<td>#775</td>
+<td>Overlapping poll and webhook syncs count one new failure per transition (no false #705 alert).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/856">#856</a></td>
+<td><code>repository-sync-overlap.test.ts</code></td>
+</tr>
+<tr>
+<td>#842</td>
+<td>Migration conflict copies reported apart from projection job failures (found in the #703 rehearsal).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/866">#866</a></td>
+<td><code>store-s2a.test.ts</code></td>
+</tr>
+<tr>
+<td>#706</td>
+<td>A red nightly lab opens/updates a <code>lab-nightly</code> issue.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/791">#791</a></td>
+<td>CI script tests.</td>
+</tr>
+<tr>
+<td>#658, #663</td>
+<td>Lab brings the app back after SIGKILL; restart-extraction prints both counts.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/798">#798</a></td>
+<td>Lab runs in the PR.</td>
+</tr>
+<tr>
+<td>#703, #704</td>
+<td>Production rehearsal and owner sign-off (section 1).</td>
+<td>—</td>
+<td>Issue comments.</td>
+</tr>
+</tbody></table>
+<p>Also merged in phase 2, outside the milestone: #771 (backup build failure, <a href="https://github.com/PIIIX-org/chapters/pull/792">#792</a>), #825/#788/#811 (revision order, migration 0024, <a href="https://github.com/PIIIX-org/chapters/pull/826">#826</a>), #854 (<a href="https://github.com/PIIIX-org/chapters/pull/860">#860</a>), #848 (backup doc, <a href="https://github.com/PIIIX-org/chapters/pull/859">#859</a>), #851, #852, #849 (test flakes: <a href="https://github.com/PIIIX-org/chapters/pull/857">#857</a>, <a href="https://github.com/PIIIX-org/chapters/pull/870">#870</a>, <a href="https://github.com/PIIIX-org/chapters/pull/863">#863</a>), #844 (S2a size-cap test race, <a href="https://github.com/PIIIX-org/chapters/pull/838">#838</a>), #767 (restart-extraction pinned repo, <a href="https://github.com/PIIIX-org/chapters/pull/798">#798</a>), #833 (character diff only on the changed region, <a href="https://github.com/PIIIX-org/chapters/pull/837">#837</a>), #858 (security events in recorded order, migration 0027, <a href="https://github.com/PIIIX-org/chapters/pull/869">#869</a>), #862 (30 s test timeouts, <a href="https://github.com/PIIIX-org/chapters/pull/874">#874</a>), #873 (dry run predicts attached equal/diffed, <a href="https://github.com/PIIIX-org/chapters/pull/876">#876</a>), #872 (operator scripts offline in the image, <a href="https://github.com/PIIIX-org/chapters/pull/878">#878</a>), #880 (crash-write waits for idle projections, <a href="https://github.com/PIIIX-org/chapters/pull/882">#882</a>), #845 (crash catch-up waits for extraction to settle, <a href="https://github.com/PIIIX-org/chapters/pull/883">#883</a>). <a href="https://github.com/PIIIX-org/chapters/pull/835">#835</a> is a baseline change only: it marked crash-write&#39;s stays-doc duplication check (#832) intermittent.</p>
+<h2>3. Known defects and deferred items</h2>
+<h3>3.1 <code>lab/known-defects.json</code> on <code>dev</code> (<code>e3ff312</code>)</h3>
+<p>29 entries, <strong>none for a phase-2 issue</strong>. During the phase, <a href="https://github.com/PIIIX-org/chapters/pull/847">#847</a> removed both #487 entries, <a href="https://github.com/PIIIX-org/chapters/pull/883">#883</a> the #845 entry, <a href="https://github.com/PIIIX-org/chapters/pull/864">#864</a> all five #408 entries, <a href="https://github.com/PIIIX-org/chapters/pull/889">#889</a> both #485 entries, <a href="https://github.com/PIIIX-org/chapters/pull/892">#892</a> moved the two #488 S18 entries to #891, and <a href="https://github.com/PIIIX-org/chapters/pull/896">#896</a> removed the four crash-write entries (#486 ×3, #489 ×1).</p>
+<table>
+<thead>
+<tr>
+<th>Issue</th>
+<th>Entries</th>
+<th>Test</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/891">#891</a></td>
+<td>2</td>
+<td>collab-duplication S18 (CRDT state put back by SQL, tab kept open)</td>
+<td>Phase 5 (section 3.2).</td>
+</tr>
+<tr>
+<td>#440, #461, #556</td>
+<td>4</td>
+<td>access-behaviour</td>
+<td>Phase 5.</td>
+</tr>
+<tr>
+<td>#533, #560, #561, #562, #618</td>
+<td>6</td>
+<td>attachments</td>
+<td>Phases 5–6.</td>
+</tr>
+<tr>
+<td>#444, #563, #564, #565, #619, #620</td>
+<td>8</td>
+<td>export-roundtrip</td>
+<td>Phase 5 (OKF).</td>
+</tr>
+<tr>
+<td>#459, #528, #530</td>
+<td>8</td>
+<td>multilingual-search</td>
+<td>Phase 3.</td>
+</tr>
+<tr>
+<td>#617</td>
+<td>1</td>
+<td>browser console errors</td>
+<td>Phase 5.</td>
+</tr>
+</tbody></table>
+<h3>3.2 Filed during phase 2 and moved out</h3>
+<table>
+<thead>
+<tr>
+<th>Issue</th>
+<th>Now</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/891">#891</a></td>
+<td>Phase 5</td>
+<td>A CRDT state put back by manual SQL behind a newer row doubles an open tab&#39;s typing. After S2b no supported path (restore, doctor, import, rollback/roll-forward) reaches it (<a href="https://github.com/PIIIX-org/chapters/issues/488#issuecomment-6324028607">#488 analysis</a>); the lab keeps measuring it through the baselined S18 step.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/780">#780</a></td>
+<td>No milestone</td>
+<td>Relay: frontmatter and non-text document content have no size bound (#491 covers the body).</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/784">#784</a></td>
+<td>No milestone</td>
+<td>Editors are not told their stores were quarantined (#492); typing vanishes on reload.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/877">#877</a>, <a href="https://github.com/PIIIX-org/chapters/issues/787">#787</a>, <a href="https://github.com/PIIIX-org/chapters/issues/799">#799</a></td>
+<td>No milestone</td>
+<td>Test and lab flakes under load (monitoring extraction count, repository-routes teardown log, monitoring-alerts sync check).</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/774">#774</a>, <a href="https://github.com/PIIIX-org/chapters/issues/785">#785</a></td>
+<td>No milestone</td>
+<td><code>fails-before</code> and agent-trial tooling.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/830">#830</a></td>
+<td>Open</td>
+<td>Nightly lab failing (the #706 alert issue); stays open until a green nightly.</td>
+</tr>
+</tbody></table>
+<p>Filed during phase 2 and already fixed on <code>dev</code>: #816 (<a href="https://github.com/PIIIX-org/chapters/pull/817">#817</a>), #865 (<a href="https://github.com/PIIIX-org/chapters/pull/879">#879</a>), #833 (<a href="https://github.com/PIIIX-org/chapters/pull/837">#837</a>), #845 (<a href="https://github.com/PIIIX-org/chapters/pull/883">#883</a>), #858 (<a href="https://github.com/PIIIX-org/chapters/pull/869">#869</a>), #862 (<a href="https://github.com/PIIIX-org/chapters/pull/874">#874</a>), #872 (<a href="https://github.com/PIIIX-org/chapters/pull/878">#878</a>; found in the S2b rehearsal), #873 (<a href="https://github.com/PIIIX-org/chapters/pull/876">#876</a>; found in the S2b rehearsal, no data effect), #880 (<a href="https://github.com/PIIIX-org/chapters/pull/882">#882</a>).</p>
+<h2>4. Operator-facing changes</h2>
+<p><strong>New commands</strong> (run in the app container, <code>docker compose run --rm --no-deps app pnpm &lt;name&gt;</code> with the app stopped, or <code>exec</code> while it runs):</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+<th>Doc</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>migrate-store --dry-run --report &lt;file&gt;</code></td>
+<td>Read-only report of what the S2a/S2b migration will do (conflicts, files that change bytes, CRDT and collab classes, timing).</td>
+<td><code>docs/self-hosting/migration.md</code></td>
+</tr>
+<tr>
+<td><code>check-notes [--wait-idle --fail-on-pending]</code></td>
+<td>Every live note&#39;s file parses and matches its row; now also lists orphans.</td>
+<td>backup.md §4</td>
+</tr>
+<tr>
+<td><code>doctor [--vault &lt;id&gt;] [--repair] [--report &lt;file&gt;]</code></td>
+<td>File, row, revision, CRDT, FTS, vectors, links, projections; conflict copies, rejected updates, fold errors.</td>
+<td>backup.md §4 &quot;The doctor&quot;</td>
+</tr>
+<tr>
+<td><code>rows-from-files</code></td>
+<td>Last resort: rebuild note rows from <code>.md</code> files (revisions and CRDT history lost).</td>
+<td>backup.md §4</td>
+</tr>
+<tr>
+<td><code>store-export-legacy</code></td>
+<td>Stopped-server export for a code-only rollback; takes the maintenance lock. Writes files, <code>index.md</code> and (from S2b, <a href="https://github.com/PIIIX-org/chapters/pull/885">#885</a>) <code>.crdt</code> bins.</td>
+<td>backup.md §5</td>
+</tr>
+</tbody></table>
+<p><strong>Migrations</strong> (all run at boot; all additive in schema, so older code runs on them with no SQL except where noted):</p>
+<table>
+<thead>
+<tr>
+<th>Migration</th>
+<th>From</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>0021 <code>adr003_store</code></td>
+<td>#783</td>
+<td>Store tables and markers; builds two indexes on <code>note_revisions</code> under a write lock.</td>
+</tr>
+<tr>
+<td>0022 <code>repository_file_embedding_note</code></td>
+<td>#800</td>
+<td></td>
+</tr>
+<tr>
+<td>0023 <code>revision_events</code></td>
+<td>#805</td>
+<td>Older code relabels revert again (backup.md §5).</td>
+</tr>
+<tr>
+<td>0024 <code>revision_order</code></td>
+<td>#826</td>
+<td>Backups made by the newer code are refused by older code.</td>
+</tr>
+<tr>
+<td>0025 <code>write_idempotency</code></td>
+<td>#840</td>
+<td></td>
+</tr>
+<tr>
+<td>0026 <code>revision_compaction</code></td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/861">#861</a></td>
+<td>Journal <code>when</code> 1791750000000. Data change: older code reads compacted bodies as empty, so a code-only rollback runs the backup.md §5 <code>UPDATE</code> first.</td>
+</tr>
+<tr>
+<td>0027 <code>security_event_order</code></td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/869">#869</a></td>
+<td>Journal <code>when</code> 1791700000000. Backups made by the newer code are refused by older code.</td>
+</tr>
+<tr>
+<td>0028 <code>note_reads</code></td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/864">#864</a></td>
+<td>Journal <code>when</code> 1791800000000. An MCP connection&#39;s last read of a note, so a restart between read and edit does not turn the edit into a replace.</td>
+</tr>
+</tbody></table>
+<p><strong>Order rule.</strong> Drizzle skips a migration whose journal <code>when</code> is at or below the newest one applied. 0027 merged first, so 0026 kept its number and took <code>when</code> 1791750000000, above 0027&#39;s; 0028 is above both. On a database without them (production), all three run in journal order 0026, 0027, 0028; on one that already had 0027 (<code>dev</code> instances), 0026 and 0028 still run because their <code>when</code> is above it. <code>migration-order.test.ts</code> pins this. Later migrations take the next number with a <code>when</code> above the newest.</p>
+<p><strong>Rollback</strong> (backup.md §5).</p>
+<ul>
+<li>Clean: restore the pre-upgrade backup.</li>
+<li>Code-only, keeping the data written since, supported for one release, with nobody typing:<ol>
+<li><code>docker compose stop app</code> (graceful: stores every open editor&#39;s typing).</li>
+<li><code>docker compose run --rm --no-deps app pnpm store-export-legacy</code>: under the exclusive maintenance lock (exit 2 while any app or writing CLI is up), folds every collab tail, renders every note file and <code>index.md</code>, and from S2b writes the <code>.crdt</code> bins (<a href="https://github.com/PIIIX-org/chapters/pull/885">#885</a>). Exit 1 means a file failed or the S2a migration has not finished: fix it and run it again. Report in <code>/data/elara/store-export-legacy-&lt;time&gt;.json</code>.</li>
+<li><strong>Rolling back over 0026:</strong> with the app still stopped, run backup.md §5&#39;s <code>UPDATE note_revisions SET body = note_revision_body(body, body_delta, delta_base_id), body_delta = NULL, delta_base_id = NULL, body_bytes = NULL WHERE body_delta IS NOT NULL; DELETE FROM note_revision_compaction</code>, so older code reads whole bodies (the export does not undo compaction).</li>
+<li>Start the older release. No other SQL. Roll-forward needs nothing: boot adopts what the older code wrote and merges bins the old relay wrote into <code>note_crdt</code>.</li>
+</ol>
+</li>
+<li>From S2a only this was rehearsed on #703 (comment 6314996795): counts and 944 row hashes unchanged.</li>
+</ul>
+<p><strong>Monitoring.</strong> <code>/api/admin/monitoring</code> with <code>Authorization: Bearer $ELARA_MONITORING_TOKEN</code> reports 5xx, failed jobs per kind and slow endpoints; the uptime monitor alerts on them (#705, <a href="https://github.com/PIIIX-org/chapters/pull/764">#764</a>). Migration and projector conflict copies are reported as <code>conflictCopies</code>, not as job failures (#842, <a href="https://github.com/PIIIX-org/chapters/pull/866">#866</a>). <code>docs/self-hosting/monitoring.md</code>.</p>
+<p><strong>Backup and restore docs.</strong> <code>globals.sql</code> no longer leaves the app unable to connect: set the role password from <code>.env</code> after loading it (#841, <a href="https://github.com/PIIIX-org/chapters/pull/855">#855</a>). The data-volume steps use the app service and the cron target is a <code>backup.sh</code> the operator saves (#848, <a href="https://github.com/PIIIX-org/chapters/pull/859">#859</a>).</p>
+<p><strong>Offline image scripts (#872).</strong> <a href="https://github.com/PIIIX-org/chapters/pull/878">#878</a> makes <code>pnpm &lt;script&gt;</code> run without network in the published image (<code>pnpm_config_verify_deps_before_run=false</code>). Images built before it (including promotion step A, section 5) still need <code>node --import tsx src/scripts/&lt;name&gt;.ts</code> inside the container.</p>
+<h2>5. Promotion plan (<code>dev</code> → <code>prod</code>)</h2>
+<h3>5.1 Two steps (owner&#39;s decision)</h3>
+<p>ADR-003 R3-2/Q4: S2b ships only after a promotion put the #720 client in production, so a refused tab&#39;s typing survives in the browser copy. <strong><code>prod</code> (<code>5c5bdc0</code>) does not contain #720&#39;s merge commit <code>150669c</code>.</strong> <strong>The owner decided on two steps.</strong> <strong>The coordinator asks the owner before opening each promotion PR.</strong></p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th><code>prod</code> ←</th>
+<th>Contains</th>
+<th>Not yet</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>A</td>
+<td><code>ae6ffb9</code> (<code>dev</code> just before #843; fast-forward from <code>5c5bdc0</code>)</td>
+<td>#720 client, S1, S2a-1, S4, S5, migrations 0021–0025, every phase-2 fix merged before #843</td>
+<td>S2b, S2a-2 (<code>store-export-legacy</code>, maintenance lock), S3, S6 doctor, #878</td>
+</tr>
+<tr>
+<td>B</td>
+<td>the <code>dev</code> head at promotion time (<code>e3ff312</code> when phase 2 finished), after tabs have loaded step A&#39;s page</td>
+<td>S2a-2, S2b, S3, S6, the #885 bin export, 0026–0028, #878, the rest</td>
+<td>—</td>
+</tr>
+</tbody></table>
+<ul>
+<li><strong>Between A and B</strong>, every browser that keeps an editor open must load step A&#39;s page once; leave at least a day, then reload tabs right before B.</li>
+<li><strong>Rollback differs per step.</strong> Step A&#39;s rollback is <strong>restore-only</strong> (the pre-step-A backup): #838 (<code>store-export-legacy</code>) merged after #843, so no prefix of <code>dev</code> has S2a with the export but without S2b. Step B&#39;s rollback to the step-A image uses the <strong>#885 export</strong> (files and <code>.crdt</code> bins), plus the 0026 <code>UPDATE</code> (section 5.4). The #703 S2a rehearsal ran the S2a + S2a-2 image, not <code>ae6ffb9</code>; a dry run plus boot of <code>ae6ffb9</code> on the rehearsal snapshot before step A closes that gap.</li>
+<li>A single promotion was rejected by the owner.</li>
+</ul>
+<h3>5.2 Pre-flight (each step)</h3>
+<ol>
+<li>Owner asked before the promotion PR is opened. Every check on the promotion PR green, full lab tier and full benchmark on the exact head, independent promotion review (phase-1 section 3). Only then <code>git push origin &lt;sha&gt;:prod</code>: production deploys on that push (#664, still open).</li>
+<li><strong>Backup immediately before</strong> (backup.md §1: pg_dump + data volume), checksums verified. For step A it is the only way back. Step B also has the #885 export, but take the backup anyway (#703 condition 1 is met by <a href="https://github.com/PIIIX-org/chapters/pull/885">#885</a>).</li>
+<li><strong>Reload open editor tabs</strong> before the upgrade, and nobody types during it (#703 condition 2; required for step B).</li>
+<li>Operator scripts (#703 condition 3): step A&#39;s image predates <a href="https://github.com/PIIIX-org/chapters/pull/878">#878</a>, so run them as <code>node --import tsx src/scripts/&lt;name&gt;.ts</code> inside the container; step B ships #878, so <code>pnpm &lt;script&gt;</code> works offline.</li>
+<li><strong><code>ELARA_MONITORING_TOKEN</code></strong> set in the production <code>.env</code> and in the uptime monitor&#39;s environment (owner).</li>
+<li>Dry run on production (read-only) or a fresh copy: <code>migrate-store --dry-run --report /data/elara/migration-dry-run.json</code>; expect 0 conflicts, as on #703. Owner sign-off on Q3/Q5/Q6 asked for in the S2a rehearsal comment. In step B the dry run also predicts the <code>attach-equal</code> / <code>attach-diffed</code> split (<a href="https://github.com/PIIIX-org/chapters/pull/876">#876</a>).</li>
+<li>Step B adds S3, migrations 0026–0028 and #861&#39;s compaction, which the #703 S2b rehearsal (<code>aa73289</code>) did not cover: rerun the S2b rehearsal on the snapshot with the step-B head.</li>
+</ol>
+<h3>5.3 Post-flight</h3>
+<ol>
+<li><code>/health</code>: up, new <code>bootId</code>, <code>lastShutdown: graceful</code>.</li>
+<li>Boot log: <code>[store] backfill:</code> summary with 0 failed (step A); collab backfill with 0 set aside and 0 failed, <code>.crdt.pre-adr-003/</code> present (step B); <code>DATA_DIR/migration-report-*.json</code> and <code>collab-migration-report-*.json</code>.</li>
+<li><code>check-notes --wait-idle --fail-on-pending</code>: 0 broken, 0 pending. <code>doctor</code> (step B): no fold errors, no rejected updates.</li>
+<li><code>/api/admin/monitoring</code> answers with the token; <code>conflictCopies</code> matches the migration report&#39;s unparseable count; the next uptime run is green.</li>
+<li>Lab smoke: there is no staging server. The lab (<code>docs/agents/lab.md</code>) builds its own instance from the commit under test on the CI runner, bootstraps it and runs <code>lab/tests</code> against it, never against production (phase-1 section 10: &quot;the lab instance is the staging server&quot;). Run it on the promoted commit: <code>gh workflow run elara-lab.yml --ref prod -f tier=fast</code>.</li>
+</ol>
+<h3>5.4 Rollback</h3>
+<ul>
+<li><strong>Step A: restore-only.</strong> Restore the backup taken in pre-flight 2 (backup.md §2), then start the <code>5c5bdc0</code> image. Writes made since step A are lost.</li>
+<li><strong>Step B: the #885 export</strong>, keeping the data written since, with nobody typing:<ol>
+<li><code>docker compose stop app</code>.</li>
+<li><code>docker compose run --rm --no-deps app pnpm store-export-legacy</code> (files, <code>index.md</code> and <code>.crdt</code> bins; exit 0 required).</li>
+<li>With the app still stopped, run backup.md §5&#39;s 0026 <code>UPDATE</code> (section 4, &quot;Rollback&quot;, step 3), so the step-A code reads whole revision bodies.</li>
+<li>Start the step-A image (<code>ae6ffb9</code>). It reads the exported bins, so tabs that reload keep their history.</li>
+<li>Rolling forward to step B again needs nothing: the S2b boot merges the bins the step-A relay wrote and recompacts the history.</li>
+</ol>
+</li>
+<li>If the export fails and cannot be fixed, restore the pre-step-B backup.</li>
+</ul>
+<h2>6. Open pull requests</h2>
+<p>None. The last phase-2 PRs merged on 2026-10-22: <a href="https://github.com/PIIIX-org/chapters/pull/892">#892</a>, <a href="https://github.com/PIIIX-org/chapters/pull/889">#889</a>, <a href="https://github.com/PIIIX-org/chapters/pull/861">#861</a>, <a href="https://github.com/PIIIX-org/chapters/pull/864">#864</a>, <a href="https://github.com/PIIIX-org/chapters/pull/879">#879</a>, <a href="https://github.com/PIIIX-org/chapters/pull/896">#896</a>, <a href="https://github.com/PIIIX-org/chapters/pull/885">#885</a>. Merged on 2026-10-21, after the first draft: <a href="https://github.com/PIIIX-org/chapters/pull/837">#837</a>, <a href="https://github.com/PIIIX-org/chapters/pull/847">#847</a>, <a href="https://github.com/PIIIX-org/chapters/pull/869">#869</a>, <a href="https://github.com/PIIIX-org/chapters/pull/874">#874</a>, <a href="https://github.com/PIIIX-org/chapters/pull/876">#876</a>, <a href="https://github.com/PIIIX-org/chapters/pull/878">#878</a>, <a href="https://github.com/PIIIX-org/chapters/pull/882">#882</a>, <a href="https://github.com/PIIIX-org/chapters/pull/883">#883</a>.</p>
+
+<footer>Generated from phase-2.md on 2026-10-22.</footer>
+</main>
+</body>
+</html>
