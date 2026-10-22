@@ -47,6 +47,11 @@ Before going public or admitting production users, verify each of the following 
       proxy_set_header Host $host;
   }
   ```
+- [ ] **`ELARA_TRUST_PROXY`** (#911): the reverse proxy's address or CIDR as the app sees it, comma-separated for several. Without it every request reaches the app from the proxy, so all users share one rate-limit bucket (1000 requests a minute, 10 a minute on login, setup and password reset) and one login lockout, and the security events record the proxy instead of the client. With it, a request from a listed address has its client read from `X-Forwarded-For`; from any other address the header is ignored, so a client cannot choose its own address.
+  - The proxy must append the client's address: nginx `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` (in every `location`, `/collab` included); Caddy and Traefik do it by default.
+  - **Stock `docker-compose.yml`, proxy on the same host** (or in a container on Docker's default networks): publish the app on loopback only, `APP_PORT=127.0.0.1:3000`, and set `ELARA_TRUST_PROXY=172.16.0.0/12`. Docker hands the proxy's connections to the container from its bridge network (the network's gateway for a proxy on the host), and the default bridge networks are in `172.16.0.0/12`. If your Docker uses other address pools, use the app network's subnet: `docker network inspect <project>_default --format '{{(index .IPAM.Config 0).Subnet}}'`.
+  - **Check it**: before setting it, `docker compose logs app` shows `"remoteAddress"` in each request line: the proxy's address, the one to trust. After setting it and restarting, the same field shows each client's own address.
+  - Never `true`, `*`, `0.0.0.0/0` or a hop count: they would trust any client that reaches the port, and the server refuses them with a warning at boot (and trusts no one). Leave it unset when nothing sits in front of the app.
 - [ ] **`CORS_ORIGIN`**: Leave empty for standard single-origin hosting. If using a dedicated domain for an external API consumer, configure the allowed origin URL.
 
 ---

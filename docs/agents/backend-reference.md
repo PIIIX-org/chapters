@@ -1891,7 +1891,7 @@ are idempotent rewrites.
 - **CORS**: off by default (same-origin only — correct for a
   reverse-proxied self-hosted app); opt in per-instance via
   `CORS_ORIGIN` (comma-separated allowlist).
-- **Rate limiting & lockout**: global Fastify rate limit (1000/min), stricter limit on abuse-sensitive auth routes, per-connection MCP rate limit (120/min default), and automatic account/IP lockout with token invalidation after 5 failed 6-digit email verification attempts.
+- **Rate limiting & lockout**: global Fastify rate limit (1000/min), stricter limit on abuse-sensitive auth routes, per-connection MCP rate limit (120/min default), and automatic account/IP lockout with token invalidation after 5 failed 6-digit email verification attempts. The address-keyed ones (global, auth routes, `ip:` lockout) and the `ip` of security events use `req.ip`: the client only when `ELARA_TRUST_PROXY` names the reverse proxy in front (#911, §8), else the proxy for everyone.
 - **SSRF & git argument-injection defense**: `isSafeGitUrl(gitUrl)` blocks cloud metadata services (`169.254.169.254`, `metadata.google.internal`), RFC 1918 private/loopback IPs in production, argument flags (`-`), control characters, and file protocols across API routes, MCP tools, and clone workers.
 - **SVG asset sandboxing**: `image/svg+xml` uploads served with `Content-Security-Policy: default-src 'none'; sandbox` and `Content-Disposition: attachment` to eliminate inline script execution vectors.
 - **Mermaid preview XSS defense**: Initialized with `securityLevel: 'strict'`, `htmlLabels: false`, and SVG sanitized with `DOMPurify.sanitize(..., { USE_PROFILES: { svg: true, svgFilters: true } })`.
@@ -2191,6 +2191,17 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     `docker-compose.yml` uses the list form (`- SETUP_TOKEN`), which
     passes a variable through only when it is actually set, instead of
     `${SETUP_TOKEN:-}`, which would always set it to the empty string.
+  - ⚠ **`ELARA_TRUST_PROXY`** (#911, `readTrustProxy` in `config.ts`,
+    passed to Fastify's `trustProxy` in `app.ts`): the reverse proxies'
+    addresses or CIDRs. Unset behind a proxy, `req.ip` is the proxy for
+    every request: one bucket for the global and auth rate limits, one
+    `ip:` login/verify lockout, and the proxy's address in every security
+    event and request log line. Only a request whose peer is listed has its
+    `X-Forwarded-For` read (and only back to the first unlisted address).
+    `true`, `*`, a `/0` and hop counts are refused with a boot warning
+    (Fastify itself trusts no hop count); off then. Stock compose behind a
+    proxy on the host: `APP_PORT=127.0.0.1:3000`,
+    `ELARA_TRUST_PROXY=172.16.0.0/12` (`docs/self-hosting/checklist.md` §3).
   - Others: `DATABASE_URL`, `PORT`, `CLIENT_DIST`, `EMBEDDINGS`,
     `CORS_ORIGIN`, `LOCAL_REPOS_ROOT`, `ELARA_MONITORING_TOKEN` (Error
     reports and metrics, above), `ELARA_NOTE_MAX_BYTES` (note body size

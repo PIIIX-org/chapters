@@ -52,7 +52,9 @@ services:
       # The only port this app needs. The Yjs collaboration relay shares
       # this listener at /collab (websocket upgrade) — there is no second
       # port to publish and no second route for a reverse proxy to add,
-      # beyond passing the Upgrade header through on /collab.
+      # beyond passing the Upgrade header through on /collab. Behind a
+      # proxy on this host, publish it on loopback only
+      # (APP_PORT=127.0.0.1:3000) and set ELARA_TRUST_PROXY below.
       - '${APP_PORT:-3000}:3000'
     # List form, not map form, deliberately. `SETUP_TOKEN: ${SETUP_TOKEN:-}`
     # would set the variable to the EMPTY STRING when nobody configured
@@ -97,6 +99,12 @@ services:
       # latency; read by the uptime monitor). `openssl rand -hex 32`.
       # Unset = only an admin session reads it. docs/self-hosting/monitoring.md
       - ELARA_MONITORING_TOKEN
+      # ⚠ Behind a reverse proxy: the proxy's address or CIDR as the app
+      # sees it (a proxy on this host or in a container: 172.16.0.0/12,
+      # Docker's bridge networks). Unset = every user is the proxy to the
+      # rate limits, the login lockout and the security events (#911).
+      # Never `true` or a hop count. docs/self-hosting/checklist.md §3
+      - ELARA_TRUST_PROXY
       # Largest note body in UTF-8 bytes (default 1 MiB), on every write path.
       - ELARA_NOTE_MAX_BYTES
       # Symbols per repository file that get an embedding (default 256).
