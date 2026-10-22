@@ -20,7 +20,13 @@
  * are rendered every live note with CRDT state gets its `.crdt/<path>.bin`
  * (collab-backfill.ts exportCrdtBins), the layout the relay before S2b
  * reads: it opens the note with the same text and items, so tabs merge
- * instead of doubling, and the roll-forward merges the bins it wrote.
+ * instead of doubling, and the roll-forward merges the bins it wrote. A
+ * note whose CRDT state does not equal its row gets no bin
+ * (`bins.skipped`): when its fold failed, the export also reports
+ * `folded.failed` and is not ok (exit 1); when the relay refused that state
+ * (`fold_error`: invalid, over the cap, a repeated block), the row is the
+ * note's last valid version, the export stays ok, and the older release
+ * opens the note from its file (the refused typing stays in the log).
  *
  * It refuses to run while the S2a backfill has not finished
  * (`store_migrated_at` unset): the notes it could not process have no

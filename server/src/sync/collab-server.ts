@@ -257,7 +257,7 @@ async function authenticate({ token, documentName }: { token: string; documentNa
   // editor either: nothing may be typed that could not be stored. The
   // refusal carries its own reason, which the editor shows as such.
   if (storeMigrationPending() && !(await noteMigrated(db, note.id))) throw new NoteNotMigratedRefusal()
-  // The same for a note whose S2b backfill failed at this boot: its bin is attached at the next restart.
+  // The same for a note whose S2b backfill or roll-forward failed at this boot: its bin is attached or merged at the next restart.
   if (!collabNoteMigrated(note.id)) throw new NoteNotMigratedRefusal()
   return { userId, sessionHash } satisfies ConnectionContext
 }

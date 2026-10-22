@@ -13,7 +13,7 @@ import { parseNote, serializeNote } from '../src/notes/okf.js'
 import { exportLegacyFiles } from '../src/notes/store-export.js'
 import { loadCrdtState } from '../src/sync/crdt-store.js'
 import { flushProjections } from '../src/notes/projector.js'
-import { appendCollabUpdate, foldPendingCollab, getLiveNote, loadCollabState, purgeNote, softDeleteNote, updateNote } from '../src/notes/store.js'
+import { appendCollabUpdate, foldPendingCollab, getLiveNote, loadCollabState, purgeNote, readLiveNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { NoteNotMigratedError, collabNoteMigrated, setCollabNotMigrated } from '../src/notes/store-tx.js'
 import { bootCollab, collabMigrated, runCollabBackfill } from '../src/sync/collab-backfill.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
@@ -207,6 +207,11 @@ describe('roll-forward after a code-only rollback (§9)', () => {
       const typed = new Y.Doc()
       typed.getText('body').insert(0, 'x')
       await expect(appendCollabUpdate(vaultId, note.id, Y.encodeStateAsUpdate(typed), { type: 'collab' })).rejects.toBeInstanceOf(NoteNotMigratedError)
+      // Reads still work: the stored row, as the older release left it (read_note serves readLiveNote; REST GET too).
+      await expect(readLiveNote(vaultId, note.path)).resolves.toMatchObject({ body: 'Hello.\nRolled back typing.\n' })
+      const got = await app.inject({ method: 'GET', url: `/api/vaults/${vaultId}/notes/${note.path}`, headers: { cookie } })
+      expect(got.statusCode).toBe(200)
+      expect(got.json().body).toBe('Hello.\nRolled back typing.\n')
     } finally {
       await chmod(binFile(note.path), 0o644)
     }

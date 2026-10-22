@@ -284,7 +284,9 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   non-rejected tail, atomically, the layout the relay before S2b reads),
   written only where that state equals the row, so the old relay opens it
   as it is and never rebuilds; a note whose state differs (a fold that
-  failed, `fold_error`) gets none and is listed in `bins.skipped`; the CLI
+  failed, `fold_error`) gets none and is listed in `bins.skipped` (a failed
+  fold also counts in `folded.failed` and makes the export not ok; a
+  refused state alone does not: the row is its last valid version); the CLI
   loads `store.ts` so the rename refactor runner is registered; a report
   `DATA_DIR/store-export-legacy-<utc>.json`; exit 0 only when nothing is
   pending and no fold or bin failed. Roll-forward is the boot above (it
@@ -341,7 +343,8 @@ revision (with a diff to the row's text on top) and otherwise moved to
 backfill or roll-forward failed is gated until a restart attaches or merges
 its bin (`setCollabNotMigrated`, store-tx.ts): the relay refuses it with
 `note-not-migrated`, nothing seeds it, writes refuse it (`lockedNote`,
-`NoteNotMigratedError`, HTTP 503) and the boot fold skips it, and `.crdt/`
+`NoteNotMigratedError`, HTTP 503), S3's append refuses it, the boot fold
+skips it and `readLiveNote` serves its stored row without a fold, and `.crdt/`
 stays in place. Otherwise a seed would make the rerun skip the bin, or a
 rebase would add the older release's row change to the state as new items
 and the rerun would merge the same typing again from the bin. The

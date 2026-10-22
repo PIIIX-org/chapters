@@ -720,7 +720,9 @@ export async function readLiveNote(vaultId: string, path: string): Promise<ReadN
   const seen = await readStored(vaultId, resolved.fullPath)
   if (!seen) return null
   // S3: acked typing is in note_updates even when no editor has the note open (a tab closed before its store, a crash).
-  if (!liveDocumentOf(seen.id) && !(await foldPending(seen.id))) return presented(seen)
+  // A note whose S2b backfill or roll-forward failed at this boot takes no fold until a restart merges its bin
+  // (collabNoteMigrated): its stored row is what can be read, and a fold attempt could never succeed.
+  if (!collabNoteMigrated(seen.id) || (!liveDocumentOf(seen.id) && !(await foldPending(seen.id)))) return presented(seen)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const row = await readStored(vaultId, resolved.fullPath)
     if (!row) return null
@@ -2019,8 +2021,6 @@ export async function loadCollabState(
           if (row.seq !== locked.seq) foldedRow = true
           return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null }
         }
-        // Its bin is still to be attached at the next restart: a seed now would make the backfill skip it.
-        if (!collabNoteMigrated(noteId)) throw new NoteNotMigratedError()
         const seed = seedDocument(noteId, { frontmatter: locked.frontmatter as Record<string, unknown>, body: locked.body })
         await insertNoteCrdt(tx, noteId, seed, locked.seq)
         return { state: Y.encodeStateAsUpdate(seed), lastId: 0 }
