@@ -53,7 +53,7 @@ flowchart LR
 
 | Slice | PR | What it guarantees | Proof |
 |---|---|---|---|
-| S1 schema + dry run | [#783](https://github.com/PIIIX-org/chapters/pull/783) | Migration 0021 is additive (older code runs on it with no SQL). `migrate-store --dry-run` reads production in one read-only transaction and reports conflicts, files that change bytes, CRDT classes and timing. | `server/test/migrate-store.test.ts`, `store-schema.test.ts`; the #703 dry run. |
+| S1 schema + dry run | [#783](https://github.com/PIIIX-org/chapters/pull/783) | Migration 0021 is additive in schema (once the S2a migration has run, older code goes on it only through the backup.md §5 rollback). `migrate-store --dry-run` reads production in one read-only transaction and reports conflicts, files that change bytes, CRDT classes and timing. | `server/test/migrate-store.test.ts`, `store-schema.test.ts`; the #703 dry run. |
 | S2a-1 transactional store | [#828](https://github.com/PIIIX-org/chapters/pull/828) | Every server write is one transaction; `DirectConnection` gone from writes; projector with ownership and conflict copies; reads from the DB; resumable backfill (`store_migrated_at`) and boot reconciliation on every boot. | `store-s2a.test.ts`; lab `store-failpoints`; #703 S2a rehearsal (944/944 row hashes unchanged). |
 | S2a-2 maintenance lock, rollback export | [#838](https://github.com/PIIIX-org/chapters/pull/838) | Instance maintenance lock (a stopped-server export refuses to run beside a server, and a server refuses to start during it); `store-export-legacy`; verify-after-unclean-shutdown and orphan sweep at boot; instance backups read rows, not files. | `maintenance-lock.test.ts`, `store-s2a2-boot.test.ts`, `store-s2a-shutdown.test.ts`; lab `store-migration`, `store-rollback`; #703 rollback run. |
 | S2b relay through Postgres | [#843](https://github.com/PIIIX-org/chapters/pull/843) | CRDT state in `note_crdt` + `note_updates`, written in the note's transaction; id-named documents; three-way rebase when the row changed outside the store; deterministic seed; S2b backfill (`collab_migrated_at`) and `.crdt/` → `.crdt.pre-adr-003/`. Closes #832, #834. | `collab-s2b.test.ts`, `collab-backfill.test.ts`, `note-crdt.test.ts`; #703 S2b rehearsal (355 bins attached, 0 set aside, 0 `fold_error`). |
@@ -173,11 +173,11 @@ Filed during phase 2 and already fixed on `dev`: #816 ([#817](https://github.com
 | `rows-from-files` | Last resort: rebuild note rows from `.md` files (revisions and CRDT history lost). | backup.md §4 |
 | `store-export-legacy` | Stopped-server export for a code-only rollback; takes the maintenance lock. Writes files, `index.md` and (from S2b, [#885](https://github.com/PIIIX-org/chapters/pull/885)) `.crdt` bins. | backup.md §5 |
 
-**Migrations** (all run at boot; all additive in schema, so older code runs on them with no SQL except where noted):
+**Migrations** (all run at boot; all additive in schema. Older code still goes on a database the S2a boot migration ran on only through the rollback below, never directly: backup.md §5, "Which way back"):
 
 | Migration | From | Note |
 |---|---|---|
-| 0021 `adr003_store` | #783 | Store tables and markers; builds two indexes on `note_revisions` under a write lock. |
+| 0021 `adr003_store` | #783 | Store tables and markers; builds two indexes on `note_revisions` under a write lock. The S2a backfill after it keeps the app down on the first boot (27–54 s on the #703 copy of production, step A; migration.md). |
 | 0022 `repository_file_embedding_note` | #800 | |
 | 0023 `revision_events` | #805 | Older code relabels revert again (backup.md §5). |
 | 0024 `revision_order` | #826 | Backups made by the newer code are refused by older code. |
@@ -190,11 +190,11 @@ Filed during phase 2 and already fixed on `dev`: #816 ([#817](https://github.com
 
 **Rollback** (backup.md §5).
 - Clean: restore the pre-upgrade backup.
-- Code-only, keeping the data written since, supported for one release, with nobody typing:
+- Code-only, keeping the data written since, from step B (or later) to step A (`ae6ffb9`, `prod` commit `f3724d0`) or any older release, with nobody typing (step A itself has no export: restore-only, section 5.4):
   1. `docker compose stop app` (graceful: stores every open editor's typing).
   2. `docker compose run --rm --no-deps app pnpm store-export-legacy`: under the exclusive maintenance lock (exit 2 while any app or writing CLI is up), folds every collab tail, renders every note file and `index.md`, and from S2b writes the `.crdt` bins ([#885](https://github.com/PIIIX-org/chapters/pull/885)). Exit 1 means a file failed or the S2a migration has not finished: fix it and run it again. Report in `/data/elara/store-export-legacy-<time>.json`.
   3. **Rolling back over 0026:** with the app still stopped, run backup.md §5's `UPDATE note_revisions SET body = note_revision_body(body, body_delta, delta_base_id), body_delta = NULL, delta_base_id = NULL, body_bytes = NULL WHERE body_delta IS NOT NULL; DELETE FROM note_revision_compaction`, so older code reads whole bodies (the export does not undo compaction).
-  4. Start the older release. No other SQL. Roll-forward needs nothing: boot adopts what the older code wrote and merges bins the old relay wrote into `note_crdt`.
+  4. Start the older release. No other SQL, unless backup.md §5 names some for a migration you roll back over (0019 and 0020, for releases before them). Roll-forward needs nothing: boot adopts what the older code wrote and merges bins the old relay wrote into `note_crdt`.
 - From S2a only this was rehearsed on #703 (comment 6314996795): counts and 944 row hashes unchanged.
 
 **Monitoring.** `/api/admin/monitoring` with `Authorization: Bearer $ELARA_MONITORING_TOKEN` reports 5xx, failed jobs per kind and slow endpoints; the uptime monitor alerts on them (#705, [#764](https://github.com/PIIIX-org/chapters/pull/764)). Migration and projector conflict copies are reported as `conflictCopies`, not as job failures (#842, [#866](https://github.com/PIIIX-org/chapters/pull/866)). `docs/self-hosting/monitoring.md`.

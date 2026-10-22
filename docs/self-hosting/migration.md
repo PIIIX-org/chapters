@@ -1,22 +1,50 @@
 # Store migration (ADR-003): dry run, migration and rollback
 
-Elara is moving to one authoritative store for notes: Postgres holds the
-truth, and the `.md` files, directory `index.md` files, `.crdt` state and
-embeddings become projections rebuilt from it (vault note
-`decision/adr-003-authoritative-store`). The move lands in slices. S1 added
-the database schema and a **read-only dry run**; **S2a** makes Postgres the
-only authority for every server write and migrates your notes once, at the
-first boot of the S2a release.
+Postgres is the one authoritative store for notes: it holds the truth, and
+the `.md` files, directory `index.md` files and embeddings are projections
+rebuilt from it (vault note `decision/adr-003-authoritative-store`). This has
+shipped, in slices: **S1** (schema, migration 0021, and the read-only dry
+run below), **S2a** (every server write is one database transaction; your
+notes are migrated once, at the first boot; `store-export-legacy` for a
+rollback), **S2b** (the editors' live state moves from `.crdt/` files into
+the database, below) and **S3** (editor typing is committed to the database
+before the editor is told it is saved). The current release has all of
+them. Promotion step A (`ae6ffb9`; `prod` commit `f3724d0`, which reports
+that `version`) shipped S1 and the S2a migration only, without
+`store-export-legacy` and without S2b and S3.
 
-## Before you upgrade to S2a
+## Before you upgrade
 
-1. Take a verified backup: the pg_dump and the data volume (backup.md §1).
-   Once S2a runs, the database is the copy that matters.
+1. Take a verified backup right before: the pg_dump and the data volume
+   (backup.md §1). From the first boot of the new release on, the database
+   is the copy that matters, and for some releases restoring this backup is
+   the only way back (backup.md §5, "Which way back").
 2. Run the dry run below on a copy (or on production: it is read-only) and
    read its `conflicts` list: those notes' files win over their rows.
-3. Upgrade when nobody is typing in an editor.
+3. Reload every open editor tab, and upgrade when nobody is typing.
+4. Plan for the app being down during the first boot (next section).
 
-## What happens at the first boot of S2a
+## The first boot: the app is down while it migrates
+
+The server answers nothing, `/health` included, until the migrations, the
+store backfill, the projector's first run and (from S2b) the collab
+backfill have finished; only then does it listen. Docker reports the
+container as `starting` meanwhile. On the #703 rehearsals, a copy of
+production with 944 notes, 3206 revisions (32 MB) and 355 `.crdt` bins,
+`docker compose up` to the first `/health` answer took:
+
+| Release | First boot | Of which |
+|---|---|---|
+| Step A (S2a, migrations 0021–0025) | 27–54 s | store backfill 21–32 s |
+| S2a + S2b (`aa73289`) | 28–33 s | store backfill 12–16 s, collab backfill 4–5 s |
+
+Plan for 30–60 s at that size; the time grows with the number of notes and
+the size of `note_revisions` (see "Estimating the migration time"). The
+spread comes from the host's load, not from how the previous release
+stopped. Later boots skip the backfills (their markers are set) and take a
+few seconds.
+
+## What happens at the first boot
 
 - **Migration 0021** (if S1 has not applied it yet) runs first. It only
   adds: two columns and a trigger on `notes`, three columns and two partial
@@ -33,13 +61,17 @@ first boot of the S2a release.
   unparseable file is copied to `vaults/<id>/.migration/<date>/unparseable/`
   and the row kept, a hand-formatted file whose content equals the row is
   adopted with its bytes, and every note gets a revision at its current
-  `seq`. Leftover `*.tmp` files are deleted. `.crdt/` is not touched.
+  `seq`. Leftover `*.tmp` files are deleted. `.crdt/` is not touched here
+  (the S2b collab backfill, below, moves it into the database).
 - It writes `DATA_DIR/migration-report-<time>.json` (counts per class, the
   conflict list, failures) and logs a one-line `[store] backfill:` summary.
   A note that fails is listed and the marker is not set, so the next boot
   tries it again; the app still starts.
-- Files that will change bytes are rewritten by the projector after boot,
-  with the old bytes copied to `vaults/<id>/.conflicts/` first.
+- Once the backfill has finished, the projector writes every file that
+  changes bytes, with the old bytes copied to `vaults/<id>/.conflicts/`
+  first, and the server starts serving only once files equal rows.
+  While the app runs afterwards, each save is written to its file a moment
+  after it commits.
 - On every later boot: rows changed outside the store (an older release
   during a rollback, a restore, manual SQL) get their projection rows and a
   revision at their `seq`; after an unclean shutdown every file is verified
@@ -49,11 +81,23 @@ first boot of the S2a release.
 
 ## Rolling back
 
-Restoring the pre-upgrade backup is the clean way back (backup.md §5).
-Keeping the data written since the upgrade is supported for one release
-with the stopped-server export, `store-export-legacy`: backup.md §5,
-"Migration 0021 and the S2a store" (files) and "ADR-003 S2b" (the `.crdt`
-bins it writes for the older release).
+Starting an older release on a database this migration has run on is not
+safe by itself. Releases before S2a read the `.md` files as the truth, and
+here they can lag behind the database. Promotion step A reads the rows, but
+its editor relay reads `.crdt/` bins, which S2b moved into the database, and
+it reads revision bodies whole, which migration 0026 compacts. Which way
+back you have depends on the release you run; backup.md §5, "Which way
+back", has the table. In short:
+
+- **From a release with `store-export-legacy`** (the current release, from
+  promotion step B on) to promotion step A or any older release: stop the
+  app, run the export, run the migration 0026 `UPDATE`, start the older
+  release. This is the only way that keeps what was written since the
+  upgrade.
+- **From promotion step A** (`ae6ffb9`, `prod` commit `f3724d0`: S2a
+  without the export): restore the pre-upgrade backup. What was written
+  since the upgrade is lost.
+- **Either way**, restoring the pre-upgrade backup works.
 
 ## Run the dry run
 

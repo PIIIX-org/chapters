@@ -178,10 +178,16 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 
 **ADR-003 store schema (migration 0021; S2a: Postgres is the only authority
 for server writes).** The schema of the single authoritative store (vault
-note `decision/adr-003-authoritative-store` §4). It is additive: code from
-before 0021 runs on it with no SQL (no NOT NULL column without a lasting
-default on a table old code writes, nothing dropped or renamed), which is
-what the code-only rollback below relies on.
+note `decision/adr-003-authoritative-store` §4). The schema is additive
+(no NOT NULL column without a lasting default on a table old code writes,
+nothing dropped or renamed), which is what the code-only rollback below
+relies on. The S2a boot migration still makes the files projections that
+can lag the rows (what releases before S2a read), S2b moves the `.crdt/`
+bins into the database (what step A's relay reads) and 0026 compacts
+revision bodies, so older code goes on a migrated database only after
+`store-export-legacy` and the 0026 `UPDATE`. A release without the export
+(promotion step A: `ae6ffb9`, `prod` commit `f3724d0`, which reports that
+`version`) can only roll back by restoring a backup.
 
 | Object | Purpose |
 |---|---|
