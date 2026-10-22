@@ -173,11 +173,11 @@ Filed during phase 2 and already fixed on `dev`: #816 ([#817](https://github.com
 | `rows-from-files` | Last resort: rebuild note rows from `.md` files (revisions and CRDT history lost). | backup.md §4 |
 | `store-export-legacy` | Stopped-server export for a code-only rollback; takes the maintenance lock. Writes files, `index.md` and (from S2b, [#885](https://github.com/PIIIX-org/chapters/pull/885)) `.crdt` bins. | backup.md §5 |
 
-**Migrations** (all run at boot; all additive in schema, so older code runs on them with no SQL except where noted):
+**Migrations** (all run at boot; all additive in schema. Older code still goes on a database the S2a boot migration ran on only through the rollback below, never directly: backup.md §5, "Which way back"):
 
 | Migration | From | Note |
 |---|---|---|
-| 0021 `adr003_store` | #783 | Store tables and markers; builds two indexes on `note_revisions` under a write lock. |
+| 0021 `adr003_store` | #783 | Store tables and markers; builds two indexes on `note_revisions` under a write lock. The S2a backfill after it keeps the app down on the first boot (27–54 s on the #703 copy of production, step A; migration.md). |
 | 0022 `repository_file_embedding_note` | #800 | |
 | 0023 `revision_events` | #805 | Older code relabels revert again (backup.md §5). |
 | 0024 `revision_order` | #826 | Backups made by the newer code are refused by older code. |
