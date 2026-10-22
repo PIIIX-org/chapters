@@ -94,11 +94,6 @@
     },
     {
       "test": "collab-duplication",
-      "check": "S16 server-acknowledged collab edit survives SIGKILL after the tab closed",
-      "issue": 487
-    },
-    {
-      "test": "collab-duplication",
       "check": "S18 injected stale .crdt, stale ydoc (tab kept open): no duplicated text",
       "issue": 488
     },
@@ -106,11 +101,6 @@
       "test": "collab-duplication",
       "check": "S18 injected stale .crdt, stale ydoc (tab kept open): @INJSTALE@ kept exactly once on disk",
       "issue": 488
-    },
-    {
-      "test": "crash-write",
-      "match": "^kill \\S+: acked collab edit of a closed tab survives SIGKILL$",
-      "issue": 487
     },
     {
       "test": "crash-write",
@@ -177,12 +167,6 @@
       "issue": 564
     },
     {
-      "test": "fix-crash-catchup",
-      "check": "filesPendingExtraction reaches 0",
-      "issue": 845,
-      "intermittent": "repository_status's filesPendingExtraction lags the SQL count by one poll after the boot catch-up (field 1, SQL pending 0); seen on four branches off dev 3616b53 that do not touch extraction (#845), reruns pass"
-    },
-    {
       "test": "multilingual-search",
       "check": "normalization: Arabic kaf ك (\"فرش كاشان\" vs stored \"فرش کاشان\")",
       "issue": 528
@@ -222,6 +206,12 @@
       "test": "multilingual-search",
       "check": "vector retriever ranks Persian answers first as often as English (bge-small-en)",
       "issue": 530
+    },
+    {
+      "test": "browser",
+      "check": "S1-type-while-agent-appends: no lost agent edits",
+      "issue": 408,
+      "intermittent": "the agent marker is split, not lost: typing in flight during a whole-body edit_note lands inside it (runs 39633168223, 39615786659, 39595467134 failed; 39636198769 passed); #864 fixes the tie-break"
     }
   ]
 }

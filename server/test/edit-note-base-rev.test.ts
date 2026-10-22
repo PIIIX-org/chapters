@@ -189,7 +189,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
     expect(typeof result.rev).toBe('number')
     await waitFor(() => text.toString() === expected && liveBody(path) === expected)
     await waitFor(async () => (await rowBody(path)) === expected)
-  }, 20_000)
+  })
 
   it("leaves the person's text untouched when the agent's change overlaps it, and keeps the agent's version as a proposal", async () => {
     const path = 'docs/rev-conflict'
@@ -222,7 +222,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
     const again = JSON.parse((await call('edit_note', { vaultId, path, base_rev: read.rev, body: agentBody })).text) as { proposalId: string }
     expect(again.proposalId).toBe(result.proposalId)
     expect((await history(path)).filter((row) => row.action === 'proposal')).toHaveLength(1)
-  }, 20_000)
+  })
 
   it('merges the frontmatter per key: a key the agent did not change keeps the live value; one both changed conflicts', async () => {
     const path = 'docs/rev-frontmatter'
@@ -244,7 +244,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
     expect(clash.isError, clash.text).toBe(false)
     expect(JSON.parse(clash.text)).toMatchObject({ status: 'conflicted', conflicts: { frontmatterKeys: ['title'] } })
     expect((await getLiveNote(vaultId, path))?.frontmatter).toMatchObject({ title: 'Renamed by a person', status: 'active' })
-  }, 20_000)
+  })
 
   it("a based edit is not quarantined because a person shortened the note since the agent's read", async () => {
     const path = 'docs/rev-shortened'
@@ -259,7 +259,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
     expect(edited.isError, edited.text).toBe(false)
     expect(JSON.parse(edited.text)).toMatchObject({ status: 'merged', body: kept.replace('Line 00', 'Line 00, edited,') })
     expect((await history(path)).map((row) => row.action)).not.toContain('quarantine')
-  }, 20_000)
+  })
 
   describe('when the note file is damaged, so no live document loads (#384, #391)', () => {
     // A full edit (frontmatter and body) is then written to the stored row directly; with a base it is still rebased and screened.
@@ -274,7 +274,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
       expect(doubled.isError, doubled.text).toBe(true)
       expect(doubled.text).toMatch(/quarantine/i)
       expect(await rowBody(path)).toBe(read.body)
-    }, 20_000)
+    })
 
     it('a based edit keeps the lines a person deleted since the read', async () => {
       const path = 'docs/rev-damaged-shortened'
@@ -288,7 +288,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
       const expected = kept.replace('Line 00', 'Line 00, edited,')
       expect(JSON.parse(edited.text)).toMatchObject({ status: 'merged', body: expected })
       expect(await rowBody(path)).toBe(expected)
-    }, 20_000)
+    })
   })
 
   it('a conflicting edit with ops keeps them in the proposal: body ops on the live text, frontmatter ops on its map', async () => {
@@ -313,7 +313,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
     expect(proposal.body).toBe(`${BODY}Agent line.\n`)
     expect(proposal.frontmatter).toMatchObject({ title: 'Agent title', tags: ['agent'] })
     expect(await rowBody(path)).toBe(BODY)
-  }, 20_000)
+  })
 
   it('reports applied when nothing changed since the base, and its rev is the next base', async () => {
     const path = 'docs/rev-chain'
@@ -337,7 +337,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
     })
     expect(second.status).toBe('merged')
     expect(second.body).toBe(typed.replace('Para two.', 'Para two, second.'))
-  }, 20_000)
+  })
 
   it('refuses a base_rev that is not a revision of the note, and changes nothing', async () => {
     const path = 'docs/rev-unknown'
@@ -353,7 +353,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
     }
     expect(liveBody(path)).toBe(BODY)
     expect(await rowBody(path)).toBe(BODY)
-  }, 20_000)
+  })
 
   it('without base_rev a whole body still replaces the live text as a minimal diff (#408, unchanged)', async () => {
     const path = 'docs/rev-none'
@@ -368,7 +368,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
     expect(result).toMatchObject({ status: 'applied', concurrent_changes: null })
     expect(result).not.toHaveProperty('baseRev')
     await waitFor(() => text.toString() === body)
-  }, 20_000)
+  })
 
   it('a proposal is not a state of the note: neither the dedupe baseline nor the start of a session', async () => {
     const path = 'docs/rev-baseline'
@@ -393,7 +393,7 @@ describe('edit_note with a stale base_rev (#475)', () => {
     // The connection's first write that lands keeps a restore point: the proposal did not start its session.
     await must('edit_note', { vaultId, path, ops: [{ op: 'append', text: 'Agent line.' }] }, agent)
     expect(await authored()).toEqual(['mcp update', 'mcp restore_point', 'mcp proposal', 'user update', 'mcp create'])
-  }, 20_000)
+  })
 })
 
 describe('whole-markdown writes reach the live document as a diff (#476)', () => {
@@ -415,7 +415,7 @@ describe('whole-markdown writes reach the live document as a diff (#476)', () =>
     expect(put.statusCode, put.body).toBe(200)
     await waitFor(() => text.toString() === body)
     expect(seen.deleted).toBe(3)
-  }, 20_000)
+  })
 
   it('revert reaches the live document as a diff from its text', async () => {
     const path = 'docs/whole-revert'
@@ -427,5 +427,5 @@ describe('whole-markdown writes reach the live document as a diff (#476)', () =>
     await must('revert_note', { vaultId, path, revisionId: created })
     await waitFor(() => text.toString() === BODY)
     expect(seen.deleted).toBe(5)
-  }, 20_000)
+  })
 })

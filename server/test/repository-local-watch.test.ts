@@ -68,7 +68,7 @@ describe('local path ingestion', () => {
     await new Promise((r) => setTimeout(r, 600))
     files = await listRepositoryFiles(repo.id)
     expect(files.map((f) => f.path).sort()).toEqual(['b.py'])
-  }, 15000)
+  })
   it('survives a sync that throws instead of taking the process down with it', async () => {
     // runSync fires from a timer, so there is no caller to reject to: an error
     // inside it is an unhandled rejection, and Node terminates on those. Since

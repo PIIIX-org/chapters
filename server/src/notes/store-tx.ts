@@ -52,6 +52,39 @@ export function pgErrorCode(err: unknown): string | undefined {
   return undefined
 }
 
+/** Driver codes of a connection that could not be made or was lost (postgres-js and Node). */
+const CONNECTION_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EHOSTUNREACH',
+  'ENOTFOUND',
+  'CONNECT_TIMEOUT',
+  'CONNECTION_CLOSED',
+  'CONNECTION_ENDED',
+  'CONNECTION_DESTROYED',
+])
+
+/**
+ * Whether `err` means the store could not be reached right now: a busy store
+ * (StoreBusyError), a connection refused, lost or timed out, or Postgres
+ * shutting down or not accepting connections (SQLSTATE class 08, 57P01-57P03).
+ * Such a failure is retryable: nothing was stored, and the caller says "try
+ * again", never "access removed" (S3).
+ */
+export function storeUnavailable(err: unknown): boolean {
+  let current: unknown = err
+  while (current instanceof Error) {
+    if (current instanceof StoreBusyError) return true
+    const code = 'code' in current ? current.code : undefined
+    if (typeof code === 'string' && (CONNECTION_CODES.has(code) || code.startsWith('08') || /^57P0[123]$/.test(code))) return true
+    if (/connection terminated|connection ended|terminating connection|not currently accepting connections|the database system is (starting up|shutting down)/i.test(current.message)) return true
+    current = current.cause
+  }
+  return false
+}
+
 /** Takes the transaction-scoped advisory lock of one note (by id, §5.1). */
 export async function lockNote(tx: Tx, noteId: string): Promise<void> {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${noteId}::text, 0))`)
@@ -159,7 +192,7 @@ export function collabNoteMigrated(noteId: string): boolean {
 
 /** The note row `id`, locked FOR UPDATE; null when it does not exist. */
 export async function lockedNote(tx: Tx, id: string): Promise<StoredNote | null> {
-  const [row] = await tx.select(storedColumns).from(notes).where(eq(notes.id, id)).for('update')
+  const [row] = await tx.select(storedColumns).from(notes).where(eq(notes.id, id)).for('no key update')
   if (row && !(await noteMigrated(tx, id))) throw new NoteNotMigratedError()
   return row ? toStored(row) : null
 }
@@ -328,12 +361,12 @@ export async function applyRowChange(
     return { row: current, changed: false }
   }
   const frontmatterSrc = orderKeys(options.frontmatterOrder ?? current.frontmatterSrc, frontmatter)
-  const [updated] = await tx
-    .update(notes)
-    .set({ frontmatter, body, path, type, name, deletedAt, updatedAt: new Date() })
-    .where(eq(notes.id, current.id))
-    .returning(storedColumns)
-  await tx.execute(sql`UPDATE notes SET frontmatter_src = ${JSON.stringify(frontmatterSrc)}::json WHERE id = ${current.id}`)
+  // One UPDATE: Postgres recomputes the generated `fts` column on every update of the row, which on a big note is most of a write's cost.
+  await tx.execute(sql`
+    UPDATE notes SET frontmatter = ${JSON.stringify(frontmatter)}::jsonb, body = ${body}, path = ${path}, type = ${type}, name = ${name},
+      deleted_at = ${deletedAt ? new Date(deletedAt).toISOString() : null}::timestamptz, updated_at = now(), frontmatter_src = ${JSON.stringify(frontmatterSrc)}::json
+    WHERE id = ${current.id}`)
+  const [updated] = await tx.select(storedColumns).from(notes).where(eq(notes.id, current.id))
   const row = { ...toStored(updated!), frontmatterSrc }
   const changed = row.seq !== current.seq
   await insertRevision(tx, row.id, changed ? row.seq : null, revision, { frontmatter, body })

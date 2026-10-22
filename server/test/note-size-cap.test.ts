@@ -152,8 +152,7 @@ afterAll(async () => {
   await app.close()
 })
 
-// Megabyte bodies through a real relay and MCP client: past vitest's 5 s default.
-describe('note body size cap (#491)', { timeout: 30_000 }, () => {
+describe('note body size cap (#491)', () => {
   it('REST stores a body of exactly the cap and refuses one byte more with 413 naming the limit', async () => {
     await newNote('rest-cap', bodyOfBytes(CAP))
     expect(Buffer.byteLength(await restBody('docs/rest-cap'))).toBe(CAP)

@@ -89,7 +89,7 @@ describe('repository CRUD + shares', () => {
     const list = await app.inject({ method: 'GET', url: '/api/repositories', headers: { cookie } })
     expect(list.body).toContain('Leaky')
     expect(list.body).not.toContain('gho_RESTLEAK')
-  }, 30000)
+  })
 
   it('boot scrub moves credentials out of remotes stored before the fix, and a second run changes nothing', async () => {
     const owner = await createActiveUser()
@@ -203,7 +203,7 @@ describe('repository CRUD + shares', () => {
     }
     await scrubStoredGitCredentials()
     expect(await db.select().from(repositories).where(inArray(repositories.id, ids))).toEqual(scrubbed)
-  }, 30000)
+  })
 
   it('rejects a local path outside the configured root', async () => {
     const owner = await createActiveUser()
