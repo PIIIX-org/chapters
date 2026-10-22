@@ -5,12 +5,40 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
 <!-- state:generated:start -->
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
 - **Last promotion to `prod`**: #899 Promote: phase 2 step A (prod ← ae6ffb9: #720 client, ADR-003 S1/S2a-1/S4/S5) (merged 2026-10-22, `f3724d0`).
-- **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) no completed run; bench-gate (all suites) no completed run. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
-- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/4, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 52/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/0, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/0, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/0, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/1, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/0, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/0.
-- **Open issues**: [0](https://github.com/PIIIX-org/chapters/issues): P0 0, P1 0, P2 0, no priority 0; `bug` 0, `security` 0, `decision` 0, `deferred` 0.
-- **Owner actions** (label `owner`): none.
-- **In progress**: no phase milestone has open issues.
-- **Open bugs** (label `bug`): none.
+- **Checks on `dev`**: CI (latest push run) no completed run; nightly lab (full tier) **failure**; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
+- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 0/1, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 0/0, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/14, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/6, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/9, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/46.
+- **Open issues**: [100](https://github.com/PIIIX-org/chapters/issues): P0 0, P1 43, P2 46, no priority 11; `bug` 55, `security` 12, `decision` 0, `deferred` 1.
+- **Owner actions** (label `owner`):
+  - #664 Production deploys on the push to prod, before CI publishes the gated image (#590 is… (P1)
+  - #636 Production uptime
+- **In progress: [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4)** (14 open, owner actions excluded):
+  - #674 [phase 3] Elara tells the agent when not to use it (P1)
+  - #675 [phase 3] One budgeted call for compound questions: where, who calls it, why, is it still… (P1)
+  - #676 [phase 3] Answer for the code the agent is editing: branch, ref and working-tree overlay (P1)
+  - #677 [phase 3] Vault as a git remote: clone, grep locally, push back (P1)
+  - #679 [phase 3] Shared reading cache across agents: one digest per file at a commit (P1)
+  - #680 [phase 3] Caching contract: every cache key carries the caller's scope and the content… (P1)
+  - #681 [phase 3] Make the agent's prompt cacheable: stable, deterministic tool list and… (P1)
+  - #682 [phase 3] "Unchanged since revision N" answers instead of repeating content (P1)
+  - #684 [phase 3] Content-addressed index caches: reuse parse, symbols and embeddings by blob hash (P1)
+  - #623 Search results with equal scores have no tie-breaker: ranks move between identical… (P2)
+  - #678 [phase 3] Learn from real usage: zero-result searches, unread notes, fallbacks to grep (P2)
+  - #683 [phase 3] Per-session de-duplication: refer to content already sent in this session (P2)
+  - … and 2 more: https://github.com/PIIIX-org/chapters/milestone/4
+- **Open bugs** (label `bug`):
+  - #713 [ui] Landing page says "No notes" to a user with notes (P1)
+  - #714 [ui] Floating top bar collides with page controls; status pill duplicated (DEF-02, DEF-08… (P1)
+  - #715 [ui] Primary actions rest at 20 % opacity (P1)
+  - #716 [ui] Session expiry is not handled (P1)
+  - #721 [ui] Note load: blank while loading, one message for every error (P1)
+  - #728 [ui] Enter after a search creates a vault (P1)
+  - #729 [ui] Snippets show markup; mobile drops the title (P1)
+  - #731 [ui] The default graph of a small vault is four unlabeled dots (P1)
+  - #733 [ui] Vault card footer clips "Delete"; the delete confirmation is unreadable (P1)
+  - #734 [ui] The irreversible action has the weaker guard (P1)
+  - #739 [ui] Repository page double-offsets the content (P1)
+  - #741 [ui] Token tables are unusable on desktop (P1)
+  - … and 43 more: https://github.com/PIIIX-org/chapters/issues?q=is%3Aopen+label%3Abug
 <!-- state:generated:end -->
 
 - **Product**: **Elara**; the repo keeps the name `chapters`. Current work: the fixes from the Elara AI-performance study (Elara vault notes `audit/2026-10-14-ai-performance-study` and its round-2 follow-up), one GitHub issue per fix-list item, grouped by the `Phase N` milestones above; plan in the Chapters vault `fixes/index`, hand-off `fixes/handoff-phase-1`. Production (`chapters.piiix.org`) redeploys by itself on every push to `prod` (about 20 s after the push, before CI has run), not from the image #590 publishes after CI (#664, owner action). Until #664 is fixed, the only gate on production is that the push is refused unless every required check on that commit is green, so never push to `prod` by any other route. A promotion is a PR `dev`→`prod` with every required check green (full lab tier and bench on its head) and a `VERDICT: MERGE` comment from an independent review, then a fast-forward push of the reviewed head (`git push origin <sha>:prod`).
