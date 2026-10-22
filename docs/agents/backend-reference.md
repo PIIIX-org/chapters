@@ -946,14 +946,16 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   sweep would move to `.orphans/` (#495). Shared helpers: `compareNoteFile`,
   `vaultMarkdownFiles`, `orphanFiles`.
 - **`doctor.ts`** / `pnpm doctor` (ADR-003 S6, #495): `runDoctor({vaultId,
-  repair})` returns `{ok, checked, counts, problems, pending}`. Classes
+  repair})` returns `{ok, status, checked, counts, problems, pending,
+  info}`. Classes
   (`DOCTOR_CLASSES`): `file-missing`, `file-unparseable`, `file-differs`
   (content differs from the row), `file-edited` (same content, bytes not
   the `projected_files.applied_hash`, a hand or `git` edit, Q2),
   `file-unrecorded` (no `projected_files` row for this note) for note
   files and `.trash/<id>.md` whose `file` projection is applied, and for
   recorded generated `index.md` files; `file-orphan`; `conflict-copy`
-  (anything in `.conflicts/`); `projection-missing` (no `file` row),
+  (anything in `.conflicts/` that is not a migration copy, below);
+  `projection-missing` (no `file` row),
   `projection-failed` (pending with `last_error`), `projection-outdated`
   (`index_version` below `PROJECTION_VERSIONS`); `revision-missing` (no
   revision at `notes.seq`), `revision-differs`; `crdt-bin-differs`,
@@ -971,7 +973,17 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   job), `vector-failed` (the `embed_note` job of the current `seq`
   failed); `links-differ` (`note_links` against `extractWikilinks(body)`).
   Pending projections, embedding jobs and unfolded CRDT tails are listed
-  in `pending`, not as problems. `repair: true` re-raises only: the
+  in `pending`, not as problems. `info` (#908) lists `migration-copy`: a
+  `.conflicts/<path minus .md>.<stamp>.md` copy whose bytes equal a
+  `.migration/<date>/unparseable/<path>` file, i.e. the projector's copy of
+  a file the S2a backfill could not parse and kept itself; once that
+  `.migration/` file is gone, the copy is a `conflict-copy` again.
+  `status`: `ok` (no problems; `ok: true`), `repairable` (every problem
+  is in the repairable set), `broken` (at least one is report-only); the
+  CLI exits 0, 3 and 1 for them (2 on bad arguments or the lock). Link
+  rows from the extractor before GRAPH-09 (wikilinks in code spans) are
+  `links-differ`, rebuilt by `--repair` only (no boot or migration step
+  rebuilds links). `repair: true` re-raises only: the
   note's `file` projection reset to `applied_seq = 0` (the projector
   renders it again under the ownership rules, so bytes it did not write
   are copied to `.conflicts/` first; content-equal bytes are adopted),
@@ -2304,12 +2316,19 @@ a leftover of a rename by old code); the next start moves it to
 **Doctor**: `pnpm -C server doctor [-- --vault <uuid>] [--repair]
 [--report [<file>]]` checks every copy of every note (file, row, revision,
 CRDT, FTS, vector, links, projections) and prints one `PROBLEM <class>`
-line per mismatch and one `PENDING` line per job still running; exit 1 on
-any problem, 2 on bad arguments. `--report` prints the JSON report,
-`--report <file>` writes it to a new file. `--repair` queues the safe
-re-raises (marked `[repair queued]`) under the shared instance lock (exit
-2 during maintenance); run the doctor again once the projector is idle to
-confirm. Report-only classes need a person:
+line per mismatch, one `PENDING` line per job still running and one
+`INFO migration-copy` line per `.conflicts/` copy the S2a migration made
+of an unparseable file (same bytes as `.migration/<date>/unparseable/`).
+Exit 0 with no problem (`PENDING` and `INFO` do not count), 3 when every
+problem is repairable (run `--repair`, then the doctor again), 1 when at
+least one needs a person, 2 on bad arguments. `--report` prints the JSON
+report, `--report <file>` writes it to a new file. `--repair` queues the
+safe re-raises (marked `[repair queued]`) under the shared instance lock
+(exit 2 during maintenance) and exits with the status it found; run the
+doctor again once the projector is idle to confirm. After an upgrade:
+`doctor --repair`, then `doctor` exits 0 (`links-differ` from a release
+before GRAPH-09 is rebuilt by the repair; #908). Report-only classes need
+a person:
 `revision-*` and `crdt-*` are store bugs (file an issue with the report),
 `conflict-copy` and `file-orphan` need a look before deleting, `fts-stale`
 needs `UPDATE notes SET body = body WHERE id = …` by hand (the generated

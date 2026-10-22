@@ -731,7 +731,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <ol>
 <li><code>/health</code>: up, new <code>bootId</code>, <code>lastShutdown: graceful</code>.</li>
 <li>Boot log: <code>[store] backfill:</code> summary with 0 failed (step A); collab backfill with 0 set aside and 0 failed, <code>.crdt.pre-adr-003/</code> present (step B); <code>DATA_DIR/migration-report-*.json</code> and <code>collab-migration-report-*.json</code>.</li>
-<li><code>check-notes --wait-idle --fail-on-pending</code>: 0 broken, 0 pending. <code>doctor</code> (step B): no fold errors, no rejected updates.</li>
+<li><code>check-notes --wait-idle --fail-on-pending</code>: 0 broken, 0 pending. <code>doctor</code> (step B): <code>doctor --repair</code> (exit 0, or 3 with the <code>links-differ</code> repairs it queued for link rows from before GRAPH-09), then <code>doctor</code>: exit 0, <code>0 problem(s)</code>, one <code>INFO migration-copy</code> line per unparseable file the migration report counts (<a href="https://github.com/PIIIX-org/chapters/issues/908">#908</a>).</li>
 <li><code>/api/admin/monitoring</code> answers with the token; <code>conflictCopies</code> matches the migration report&#39;s unparseable count; the next uptime run is green.</li>
 <li>Lab smoke: there is no staging server. The lab (<code>docs/agents/lab.md</code>) builds its own instance from the commit under test on the CI runner, bootstraps it and runs <code>lab/tests</code> against it, never against production (phase-1 section 10: &quot;the lab instance is the staging server&quot;). Run it on the promoted commit: <code>gh workflow run elara-lab.yml --ref prod -f tier=fast</code>.</li>
 </ol>
