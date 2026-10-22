@@ -9,10 +9,9 @@ import { atLeast, resolveAccess } from '../vaults/permissions.js'
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
-import { compactCollabState, keepRefusedTyping, loadCollabState, updateNote } from '../notes/store.js'
-import { NoteNotMigratedError, StoreBusyError, collabNoteMigrated, noteMigrated, storeMigrationPending } from '../notes/store-tx.js'
+import { appendCollabUpdate, compactCollabState, keepRefusedTyping, loadCollabState, updateNote, type LoggedUpdate } from '../notes/store.js'
+import { NoteNotMigratedError, StoreBusyError, collabNoteMigrated, noteMigrated, storeMigrationPending, storeUnavailable } from '../notes/store-tx.js'
 import { docState, forgetLivePath, livePath, parseDocName, registerLiveDocs, setLivePath, type LiveDocument } from './live-docs.js'
-import { rememberLoadedState } from './note-crdt.js'
 import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { affects, onPermissionChange } from './permission-events.js'
@@ -23,11 +22,25 @@ import { recordJob } from '../monitoring/metrics.js'
 import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
 import { bodyMeasured, updateFits } from './collab-size.js'
+import { liveTookUpdate, updateToLog } from './collab-append.js'
+import { advanceStoredState, rejectUpdate, rememberLoadedState } from './note-crdt.js'
+import { failpoint } from '../failpoints.js'
 import { forgetAgentPresence, stripAgentClaims } from './agent-presence.js'
+import { writesPaused } from '../notes/maintenance-lock.js'
 
 export const ALLOWED_UPGRADES = new Set([COLLAB_PATH, '/elara-collab'])
 
 const DEBOUNCE_MS = Number(process.env.COLLAB_DEBOUNCE_MS ?? 2000)
+
+/**
+ * Backpressure (S3): bytes a socket has sent that the relay has not handled
+ * yet. Every update now waits for its log commit before the next message of
+ * that connection is handled, so a client that sends faster than the store
+ * commits queues up here; past the bound the socket is closed with 1013
+ * `store-busy` and the editor reconnects and resends what is still unsynced.
+ */
+const MAX_PENDING_SOCKET_BYTES = 16 * 1024 * 1024
+const pendingSocketBytes = new WeakMap<object, number>()
 
 /** y-protocols/sync message types that carry a Yjs update (step 2 of the handshake, and live edits). */
 const SYNC_STEP_2 = 1
@@ -45,6 +58,34 @@ class NoteTooLargeRefusal extends Error {
   constructor(documentName: string, limit: number) {
     super(`refused an update to ${documentName}: the note body would pass ${limit} bytes (ELARA_NOTE_MAX_BYTES)`)
   }
+}
+
+/**
+ * The store is not taking writes for a moment (ADR-003 §5.1: this process's
+ * maintenance-lock connection dropped and writes are paused; or a lock
+ * timeout): reason `store-busy`, one name for every such refusal. Nothing of
+ * the update is applied or stored. Where the relay can, it closes the
+ * socket with 1013 ("try again later"): a document-level close or a
+ * `permission-denied` leaves the provider detached, while a socket close
+ * makes even an older editor reconnect with backoff and resend what the
+ * relay never took. The editor (client/src/hooks/useCollabDoc.ts) treats
+ * `store-busy`, from a close or an authentication failure, as a temporary
+ * drop: it keeps the document and the typing, shows "Saving paused" and
+ * reconnects after a delay.
+ */
+class StoreBusyRefusal extends Error {
+  readonly code = 1013
+  readonly reason = 'store-busy'
+  constructor(documentName: string, cause: string) {
+    super(`refused ${documentName}: the note store is not taking writes (${cause}); retry later`)
+  }
+}
+
+/** Closes `socket` with the store-busy close (see StoreBusyRefusal) and returns the refusal to throw. */
+function refuseStoreBusy(socket: { close(code?: number, reason?: string): void } | undefined, documentName: string, cause: string): StoreBusyRefusal {
+  const refusal = new StoreBusyRefusal(documentName, cause)
+  socket?.close(refusal.code, refusal.reason)
+  return refusal
 }
 
 /**
@@ -124,6 +165,10 @@ interface ConnectionContext {
   accessVerifiedAt?: number
   /** A change the server pushed into the document (live-docs.ts), whose writer already ran the quarantine check. */
   directWrite?: boolean
+  /** The update this connection's current message logged (§5.4 Append), until the live document is seen to hold it. */
+  logged?: { id: number; previous: number; noteId: string; update: Uint8Array }
+  /** The connection's socket (handleConnection's default context): closed when the store is busy (StoreBusyRefusal). */
+  socket?: { close(code?: number, reason?: string): void }
 }
 
 /** The note each loaded document holds (its name says so; kept once the load finished). */
@@ -167,18 +212,68 @@ function toBytes(data: RawData): Uint8Array {
   return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
 }
 
+/**
+ * Identity only (`onAuthenticate`). A browser presents a single-use ticket;
+ * server-side callers and the tests present a raw session token. Either way
+ * the connection belongs to that session and ends with it (#498).
+ */
+async function authenticate({ token, documentName }: { token: string; documentName: string }): Promise<ConnectionContext> {
+  const name = parseDocName(documentName)
+  // A bundle from before S2b names documents by path: refused before anything else, nothing it sends is stored.
+  if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
+  const ticket = token ? consumeTicket(token) : null
+  let sessionHash: string | null = null
+  let userId: string | null = null
+  if (ticket) {
+    if (await sessionActive(ticket.sessionHash)) {
+      userId = ticket.userId
+      sessionHash = ticket.sessionHash
+    }
+  } else if (token) {
+    userId = (await getSessionUser(token))?.id ?? null
+    sessionHash = hashToken(token)
+  }
+  if (!userId || !sessionHash) throw new Error('authentication required')
+  const { vaultId, noteId } = name
+  const access = await resolveAccess(userId, vaultId)
+  if (!atLeast(access, 'edit')) {
+    await logSecurityEvent({
+      type: 'permission_denied',
+      actorUserId: userId,
+      detail: { surface: 'collab', documentName },
+    })
+    throw new Error('edit access required')
+  }
+  // The note by id, in that vault, live: a trashed or purged note takes no editor.
+  const [note] = await db
+    .select({ id: notes.id, deletedAt: notes.deletedAt })
+    .from(notes)
+    .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId)))
+  if (!note || note.deletedAt) throw new NoteDeletedRefusal(documentName)
+  // A note the store migration has not processed yet takes no writes, so no
+  // editor either: nothing may be typed that could not be stored. The
+  // refusal carries its own reason, which the editor shows as such.
+  if (storeMigrationPending() && !(await noteMigrated(db, note.id))) throw new NoteNotMigratedRefusal()
+  // The same for a note whose S2b backfill failed at this boot: its bin is attached at the next restart.
+  if (!collabNoteMigrated(note.id)) throw new NoteNotMigratedRefusal()
+  return { userId, sessionHash } satisfies ConnectionContext
+}
+
 /** The running relay instance, if any — MCP writes route through it. */
 export function getCollab(): Hocuspocus | null {
   return currentInstance
 }
 
 export function startCollabServer(httpServer: HttpServer): CollabRelay {
+  /** Unload folds (afterUnloadDocument) still running: `destroy` waits for them. */
+  const unloadFolds = new Set<Promise<void>>()
   // Constructed but never `listen()`ed: we only want its hooks, its document
   // lifecycle and its `destroy()` (which flushes pending note writes).
   const server = new Server({
     debounce: DEBOUNCE_MS,
     maxDebounce: DEBOUNCE_MS * 5,
-    unloadImmediately: false,
+    // The last tab closing folds at once (#487); while tabs stay, the debounce (2 s, 10 s max) folds.
+    unloadImmediately: true,
     quiet: true,
 
     /**
@@ -190,46 +285,16 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * *do* — that is the live `edit` check below, and `beforeHandleMessage`
      * on every message after it.
      */
-    async onAuthenticate({ token, documentName }) {
-      const name = parseDocName(documentName)
-      // A bundle from before S2b names documents by path: refused before anything else, nothing it sends is stored.
-      if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
-      const ticket = token ? consumeTicket(token) : null
-      let sessionHash: string | null = null
-      let userId: string | null = null
-      if (ticket) {
-        if (await sessionActive(ticket.sessionHash)) {
-          userId = ticket.userId
-          sessionHash = ticket.sessionHash
+    async onAuthenticate(payload) {
+      try {
+        return await authenticate(payload)
+      } catch (err) {
+        // The store unreachable while a tab reconnects is a pause, not a revocation (S3): the editor retries.
+        if (storeUnavailable(err)) {
+          throw refuseStoreBusy((payload.context as Partial<ConnectionContext> | undefined)?.socket, payload.documentName, err instanceof Error ? err.message : String(err))
         }
-      } else if (token) {
-        userId = (await getSessionUser(token))?.id ?? null
-        sessionHash = hashToken(token)
+        throw err
       }
-      if (!userId || !sessionHash) throw new Error('authentication required')
-      const { vaultId, noteId } = name
-      const access = await resolveAccess(userId, vaultId)
-      if (!atLeast(access, 'edit')) {
-        await logSecurityEvent({
-          type: 'permission_denied',
-          actorUserId: userId,
-          detail: { surface: 'collab', documentName },
-        })
-        throw new Error('edit access required')
-      }
-      // The note by id, in that vault, live: a trashed or purged note takes no editor.
-      const [note] = await db
-        .select({ id: notes.id, deletedAt: notes.deletedAt })
-        .from(notes)
-        .where(and(eq(notes.id, noteId), eq(notes.vaultId, vaultId)))
-      if (!note || note.deletedAt) throw new NoteDeletedRefusal(documentName)
-      // A note the store migration has not processed yet takes no writes, so no
-      // editor either: nothing may be typed that could not be stored. The
-      // refusal carries its own reason, which the editor shows as such.
-      if (storeMigrationPending() && !(await noteMigrated(db, note.id))) throw new NoteNotMigratedRefusal()
-      // The same for a note whose S2b backfill failed at this boot: its bin is attached at the next restart.
-      if (!collabNoteMigrated(note.id)) throw new NoteNotMigratedRefusal()
-      return { userId, sessionHash } satisfies ConnectionContext
     },
 
     /**
@@ -240,10 +305,16 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * the text, so a client holding the document's items never sees them
      * twice (#488, #832).
      */
-    async onLoadDocument({ documentName, document }) {
+    async onLoadDocument({ documentName, document, context }) {
       const name = parseDocName(documentName)
       if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
-      const { state, path, lastId } = await loadCollabState(name.vaultId, name.noteId)
+      const { state, path, lastId } = await loadCollabState(name.vaultId, name.noteId).catch((err: unknown) => {
+        // Loading is a store transaction (seed, catch-up): a busy or unreachable store refuses it like an update.
+        if (storeUnavailable(err)) {
+          throw refuseStoreBusy((context as Partial<ConnectionContext> | undefined)?.socket, documentName, err instanceof Error ? err.message : String(err))
+        }
+        throw err
+      })
       Y.applyUpdate(document, state)
       // The stored state this document holds, so its stores need not materialise it again (§5.4 "Before S3").
       if (lastId !== null) rememberLoadedState(document, name.noteId, lastId)
@@ -280,14 +351,62 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     },
 
     /**
-     * The size cap (#491), before an update is applied: the relay never
-     * holds or stores a body over it. See collab-size.ts for how this stays
-     * off the whole document on ordinary keystrokes.
+     * Append before ack (ADR-003 §5.4, S3, #487). Awaited per message before
+     * Hocuspocus applies an update and sends SyncStatus(true), so an update
+     * is in `note_updates` before the editor shows it as saved. A malformed
+     * update (it must decode and apply to an empty document) or one over the
+     * size cap (#491) is refused; one the document already holds is not
+     * logged again; the rest is committed under the note's locks. A throw
+     * closes the document unacked and nothing is applied. While writes are
+     * paused (the maintenance lock's connection dropped, §5.1), or when the
+     * log itself failed (Postgres down, a lock timeout), the update is
+     * refused as `store-busy` and the socket closed (1013): the provider then
+     * reconnects and resends what is still unsynced, and Yjs applies a
+     * resend once. A refused note (trashed, purged) is refused again by
+     * `onAuthenticate` on that reconnect.
      */
-    async beforeSync({ type, payload, document, documentName }) {
+    async beforeSync({ type, payload, document, documentName, context, connection }) {
       if (type !== SYNC_STEP_2 && type !== SYNC_UPDATE) return
+      if (writesPaused()) throw refuseStoreBusy(connection.webSocket, documentName, 'writes paused')
+      const toLog = updateToLog(document, payload)
       const limit = config.noteMaxBytes
       if (!updateFits(document, payload, limit)) throw new NoteTooLargeRefusal(documentName, limit)
+      if (!toLog) return
+      const noteId = documentNotes.get(document)
+      const { vaultId } = parseDocName(documentName)
+      const ctx = context as ConnectionContext
+      let logged: LoggedUpdate | null
+      try {
+        logged = noteId ? await appendCollabUpdate(vaultId, noteId, toLog, { type: 'collab', id: ctx.userId }) : null
+        if (logged !== null) failpoint('collab.after-log-before-ack')
+      } catch (err) {
+        if (storeUnavailable(err)) throw refuseStoreBusy(connection.webSocket, documentName, err instanceof Error ? err.message : String(err))
+        connection.webSocket.close(1013, 'store-busy')
+        throw err
+      }
+      if (logged === null) throw new Error(`note does not exist: ${documentName}`)
+      ctx.logged = { ...logged, noteId: noteId!, update: toLog }
+    },
+
+    /**
+     * The backstop of §5.4 Append step 5: an update logged in `beforeSync`
+     * that the live document then failed to apply (Hocuspocus closes the
+     * connection) is marked `rejected_at` at once, so no fold trips on it.
+     */
+    async afterHandleMessage({ document, context, connection, update }) {
+      const socket = connection.webSocket
+      pendingSocketBytes.set(socket, Math.max(0, (pendingSocketBytes.get(socket) ?? 0) - update.byteLength))
+      const ctx = context as ConnectionContext
+      const logged = ctx.logged
+      if (!logged) return
+      ctx.logged = undefined
+      if (liveTookUpdate(document, logged.update)) {
+        // Fully integrated (nothing pending): the open document's cached stored state may advance to this update.
+        if (!document.store.pendingStructs && !document.store.pendingDs) advanceStoredState(document, logged.noteId, logged.previous, logged.id)
+        return
+      }
+      console.error(`[collab] logged update ${logged.id} did not apply to the live document; rejected`)
+      await rejectUpdate(db, logged.id, 'the relay could not apply it to the live document')
     },
 
     /** Only the relay puts agents in presence (#481, agent-presence.ts). */
@@ -304,6 +423,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * nothing.
      */
     async onStoreDocument({ documentName, document, lastContext }) {
+      // The #487 window: acked typing is in the log, the fold has not run yet.
+      failpoint('collab.after-ack-before-fold')
       const name = parseDocName(documentName)
       const context: Partial<ConnectionContext> | undefined = lastContext
       const noteId = documentNotes.get(document)
@@ -382,9 +503,17 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       const name = parseDocName(documentName)
       if ('legacy' in name) return
       forgetLivePath(name.noteId)
-      await compactCollabState(name.vaultId, name.noteId).catch((err) =>
+      // Compaction is a store transaction; while writes are paused it waits for the next unload.
+      if (writesPaused()) return
+      const fold = compactCollabState(name.vaultId, name.noteId).catch((err) =>
         console.error(`collab compaction of ${documentName} failed:`, err),
       )
+      unloadFolds.add(fold)
+      try {
+        await fold
+      } finally {
+        unloadFolds.delete(fold)
+      }
     },
   })
 
@@ -403,8 +532,17 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       return
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      const connection = hocuspocus.handleConnection(ws, toRequest(req))
-      ws.on('message', (data) => connection.handleMessage(toBytes(data)))
+      const connection = hocuspocus.handleConnection(ws, toRequest(req), { socket: ws })
+      ws.on('message', (data) => {
+        const bytes = toBytes(data)
+        const pending = (pendingSocketBytes.get(ws) ?? 0) + bytes.byteLength
+        pendingSocketBytes.set(ws, pending)
+        if (pending > MAX_PENDING_SOCKET_BYTES) {
+          ws.close(1013, 'store-busy')
+          return
+        }
+        connection.handleMessage(bytes)
+      })
       ws.on('close', (code, reason) =>
         connection.handleClose({ code, reason: reason.toString() }),
       )
@@ -447,6 +585,9 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       httpServer.off('upgrade', onUpgrade)
       unbindKick()
       await server.destroy()
+      // Hocuspocus resolves once the last document unloaded, which can be before another document's unload fold
+      // finished (S3: that fold stores the row). Shutdown waits for every one, so none lands after the relay is gone.
+      while (unloadFolds.size > 0) await Promise.all([...unloadFolds])
       for (const client of wss.clients) client.terminate()
       wss.close()
       currentInstance = null

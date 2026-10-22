@@ -182,9 +182,32 @@ export async function filesPendingExtraction(ctx: LabContext, repoId: string) {
   return { ok: r.ok, value: typeof v === 'number' ? v : undefined, raw: r.text.slice(0, 400) }
 }
 
-/** SQL equivalent of filesPendingExtraction: files without an embedding. */
+/**
+ * Files without an embedding. Not quite filesPendingExtraction: the field
+ * counts a file whose extract job is not done, and a file gets its embedding
+ * before its job completes (semantic edges come in between), so the field can
+ * be higher until that job finishes or a dead process's lease runs out (#845).
+ */
 export async function sqlPending(ctx: LabContext, repoId: string): Promise<number> {
   return Number(
     await ctx.docker.psql(`select count(*) from repository_files where repository_id = '${repoId}' and embedding is null;`),
   )
+}
+
+/**
+ * Polls filesPendingExtraction and sqlPending until both are 0 or `timeoutMs`
+ * passed; returns the last values and how long it waited. A failing psql
+ * reads as -1.
+ */
+export async function waitPendingZero(ctx: LabContext, repoId: string, timeoutMs: number, pollMs = 2_000) {
+  const t0 = Date.now()
+  for (let polls = 1; ; polls++) {
+    const field = await filesPendingExtraction(ctx, repoId)
+    const sql = await sqlPending(ctx, repoId).catch(() => -1)
+    const waitedMs = Date.now() - t0
+    const settled = field.value === 0 && sql === 0
+    if (settled || waitedMs >= timeoutMs) return { settled, field, sql, waitedMs, polls }
+    // Real time on purpose: a crashed job is claimable again only when its lease runs out.
+    await Bun.sleep(pollMs)
+  }
 }

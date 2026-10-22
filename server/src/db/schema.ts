@@ -271,6 +271,11 @@ export const emailTokens = pgTable(
   (t) => [index('email_tokens_user_idx').on(t.userId, t.purpose)],
 )
 
+/**
+ * Migration 0027 (#858): `seq` is the order events were recorded in (a
+ * sequence, not the clock: `created_at` can step back or tie); the admin
+ * security-event log orders by it.
+ */
 export const securityEvents = pgTable(
   'security_events',
   {
@@ -284,8 +289,9 @@ export const securityEvents = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    seq: bigserial('seq', { mode: 'number' }).notNull(),
   },
-  (t) => [index('security_events_created_idx').on(t.createdAt)],
+  (t) => [index('security_events_created_idx').on(t.createdAt), index('security_events_seq_idx').on(t.seq)],
 )
 
 export const notifications = pgTable(
@@ -322,14 +328,16 @@ export const instanceState = pgTable('instance_state', {
 })
 
 /**
- * Derived index of the OKF files on disk (canonical source is the file
- * tree). Rebuildable; search and graph attach to this table.
+ * The authoritative note store (ADR-003, S2a): every server write is one
+ * transaction on this row (store-tx.ts); the OKF files on disk are a
+ * projection of it (notes/projector.ts). Search and graph attach here.
  *
  * Migration 0021 (ADR-003 §4) also adds `seq bigint NOT NULL DEFAULT 1`
  * (bumped by the `notes_bump_seq` trigger on any change of body, frontmatter,
  * path or deleted_at) and `frontmatter_src json`. They are deliberately not
- * in this model yet: rows are returned whole by REST and MCP, so declaring
- * them would add fields to responses. S2a declares them when it uses them.
+ * in this model: rows are returned whole by REST and MCP, so declaring them
+ * would add fields to responses. The store reads them with SQL
+ * (store-tx.ts `storedColumns`).
  */
 export const notes = pgTable(
   'notes',

@@ -86,7 +86,7 @@ describe('concurrent writes to one note', () => {
       f.endsWith('.tmp'),
     )
     expect(leftovers).toEqual([])
-  }, 15_000)
+  })
 
   it('writes through the live collab engine all succeed and leave file, row and CRDT state agreeing', async () => {
     const path = 'docs/collab-raced'
@@ -105,7 +105,7 @@ describe('concurrent writes to one note', () => {
     // note no editor ever opened has no CRDT state ("Notes with no bin are
     // left alone (the relay seeds them on first open)").
     expect(await loadCrdtState(vaultId, path)).toBeNull()
-  }, 15_000)
+  })
 })
 
 describe('renames through the live collab engine (#803)', () => {
@@ -125,5 +125,5 @@ describe('renames through the live collab engine (#803)', () => {
     expect(note.row.body).toBe(body)
     // ADR-003 §5.2 (S2a): never opened, so no CRDT state; the first open seeds it from the row.
     expect(await loadCrdtState(vaultId, 'docs/relay-hub')).toBeNull()
-  }, 15_000)
+  })
 })

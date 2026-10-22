@@ -19,6 +19,7 @@
 import { randomBytes } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import * as Y from 'yjs'
+import { sameContent } from '../notes/frontmatter-order.js'
 import { applyTextDiff } from './text-diff.js'
 import { moveViewers } from './viewers.js'
 
@@ -33,6 +34,16 @@ export function docState(document: Y.Doc): DocState {
     frontmatter: document.getMap('frontmatter').toJSON(),
     body: document.getText('body').toString(),
   }
+}
+
+/**
+ * Whether a document already holds `target` (body and frontmatter, key order
+ * ignored). The S2b backfill attaches a bin equal to the row as is and puts a
+ * diff to the row on top of any other; `migrate-store --dry-run` predicts that
+ * split with this same rule (#873).
+ */
+export function sameDocState(state: DocState, target: DocState): boolean {
+  return state.body === target.body && sameContent(state.frontmatter, target.frontmatter)
 }
 
 /**

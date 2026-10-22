@@ -13,6 +13,7 @@ import { readFile } from 'node:fs/promises'
 import { DrizzleQueryError } from 'drizzle-orm/errors'
 import { runMigrations } from '../db/migrate.js'
 import { sql } from '../db/client.js'
+import { holdSharedLockOrExit } from '../notes/maintenance-lock.js'
 import {
   BackupInvalidError,
   RestoreRefusedError,
@@ -52,6 +53,8 @@ function describeError(err: unknown): string {
   return err instanceof Error && !(err instanceof DrizzleQueryError) ? err.message : 'a database query failed'
 }
 
+// A writing CLI holds the shared instance lock (ADR-003 §5.1): refused while store-export-legacy runs.
+const instanceLock = await holdSharedLockOrExit()
 await runMigrations()
 
 let exitCode = 0
@@ -82,5 +85,6 @@ try {
   exitCode = 1
 }
 
+await instanceLock.release()
 await sql.end()
 process.exit(exitCode)

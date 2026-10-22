@@ -268,7 +268,7 @@ describe('error and job reports carry no note text (#705)', () => {
     )
     expectClean(raw)
     for (const r of reportLines()) expectClean(JSON.stringify(r))
-  }, 20_000)
+  })
 
   it('reports a repository that keeps failing once, on the transition into error, not on every poll or manual retry', async () => {
     const owner = await createActiveUser()
@@ -320,7 +320,7 @@ describe('error and job reports carry no note text (#705)', () => {
     const again = (await snapshot()).body
     expect(again.totals.jobFailures).toBe(before.totals.jobFailures + 2)
     expect(again.errors.filter((e) => e.seq > before.lastSeq && e.subjectId === git!.id)).toHaveLength(2)
-  }, 20_000)
+  })
 
   it('reports a rejected collab store (the file keeps its last version) by vault id', async () => {
     const before = (await snapshot()).body
@@ -348,5 +348,5 @@ describe('error and job reports carry no note text (#705)', () => {
     )
     expectClean(raw)
     for (const r of reportLines()) expectClean(JSON.stringify(r))
-  }, 20_000)
+  })
 })
