@@ -31,12 +31,11 @@ import * as Y from 'yjs'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { failpoint } from '../failpoints.js'
-import { sameContent } from '../notes/frontmatter-order.js'
 import { parseNote } from '../notes/okf.js'
 import { foldPendingCollab } from '../notes/store.js'
 import { BACKFILL_MARKER, setCollabNotMigrated, storeTransaction, type Tx } from '../notes/store-tx.js'
 import { crdtFile, loadCrdtState } from './crdt-store.js'
-import { SERVER_CLIENT_ID, cloneDocument, compileChange, docState } from './live-docs.js'
+import { SERVER_CLIENT_ID, cloneDocument, compileChange, docState, sameDocState } from './live-docs.js'
 import { appendUpdate, insertNoteCrdt, readNoteCrdt } from './note-crdt.js'
 
 const BATCH = 100
@@ -168,7 +167,7 @@ async function backfillNote(tx: Tx, id: string, report: CollabBackfillReport, da
   const state = docState(doc)
   if (!(await knownText(tx, row, state.body))) return setAside('unknown-text')
   const target = { frontmatter: row.frontmatter, body: row.body }
-  if (state.body === target.body && sameContent(state.frontmatter, target.frontmatter)) {
+  if (sameDocState(state, target)) {
     report.attached.equal++
   } else {
     Y.applyUpdate(doc, compileChange(cloneDocument(doc), target))

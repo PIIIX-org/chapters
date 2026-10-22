@@ -268,6 +268,15 @@ export async function runStoreBackfill(): Promise<BackfillReport> {
   return report
 }
 
+/**
+ * Q5: the content a note's row takes when its file parses and differs from
+ * it: the file's, keeping the row's `type` (the path's first segment). The
+ * dry run (migrate-store.ts) predicts the S2b attach against it (#873).
+ */
+export function fileWinsContent(row: { frontmatter: Record<string, unknown> }, parsed: OkfNote): { frontmatter: Record<string, unknown>; body: string } {
+  return { frontmatter: { ...parsed.frontmatter, type: row.frontmatter.type ?? parsed.frontmatter.type }, body: parsed.body }
+}
+
 async function backfillNote(tx: Tx, id: string, report: BackfillReport, date: string): Promise<boolean> {
   const [done] = (await tx.execute(
     sql`SELECT 1 FROM note_projections WHERE note_id = ${id} AND projection = ${BACKFILL_MARKER}`,
@@ -312,7 +321,7 @@ async function backfillNote(tx: Tx, id: string, report: BackfillReport, date: st
         CASE WHEN EXISTS (SELECT 1 FROM note_revisions r WHERE r.note_id = n.id AND r.seq = n.seq) THEN NULL ELSE seq END,
         '{"kind":"system","reason":"migration: file differs from row"}'::jsonb
       FROM notes n WHERE id = ${id}`)
-    const frontmatter = { ...parsed.frontmatter, type: row.frontmatter.type ?? parsed.frontmatter.type }
+    const { frontmatter } = fileWinsContent(row, parsed)
     await tx.execute(sql`
       UPDATE notes SET frontmatter = ${JSON.stringify(frontmatter)}::jsonb, body = ${parsed.body}, updated_at = now() WHERE id = ${id}`)
     await tx.execute(sql`

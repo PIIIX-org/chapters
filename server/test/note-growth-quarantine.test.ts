@@ -258,7 +258,7 @@ describe('collab relay store', () => {
     // The row is written before the file: wait for both.
     const legit = `${body}\n\nlegit addition`
     await waitFor(async () => (await rowBody(path)) === legit && (await fileBody(path)) === legit)
-  }, 20_000)
+  })
 
   it('a quarantine after the document is unloaded and reloaded is a new revision: the first episode survives', async () => {
     const path = 'docs/two-episodes'
@@ -292,7 +292,7 @@ describe('collab relay store', () => {
     expect(await rowBody(path)).toBe(body)
     // Each episode is reported as a failure of its own.
     await waitFor(() => metricsSnapshot().jobs['collab-store'].failed >= before.failed + 2)
-  }, 30_000)
+  })
 
   // #408 review: a refused edit_note with body `ops` opened its direct
   // connection as a checked write (`directWrite`), and the connection's store
@@ -320,7 +320,7 @@ describe('collab relay store', () => {
     expect(ambiguous.text).toMatch(/occurs \d+ times/)
     expect(await rowBody(path)).toBe(body)
     expect(await fileBody(path)).toBe(body)
-  }, 20_000)
+  })
 })
 
 describe('writes that are not quarantined', () => {
@@ -347,19 +347,23 @@ describe('writes that are not quarantined', () => {
     const path = 'docs/one-mib'
     const body = paragraphs('mib', 6000).slice(0, 640 * 1024)
     await must('create_note', { vaultId, path, body })
-    // Half of it repeated: quarantined, quickly.
+    // Half of it repeated: quarantined, quickly. "Quickly" is this process's
+    // CPU time (client and server both run here), not wall time: a loaded
+    // machine stretches wall time without the check doing more work (#862:
+    // 6.1 s wall under load), while a check that scaled badly with the size
+    // would still burn the CPU.
     const repeated = `${body}\n\n${body.slice(0, 320 * 1024)}`
-    let t = performance.now()
+    let cpu = process.cpuUsage()
     const refused = await call('edit_note', { vaultId, path, body: repeated })
-    const refusedMs = performance.now() - t
+    const refusedCpu = process.cpuUsage(cpu)
     expect(refused.isError).toBe(true)
     expect(refused.text).toMatch(/quarantine/i)
     // An ordinary edit of the same note passes, also quickly.
-    t = performance.now()
+    cpu = process.cpuUsage()
     const edited = await call('edit_note', { vaultId, path, body: `${body.slice(0, 1000)}EDITED${body.slice(1000)}` })
-    const editedMs = performance.now() - t
+    const editedCpu = process.cpuUsage(cpu)
     expect(edited.isError, edited.text).toBe(false)
-    expect(refusedMs).toBeLessThan(5000)
-    expect(editedMs).toBeLessThan(5000)
-  }, 30_000)
+    expect((refusedCpu.user + refusedCpu.system) / 1000).toBeLessThan(5000)
+    expect((editedCpu.user + editedCpu.system) / 1000).toBeLessThan(5000)
+  })
 })

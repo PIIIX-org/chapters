@@ -12,8 +12,10 @@
 import { createHash } from 'node:crypto'
 import { and, asc, eq, gt, isNull, lte, sql } from 'drizzle-orm'
 import * as Y from 'yjs'
+import type { db } from '../db/client.js'
 import { noteCrdt, noteUpdates } from '../db/schema.js'
 import type { Tx } from '../notes/store-tx.js'
+import { withKeyLock } from '../notes/key-lock.js'
 import { recordJob } from '../monitoring/metrics.js'
 import { SERVER_CLIENT_ID, type DocState } from './live-docs.js'
 
@@ -110,6 +112,19 @@ function toBytes(value: Uint8Array | Buffer): Uint8Array {
 }
 
 /**
+ * The in-process key every relay append of note `noteId` holds from its id
+ * to its COMMIT (S3), and that a materialisation holds only around its tail
+ * read. Appends do not take the note's lock, so a fold never delays an ack;
+ * this key is what makes the tail read a clean boundary: no append is in
+ * flight while it runs, so every row with a lower id is committed and seen,
+ * and every later append gets a higher id. Folding and compaction stop at
+ * that boundary (`lastId`), never past an unseen row.
+ */
+export function appendGate(noteId: string): string {
+  return `append:${noteId}`
+}
+
+/**
  * What the database holds for an open document's note (ADR-003 §5.4 "Before
  * S3"): the state vector of `note_crdt` ⊕ tail and the last update id it
  * includes. Set at load and after every commit that appended or folded with
@@ -143,6 +158,19 @@ export function rememberLoadedState(live: Y.Doc, noteId: string, lastId: number)
 }
 
 /**
+ * S3: the relay logged update `id` (the note's previous update was
+ * `previous`) and `live` applied it. If the cached stored state was exactly
+ * at `previous`, `live` now holds the stored state through `id`, so the
+ * cache advances and the next store need not materialise. Any other order
+ * (a concurrent append, a write's own rows) leaves it behind, and the next
+ * read finds the last id moved and materialises.
+ */
+export function advanceStoredState(live: Y.Doc, noteId: string, previous: number, id: number): void {
+  const cached = storedStates.get(live)
+  if (cached && cached.noteId === noteId && cached.lastId === previous) storedStates.set(live, { noteId, stateVector: Y.encodeStateVector(live), lastId: id })
+}
+
+/**
  * An open document a write has in hand: `live` itself, `base` the clone the
  * write is computed from, and the row's `seq` under the lock. readNoteCrdt
  * uses its cached stored state when it still matches.
@@ -166,7 +194,8 @@ export interface OpenDocument {
 export async function readNoteCrdt(tx: Tx, noteId: string, open?: OpenDocument): Promise<NoteCrdt | null> {
   const cached = open ? storedStates.get(open.live) : undefined
   if (open && cached && cached.noteId === noteId) {
-    const [row] = (await tx.execute(sql`
+    // Under the append gate, like the materialised tail read: the last id is a boundary no later append falls under (S3).
+    const [row] = (await withKeyLock(appendGate(noteId), () => tx.execute(sql`
       SELECT c.snapshot_through, c.folded_through, c.folded_seq, c.fold_error, octet_length(c.snapshot) AS snapshot_bytes,
         coalesce(t.last_id, c.snapshot_through) AS last_id, coalesce(t.n, 0) AS tail_count, coalesce(t.bytes, 0) AS tail_bytes
       FROM note_crdt c
@@ -174,7 +203,7 @@ export async function readNoteCrdt(tx: Tx, noteId: string, open?: OpenDocument):
         SELECT max(u.id) AS last_id, count(*) AS n, sum(octet_length(u.update)) AS bytes FROM note_updates u
         WHERE u.note_id = c.note_id AND u.id > c.snapshot_through AND u.rejected_at IS NULL
       ) t ON true
-      WHERE c.note_id = ${noteId} FOR UPDATE OF c`)) as unknown as Array<Record<string, string | number | null>>
+      WHERE c.note_id = ${noteId} FOR UPDATE OF c`))) as unknown as Array<Record<string, string | number | null>>
     if (!row) return null
     const lastId = Number(row.last_id)
     if (lastId === cached.lastId && row.fold_error === null && Number(row.folded_seq) === open.seq) {
@@ -210,11 +239,13 @@ async function materialise(tx: Tx, noteId: string): Promise<NoteCrdt | null> {
   const doc = new Y.Doc()
   const snapshot = toBytes(row.snapshot)
   Y.applyUpdate(doc, snapshot)
-  const tail = await tx
-    .select({ id: noteUpdates.id, update: noteUpdates.update })
-    .from(noteUpdates)
-    .where(and(eq(noteUpdates.noteId, noteId), gt(noteUpdates.id, row.snapshotThrough), isNull(noteUpdates.rejectedAt)))
-    .orderBy(asc(noteUpdates.id))
+  const tail = await withKeyLock(appendGate(noteId), () =>
+    tx
+      .select({ id: noteUpdates.id, update: noteUpdates.update })
+      .from(noteUpdates)
+      .where(and(eq(noteUpdates.noteId, noteId), gt(noteUpdates.id, row.snapshotThrough), isNull(noteUpdates.rejectedAt)))
+      .orderBy(asc(noteUpdates.id)),
+  )
   const crdt: NoteCrdt = {
     noteId,
     doc,
@@ -270,7 +301,15 @@ export async function insertNoteCrdt(tx: Tx, noteId: string, doc: Y.Doc, seq: nu
   }
 }
 
-/** Appends `update` to the note's log and applies it to the materialised document. Returns false for an empty update (nothing stored). */
+/**
+ * Appends a server-authored `update` (a write, a rebase, refused typing) to
+ * the note's log inside the caller's locked transaction and applies it to
+ * the materialised document. `lastId` stays at the tail-read boundary: a
+ * relay append committed after that read may have a lower id than this row,
+ * so this row is left for the next fold to see again (applying it twice is
+ * harmless) rather than marking the unseen one folded. Returns false for an
+ * empty update (nothing stored).
+ */
 export async function appendUpdate(
   tx: Tx,
   crdt: NoteCrdt,
@@ -278,22 +317,24 @@ export async function appendUpdate(
   actor: UpdateActor,
   detail?: Record<string, unknown>,
 ): Promise<boolean> {
-  if (!updateHasContent(update)) return false
-  const [row] = await tx
-    .insert(noteUpdates)
-    .values({
-      noteId: crdt.noteId,
-      update: Buffer.from(update),
-      actorType: actor.type,
-      actorId: actor.id ?? null,
-      actorDetail: detail ?? null,
-    })
-    .returning({ id: noteUpdates.id })
+  // Nothing the state lacks (S3: typing is already logged by the relay; a full delete set alone is not news): nothing stored.
+  if (!updateHasContent(update) || Y.snapshotContainsUpdate(Y.snapshot(crdt.doc), update)) return false
+  await tx.insert(noteUpdates).values({
+    noteId: crdt.noteId,
+    update: Buffer.from(update),
+    actorType: actor.type,
+    actorId: actor.id ?? null,
+    actorDetail: detail ?? null,
+  })
   Y.applyUpdate(crdt.doc, update)
-  crdt.lastId = row!.id
   crdt.tailCount++
   crdt.tailBytes += update.byteLength
   return true
+}
+
+/** Marks a logged update `rejected_at` (§5.4 Append step 5): the live document did not take it, so no fold applies it. */
+export async function rejectUpdate(client: Tx | typeof db, id: number, reason: string): Promise<void> {
+  await client.update(noteUpdates).set({ rejectedAt: new Date(), rejectReason: reason }).where(eq(noteUpdates.id, id))
 }
 
 /** Tail size past which a fold also compacts (§5.4 fold step 6): scaled to the snapshot, so a big note does not rewrite it every few seconds. */

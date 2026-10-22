@@ -188,7 +188,7 @@ what the code-only rollback below relies on.
 | `notes.seq` | `bigint NOT NULL DEFAULT 1`; the `notes_bump_seq` BEFORE UPDATE trigger adds 1 whenever `body`, `frontmatter`, `path` or `deleted_at` changes, so old code bumps it too. The note's `rev` on every MCP read and write (#477, S4) |
 | `notes.frontmatter_src` | `json` copy of the frontmatter in its original key order (jsonb reorders keys); for rendering files and answering reads |
 | `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), actor detail (#403). `idempotency_key` stays unused: #477's keys need the call's arguments and its whole answer, also for writes that record no revision, so they live in `write_idempotency` |
-| `note_revisions.body_delta` / `delta_base_id` / `body_bytes` (migration 0026) | a compacted revision (#501, **Revision compaction** below): `body` is `''`, `body_delta` (jsonb) rebuilds the body from the revision `delta_base_id` (FK to `note_revisions`, NO ACTION, partial index `note_revisions_delta_base`), `body_bytes` is its UTF-8 size; all three null on a revision stored whole (check `note_revisions_delta_check`). SQL `note_revision_body(body, body_delta, delta_base_id)` returns any revision's body (`revisionBody` in store-tx.ts); `note_revision_patch(base, delta)` applies a delta. Kept out of the Drizzle model like `seq` |
+| `note_revisions.body_delta` / `delta_base_id` / `body_bytes` (migration 0026) | a compacted revision (#501, **Revision compaction** below): `body` is `''`, `body_delta` (jsonb) rebuilds the body from the revision `delta_base_id` (FK to `note_revisions`, NO ACTION, partial index `note_revisions_delta_base`), `body_bytes` is its UTF-8 size; all three null on a revision stored whole (check `note_revisions_delta_check`). SQL `note_revision_body(body, body_delta, delta_base_id)` returns any revision's body (`revisionBody` in store-tx.ts); `note_revision_patch(base, delta)` applies a delta. Kept out of the Drizzle model like `seq`. 0026 merged after 0027, so its journal `when` (1791750000000) is above 0027's: drizzle applies an entry only when its `when` is above the newest one already applied, so an instance that ran 0027 first still runs 0026 (`test/migration-order.test.ts`) |
 | `write_idempotency` (migration 0025) | the first answer of an MCP write sent with `idempotency_key` (#477, `mcp/write-result.ts` `runWrite`): PK (`connection_id`, `key`), `tool`, `args_hash` (sha256 of the tool, vault and canonical arguments), `note_id` (FK to `notes`, cascade: purging the note deletes its keys and the note text their answers hold), `result` jsonb, `created_at` (indexed). A write that commits inserts its row **inside its own store transaction** (`WriteOptions.recordKey`, called with the committed row by `createNote`, `writeNote`, the rename move, `softDeleteNote`, `restoreNote`), so a crash after COMMIT and before the answer still leaves the key and the retry replays (ADR-003 §4, §10); its recorded answer has `indexed: false`. Answers that commit nothing (`conflicted`) are inserted after the call. A repeat with the same hash answers `result` + `replayed: true`; another hash is refused. Every keyed call first deletes rows older than 24 h. Calls with one key run one at a time (in-process key lock). Rows also go with their connection (FK cascade) |
 | `note_crdt` | Yjs snapshot per note id (replaced `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
@@ -1221,6 +1221,57 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   end of the write's transaction, so a refused write (a check, an op that
   does not resolve, validation) still gets this check on its connection's
   disconnect store: a document a person doubled stays out of the row (#408).
+- **An ack means committed in Postgres** (ADR-003 §5.4 "Append", S3,
+  #487; `collab-append.ts`, `appendCollabUpdate` in `notes/store.ts`).
+  `beforeSync` runs on every sync-step-2 and update message before
+  Hocuspocus applies it and sends `SyncStatus(true)` (what the editor
+  shows as saved): the update must decode and apply to an empty scratch
+  document (else the document connection closes and nothing is stored),
+  passes the size cap, is skipped when the live document already holds it
+  (`Y.snapshotContainsUpdate`, a reconnect repeating known items), and
+  otherwise `Y.diffUpdate` against the live document is inserted into
+  `note_updates` (actor `collab`, `actor_detail.kind = 'collab'`).
+  Appends of one note are group-committed: those that arrive while a
+  commit runs go together, each batch as a single autocommit statement
+  (the instance check, the note re-checked live, the id before the batch,
+  one multi-row INSERT; `commitAppends`). The append takes neither the
+  note's queue lock nor its advisory lock, so a fold or a write holding
+  them never delays an ack. It holds the note's in-process append gate
+  (`appendGate` in `note-crdt.ts`) from its ids to its COMMIT, and every materialisation of the note's CRDT
+  state holds that gate around its tail read only. The tail read is
+  therefore a clean boundary (`lastId`): every lower id is committed and
+  seen, every later append gets a higher id. Folds mark `folded_through`
+  and compact only up to that boundary, and a server-authored update a
+  write appends in its own transaction does not move it, so a row appended
+  during a fold or a write stays for the next fold (or boot). A write
+  computes its change against exactly the state it read (`compute` runs
+  inside the transaction), so typing appended meanwhile merges as a
+  concurrent edit and is never diffed away. `lockedNote` takes `FOR NO KEY
+  UPDATE`, so an append's foreign-key check never waits for it. A failed insert
+  (Postgres down, a lock timeout, maintenance) closes the socket with
+  1013 `store-unavailable`: the editor keeps the change unsynced, reconnects and
+  resends; a trashed or purged note closes the document unacked and its
+  reconnect is refused. If the live apply then fails, `afterHandleMessage`
+  marks the row `rejected_at`. The fold into row + revision follows:
+  the debounced store (2 s pause, 10 s max), the last tab closing
+  (`unloadImmediately: true`), every server write (Invariant W), the
+  unload compaction (which folds before it compacts) and boot
+  (`foldPendingCollab`; a note whose fold fails gets `fold_error` and a
+  failed `collab-store` job, and boot continues). A SIGKILL after the ack
+  therefore loses nothing: boot folds the logged update. Lab failpoints
+  `collab.after-log-before-ack` and `collab.after-ack-before-fold` mark
+  the two crash boundaries. A fold that stores the row (boot, load,
+  unload) wakes the projector, so the file follows at once. A reconnect
+  that finds the store busy or unreachable (`storeUnavailable` in
+  `store-tx.ts`: a busy store, a connection refused, lost or timed out,
+  Postgres shutting down or not accepting connections) in `onAuthenticate`
+  or `onLoadDocument` is refused with reason `store-busy`, not a
+  revocation. `useCollabDoc` shows "reconnecting", keeps the text and
+  connects again after 5 s on a new provider, which resends what is
+  unsynced; a reconnect ticket that fails with anything but 401/403 is
+  retried the same way. Backpressure: a socket with more than 16 MiB sent and not yet
+  handled, or a note with 256 appends waiting for its append gate, is
+  closed with 1013 (retryable) instead of queueing without end.
 - **Size cap on the relay** (#491, `collab-size.ts`): ws refuses a frame
   over `noteTransportLimit()` before reading it (close 1009).
   `beforeSync` refuses a sync-step-2 or update message whose Yjs update
@@ -1553,6 +1604,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   prints `a database query failed`, #813).
   Ids are the archive's — a true restore, not an import. Rows are
   inserted as stored, not re-validated through the OKF write path.
+  Revisions keep their `ord` and security events their `seq` (the
+  order they were recorded in, #825, #858; the admin security-event log
+  lists by `seq`, newest first); an archive from before those columns
+  gets them in (created_at, id) order, and the sequences are advanced
+  past the restored rows before the `instance_restored` event.
   Restored MCP and sync tokens keep working (their hashes are
   restored). Restored repositories get `last_synced_at`,
   `last_synced_commit` and `last_webhook_at` cleared so the next poll
@@ -2144,7 +2200,9 @@ file and `.crdt` bin in one `REPEATABLE READ READ ONLY` transaction (only
 pre-0021 columns, so it runs on a production copy before the upgrade) and
 reports what the S2a/S2b backfill will do: per-note classes (`crdt`: what
 the bin's text matches; `collab`: what the S2b backfill does with it,
-`attach`/`set-aside`/`seed`/`has-state`), the file ≠ row
+`attach-equal`/`attach-diffed`/`set-aside`/`seed`/`has-state`, equal or
+diffed against the row S2a leaves, the file's content when the file wins),
+the file ≠ row
 conflict list (Q5: the file wins; `row.updated_at` against the file mtime,
 both hashes), files that will change bytes, files with no row, sizes and
 timings.

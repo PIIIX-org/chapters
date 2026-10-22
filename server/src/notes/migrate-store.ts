@@ -17,7 +17,9 @@ import type { TransactionSql } from 'postgres'
 import * as Y from 'yjs'
 import { config } from '../config.js'
 import { sql } from '../db/client.js'
+import { docState, sameDocState, type DocState } from '../sync/live-docs.js'
 import { parseNote, serializeNote, type OkfNote } from './okf.js'
+import { fileWinsContent } from './store-reconcile.js'
 
 const BATCH = 100
 
@@ -33,12 +35,14 @@ export type CrdtClass =
   | 'undecodable'
 /**
  * What the S2b backfill (sync/collab-backfill.ts) does with the live note:
- * `attach` its bin (text equals row, file or a revision), `set-aside` the
+ * attach its bin (text equals row, file or a revision) as is (`attach-equal`:
+ * body and frontmatter equal the row) or with a diff to the row on top
+ * (`attach-diffed`), the backfill's `attached.equal` / `attached.diffed`; `set-aside` the
  * bin to `.migration/<date>/bins/` (mismatch or undecodable), `seed` on
  * first open (no bin), or nothing because the note already has `note_crdt`
  * state (`has-state`).
  */
-export type CollabAction = 'attach' | 'set-aside' | 'seed' | 'has-state'
+export type CollabAction = 'attach-equal' | 'attach-diffed' | 'set-aside' | 'seed' | 'has-state'
 /** §8 step 2f, the `file` projection after the backfill. */
 export type ProjectionClass = 'applied' | 'adopted' | 'create' | 'rewrite'
 
@@ -216,7 +220,7 @@ export async function planStoreMigration(options: { vaultId?: string } = {}): Pr
       notSerializeNoteForm: 0,
       revision: zero(['consistent', 'gap', 'none'] as const),
       crdt: zero(['matches-row', 'matches-file', 'matches-revision', 'mismatch', 'missing', 'undecodable'] as const),
-      collab: zero(['attach', 'set-aside', 'seed', 'has-state'] as const),
+      collab: zero(['attach-equal', 'attach-diffed', 'set-aside', 'seed', 'has-state'] as const),
       projection: zero(['applied', 'adopted', 'create', 'rewrite'] as const),
       embeddingPending: 0,
       filesWithoutRow: 0,
@@ -437,6 +441,7 @@ async function classifyNote(
 
   // §8 step 4a (S2b): the bin at the live note's current path
   let crdt: CrdtClass | null = null
+  let binState: DocState | null = null
   if (!trashed) {
     const t1 = performance.now()
     const bin = await readMaybe(join(vaultsDir, row.vault_id, '.crdt', `${row.path}.bin`))
@@ -447,7 +452,8 @@ async function classifyNote(
       try {
         const doc = new Y.Doc()
         Y.applyUpdate(doc, new Uint8Array(bin.bytes.buffer, bin.bytes.byteOffset, bin.bytes.byteLength))
-        text = doc.getText('body').toString()
+        binState = docState(doc)
+        text = binState.body
         doc.destroy()
       } catch {
         text = null
@@ -465,6 +471,8 @@ async function classifyNote(
     c.crdt[crdt]++
     timings.crdt += performance.now() - t1
   }
+  // S2b runs after S2a, so it compares the bin with the row S2a leaves: the file's content when the file wins (Q5).
+  const afterS2a = fileClass === 'differs' && parsed ? fileWinsContent(row, parsed) : { frontmatter: row.frontmatter, body: row.body }
   const collab: CollabAction | null =
     crdt === null
       ? null
@@ -474,7 +482,9 @@ async function classifyNote(
           ? 'seed'
           : crdt === 'mismatch' || crdt === 'undecodable'
             ? 'set-aside'
-            : 'attach'
+            : binState && sameDocState(binState, afterS2a)
+              ? 'attach-equal'
+              : 'attach-diffed'
   if (collab) c.collab[collab]++
 
   const embedding = row.has_embedding ? 'applied' : 'pending'

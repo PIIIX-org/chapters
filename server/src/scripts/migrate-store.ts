@@ -74,7 +74,7 @@ const summary =
   `revision gap ${c.revision.gap}, none ${c.revision.none}; ` +
   `crdt row ${c.crdt['matches-row']}, file ${c.crdt['matches-file']}, revision ${c.crdt['matches-revision']}, ` +
   `mismatch ${c.crdt.mismatch}, undecodable ${c.crdt.undecodable}, missing ${c.crdt.missing}; ` +
-  `S2b collab: attach ${c.collab.attach}, set aside ${c.collab['set-aside']}, seed ${c.collab.seed}, ` +
+  `S2b collab: attach ${c.collab['attach-equal']} equal + ${c.collab['attach-diffed']} diffed, set aside ${c.collab['set-aside']}, seed ${c.collab.seed}, ` +
   `has state ${c.collab['has-state']}; ` +
   `files without row ${c.filesWithoutRow}, trash files without row ${c.trashFilesWithoutRow}, ` +
   `bins without note ${c.binsWithoutNote}; files that change bytes ${c.filesThatChangeBytes}; ` +

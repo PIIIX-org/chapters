@@ -62,6 +62,13 @@ export interface BackupTable {
   onRestore?: (row: Row) => Row
   /** Columns the archive holds as these expressions of the stored row (a value rebuilt from columns kept out of the model). */
   dumped?: Record<string, SQL>
+  /**
+   * JS key of a column numbered from a sequence in the order rows were
+   * recorded (#825, #858). A restore keeps the archive's numbers, numbers rows
+   * of an archive from before the column in (created_at, id) order, and
+   * advances the sequence past them.
+   */
+  sequence?: string
 }
 
 /**
@@ -111,7 +118,7 @@ export const BACKUP_TABLES: BackupTable[] = [
   { name: 'repository_graph_preferences', table: repositoryGraphPreferences },
   { name: 'repository_sync_tokens', table: repositorySyncTokens, unique: [{ columns: ['tokenHash'] }] },
   { name: 'mcp_connections', table: mcpConnections, unique: [{ columns: ['tokenHash'] }], legacyKey: 'mcpConnections' },
-  { name: 'security_events', table: securityEvents, legacyKey: 'securityEvents' },
+  { name: 'security_events', table: securityEvents, legacyKey: 'securityEvents', sequence: 'seq' },
   { name: 'notifications', table: notifications, legacyKey: 'notifications' },
   {
     name: 'notes',
@@ -120,7 +127,7 @@ export const BACKUP_TABLES: BackupTable[] = [
     unique: [{ columns: ['vaultId', 'path'], liveOnly: true }],
   },
   // Every body whole (#501): a compacted revision's delta is not in the archive, which any release restores.
-  { name: 'note_revisions', table: noteRevisions, dumped: { body: revisionBody } },
+  { name: 'note_revisions', table: noteRevisions, sequence: 'ord', dumped: { body: revisionBody } },
 ]
 
 /** The setup/MFA-mandate row: restored by hand, never with the setup token. */
