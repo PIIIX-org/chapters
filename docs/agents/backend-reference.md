@@ -685,10 +685,20 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   schema does). Every whole-markdown write (edit_note and REST PUT `body`,
   revert, a rename's referrer rewrite) goes through `writeThroughCollab`,
   so it reaches the live document as this diff from its text, never as
-  delete-all/insert-all (#476). A whole edit_note `body` without
-  `base_rev` is rebased from the connection's last read (below), so it
-  keeps text typed after the agent's `read_note`, which itself serves the
-  live document (#474, below).
+  delete-all/insert-all (#476). A whole edit_note or upsert_note `body`
+  without `base_rev` is rebased from the connection's last read (below),
+  so it keeps text typed after the agent's `read_note`, which itself
+  serves the live document (#474, below). REST PUT takes `baseRev` (#865,
+  the `rev` REST GET returned, or a revision id) and is rebased from it
+  the same way: a clean merge answers the row plus `status`
+  (`applied`/`merged`), `concurrentChanges` and `baseRev`; an overlap
+  writes nothing, keeps the body as a `proposal` revision and answers 409
+  `{ error, status: "conflicted", baseRev, proposalId, conflicts }`; a
+  `baseRev` that is not a revision of the note is 400. A PUT without
+  `baseRev` still replaces the live text, so it removes what anyone typed
+  since the caller read the note: unsafe while someone is typing. No web
+  client code sends a whole-body PUT (the editor saves through the collab
+  relay, and the offline copies of #720 merge as Yjs updates through it).
 - **Reads serve the live document; `rev` is `seq`** (#474, #477, ADR-003
   S4): `readLiveNote` (MCP `read_note` and `export_note`, REST GET of a
   note) folds first when the relay has the note's document loaded: under
@@ -773,10 +783,14 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `baseRev`). Each whole body the connection writes moves it to the
   write's `rev`, with `note_reads.body` = the body it sent when the result
   differs from it (merged): the agent's next body is built on what it
-  sent, so its earlier lines are not its change again. `create_note`, `append_note`, `upsert_note`,
-  `ops`-only and frontmatter-only edits neither record nor use it, so a
-  connection that never read the note still replaces the live text (a
-  blind replace stays a replace). Kept in `note_reads` (above) for 24 h,
+  sent, so its earlier lines are not its change again. `upsert_note` on an
+  existing note uses it the same way (#865: `merged`, or `conflicted` with
+  a proposal, `created: false`), and a note `upsert_note` creates is
+  recorded as the connection's base (the created `rev`, with the body sent
+  when the stored one differs). `create_note`, `append_note`, `ops`-only
+  and frontmatter-only edits neither record nor use it, so a connection
+  that never read the note still replaces the live text (a blind replace
+  stays a replace). Kept in `note_reads` (above) for 24 h,
   so a restart between the read and the edit keeps it; a read older than
   that, or a revision gone since (purged), falls back to the live diff.
 - **Atomic append and upsert** (#478): MCP `append_note` is the `append`

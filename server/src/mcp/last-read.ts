@@ -26,12 +26,16 @@ export const READ_WINDOW_HOURS = 24
 
 const inWindow = gte(noteReads.readAt, sql`now() - make_interval(hours => ${READ_WINDOW_HOURS})`)
 
-/** `connectionId` read note `noteId` at `rev`: one statement that also prunes reads past the window. */
-export async function rememberRead(connectionId: string, noteId: string, rev: number): Promise<void> {
+/**
+ * `connectionId` read note `noteId` at `rev` (or created it there, `sent`
+ * being the body it sent when the stored one differs): one statement that
+ * also prunes reads past the window.
+ */
+export async function rememberRead(connectionId: string, noteId: string, rev: number, sent: string | null = null): Promise<void> {
   await db.execute(sql`
     WITH pruned AS (DELETE FROM note_reads WHERE read_at < now() - make_interval(hours => ${READ_WINDOW_HOURS}))
-    INSERT INTO note_reads (connection_id, note_id, rev) VALUES (${connectionId}, ${noteId}, ${rev})
-    ON CONFLICT (connection_id, note_id) DO UPDATE SET rev = EXCLUDED.rev, body = NULL, read_at = now()`)
+    INSERT INTO note_reads (connection_id, note_id, rev, body) VALUES (${connectionId}, ${noteId}, ${rev}, ${sent})
+    ON CONFLICT (connection_id, note_id) DO UPDATE SET rev = EXCLUDED.rev, body = EXCLUDED.body, read_at = now()`)
 }
 
 /**
