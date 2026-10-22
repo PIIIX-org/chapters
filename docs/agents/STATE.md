@@ -6,18 +6,17 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
 - **Last promotion to `prod`**: #660 Promote: Elara study phase 1 (guardrails and security) (merged 2026-10-17, `5c5bdc0`).
 - **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) **failure**; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
-- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/6, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 47/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/74, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/35, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/47, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/46.
-- **Open issues**: [236](https://github.com/PIIIX-org/chapters/issues): P0 43, P1 112, P2 67, no priority 14; `bug` 58, `security` 12, `decision` 2, `deferred` 3.
+- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/6, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 48/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/74, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/35, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/47, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/46.
+- **Open issues**: [235](https://github.com/PIIIX-org/chapters/issues): P0 43, P1 112, P2 66, no priority 14; `bug` 58, `security` 12, `decision` 2, `deferred` 3.
 - **Owner actions** (label `owner`):
   - #589 [fix 192] Revoke the 5 GitHub tokens exposed before #383 (P0)
   - #664 Production deploys on the push to prod, before CI publishes the gated image (#590 is… (P1)
   - #636 Production uptime
-- **In progress: [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3)** (5 open, owner actions excluded):
+- **In progress: [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3)** (4 open, owner actions excluded):
   - #408 edit_note replaces the whole body and deletes text a user is typing at the same moment (P0)
   - #476 [fix 76] Whole-markdown writes accepted only as a structural diff against the live doc (P0)
   - #486 [fix 87] One authoritative store: DB row + revision + CRDT update in one transaction (P0)
   - #489 [fix 90] Rerun the lab SIGKILL boundary tests (lab/data-path) after the change: no… (P0)
-  - #501 [fix 103] Compact long revision histories instead of storing full snapshots forever (P2)
 - **Open bugs** (label `bug`):
   - #408 edit_note replaces the whole body and deletes text a user is typing at the same moment (P0)
   - #713 [ui] Landing page says "No notes" to a user with notes (P1)
