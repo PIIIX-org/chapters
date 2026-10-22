@@ -1,3 +1,4 @@
+import { isIP } from 'node:net'
 import { fileURLToPath } from 'node:url'
 
 const env = process.env
@@ -12,6 +13,52 @@ export function readHealthHidesVersion(raw: string | undefined): boolean {
   if (raw === undefined || raw === '' || raw === 'false') return false
   if (raw === 'true') return true
   console.warn(`ELARA_HEALTH_HIDE_VERSION=${JSON.stringify(raw)} is not 'true' or 'false': /health keeps reporting version`)
+  return false
+}
+
+/**
+ * Which peers may say who the client is (#911), as Fastify's `trustProxy`:
+ * `false` (the socket's peer is the client) or the proxies' addresses.
+ * Without it every request behind a reverse proxy has the proxy's address as
+ * `req.ip`, so every user shares one rate-limit bucket, one login lockout and
+ * one address in the security events.
+ */
+export type TrustProxy = false | string[]
+
+/** proxy-addr's named ranges, which Fastify's trustProxy accepts as list entries. */
+const PROXY_RANGE_NAMES: readonly string[] = ['loopback', 'linklocal', 'uniquelocal']
+
+/** An IPv4/IPv6 address, an address/prefix CIDR, or a proxy-addr range name. */
+function isProxyEntry(entry: string): boolean {
+  if (PROXY_RANGE_NAMES.includes(entry)) return true
+  const [address, prefix, extra] = entry.split('/')
+  const family = isIP(address ?? '')
+  if (!family || extra !== undefined) return false
+  if (prefix === undefined) return true
+  // `/0` is every address: the same as trusting every peer.
+  return /^\d{1,3}$/.test(prefix) && Number(prefix) > 0 && Number(prefix) <= (family === 4 ? 32 : 128)
+}
+
+/**
+ * `ELARA_TRUST_PROXY` -> Fastify's `trustProxy` (#911). Unset, empty or
+ * `false`: off, the socket's peer is the client (direct exposure, and the
+ * behaviour before #911). Otherwise a comma-separated list of the proxies'
+ * addresses or CIDRs (`127.0.0.1`, `172.16.0.0/12`, `loopback`): only a
+ * request whose peer is one of them has its `X-Forwarded-For` read, and only
+ * back to the first address that is not. Never every peer: `true`, `*` or a
+ * `/0` would let any client name its own address and walk around every rate
+ * limit and lockout. Not a hop count either: it cannot tell the proxy from a
+ * client that reached the app's port directly, and Fastify trusts no hop
+ * count for that reason. Anything else warns once at boot and keeps it off.
+ */
+export function readTrustProxy(raw: string | undefined): TrustProxy {
+  const value = raw?.trim() ?? ''
+  if (value === '' || value === 'false') return false
+  const entries = value.split(',').map((entry) => entry.trim())
+  if (entries.every(isProxyEntry)) return entries
+  console.warn(
+    `ELARA_TRUST_PROXY=${JSON.stringify(raw)} is not a list of proxy addresses or CIDRs: X-Forwarded-For is not trusted (name the reverse proxy's address as the app sees it; never true or a hop count, which trust any client)`,
+  )
   return false
 }
 
@@ -63,6 +110,8 @@ export const config = {
    * shown. The boot log line keeps it either way.
    */
   healthHidesVersion: readHealthHidesVersion(env.ELARA_HEALTH_HIDE_VERSION),
+  /** `ELARA_TRUST_PROXY` (or `TRUST_PROXY`): the reverse proxies whose `X-Forwarded-For` names the client (#911, readTrustProxy). */
+  trustProxy: readTrustProxy(env.ELARA_TRUST_PROXY ?? env.TRUST_PROXY),
   /**
    * `ELARA_MONITORING_TOKEN` (#705): the bearer token that reads
    * GET /api/admin/monitoring without a session (the uptime monitor). Unset,

@@ -4,7 +4,7 @@ import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
 import multipart from '@fastify/multipart'
 import rateLimit from '@fastify/rate-limit'
-import { config } from './config.js'
+import { config, type TrustProxy } from './config.js'
 import { registerStatic } from './static.js'
 import { sql } from './db/client.js'
 import { bootInfo } from './lifecycle.js'
@@ -33,7 +33,7 @@ import { recordRequest } from './monitoring/metrics.js'
 import { monitoringRoutes } from './monitoring/routes.js'
 
 export async function buildApp(
-  opts: { clientDist?: string; logger?: FastifyServerOptions['logger'] } = {},
+  opts: { clientDist?: string; logger?: FastifyServerOptions['logger']; trustProxy?: TrustProxy } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger:
@@ -42,6 +42,10 @@ export async function buildApp(
         : config.isTest
           ? false
           : { level: config.isProd ? 'info' : 'debug' },
+    // Which peers' X-Forwarded-For names the client (ELARA_TRUST_PROXY, #911):
+    // `req.ip` is what the rate limits, the login lockout, the security events
+    // and the request log record. Off by default: the socket's peer.
+    trustProxy: opts.trustProxy ?? config.trustProxy,
   })
 
   // Every finished request is counted per route template, and a 5xx is
