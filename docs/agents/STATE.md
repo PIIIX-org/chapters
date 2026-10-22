@@ -5,25 +5,27 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
 <!-- state:generated:start -->
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
 - **Last promotion to `prod`**: #899 Promote: phase 2 step A (prod ← ae6ffb9: #720 client, ADR-003 S1/S2a-1/S4/S5) (merged 2026-10-22, `f3724d0`).
-- **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) no completed run; bench-gate (all suites) no completed run. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
-- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/5, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 52/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/13, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/6, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/8, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/46.
-- **Open issues**: [98](https://github.com/PIIIX-org/chapters/issues): P0 0, P1 43, P2 44, no priority 11; `bug` 56, `security` 12, `decision` 0, `deferred` 1.
+- **Checks on `dev`**: CI (latest push run) no completed run; nightly lab (full tier) **failure**; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
+- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 0/2, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 52/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 0/74, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/35, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/47, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/46.
+- **Open issues**: [232](https://github.com/PIIIX-org/chapters/issues): P0 39, P1 112, P2 66, no priority 15; `bug` 57, `security` 12, `decision` 2, `deferred` 3.
 - **Owner actions** (label `owner`):
+  - #589 [fix 192] Revoke the 5 GitHub tokens exposed before #383 (P0)
   - #664 Production deploys on the push to prod, before CI publishes the gated image (#590 is… (P1)
-- **In progress: [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4)** (13 open, owner actions excluded):
-  - #674 [phase 3] Elara tells the agent when not to use it (P1)
-  - #675 [phase 3] One budgeted call for compound questions: where, who calls it, why, is it still… (P1)
-  - #676 [phase 3] Answer for the code the agent is editing: branch, ref and working-tree overlay (P1)
-  - #677 [phase 3] Vault as a git remote: clone, grep locally, push back (P1)
-  - #679 [phase 3] Shared reading cache across agents: one digest per file at a commit (P1)
-  - #680 [phase 3] Caching contract: every cache key carries the caller's scope and the content… (P1)
-  - #681 [phase 3] Make the agent's prompt cacheable: stable, deterministic tool list and… (P1)
-  - #682 [phase 3] "Unchanged since revision N" answers instead of repeating content (P1)
-  - #684 [phase 3] Content-addressed index caches: reuse parse, symbols and embeddings by blob hash (P1)
-  - #678 [phase 3] Learn from real usage: zero-result searches, unread notes, fallbacks to grep (P2)
-  - #683 [phase 3] Per-session de-duplication: refer to content already sent in this session (P2)
-  - #685 [phase 3] Search and graph result cache keyed by query, scope and index version (P2)
-  - … and 1 more: https://github.com/PIIIX-org/chapters/milestone/4
+  - #636 Production uptime
+- **In progress: [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4)** (74 open, owner actions excluded):
+  - #413 [fix 10] Index every note heading section and every code symbol as a block with a stable… (P0)
+  - #414 [fix 11] Search hits return {path#Lx-Ly, block id, heading path, approx tokens, snippet… (P0)
+  - #415 [fix 12] Group hits by note, at most 3 passages per note (P0)
+  - #416 [fix 13] One read call accepts several targets (line range, block id or heading path) and… (P0)
+  - #417 [fix 14] read_file and read_note without a range return an outline with line spans, not… (P0)
+  - #418 [fix 15] Never collapse newlines in stored text, so line addressing stays valid (P0)
+  - #420 [fix 17] Every read, search, browse, graph and history tool takes budget_tokens (P0)
+  - #421 [fix 18] Over budget: drop whole low-ranked items, then step down a ladder (P0)
+  - #422 [fix 19] Every response ends with a truncated block: shown, total (fetch limit+1 to… (P0)
+  - #423 [fix 20] Very large results become a pageable, greppable handle instead of inline text (P0)
+  - #424 [fix 21] browse_repository: path prefix filter and cursor (P0)
+  - #425 [fix 22] browse_vault: root listing must respect recursive:false; return path and title… (P0)
+  - … and 62 more: https://github.com/PIIIX-org/chapters/milestone/4
 - **Open bugs** (label `bug`):
   - #713 [ui] Landing page says "No notes" to a user with notes (P1)
   - #714 [ui] Floating top bar collides with page controls; status pill duplicated (DEF-02, DEF-08… (P1)
@@ -37,7 +39,7 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #734 [ui] The irreversible action has the weaker guard (P1)
   - #739 [ui] Repository page double-offsets the content (P1)
   - #741 [ui] Token tables are unusable on desktop (P1)
-  - … and 44 more: https://github.com/PIIIX-org/chapters/issues?q=is%3Aopen+label%3Abug
+  - … and 45 more: https://github.com/PIIIX-org/chapters/issues?q=is%3Aopen+label%3Abug
 <!-- state:generated:end -->
 
 - **Product**: **Elara**; the repo keeps the name `chapters`. Current work: the fixes from the Elara AI-performance study (Elara vault notes `audit/2026-10-14-ai-performance-study` and its round-2 follow-up), one GitHub issue per fix-list item, grouped by the `Phase N` milestones above; plan in the Chapters vault `fixes/index`, hand-off `fixes/handoff-phase-1`. Production (`chapters.piiix.org`) redeploys by itself on every push to `prod` (about 20 s after the push, before CI has run), not from the image #590 publishes after CI (#664, owner action). Until #664 is fixed, the only gate on production is that the push is refused unless every required check on that commit is green, so never push to `prod` by any other route. A promotion is a PR `dev`→`prod` with every required check green (full lab tier and bench on its head) and a `VERDICT: MERGE` comment from an independent review, then a fast-forward push of the reviewed head (`git push origin <sha>:prod`).
