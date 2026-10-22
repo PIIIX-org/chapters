@@ -157,7 +157,7 @@ describe('agents in editor presence (#481)', () => {
     // Quiet for the idle timeout: gone from the row.
     await seen(person, () => agentsSeenBy(person).length === 0, IDLE_MS + 4000)
     expect(agentsSeenBy(person)).toEqual([])
-  }, 15_000)
+  })
 
   it('an MCP read of an open note shows the agent as reading, and a later write as editing', async () => {
     const path = await freshNote()
@@ -171,7 +171,7 @@ describe('agents in editor presence (#481)', () => {
     await seen(person, () => (agentsSeenBy(person)[0]?.agent as { activity?: string } | undefined)?.activity === 'editing')
     // One connection is one participant, not one per call.
     expect(agentsSeenBy(person)).toEqual([{ agent: { name: AGENT_NAME, activity: 'editing' } }])
-  }, 15_000)
+  })
 
   it('a person who opens the note while the agent is there sees it too', async () => {
     const path = await freshNote()
@@ -180,7 +180,7 @@ describe('agents in editor presence (#481)', () => {
     const late = await open(path)
     await seen(late, () => agentsSeenBy(late).length === 1)
     expect(agentsSeenBy(late)).toEqual([{ agent: { name: AGENT_NAME, activity: 'editing' } }])
-  }, 15_000)
+  })
 
   it('reading a note nobody has open does not load it into the relay', async () => {
     const path = await freshNote()

@@ -45,7 +45,34 @@ const BODY_BYTES = Number(process.env.LAB_CRASH_BODY_BYTES ?? 40_000)
  * runner is: completion times varied 0.4-3 s between runs).
  */
 const KILLS = (process.env.LAB_CRASH_KILLS ?? 't100,t400,a1,a4,a10,a20,a30,a38').split(',')
-const SETTLE_MS = 3500
+/**
+ * After a round, wait at least SETTLE_MIN_MS (the old fixed settle: the 2 s
+ * collab store debounce plus the store's updateNote under the note lock; the
+ * stays note's projection only becomes pending once that commits), then until
+ * the vault has no pending `file`/`dir_index` projection (the signal
+ * `check-notes --wait-idle` uses), at most SETTLE_MAX_MS in total.
+ * A projector still behind at the bound is compared as is and fails.
+ */
+const SETTLE_MIN_MS = 3500
+const SETTLE_MAX_MS = Number(process.env.LAB_CRASH_SETTLE_MAX_MS ?? 30_000)
+
+async function pendingProjections(ctx: LabContext, vaultId: string): Promise<number> {
+  return Number(
+    await ctx.docker.psql(`select count(*)::int from note_projections p join notes n on n.id = p.note_id
+      where p.applied_seq < p.target_seq and p.projection in ('file', 'dir_index') and n.vault_id = '${vaultId}'`),
+  )
+}
+
+/** Waits for projections to go idle; returns the wait and what was still pending. */
+async function settle(ctx: LabContext, vaultId: string): Promise<{ waitedMs: number; pending: number; timedOut: boolean }> {
+  const t0 = performance.now()
+  let pending = await pendingProjections(ctx, vaultId)
+  while (performance.now() - t0 < SETTLE_MAX_MS && (pending > 0 || performance.now() - t0 < SETTLE_MIN_MS)) {
+    await Bun.sleep(250)
+    pending = await pendingProjections(ctx, vaultId)
+  }
+  return { waitedMs: Math.round(performance.now() - t0), pending, timedOut: pending > 0 }
+}
 
 type OpKind = 'edit' | 'create'
 type Answer = 'acked' | 'app-error' | 'no-answer'
@@ -94,6 +121,7 @@ interface RoundReport {
   vaultTotals: { divergent: number; revisionGaps: number; crdtMismatch: number; tmp: number; orphanFiles: number }
   tmpFiles: { file: string; bytes: number }[]
   collab: Record<string, unknown>
+  settle: { waitedMs: number; pending: number; timedOut: boolean }
   checkNotes: { code: number; broken: string[]; tail: string }
   opList: Op[]
 }
@@ -262,7 +290,10 @@ const test: LabTest = {
       await Promise.all(promises)
       const staysSynced = await stays.waitSynced(60_000)
       await stays.waitAcked()
-      await Bun.sleep(SETTLE_MS)
+      const settled = await settle(ctx, vault.id)
+      const settleNote = settled.timedOut
+        ? ` (projector still had ${settled.pending} pending projection(s) after waiting ${settled.waitedMs} ms, bound ${SETTLE_MAX_MS} ms)`
+        : ` (projections idle after ${settled.waitedMs} ms)`
 
       const dump = await dumpVault(vault.id, livePaths)
       const rows = await dbNotes(ctx, vault.id)
@@ -321,6 +352,7 @@ const test: LabTest = {
           leaveAcked,
           leaveMarkerOnDisk: count(leaveBody, leaveMarker),
         },
+        settle: settled,
         checkNotes: { code: cn.code, broken, tail: cn.stdout.split('\n').slice(-1).join('') },
         opList: ops,
       }
@@ -339,7 +371,7 @@ const test: LabTest = {
       checks.push({
         name: `${label}: acknowledged writes survive`,
         expected: 'every acked edit/create is on disk and in the row',
-        actual: ackedLost.length === 0 ? `all ${rep.ops.acked} acked writes intact` : `${ackedLost.length} lost/diverged: ${JSON.stringify(ackedLost.slice(0, 5))}`,
+        actual: (ackedLost.length === 0 ? `all ${rep.ops.acked} acked writes intact` : `${ackedLost.length} lost/diverged: ${JSON.stringify(ackedLost.slice(0, 5))}`) + settleNote,
         ok: ackedLost.length === 0,
         severity: 'critical',
       })

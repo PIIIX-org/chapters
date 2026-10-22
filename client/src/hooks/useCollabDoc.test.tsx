@@ -260,6 +260,28 @@ describe('useCollabDoc', () => {
     expect(view.result.current.ydoc.getText('body').toString()).toBe('typed before the upgrade')
   })
 
+  it('a relay whose store is busy is not a revocation: it reconnects after a pause and keeps the unsent text (S3)', async () => {
+    vi.useFakeTimers()
+    try {
+      const view = mount()
+      await vi.waitFor(() => expect(stub.providers).toHaveLength(1))
+      const provider = stub.providers[0]!
+      act(() => view.result.current.ydoc.getText('body').insert(0, 'typed while the store was busy'))
+      act(() => provider.options.onAuthenticationFailed({ reason: 'store-busy' }))
+      expect(view.result.current.status).toBe('paused')
+      expect(provider.disconnected).toBe(true)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(stub.providers).toHaveLength(2)
+      expect(stub.providers[1]!.options.document).toBe(view.result.current.ydoc)
+      expect(view.result.current.ydoc.getText('body').toString()).toBe('typed while the store was busy')
+      expect(view.result.current.status).not.toBe('revoked')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a note deleted while open stops the editor as deleted, not revoked, and keeps the text (close or refusal)', async () => {
     const { view, provider } = await connected()
     act(() => provider.options.onStatus({ status: 'connected' }))
@@ -747,6 +769,36 @@ describe('useCollabDoc', () => {
 
     expect(view.result.current.status).toBe('reconnecting')
     expect(view.result.current.writable).toBe(true)
+  })
+
+  it('a reconnect ticket that fails with a 5xx pauses and retries on a new provider; the refusal that follows is not a revocation (S3)', async () => {
+    vi.useFakeTimers()
+    try {
+      const view = mount()
+      await vi.waitFor(() => expect(stub.providers).toHaveLength(1))
+      const provider = stub.providers[0]!
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      await provider.options.token()
+      act(() => view.result.current.ydoc.getText('body').insert(0, 'typed while the server was away'))
+      act(() => provider.options.onStatus({ status: 'disconnected' }))
+      ticket.mockRejectedValueOnce(new ApiError(503, { error: 'database unreachable' }))
+      await act(async () => {
+        await expect(provider.options.token()).rejects.toBeInstanceOf(ApiError)
+      })
+      // The provider keeps retrying; the refusal its failed attempt reports is a pause, not a revocation.
+      expect(view.result.current.status).toBe('reconnecting')
+      act(() => provider.options.onAuthenticationFailed({ reason: 'permission-denied' }))
+      expect(view.result.current.status).toBe('paused')
+      expect(provider.disconnected).toBe(true)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(stub.providers).toHaveLength(2)
+      expect(stub.providers[1]!.options.document).toBe(view.result.current.ydoc)
+      expect(view.result.current.status).not.toBe('revoked')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('resets the document when logging in after being disabled (logout then login)', async () => {

@@ -133,7 +133,7 @@ describe('edit_note with a person typing in the note (#408)', () => {
     expect(liveBody(path)).toBe(expected)
     await waitFor(() => other.document.getText('body').toString() === expected)
     await waitFor(async () => (await rowBody(path)) === expected)
-  }, 20_000)
+  })
 
   it('an append op while a person types elsewhere keeps every typed word, in order', async () => {
     const path = 'docs/live-append'
@@ -163,7 +163,7 @@ describe('edit_note with a person typing in the note (#408)', () => {
     const expected = `Para one.\n\nPara ${typed}two.\nAgent line.\n`
     await waitFor(() => liveBody(path) === expected && text.toString() === expected)
     await waitFor(async () => (await rowBody(path)) === expected)
-  }, 20_000)
+  })
 })
 
 describe('edit_note while a tab is offline (#485)', () => {
@@ -369,5 +369,5 @@ describe('edit_note ops (#408)', () => {
     expect(doubled.text).toMatch(/quarantine/i)
     expect(liveBody(path)).toBe(`${block}\n`)
     expect(await rowBody(path)).toBe(`${block}\n`)
-  }, 20_000)
+  })
 })
