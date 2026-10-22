@@ -1896,7 +1896,7 @@ are idempotent rewrites.
 - **CORS**: off by default (same-origin only — correct for a
   reverse-proxied self-hosted app); opt in per-instance via
   `CORS_ORIGIN` (comma-separated allowlist).
-- **Rate limiting & lockout**: global Fastify rate limit (1000/min), stricter limit on abuse-sensitive auth routes, per-connection MCP rate limit (120/min default), and automatic account/IP lockout with token invalidation after 5 failed 6-digit email verification attempts.
+- **Rate limiting & lockout**: global Fastify rate limit (1000/min, keyed by `req.ip`), stricter limit on abuse-sensitive auth routes, `POST /api/collab/ticket` on its own counters per session (600/min, `TICKET_RATE_LIMIT` in `sync/routes.ts`, #907: a pre-S2b tab's reconnect loop never draws on the shared budget), per-connection MCP rate limit (120/min default), and automatic account/IP lockout with token invalidation after 5 failed 6-digit email verification attempts.
 - **SSRF & git argument-injection defense**: `isSafeGitUrl(gitUrl)` blocks cloud metadata services (`169.254.169.254`, `metadata.google.internal`), RFC 1918 private/loopback IPs in production, argument flags (`-`), control characters, and file protocols across API routes, MCP tools, and clone workers.
 - **SVG asset sandboxing**: `image/svg+xml` uploads served with `Content-Security-Policy: default-src 'none'; sandbox` and `Content-Disposition: attachment` to eliminate inline script execution vectors.
 - **Mermaid preview XSS defense**: Initialized with `securityLevel: 'strict'`, `htmlLabels: false`, and SVG sanitized with `DOMPurify.sanitize(..., { USE_PROFILES: { svg: true, svgFilters: true } })`.
