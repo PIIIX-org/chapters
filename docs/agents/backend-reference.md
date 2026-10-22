@@ -1238,9 +1238,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `"<vaultId>/~<noteId>"` (ADR-003 S2b; `~` never occurs in a slug, client
   `collabDocName`). A path-named connection (`"<vaultId>/<path>"`, sent by a
   bundle from before S2b) is refused with reason `reload-required` and
-  nothing it sends is stored; the editor shows "Reload to keep editing"
-  and keeps the text (and its #720 browser copy, which it looks up under
-  both the id name and the old path name after the reload). Loading reads
+  nothing it sends is stored. The relay sends it as a document close and
+  then a socket close (code 4426), never as an authentication failure: the
+  step-A bundle (`ae6ffb9`) reads any authentication failure as a revoked
+  share, while a close is a drop it retries about once a second, showing
+  "Offline" and keeping the typing in the browser (#907). The current
+  editor shows "Reload to keep editing" for either and keeps the text (and
+  its #720 browser copy, which it looks up under both the id name and the
+  old path name after the reload). Loading reads
   the note's state from `note_crdt` + `note_updates` (seeding it when
   absent), never a file. A rename keeps every editor connected (same id)
   and moves the note's SSE viewers to the new path (a `moved` event);
