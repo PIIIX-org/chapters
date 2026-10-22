@@ -147,7 +147,9 @@ class NoteNotMigratedRefusal extends Error {
  * and the socket with reason `reload-required`, which that editor takes for
  * a dropped connection: it keeps the typing in this browser (#720), says
  * "Offline, not saved yet" and reconnects every second or so until the
- * person reloads. The reload loads the bundle that names documents by note
+ * person reloads, each time with a ticket counted against its own session
+ * only (routes.ts TICKET_RATE_LIMIT). The reload loads the bundle that names
+ * documents by note
  * id, and the tab's unsent typing is merged once or offered as text. A
  * bundle that knows the reason (client/src/hooks/useCollabDoc.ts) says
  * "Reload to keep editing" for it.
