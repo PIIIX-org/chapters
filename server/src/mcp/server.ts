@@ -3037,5 +3037,16 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     })
   }
 
+  // The SDK registers each list capability with `listChanged: true`, but
+  // this server is stateless (a fresh one per POST, no session, no GET
+  // stream: routes.ts), so a list_changed notification can never be sent
+  // (#436). Each capability the server has (tools always, the manuals when
+  // one was registered, prompts unless an allow-list left them out) is
+  // advertised with `false`; registerCapabilities merges per key.
+  server.server.registerCapabilities({
+    tools: { listChanged: false },
+    ...(manualOf.size > 0 ? { resources: { listChanged: false } } : {}),
+    ...(auth.connection.allowedTools ? {} : { prompts: { listChanged: false } }),
+  })
   return { server, tools }
 }
