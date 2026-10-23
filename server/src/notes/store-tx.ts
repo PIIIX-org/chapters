@@ -291,17 +291,28 @@ export async function insertRevision(
       ${spec.sourceRevisionId ?? null}, ${spec.fromPath ?? null}, ${spec.toPath ?? null}, clock_timestamp())`)
 }
 
-/** Replaces the note's EXTRACTED link rows from `body`, inside `tx`: one per wikilink, with its body-relative lines. */
-export async function replaceLinks(tx: Tx, noteId: string, body: string): Promise<void> {
-  const links = extractWikilinkLocations(body)
-  await tx.delete(noteLinks).where(eq(noteLinks.sourceNoteId, noteId))
-  if (links.length > 0) {
-    await tx
-      .insert(noteLinks)
-      .values(links.map((l) => ({ sourceNoteId: noteId, targetPath: l.target, startLine: l.startLine, endLine: l.endLine })))
-      // Two links to one target that start on one line: the first is kept.
-      .onConflictDoNothing()
+/**
+ * The `note_links` rows of a body: one per wikilink with its body-relative
+ * lines, keyed as the table is (target, start line): of two links to one
+ * target starting on one line, the first.
+ */
+export function linkRows(noteId: string, body: string): Array<typeof noteLinks.$inferInsert> {
+  const rows = new Map<string, typeof noteLinks.$inferInsert>()
+  for (const l of extractWikilinkLocations(body)) {
+    const key = `${l.startLine}\u001f${l.target}`
+    if (!rows.has(key)) rows.set(key, { sourceNoteId: noteId, targetPath: l.target, startLine: l.startLine, endLine: l.endLine })
   }
+  return [...rows.values()]
+}
+
+/** Rows per insert: 4 parameters each, well under Postgres's 65,535 per statement. */
+const LINK_ROWS_PER_INSERT = 10_000
+
+/** Replaces the note's EXTRACTED link rows from `body`, inside `tx` (`linkRows`). */
+export async function replaceLinks(tx: Tx, noteId: string, body: string): Promise<void> {
+  const rows = linkRows(noteId, body)
+  await tx.delete(noteLinks).where(eq(noteLinks.sourceNoteId, noteId))
+  for (let i = 0; i < rows.length; i += LINK_ROWS_PER_INSERT) await tx.insert(noteLinks).values(rows.slice(i, i + LINK_ROWS_PER_INSERT))
 }
 
 /**

@@ -78,6 +78,14 @@ describe('note_links rows (#558)', () => {
     ])
   })
 
+  it('a body with more links than one insert can bind is saved whole', async () => {
+    // 20,000 rows of 4 parameters: past Postgres's 65,535 parameters per statement.
+    const body = Array.from({ length: 20_000 }, (_, i) => `[[lines/t${i % 7}]]`).join('\n')
+    const note = await createNote(vaultId, { path: 'lines/crowded', body })
+    const [row] = (await db.execute(sql`SELECT count(*)::int AS n FROM note_links WHERE source_note_id = ${note.id}`)) as unknown as Array<{ n: number }>
+    expect(row?.n).toBe(20_000)
+  })
+
   it('the boot backfill locates rows written without lines, and leaves located notes alone', async () => {
     const old = await createNote(vaultId, { path: 'lines/old', body: 'intro\n[[lines/a]]\n\n[[lines/b]]\n' })
     const fresh = await createNote(vaultId, { path: 'lines/fresh', body: '[[lines/a]]\n' })
