@@ -758,7 +758,11 @@ export const repositoryFiles = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [uniqueIndex('repository_files_repo_path').on(t.repositoryId, t.path)],
+  (t) => [
+    uniqueIndex('repository_files_repo_path').on(t.repositoryId, t.path),
+    // browse_repository's keyset in code-unit order (#424, migration 0029).
+    index('repository_files_repo_path_c').on(t.repositoryId, sql`${t.path} collate "C"`),
+  ],
 )
 
 /** EXTRACTED edges for code: raw import targets, resolved against the same repository's files. */

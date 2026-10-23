@@ -194,7 +194,10 @@ describe('browse_repository on a large repository', () => {
   it('the default answer stays within 2,000 tokens and reports the total from the limit + 1 fetch', async () => {
     const first = await page({ repositoryId: largeRepoId })
     expect(first.truncated).toMatchObject({ total: { files: '>500' }, cursor: expect.any(String) })
-    expect(first.truncated !== false && first.truncated.narrow).toEqual(expect.arrayContaining([expect.stringMatching(/^path: "pkg\/m\d"$/)]))
+    // Narrowing names the largest folders one level down: `pkg` at the root, `pkg/mN` under it.
+    expect(first.truncated !== false && first.truncated.narrow).toEqual(['path: "pkg"'])
+    const inPkg = await page({ repositoryId: largeRepoId, path: 'pkg' })
+    expect(inPkg.truncated !== false && inPkg.truncated.narrow).toEqual(['path: "pkg/m0"', 'path: "pkg/m1"', 'path: "pkg/m2"'])
     // The largest budget still pages at 500 files, and the pages cover the repository once, in order.
     const pages = await walk({ repositoryId: largeRepoId, budget_tokens: 25_000 })
     expect(pages.map((p) => p.files.length)).toEqual([500, 500, 200])
