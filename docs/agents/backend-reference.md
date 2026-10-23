@@ -1608,16 +1608,40 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   server logs it once and serves no manuals; tools are unaffected. The
   `tools/list` wrapper also drops what restates a default: the input
   schemas' `$schema` (draft-07; only keywords draft-07 and 2020-12 read
-  alike are used) and `execution: {taskSupport: "forbidden"}`.
+  alike are used) and `execution: {taskSupport: "forbidden"}`, and the
+  output schemas' `$schema`.
   `test/mcp-tool-budget.test.ts` fails a reader account token over 2,000
   tokens (characters / 4 of `tools/list` plus `initialize`
   instructions; measured 7,649 characters) and a writer one over 4,000
-  (14,222), reports admin (37,493; its ceiling is in
+  (14,972 with #433's output schemas; 14,222 before), reports admin
+  (39,493; 37,493 before #433; its ceiling, 40,000, is in
   `mcp-tool-schema.test.ts`), checks the bytes are the same on every call
   and for two pins of one profile, and counts each description's
   sentences. `test/mcp-manuals.test.ts` covers the manual scoping (profile,
   pin, allow-list, live permission) and that every tool has exactly one
   entry.
+- **Structured content and output schemas** (#433, ADR-004 §2.1, D6
+  default): `tool()` answers every success through `answered(text)`:
+  `content[0].text` stays the whole JSON answer (clients that show the
+  model only `content` lose nothing), and when that text is an object
+  (it starts with `{`) `structuredContent` is `JSON.parse(text)`, so it
+  holds exactly what the text shows (dates as strings) and the two never
+  differ. Bare-array answers (`search`, the unbudgeted list tools) carry
+  none: MCP's `structuredContent` is an object, and wrapping the array
+  would make it differ from the text. A tool may declare `outputSchema`
+  (a loose zod object, so other keys pass): today only the eight
+  `runWrite` tools, with `WRITE_RESULT_SCHEMA` (`write-result.ts`:
+  `rev` number or null, `status` enum, `indexed` boolean; about 250
+  characters per tool in `tools/list`). The SDK checks it on every
+  successful answer, after the write committed, and a mismatch would
+  turn the answer into an `Output validation error`; the schema is
+  therefore the fields every write answer has (applied, merged,
+  conflicted, retry, dry run, replay, delete). Errors stay `isError`
+  text without `structuredContent`, which the SDK does not check.
+  Read tools get no output schema until their shapes settle (#445,
+  #432, #439). `test/mcp-structured-content.test.ts` covers each tool
+  family through the real client (which validates against the listed
+  schema), every write answer shape and the errors.
 - **Tools** (60, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):
   - *Vaults* (14): `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `get_vault_graph_preference`, `set_vault_graph_preference`, `get_vault_preferences`, `update_vault_preferences`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.
