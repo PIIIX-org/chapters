@@ -209,10 +209,10 @@ Filed during phase 2 and already fixed on `dev`: #816 ([#817](https://github.com
 
 ADR-003 R3-2/Q4: S2b ships only after a promotion has put the #720 client in production, so that a refused tab's typing survives in the browser copy. `prod` (`5c5bdc0`) did not contain #720's merge commit `150669c`, so **the owner decided on two steps**. The coordinator asked the owner before opening each promotion PR. A single promotion was rejected by the owner.
 
-| Step | PR | `prod` ← | Pushed (UTC) | CI + publish on `prod` | Dry run on the production snapshot | After |
+| Step | PR | `prod` ← | Pushed to `prod` (UTC, branch activity) | CI + publish on `prod` | Dry run on the production snapshot | After |
 |---|---|---|---|---|---|---|
-| A | [#899](https://github.com/PIIIX-org/chapters/pull/899) | `f3724d0` = `ae6ffb9` (`dev` just before #843) + one baseline-only commit | 2026-10-22 12:55:50 | [run 39782450732](https://github.com/PIIIX-org/chapters/actions/runs/39782450732) | [#703 comment 6337997585](https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6337997585) (GO) | prod→dev sync [#904](https://github.com/PIIIX-org/chapters/pull/904); the owner confirmed post-flight on the server |
-| B | [#920](https://github.com/PIIIX-org/chapters/pull/920) | `d3b210e` (`dev` head; fast-forward, `prod` `ahead_by` 0) | 2026-10-23 07:55:29 | [run 39921053378](https://github.com/PIIIX-org/chapters/actions/runs/39921053378) | [#703 comment 6359468988](https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6359468988) (GO, rerun on the exact head) | no sync needed; [#900](https://github.com/PIIIX-org/chapters/issues/900) closed; the owner confirmed post-flight on the live server |
+| A | [#899](https://github.com/PIIIX-org/chapters/pull/899) | `f3724d0` = `ae6ffb9` (`dev` just before #843) + one baseline-only commit | 2026-10-22 12:55:48 (PR marked merged 12:55:50) | [run 39782450732](https://github.com/PIIIX-org/chapters/actions/runs/39782450732) | [#703 comment 6337997585](https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6337997585) (GO) | prod→dev sync [#904](https://github.com/PIIIX-org/chapters/pull/904); the owner confirmed post-flight on the server |
+| B | [#920](https://github.com/PIIIX-org/chapters/pull/920) | `d3b210e` (`dev` head; fast-forward, `prod` `ahead_by` 0) | 2026-10-23 07:55:27 (PR marked merged 07:55:29) | [run 39921053378](https://github.com/PIIIX-org/chapters/actions/runs/39921053378) | [#703 comment 6359468988](https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6359468988) (GO, rerun on the exact head) | no sync needed; [#900](https://github.com/PIIIX-org/chapters/issues/900) closed; the owner confirmed post-flight on the live server |
 
 **Step A** shipped:
 - the #720 client;
@@ -235,28 +235,26 @@ Its lab baseline needed one commit: [#900](https://github.com/PIIIX-org/chapters
 
 Open after the promotion: [#921](https://github.com/PIIIX-org/chapters/issues/921), an Ajv `allowUnionTypes` warning on every boot (REST PUT `baseRev` schema from #865). It is cosmetic: integer and revision-id `baseRev` are both accepted.
 
-### 5.2 Pre-flight as run (for the next promotion)
+### 5.2 Pre-flight (as the promotion PRs instructed; for the next promotion)
 
-1. The owner was asked before the promotion PR was opened. Every check on the promotion PR had to be done, including the full lab tier and the full benchmark on the exact head. Then an independent promotion review, and only then `git push origin <sha>:prod`: production deploys on that push (#664 is still open).
-2. A backup immediately before the push, per backup.md §1 (pg_dump + the data volume through a one-off app container). For step A's image the data-volume steps of its own backup.md failed (#848), so the backup followed `dev`'s backup.md at `b465e2a`.
-3. Open editor tabs reloaded before step B (announced: a step-A tab left open shows "Offline — not saved yet" until it is reloaded; the reload brings its typing back once, #910).
+These are the instructions in the #899 and #920 bodies. Items 2 and 3 have no separate record of how they were carried out.
+
+1. The owner was asked before the promotion PR was opened. Every check on the promotion PR had to be done, including the full lab tier and the full benchmark on the exact head, then an independent promotion review. Only then `git push origin <sha>:prod`: production deploys on that push (#664 is still open).
+2. A backup immediately before the push, per backup.md §1 (pg_dump + the data volume through a one-off app container). Step A's own backup.md had data-volume steps that fail (#848), so #899 pointed at `dev`'s backup.md at `b465e2a`; #920 used its own head's.
+3. Reload open editor tabs before step B, and tell users first: a step-A tab left open shows "Offline — not saved yet" until it is reloaded, and the reload brings its typing back once (#910).
 4. Operator scripts: in step A's image, `node --import tsx src/scripts/<name>.ts` (#872); from step B, `pnpm <script>` works offline (#878).
-5. `ELARA_MONITORING_TOKEN` in the production `.env`, the repository secret's value, at least 32 characters.
+5. `ELARA_MONITORING_TOKEN` in the production `.env`: the repository secret's value, at least 32 characters.
 6. A dry run and first boot of the exact head on the production snapshot, posted to #703 (comments above).
 
-### 5.3 Post-flight as run
+### 5.3 Post-flight: what is on record
 
-The owner confirmed each item on the live server after each step:
-1. `/health`: up, a new `bootId`, `version` = the promoted commit, `lastShutdown: graceful`.
-2. The boot log:
-   - step A: `[store] backfill:` with 0 failed;
-   - step B: the collab backfill with 0 set aside and 0 failed, and `.crdt.pre-adr-003/` present;
-   - `DATA_DIR/migration-report-*.json` and `collab-migration-report-*.json`.
-3. `check-notes --wait-idle --fail-on-pending`: 0 broken, 0 pending. On step B, `doctor --repair` then `doctor` (exit 3 and then 0 in the rehearsal), with one `INFO migration-copy` line per unparseable file in the migration report (#908).
-4. `/api/admin/monitoring` answers with the token, and the uptime monitor passes.
-5. The editor shows `Synced`.
+The promotion PRs listed the post-flight checks: `/health`, the boot report (store backfill; for step B the collab backfill and `.crdt.pre-adr-003/`), `check-notes`, `doctor` (step B), the monitoring endpoint, and the editor showing `Synced`. What the record shows:
 
-There is no staging server: the lab builds its own instance from the commit under test (`docs/agents/lab.md`), never against production.
+- **Step A, the owner** ([#899 comment 6358929809](https://github.com/PIIIX-org/chapters/pull/899#issuecomment-6358929809)): "all checks good after the step A deploy of f3724d0 — /health version, first-boot store backfill, check-notes, editor Synced". To the coordinator: "everything on the server seems good".
+- **Step B, the owner** ([#920 comment 6360647981](https://github.com/PIIIX-org/chapters/pull/920#issuecomment-6360647981)): "all checks good on d3b210e. Phase 2 is complete in production." To the coordinator: "everything works on the live server".
+- **`version` in `/health`:** the uptime monitor's restart comment on #636 ([comment 6342600068](https://github.com/PIIIX-org/chapters/issues/636#issuecomment-6342600068), 2026-10-22 13:59 UTC) shows `version` _none_ for the process started at 13:11:08 UTC, after step A. That fits [#664](https://github.com/PIIIX-org/chapters/issues/664): production builds from source on the push, not from the published image that carries `ELARA_VERSION`. So `/health` cannot be relied on to name the promoted commit until #664 is fixed.
+- **Uptime monitor after step B: pending.** The last `uptime.yml` run before this was written ran at 04:58 UTC ([run 39903154428](https://github.com/PIIIX-org/chapters/actions/runs/39903154428)), before the 07:55 UTC push.
+- **The lab never runs against production.** It builds its own instance from the commit under test on the CI runner (`docs/agents/lab.md`). That lab instance is what phase-1 §10 calls "the staging server". There is no separate staging deployment.
 
 ### 5.4 Rollback (valid until the next promotion)
 
@@ -268,7 +266,7 @@ There is no staging server: the lab builds its own instance from the commit unde
   4. Check out `f3724d0` and run `docker compose up -d --build app`. It reads the exported bins, so tabs that reload keep their history.
   5. Rolling forward to step B again needs nothing: the S2b boot merges the bins the step-A relay wrote and compacts the history again.
   
-  This was rehearsed on the exact step-B head (#703 comment 6359468988).
+  This was rehearsed from the exact step-B head (#703 comment 6359468988), with one caveat. The rehearsal started the step-A image by its tag, so its `--build` was a no-op; `git checkout f3724d0 && docker compose up -d --build app` itself has never been run from source.
 - **Restore, losing every write since the upgrade:** stop the app, remove the database and data volumes (`docker compose down -v`), check out the release the backup was taken on, follow backup.md §2 steps 1–8 with the pre-step-B backup, and start it. After the next promotion this is the only way back over phase 2.
 
 ## 6. Open pull requests
@@ -345,13 +343,14 @@ The phase-1 decisions ([phase-1.md §5](phase-1.md#5-decisions-taken-for-the-own
 
 ## 10. Open follow-ups found during phase 2
 
-Every open issue filed since 2026-10-19 (`gh issue list --search "created:>=2026-10-19" --state open`), classified. Section 3.2 has the reasons for the ones moved out during the phase.
+Every issue filed from 2026-10-19 to 2026-10-23 09:00 UTC (the time of writing) that is still open (`gh issue list --search "created:>=2026-10-19" --state open`), classified. Section 3.2 has the reasons for the ones moved out during the phase.
 
 | Issue | Kind | Proposed |
 |---|---|---|
 | [#784](https://github.com/PIIIX-org/chapters/issues/784) | Bug, user-visible: editors are not told their stores were quarantined (#492); the typing vanishes on reload | First in the next phase: it is the one remaining way typing disappears. |
 | [#780](https://github.com/PIIIX-org/chapters/issues/780) | Bug: the relay bounds the body (#491) but not frontmatter or other document content | Next phase, with #784. |
 | [#891](https://github.com/PIIIX-org/chapters/issues/891) | Bug, manual SQL only | Phase 5 (decided, section 8); the lab keeps measuring it (2 baseline entries). |
+| [#923](https://github.com/PIIIX-org/chapters/issues/923) | Bug, P2, filed 2026-10-23 08:38 UTC: a repository file that grows past 1 MB or gains a NUL byte keeps its old indexed content in `read_file`, search, symbols and imports, and nothing reports it (both sync paths skip the file but keep its path current) | Phase 3, with the code-index items (#449–#456, #465 "report skipped files"): it makes answers silently stale. |
 | [#921](https://github.com/PIIIX-org/chapters/issues/921) | Cosmetic: an Ajv `allowUnionTypes` warning on every boot (REST PUT `baseRev`, #865) | Any time; small. |
 | [#905](https://github.com/PIIIX-org/chapters/issues/905) | Flake: `collab-s3-perf` p95 < 250 ms on CI runners | Needs the owner's call (section 9). |
 | [#877](https://github.com/PIIIX-org/chapters/issues/877), [#787](https://github.com/PIIIX-org/chapters/issues/787), [#799](https://github.com/PIIIX-org/chapters/issues/799) | Test and lab flakes (monitoring extraction count, repository-routes teardown log, monitoring-alerts sync check) | Phase 5, or earlier whenever one turns a required check red. |
@@ -571,7 +570,7 @@ Generated 2026-10-23 from phase-1's Appendix A (order, fix-list item, priority) 
 
 ### Phase 5: everything else
 
-47 open ([milestone 6](https://github.com/PIIIX-org/chapters/milestone/6)). 34 fix-list items plus 12 added issues (#707 together with #556; the rest where they fit).
+47 open ([milestone 6](https://github.com/PIIIX-org/chapters/milestone/6)). 34 fix-list items plus 13 added issues: 12 from phase 1 (#707 together with #556; the rest where they fit) and #891 from phase 2.
 
 | Order | Item | Issue | Priority | Title |
 |---|---|---|---|---|
@@ -621,7 +620,7 @@ Generated 2026-10-23 from phase-1's Appendix A (order, fix-list item, priority) 
 | — | — | [#707](https://github.com/PIIIX-org/chapters/issues/707) | P1 | [phase 5] Mark note and file content as untrusted data in every tool response, not only prompts |
 | — | — | [#708](https://github.com/PIIIX-org/chapters/issues/708) | P1 | [phase 5] Real account deletion: erase a user and their data |
 | — | — | [#710](https://github.com/PIIIX-org/chapters/issues/710) | P2 | [phase 5] User-facing release notes for each promotion |
-| — | — | [#891](https://github.com/PIIIX-org/chapters/issues/891) | P2 | collab: a CRDT state put back by SQL behind a newer row doubles an open tab's typing (rebase stand-ins vs. original items) (added in phase 2) |
+| — | — | [#891](https://github.com/PIIIX-org/chapters/issues/891) (added in phase 2) | P2 | collab: a CRDT state put back by SQL behind a newer row doubles an open tab's typing (rebase stand-ins vs. original items) |
 
 ### Phase 6: rendered views and data attachments
 

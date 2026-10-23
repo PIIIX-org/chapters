@@ -696,7 +696,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <th>Step</th>
 <th>PR</th>
 <th><code>prod</code> ←</th>
-<th>Pushed (UTC)</th>
+<th>Pushed to <code>prod</code> (UTC, branch activity)</th>
 <th>CI + publish on <code>prod</code></th>
 <th>Dry run on the production snapshot</th>
 <th>After</th>
@@ -706,7 +706,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <td>A</td>
 <td><a href="https://github.com/PIIIX-org/chapters/pull/899">#899</a></td>
 <td><code>f3724d0</code> = <code>ae6ffb9</code> (<code>dev</code> just before #843) + one baseline-only commit</td>
-<td>2026-10-22 12:55:50</td>
+<td>2026-10-22 12:55:48 (PR marked merged 12:55:50)</td>
 <td><a href="https://github.com/PIIIX-org/chapters/actions/runs/39782450732">run 39782450732</a></td>
 <td><a href="https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6337997585">#703 comment 6337997585</a> (GO)</td>
 <td>prod→dev sync <a href="https://github.com/PIIIX-org/chapters/pull/904">#904</a>; the owner confirmed post-flight on the server</td>
@@ -715,7 +715,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <td>B</td>
 <td><a href="https://github.com/PIIIX-org/chapters/pull/920">#920</a></td>
 <td><code>d3b210e</code> (<code>dev</code> head; fast-forward, <code>prod</code> <code>ahead_by</code> 0)</td>
-<td>2026-10-23 07:55:29</td>
+<td>2026-10-23 07:55:27 (PR marked merged 07:55:29)</td>
 <td><a href="https://github.com/PIIIX-org/chapters/actions/runs/39921053378">run 39921053378</a></td>
 <td><a href="https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6359468988">#703 comment 6359468988</a> (GO, rerun on the exact head)</td>
 <td>no sync needed; <a href="https://github.com/PIIIX-org/chapters/issues/900">#900</a> closed; the owner confirmed post-flight on the live server</td>
@@ -744,30 +744,25 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 </li>
 </ul>
 <p>Open after the promotion: <a href="https://github.com/PIIIX-org/chapters/issues/921">#921</a>, an Ajv <code>allowUnionTypes</code> warning on every boot (REST PUT <code>baseRev</code> schema from #865). It is cosmetic: integer and revision-id <code>baseRev</code> are both accepted.</p>
-<h3>5.2 Pre-flight as run (for the next promotion)</h3>
+<h3>5.2 Pre-flight (as the promotion PRs instructed; for the next promotion)</h3>
+<p>These are the instructions in the #899 and #920 bodies. Items 2 and 3 have no separate record of how they were carried out.</p>
 <ol>
-<li>The owner was asked before the promotion PR was opened. Every check on the promotion PR had to be done, including the full lab tier and the full benchmark on the exact head. Then an independent promotion review, and only then <code>git push origin &lt;sha&gt;:prod</code>: production deploys on that push (#664 is still open).</li>
-<li>A backup immediately before the push, per backup.md §1 (pg_dump + the data volume through a one-off app container). For step A&#39;s image the data-volume steps of its own backup.md failed (#848), so the backup followed <code>dev</code>&#39;s backup.md at <code>b465e2a</code>.</li>
-<li>Open editor tabs reloaded before step B (announced: a step-A tab left open shows &quot;Offline — not saved yet&quot; until it is reloaded; the reload brings its typing back once, #910).</li>
+<li>The owner was asked before the promotion PR was opened. Every check on the promotion PR had to be done, including the full lab tier and the full benchmark on the exact head, then an independent promotion review. Only then <code>git push origin &lt;sha&gt;:prod</code>: production deploys on that push (#664 is still open).</li>
+<li>A backup immediately before the push, per backup.md §1 (pg_dump + the data volume through a one-off app container). Step A&#39;s own backup.md had data-volume steps that fail (#848), so #899 pointed at <code>dev</code>&#39;s backup.md at <code>b465e2a</code>; #920 used its own head&#39;s.</li>
+<li>Reload open editor tabs before step B, and tell users first: a step-A tab left open shows &quot;Offline — not saved yet&quot; until it is reloaded, and the reload brings its typing back once (#910).</li>
 <li>Operator scripts: in step A&#39;s image, <code>node --import tsx src/scripts/&lt;name&gt;.ts</code> (#872); from step B, <code>pnpm &lt;script&gt;</code> works offline (#878).</li>
-<li><code>ELARA_MONITORING_TOKEN</code> in the production <code>.env</code>, the repository secret&#39;s value, at least 32 characters.</li>
+<li><code>ELARA_MONITORING_TOKEN</code> in the production <code>.env</code>: the repository secret&#39;s value, at least 32 characters.</li>
 <li>A dry run and first boot of the exact head on the production snapshot, posted to #703 (comments above).</li>
 </ol>
-<h3>5.3 Post-flight as run</h3>
-<p>The owner confirmed each item on the live server after each step:</p>
-<ol>
-<li><code>/health</code>: up, a new <code>bootId</code>, <code>version</code> = the promoted commit, <code>lastShutdown: graceful</code>.</li>
-<li>The boot log:<ul>
-<li>step A: <code>[store] backfill:</code> with 0 failed;</li>
-<li>step B: the collab backfill with 0 set aside and 0 failed, and <code>.crdt.pre-adr-003/</code> present;</li>
-<li><code>DATA_DIR/migration-report-*.json</code> and <code>collab-migration-report-*.json</code>.</li>
+<h3>5.3 Post-flight: what is on record</h3>
+<p>The promotion PRs listed the post-flight checks: <code>/health</code>, the boot report (store backfill; for step B the collab backfill and <code>.crdt.pre-adr-003/</code>), <code>check-notes</code>, <code>doctor</code> (step B), the monitoring endpoint, and the editor showing <code>Synced</code>. What the record shows:</p>
+<ul>
+<li><strong>Step A, the owner</strong> (<a href="https://github.com/PIIIX-org/chapters/pull/899#issuecomment-6358929809">#899 comment 6358929809</a>): &quot;all checks good after the step A deploy of f3724d0 — /health version, first-boot store backfill, check-notes, editor Synced&quot;. To the coordinator: &quot;everything on the server seems good&quot;.</li>
+<li><strong>Step B, the owner</strong> (<a href="https://github.com/PIIIX-org/chapters/pull/920#issuecomment-6360647981">#920 comment 6360647981</a>): &quot;all checks good on d3b210e. Phase 2 is complete in production.&quot; To the coordinator: &quot;everything works on the live server&quot;.</li>
+<li><strong><code>version</code> in <code>/health</code>:</strong> the uptime monitor&#39;s restart comment on #636 (<a href="https://github.com/PIIIX-org/chapters/issues/636#issuecomment-6342600068">comment 6342600068</a>, 2026-10-22 13:59 UTC) shows <code>version</code> <em>none</em> for the process started at 13:11:08 UTC, after step A. That fits <a href="https://github.com/PIIIX-org/chapters/issues/664">#664</a>: production builds from source on the push, not from the published image that carries <code>ELARA_VERSION</code>. So <code>/health</code> cannot be relied on to name the promoted commit until #664 is fixed.</li>
+<li><strong>Uptime monitor after step B: pending.</strong> The last <code>uptime.yml</code> run before this was written ran at 04:58 UTC (<a href="https://github.com/PIIIX-org/chapters/actions/runs/39903154428">run 39903154428</a>), before the 07:55 UTC push.</li>
+<li><strong>The lab never runs against production.</strong> It builds its own instance from the commit under test on the CI runner (<code>docs/agents/lab.md</code>). That lab instance is what phase-1 §10 calls &quot;the staging server&quot;. There is no separate staging deployment.</li>
 </ul>
-</li>
-<li><code>check-notes --wait-idle --fail-on-pending</code>: 0 broken, 0 pending. On step B, <code>doctor --repair</code> then <code>doctor</code> (exit 3 and then 0 in the rehearsal), with one <code>INFO migration-copy</code> line per unparseable file in the migration report (#908).</li>
-<li><code>/api/admin/monitoring</code> answers with the token, and the uptime monitor passes.</li>
-<li>The editor shows <code>Synced</code>.</li>
-</ol>
-<p>There is no staging server: the lab builds its own instance from the commit under test (<code>docs/agents/lab.md</code>), never against production.</p>
 <h3>5.4 Rollback (valid until the next promotion)</h3>
 <p><code>prod</code> runs step B (<code>d3b210e</code>). backup.md §5, &quot;Which way back&quot;, has the commands.</p>
 <ul>
@@ -779,7 +774,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <li>Check out <code>f3724d0</code> and run <code>docker compose up -d --build app</code>. It reads the exported bins, so tabs that reload keep their history.</li>
 <li>Rolling forward to step B again needs nothing: the S2b boot merges the bins the step-A relay wrote and compacts the history again.</li>
 </ol>
-<p>This was rehearsed on the exact step-B head (#703 comment 6359468988).</p>
+<p>This was rehearsed from the exact step-B head (#703 comment 6359468988), with one caveat. The rehearsal started the step-A image by its tag, so its <code>--build</code> was a no-op; <code>git checkout f3724d0 &amp;&amp; docker compose up -d --build app</code> itself has never been run from source.</p>
 </li>
 <li><p><strong>Restore, losing every write since the upgrade:</strong> stop the app, remove the database and data volumes (<code>docker compose down -v</code>), check out the release the backup was taken on, follow backup.md §2 steps 1–8 with the pre-step-B backup, and start it. After the next promotion this is the only way back over phase 2.</p>
 </li>
@@ -925,7 +920,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 </li>
 </ol>
 <h2>10. Open follow-ups found during phase 2</h2>
-<p>Every open issue filed since 2026-10-19 (<code>gh issue list --search &quot;created:&gt;=2026-10-19&quot; --state open</code>), classified. Section 3.2 has the reasons for the ones moved out during the phase.</p>
+<p>Every issue filed from 2026-10-19 to 2026-10-23 09:00 UTC (the time of writing) that is still open (<code>gh issue list --search &quot;created:&gt;=2026-10-19&quot; --state open</code>), classified. Section 3.2 has the reasons for the ones moved out during the phase.</p>
 <table>
 <thead>
 <tr>
@@ -948,6 +943,11 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <td><a href="https://github.com/PIIIX-org/chapters/issues/891">#891</a></td>
 <td>Bug, manual SQL only</td>
 <td>Phase 5 (decided, section 8); the lab keeps measuring it (2 baseline entries).</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/923">#923</a></td>
+<td>Bug, P2, filed 2026-10-23 08:38 UTC: a repository file that grows past 1 MB or gains a NUL byte keeps its old indexed content in <code>read_file</code>, search, symbols and imports, and nothing reports it (both sync paths skip the file but keep its path current)</td>
+<td>Phase 3, with the code-index items (#449–#456, #465 &quot;report skipped files&quot;): it makes answers silently stale.</td>
 </tr>
 <tr>
 <td><a href="https://github.com/PIIIX-org/chapters/issues/921">#921</a></td>
@@ -2002,7 +2002,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 </tr>
 </tbody></table>
 <h3>Phase 5: everything else</h3>
-<p>47 open (<a href="https://github.com/PIIIX-org/chapters/milestone/6">milestone 6</a>). 34 fix-list items plus 12 added issues (#707 together with #556; the rest where they fit).</p>
+<p>47 open (<a href="https://github.com/PIIIX-org/chapters/milestone/6">milestone 6</a>). 34 fix-list items plus 13 added issues: 12 from phase 1 (#707 together with #556; the rest where they fit) and #891 from phase 2.</p>
 <table>
 <thead>
 <tr>
@@ -2338,9 +2338,9 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <tr>
 <td>—</td>
 <td>—</td>
-<td><a href="https://github.com/PIIIX-org/chapters/issues/891">#891</a></td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/891">#891</a> (added in phase 2)</td>
 <td>P2</td>
-<td>collab: a CRDT state put back by SQL behind a newer row doubles an open tab&#39;s typing (rebase stand-ins vs. original items) (added in phase 2)</td>
+<td>collab: a CRDT state put back by SQL behind a newer row doubles an open tab&#39;s typing (rebase stand-ins vs. original items)</td>
 </tr>
 </tbody></table>
 <h3>Phase 6: rendered views and data attachments</h3>
