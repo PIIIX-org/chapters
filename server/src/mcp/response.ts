@@ -126,17 +126,15 @@ export interface KeysetSection<T> {
  * first item (recomputed per page); the cursor holds the offset and a guard
  * over the `id`s before it, so a ranking that changed is refused, never
  * skipped or repeated. `limit` bounds the whole ranking: pages walk its first
- * `limit` items, and an item past them (a limit + 1 fetch) only sets `">limit"`.
- * `capped`: the handler cut the ranking at `items`' end (a `limit` argument,
- * from a fetch of limit + 1): the total reads `">n"` and the answer is never
- * whole, but no cursor continues past the cut (a larger limit does).
+ * `limit` items, and an item past them (a limit + 1 fetch) only sets `">limit"`:
+ * the answer is not whole, but no cursor continues past it (a larger limit
+ * does), and the page goes on to the sections after this one.
  */
 export interface RankedSection<T> {
   name: string
   items: readonly T[]
   id: (item: T) => string
   limit?: number
-  capped?: boolean
   ladder?: Ladder<T>
 }
 
@@ -291,9 +289,8 @@ interface Slot {
   start: number
   /** Ranked and keyset sections: the items this page may show, in order. */
   avail: readonly unknown[]
+  /** More items than `avail`: a keyset section's next page, or a ranked section's items past its `limit` (no page). */
   more: boolean
-  /** A ranked section the handler capped (`RankedSection.capped`), from this page on. */
-  capped: boolean
   limit: number
 }
 
@@ -301,11 +298,11 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
   const s0 = at?.s ?? 0
   if (s0 >= answer.sections.length) throw invalid('not a position of this answer')
   return answer.sections.map((section, i): Slot => {
-    if (i < s0) return { section, start: -1, avail: [], more: false, capped: false, limit: 0 }
+    if (i < s0) return { section, start: -1, avail: [], more: false, limit: 0 }
     const here = at !== null && i === s0
     if (section.kind === 'keyset') {
       const limit = section.limit ?? Infinity
-      return { section, start: 0, avail: section.items.slice(0, limit), more: section.more === true || section.items.length > limit, capped: false, limit }
+      return { section, start: 0, avail: section.items.slice(0, limit), more: section.more === true || section.items.length > limit, limit }
     }
     if (section.kind === 'ranked') {
       const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
@@ -316,14 +313,14 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
       const limit = section.limit ?? Infinity
       // `limit` bounds the ranking as a whole, not each page: pages walk its first `limit` items, and the
       // lookahead item past them (a limit + 1 fetch) only says that more exist.
-      return { section, start, avail: section.items.slice(start, limit), more: section.items.length > limit, capped: section.capped === true && section.items.length <= limit, limit }
+      return { section, start, avail: section.items.slice(start, limit), more: section.items.length > limit, limit }
     }
     const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
     if (!Number.isSafeInteger(start) || start < 0) throw invalid('not a position of this answer')
     if (here && (start > section.text.length || at.g !== guardOf(section.text))) {
       throw new CursorError('CURSOR_STALE', `stale cursor: the ${section.name} changed since this cursor was issued; start again without \`cursor\``)
     }
-    return { section, start, avail: [], more: false, capped: false, limit: Infinity }
+    return { section, start, avail: [], more: false, limit: Infinity }
   })
 }
 
@@ -396,7 +393,8 @@ function fill(slots: Slot[], room: number, itemLength: (slot: number, i: number)
       shown[n] = i + 1
       any = true
     }
-    if (slot.more) return { shown, forced: false, stop: n }
+    // A keyset list's next page starts here; past a ranked list's `limit` there is no page, so the next section fills on.
+    if (slot.more && slot.section.kind === 'keyset') return { shown, forced: false, stop: n }
   }
   return { shown, forced: false, stop: -1 }
 }
@@ -547,8 +545,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       continue
     }
     const exact = slot.start < 0 ? 0 : slot.avail.length
-    counts.total[section.name] = slot.more || slot.capped ? `>${exact}` : exact
-    anyDropped ||= slot.capped
+    counts.total[section.name] = slot.more ? `>${exact}` : exact
     if (aggregate && slot.start >= 0) {
       values.push([section.name, aggregateOf(slot, aggregate)])
       counts.shown[section.name] = 0

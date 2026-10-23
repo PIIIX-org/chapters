@@ -104,8 +104,10 @@ const index = { outcome: settled.outcome, ms: settled.ms, files: progress.files,
 ctx.log(`index ${index.outcome}: ${index.files} files, ${index.embedded} embedded, ${index.symbols} symbols`)
 if (index.outcome !== 'complete') throw new Error(`indexing did not complete (${index.outcome}); not running agents on a partial index`)
 
-// The Elara arm's token: pinned to the trial repository, read access, only its tools.
-const minted = await ctx.mintToken('admin', ctx.uniq('agent-trial'), 'repository', { repositoryId: repo.id, access: 'read', allowedTools: ELARA_TOOLS })
+// The Elara arm's token: pinned to the trial repository, read access, only its tools. The
+// `admin` profile (#428), because `repository_status`, its first call, is in no smaller profile;
+// the allow-list is what limits it to ELARA_TOOLS.
+const minted = await ctx.mintToken('admin', ctx.uniq('agent-trial'), 'repository', { repositoryId: repo.id, access: 'read', profile: 'admin', allowedTools: ELARA_TOOLS })
 const mcp = ctx.mcp(minted.token, 'agent-trial')
 const toolsets: Record<Arm, Toolset> = {
   elara: elaraToolset(await mcp.listTools(), async (tool, args, timeoutMs) => {
