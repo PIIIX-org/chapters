@@ -64,7 +64,22 @@ export function isSlug(value: string): boolean {
   return SLUG.test(value)
 }
 
-export class OkfValidationError extends Error {}
+/** The slug rule of every path segment, `type` and name, as the regex text an error shows (#439). */
+export const SLUG_RULE = SLUG.source
+
+/** What an OKF refusal is about (#439): MCP answers it as OKF_INVALID, TYPE_MISMATCH or ALREADY_EXISTS. */
+export type OkfRefusal = 'invalid' | 'type_mismatch' | 'exists'
+
+/** A note the OKF rules refuse; `rule` is the rule it broke when one names it (the slug regex, the type rule). */
+export class OkfValidationError extends Error {
+  constructor(
+    message: string,
+    readonly refusal: OkfRefusal = 'invalid',
+    readonly rule?: string,
+  ) {
+    super(message)
+  }
+}
 
 /**
  * The shared OKF validation (Editor spec hardening): every write path —
@@ -79,14 +94,16 @@ export function validateNote(
   frontmatter: Frontmatter,
   body: string,
 ): void {
-  if (!isSlug(type)) throw new OkfValidationError(`invalid type slug: ${type}`)
+  if (!isSlug(type)) throw new OkfValidationError(`invalid type slug: ${type}`, 'invalid', SLUG_RULE)
   const nameSegments = name.split('/')
   if (nameSegments.length === 0 || nameSegments.some((seg) => !isSlug(seg))) {
-    throw new OkfValidationError(`invalid name slug: ${name}`)
+    throw new OkfValidationError(`invalid name slug: ${name}`, 'invalid', SLUG_RULE)
   }
   if (frontmatter.type !== type) {
     throw new OkfValidationError(
       `frontmatter type "${String(frontmatter.type)}" does not match path type "${type}"`,
+      'type_mismatch',
+      'frontmatter `type` equals the first path segment',
     )
   }
   if (frontmatter.tags !== undefined) {

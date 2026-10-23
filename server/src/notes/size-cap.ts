@@ -20,10 +20,12 @@ import { OkfValidationError } from './okf.js'
  */
 export class NoteTooLargeError extends OkfValidationError {
   readonly statusCode = 413
-  /** `atLeast`: `bytes` is a lower bound, for a body refused before it is built. */
+  /** `atLeast`: `bytes` is a lower bound, for a body refused before it is built. The rule (#439) names the limit. */
   constructor(bytes: number, limit: number, context?: string, atLeast = false) {
     super(
       `${context ? `${context}: ` : ''}note body ${atLeast ? 'would be at least' : 'is'} ${bytes} bytes (UTF-8); the limit is ${limit} bytes (ELARA_NOTE_MAX_BYTES)`,
+      'invalid',
+      `note body at most ${limit} bytes (UTF-8, ELARA_NOTE_MAX_BYTES)`,
     )
   }
 }

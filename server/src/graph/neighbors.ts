@@ -23,6 +23,7 @@ import {
   type GraphResourceSet,
   type InternalNode,
 } from './assemble.js'
+import { McpToolError } from '../mcp/errors.js'
 
 /**
  * The local graph around one node (#426): every node within `depth` edges of
@@ -95,9 +96,17 @@ export async function resolveGraphNode(resources: GraphResourceSet, ref: string)
   }
   if (found.length === 1) return found[0]!
   if (found.length === 0) {
-    throw new Error(`"${ref}" is not a node of this graph: pass a node id or its exact path (a note path without .md, or a repository file path)`)
+    throw new McpToolError(
+      'NOT_FOUND',
+      `"${ref}" is not a node of this graph: pass a node id or its exact path (a note path without .md, or a repository file path)`,
+    )
   }
-  throw new Error(`"${ref}" names ${found.length} nodes; pass one of their ids: ${found.map((n) => `${n.id} (${n.resourceType} ${n.path})`).join(', ')}`)
+  // The candidates come from `resources`, which the caller's access resolved: their ids are in its reach.
+  throw new McpToolError(
+    'AMBIGUOUS',
+    `"${ref}" names ${found.length} nodes; pass one of their ids: ${found.map((n) => `${n.id} (${n.resourceType} ${n.path})`).join(', ')}`,
+    { suggestions: found.map((n) => n.id) },
+  )
 }
 
 /** The nodes reached so far, by id and by path. */
