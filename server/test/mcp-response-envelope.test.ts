@@ -33,6 +33,12 @@ type Answer = Record<string, unknown> & { truncated: Truncated }
 
 /** Default budgets (#420): reads 4,000 tokens, every other budgeted tool 2,000. */
 const DEFAULT_BUDGET: Record<string, number> = { read_note: 4_000, read_file: 4_000, get_revision: 4_000 }
+/**
+ * A budget that pages these fixtures' lists at `full`: at least 5 whole items
+ * a page (#421), never all of them. Smaller budgets step down the ladder
+ * (mcp-budget-ladder.test.ts).
+ */
+const LIST_PAGE = 700
 
 let app: FastifyInstance
 let baseUrl: string
@@ -192,7 +198,7 @@ describe('note_history: hasMore/nextCursor moved into truncated', () => {
   })
 
   it('a small budget drops whole revisions; paging returns every revision once, in order', async () => {
-    const pages = await walk('note_history', { vaultId, path: HISTORY, limit: 100, budget_tokens: 256 })
+    const pages = await walk('note_history', { vaultId, path: HISTORY, limit: 100, budget_tokens: LIST_PAGE })
     expect(pages.length).toBeGreaterThan(2)
     expect(pages.some((p) => p.truncated !== false && p.truncated.dropped.revisions! > 0)).toBe(true)
     const all = await page('note_history', { vaultId, path: HISTORY, limit: 100, budget_tokens: 25_000 })
@@ -231,7 +237,7 @@ describe('browse_vault and browse_repository', () => {
   it('browse_vault: the default answer stays within 2,000 tokens; paging lists every note once, by path', async () => {
     const first = await page('browse_vault', { vaultId })
     expect(first.truncated).not.toBe(false)
-    const pages = await walk('browse_vault', { vaultId, budget_tokens: 256 })
+    const pages = await walk('browse_vault', { vaultId, budget_tokens: LIST_PAGE })
     const paths = pages.flatMap((p) => (p.notes as Array<{ path: string }>).map((n) => n.path))
     const all = await page('browse_vault', { vaultId, budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
@@ -244,13 +250,13 @@ describe('browse_vault and browse_repository', () => {
   it('browse_vault of a directory pages subdirectories, notes and the index text; a cursor of the whole-vault view is refused', async () => {
     const all = await page('browse_vault', { vaultId, path: 'docs', budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
-    const pages = await walk('browse_vault', { vaultId, path: 'docs', budget_tokens: 256 })
+    const pages = await walk('browse_vault', { vaultId, path: 'docs', budget_tokens: LIST_PAGE })
     expect(pages.length).toBeGreaterThan(2)
     expect(pages.flatMap((p) => p.subdirectories as unknown[])).toEqual(all.subdirectories)
     expect(ids(pages, 'notes', (n) => n.path as string)).toEqual(ids([all], 'notes', (n) => n.path as string))
     expect(pages.map((p) => p.indexContent ?? '').join('')).toBe(all.indexContent)
-    const whole = await page('browse_vault', { vaultId, budget_tokens: 256 })
-    await refused('browse_vault', { vaultId, path: 'docs', budget_tokens: 256, cursor: cursorOf(whole) }, /invalid cursor/)
+    const whole = await page('browse_vault', { vaultId, budget_tokens: LIST_PAGE })
+    await refused('browse_vault', { vaultId, path: 'docs', budget_tokens: LIST_PAGE, cursor: cursorOf(whole) }, /invalid cursor/)
   })
 
   it('browse_repository is {files, truncated}; paging lists every file once', async () => {
@@ -384,19 +390,19 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
     expect(all.truncated).toBe(false)
     // The fixture: the 9 chain links and nothing else (no semantic or structural edge).
     expect(ids([all], 'edges', (e) => e.kind as string)).toEqual(Array.from({ length: 9 }, () => 'extracted'))
-    const pages = await walk('graph', { vaultId: graphVaultId, budget_tokens: 256 })
-    expect(pages.length).toBeGreaterThan(2)
+    const pages = await walk('graph', { vaultId: graphVaultId, budget_tokens: LIST_PAGE })
+    expect(pages.length).toBeGreaterThan(1)
     expect(ids(pages, 'nodes').sort()).toEqual(ids([all], 'nodes').sort())
     const edge = (e: Record<string, unknown>) => `${e.source}>${e.target}:${e.kind}`
     expect(ids(pages, 'edges', edge).sort()).toEqual(ids([all], 'edges', edge).sort())
-    await refused('graph', { vaultId: graphVaultId, types: ['c1'], budget_tokens: 256, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
+    await refused('graph', { vaultId: graphVaultId, types: ['c1'], budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
   })
 
   it('find_graph_path: a path cut by the budget continues with the cursor', async () => {
     const args = { vaultId: graphVaultId, source: 'c0/link', target: 'c9/link' }
     const all = await page('find_graph_path', { ...args, budget_tokens: 25_000 })
     expect(all).toMatchObject({ found: true, distance: 9, truncated: false })
-    const pages = await walk('find_graph_path', { ...args, budget_tokens: 256 })
+    const pages = await walk('find_graph_path', { ...args, budget_tokens: LIST_PAGE })
     expect(pages.length).toBeGreaterThan(1)
     expect(ids(pages, 'nodes')).toEqual(ids([all], 'nodes'))
     expect(ids(pages, 'edges', (e) => `${e.source}>${e.target}`)).toEqual(ids([all], 'edges', (e) => `${e.source}>${e.target}`))
@@ -409,17 +415,17 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
     const all = await page('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 50, budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
     expect((all.results as unknown[]).length).toBe(30)
-    const pages = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 50, budget_tokens: 256 })
+    const pages = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 50, budget_tokens: LIST_PAGE })
     expect(pages.length).toBeGreaterThan(2)
     expect(ids(pages, 'results')).toEqual(ids([all], 'results'))
-    await refused('find_symbols', { repositoryId: repoId, query: 'other', limit: 50, budget_tokens: 256, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
+    await refused('find_symbols', { repositoryId: repoId, query: 'other', limit: 50, budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
 
     // `limit` bounds the ranking, not each page: a walk of a limit + 1 fetch shows exactly `limit` results, the
     // same as one large answer, and the lookahead result past them only says ">limit" (no cursor beyond it).
     const capped = await page('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 29, budget_tokens: 25_000 })
     expect(capped.results).toHaveLength(29)
     expect(capped.truncated).toMatchObject({ total: { results: '>29' }, dropped: { results: 0 }, cursor: null })
-    const walked = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 29, budget_tokens: 256 })
+    const walked = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 29, budget_tokens: LIST_PAGE })
     expect(walked.length).toBeGreaterThan(2)
     expect(ids(walked, 'results')).toEqual(ids([capped], 'results'))
   })

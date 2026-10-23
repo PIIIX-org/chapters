@@ -1641,12 +1641,42 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     10-20 % on code and JSON and 1.3-4x on Persian or Chinese text; kept
     because it is what the benchmark gate measures, ADR-004 §5); the rendered text stays within the budget
     (items dropped whole from the end, a refill loop accounts for the
-    `truncated` block), except that an answer which would show nothing
-    shows its first item or line, so paging always moves on.
+    `truncated` block), except that a text which would show nothing
+    shows its first line (split when longer than the page), so paging
+    always moves on.
+  - Ladder (#421, ADR-004 §2.1): `render()` tries `full`, `no_context`,
+    `locations`, `counts`, `total` in order, one level for the whole
+    answer; a level no list on the page defines is skipped. An item level
+    is kept when the page fits and did not stop inside a list, or the
+    list it stopped in could show `min(MIN_ITEMS = 5, items left)` at
+    that level on a page of its own (so a list crowded out by an earlier
+    section starts the next page instead of stepping down). `counts` is
+    kept when it fits; `total` always is (a head larger than the budget
+    is the one way over it). A section's `ladder` gives its forms:
+    `no_context` and `locations` map an item (a missing form falls back
+    to the level above), `group`/`weight` key `counts`. At `counts` a
+    list is `{group: n}` (keys in code-unit order) and at `total` `n`,
+    over the items from the page start; no item is shown (`shown` 0,
+    everything `dropped`), lists issue no cursor, and text after a
+    counted list is left out (counted); a text before the counted lists
+    that did not fit keeps its cursor (`read_file`'s content beside a
+    counted outline). Text is never laddered. Below
+    `full`, `narrow` starts with `budget_tokens: N`, the budget measured
+    to show `min(5, left)` items of that list at `full` (omitted over
+    25,000), and `truncated` is never `false`.
+  - Forms per tool: `browse_vault`/`list_trash` notes `{id, path, type,
+    name}` → path → per folder (`folderOf`, `.` at the root); directory
+    `subdirectories` → name → `{name: notes under it}`;
+    `browse_repository` files `{path, language}` → path → per folder;
+    `note_history` revisions `{id, action, createdAt}` → id → per action;
+    `find_symbols` results without `snippet` → `path#La-Lb` (`location`,
+    ADR-004 §2.2) → per file; `graph`/`find_graph_path` nodes `{id, path,
+    type, community}` (community nodes `{id, community, size}`) → `{id,
+    path}` (`{id}`) → per type (`communities`), edges → per kind;
+    `read_file`'s outline → per kind.
   - `truncated` is always the last key: `false`, or `{shown, total,
-    dropped, level: 'full', cursor, narrow}`, counted from the page start
-    (`total` `">n"` from a limit + 1 fetch). `level` is a hook for the
-    ladder (#421), which is not built.
+    dropped, level, cursor, narrow}`, counted from the page start
+    (`total` `">n"` from a limit + 1 fetch).
   - Cursor: base64url JSON `{v: 1, t: tool, f, k: {s, p}, g?}`. `f` is 16
     hex of sha256 over the canonical arguments without `cursor`,
     `budget_tokens` and the id arguments, plus the resolved scope
@@ -1659,7 +1689,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     for a first page with `truncated: false` (the whole body).
   - `search` keeps its bare array and has no budget (its envelope waits
     for #441/#442/#458). `test/mcp-response-envelope.test.ts` drives each
-    tool family through the MCP HTTP path.
+    tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`
+    each ladder level.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
