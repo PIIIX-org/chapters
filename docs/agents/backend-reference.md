@@ -1291,8 +1291,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **Relevance gate** (#441): each vector leg takes its 30 nearest rows
     (`ORDER BY distance LIMIT 30`, which the HNSW index serves) and keeps
     those with cosine distance under `config.searchMaxDistance`
-    (`SEARCH_MAX_DISTANCE`; default by embedder: see the threshold
-    measurement in `config.ts`; 0.8 for the fake embedder). Keyword rows
+    (`SEARCH_MAX_DISTANCE`; 0.40 for bge-small, measured on the five
+    benchmark corpora as `config.ts` records; 0.8 for the fake embedder).
+    Keyword rows
     always count. The gate cuts a suffix of a distance-ordered list, so the
     RRF ranks of the rows it keeps do not change.
   - **Degraded** (#458): a failed query embedding (`queryVector`) skips the
