@@ -720,7 +720,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   so it keeps text typed after the agent's `read_note`, which itself
   serves the live document (#474, below). REST PUT takes `baseRev` (#865,
   the `rev` REST GET returned, or a revision id) and is rebased from it
-  the same way: a clean merge answers the row plus `status`
+  the same way: a clean merge answers `noteReply` of the row plus `status`
   (`applied`/`merged`), `concurrentChanges` and `baseRev`; an overlap
   writes nothing, keeps the body as a `proposal` revision and answers 409
   `{ error, status: "conflicted", baseRev, proposalId, conflicts }`; a
@@ -747,7 +747,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   ids, #822): `getBaseRevision`, never a `quarantine` or `proposal` row;
   anything else is refused and nothing changes.
 - **Write results** (#477, `mcp/write-result.ts`): every MCP note write
-  answers its row (without `seq`) plus `rev`, `status`
+  answers `noteReply` of its row (`notes/reply-fields.ts`, #427, #931:
+  only `NOTE_REPLY_FIELDS` = id, vaultId, type, name, path, frontmatter,
+  body, createdAt, updatedAt, plus `rev` = `seq`; never `embedding`,
+  `deletedAt`, `seq` or other columns) plus `status`
   (`applied`/`merged`/`conflicted`, or `retry` when `StoreBusyError`
   refused it: nothing written, `rev` null), `diff_stats` (`diffLines`
   hunks from `WriteOutcome.before`, the state writeNote met, to the
@@ -761,7 +764,11 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   recording (`proposalId: null`, `NoteWriteWouldQuarantineError`).
   `idempotency_key`: `write_idempotency` (above). A read whose fold
   the store refuses (StoreBusyError) fails as `NoteReadBusyError`, with a
-  read's wording.
+  read's wording. The REST write routes (POST `/notes`, PUT `/notes/*`,
+  POST `/notes-rename`, POST `/trash/:noteId/restore`, POST `/revert/*`)
+  answer the same `noteReply` (PUT with `baseRev` adds `status`,
+  `concurrentChanges`, `baseRev`, above); REST GET answers id, path,
+  `rev`, frontmatter, body, updatedAt.
 - **Stale base: three-way merge or proposal** (#475): with `base_rev`,
   `writeThroughCollab` gets `NoteEdit.base` and rebases the edit
   onto the live document inside the same transaction
@@ -1048,7 +1055,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
 - **Body size cap** (#491, `size-cap.ts`): one cap on every write path,
   `ELARA_NOTE_MAX_BYTES` (`config.noteMaxBytes`, default 1 MiB =
   1048576), measured as the **UTF-8 bytes of the body** (frontmatter is
-  not counted). `assertBodyFits` runs in `createNote` and `updateNote`
+  counted apart, next item). `assertBodyFits` runs in `createNote` and `updateNote`
   (REST, MCP, import, the relay's store) and in `writeThroughCollab`
   before the live document is edited, so a refused write never reaches
   editors. A write is refused (`NoteTooLargeError`, an
@@ -1079,6 +1086,26 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   body under 1 MiB with JSON escaping was refused), import took any size
   and the relay stored up to ws's 100 MiB default (60 MiB froze the
   server ~20 s in the lab).
+- **Frontmatter size cap** (#933, `assertFrontmatterFits` in
+  `size-cap.ts`): the same `ELARA_NOTE_MAX_BYTES` bounds the frontmatter
+  as stored, counted apart from the body and measured as the relay
+  measures the rest of a live document (#780): each key's UTF-8 bytes
+  plus its value as JSON (`frontmatterBytes`). It runs on the *resulting*
+  map, after a per-key merge (#438), so many small merges cannot grow it
+  past the cap: in `newNoteState` (create, upsert/append creating a note,
+  import) and in `writeNote` after `compute` (REST PUT, MCP
+  `edit_note`/`append_note`/`upsert_note`/`revert_note`, dry runs, the
+  relay's store), plus the fold's `refusal` and a rename's `type` rewrite
+  (`moveNote`). Inside `compute` it runs before any revision can be
+  written: in `updateNote` and `writeThroughCollab` before the write
+  quarantine (`refuseSuspiciousWrite`), and in `propose` before the
+  `proposal` revision, so neither stores an over-cap map. Same rule as the body: refused
+  (`NoteTooLargeError`, REST 413, MCP `isError`, import `skipped`: `note
+  frontmatter (keys and values as JSON) is N bytes (UTF-8); the limit is
+  L bytes (ELARA_NOTE_MAX_BYTES)`) when over the cap **and** larger than
+  the stored frontmatter, before anything is written; a note already over
+  it can shrink (`removeKeys`, `replace`) and take body-only edits.
+  `restore_note` puts a trashed note back unchanged, so it cannot grow.
 - **Write quarantine** (`growth-guard.ts`, #492): a stale reload once
   doubled a whole note (#488) and the store wrote it like any edit. A body
   write is checked against the stored body (UTF-8 bytes, linear time:
@@ -1108,7 +1135,21 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   MCP/REST write continues only an identical retry of the newest quarantine
   by the same actor. `recordRevision`'s
   dedupe skips quarantine and proposal rows. Restore one
-  with `revert_note` / the REST revert route.
+  with `revert_note` / the REST revert route. The relay **tells the
+  editors** (#784): a Hocuspocus stateless message `{"type":
+  "elara-store", "quarantine": {revisionId, rule, repeatedBytes,
+  noteBytes, excerpt} | null}`. It is sent to every connection on connect
+  (`connected` hook) and broadcast whenever it changes: set by a
+  quarantined store, cleared by the next written store. A document loaded
+  with `note_crdt.fold_error` set (after an unload or a restart) rebuilds
+  it from the repeat check against the row and the newest quarantine
+  revision by `ord`. `excerpt` is the first 80 characters of the first
+  repeated chunk (`firstRepeatAt`). The editor shows `QuarantineNotice`
+  and the status pill reads "Held back". Clients cannot send it: their
+  stateless messages go to the default `onStateless`, which relays
+  nothing. The typing itself survives a reload through the CRDT log
+  (ADR-003: `keepRefusedTyping` appends the refused state with
+  `fold_error`), not through the browser's copy.
 - **Restore points** (`withRestorePoint` in `store.ts`, #482): the MCP
   write tools (`edit_note`, `rename_note`, `delete_note`, `revert_note`)
   run through `withRestorePoint(vaultId, path, connectionId, write)`.
@@ -1450,7 +1491,39 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   e.g. an undone paste), it first rebuilds the document from its own
   state: same history, so it still merges, but deleted text and the undo
   history are dropped (the notice says so); the browser's copy moves to
-  the new document.
+  the new document. **The rest of the document** (#780) is bounded the
+  same way, by the same cap and separately from the body: `restBytes` is
+  the content of every live item that is not body text (frontmatter keys
+  and values as JSON, strings in other root types, embeds, formatting,
+  binaries, nested types, and entries of the `body` type's own map: body
+  text is only a string item in its list, `parentSub` null, #952), so
+  frontmatter can no longer grow without
+  limit into the row and the file, and nothing else can grow in the CRDT
+  log. Its running bound counts 6× each update's length (the worst JSON
+  expansion of Yjs's encoding: `false` is 1 byte encoded and 5 as JSON, a
+  control character 1 and 6), so property edits far from the cap measure
+  nothing. An update that adds nothing but body text (typing, deletions)
+  skips the rest check, as an update without text skips the body's, so
+  typing on a note whose frontmatter is already over the cap measures
+  nothing either (#947). `addsRest` follows what Yjs will do with the
+  update, not what it claims: an update that re-sends an id the document
+  holds (Yjs skips it) or holds one id twice (Yjs keeps the last section)
+  counts as rest, a decoded item's parent is its neighbour's
+  (`origin`/`rightOrigin`) in the document first, then in the update, and
+  an item it cannot place counts as rest; the full check then runs.
+  The editor measures both parts alike (`client/src/lib/noteSize.ts`),
+  `tooLarge.otherBytes` says how large the properties are, and it reconnects
+  only once both fit. REST, MCP and import bound frontmatter with the same
+  measure (`jsonBytes` from `size-cap.ts`; Frontmatter size cap, #933).
+  Before a `note-too-large` close the relay sends the refused connection a
+  stateless `{"type": "elara-size", limitBytes, bodyBytes, otherBytes}`:
+  the exact sizes of the document it holds (`documentSizes`, which also
+  restarts both bounds). "Fits" for the editor is then the relay's own
+  rule (#948): each part within the cap or no larger than the relay's
+  (`tooLarge.bodyRoomBytes`/`otherRoomBytes`), so a note whose
+  frontmatter is stored over the cap resumes once the body is cut, and
+  `TooLargeNotice` asks only for the cuts that are needed. Without the
+  message (a 1009 close, an older relay) each part must fit the cap.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
   Every share/team/deactivation mutation calls `emitPermissionChange()`,
   and every session delete announces the ended sessions' hashes on it;
