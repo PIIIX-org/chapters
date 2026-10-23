@@ -18,6 +18,7 @@
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { and, eq, getTableColumns, sql } from 'drizzle-orm'
+import { z } from 'zod'
 import { db } from '../db/client.js'
 import { notes, writeIdempotency } from '../db/schema.js'
 import { withKeyLock } from '../notes/key-lock.js'
@@ -26,6 +27,20 @@ import { StoreBusyError } from '../notes/store-tx.js'
 import { diffLines } from '../sync/text-diff.js'
 
 export type WriteStatus = 'applied' | 'merged' | 'conflicted' | 'retry'
+
+/**
+ * The `outputSchema` every write tool lists (#433): the fields every write
+ * answer has, whatever its status (a dry run, a replay, a `retry`, a
+ * `conflicted` edit and delete_note's answer included). Other keys are
+ * allowed, so the SDK's check of a successful answer, which runs after the
+ * write committed, never turns one into an error; they are documented in
+ * mcp-tools.md. Kept this small because tools/list repeats it per tool.
+ */
+export const WRITE_RESULT_SCHEMA = z.looseObject({
+  rev: z.number().nullable(),
+  status: z.enum(['applied', 'merged', 'conflicted', 'retry'] satisfies WriteStatus[]),
+  indexed: z.boolean(),
+})
 
 export interface DiffStats {
   lines_added: number

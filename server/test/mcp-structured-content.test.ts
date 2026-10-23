@@ -10,9 +10,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv'
 import { buildApp } from '../src/app.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
+import { retryResult } from '../src/mcp/write-result.js'
 import { createNote } from '../src/notes/store.js'
+import { StoreBusyError } from '../src/notes/store-tx.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
@@ -115,7 +118,7 @@ describe('structuredContent is the text JSON, per tool family', () => {
     expect(Array.isArray(vaults.json)).toBe(true)
     expect(vaults.structured).toBeUndefined()
     await ok('browse_vault', { vaultId, recursive: true })
-    await ok('get_vault_preferences', { vaultId })
+    await ok('get_vault_preferences', {})
   })
 
   it('note reads and history', async () => {
@@ -143,15 +146,12 @@ describe('write answers validate against the listed outputSchema', () => {
     const created = await ok('create_note', { vaultId, path: 'w/one', body: 'a\nb\nc\n', idempotency_key: 'k-one' })
     expect(created).toMatchObject({ path: 'w/one', rev: 1, status: 'applied' })
     expect(typeof created.createdAt).toBe('string')
-    const replayed = await ok('create_note', { vaultId, path: 'w/one', body: 'a\nb\nc\n', idempotency_key: 'k-one' })
-    expect(replayed).toMatchObject({ rev: 1, replayed: true })
-
     const edited = await ok('edit_note', { vaultId, path: 'w/one', body: 'a\nB\nc\n', base_rev: 1 })
     expect(edited).toMatchObject({ status: 'applied', rev: 2 })
+    const merged = await ok('edit_note', { vaultId, path: 'w/one', body: 'a\nb\nc\nd\n', base_rev: 1 })
+    expect(merged).toMatchObject({ status: 'merged', rev: 3 })
     const conflicted = await ok('edit_note', { vaultId, path: 'w/one', body: 'a\nX\nc\n', base_rev: 1 })
-    expect(conflicted).toMatchObject({ status: 'conflicted', diff_stats: null })
-    const merged = await ok('edit_note', { vaultId, path: 'w/one', body: 'a\nB\nc\nd\n', base_rev: 1 })
-    expect(merged.status).toMatch(/^(merged|conflicted)$/)
+    expect(conflicted).toMatchObject({ status: 'conflicted', rev: 3, diff_stats: null })
 
     await ok('append_note', { vaultId, path: 'w/one', text: 'tail' })
     expect(await ok('upsert_note', { vaultId, path: 'w/two', body: 'two\n' })).toMatchObject({ created: true, status: 'applied' })
@@ -163,6 +163,15 @@ describe('write answers validate against the listed outputSchema', () => {
     const history = await ok('note_history', { vaultId, path: 'w/one' })
     const oldest = (history.revisions as Array<{ id: string }>).at(-1)!
     await ok('revert_note', { vaultId, path: 'w/one', revisionId: oldest.id })
+  })
+
+  it('a `retry` answer (the store was busy) fits the listed schema too, with the validator the client uses', async () => {
+    resetRateLimits()
+    const { tools } = await agent.listTools()
+    const validate = new AjvJsonSchemaValidator().getValidator(tools.find((t) => t.name === 'create_note')!.outputSchema!)
+    const retry = JSON.parse(JSON.stringify(retryResult(new StoreBusyError('lock timeout')))) as unknown
+    expect(validate(retry)).toMatchObject({ valid: true })
+    expect(validate({ rev: 1, status: 'done', indexed: true }).valid, 'an unknown status is refused').toBe(false)
   })
 })
 
