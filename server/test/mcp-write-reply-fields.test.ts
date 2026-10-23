@@ -74,7 +74,7 @@ afterAll(async () => {
 
 describe('write replies carry no embedding or internal columns (#427)', () => {
   it('create, edit, append, upsert, rename, revert, delete and restore answer only the documented fields', async () => {
-    const path = 'notes/lean.md'
+    const path = 'notes/lean'
     const created = await call('create_note', { path, frontmatter: { title: 'Lean' }, body: 'One.\n' })
     expectLean('create_note', created)
     expect(created.answer).toMatchObject({ path, body: 'One.\n', frontmatter: { title: 'Lean' }, rev: 1, status: 'applied' })
@@ -83,10 +83,10 @@ describe('write replies carry no embedding or internal columns (#427)', () => {
     expectLean('edit_note', await call('edit_note', { path, body: 'One.\nTwo.\n' }))
     await embed(path)
     expectLean('edit_note dry_run', await call('edit_note', { path, body: 'Three.\n', dry_run: true }))
-    expectLean('append_note', await call('append_note', { path, content: 'Three.\n' }))
+    expectLean('append_note', await call('append_note', { path, text: 'Three.\n' }))
     await embed(path)
     expectLean('upsert_note', await call('upsert_note', { path, body: 'Upserted.\n' }))
-    expectLean('upsert_note create', await call('upsert_note', { path: 'notes/other.md', body: 'Other.\n' }))
+    expectLean('upsert_note create', await call('upsert_note', { path: 'notes/other', body: 'Other.\n' }))
     await embed(path)
 
     const renamed = await call('rename_note', { from: path, toName: 'leaner' })
@@ -106,7 +106,7 @@ describe('write replies carry no embedding or internal columns (#427)', () => {
   })
 
   it('a stored answer recorded in the old shape is stripped when replayed', async () => {
-    const path = 'notes/replayed.md'
+    const path = 'notes/replayed'
     await call('create_note', { path, body: 'Body.\n' })
     const args = { path, body: 'Edited.\n', idempotency_key: 'reply-fields-replay' }
     expectLean('edit_note keyed', await call('edit_note', args))
