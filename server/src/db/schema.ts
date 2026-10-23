@@ -44,6 +44,8 @@ export const permission = pgEnum('permission', ['read', 'edit'])
 export const mcpScope = pgEnum('mcp_scope', ['account', 'vault', 'repository'])
 /** What an MCP token may do, ordered: read < write < admin (#548, #549). */
 export const mcpAccess = pgEnum('mcp_access', ['read', 'write', 'admin'])
+/** The tools an MCP token lists and may call, nested: reader < writer < admin (every tool) (#428). */
+export const mcpProfile = pgEnum('mcp_profile', ['reader', 'writer', 'admin'])
 export const emailTokenPurpose = pgEnum('email_token_purpose', [
   'verify_email',
   'password_reset',
@@ -243,6 +245,10 @@ export const mcpConnections = pgTable(
     access: mcpAccess('access').notNull(),
     // null = every tool `access` permits; otherwise only these tool names.
     allowedTools: text('allowed_tools').array(),
+    // Set at mint time only (#428, migration 0032). Narrows what `access`,
+    // `allowedTools` and the scope allow; 'admin' (every tool) is the default
+    // for tokens minted before it and for API mints that name none.
+    profile: mcpProfile('profile').notNull().default('admin'),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
