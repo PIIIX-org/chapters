@@ -323,6 +323,114 @@ describe('collab relay store', () => {
   })
 })
 
+/** What the relay tells a document's editors about its stores (#784): the stateless `elara-store` message. */
+interface StoreNotice {
+  type: 'elara-store'
+  quarantine: { revisionId: string; rule: string; repeatedBytes: number; noteBytes: number; excerpt: string } | null
+}
+
+/** An editor on `docName` that records every `elara-store` notice the relay sends it. */
+function editor(docName: string, document = new Y.Doc()): { provider: HocuspocusProvider; notices: StoreNotice[] } {
+  const notices: StoreNotice[] = []
+  const provider = new HocuspocusProvider({
+    url: `${baseUrl.replace('http', 'ws')}/collab`,
+    name: docName,
+    token: ownerToken,
+    document,
+    onStateless: ({ payload }) => {
+      const message = JSON.parse(payload) as StoreNotice
+      if (message.type === 'elara-store') notices.push(message)
+    },
+  })
+  providers.push(provider)
+  return { provider, notices }
+}
+
+/** Waits a little for a notice in flight, then leaves the assertion to the caller (fails-before must fail on one). */
+async function settleNotices(check: () => boolean): Promise<void> {
+  await waitFor(check, 3000).catch(() => undefined)
+}
+
+// #784: a quarantined store was only logged; every editor kept seeing their typing as synced and was never told.
+describe('editors are told when the relay quarantines their store (#784)', () => {
+  it('tells every editor, names the revision and the repeated passage, and clears once a store succeeds', async () => {
+    const path = 'docs/told-of-quarantine'
+    const body = paragraphs('told', 25)
+    const noteId = (await must<{ id: string }>('create_note', { vaultId, path, body })).id
+    const docName = `${vaultId}/~${noteId}`
+    const typist = editor(docName)
+    const other = editor(docName)
+    const text = typist.provider.document.getText('body')
+    await waitFor(() => text.toString() === body && other.provider.document.getText('body').toString() === body)
+    // A connection is told the state it joins: nothing held back.
+    await settleNotices(() => typist.notices.length > 0)
+    expect(typist.notices.at(-1)).toEqual({ type: 'elara-store', quarantine: null })
+
+    text.insert(text.length, `\n\n${body}`)
+    await waitFor(async () => (await quarantined(noteId)).length > 0)
+    const [revision] = await quarantined(noteId)
+    await settleNotices(() => typist.notices.at(-1)?.quarantine != null && other.notices.at(-1)?.quarantine != null)
+    for (const { notices } of [typist, other]) {
+      expect(notices.at(-1)?.quarantine).toMatchObject({ revisionId: revision!.id, rule: 'repeated-block', noteBytes: Buffer.byteLength(body) })
+      expect(notices.at(-1)!.quarantine!.repeatedBytes).toBeGreaterThan(1024)
+      // The excerpt is text of the note that now appears twice.
+      const excerpt = notices.at(-1)!.quarantine!.excerpt
+      expect(excerpt.length).toBeGreaterThan(10)
+      expect(body).toContain(excerpt)
+    }
+
+    // A tab that opens the note while the duplicate stands is told at once, before it types anything.
+    const late = editor(docName)
+    await settleNotices(() => late.notices.at(-1)?.quarantine != null)
+    expect(late.notices.at(-1)?.quarantine?.revisionId).toBe(revision!.id)
+    late.provider.destroy()
+
+    // The duplicate removed, the next store is written: everyone hears that nothing is held back any more.
+    text.delete(body.length, text.length - body.length)
+    await waitFor(async () => (await rowBody(path)) === body && (await fileBody(path)) === body)
+    await settleNotices(() => typist.notices.at(-1)?.quarantine === null && other.notices.at(-1)?.quarantine === null)
+    expect(typist.notices.at(-1)).toEqual({ type: 'elara-store', quarantine: null })
+    expect(other.notices.at(-1)).toEqual({ type: 'elara-store', quarantine: null })
+  })
+
+  it('after an unload and a reload, the editor is told again before typing anything, and the typing is still there', async () => {
+    const path = 'docs/told-after-reload'
+    const body = paragraphs('reload', 25)
+    const noteId = (await must<{ id: string }>('create_note', { vaultId, path, body })).id
+    const docName = `${vaultId}/~${noteId}`
+    const first = editor(docName)
+    const text1 = first.provider.document.getText('body')
+    await waitFor(() => text1.toString() === body)
+    text1.insert(text1.length, `\n\n${body}\n\ntyped-before-reload`)
+    await waitFor(async () => ((await quarantined(noteId))[0]?.body ?? '').endsWith('typed-before-reload'))
+    const [revision] = await quarantined(noteId)
+    first.provider.destroy()
+    await waitFor(() => !collab.hocuspocus.documents.has(docName), 15_000)
+
+    const second = editor(docName)
+    const text2 = second.provider.document.getText('body')
+    await waitFor(() => text2.toString().endsWith('typed-before-reload'))
+    await settleNotices(() => second.notices.at(-1)?.quarantine != null)
+    expect(second.notices.at(-1)?.quarantine).toMatchObject({ revisionId: revision!.id, rule: 'repeated-block' })
+    expect(await quarantined(noteId)).toHaveLength(1)
+    expect(await rowBody(path)).toBe(body)
+  })
+
+  it('a client cannot send the notice to other editors', async () => {
+    const path = 'docs/spoofed-notice'
+    const noteId = (await must<{ id: string }>('create_note', { vaultId, path, body: 'plain' })).id
+    const docName = `${vaultId}/~${noteId}`
+    const sender = editor(docName)
+    const receiver = editor(docName)
+    await waitFor(() => sender.provider.isSynced && receiver.provider.isSynced)
+    await settleNotices(() => receiver.notices.length > 0)
+    const before = receiver.notices.length
+    sender.provider.sendStateless(JSON.stringify({ type: 'elara-store', quarantine: { revisionId: 'x', rule: 'repeated-block', repeatedBytes: 1, noteBytes: 1, excerpt: 'x' } }))
+    await sleep(300)
+    expect(receiver.notices.slice(before)).toEqual([])
+  })
+})
+
 describe('writes that are not quarantined', () => {
   it('a stub filled in, ordinary growth and a large first write pass', async () => {
     const stub = 'docs/stub-then-filled'

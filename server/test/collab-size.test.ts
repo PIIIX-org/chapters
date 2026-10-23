@@ -123,3 +123,94 @@ describe('collab size guard (#491)', () => {
     expect(updateFits(server, first, LIMIT)).toBe(false)
   })
 })
+
+/** The update `edit` makes on the client's whole document (frontmatter, other roots), as the relay would receive it. */
+function docUpdateFrom(client: Y.Doc, edit: (doc: Y.Doc) => void): Uint8Array {
+  const before = Y.encodeStateVector(client)
+  edit(client)
+  return Y.encodeStateAsUpdate(client, before)
+}
+
+// #780: the body was the only thing bounded; frontmatter and any other content in the document were not.
+describe('collab size guard: the rest of the document (#780)', () => {
+  it('refuses a frontmatter value that would take the rest of the document past the cap', () => {
+    const { server, client } = pair('short body')
+    const update = docUpdateFrom(client, (doc) => doc.getMap('frontmatter').set('huge', 'f'.repeat(LIMIT)))
+    expect(updateFits(server, update, LIMIT)).toBe(false)
+  })
+
+  it('refuses frontmatter that passes the cap over many keys, each one far under it', () => {
+    const { server, client } = pair('short body')
+    let refused = -1
+    for (let i = 0; i < 20; i++) {
+      const update = docUpdateFrom(client, (doc) => doc.getMap('frontmatter').set(`k${i}`, 'v'.repeat(100)))
+      if (!updateFits(server, update, LIMIT)) {
+        refused = i
+        break
+      }
+      Y.applyUpdate(server, update)
+    }
+    // Nine or so values of about 106 bytes (key, quotes, value) fit; the next would pass 1000.
+    expect(refused).toBeGreaterThanOrEqual(8)
+    expect(refused).toBeLessThanOrEqual(10)
+    expect(server.getMap('frontmatter').size).toBe(refused)
+  })
+
+  it('counts JSON values by what they take written out, not by their compact encoding', () => {
+    const { server, client } = pair('')
+    // 400 `false`s encode in about 400 bytes and are 2400 as JSON.
+    const update = docUpdateFrom(client, (doc) => doc.getMap('frontmatter').set('flags', Array.from({ length: 400 }, () => false)))
+    expect(update.length).toBeLessThan(LIMIT)
+    expect(updateFits(server, update, LIMIT)).toBe(false)
+  })
+
+  it('refuses content in other root types and non-text content in the body', () => {
+    const map = pair('body')
+    expect(updateFits(map.server, docUpdateFrom(map.client, (doc) => doc.getMap('junk').set('k', 'j'.repeat(LIMIT))), LIMIT)).toBe(false)
+    const text = pair('body')
+    expect(updateFits(text.server, docUpdateFrom(text.client, (doc) => doc.getText('junk').insert(0, 'j'.repeat(LIMIT + 1))), LIMIT)).toBe(false)
+    const array = pair('body')
+    expect(updateFits(array.server, docUpdateFrom(array.client, (doc) => doc.getArray('junk').insert(0, [new Uint8Array(LIMIT + 1)])), LIMIT)).toBe(false)
+    const embed = pair('body')
+    expect(updateFits(embed.server, updateFrom(embed.client, (t) => t.insertEmbed(0, { blob: 'e'.repeat(LIMIT) })), LIMIT)).toBe(false)
+    const format = pair('body')
+    expect(updateFits(format.server, updateFrom(format.client, (t) => t.format(0, 4, { style: 's'.repeat(LIMIT) })), LIMIT)).toBe(false)
+  })
+
+  it('keeps the body and the rest apart: a body at the cap still takes small frontmatter', () => {
+    const { server, client } = pair('x'.repeat(LIMIT))
+    const update = docUpdateFrom(client, (doc) => doc.getMap('frontmatter').set('title', 'At the cap'))
+    expect(updateFits(server, update, LIMIT)).toBe(true)
+  })
+
+  it('lets a document whose rest is already over the cap shrink, but not grow', () => {
+    const server = new Y.Doc()
+    server.getText('body').insert(0, 'body')
+    server.getMap('frontmatter').set('big', 'b'.repeat(LIMIT + 50))
+    server.getMap('frontmatter').set('small', 'kept')
+    const client = new Y.Doc()
+    Y.applyUpdate(client, Y.encodeStateAsUpdate(server))
+    const shrink = docUpdateFrom(client, (doc) => doc.getMap('frontmatter').delete('small'))
+    expect(updateFits(server, shrink, LIMIT)).toBe(true)
+    Y.applyUpdate(server, shrink)
+    expect(updateFits(server, docUpdateFrom(client, (doc) => doc.getMap('frontmatter').set('more', 'm')), LIMIT)).toBe(false)
+    // Body typing does not grow the rest: still taken.
+    expect(updateFits(server, updateFrom(client, (t) => t.insert(0, 'typing ')), LIMIT)).toBe(true)
+  })
+
+  it('lets frontmatter edits far from the cap through without measuring the document', () => {
+    const { server, client } = pair('x'.repeat(100))
+    const primer = docUpdateFrom(client, (doc) => doc.getMap('frontmatter').set('title', 'first'))
+    expect(updateFits(server, primer, LIMIT)).toBe(true)
+    Y.applyUpdate(server, primer)
+    const toString = vi.spyOn(textPrototype, 'toString')
+    const toJSON = vi.spyOn(Y.Map.prototype, 'toJSON')
+    for (let i = 0; i < 5; i++) {
+      const update = docUpdateFrom(client, (doc) => doc.getMap('frontmatter').set('title', `t${i}`))
+      expect(updateFits(server, update, LIMIT)).toBe(true)
+      Y.applyUpdate(server, update)
+    }
+    expect(toString).not.toHaveBeenCalled()
+    expect(toJSON).not.toHaveBeenCalled()
+  })
+})

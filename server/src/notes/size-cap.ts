@@ -61,13 +61,17 @@ export function assertLengthFits(length: number, current?: string, context?: str
 }
 
 /**
- * Bytes of `value` written out as JSON (strings with their quotes and
- * escapes, as UTF-8), without building the whole document.
+ * Bytes `value` takes written out as JSON (strings with their quotes and
+ * escapes, as UTF-8); binary data (a Yjs value) counts its length. Measured
+ * without building the JSON text: a large Uint8Array would turn into an
+ * object ten times its size. One measure for frontmatter on every write path
+ * (#933) and the rest of a live document on the relay (#780, collab-size.ts).
  */
-function jsonBytes(value: unknown): number {
+export function jsonBytes(value: unknown): number {
   if (typeof value === 'string') return Buffer.byteLength(JSON.stringify(value), 'utf8')
   if (value === null || value === undefined) return 4
   if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value).length
+  if (value instanceof Uint8Array) return value.length
   if (Array.isArray(value)) {
     let bytes = 2 + Math.max(0, value.length - 1)
     for (const item of value) bytes += jsonBytes(item)
