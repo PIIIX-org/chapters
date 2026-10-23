@@ -78,7 +78,7 @@ describe('REST note write replies carry no embedding or internal columns (#931)'
     await embed(moved)
 
     const history = (await rest('GET', `/history/${moved}?limit=200`)).reply as unknown as Array<{ id: string; action: string }>
-    const first = history[history.length - 1]
+    const first = history.at(-1)!
     const reverted = await rest('POST', `/revert/${moved}`, { revisionId: first.id })
     expectLean('POST /revert', reverted)
     expect(reverted.reply).toMatchObject({ path: moved, body: 'One.\n' })

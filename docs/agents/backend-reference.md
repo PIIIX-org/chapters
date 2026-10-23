@@ -739,7 +739,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   ids, #822): `getBaseRevision`, never a `quarantine` or `proposal` row;
   anything else is refused and nothing changes.
 - **Write results** (#477, `mcp/write-result.ts`): every MCP note write
-  answers its row (without `seq`) plus `rev`, `status`
+  answers `noteReply` of its row (`notes/reply-fields.ts`, #427, #931:
+  only `NOTE_REPLY_FIELDS` = id, vaultId, type, name, path, frontmatter,
+  body, createdAt, updatedAt, plus `rev` = `seq`; never `embedding`,
+  `deletedAt`, `seq` or other columns) plus `status`
   (`applied`/`merged`/`conflicted`, or `retry` when `StoreBusyError`
   refused it: nothing written, `rev` null), `diff_stats` (`diffLines`
   hunks from `WriteOutcome.before`, the state writeNote met, to the
@@ -753,7 +756,11 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   recording (`proposalId: null`, `NoteWriteWouldQuarantineError`).
   `idempotency_key`: `write_idempotency` (above). A read whose fold
   the store refuses (StoreBusyError) fails as `NoteReadBusyError`, with a
-  read's wording.
+  read's wording. The REST write routes (POST `/notes`, PUT `/notes/*`,
+  POST `/notes-rename`, POST `/trash/:noteId/restore`, POST `/revert/*`)
+  answer the same `noteReply` (PUT with `baseRev` adds `status`,
+  `concurrentChanges`, `baseRev`, above); REST GET answers id, path,
+  `rev`, frontmatter, body, updatedAt.
 - **Stale base: three-way merge or proposal** (#475): with `base_rev`,
   `writeThroughCollab` gets `NoteEdit.base` and rebases the edit
   onto the live document inside the same transaction
