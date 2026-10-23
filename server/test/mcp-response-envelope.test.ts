@@ -85,7 +85,8 @@ async function page(tool: string, args: Args): Promise<Answer> {
       if (typeof total === 'number') expect(shown + t.dropped[name]!, `${tool} ${name}: shown + dropped = total`).toBe(total)
       else expect(total).toMatch(/^>\d+$/)
     }
-    expect(t.cursor !== null || Object.values(t.dropped).some((n) => n > 0)).toBe(true)
+    // Something was left out: a next page, dropped items, or more past a ranked `limit` (">n").
+    expect(t.cursor !== null || Object.values(t.dropped).some((n) => n > 0) || Object.values(t.total).some((n) => typeof n === 'string')).toBe(true)
   }
   return json
 }
@@ -429,6 +430,15 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
     expect(pages.length).toBeGreaterThan(2)
     expect(ids(pages, 'results')).toEqual(ids([all], 'results'))
     await refused('find_symbols', { repositoryId: repoId, query: 'other', limit: 50, budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
+
+    // `limit` bounds the ranking, not each page: a walk of a limit + 1 fetch shows exactly `limit` results, the
+    // same as one large answer, and the lookahead result past them only says ">limit" (no cursor beyond it).
+    const capped = await page('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 29, budget_tokens: 25_000 })
+    expect(capped.results).toHaveLength(29)
+    expect(capped.truncated).toMatchObject({ total: { results: '>29' }, dropped: { results: 0 }, cursor: null })
+    const walked = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 29, budget_tokens: LIST_PAGE })
+    expect(walked.length).toBeGreaterThan(2)
+    expect(ids(walked, 'results')).toEqual(ids([capped], 'results'))
   })
 })
 

@@ -2537,7 +2537,6 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     async (
       args: { query: string; kind?: 'function' | 'class' | 'interface' | 'type'; limit?: number },
       { repositoryId },
-      page,
     ) => {
       // null: an account-scoped connection with no repositoryId, or `everywhere`.
       if (repositoryId) await requireRepositoryAccess(repositoryId)
@@ -2545,8 +2544,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         ? [repositoryId]
         : (await listAccessibleRepositories(auth.user.id)).map((r) => r.id)
       const limit = args.limit ?? 20
-      // The ranking up to this page's end, plus one to know whether more follow.
-      const results = await findSymbols(repoIds, args.query, { kind: args.kind, limit: page.shownBefore(0) + limit + 1 })
+      // The first `limit` symbols of the ranking, plus one to know whether more match.
+      const results = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 })
       return {
         head: {},
         sections: [
