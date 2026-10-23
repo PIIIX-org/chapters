@@ -1,18 +1,18 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { OutgoingMessage, Server, type Hocuspocus } from '@hocuspocus/server'
+import { OutgoingMessage, Server, type Document, type Hocuspocus } from '@hocuspocus/server'
 import { WebSocketServer, type RawData } from 'ws'
 import * as Y from 'yjs'
 import { getSessionUser, sessionActive } from '../auth/sessions.js'
 import { hashToken } from '../auth/tokens.js'
 import { atLeast, resolveAccess } from '../vaults/permissions.js'
-import { and, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { notes } from '../db/schema.js'
-import { appendCollabUpdate, compactCollabState, keepRefusedTyping, loadCollabState, updateNote, type LoggedUpdate } from '../notes/store.js'
+import { noteRevisions, notes } from '../db/schema.js'
+import { QUARANTINE_ACTION, appendCollabUpdate, compactCollabState, keepRefusedTyping, loadCollabState, updateNote, type LoggedUpdate } from '../notes/store.js'
 import { NoteNotMigratedError, StoreBusyError, collabNoteMigrated, noteMigrated, storeMigrationPending, storeUnavailable } from '../notes/store-tx.js'
 import { docState, forgetLivePath, livePath, parseDocName, registerLiveDocs, setLivePath, type LiveDocument } from './live-docs.js'
-import { NoteWriteQuarantinedError } from '../notes/growth-guard.js'
+import { NoteWriteQuarantinedError, firstRepeatAt, suspiciousWrite, type SuspiciousWrite } from '../notes/growth-guard.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { affects, onPermissionChange } from './permission-events.js'
 import { publishNoteState } from './viewers.js'
@@ -21,7 +21,7 @@ import { COLLAB_PATH } from './routes.js'
 import { recordJob } from '../monitoring/metrics.js'
 import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
-import { bodyMeasured, updateFits } from './collab-size.js'
+import { bodyMeasured, documentSizes, updateFits } from './collab-size.js'
 import { liveTookUpdate, updateToLog } from './collab-append.js'
 import { advanceStoredState, rejectUpdate, rememberLoadedState } from './note-crdt.js'
 import { failpoint } from '../failpoints.js'
@@ -47,18 +47,27 @@ const SYNC_STEP_2 = 1
 const SYNC_UPDATE = 2
 
 /**
- * Thrown from `beforeSync` for an update the size cap refuses (#491).
- * Hocuspocus closes the document connection with this code and reason
- * before applying anything; the reason reaches the client in the close
- * message (client/src/hooks/useCollabDoc.ts reads `note-too-large`).
+ * Thrown from `beforeSync` for an update the size cap refuses (#491): the
+ * note body, or the rest of the document (frontmatter, anything else a
+ * client put in it, #780), would pass the cap. Hocuspocus closes the
+ * document connection with this code and reason before applying anything;
+ * the reason reaches the client in the close message
+ * (client/src/hooks/useCollabDoc.ts reads `note-too-large`). Just before,
+ * the refused connection gets a stateless SIZE_NOTICE
+ * `{"type":"elara-size","limitBytes","bodyBytes","otherBytes"}`: the exact
+ * sizes of the document the relay holds, against which a part may end up
+ * within the cap or no larger (collab-size.ts), so the editor resumes by the
+ * relay's own rule (#948).
  */
 class NoteTooLargeRefusal extends Error {
   readonly code = 4413
   readonly reason = 'note-too-large'
   constructor(documentName: string, limit: number) {
-    super(`refused an update to ${documentName}: the note body would pass ${limit} bytes (ELARA_NOTE_MAX_BYTES)`)
+    super(`refused an update to ${documentName}: the note body or the rest of the document (frontmatter) would pass ${limit} bytes (ELARA_NOTE_MAX_BYTES)`)
   }
 }
+
+const SIZE_NOTICE = 'elara-size'
 
 /**
  * The store is not taking writes for a moment (ADR-003 §5.1: this process's
@@ -183,6 +192,80 @@ function refuseReloadRequired(socket: ConnectionContext['socket'], documentName:
  * episode's refused body, the only copy of what was typed then.
  */
 const quarantineEpisodes = new WeakMap<Y.Doc, string>()
+
+/**
+ * What the relay tells a document's editors about its stores (#784), as a
+ * Hocuspocus stateless message `{"type":"elara-store","quarantine":…}`
+ * (client/src/hooks/useCollabDoc.ts reads it): `quarantine` is set while the
+ * document's stores are quarantined (#492), so the note keeps its stored body
+ * and the editors' typing goes to the CRDT log and a quarantine revision
+ * only, and null otherwise. Sent to every connection when it connects, to
+ * all of them when it changes (a store quarantined, a store written again),
+ * and rebuilt when a document loads with `fold_error` set (after an unload
+ * or a restart). Only the relay sends it: a client's stateless messages go
+ * to Hocuspocus's default `onStateless`, which relays nothing.
+ */
+interface QuarantineNotice {
+  /** The quarantine revision holding the refused body (History: "Held back"). */
+  revisionId: string | null
+  rule: SuspiciousWrite['rule']
+  repeatedBytes: number
+  /** The stored note's body, in UTF-8 bytes: what the note keeps. */
+  noteBytes: number
+  /** The start of the first repeated passage in the editors' text, so they can find it. */
+  excerpt: string
+}
+
+const STORE_NOTICE = 'elara-store'
+/** How much of the repeated passage a notice quotes, in UTF-16 units. */
+const EXCERPT_LENGTH = 80
+
+const quarantineNotices = new WeakMap<Y.Doc, QuarantineNotice>()
+
+function storeNotice(document: Y.Doc): string {
+  return JSON.stringify({ type: STORE_NOTICE, quarantine: quarantineNotices.get(document) ?? null })
+}
+
+/** Records `document`'s quarantine (null: none) and tells every editor when that changes what they were told. */
+function announceQuarantine(document: Document, notice: QuarantineNotice | null): void {
+  const before = storeNotice(document)
+  if (notice) quarantineNotices.set(document, notice)
+  else quarantineNotices.delete(document)
+  const after = storeNotice(document)
+  if (after !== before) document.broadcastStateless(after)
+}
+
+/**
+ * The notice for `document`, whose text the relay refused to store over note
+ * `noteId`'s body: what repeats and where, and the quarantine revision
+ * (`revisionId`, else the note's newest one by `ord`). Null when the text
+ * repeats nothing of the stored body (a store refused for another reason).
+ */
+async function quarantineNotice(noteId: string, document: Y.Doc, revisionId?: string): Promise<QuarantineNotice | null> {
+  const [row] = await db.select({ body: notes.body }).from(notes).where(eq(notes.id, noteId))
+  if (!row) return null
+  const text = document.getText('body').toString()
+  const finding = suspiciousWrite(row.body, text, 'repeated-block')
+  if (!finding) return null
+  let revision = revisionId ?? null
+  if (revision === null) {
+    const [newest] = await db
+      .select({ id: noteRevisions.id })
+      .from(noteRevisions)
+      .where(and(eq(noteRevisions.noteId, noteId), eq(noteRevisions.action, QUARANTINE_ACTION)))
+      .orderBy(desc(noteRevisions.ord))
+      .limit(1)
+    revision = newest?.id ?? null
+  }
+  const at = firstRepeatAt(row.body, text)
+  return {
+    revisionId: revision,
+    rule: finding.rule,
+    repeatedBytes: finding.repeatedBytes,
+    noteBytes: finding.previousBytes,
+    excerpt: at < 0 ? '' : text.slice(at, at + EXCERPT_LENGTH).trim(),
+  }
+}
 
 interface ConnectionContext {
   userId: string
@@ -339,7 +422,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     async onLoadDocument({ documentName, document, context }) {
       const name = parseDocName(documentName)
       if ('legacy' in name) throw new ReloadRequiredRefusal(documentName)
-      const { state, path, lastId } = await loadCollabState(name.vaultId, name.noteId).catch((err: unknown) => {
+      const { state, path, lastId, foldError } = await loadCollabState(name.vaultId, name.noteId).catch((err: unknown) => {
         // Loading is a store transaction (seed, catch-up): a busy or unreachable store refuses it like an update.
         if (storeUnavailable(err)) {
           throw refuseStoreBusy((context as Partial<ConnectionContext> | undefined)?.socket, documentName, err instanceof Error ? err.message : String(err))
@@ -351,7 +434,20 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       if (lastId !== null) rememberLoadedState(document, name.noteId, lastId)
       documentNotes.set(document, name.noteId)
       setLivePath(name.noteId, name.vaultId, path)
+      // Refused stores before this load (an unload, a restart): if they were a quarantine, the editors are told on connect (#784).
+      if (foldError !== null) {
+        const notice = await quarantineNotice(name.noteId, document).catch((err: unknown) => {
+          console.error(`collab quarantine notice of ${documentName} not built:`, err)
+          return null
+        })
+        if (notice) quarantineNotices.set(document, notice)
+      }
       return document
+    },
+
+    /** Each connection hears where its document's stores stand (#784): a quarantine, or none. */
+    async connected({ connection }) {
+      connection.sendStateless(storeNotice(connection.document))
     },
 
     /**
@@ -401,7 +497,11 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       if (writesPaused()) throw refuseStoreBusy(connection.webSocket, documentName, 'writes paused')
       const toLog = updateToLog(document, payload)
       const limit = config.noteMaxBytes
-      if (!updateFits(document, payload, limit)) throw new NoteTooLargeRefusal(documentName, limit)
+      if (!updateFits(document, payload, limit)) {
+        // What this document holds, which the editor resumes against (#948): sent first, so it reaches the editor before the close.
+        connection.sendStateless(JSON.stringify({ type: SIZE_NOTICE, limitBytes: limit, ...documentSizes(document) }))
+        throw new NoteTooLargeRefusal(documentName, limit)
+      }
       if (!toLog) return
       const noteId = documentNotes.get(document)
       const { vaultId } = parseDocName(documentName)
@@ -504,6 +604,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
           if (stored) break
         }
         quarantineEpisodes.delete(document)
+        announceQuarantine(document, null)
         recordJob('collab-store', 'ok', vaultId)
       } catch (err) {
         // A rejected store is a failed job (#705): the row keeps its last valid
@@ -513,6 +614,14 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
           // One report per episode: stores that continue it count as `repeated`.
           if (!err.repeat) console.error(`collab store quarantined for ${documentName}: ${err.message}`)
           recordJob('collab-store', { error: err, repeat: err.repeat }, vaultId)
+          // The editors see their text as synced: tell them it is held back, and where it is kept (#784).
+          if (noteId) {
+            const notice = await quarantineNotice(noteId, document, err.revisionId).catch((noticeErr: unknown) => {
+              console.error(`collab quarantine notice of ${documentName} not built:`, noticeErr)
+              return null
+            })
+            if (notice) announceQuarantine(document, notice)
+          }
         } else {
           // Invalid collab state (e.g. bad frontmatter): keep last valid row.
           console.error(`collab store rejected for ${documentName}:`, err)
