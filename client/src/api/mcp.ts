@@ -8,6 +8,14 @@ export type McpScope = 'account' | 'vault' | 'repository'
  */
 export type McpAccess = 'read' | 'write' | 'admin'
 
+/**
+ * The tools a token lists and may call, nested reader < writer < admin
+ * (#428): reader finds, reads and answers code questions, writer also
+ * creates and edits notes, admin has every tool. It narrows `access`, never
+ * widens it. Set when the token is minted.
+ */
+export type McpProfile = 'reader' | 'writer' | 'admin'
+
 export interface McpConnection {
   id: string
   name: string
@@ -15,7 +23,8 @@ export interface McpConnection {
   vaultId: string | null
   repositoryId: string | null
   access: McpAccess
-  /** null: every tool `access` permits. */
+  profile: McpProfile
+  /** null: every tool `access` and `profile` permit. */
   allowedTools: string[] | null
   createdAt: string
   lastUsedAt: string | null
@@ -30,7 +39,8 @@ export type McpTarget = { scope: 'vault'; vaultId: string } | { scope: 'account'
 export interface McpMintOptions {
   name: string
   access: McpAccess
-  /** Omitted: every tool `access` permits. */
+  profile: McpProfile
+  /** Omitted: every tool `access` and `profile` permit. */
   allowedTools?: string[]
   /** ISO time; omitted: never expires. */
   expiresAt?: string
@@ -43,6 +53,8 @@ export interface McpToolInfo {
   capability: McpAccess
   /** The user's permission on a pinned vault or repository that the tool needs (#649). */
   pinPermission: 'read' | 'edit' | 'owner'
+  /** The smallest profile the tool is in (#428). */
+  profile: McpProfile
 }
 
 // Only the create response carries the raw token, and only once.

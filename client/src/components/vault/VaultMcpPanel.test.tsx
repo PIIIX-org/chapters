@@ -15,6 +15,7 @@ const ACCOUNT_SCOPED: McpConnection = {
   vaultId: null,
   repositoryId: null,
   access: 'admin',
+  profile: 'admin',
   allowedTools: null,
   createdAt: '2026-08-01T00:00:00.000Z',
   lastUsedAt: null,
@@ -29,6 +30,7 @@ const OTHER_VAULT: McpConnection = {
   vaultId: 'v-other',
   repositoryId: null,
   access: 'write',
+  profile: 'writer',
   allowedTools: null,
   createdAt: '2026-08-01T00:00:00.000Z',
   lastUsedAt: null,
@@ -43,6 +45,7 @@ const THIS_VAULT: McpConnection = {
   vaultId: 'v1',
   repositoryId: null,
   access: 'write',
+  profile: 'writer',
   allowedTools: null,
   createdAt: '2026-08-01T00:00:00.000Z',
   lastUsedAt: null,
@@ -51,13 +54,14 @@ const THIS_VAULT: McpConnection = {
 }
 
 const TOOLS: McpToolInfo[] = [
-  { name: 'list_vaults', scope: 'account', capability: 'read', pinPermission: 'read' },
-  { name: 'read_note', scope: 'vault', capability: 'read', pinPermission: 'read' },
-  { name: 'list_trash', scope: 'vault', capability: 'read', pinPermission: 'edit' },
-  { name: 'list_vault_shares', scope: 'vault', capability: 'read', pinPermission: 'owner' },
-  { name: 'create_note', scope: 'vault', capability: 'write', pinPermission: 'edit' },
-  { name: 'share_vault', scope: 'vault', capability: 'admin', pinPermission: 'owner' },
-  { name: 'search', scope: 'vault-or-repo', capability: 'read', pinPermission: 'read' },
+  { name: 'list_vaults', scope: 'account', capability: 'read', pinPermission: 'read', profile: 'reader' },
+  { name: 'read_note', scope: 'vault', capability: 'read', pinPermission: 'read', profile: 'reader' },
+  { name: 'list_trash', scope: 'vault', capability: 'read', pinPermission: 'edit', profile: 'admin' },
+  { name: 'list_vault_shares', scope: 'vault', capability: 'read', pinPermission: 'owner', profile: 'admin' },
+  { name: 'create_note', scope: 'vault', capability: 'write', pinPermission: 'edit', profile: 'writer' },
+  { name: 'rename_note', scope: 'vault', capability: 'write', pinPermission: 'edit', profile: 'admin' },
+  { name: 'share_vault', scope: 'vault', capability: 'admin', pinPermission: 'owner', profile: 'admin' },
+  { name: 'search', scope: 'vault-or-repo', capability: 'read', pinPermission: 'read', profile: 'reader' },
 ]
 
 function postBody(fetchMock: Mock): Record<string, unknown> {
@@ -90,6 +94,7 @@ function stubFetch(opts: {
         scope: string
         vaultId?: string
         access: McpConnection['access']
+        profile: McpConnection['profile']
         allowedTools?: string[]
         expiresAt?: string
       }
@@ -100,6 +105,7 @@ function stubFetch(opts: {
         vaultId: body.vaultId ?? null,
         repositoryId: null,
         access: body.access,
+        profile: body.profile,
         allowedTools: body.allowedTools ?? null,
         createdAt: '2026-08-23T00:00:00.000Z',
         lastUsedAt: null,
@@ -161,7 +167,7 @@ describe('VaultMcpPanel', () => {
     expect(screen.queryByText('Claude')).toBeNull()
   })
 
-  it('create POSTs /api/mcp-connections with scope vault, this vaultId and write access by default', async () => {
+  it('create POSTs /api/mcp-connections with scope vault, this vaultId, write access and the writer profile by default', async () => {
     const fetchMock = stubFetch({ connections: [] })
     const user = userEvent.setup()
     renderPanel()
@@ -177,11 +183,11 @@ describe('VaultMcpPanel', () => {
       ),
     )
     // No allow-list and no expiry unless chosen; the tool catalog is never fetched.
-    expect(postBody(fetchMock)).toEqual({ name: 'Claude', scope: 'vault', vaultId: 'v1', access: 'write' })
+    expect(postBody(fetchMock)).toEqual({ name: 'Claude', scope: 'vault', vaultId: 'v1', access: 'write', profile: 'writer' })
     expect(fetchMock.mock.calls.some((c) => c[0] === '/api/mcp-connections/tools')).toBe(false)
   })
 
-  it('a read-only token with a 30-day expiry sends access read and an expiresAt 30 days ahead', async () => {
+  it('a read-only token with a 30-day expiry sends access read, the reader profile and an expiresAt 30 days ahead', async () => {
     const fetchMock = stubFetch({ connections: [] })
     const user = userEvent.setup()
     renderPanel()
@@ -195,7 +201,7 @@ describe('VaultMcpPanel', () => {
 
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
     const body = postBody(fetchMock)
-    expect(body).toMatchObject({ name: 'Reader', scope: 'vault', vaultId: 'v1', access: 'read' })
+    expect(body).toMatchObject({ name: 'Reader', scope: 'vault', vaultId: 'v1', access: 'read', profile: 'reader' })
     const days = (new Date(String(body.expiresAt)).getTime() - before) / (24 * 60 * 60 * 1000)
     expect(days).toBeGreaterThan(29.99)
     expect(days).toBeLessThan(30.01)
@@ -223,7 +229,7 @@ describe('VaultMcpPanel', () => {
     await user.type(screen.getByLabelText('New connection'), 'Member agent')
     await user.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
-    expect(postBody(fetchMock)).toEqual({ name: 'Member agent', scope: 'vault', vaultId: 'v1', access: 'write' })
+    expect(postBody(fetchMock)).toEqual({ name: 'Member agent', scope: 'vault', vaultId: 'v1', access: 'write', profile: 'writer' })
   })
 
   it('a member with a read-only share is offered read only, the default (#649)', async () => {
@@ -238,7 +244,7 @@ describe('VaultMcpPanel', () => {
     await user.type(screen.getByLabelText('New connection'), 'Reader agent')
     await user.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
-    expect(postBody(fetchMock)).toEqual({ name: 'Reader agent', scope: 'vault', vaultId: 'v1', access: 'read' })
+    expect(postBody(fetchMock)).toEqual({ name: 'Reader agent', scope: 'vault', vaultId: 'v1', access: 'read', profile: 'reader' })
   })
 
   it('an account token defaults to read and write, admin stays available, without the pinned-token warning', async () => {
@@ -256,7 +262,51 @@ describe('VaultMcpPanel', () => {
     await user.type(screen.getByLabelText('New connection'), 'Laptop')
     await user.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
-    expect(postBody(fetchMock)).toEqual({ name: 'Laptop', scope: 'account', access: 'write' })
+    expect(postBody(fetchMock)).toEqual({ name: 'Laptop', scope: 'account', access: 'write', profile: 'writer' })
+  })
+
+  it('the profile follows the access level until one is picked, then is sent as picked (#428)', async () => {
+    const fetchMock = stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderAccountPanel()
+
+    await screen.findByText('No account-wide MCP connections yet.')
+    const profile = screen.getByLabelText('Profile')
+    expect(within(profile).getAllByRole('option').map((o) => o.getAttribute('value'))).toEqual(['reader', 'writer', 'admin'])
+    expect(profile).toHaveValue('writer')
+    await user.selectOptions(screen.getByLabelText('Access'), 'read')
+    expect(profile).toHaveValue('reader')
+    await user.selectOptions(screen.getByLabelText('Access'), 'admin')
+    expect(profile).toHaveValue('admin')
+
+    // Once picked, the profile stays when the access level changes.
+    await user.selectOptions(profile, 'reader')
+    await user.selectOptions(screen.getByLabelText('Access'), 'write')
+    expect(profile).toHaveValue('reader')
+    await user.type(screen.getByLabelText('New connection'), 'Searcher')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
+    expect(postBody(fetchMock)).toEqual({ name: 'Searcher', scope: 'account', access: 'write', profile: 'reader' })
+  })
+
+  it('the allow-list offers only tools inside the chosen profile (#428)', async () => {
+    stubFetch({ connections: [] })
+    const user = userEvent.setup()
+    renderPanel()
+
+    await screen.findByText('No MCP connections for this vault yet.')
+    await user.selectOptions(screen.getByLabelText('Profile'), 'reader')
+    await user.click(screen.getByLabelText('Limit this token to specific tools'))
+    const group = await screen.findByRole('group', { name: 'Allowed tools' })
+    await within(group).findByLabelText(/read_note/)
+    expect(within(group).getByLabelText(/search/)).toBeInTheDocument()
+    expect(within(group).queryByLabelText(/create_note/)).toBeNull()
+    expect(within(group).queryByLabelText(/list_trash/)).toBeNull()
+
+    await user.selectOptions(screen.getByLabelText('Profile'), 'admin')
+    expect(within(group).getByLabelText(/create_note/)).toBeInTheDocument()
+    expect(within(group).getByLabelText(/rename_note/)).toBeInTheDocument()
+    expect(within(group).getByLabelText(/list_trash/)).toBeInTheDocument()
   })
 
   it('the allow-list offers only tools the access level and the vault pin can use, and sends the picked ones', async () => {
@@ -272,8 +322,10 @@ describe('VaultMcpPanel', () => {
     await within(group).findByLabelText(/read_note/)
     expect(within(group).getByLabelText(/create_note/)).toBeInTheDocument()
     expect(within(group).getByLabelText(/search/)).toBeInTheDocument()
-    // share_vault needs admin (this token is write); list_vaults is account-only.
+    // share_vault needs admin (this token is write); list_vaults is account-only;
+    // rename_note is outside the writer profile.
     expect(within(group).queryByLabelText(/share_vault/)).toBeNull()
+    expect(within(group).queryByLabelText(/rename_note/)).toBeNull()
     expect(within(group).queryByLabelText(/list_vaults/)).toBeNull()
 
     // Nothing picked: refused before any request.
@@ -284,7 +336,7 @@ describe('VaultMcpPanel', () => {
     await user.click(within(group).getByLabelText(/read_note/))
     await user.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
-    expect(postBody(fetchMock)).toEqual({ name: 'Limited', scope: 'vault', vaultId: 'v1', access: 'write', allowedTools: ['read_note'] })
+    expect(postBody(fetchMock)).toEqual({ name: 'Limited', scope: 'vault', vaultId: 'v1', access: 'write', profile: 'writer', allowedTools: ['read_note'] })
   })
 
   it("the allow-list leaves out tools that need more than the user's own permission on the vault (#649)", async () => {
@@ -293,6 +345,8 @@ describe('VaultMcpPanel', () => {
     renderPanel('v1', 'read')
 
     await screen.findByText('No MCP connections for this vault yet.')
+    // The admin profile, so only the vault permission leaves tools out.
+    await user.selectOptions(screen.getByLabelText('Profile'), 'admin')
     await user.click(screen.getByLabelText('Limit this token to specific tools'))
     const group = await screen.findByRole('group', { name: 'Allowed tools' })
     await within(group).findByLabelText(/read_note/)
@@ -308,6 +362,8 @@ describe('VaultMcpPanel', () => {
     renderPanel('v1', 'edit')
 
     await screen.findByText('No MCP connections for this vault yet.')
+    // list_trash is outside the writer profile the form starts on.
+    await user.selectOptions(screen.getByLabelText('Profile'), 'admin')
     await user.click(screen.getByLabelText('Limit this token to specific tools'))
     const group = await screen.findByRole('group', { name: 'Allowed tools' })
     await within(group).findByLabelText(/list_trash/)
@@ -325,11 +381,11 @@ describe('VaultMcpPanel', () => {
     renderPanel()
 
     const row = (await screen.findByText('Claude')).closest('tr') as HTMLElement
-    expect(row).toHaveTextContent('read')
+    expect(row).toHaveTextContent('read, writer profile')
     expect(row).toHaveTextContent('only read_note, search')
     expect(row).toHaveTextContent(/Expired/)
     const writer = screen.getByText('Writer').closest('tr') as HTMLElement
-    expect(writer).toHaveTextContent('write')
+    expect(writer).toHaveTextContent('write, writer profile')
     expect(writer).toHaveTextContent('all tools')
     expect(within(writer).getByText('Never')).toBeInTheDocument()
   })
