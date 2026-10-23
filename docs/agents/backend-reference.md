@@ -1612,10 +1612,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   output schemas' `$schema`.
   `test/mcp-tool-budget.test.ts` fails a reader account token over 2,000
   tokens (characters / 4 of `tools/list` plus `initialize`
-  instructions; measured 7,951 characters with #435's instructions;
+  instructions; measured 7,957 characters with #435's instructions;
   7,922 with #434's annotations; 7,649 before) and a writer one over
-  4,000 (15,544 with #435; 15,365 with #434; 14,972 with #433's output
-  schemas; 14,222 before), reports admin (42,174 with #435, of which
+  4,000 (15,605 with #435; 15,365 with #434; 14,972 with #433's output
+  schemas; 14,222 before), reports admin (42,235 with #435, of which
   `tools/list` 41,792; 42,082 with #434; 39,493 with #433; 37,493
   before; the `tools/list` ceiling, 43,000, is in
   `mcp-tool-schema.test.ts`), checks the bytes are the same on every call
@@ -1649,13 +1649,19 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `mcp/instructions.ts` is the `initialize` result's `instructions`
   (`new McpServer(info, {instructions})` in `buildServer`): one constant
   text per profile, with no id, name, date or pin, so every token of a
-  profile gets the same bytes (#681). Reader: answers fit
-  `budget_tokens` (characters / 4) and end with `truncated`, the cursor
-  is the only way on (read_note/read_file page long bodies only that
-  way), manuals are `elara://manual/conventions` and one per family.
-  Writer and admin (the same text) add the whole-`body` merge base
-  (`base_rev`, else this token's last read; `ops` edit the live text)
-  and the `idempotency_key` retry rule. Keyed on profile only: a
+  profile gets the same bytes (#681). Reader: tools with
+  `budget_tokens` (characters / 4) fit it and end with `truncated`
+  (`search`, `list_vaults` and `list_repositories` take no budget and
+  answer bare arrays), the cursor is the only way on (read_note/read_file
+  page long bodies only that way), manuals are
+  `elara://manual/conventions` and one per family. Writer and admin (the
+  same text) add the whole-`body` merge base (`base_rev`, else this
+  token's last unpaged `read_note` within `READ_WINDOW_HOURS`, 24 h,
+  `last-read.ts`; a paged read records nothing, so after one the agent
+  sends its `rev` as `base_rev`; `ops` edit the live text) and the retry
+  rule, scoped to note writes ("Retry a note write with the same
+  `idempotency_key`": only the note writes take the key, admin's other
+  writes refuse it). Keyed on profile only: a
   `read`-access token with the `writer` profile also gets the write
   sentence. The reader text fits the 2,000-token budget because the
   shared `budgetArgs` descriptions (`response.ts`) became `Max tokens;
