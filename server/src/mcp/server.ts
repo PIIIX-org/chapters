@@ -69,7 +69,7 @@ import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord } from '../vaults/routes.js'
 import { isTeamOwner, notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
-import { EDGE_KINDS, buildGraph, findShortestPath, type EdgeKind } from '../graph/assemble.js'
+import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type EdgeKind } from '../graph/assemble.js'
 import { neighborhood, resolveGraphNode } from '../graph/neighbors.js'
 import { isInstanceAdmin, visibleGlobalPerspectives } from '../graph/perspective-access.js'
 import { buildVaultZip } from '../export/archive.js'
@@ -2534,7 +2534,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault-or-repo',
       capability: 'read',
       description:
-        'Query the knowledge graph over notes and code. Default: one node per Louvain community; `community` lists one community, `aggregate: "none"` every node, `neighborsOf` the nodes within `depth` edges of one node (no community). Edges: extracted, structural, semantic (`edgeTypes`). `limit` keeps the first nodes (largest communities, most edges, nearest) and the edges among them.' +
+        'Knowledge graph of notes and code. Default: one node per Louvain community; `aggregate: "none"` lists every node, `neighborsOf` the nodes near one.' +
         ENVELOPE_DOC,
       inputSchema: {
         vaultId: UUID_ARG.optional().describe('Vault graph'),
@@ -2544,9 +2544,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         aggregate: z.enum(['community', 'none']).optional().describe('Default "community"'),
         community: z.number().int().optional().describe('Only this community\'s members'),
         neighborsOf: z.string().min(1).optional().describe('Node id or exact path'),
-        depth: z.number().int().min(1).max(3).optional().describe('With neighborsOf; default 1'),
+        depth: z.number().int().min(1).max(3).optional().describe('Edges from neighborsOf; default 1'),
         edgeTypes: z.array(z.enum(EDGE_KINDS)).min(1).optional().describe('Only these edge kinds'),
-        limit: z.number().int().min(1).max(1_000).optional().describe('Most nodes kept'),
+        limit: z.number().int().min(1).max(1_000).optional().describe('First n nodes and their edges'),
       },
       budget: 'list',
     },
@@ -2590,8 +2590,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         return {
           head: { center: { id: center.id, path: center.path }, depth, cappedGroups: local.cappedGroups },
           sections: [
-            // Already ranked: nearest first, the centre at the top.
-            ranked({ name: 'nodes', items: local.nodes, id: (n) => n.id, capped: local.more, ladder: GRAPH_NODE_LADDER }),
+            // Already ranked: nearest first, the centre at the top; `next` only says that more exist.
+            ranked({ name: 'nodes', items: local.next ? [...local.nodes, local.next] : local.nodes, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER }),
             ranked({ name: 'edges', items: [...local.edges].sort(byEdgeKey), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
           ],
           narrow: [...(depth > 1 ? [`depth: ${depth - 1}`] : []), ...(args.edgeTypes ? [] : ['edgeTypes: ["extracted"]']), ...typeGroups(local.nodes.slice(1))],
@@ -2603,29 +2603,32 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       if (args.community === undefined && args.aggregate !== 'none') {
         const { nodes, edges, ...head } = await buildGraph(resources, { ...filters, aggregate: 'community' })
         const ranking = [...nodes].sort((a, b) => b.size - a.size || a.community - b.community)
-        const kept = args.limit === undefined ? ranking : ranking.slice(0, args.limit)
         return {
+          // Its cappedGroups are the whole graph's: every node went into the communities.
           head,
           sections: [
-            ranked({ name: 'nodes', items: kept, id: (n) => n.id, capped: kept.length < ranking.length, ladder: GRAPH_NODE_LADDER }),
-            ranked({ name: 'edges', items: edgesAmong(edges, kept), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
+            ranked({ name: 'nodes', items: ranking, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER }),
+            ranked({ name: 'edges', items: edgesAmong(edges, ranking.slice(0, args.limit)), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
           ],
           narrow: ranking.slice(0, 3).map((c) => `community: ${c.community}`),
         }
       }
-      const { nodes, edges, ...head } = await buildGraph(resources, filters)
+      const { nodes, edges, cappedGroups, ...head } = await buildGraph(resources, filters)
       // Best-connected first (edges listed), then path and id: what `limit` keeps.
       const degree = new Map<string, number>()
       for (const e of edges) for (const id of [e.source, e.target]) degree.set(id, (degree.get(id) ?? 0) + 1)
       const ranking = [...nodes].sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) || compareCodeUnits(a.path, b.path) || compareCodeUnits(a.id, b.id))
-      const kept = args.limit === undefined ? ranking : ranking.slice(0, args.limit)
+      const kept = ranking.slice(0, args.limit)
+      // As for `neighborsOf`: the skipped groups a listed node belongs to.
+      const listedGroups = new Set(kept.flatMap(groupKeys))
       return {
-        head,
+        head: { cappedGroups: cappedGroups.filter((key) => listedGroups.has(key)), ...head },
         sections: [
-          ranked({ name: 'nodes', items: kept, id: (n) => n.id, capped: kept.length < ranking.length, ladder: GRAPH_NODE_LADDER }),
+          ranked({ name: 'nodes', items: ranking, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER }),
           ranked({ name: 'edges', items: edgesAmong(edges, kept), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
         ],
-        narrow: [...(ranking[0] ? [`neighborsOf: ${JSON.stringify(ranking[0].path)}`] : []), ...typeGroups(ranking)],
+        // An id, not the path: a note and a file can share a path.
+        narrow: [...(ranking[0] ? [`neighborsOf: ${JSON.stringify(ranking[0].id)}`] : []), ...typeGroups(ranking)],
       }
     },
   )

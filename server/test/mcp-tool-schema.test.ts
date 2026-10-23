@@ -15,8 +15,9 @@ import { createActiveUser, loginCookie } from './helpers.js'
  * Characters of `JSON.stringify({ tools })` for an admin account token (#430: 51,972 before, 46,385 after).
  * With `budget_tokens`, `cursor` and the envelope sentence on the 10 budgeted tools (#420, #422): 49,084.
  * With `browse_repository`'s `path` (#424) and `browse_vault`'s `fields` (#425): 49,388.
+ * With `graph`'s `neighborsOf`, `depth`, `edgeTypes` and `limit` (#426; its description kept to the old length): 49,805.
  */
-const TOOLS_LIST_CEILING = 49_500
+const TOOLS_LIST_CEILING = 50_000
 
 let app: FastifyInstance
 let client: Client

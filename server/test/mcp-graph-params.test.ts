@@ -329,6 +329,8 @@ describe('graph: limit (#426)', () => {
     expect(nodesOf(json).map((n) => n.path)).toEqual(['src/main.ts', 'p0/c', 'p1/a'])
     expect(edgesOf(json).map(pairKey)).toEqual([pairKey({ source: idOf['p0/c']!, target: idOf['p1/a']!, kind: 'extracted' })])
     expect(json.truncated).toMatchObject({ total: { nodes: '>3', edges: 1 }, cursor: null })
+    // The drill-down hint names the best-connected node by id: a path can name a note and a file.
+    expect((json.truncated as { narrow: string[] }).narrow[0]).toBe(`neighborsOf: "${idOf['file:src/main.ts']}"`)
 
     const all = await page({ budget_tokens: 25_000 })
     const top = await page({ limit: 1, budget_tokens: 25_000 })
