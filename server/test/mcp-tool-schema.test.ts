@@ -13,9 +13,10 @@ import { createActiveUser, loginCookie } from './helpers.js'
 
 /**
  * Characters of `JSON.stringify({ tools })` for an admin account token (#430: 51,972 before, 46,385 after).
- * With the paged-envelope descriptions of the #942 stack merged in: 50,459.
+ * With the paged-envelope descriptions of the #942 stack merged in: 50,459. Two-sentence descriptions and no
+ * default `$schema`/`execution` fields (#429): 37,493. The reader and writer budgets are in mcp-tool-budget.test.ts.
  */
-const TOOLS_LIST_CEILING = 51_000
+const TOOLS_LIST_CEILING = 38_000
 
 let app: FastifyInstance
 let client: Client

@@ -64,6 +64,11 @@ RUN pnpm install --frozen-lockfile --filter @elara/server
 COPY --chown=node:node tsconfig.base.json ./
 COPY --chown=node:node server ./server
 
+# The tool manuals the MCP server serves as resources (#429), where
+# server/src/mcp/manuals.ts reads them (`../../../skills/...` from
+# server/src/mcp): the agent reference is their one source.
+COPY --chown=node:node skills/elara/references/mcp-tools.md ./skills/elara/references/mcp-tools.md
+
 # Where server/src/config.ts resolves CLIENT_DIST to by default
 # (`../../client/dist` from server/src). Last, so a server-only change
 # does not invalidate it.
