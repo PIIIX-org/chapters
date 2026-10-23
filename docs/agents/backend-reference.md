@@ -712,7 +712,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   so it keeps text typed after the agent's `read_note`, which itself
   serves the live document (#474, below). REST PUT takes `baseRev` (#865,
   the `rev` REST GET returned, or a revision id) and is rebased from it
-  the same way: a clean merge answers the row plus `status`
+  the same way: a clean merge answers `noteReply` of the row plus `status`
   (`applied`/`merged`), `concurrentChanges` and `baseRev`; an overlap
   writes nothing, keeps the body as a `proposal` revision and answers 409
   `{ error, status: "conflicted", baseRev, proposalId, conflicts }`; a
@@ -1414,7 +1414,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   log. Its running bound counts 6× each update's length (the worst JSON
   expansion of Yjs's encoding: `false` is 1 byte encoded and 5 as JSON, a
   control character 1 and 6), so property edits far from the cap measure
-  nothing. The editor measures both parts alike (`client/src/lib/noteSize.ts`),
+  nothing. An update that adds nothing but body text (typing, deletions)
+  skips the rest check, as an update without text skips the body's, so
+  typing on a note whose frontmatter is already over the cap measures
+  nothing either (#947). `addsRest` follows what Yjs will do with the
+  update, not what it claims: an update that re-sends an id the document
+  holds (Yjs skips it) or holds one id twice (Yjs keeps the last section)
+  counts as rest, a decoded item's parent is its neighbour's
+  (`origin`/`rightOrigin`) in the document first, then in the update, and
+  an item it cannot place counts as rest; the full check then runs.
+  The editor measures both parts alike (`client/src/lib/noteSize.ts`),
   `tooLarge.otherBytes` says how large the properties are, and it reconnects
   only once both fit. REST and MCP frontmatter is bounded only by the request size.
   Before a `note-too-large` close the relay sends the refused connection a
