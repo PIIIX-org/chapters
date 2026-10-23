@@ -51,7 +51,7 @@ import {
   splitPath,
 } from './okf/paths.js'
 import { withKeyLock, withKeyLocks } from './key-lock.js'
-import { assertBodyFits, NoteTooLargeError } from './size-cap.js'
+import { assertBodyFits, assertFrontmatterFits, NoteTooLargeError } from './size-cap.js'
 import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from './growth-guard.js'
 import { orderKeys, presentedFrontmatter, sameContent } from './frontmatter-order.js'
 import {
@@ -403,6 +403,7 @@ function refusal(row: NoteRow, state: DocState): string | null {
   try {
     validateNote(row.type, row.name, { ...state.frontmatter, type: row.type } as Frontmatter, state.body)
     assertBodyFits(state.body, row.body)
+    assertFrontmatterFits(state.frontmatter, row.frontmatter as Record<string, unknown>)
   } catch (err) {
     return err instanceof Error ? err.message : String(err)
   }
@@ -579,6 +580,7 @@ function newNoteState(input: NewNote, asImported = false): { resolved: ResolvedN
   const body = input.body ?? ''
   validateNote(resolved.type, resolved.name, frontmatter, body)
   assertBodyFits(body)
+  assertFrontmatterFits(frontmatter)
   return { resolved, frontmatter, body }
 }
 
@@ -872,6 +874,7 @@ export async function writeNote(
         try {
           const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
           const next = await compute(current, plainRow(seen))
+          assertFrontmatterFits({ ...next.frontmatter, type: seen.type }, seen.frontmatter as Record<string, unknown>)
           if (options.outcome) options.outcome.before = current
           return { ...plainRow(seen), frontmatter: { ...next.frontmatter, type: seen.type }, body: next.body }
         } finally {
@@ -891,6 +894,8 @@ export async function writeNote(
           const { row, refused } = await catchUp(tx, locked, crdt, fold, { storeRow: !options.relay })
           const current = crdt ? docState(crdt.doc) : { frontmatter: row.frontmatter as Record<string, unknown>, body: row.body }
           const next = await compute(current, plainRow(row))
+          // Every write path's frontmatter, merged or whole, against the stored one (#933), before anything is written.
+          assertFrontmatterFits({ ...next.frontmatter, type: row.type }, row.frontmatter as Record<string, unknown>)
           if (options.outcome) options.outcome.before = current
           const { row: written } = await applyRowChange(
             tx,
@@ -955,6 +960,7 @@ export async function updateNote(
       validateNote(row.type, row.name, frontmatter, body)
       // The size cap first: an over-cap body is refused, never kept as a quarantine revision (#491).
       assertBodyFits(body, row.body)
+      assertFrontmatterFits(frontmatter, row.frontmatter as Record<string, unknown>)
       if (options.quarantine) {
         await refuseSuspiciousWrite(row, { frontmatter: edit.frontmatter, body }, actor, options.quarantine, options.episode)
       }
@@ -1155,6 +1161,7 @@ async function moveNote(
       // body (the note's own, then each referrer's) is checked before anything is
       // written, so a refused rename leaves the vault as it was.
       assertBodyFits(newBody, row.body, `${renaming} rewrites its own links`)
+      assertFrontmatterFits(newFrontmatter, row.frontmatter as Record<string, unknown>)
       const referrers = isMoving ? await linkReferrers(tx, vaultId, row.id, fromResolved.fullPath) : []
       for (const referrer of referrers) {
         const rewritten = refactorWikilinks(referrer.body, fromResolved.fullPath, toResolved.fullPath)
@@ -2005,14 +2012,15 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
  * same transaction when it has none; a row changed behind the store is
  * rebased into it and folded first, and so is a tail left unfolded. Never
  * reads a file or a `.crdt` bin, and never rebuilds the text (#488).
- * Returns the state to apply to the document, the note's path, and the last
+ * Returns the state to apply to the document, the note's path, the last
  * update id that state includes (null while `fold_error` is set: the open
- * document then caches nothing, see note-crdt.ts readNoteCrdt).
+ * document then caches nothing, see note-crdt.ts readNoteCrdt), and that
+ * `fold_error` (the relay tells the editors of a quarantine it names, #784).
  */
 export async function loadCollabState(
   vaultId: string,
   noteId: string,
-): Promise<{ state: Uint8Array; path: string; lastId: number | null }> {
+): Promise<{ state: Uint8Array; path: string; lastId: number | null; foldError: string | null }> {
   for (let round = 0; round < WRITE_ROUNDS; round++) {
     const [note] = await db
       .select({ path: notes.path })
@@ -2029,11 +2037,11 @@ export async function loadCollabState(
         if (stored) {
           const { row } = await catchUp(tx, locked, stored, null, { storeRow: true })
           if (row.seq !== locked.seq) foldedRow = true
-          return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null }
+          return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null, foldError: stored.foldError }
         }
         const seed = seedDocument(noteId, { frontmatter: locked.frontmatter as Record<string, unknown>, body: locked.body })
         await insertNoteCrdt(tx, noteId, seed, locked.seq)
-        return { state: Y.encodeStateAsUpdate(seed), lastId: 0 }
+        return { state: Y.encodeStateAsUpdate(seed), lastId: 0, foldError: null }
       }),
     )
     // A fold that stored the row wakes the projector, so the file follows at once, not at its next poll.

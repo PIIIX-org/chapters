@@ -9,7 +9,15 @@ interface CollabStatusLineProps {
   synced: boolean
   /** When `synced` last became true; null before the first sync of this mount. */
   syncedAt: Date | null
+  /** The relay holds this note's stores back (#784, `useCollabDoc`'s `quarantined`): synced to the server, not saved to the note. */
+  heldBack?: boolean
 }
+
+/**
+ * Connected, but the relay keeps what it syncs out of the note (#784): its
+ * text repeats a block of the saved note. "Synced" would read as saved.
+ */
+const HELD_BACK = { tone: 'error', label: 'Held back', detail: 'not saved to the note' } as const
 
 /**
  * The word for each state a keystroke can be in. Two of these are easy to
@@ -48,7 +56,8 @@ const WHISPER: Record<
  * The same words and tones, shaped for the shell's top-bar pill — one mapping,
  * so the mirror can never disagree with the note bar it mirrors.
  */
-export function collabShellStatus(status: CollabStatus, synced: boolean): ShellStatus {
+export function collabShellStatus(status: CollabStatus, synced: boolean, heldBack = false): ShellStatus {
+  if (status === 'connected' && heldBack) return { tone: HELD_BACK.tone, label: HELD_BACK.label }
   if (status === 'connected') {
     return synced ? { tone: 'live', label: 'Synced' } : { tone: 'idle', label: 'Syncing…' }
   }
@@ -68,7 +77,17 @@ export function collabShellStatus(status: CollabStatus, synced: boolean): ShellS
  * Tones are semantic status (live/idle/error), never the AI accent — a sync
  * state is not an authorship signal.
  */
-export function CollabStatusLine({ status, synced, syncedAt }: CollabStatusLineProps) {
+export function CollabStatusLine({ status, synced, syncedAt, heldBack = false }: CollabStatusLineProps) {
+  if (status === 'connected' && heldBack) {
+    return (
+      <span role="status" className="flex min-w-0 items-center gap-2">
+        <Pill tone={HELD_BACK.tone} dot className="hidden sm:inline-flex">
+          {HELD_BACK.label}
+        </Pill>
+        <span className="truncate font-mono text-xs tabular-nums text-muted-foreground">{HELD_BACK.detail}</span>
+      </span>
+    )
+  }
   if (status === 'connected') {
     return (
       <span role="status" className="flex min-w-0 items-center gap-2">
