@@ -363,20 +363,33 @@ describe('graph: structural groups over the cap (#426)', () => {
   it('are skipped around neighborsOf as in the whole graph, and reported in cappedGroups', async () => {
     const crowdVault = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'graph crowd' } })).json<{ id: string }>().id
     // 51 notes of one type and one tag (both groups over the cap of 50); two of them also share the tag `pair`.
+    // Two more, `a-solo/x` and `a-solo/y`, share a type and a tag of their own (one structural edge) and sort first.
     const ids: string[] = []
     for (let i = 0; i < 51; i++) {
       const tags = i < 2 ? ['crowd', 'pair'] : ['crowd']
       ids.push((await createNote(crowdVault, { path: `crowd/n-${String(i).padStart(2, '0')}`, body: `Crowd ${i}.`, frontmatter: { tags } })).id)
     }
+    for (const name of ['x', 'y']) ids.push((await createNote(crowdVault, { path: `a-solo/${name}`, body: `Solo ${name}.`, frontmatter: { tags: ['duo'] } })).id)
     await flushEmbeddings()
     await db.delete(semanticEdges).where(or(inArray(semanticEdges.sourceId, ids), inArray(semanticEdges.targetId, ids)))
     const only = { vaultId: crowdVault, repositoryId: undefined, budget_tokens: 25_000 }
     const whole = await page({ ...only, aggregate: 'none' })
     expect([...(whole.cappedGroups as string[])].sort()).toEqual(['tag:crowd', 'type:crowd'])
-    expect(edgesOf(whole).map((e) => e.kind)).toEqual(['structural'])
+    expect(edgesOf(whole).map((e) => e.kind)).toEqual(['structural', 'structural'])
     const local = await page({ ...only, neighborsOf: 'crowd/n-00', depth: 3 })
     expect(nodesOf(local).map((n) => n.path)).toEqual(['crowd/n-00', 'crowd/n-01'])
     expect(edgesOf(local)).toHaveLength(1)
     expect(local.cappedGroups).toEqual(['tag:crowd', 'type:crowd'])
+
+    // Under `limit`, the node views name only the skipped groups a listed node belongs to, as `neighborsOf` does.
+    const solo = await page({ ...only, aggregate: 'none', limit: 2 })
+    expect(nodesOf(solo).map((n) => n.path)).toEqual(['a-solo/x', 'a-solo/y'])
+    expect(solo.cappedGroups).toEqual([])
+    const three = await page({ ...only, aggregate: 'none', limit: 3 })
+    expect(nodesOf(three).map((n) => n.path)).toEqual(['a-solo/x', 'a-solo/y', 'crowd/n-00'])
+    expect([...(three.cappedGroups as string[])].sort()).toEqual(['tag:crowd', 'type:crowd'])
+    // The community view keeps the whole graph's: every node went into its communities, whatever `limit` lists.
+    const communities = await page({ ...only, limit: 1 })
+    expect([...(communities.cappedGroups as string[])].sort()).toEqual(['tag:crowd', 'type:crowd'])
   })
 })
