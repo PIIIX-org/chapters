@@ -34,6 +34,14 @@ describe('TooLargeNotice', () => {
     expect(text).not.toMatch(/the text is/i)
   })
 
+  // #948: properties the server already holds over the limit may stay; only the text has to be cut.
+  it('asks only for the cut that is needed: properties within their room are not mentioned', () => {
+    render(<TooLargeNotice limitBytes={MiB} bodyBytes={MiB + 100 * 1024} otherBytes={MiB + 50 * 1024} otherRoomBytes={MiB + 50 * 1024} />)
+    const text = screen.getByRole('status').textContent!
+    expect(text).toContain('remove about 100.0 KB')
+    expect(text).not.toMatch(/properties are/i)
+  })
+
   it('is inline, not a dialog, and asks nothing of the user', () => {
     render(<TooLargeNotice limitBytes={MiB} bodyBytes={2 * MiB} />)
     expect(screen.queryByRole('dialog')).toBeNull()
