@@ -39,6 +39,7 @@ let baseUrl: string
 let agent: Client
 let vaultId: string
 let repoId: string
+let cookie: string
 const REPO = 'graph-params-repo'
 /** Every argument set below is over the vault and the repository together. */
 let scope: Args
@@ -128,7 +129,7 @@ beforeAll(async () => {
   const address = app.server.address()
   baseUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
   const owner = await createActiveUser()
-  const cookie = await loginCookie(app, owner.email)
+  cookie = await loginCookie(app, owner.email)
   vaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'graph params' } })).json<{ id: string }>().id
   repoId = (await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: REPO, ingestionMethod: 'agent_push' } })).json<{
     id: string
@@ -291,9 +292,9 @@ describe('graph: edgeTypes (#426)', () => {
     // Without semantic edges p6/s is not reached from p0/c, and so neither is the repository.
     const extracted = await page({ neighborsOf: 'p0/c', depth: 3, edgeTypes: ['extracted'], budget_tokens: 25_000 })
     expect(nodesOf(extracted).map((n) => n.path).sort()).toEqual(['p0/c', 'p1/a', 'p2/b', 'p3/d', 'p4/e'])
-    // The community view is computed over the kept edges: no edge, one community per node.
-    const none = await page({ edgeTypes: ['semantic'], types: ['p1', 'p3'], budget_tokens: 25_000 })
-    expect((nodesOf(none) as unknown as Array<{ size: number }>).map((c) => c.size)).toEqual([1, 1])
+    // The community view is computed over the kept edges: with the one semantic edge, p0/c and p6/s pair up and every other node is alone.
+    const semantic = await page({ edgeTypes: ['semantic'], budget_tokens: 25_000 })
+    expect((nodesOf(semantic) as unknown as Array<{ size: number }>).map((c) => c.size)).toEqual([2, ...Array.from({ length: 11 }, () => 1)])
     await refused({ edgeTypes: ['similar'] }, /edgeTypes/)
     await refused({ edgeTypes: [] }, /edgeTypes/)
   })
@@ -353,5 +354,27 @@ describe('graph: limit (#426)', () => {
     for (const e of limited.flatMap(edgesOf)) expect(kept.has(e.source) && kept.has(e.target)).toBe(true)
     // A cursor is bound to its arguments: another limit refuses it.
     await refused({ neighborsOf: 'p0/c', depth: 3, limit: 5, budget_tokens: 300, cursor: (limited[0]!.truncated as { cursor: string }).cursor }, /invalid cursor/)
+  })
+})
+
+describe('graph: structural groups over the cap (#426)', () => {
+  it('are skipped around neighborsOf as in the whole graph, and reported in cappedGroups', async () => {
+    const crowdVault = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'graph crowd' } })).json<{ id: string }>().id
+    // 51 notes of one type and one tag (both groups over the cap of 50); two of them also share the tag `pair`.
+    const ids: string[] = []
+    for (let i = 0; i < 51; i++) {
+      const tags = i < 2 ? ['crowd', 'pair'] : ['crowd']
+      ids.push((await createNote(crowdVault, { path: `crowd/n-${String(i).padStart(2, '0')}`, body: `Crowd ${i}.`, frontmatter: { tags } })).id)
+    }
+    await flushEmbeddings()
+    await db.delete(semanticEdges).where(or(inArray(semanticEdges.sourceId, ids), inArray(semanticEdges.targetId, ids)))
+    const only = { vaultId: crowdVault, repositoryId: undefined, budget_tokens: 25_000 }
+    const whole = await page({ ...only, aggregate: 'none' })
+    expect([...(whole.cappedGroups as string[])].sort()).toEqual(['tag:crowd', 'type:crowd'])
+    expect(edgesOf(whole).map((e) => e.kind)).toEqual(['structural'])
+    const local = await page({ ...only, neighborsOf: 'crowd/n-00', depth: 3 })
+    expect(nodesOf(local).map((n) => n.path)).toEqual(['crowd/n-00', 'crowd/n-01'])
+    expect(edgesOf(local)).toHaveLength(1)
+    expect(local.cappedGroups).toEqual(['tag:crowd', 'type:crowd'])
   })
 })

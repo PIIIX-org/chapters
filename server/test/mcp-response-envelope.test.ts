@@ -330,16 +330,16 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
 
 describe('graph, find_graph_path and find_symbols page a stable ranking', () => {
   it('graph: paging shows every node and edge once; a cursor for other filters is refused', async () => {
-    const all = await page('graph', { vaultId: graphVaultId, budget_tokens: 25_000 })
+    const all = await page('graph', { vaultId: graphVaultId, aggregate: 'none', budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
     // The fixture: the 9 chain links and nothing else (no semantic or structural edge).
     expect(ids([all], 'edges', (e) => e.kind as string)).toEqual(Array.from({ length: 9 }, () => 'extracted'))
-    const pages = await walk('graph', { vaultId: graphVaultId, budget_tokens: LIST_PAGE })
+    const pages = await walk('graph', { vaultId: graphVaultId, aggregate: 'none', budget_tokens: LIST_PAGE })
     expect(pages.length).toBeGreaterThan(1)
     expect(ids(pages, 'nodes').sort()).toEqual(ids([all], 'nodes').sort())
     const edge = (e: Record<string, unknown>) => `${e.source}>${e.target}:${e.kind}`
     expect(ids(pages, 'edges', edge).sort()).toEqual(ids([all], 'edges', edge).sort())
-    await refused('graph', { vaultId: graphVaultId, types: ['c1'], budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
+    await refused('graph', { vaultId: graphVaultId, aggregate: 'none', types: ['c1'], budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
   })
 
   it('find_graph_path: a path cut by the budget continues with the cursor', async () => {

@@ -352,7 +352,7 @@ describe("account separation: B sees nothing of A's (#552)", () => {
   it("A's own views show A's things (the fixtures are real)", async () => {
     expect((await call(acctA, 'search', { query: SHARED, everywhere: true })).text).toContain(fx.noteA)
     expect((await call(acctA, 'find_symbols', { query: SYMBOL_A })).text).toContain(SYMBOL_A)
-    expect((await call(acctA, 'graph', { vaultId: fx.VA })).text).toContain(fx.noteA)
+    expect((await call(acctA, 'graph', { vaultId: fx.VA, aggregate: 'none' })).text).toContain(fx.noteA)
     expect((await call(acctA, 'list_notifications', {})).text).toContain(MARK_A)
     expect((await call(acctA, 'list_graph_perspectives', {})).text).toContain(fx.objects.id[1]!)
     // The cross-account edge is stored: only the read side keeps it from B.
@@ -366,8 +366,10 @@ describe("account separation: B sees nothing of A's (#552)", () => {
       ['search', { query: MARK_A, everywhere: true }],
       ['search', { query: SHARED, vaultId: fx.VB }],
       ['search', { query: SYMBOL_A, repositoryId: fx.RB }],
-      ['graph', { repositoryId: fx.RB }],
-      ['graph', { vaultId: fx.VB }],
+      ['graph', { repositoryId: fx.RB, aggregate: 'none' }],
+      ['graph', { vaultId: fx.VB, aggregate: 'none' }],
+      // The local view reads neighbours in SQL (#426): the stored cross-account semantic edge from B's note stays out.
+      ['graph', { vaultId: fx.VB, neighborsOf: PATH.B, depth: 3 }],
       ['find_symbols', { query: SYMBOL_A }],
       ['find_symbols', { query: SYMBOL_A, everywhere: true }],
       ['list_notifications', {}],

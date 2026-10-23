@@ -120,13 +120,17 @@ export interface KeysetSection<T> {
  * A ranking an offset cursor pages: `items` is the whole ranking from its
  * first item (recomputed per page); the cursor holds the offset and a guard
  * over the `id`s before it, so a ranking that changed is refused, never
- * skipped or repeated. At most `limit` items per answer.
+ * skipped or repeated. At most `limit` items per answer. `capped`: the
+ * handler cut the ranking at `items`' end (a `limit` argument, from a fetch
+ * of limit + 1): the total reads `">n"` and the answer is never whole, but
+ * no cursor continues past the cut (a larger limit does).
  */
 export interface RankedSection<T> {
   name: string
   items: readonly T[]
   id: (item: T) => string
   limit?: number
+  capped?: boolean
   ladder?: Ladder<T>
 }
 
@@ -276,6 +280,8 @@ interface Slot {
   /** Ranked and keyset sections: the items this page may show, in order. */
   avail: readonly unknown[]
   more: boolean
+  /** A ranked section the handler capped (`RankedSection.capped`), from this page on. */
+  capped: boolean
   limit: number
 }
 
@@ -283,11 +289,11 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
   const s0 = at?.s ?? 0
   if (s0 >= answer.sections.length) throw invalid('not a position of this answer')
   return answer.sections.map((section, i): Slot => {
-    if (i < s0) return { section, start: -1, avail: [], more: false, limit: 0 }
+    if (i < s0) return { section, start: -1, avail: [], more: false, capped: false, limit: 0 }
     const here = at !== null && i === s0
     if (section.kind === 'keyset') {
       const limit = section.limit ?? Infinity
-      return { section, start: 0, avail: section.items.slice(0, limit), more: section.more === true || section.items.length > limit, limit }
+      return { section, start: 0, avail: section.items.slice(0, limit), more: section.more === true || section.items.length > limit, capped: false, limit }
     }
     if (section.kind === 'ranked') {
       const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
@@ -297,14 +303,14 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
       }
       const limit = section.limit ?? Infinity
       const rest = section.items.slice(start)
-      return { section, start, avail: rest.slice(0, limit), more: rest.length > limit, limit }
+      return { section, start, avail: rest.slice(0, limit), more: rest.length > limit, capped: section.capped === true && rest.length <= limit, limit }
     }
     const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
     if (!Number.isSafeInteger(start) || start < 0) throw invalid('not a position of this answer')
     if (here && (start > section.text.length || at.g !== guardOf(section.text))) {
       throw new CursorError('CURSOR_STALE', `stale cursor: the ${section.name} changed since this cursor was issued; start again without \`cursor\``)
     }
-    return { section, start, avail: [], more: false, limit: Infinity }
+    return { section, start, avail: [], more: false, capped: false, limit: Infinity }
   })
 }
 
@@ -523,7 +529,8 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       continue
     }
     const exact = slot.start < 0 ? 0 : slot.avail.length
-    counts.total[section.name] = slot.more ? `>${slot.limit === Infinity ? exact : slot.limit}` : exact
+    counts.total[section.name] = slot.more ? `>${slot.limit === Infinity ? exact : slot.limit}` : slot.capped ? `>${exact}` : exact
+    anyDropped ||= slot.capped
     if (aggregate && slot.start >= 0) {
       values.push([section.name, aggregateOf(slot, aggregate)])
       counts.shown[section.name] = 0

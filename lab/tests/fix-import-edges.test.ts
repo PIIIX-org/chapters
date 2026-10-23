@@ -75,9 +75,9 @@ async function unresolvedSample(ctx: LabContext, repoId: string) {
 }
 
 async function graphExtractedEdges(ctx: LabContext, repoId: string) {
-  // `graph` lists nodes, then edges, page by page (#420): walk every page.
+  // `graph` lists nodes, then edges, page by page (#420): walk every page. The node list is `aggregate: "none"` (#426).
   const mcp = ctx.mcp('adminAccount')
-  let r = await mcp.call('graph', { repositoryId: repoId, budget_tokens: 25_000 })
+  let r = await mcp.call('graph', { repositoryId: repoId, aggregate: 'none', budget_tokens: 25_000 })
   const nodes: unknown[] = []
   const edges: Array<{ kind?: string }> = []
   for (let pages = 1; ; pages++) {
@@ -86,7 +86,7 @@ async function graphExtractedEdges(ctx: LabContext, repoId: string) {
     edges.push(...(j?.edges ?? []))
     const cursor = r.ok ? nextCursor(r.json) : null
     if (!cursor || pages >= 500) break
-    r = await mcp.call('graph', { repositoryId: repoId, budget_tokens: 25_000, cursor })
+    r = await mcp.call('graph', { repositoryId: repoId, aggregate: 'none', budget_tokens: 25_000, cursor })
   }
   return {
     ok: r.ok,

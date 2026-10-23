@@ -69,7 +69,8 @@ import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord } from '../vaults/routes.js'
 import { isTeamOwner, notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
-import { buildGraph, findShortestPath } from '../graph/assemble.js'
+import { EDGE_KINDS, buildGraph, findShortestPath, type EdgeKind } from '../graph/assemble.js'
+import { neighborhood, resolveGraphNode } from '../graph/neighbors.js'
 import { isInstanceAdmin, visibleGlobalPerspectives } from '../graph/perspective-access.js'
 import { buildVaultZip } from '../export/archive.js'
 import { notify } from '../notifications/notify.js'
@@ -250,10 +251,13 @@ const BROWSED_NOTE_LADDER: Ladder<Partial<BrowsedNote> & { path: string }> = {
 /**
  * A graph node down the ladder: without tags and timestamps, then its id
  * (edges name nodes by id) and path; counted per type. A community node
- * keeps its id and size, then its id; communities are counted together.
+ * keeps its id and size, then its id; communities are counted together. A
+ * node of a `neighborsOf` answer keeps its distance where another keeps its
+ * community.
  */
-const GRAPH_NODE_LADDER: Ladder<{ id: string; path?: string; type?: string | null; community: number; size?: number }> = {
-  no_context: (n) => (n.size !== undefined ? { id: n.id, community: n.community, size: n.size } : { id: n.id, path: n.path, type: n.type, community: n.community }),
+const GRAPH_NODE_LADDER: Ladder<{ id: string; path?: string; type?: string | null; community?: number; size?: number; distance?: number }> = {
+  no_context: (n) =>
+    n.size !== undefined ? { id: n.id, community: n.community, size: n.size } : { id: n.id, path: n.path, type: n.type, community: n.community, distance: n.distance },
   locations: (n) => (n.size !== undefined ? { id: n.id } : { id: n.id, path: n.path }),
   group: (n) => (n.size !== undefined ? 'communities' : (n.type ?? 'untyped')),
 }
@@ -2510,43 +2514,98 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault-or-repo',
       capability: 'read',
       description:
-        'Query the knowledge graph over notes and code: nodes (by path) plus extracted/structural/semantic edges and Louvain communities. Optional filters.' + ENVELOPE_DOC,
+        'Query the knowledge graph over notes and code. Default: one node per Louvain community; `community` lists one community, `aggregate: "none"` every node, `neighborsOf` the nodes within `depth` edges of one node (no community). Edges: extracted, structural, semantic (`edgeTypes`). `limit` keeps the first nodes (largest communities, most edges, nearest) and the edges among them.' +
+        ENVELOPE_DOC,
       inputSchema: {
         vaultId: z.string().uuid().optional(),
         repositoryId: z.string().uuid().optional(),
         types: z.array(z.string()).optional(),
         tags: z.array(z.string()).optional(),
-        aggregate: z.enum(['community']).optional(),
+        aggregate: z.enum(['community', 'none']).optional().describe('Default "community"'),
         community: z.number().int().optional(),
+        neighborsOf: z.string().min(1).optional().describe('Node id or exact path'),
+        depth: z.number().int().min(1).max(3).optional().describe('With neighborsOf; default 1'),
+        edgeTypes: z.array(z.enum(EDGE_KINDS)).min(1).optional(),
+        limit: z.number().int().min(1).max(1_000).optional(),
       },
       budget: 'list',
     },
     async (
-      args: { types?: string[]; tags?: string[]; aggregate?: 'community'; community?: number },
+      args: {
+        types?: string[]
+        tags?: string[]
+        aggregate?: 'community' | 'none'
+        community?: number
+        neighborsOf?: string
+        depth?: number
+        edgeTypes?: EdgeKind[]
+        limit?: number
+      },
       { resources },
     ) => {
-      const { nodes, edges, ...head } = await buildGraph(resources, {
-        types: args.types,
-        tags: args.tags,
-        aggregate: args.aggregate,
-        community: args.community,
-      })
-      // A stable order, so a cursor's next page continues the same listing.
-      const nodeKey = (n: (typeof nodes)[number]) => ('path' in n ? `${n.path}\0${n.id}` : n.id)
-      // Narrowing: the largest communities when aggregated, else the commonest node types.
-      const groups = new Map<string, number>()
-      for (const n of nodes) {
-        const group = 'size' in n ? `community: ${n.community}` : n.type === null ? null : `types: ${JSON.stringify([n.type])}`
-        if (group) groups.set(group, (groups.get(group) ?? 0) + ('size' in n ? n.size : 1))
+      // Arguments that would be ignored are refused (#426).
+      if (args.depth !== undefined && args.neighborsOf === undefined) throw new McpToolError('`depth` counts edges from `neighborsOf`: pass both, or neither')
+      if (args.neighborsOf !== undefined && args.community !== undefined) throw new McpToolError('`neighborsOf` and `community` are two views: pass one')
+      if (args.neighborsOf !== undefined && args.aggregate === 'community') {
+        throw new McpToolError('`neighborsOf` lists nodes and `aggregate: "community"` collapses them: pass one')
       }
-      const narrow = [...groups].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([group]) => group)
+      if (args.aggregate === 'community' && args.community !== undefined) {
+        throw new McpToolError('`aggregate: "community"` collapses every community and `community` lists one: pass one')
+      }
+      // Narrowing by the commonest node types.
+      const typeGroups = (nodes: ReadonlyArray<{ type: string | null }>) => {
+        const counts = new Map<string, number>()
+        for (const n of nodes) if (n.type !== null) counts.set(n.type, (counts.get(n.type) ?? 0) + 1)
+        return [...counts].sort((a, b) => b[1] - a[1] || compareCodeUnits(a[0], b[0])).slice(0, 3).map(([type]) => `types: ${JSON.stringify([type])}`)
+      }
+      const edgesAmong = <E extends { source: string; target: string }>(edges: readonly E[], nodes: ReadonlyArray<{ id: string }>) => {
+        const ids = new Set(nodes.map((n) => n.id))
+        return edges.filter((e) => ids.has(e.source) && ids.has(e.target)).sort(byEdgeKey)
+      }
+
+      if (args.neighborsOf !== undefined) {
+        const center = await resolveGraphNode(resources, args.neighborsOf)
+        const depth = args.depth ?? 1
+        const local = await neighborhood(resources, center, { depth, edgeTypes: args.edgeTypes, types: args.types, tags: args.tags, limit: args.limit })
+        return {
+          head: { center: { id: center.id, path: center.path }, depth, cappedGroups: local.cappedGroups },
+          sections: [
+            // Already ranked: nearest first, the centre at the top.
+            ranked({ name: 'nodes', items: local.nodes, id: (n) => n.id, capped: local.more, ladder: GRAPH_NODE_LADDER }),
+            ranked({ name: 'edges', items: [...local.edges].sort(byEdgeKey), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
+          ],
+          narrow: [...(depth > 1 ? [`depth: ${depth - 1}`] : []), ...(args.edgeTypes ? [] : ['edgeTypes: ["extracted"]']), ...typeGroups(local.nodes.slice(1))],
+        }
+      }
+
+      const filters = { types: args.types, tags: args.tags, edgeTypes: args.edgeTypes, community: args.community }
+      // The community view is the default (#426); `community` and `aggregate: "none"` list nodes.
+      if (args.community === undefined && args.aggregate !== 'none') {
+        const { nodes, edges, ...head } = await buildGraph(resources, { ...filters, aggregate: 'community' })
+        const ranking = [...nodes].sort((a, b) => b.size - a.size || a.community - b.community)
+        const kept = args.limit === undefined ? ranking : ranking.slice(0, args.limit)
+        return {
+          head,
+          sections: [
+            ranked({ name: 'nodes', items: kept, id: (n) => n.id, capped: kept.length < ranking.length, ladder: GRAPH_NODE_LADDER }),
+            ranked({ name: 'edges', items: edgesAmong(edges, kept), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
+          ],
+          narrow: ranking.slice(0, 3).map((c) => `community: ${c.community}`),
+        }
+      }
+      const { nodes, edges, ...head } = await buildGraph(resources, filters)
+      // Best-connected first (edges listed), then path and id: what `limit` keeps.
+      const degree = new Map<string, number>()
+      for (const e of edges) for (const id of [e.source, e.target]) degree.set(id, (degree.get(id) ?? 0) + 1)
+      const ranking = [...nodes].sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) || compareCodeUnits(a.path, b.path) || compareCodeUnits(a.id, b.id))
+      const kept = args.limit === undefined ? ranking : ranking.slice(0, args.limit)
       return {
         head,
         sections: [
-          ranked({ name: 'nodes', items: [...nodes].sort((a, b) => compareCodeUnits(nodeKey(a), nodeKey(b))), id: (n) => n.id, ladder: GRAPH_NODE_LADDER }),
-          ranked({ name: 'edges', items: [...edges].sort(byEdgeKey), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
+          ranked({ name: 'nodes', items: kept, id: (n) => n.id, capped: kept.length < ranking.length, ladder: GRAPH_NODE_LADDER }),
+          ranked({ name: 'edges', items: edgesAmong(edges, kept), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
         ],
-        narrow: args.aggregate ? narrow : ['aggregate: "community"', ...narrow],
+        narrow: [...(ranking[0] ? [`neighborsOf: ${JSON.stringify(ranking[0].path)}`] : []), ...typeGroups(ranking)],
       }
     },
   )
