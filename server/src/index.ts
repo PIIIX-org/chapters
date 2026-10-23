@@ -81,9 +81,6 @@ try {
   if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)
   const backfilled = await backfillUnresolvedImports()
   if (backfilled > 0) console.log(`resolved ${backfilled} previously unresolved code import(s)`)
-  // Wikilink rows without lines (#558: before migration 0031, or written by older code) located from the bodies.
-  const located = await backfillLinkLines()
-  if (located > 0) console.log(`located the wikilinks of ${located} note(s)`)
   const { setupPending, setupToken } = await ensureInstanceState()
   if (setupPending && setupToken) {
     // The only place the setup token ever appears in plaintext.
@@ -100,6 +97,15 @@ try {
       if (moved.length > 0) console.warn(`moved ${moved.length} orphan note file(s) to .orphans/`)
     })
     .catch((err: unknown) => console.error('orphan sweep failed:', err))
+  // In the background too: wikilink rows without lines (#558: before
+  // migration 0031, or written by older code) are located from the bodies,
+  // about 8 ms a note (5,000 notes took 40 s), too slow to hold the listen.
+  // Until then those edges answer with `evidence: null`.
+  void backfillLinkLines()
+    .then((located) => {
+      if (located > 0) console.log(`located the wikilinks of ${located} note(s)`)
+    })
+    .catch((err: unknown) => console.error('wikilink line backfill failed:', err))
   // Hocuspocus used to install these itself inside its `listen()`. Without
   // them a redeploy drops every note edit still inside the store debounce.
   // After the relay's last stores commit, the projector gets a bounded drain

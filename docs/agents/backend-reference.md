@@ -173,7 +173,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 |---|---|
 | `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages |
 | `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order |
-| `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every body save: one row per link with its body-relative `start_line`/`end_line` (migration 0031, #558), PK (`source_note_id`, `target_path`, `start_line`), so a target linked on several lines has several rows. 0 = not located yet (rows from before 0031, or written by older code after a rollback; the column default keeps that working): `backfillLinkLines()` (`notes/store-tx.ts`) rewrites them from the body under the note lock at every boot, and the doctor's `links-differ` lists any left |
+| `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every body save: one row per link with its body-relative `start_line`/`end_line` (migration 0031, #558), PK (`source_note_id`, `target_path`, `start_line`), so a target linked on several lines has several rows. 0 = not located yet (rows from before 0031, or written by older code after a rollback; the column default keeps that working): `backfillLinkLines()` (`notes/store-tx.ts`) rewrites them from the body under the note lock, in the background after `listen` at every boot (about 8 ms a note: 5,000 notes took 40 s locally; until then those edges have `evidence: null`), and the doctor's `links-differ` lists any left |
 | `exportLinks` | expiring/revocable vault export download links |
 
 **ADR-003 store schema (migration 0021; S2a: Postgres is the only authority
@@ -974,7 +974,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   against the 0002 expression); `vector-missing` (no embedding and no
   job), `vector-failed` (the `embed_note` job of the current `seq`
   failed); `links-differ` (`note_links` targets and body lines against
-  `extractWikilinkLocations(body)`; a row without lines, from before
+  `linkRows(body)`, the rows `replaceLinks` stores; a row without lines, from before
   migration 0031, shows as `<target> (no line)`).
   Pending projections, embedding jobs and unfolded CRDT tails are listed
   in `pending`, not as problems. `info` (#908) lists `migration-copy`: a
@@ -1199,10 +1199,12 @@ constructors, `STRUCTURAL_GROUP_CAP`) are exported for `neighbors.ts`.
 `edges.ts` (#558, ADR-004 §2.8) renders edges for MCP `graph` and
 `find_graph_path` as rows `{from, to, directed, kind, relation,
 confidence, evidence}`: ends as `{path, in?}` (`in`: vault or repository
-name, only when the call spans several), no ids; undirected rows' ends in
+name and the first 8 characters of its id, the whole id when two of the
+call's share them; only when the call spans several), no ids; undirected rows' ends in
 name order; similarity to 2 decimals; evidence `path#La-Lb` (link lines
-shifted to whole-file lines by `bodyStartLine(frontmatter)` from
-`notes/okf.ts`, read for the listed links' notes), `path#Ln` for an
+shifted to whole-file lines by `bodyStartLine(row)` from
+`notes/projector.ts`: the lines of `renderNoteFile(row)`, the file the
+projector writes; an adopted file keeps its own bytes and may differ), `path#Ln` for an
 import, `type:`/`tag:`/`language:`/`folder:` for structural, null for
 semantic and for import rows extracted before migration 0031 (`line` null
 until #453's extractor-version bump extracts them again). On the budget
@@ -1983,9 +1985,9 @@ stored with no resolved target and produces no graph edge.
 `backfillUnresolvedImports()` runs at boot and re-resolves every stored
 import row whose target is still null with the current rules, so
 repositories indexed before #398 gain their import edges without a
-re-sync (unchanged files are never re-extracted). The next boot step,
-`backfillLinkLines()` (#558), writes wikilink rows without lines again
-from their note's body.
+re-sync (unchanged files are never re-extracted). After `listen`, in the
+background, `backfillLinkLines()` (#558) writes wikilink rows without
+lines again from their note's body.
 
 **Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
 **Durable jobs** below), kind `extract`, payload `{fileId,

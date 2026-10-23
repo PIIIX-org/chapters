@@ -8,7 +8,8 @@ import { asc, eq, sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
 import { noteLinks } from '../src/db/schema.js'
-import { bodyStartLine, extractWikilinkLocations, serializeNote, type Frontmatter } from '../src/notes/okf.js'
+import { extractWikilinkLocations, type Frontmatter } from '../src/notes/okf.js'
+import { bodyStartLine, renderNoteFile } from '../src/notes/projector.js'
 import { createNote } from '../src/notes/store.js'
 import { backfillLinkLines } from '../src/notes/store-tx.js'
 import { createActiveUser, loginCookie } from './helpers.js'
@@ -36,11 +37,14 @@ describe('extractWikilinkLocations', () => {
 })
 
 describe('bodyStartLine', () => {
-  it('is the file line the body begins on, as serializeNote writes it', () => {
-    const cases: Frontmatter[] = [{ type: 'docs' }, { type: 'docs', tags: ['a', 'b'], description: 'one\ntwo\nthree' }]
-    for (const frontmatter of cases) {
-      const lines = serializeNote({ frontmatter, body: 'BODY FIRST LINE\nsecond' }).split('\n')
-      expect(lines[bodyStartLine(frontmatter) - 1]).toBe('BODY FIRST LINE')
+  it('is the file line the body begins on, as renderNoteFile writes it (in its stored key order)', () => {
+    const cases: Array<[Frontmatter, unknown]> = [
+      [{ type: 'docs' }, null],
+      [{ type: 'docs', tags: ['a', 'b'], description: 'one\ntwo\nthree' }, { description: 'one\ntwo\nthree', type: 'docs', tags: ['a', 'b'] }],
+    ]
+    for (const [frontmatter, frontmatterSrc] of cases) {
+      const lines = renderNoteFile({ frontmatter, frontmatterSrc, body: 'BODY FIRST LINE\nsecond' }).split('\n')
+      expect(lines[bodyStartLine({ frontmatter, frontmatterSrc }) - 1]).toBe('BODY FIRST LINE')
     }
   })
 })

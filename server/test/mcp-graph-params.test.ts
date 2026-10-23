@@ -90,7 +90,7 @@ async function refused(args: Args, why: RegExp): Promise<void> {
 
 const nodesOf = (json: Answer) => json.nodes as Node[]
 /** The rows as id pairs: notes are keyed by path in `idOf`, files by `file:<path>`. */
-const idAt = (end: Row['from']) => (end.in === REPO ? idOf[`file:${end.path}`]! : idOf[end.path]!)
+const idAt = (end: Row['from']) => (end.in?.startsWith(`${REPO}#`) ? idOf[`file:${end.path}`]! : idOf[end.path]!)
 const edgesOf = (json: Answer): Edge[] => (json.edges as Row[]).map((r) => ({ source: idAt(r.from), target: idAt(r.to), kind: r.kind }))
 const pairKey = (e: Edge) => `${[e.source, e.target].sort().join('|')}:${e.kind}`
 
