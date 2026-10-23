@@ -405,7 +405,7 @@ with a public URL, which may move again.
 
 ## Gotchas
 
-- Notes: `type` in frontmatter must equal the first path segment; segments
+- Notes: frontmatter `type` is free text and defaults to the first path segment (#444); segments
   `^[a-z0-9][a-z0-9-]*$`; `edit_note` frontmatter merges per key
   (`replace: true` replaces the whole map, `removeKeys` deletes keys; #438).
 - `note_history` returns one page of metadata, no bodies (#411): read the

@@ -97,7 +97,7 @@ INSTRUCTIONS:
 1. INSPECT: Read the markdown files in "${directoryPath}" using your local filesystem tools.
 2. VALIDATE OKF v0.2:
    - File path must follow \`<type>/<name>\` slug format (e.g., \`spec/auth\`, \`docs/architecture\`, \`adr/storage-layer\`).
-   - Frontmatter must contain \`type: <type>\` matching the path prefix.
+   - Frontmatter \`type\` is the note's OKF type, any non-empty string (e.g. \`Metric\`); left out, it is the path prefix.
    - Slugs must be lowercase alphanumeric with hyphens (^[a-z0-9][a-z0-9-]*$).
 3. UPLOAD / UPSERT: For each valid file, call Elara MCP \`create_note\` with the target \`vaultId: "${vaultId}"\`. If the note already exists, call \`edit_note\` with the file's full \`frontmatter\`, its \`body\` and \`replace: true\`, so the vault note mirrors the file: \`edit_note\` otherwise merges frontmatter per key and keeps keys the file no longer has.
 4. REPORT: Output a summary table of all uploaded notes, their resolved paths, and any files skipped due to format issues.`

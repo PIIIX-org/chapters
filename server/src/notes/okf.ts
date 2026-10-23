@@ -67,11 +67,23 @@ export function isSlug(value: string): boolean {
 export class OkfValidationError extends Error {}
 
 /**
+ * `frontmatter` with its OKF `type`: the one it has, or the folder (the
+ * path's first segment) when it has none. The frontmatter `type` is free
+ * (OKF §4.1, #444); the folder stays in `notes.type`.
+ */
+export function withType(frontmatter: Record<string, unknown>, folder: string): Frontmatter {
+  const type = frontmatter.type
+  return { ...frontmatter, type: type === undefined || type === null || type === '' ? folder : type } as Frontmatter
+}
+
+/**
  * The shared OKF validation (Editor spec hardening): every write path —
  * REST, CRDT persistence, MCP — validates through here. Slug-only path
  * segments make traversal impossible by construction. It runs before the
  * row or the file is written, so it is also where a note that its own file
- * could not reproduce is refused (see `assertRoundTrips`).
+ * could not reproduce is refused (see `assertRoundTrips`). `type` is the
+ * folder (the path's first segment); the frontmatter `type` may be any
+ * non-empty string (#444).
  */
 export function validateNote(
   type: string,
@@ -84,10 +96,8 @@ export function validateNote(
   if (nameSegments.length === 0 || nameSegments.some((seg) => !isSlug(seg))) {
     throw new OkfValidationError(`invalid name slug: ${name}`)
   }
-  if (frontmatter.type !== type) {
-    throw new OkfValidationError(
-      `frontmatter type "${String(frontmatter.type)}" does not match path type "${type}"`,
-    )
+  if (typeof frontmatter.type !== 'string' || frontmatter.type.trim() === '') {
+    throw new OkfValidationError('frontmatter type must be a non-empty string')
   }
   if (frontmatter.tags !== undefined) {
     if (

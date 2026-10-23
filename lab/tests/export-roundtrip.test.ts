@@ -330,7 +330,7 @@ const test: LabTest = {
       actual: freeType.ok ? 'created' : freeType.text.slice(0, 160),
       ok: freeType.ok,
       severity: 'medium',
-      detail: { code: 'okf.ts:79-88: type must be a slug equal to the first path segment' },
+      detail: { code: 'okf.ts validateNote: frontmatter type is any non-empty string since #444 (notes.type stays the folder)' },
     })
 
     // rename (wikilink refactor), revisions, revert, trash
@@ -847,7 +847,7 @@ const test: LabTest = {
         actual: res ? `${res.imported} imported, ${res.skipped.length} skipped: ${res.skipped.slice(0, 3).join(' | ')}` : `${r.status} ${r.text.slice(0, 160)}`,
         ok: res ? res.imported === acmeConcepts.length : false,
         severity: 'high',
-        detail: { result: res, acmeTypes, code: 'okf.ts:84 frontmatter.type must equal the first path segment slug; OKF types are free text (SPEC §4.1)' },
+        detail: { result: res, acmeTypes, code: 'type is free since #444; still refused: verified {by, at} without tier (#563), nested producer keys parameters/executor/attester/not (#970)' },
       })
       if (res?.vaultId) {
         const acmeRows = await noteSnapshot(null, [res.vaultId])

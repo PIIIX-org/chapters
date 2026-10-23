@@ -15,7 +15,7 @@ When this skill is active, **you do not need to ask the user what Elara is or wh
 
 Elara is a team knowledge base and codebase mapping platform built on four foundational pillars:
 
-1. **Notes as Plain Files (OKF v0.2)**: Every note is a markdown file with YAML frontmatter following Google's [Open Knowledge Format (OKF v0.2)](https://github.com/GoogleCloudPlatform/open-knowledge-format). Notes live at slug paths up to 8 segments deep (each segment matches `^[a-z0-9][a-z0-9-]*$`), and the frontmatter `type` must equal the first path segment (`concepts/auth/tokens` → `type: concepts`). Datetimes need an explicit UTC or offset. Links:
+1. **Notes as Plain Files (OKF v0.2)**: Every note is a markdown file with YAML frontmatter following Google's [Open Knowledge Format (OKF v0.2)](https://github.com/GoogleCloudPlatform/open-knowledge-format). Notes live at slug paths up to 8 segments deep (each segment matches `^[a-z0-9][a-z0-9-]*$`). The first segment is the note's folder (`concepts/auth/tokens` → folder `concepts`); the frontmatter `type` is the OKF type, any non-empty string, and defaults to the folder. Datetimes need an explicit UTC or offset. Links:
    - Note-to-note: `[[path/to/note]]` or `[[path/to/note|display text]]`
    - Note-to-code: `[[repo:<repo-name-or-id>/path/to/file]]`
    - Anchored forms such as `[[repo:<repo>/path/to/file#L12-L34]]` are accepted, but the graph edge always points at the file; the anchor is not resolved or checked.
@@ -49,7 +49,7 @@ When exploring a project or answering questions about architecture, concepts, or
 ### 2. Note Creation & Editing (OKF Standard)
 When creating or editing notes via `create_note` or `edit_note`:
 - `create_note` takes `path` (or `type` + `name`), a `frontmatter` **object**, and a markdown `body` **without** a frontmatter block. There is no `content` argument: every tool refuses an argument it does not declare, and the error lists its real parameters.
-- The frontmatter `type` must equal the first path segment, and every path segment must match `^[a-z0-9][a-z0-9-]*$` (so `decisions/adr-001-crdt-relay`, not `decisions/ADR-001`). `timestamp` defaults to now; datetimes need `Z` or an offset. Example `create_note` arguments:
+- The frontmatter `type` may be any non-empty string (`decision`, `Metric`); left out, it is the first path segment. The `types` filter matches the folder, not the frontmatter `type`. Every path segment must match `^[a-z0-9][a-z0-9-]*$` (so `decisions/adr-001-crdt-relay`, not `decisions/ADR-001`). `timestamp` defaults to now; datetimes need `Z` or an offset. Example `create_note` arguments:
   ```json
   {
     "vaultId": "<vault-uuid>",
