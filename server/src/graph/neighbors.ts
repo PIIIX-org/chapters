@@ -42,10 +42,10 @@ export interface LocalGraph {
   /** Nearest first: by distance, then path and id in code-unit order; the centre first. */
   nodes: LocalNode[]
   edges: GraphEdge[]
-  /** Structural groups over the cap that a node of the walk belongs to, skipped as in `buildGraph`. */
+  /** Structural groups over the cap that a listed node belongs to, skipped as in `buildGraph`. */
   cappedGroups: string[]
-  /** More nodes were in reach than `limit` kept. */
-  more: boolean
+  /** The nearest node past `limit` (null: none, or no limit): a caller can say that more exist. */
+  next: LocalNode | null
 }
 
 export interface NeighborhoodOptions {
@@ -416,6 +416,6 @@ export async function neighborhood(resources: GraphResourceSet, center: Internal
     nodes,
     edges: edges.edges.filter((e) => kept.has(e.source) && kept.has(e.target)),
     cappedGroups: [...walk.cappedGroups].sort(),
-    more: ranked.length > nodes.length,
+    next: ranked[nodes.length] ?? null,
   }
 }

@@ -1,8 +1,8 @@
-import { inArray } from 'drizzle-orm'
+import { inArray, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes, repositories, vaults } from '../db/schema.js'
 import { compareCodeUnits, location } from '../mcp/response.js'
-import { bodyStartLine, type Frontmatter } from '../notes/okf.js'
+import { bodyStartLine } from '../notes/projector.js'
 import type { EdgeKind, EdgeRelation, GraphEdge, GraphResourceSet, InternalNode } from './assemble.js'
 
 /**
@@ -21,7 +21,11 @@ import type { EdgeKind, EdgeRelation, GraphEdge, GraphResourceSet, InternalNode 
 export interface Endpoint {
   /** A note path (no `.md`) or a repository file path. */
   path: string
-  /** The vault or repository name, only when the answer spans more than one. */
+  /**
+   * The vault or repository, only when the answer spans more than one: its
+   * name and the first 8 characters of its id (`notes#1a2b3c4d`; names are
+   * not unique), the whole id when two of the call's share those 8.
+   */
   in?: string
 }
 
@@ -42,7 +46,7 @@ export const edgeRowKey = (r: EdgeRow): string => JSON.stringify([r.from, r.to, 
 
 /**
  * `edges` as rows, in their order. Every end must be in `nodes`. Reads the
- * vault and repository names (when `resources` spans several) and the
+ * vault and repository names (when `resources` spans several, for `in`) and the
  * frontmatter of the notes whose links are listed: stored link lines are
  * body-relative (ADR-004 §2.2), the evidence counts lines of the whole note
  * file.
@@ -65,17 +69,22 @@ export async function edgeRows(edges: readonly GraphEdge[], nodes: Iterable<Name
     }
   }
 
+  const short = (id: string) => id.slice(0, 8)
+  const prefixes = new Map<string, number>()
+  for (const id of [...resources.vaultIds, ...resources.repositoryIds]) prefixes.set(short(id), (prefixes.get(short(id)) ?? 0) + 1)
+  const labels = new Map([...names].map(([id, name]) => [id, `${name}#${prefixes.get(short(id))! > 1 ? id : short(id)}`]))
+
   const linked = [...new Set(edges.filter((e) => e.relation === 'link' && Array.isArray(e.evidence)).map((e) => e.source))]
   const bodyStart = new Map<string, number>()
   if (linked.length > 0) {
-    for (const n of await db.select({ id: notes.id, frontmatter: notes.frontmatter }).from(notes).where(inArray(notes.id, linked))) {
-      bodyStart.set(n.id, bodyStartLine(n.frontmatter as Frontmatter))
+    for (const n of await db.select({ id: notes.id, frontmatter: notes.frontmatter, frontmatterSrc: sql<unknown>`frontmatter_src` }).from(notes).where(inArray(notes.id, linked))) {
+      bodyStart.set(n.id, bodyStartLine(n))
     }
   }
 
   const endpoint = (id: string): Endpoint => {
     const n = node(id)
-    const container = names.get(n.resourceId)
+    const container = labels.get(n.resourceId)
     return container === undefined ? { path: n.path } : { path: n.path, in: container }
   }
   const evidence = (e: GraphEdge): string | null => {
