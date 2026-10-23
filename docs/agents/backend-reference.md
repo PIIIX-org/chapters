@@ -1847,10 +1847,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   included) and `MaintenanceInProgressError` (`BUSY`, retryable), the
   quarantine errors (`QUARANTINED`, the rule), `NoteEditError`
   (`INVALID_ARGUMENT`), `NoteEditConflictError` and
-  `IdempotencyKeyReusedError` (`CONFLICT`), a Node system error
-  (`INTERNAL`, its code only, the error logged), anything else
-  (`INTERNAL` with its message; #443 adds a database-error branch here
-  that shows only the SQLSTATE). `CONFLICT`, `BUSY` and `QUARANTINED`
+  `IdempotencyKeyReusedError` (`CONFLICT`), a failed query (`INTERNAL`
+  `a database query failed (<SQLSTATE>)`, #443: `databaseFailure()` in
+  `db/errors.ts` finds a `DrizzleQueryError` or postgres.js
+  `PostgresError` in the `cause` chain; drizzle's message is the SQL and
+  every parameter, so only the driver error is logged), a Node system
+  error (`INTERNAL`, its code only, the error logged), anything else
+  (`INTERNAL` with its message). `CONFLICT`, `BUSY` and `QUARANTINED`
   extend ADR-004's list, and `field` its envelope. The SDK's own
   refusals (arguments its schema check rejects, an unknown tool, an
   answer failing its outputSchema) are isError text it makes itself; a
@@ -1863,7 +1866,21 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   union's tag values for a bad `op`), an unknown tool →
   `NOT_FOUND` (close names among `listedTools()`), else `INTERNAL`; the
   message is the SDK's without `MCP error -32602: Input validation
-  error: `. Suggestions only from what the caller reaches: a `note not
+  error: `. The same wrapper refuses a NUL byte (U+0000) in any string
+  or object key of the arguments before the SDK's check, for every tool
+  (#443, `findNulByte()` in `nul-bytes.ts`): `INVALID_ARGUMENT`, `field`
+  its dotted path, message `<field>: NUL bytes (U+0000) are not allowed`
+  (` (in a key)` for a key). Postgres `text` and `jsonb` cannot hold
+  one; other control characters (tab, LF, CR and the rest) are kept.
+  Every other request the override sets (prompts/get, resources/read)
+  answers a NUL in its params as JSON-RPC InvalidParams and a failed
+  query as InternalError `a database query failed`. REST does the same
+  in app.ts: a root `preValidation` hook answers a NUL in path params,
+  query string or parsed body (not the MCP routes' JSON-RPC body) with
+  400 `{statusCode, error, message, code: "INVALID_ARGUMENT", field}`
+  (`params.<name>`, `query.<name>`, or the body's field path), and the
+  error handler answers a failed query 500 `a database query failed` in
+  every environment. Suggestions only from what the caller reaches: a `note not
   found` after the access check carries `closest()` of
   `nearbyNotePaths()` (live paths of that vault directly in the same
   folder, and with the same last segment anywhere, each query up to 500;
