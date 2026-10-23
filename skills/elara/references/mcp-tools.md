@@ -148,7 +148,7 @@ Every write goes through the same validation (`validateNote` in `server/src/note
 - Any other top-level key must be a scalar or a list of scalars. `generated`, `sources`, `verified`, `usage_window`, and `properties` are the only keys allowed to hold objects.
 - The note must survive a save and reload unchanged: if its serialized file would parse back to different frontmatter or body, the write is refused (`note cannot be stored: ...`).
 
-**Every write answers the same way** (`create_note`, `edit_note`, `append_note`, `upsert_note`, `rename_note`, `delete_note`, `restore_note`, `revert_note`): the note (as before) plus
+**Every write answers the same way** (`create_note`, `edit_note`, `append_note`, `upsert_note`, `rename_note`, `delete_note`, `restore_note`, `revert_note`): the note's `id`, `vaultId`, `type`, `name`, `path`, `frontmatter`, `body`, `createdAt` and `updatedAt` (no embedding or other internal columns; `delete_note` answers only `id` and `path` of these) plus
 - `rev` (integer): the note's version after the write. It goes up by one with every change of the note's body, frontmatter, path or trash state, by anyone; `read_note` returns the same `rev` for the same content. Send it as `edit_note` `base_rev`.
 - `status`: `applied`; `merged` or `conflicted` (`edit_note` with `base_rev`, or with a `body` after you read the note, below); or `retry`: the store was busy (a lock wait timed out, or maintenance is running), **nothing was written**, and `rev` is `null`: send the same call again.
 - `diff_stats`: `{ lines_added, lines_removed, frontmatter_keys }`: whole body lines added and removed, and the frontmatter keys whose value changed, from the note as it was when your write ran (what people editing it saw) to the result. `null` for `rename_note`, `delete_note` and `restore_note`.
@@ -178,7 +178,7 @@ The write is committed when the call returns; a connection lost before the answe
   - `type` (string, optional) and `name` (string, optional): used as `<type>/<name>` when `path` is omitted. You must give either `path` or both `type` and `name`.
   - `frontmatter` (object, optional): the YAML frontmatter as a JSON object. If `type` is omitted it is set to the first path segment; if given it must match. `timestamp` defaults to now.
   - `body` (string, optional, default `""`): the markdown body, **without** a frontmatter block. At most the server's note size limit, in UTF-8 bytes (`ELARA_NOTE_MAX_BYTES`, default 1048576 = 1 MiB); a larger body is refused with `isError: true` and `note body is N bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)`. Split such content across notes. The same limit applies to the editor, REST and import.
-- **Returns**: the created note row (`id`, `vaultId`, `type`, `name`, `path`, `frontmatter`, `body`, timestamps, ...) with the write result fields above (`rev` 1).
+- **Returns**: the created note (`id`, `vaultId`, `type`, `name`, `path`, `frontmatter`, `body`, `createdAt`, `updatedAt`) with the write result fields above (`rev` 1).
 - There is no `content` argument. Passing one (or any other undeclared key) is refused with the parameter list, and no note is created.
 
 ### `edit_note`
