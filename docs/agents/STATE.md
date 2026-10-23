@@ -6,8 +6,8 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
 - **Last promotion to `prod`**: #920 Promote: phase 2 step B (prod ← d3b210e: ADR-003 S2a-2/S2b/S3/S6, compaction, whole-body… (merged 2026-10-23, `d3b210e`).
 - **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) success; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
-- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/6, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 52/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 6/84, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/35, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/46, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/47.
-- **Open issues**: [234](https://github.com/PIIIX-org/chapters/issues): P0 39, P1 112, P2 70, no priority 13; `bug` 60, `security` 13, `decision` 3, `deferred` 3.
+- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/6, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 52/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 8/86, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/35, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/46, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/47.
+- **Open issues**: [236](https://github.com/PIIIX-org/chapters/issues): P0 40, P1 111, P2 71, no priority 14; `bug` 60, `security` 12, `decision` 3, `deferred` 3.
 - **Owner actions** (label `owner`):
   - #589 [fix 192] Revoke the 5 GitHub tokens exposed before #383 (P0)
   - #930 [phase 3] Design review and owner sign-off: ADR-004 response contract (before wave 2) (P0)
@@ -28,6 +28,7 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #425 [fix 22] browse_vault: root listing must respect recursive:false; return path and title… (P0)
   - … and 65 more: https://github.com/PIIIX-org/chapters/milestone/4
 - **Open bugs** (label `bug`):
+  - #961 [mcp] A paged read_note records no merge base, so a later whole-body edit_note replaces… (P0)
   - #713 [ui] Landing page says "No notes" to a user with notes (P1)
   - #714 [ui] Floating top bar collides with page controls; status pill duplicated (DEF-02, DEF-08… (P1)
   - #715 [ui] Primary actions rest at 20 % opacity (P1)
@@ -39,7 +40,6 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #733 [ui] Vault card footer clips "Delete"; the delete confirmation is unreadable (P1)
   - #734 [ui] The irreversible action has the weaker guard (P1)
   - #739 [ui] Repository page double-offsets the content (P1)
-  - #741 [ui] Token tables are unusable on desktop (P1)
   - … and 48 more: https://github.com/PIIIX-org/chapters/issues?q=is%3Aopen+label%3Abug
 <!-- state:generated:end -->
 
