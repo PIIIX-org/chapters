@@ -1261,8 +1261,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description:
         'Update a note. Prefer `ops` for local changes: they apply to the live text, so text a person typed since you read the note is kept. `ops` run in order: replace_text {find, replace, expectedCount?}, insert_before/insert_after {anchor, text}, replace_section {heading, content}, append {text}, prepend {text} (each as whole lines), delete_block {find}, frontmatter_set {key, value}, frontmatter_add/frontmatter_remove {key, value} (list items; remove without value deletes the key). A `find`/`anchor` must occur exactly once (replace_text: `expectedCount` times) and a heading once, else the edit fails and nothing changes. ' +
         '`body` replaces the whole body (not with `ops`); only the characters that differ change. `frontmatter` merges per top-level key: keys you send are set, keys you leave out are kept; `replace: true` replaces the whole map instead, and `removeKeys` deletes keys. ' +
-        '`base_rev`: the `rev` read_note or edit_note returned for the content you edited (a note_history revision id works too). With it, your `body`/`frontmatter` merge with what changed since: `status` `applied`, `merged` (with `concurrent_changes`), or `conflicted` when you changed lines or keys that also changed (nothing changes; your version is kept as revision `proposalId`). Lines you only added at the end go after text added or typed there since. ' +
-        'A `body` without `base_rev` merges the same way from this connection\'s last read_note or export_note of the note in the past 24 h, or from the last `body` this connection wrote to it since (its `rev`, echoed as `baseRev`), so text typed since is kept; only when this connection has not read the note in that time does a `body` replace the live text. ' +
+        '`base_rev`: the `rev` read_note or edit_note returned for the content you edited (a revision id works too). With it, your `body`/`frontmatter` merge with what changed since: `status` `applied`, `merged` (with `concurrent_changes`), or `conflicted` when you changed lines or keys that also changed (nothing changes; your version is kept as revision `proposalId`). Lines you only added at the end go after text added or typed there since. ' +
+        'A `body` without `base_rev` merges the same way from this connection\'s last read of the note in the past 24 h, or from the last `body` this connection wrote to it since (its `rev`, echoed as `baseRev`), so text typed since is kept; only when this connection has not read the note in that time does a `body` replace the live text. ' +
         'The edit flows through the live collaboration engine — humans with the note open see it stream in, attributed to this connection. ' +
         'A body that doubles the note or repeats a large block of it is quarantined (note unchanged, body kept as a revision); set `allowGrowth: true` if intended.' +
         WRITE_DOC,
@@ -1391,7 +1391,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       ...(dryRun ? { dry_run: true } : {}),
       message: err.proposalId
         ? `Not applied: lines or frontmatter keys you changed were also changed ${since} (\`conflicts\`: lines of the current body). ` +
-          `The note is unchanged; your version is kept as revision ${err.proposalId} (action "proposal": get_revision shows it, a person can restore it). ` +
+          `The note is unchanged; your version is kept as revision ${err.proposalId} (action "proposal": get_revision shows it on an admin-profile token, a person can restore it). ` +
           `read_note for the current text and rev, then redo your change on it, or use ops, which apply to the live text.`
         : `Dry run: this edit would conflict with changes made ${since} (\`conflicts\`); nothing was written or kept.`,
     }
