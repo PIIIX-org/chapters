@@ -28,7 +28,9 @@ and the code disagree, the code and `backend-reference.md` win).
 Integration tests (collab relay, store, disk, MCP against a real
 instance) are the lab: `docs/agents/lab.md`.
 
-Current phase: **reliability fixes from the 2026-10-14 AI-performance
-study** (agent write path, crash safety, backup/restore, ingestion). The
-backend and UI are built; see `docs/agents/STATE.md` for the phase in
-progress and the open bugs.
+Current phase: **phase 3 of the 2026-10-14 AI-performance study fixes,
+"the premise"** (fewer tokens, exact answers: response budgets, slim tool
+list, code index, retrieval, located hits and ranged reads). Phases 1
+(guardrails) and 2 (stop data loss) are on `prod`. See
+`docs/agents/STATE.md` for the phase in progress and the open bugs, and
+the Elara note `fixes/phase-3-kickoff` for the work order.
