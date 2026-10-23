@@ -1405,7 +1405,12 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   log. Its running bound counts 6× each update's length (the worst JSON
   expansion of Yjs's encoding: `false` is 1 byte encoded and 5 as JSON, a
   control character 1 and 6), so property edits far from the cap measure
-  nothing. The editor measures both parts alike (`client/src/lib/noteSize.ts`),
+  nothing. An update that adds nothing but body text (typing, deletions;
+  `addsRest` follows a decoded item's `origin`/`rightOrigin` to find its
+  parent, and counts one it cannot place as rest) skips the rest check,
+  as an update without text skips the body's, so typing on a note whose
+  frontmatter is already over the cap measures nothing either (#947).
+  The editor measures both parts alike (`client/src/lib/noteSize.ts`),
   `tooLarge.otherBytes` says how large the properties are, and it reconnects
   only once both fit. REST and MCP frontmatter is bounded only by the request size.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.

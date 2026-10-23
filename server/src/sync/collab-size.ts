@@ -25,7 +25,8 @@ import * as Y from 'yjs'
  *    encoding (`false` is one byte encoded and five as JSON, a control
  *    character one and six), so the rest's bound counts that many.
  * 2. An update that inserts no text (deletions, frontmatter) cannot grow the
- *    body.
+ *    body, and one that adds nothing but text to the body (typing,
+ *    deletions) cannot grow the rest (addsRest, #947).
  * 3. Exact: measure the part now; its bound restarts from it.
  * 4. Otherwise apply the update to a scratch copy and measure: at most the
  *    larger of the cap and the current document, plus one frame of work. The
@@ -71,8 +72,89 @@ export function bodyMeasured(doc: Y.Doc, body: string): void {
   meter.since = 0
 }
 
-function insertsText(structs: Array<Y.Item | Y.GC | Y.Skip>): boolean {
+type Struct = Y.Item | Y.GC | Y.Skip
+
+function insertsText(structs: Struct[]): boolean {
   return structs.some((struct) => struct instanceof Y.Item && struct.content instanceof Y.ContentString)
+}
+
+/**
+ * True when `structs` (a decoded update and the structs Yjs holds pending,
+ * which it can unblock) may add to the rest of `doc` (#947): an item that is
+ * anything but text in the body (other content, a map entry, text in another
+ * type). Deletions add nothing. A decoded item typed next to another one
+ * names no parent, only its neighbours (`origin`, `rightOrigin`), so its
+ * parent is the one of the neighbour it was typed against, found in these
+ * structs or in the document. A neighbour found in neither (it is still on
+ * its way) counts as rest: the full check then runs, as before. So plain
+ * typing on a note whose rest is over the cap is not measured per keystroke.
+ */
+function addsRest(doc: Y.Doc, structs: Struct[]): boolean {
+  const items = new Map<number, Y.Item[]>()
+  for (const struct of structs) {
+    if (!(struct instanceof Y.Item)) continue
+    const list = items.get(struct.id.client)
+    if (list) list.push(struct)
+    else items.set(struct.id.client, [struct])
+  }
+  for (const list of items.values()) list.sort((a, b) => a.id.clock - b.id.clock)
+  /** The item of these structs that holds `id`, or null. */
+  const local = (id: Y.ID): Y.Item | null => {
+    const list = items.get(id.client)
+    if (!list) return null
+    let low = 0
+    let high = list.length - 1
+    while (low <= high) {
+      const mid = (low + high) >> 1
+      const item = list[mid]!
+      if (id.clock < item.id.clock) high = mid - 1
+      else if (id.clock >= item.id.clock + item.length) low = mid + 1
+      else return item
+    }
+    return null
+  }
+  const body = doc.getText('body')
+  const known = new Map<Y.Item, boolean>()
+  /** Whether `start`'s parent is the root `body`; every item walked through gets the same answer. */
+  const inBody = (start: Y.Item): boolean => {
+    const walked: Y.Item[] = []
+    let item = start
+    let answer = false
+    for (;;) {
+      const seen = known.get(item)
+      if (seen !== undefined) {
+        answer = seen
+        break
+      }
+      // A cycle of neighbours (a malformed update) ends here, as rest.
+      if (walked.length > structs.length) break
+      walked.push(item)
+      // Decoded: a root's name, the id of a nested type (never the body, a root), or null (typed next to a neighbour).
+      const parent: unknown = item.parent
+      if (typeof parent === 'string') {
+        answer = parent === 'body'
+        break
+      }
+      if (parent !== null) break
+      const neighbour = item.origin ?? item.rightOrigin
+      if (neighbour === null) break
+      const next = local(neighbour)
+      if (next) {
+        item = next
+        continue
+      }
+      if (neighbour.clock < Y.getState(doc.store, neighbour.client)) answer = Y.getItem(doc.store, neighbour).parent === body
+      break
+    }
+    for (const item of walked) known.set(item, answer)
+    return answer
+  }
+  return structs.some(
+    (struct) =>
+      struct instanceof Y.Item &&
+      !(struct.content instanceof Y.ContentDeleted) &&
+      (!(struct.content instanceof Y.ContentString) || struct.parentSub !== null || !inBody(struct)),
+  )
 }
 
 /**
@@ -139,11 +221,12 @@ export function updateFits(doc: Y.Doc, update: Uint8Array, limit: number): boole
   // Yjs keeps pending structs as one v2 update.
   const pending = doc.store.pendingStructs?.update
   const incoming = update.length + (pending?.length ?? 0)
+  // Decoded once, only when a bound is passed.
+  let decoded: Struct[] | undefined
+  const structs = () => (decoded ??= [...Y.decodeUpdate(update).structs, ...(pending ? Y.decodeUpdateV2(pending).structs : [])])
 
   let bodyFits = meter.bytes + meter.since + incoming <= limit
-  if (!bodyFits && !insertsText(Y.decodeUpdate(update).structs) && !(pending && insertsText(Y.decodeUpdateV2(pending).structs))) {
-    bodyFits = true
-  }
+  if (!bodyFits && !insertsText(structs())) bodyFits = true
   if (!bodyFits) {
     meter.bytes = Buffer.byteLength(doc.getText('body').toString())
     meter.since = 0
@@ -151,6 +234,7 @@ export function updateFits(doc: Y.Doc, update: Uint8Array, limit: number): boole
   }
 
   let restFits = meter.rest + REST_EXPANSION * (meter.restSince + incoming) <= limit
+  if (!restFits && !addsRest(doc, structs())) restFits = true
   if (!restFits) {
     meter.rest = restBytes(doc)
     meter.restSince = 0
