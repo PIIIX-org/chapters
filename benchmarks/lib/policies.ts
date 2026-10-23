@@ -3,7 +3,8 @@
 // index Elara builds. Both stop as soon as every gold range has been in
 // their context (an oracle stop, the same for both), or when a cap is hit.
 //
-//   elara  search(question) -> read_file of each hit, best first
+//   elara  search(question) -> read_file of each hit, best first, page by
+//          page (the default 4,000-token budget) following its cursor
 //   grep   rg --count (files ranked by matching lines) -> rg -n over the
 //          top files (first matches of each) -> ranged reads around them
 //
@@ -110,8 +111,8 @@ export interface PolicyRun {
 export interface ElaraTools {
   /** MCP `search` {query, repositoryId, limit: 10}. */
   search(query: string): Promise<ToolResponse>
-  /** MCP `read_file` {repositoryId, path}. */
-  readFile(path: string): Promise<ToolResponse>
+  /** MCP `read_file` {repositoryId, path, cursor?}: one page of the file. */
+  readFile(path: string, cursor?: string): Promise<ToolResponse>
 }
 
 interface SearchHit {
@@ -185,6 +186,26 @@ export function visibleContentLines(response: string, content: string, visibleCh
   return lines
 }
 
+/**
+ * One `read_file` page (#420, #422): its content, the file line it starts
+ * at (`lines[0]` when the file is paged), the lines it completes (a line
+ * split across pages counts on the page where it ends) and the cursor of
+ * the next page, if any.
+ */
+export function readFilePage(json: unknown): { content: string; first: number; lines: number; cursor?: string } | null {
+  if (!json || typeof json !== 'object') return null
+  const content: unknown = Reflect.get(json, 'content')
+  if (typeof content !== 'string') return null
+  const range: unknown = Reflect.get(json, 'lines')
+  const first = Array.isArray(range) && typeof range[0] === 'number' ? range[0] : 1
+  const truncated: unknown = Reflect.get(json, 'truncated')
+  const next: unknown = truncated && typeof truncated === 'object' ? Reflect.get(truncated, 'cursor') : undefined
+  const cursor = typeof next === 'string' ? next : undefined
+  const newlines = content.split('\n').length - 1
+  const last = cursor === undefined && content !== '' && !content.endsWith('\n') ? 1 : 0
+  return { content, first, lines: newlines + last, ...(cursor === undefined ? {} : { cursor }) }
+}
+
 export async function runElara(question: string, gold: readonly LineRange[], tools: ElaraTools, caps: Caps = CAPS): Promise<PolicyRun> {
   const ep = new Episode(gold, caps)
   const res = await tools.search(question)
@@ -196,16 +217,17 @@ export async function runElara(question: string, gold: readonly LineRange[], too
   const ranking = dedupe(hits.map((h) => h.path).filter((p): p is string => typeof p === 'string'))
 
   for (const path of ranking.slice(0, caps.maxFiles)) {
-    if (ep.done) break
-    const file = await tools.readFile(path)
-    const cut = ep.clip(file.text)
-    const json = file.ok ? parseJson(file.text) : undefined
-    const content = json && typeof json === 'object' ? Reflect.get(json, 'content') : undefined
-    let lines = 0
-    if (typeof content === 'string') {
-      lines = cut.truncated ? visibleContentLines(file.text, content, caps.perCallChars) : content.split('\n').length
-    }
-    ep.record('read_file', path, cut.visible, cut.truncated, file.ms, file.ok, lines > 0 ? [{ path, start: 1, end: lines }] : [])
+    // A long file comes in pages (#420): follow `truncated.cursor` until the gold is seen or the file ends.
+    let cursor: string | undefined
+    do {
+      if (ep.done) break
+      const file = await tools.readFile(path, cursor)
+      const cut = ep.clip(file.text)
+      const page = readFilePage(file.ok ? parseJson(file.text) : undefined)
+      const lines = page ? (cut.truncated ? visibleContentLines(file.text, page.content, caps.perCallChars) : page.lines) : 0
+      ep.record('read_file', path, cut.visible, cut.truncated, file.ms, file.ok, page && lines > 0 ? [{ path, start: page.first, end: page.first + lines - 1 }] : [])
+      cursor = cut.truncated ? undefined : page?.cursor
+    } while (cursor)
   }
   return { ranking, episode: ep }
 }

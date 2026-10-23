@@ -70,15 +70,15 @@ const text = () => lines.join('')
 /** The note's history, newest first, every page. */
 async function history(): Promise<HistoryRow[]> {
   const rows: HistoryRow[] = []
-  let cursor: string | undefined
+  let cursor: string | null = null
   do {
-    const page = await must<{ revisions: HistoryRow[]; nextCursor?: string }>('note_history', {
+    const page: { revisions: HistoryRow[]; truncated: false | { cursor: string | null } } = await must('note_history', {
       path: PATH,
       limit: 100,
       ...(cursor ? { cursor } : {}),
     })
     rows.push(...page.revisions)
-    cursor = page.nextCursor
+    cursor = page.truncated === false ? null : page.truncated.cursor
   } while (cursor)
   return rows
 }

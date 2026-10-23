@@ -256,7 +256,8 @@ export async function findSymbols(
   contribute(sem, false)
   contribute(kw, true)
 
-  return [...map.values()].sort((a, b) => b.score - a.score).slice(0, limit)
+  // Equal scores in id order, so the MCP cursor's next page (#422) continues the same ranking.
+  return [...map.values()].sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, limit)
 }
 
 /**

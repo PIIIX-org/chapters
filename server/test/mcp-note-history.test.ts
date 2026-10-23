@@ -14,6 +14,7 @@ import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
 import { noteRevisions, notes } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
+import { argsFingerprint, encodeCursor } from '../src/mcp/response.js'
 import { updateNote } from '../src/notes/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -21,9 +22,10 @@ type Args = Record<string, unknown>
 
 interface HistoryPage {
   revisions: Array<Record<string, unknown> & { id: string; createdAt: string }>
-  hasMore: boolean
-  nextCursor: string | null
+  truncated: false | { cursor: string | null; total: { revisions: number | string } }
 }
+
+const nextCursor = (page: HistoryPage) => (page.truncated === false ? null : page.truncated.cursor)
 
 const PATH = 'docs/big-history'
 const MARK = 'HISTORYBODYMARKER'
@@ -103,14 +105,29 @@ async function revisionIdsInDb(): Promise<string[]> {
 /** Walks note_history to the end with `limit`, returning every page. */
 async function allPages(client: Client, limit: number): Promise<HistoryPage[]> {
   const pages: HistoryPage[] = []
-  let cursor: string | undefined
+  let cursor: string | null = null
   for (;;) {
-    const page = await must<HistoryPage>(client, 'note_history', { vaultId, path: PATH, limit, ...(cursor ? { cursor } : {}) })
+    const page: HistoryPage = await must<HistoryPage>(client, 'note_history', { vaultId, path: PATH, limit, ...(cursor ? { cursor } : {}) })
     pages.push(page)
-    if (!page.hasMore) return pages
-    expect(page.nextCursor).toEqual(expect.any(String))
-    cursor = page.nextCursor!
+    cursor = nextCursor(page)
+    if (cursor === null) return pages
     if (pages.length > 100) throw new Error('note_history never reached the last page')
+  }
+}
+
+/** A revision's whole body: get_revision pages a long one (#420). */
+async function revisionBody(client: Client, args: Args): Promise<string> {
+  let body = ''
+  let cursor: string | null = null
+  for (;;) {
+    const page: { body: string; truncated: false | { cursor: string | null } } = await must(client, 'get_revision', {
+      ...args,
+      budget_tokens: 25_000,
+      ...(cursor ? { cursor } : {}),
+    })
+    body += page.body
+    cursor = page.truncated === false ? null : page.truncated.cursor
+    if (cursor === null) return body
   }
 }
 
@@ -166,8 +183,9 @@ describe('note_history is metadata only and paginated (#411)', () => {
     expect(r.text).not.toContain(MARK)
     const page = JSON.parse(r.text) as HistoryPage
     expect(page.revisions).toHaveLength(20)
-    expect(page.hasMore).toBe(true)
-    expect(page.nextCursor).toEqual(expect.any(String))
+    expect(page.truncated).toMatchObject({ total: { revisions: '>20' }, cursor: expect.any(String) })
+    expect(page).not.toHaveProperty('hasMore')
+    expect(page).not.toHaveProperty('nextCursor')
 
     const ids = await revisionIdsInDb()
     expect(page.revisions.map((rev) => rev.id)).toEqual(ids.slice(0, 20))
@@ -177,13 +195,13 @@ describe('note_history is metadata only and paginated (#411)', () => {
   })
 
   it('the largest page is bounded too', async () => {
-    const r = await call(owner, 'note_history', { vaultId, path: PATH, limit: 100 })
+    const r = await call(owner, 'note_history', { vaultId, path: PATH, limit: 100, budget_tokens: 25_000 })
     expect(r.isError, r.text.slice(0, 300)).toBe(false)
     expect(r.text.length).toBeLessThan(PAGE_BOUND)
     expect(r.text).not.toContain(MARK)
     const page = JSON.parse(r.text) as HistoryPage
     expect(page.revisions).toHaveLength(EDITS + 1 + 4)
-    expect(page).toMatchObject({ hasMore: false, nextCursor: null })
+    expect(page.truncated).toBe(false)
   })
 
   it('paging returns every revision exactly once, in order, including revisions recorded in the same instant', async () => {
@@ -199,7 +217,7 @@ describe('note_history is metadata only and paginated (#411)', () => {
   it('a revision recorded while paging does not shift the pages', async () => {
     const first = await must<HistoryPage>(owner, 'note_history', { vaultId, path: PATH, limit: 5 })
     await updateNote(vaultId, PATH, { body: `${MARK} written while paging` })
-    const second = await must<HistoryPage>(owner, 'note_history', { vaultId, path: PATH, limit: 5, cursor: first.nextCursor })
+    const second = await must<HistoryPage>(owner, 'note_history', { vaultId, path: PATH, limit: 5, cursor: nextCursor(first) })
     const ids = await revisionIdsInDb()
     expect([...first.revisions, ...second.revisions].map((rev) => rev.id)).toEqual(ids.slice(1, 11))
   })
@@ -218,26 +236,30 @@ describe('note_history is metadata only and paginated (#411)', () => {
 
   it('refuses a well-formed cursor that is no position before it reaches the database', async () => {
     const ord = (await db.select({ ord: noteRevisions.ord }).from(noteRevisions).where(eq(noteRevisions.noteId, noteId)).orderBy(desc(noteRevisions.ord)))[0]!.ord
-    for (const json of [
-      { ord: 0 },
-      { ord: -1 },
-      { ord: 1.5 },
-      { ord: String(ord) },
-      { ord: Number.MAX_SAFE_INTEGER + 1 },
-      { ord, at: '2026-01-01T00:00:00.000000Z' },
-      // The cursor before #825.
-      { at: '2026-01-01T00:00:00.000000Z', id: randomUUID() },
+    // The cursor this call would carry, at position `p`: same tool, same arguments.
+    const f = argsFingerprint({ path: PATH }, { vaultId })
+    const at = (p: unknown) => encodeCursor({ v: 1, t: 'note_history', f, k: { s: 0, p: p as number } })
+    for (const cursor of [
+      at(0),
+      at(-1),
+      at(1.5),
+      at(String(ord)),
+      at(Number.MAX_SAFE_INTEGER + 1),
+      // Positions of another section or shape.
+      encodeCursor({ v: 1, t: 'note_history', f, k: { s: 1, p: ord } }),
+      Buffer.from(JSON.stringify({ v: 1, t: 'note_history', f, k: { s: 0, p: { ord } } })).toString('base64url'),
+      // The cursors before #422 and before #825.
+      Buffer.from(JSON.stringify({ ord })).toString('base64url'),
+      Buffer.from(JSON.stringify({ at: '2026-01-01T00:00:00.000000Z', id: randomUUID() })).toString('base64url'),
     ]) {
-      const cursor = Buffer.from(JSON.stringify(json)).toString('base64url')
       const r = await call(owner, 'note_history', { vaultId, path: PATH, cursor })
-      expect(r.isError, JSON.stringify(json)).toBe(true)
-      expect(r.text, JSON.stringify(json)).toMatch(/invalid cursor/)
-      expect(r.text, JSON.stringify(json)).not.toMatch(/Failed query|select/i)
+      expect(r.isError, cursor).toBe(true)
+      expect(r.text, cursor).toMatch(/invalid cursor/)
+      expect(r.text, cursor).not.toMatch(/Failed query|select/i)
     }
     // The smallest and largest positions the cursor format can carry are accepted.
     for (const edge of [1, Number.MAX_SAFE_INTEGER]) {
-      const cursor = Buffer.from(JSON.stringify({ ord: edge })).toString('base64url')
-      const r = await call(owner, 'note_history', { vaultId, path: PATH, cursor })
+      const r = await call(owner, 'note_history', { vaultId, path: PATH, cursor: at(edge) })
       expect(r.isError, `${edge}: ${r.text.slice(0, 200)}`).toBe(false)
     }
   })
@@ -254,12 +276,13 @@ describe('get_revision returns one revision with its content (#411)', () => {
       noteId,
       path: PATH,
       action: 'create',
-      body: bodyOf(0),
+      body: expect.stringMatching(new RegExp(`^${MARK} revision 0 café\n`)),
       frontmatter: expect.objectContaining({ type: 'docs' }),
     })
+    expect(await revisionBody(owner, { vaultId, revisionId: created.id })).toBe(bodyOf(0))
     // Naming the note by path or id narrows the lookup; it must match.
-    expect((await must<{ body: string }>(owner, 'get_revision', { vaultId, path: PATH, revisionId: created.id })).body).toBe(bodyOf(0))
-    expect((await must<{ body: string }>(owner, 'get_revision', { vaultId, noteId, revisionId: created.id })).body).toBe(bodyOf(0))
+    expect(await revisionBody(owner, { vaultId, path: PATH, revisionId: created.id })).toBe(bodyOf(0))
+    expect(await revisionBody(owner, { vaultId, noteId, revisionId: created.id })).toBe(bodyOf(0))
     // The path is read like every note tool reads it: trimmed, `\` as `/`, a trailing `.md` dropped.
     for (const path of [`${PATH}.md`, ` ${PATH} `, PATH.replace('/', '\\')]) {
       const r = await call(owner, 'get_revision', { vaultId, path, revisionId: created.id })

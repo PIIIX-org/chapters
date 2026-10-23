@@ -1419,8 +1419,9 @@ export interface RevisionPosition {
  * the bodies are never read (`octet_length` takes the size from the stored
  * value's header; a compacted revision's size is its `body_bytes`, #501).
  * Keyset-paged on `ord` after `before`, so a revision
- * recorded while a caller pages does not shift the pages. `next` is
- * the position to continue from, or null on the last page. Null when the note
+ * recorded while a caller pages does not shift the pages. `ords` are the
+ * revisions' positions (a page can stop after any of them), `next` the
+ * position to continue from, or null on the last page. Null when the note
  * does not exist. Edit/owner only — enforced by callers.
  */
 export async function listRevisionPage(
@@ -1428,7 +1429,7 @@ export async function listRevisionPage(
   path: string,
   limit: number,
   before?: RevisionPosition,
-): Promise<{ revisions: RevisionSummary[]; next: RevisionPosition | null } | null> {
+): Promise<{ revisions: RevisionSummary[]; ords: number[]; next: RevisionPosition | null } | null> {
   const row = await getLiveNote(vaultId, path)
   if (!row) return null
   const rows = await db
@@ -1460,6 +1461,7 @@ export async function listRevisionPage(
         ...eventDetail(r),
       })),
     ),
+    ords: page.map((r) => r.ord),
     next: rows.length > limit && last ? { ord: last.ord } : null,
   }
 }

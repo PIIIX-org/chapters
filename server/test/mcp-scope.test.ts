@@ -220,7 +220,7 @@ beforeAll(async () => {
   await must(acct, 'create_note', { vaultId: O.id, type: 'docs', name: 'other-only', body: MARK.O })
   await must(acct, 'create_note', { vaultId: O.id, type: 'docs', name: 'other-trashed', body: MARK.O })
   await must(acct, 'delete_note', { vaultId: O.id, path: 'docs/other-trashed' })
-  const trash = await must<Array<{ id: string; path: string }>>(acct, 'list_trash', { vaultId: O.id })
+  const { notes: trash } = await must<{ notes: Array<{ id: string; path: string }> }>(acct, 'list_trash', { vaultId: O.id })
   const { revisions } = await must<{ revisions: Array<{ id: string }> }>(acct, 'note_history', { vaultId: O.id, path: 'docs/other-only' })
   await must(acct, 'share_vault', { vaultId: O.id, granteeType: 'user', granteeId: member.id, permission: 'read' })
   const vaultShares = await must<Array<{ id: string }>>(acct, 'list_vault_shares', { vaultId: O.id })

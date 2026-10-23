@@ -38,6 +38,8 @@ let app: FastifyInstance
 let baseUrl: string
 let vaultId: string
 let repoId: string
+/** A small graph: a chain of 10 notes, each its own type (no structural edges), linked in order. */
+let graphVaultId: string
 let agent: Client
 let agentConnectionId: string
 const clients: Client[] = []
@@ -123,6 +125,7 @@ beforeAll(async () => {
   const owner = await createActiveUser()
   const cookie = await loginCookie(app, owner.email)
   vaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope vault' } })).json<{ id: string }>().id
+  graphVaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope graph' } })).json<{ id: string }>().id
   repoId = (
     await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: 'envelope-repo', ingestionMethod: 'agent_push' } })
   ).json<{ id: string }>().id
@@ -130,10 +133,14 @@ beforeAll(async () => {
   agent = await mcpClient(minted.json<{ token: string }>().token)
   agentConnectionId = (await db.select({ id: mcpConnections.id }).from(mcpConnections).where(eq(mcpConnections.name, 'envelope-agent')))[0]!.id
 
-  // 40 notes in docs/, 5 in docs/sub/, a chain of 10 linked notes, 12 in the trash.
+  // 40 notes in docs/, 5 in docs/sub/, 12 in the trash; the chain in its own vault.
   for (let i = 0; i < 40; i++) await createNote(vaultId, { path: `docs/note-${String(i).padStart(2, '0')}`, body: `Note ${i}.` })
   for (let i = 0; i < 5; i++) await createNote(vaultId, { path: `docs/sub/inner-${i}`, body: `Inner ${i}.` })
-  for (let i = 0; i < 10; i++) await createNote(vaultId, { path: `chain/link-${i}`, body: i < 9 ? `Next: [[chain/link-${i + 1}]]` : 'The end.' })
+  // Distinct words per note, so the test embedder finds no similar pair (no semantic shortcut).
+  const words = ['apple', 'river', 'stone', 'cloud', 'maple', 'ember', 'frost', 'tiger', 'violet', 'quartz']
+  for (let i = 0; i < 10; i++) {
+    await createNote(graphVaultId, { path: `c${i}/link`, body: `${`${words[i]} `.repeat(8)}${i < 9 ? `[[c${i + 1}/link]]` : ''}` })
+  }
   for (let i = 0; i < 12; i++) {
     await createNote(vaultId, { path: `trash/gone-${i}`, body: `Gone ${i}.` })
     await softDeleteNote(vaultId, `trash/gone-${i}`)
@@ -211,7 +218,7 @@ describe('browse_vault and browse_repository', () => {
     const all = await page('browse_vault', { vaultId, budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
     const allPaths = (all.notes as Array<{ path: string }>).map((n) => n.path)
-    expect(allPaths).toHaveLength(58)
+    expect(allPaths).toHaveLength(48)
     expect(paths).toEqual(allPaths)
     expect([...allPaths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(allPaths)
   })
@@ -310,18 +317,18 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
 
 describe('graph, find_graph_path and find_symbols page a stable ranking', () => {
   it('graph: paging shows every node and edge once; a cursor for other filters is refused', async () => {
-    const all = await page('graph', { vaultId, budget_tokens: 25_000 })
+    const all = await page('graph', { vaultId: graphVaultId, budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
-    const pages = await walk('graph', { vaultId, budget_tokens: 256 })
+    const pages = await walk('graph', { vaultId: graphVaultId, budget_tokens: 256 })
     expect(pages.length).toBeGreaterThan(2)
     expect(ids(pages, 'nodes').sort()).toEqual(ids([all], 'nodes').sort())
     const edge = (e: Record<string, unknown>) => `${e.source}>${e.target}:${e.kind}`
     expect(ids(pages, 'edges', edge).sort()).toEqual(ids([all], 'edges', edge).sort())
-    await refused('graph', { vaultId, types: ['docs'], budget_tokens: 256, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
+    await refused('graph', { vaultId: graphVaultId, types: ['c1'], budget_tokens: 256, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
   })
 
   it('find_graph_path: a path cut by the budget continues with the cursor', async () => {
-    const args = { vaultId, source: 'chain/link-0', target: 'chain/link-9' }
+    const args = { vaultId: graphVaultId, source: 'c0/link', target: 'c9/link' }
     const all = await page('find_graph_path', { ...args, budget_tokens: 25_000 })
     expect(all).toMatchObject({ found: true, distance: 9, truncated: false })
     const pages = await walk('find_graph_path', { ...args, budget_tokens: 256 })
