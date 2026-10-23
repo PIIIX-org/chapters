@@ -18,7 +18,8 @@
 // scanned for "leak markers" (ids, names and a body marker of the other
 // resources). The account token re-runs the read-only "other" cases as a
 // control proving the arguments are valid. Last, the capabilities set at mint
-// time (#548): a read-only token, a tool allow-list and an expired token.
+// time (#548): a read-only token, a tool allow-list, an expired token and a
+// `reader` tool profile (#428).
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { McpClient, type HistoryPage, type JsonSchema, type ToolInfo, type ToolResult } from '../lib/mcp.ts'
 
@@ -482,6 +483,10 @@ const test: LabTest = {
       (await ctx.mintToken('admin', 'lab cap allow-list', 'vault', { vaultId: capVault.id, allowedTools: ['read_note'] })).token,
       'cap-allow',
     )
+    const readerProfile = ctx.mcp(
+      (await ctx.mintToken('admin', 'lab cap reader profile', 'vault', { vaultId: capVault.id, profile: 'reader' })).token,
+      'cap-reader-profile',
+    )
     const expiring = await ctx.mintToken('admin', 'lab cap expiring', 'account', { expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString() })
     const expiringClient = ctx.mcp(expiring.token, 'cap-expiring')
     const allowed = (name: string, r: ToolResult): Check => ({
@@ -499,6 +504,31 @@ const test: LabTest = {
       refused('allow-list token: unlisted search refused', await limited.call('search', { query: 'capability probe' }), /not in this connection's tool allow-list/),
       allowed('expiring token works before its expiry', await expiringClient.call('list_vaults', {})),
     ]
+    // The reader profile on a vault pin (#428): the vault-reachable reader tools only, and a
+    // tool outside the profile is refused even though the token's write access would allow it.
+    const READER_ON_VAULT = ['browse_vault', 'find_graph_path', 'graph', 'read_note', 'search']
+    const readerListed = (await readerProfile.listTools()).map((t) => t.name).sort()
+    capChecks.push(
+      {
+        name: 'reader-profile token: tools/list is the reader tools a vault pin reaches',
+        expected: READER_ON_VAULT.join(', '),
+        actual: readerListed.join(', '),
+        ok: readerListed.join(',') === READER_ON_VAULT.join(','),
+        severity: readerListed.join(',') === READER_ON_VAULT.join(',') ? 'info' : 'high',
+      },
+      allowed('reader-profile token: read_note works', await readerProfile.call('read_note', { path: 'docs/cap' })),
+      refused('reader-profile token: delete_note (admin profile) refused', await readerProfile.call('delete_note', { path: 'docs/cap' }), /delete_note needs the admin profile; this connection has the reader profile/),
+      refused('reader-profile token: edit_note (writer profile) refused', await readerProfile.call('edit_note', { path: 'docs/cap', body: 'overwritten' }), /edit_note needs the writer profile/),
+    )
+    const afterRefusals = await readerProfile.call('read_note', { path: 'docs/cap' })
+    const unchanged = afterRefusals.ok && afterRefusals.text.includes('capability probe')
+    capChecks.push({
+      name: 'reader-profile token: the refused calls changed nothing',
+      expected: 'docs/cap still holds "capability probe"',
+      actual: afterRefusals.text.slice(0, 160),
+      ok: unchanged ? true : afterRefusals.httpStatus === 0 ? null : false,
+      severity: unchanged ? 'info' : 'critical',
+    })
     await ctx.docker.psql(`update mcp_connections set expires_at = now() - interval '1 minute' where id = '${expiring.id}'`)
     const expired = await expiringClient.call('list_vaults', {})
     capChecks.push({

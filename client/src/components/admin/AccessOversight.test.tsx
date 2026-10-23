@@ -67,6 +67,7 @@ const CONNECTIONS: AdminMcpConnection[] = [
     id: 'c1',
     name: 'laptop agent',
     scope: 'account',
+    profile: 'reader',
     userEmail: 'ada@example.com',
     vaultId: null,
     repositoryId: null,
@@ -78,6 +79,7 @@ const CONNECTIONS: AdminMcpConnection[] = [
     id: 'c2',
     name: 'leaked token',
     scope: 'vault',
+    profile: 'admin',
     userEmail: 'owner@example.com',
     vaultId: 'v1',
     repositoryId: null,
@@ -160,6 +162,9 @@ describe('AccessOversight', () => {
     expect(within(liveRow).getByRole('button', { name: /^Revoke the MCP connection/ })).toBeInTheDocument()
     expect(within(deadRow).queryByRole('button', { name: /^Revoke/ })).toBeNull()
     expect(deadRow.textContent).toContain('revoked')
+    // Each connection's tool profile (#428).
+    expect(liveRow.textContent).toContain('reader profile')
+    expect(deadRow.textContent).toContain('admin profile')
 
     await userEvent.click(within(liveRow).getByRole('button', { name: 'Revoke the MCP connection laptop agent' }))
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }))

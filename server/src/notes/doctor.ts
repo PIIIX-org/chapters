@@ -54,11 +54,10 @@ import { onJobConflict } from '../jobs/durable.js'
 import { EMBEDDING_JOB } from '../search/embedding-queue.js'
 import { sameContent } from './frontmatter-order.js'
 import { compareNoteFile, orphanFiles } from './integrity.js'
-import { extractWikilinkLocations } from './okf.js'
 import { PROJECTION_VERSIONS, noteFileRel, sha256 } from './projector.js'
 import { foldPendingCollab, vaultDir } from './store.js'
 import { docState } from '../sync/live-docs.js'
-import { replaceLinks, storeTransaction, type Tx } from './store-tx.js'
+import { linkRows, replaceLinks, storeTransaction, type Tx } from './store-tx.js'
 
 export const DOCTOR_CLASSES = [
   'file-missing',
@@ -392,10 +391,10 @@ export async function runDoctor(
         if (job && !job.done) pending.push({ ...pendingAt, kind: 'embedding', detail: `embedding job for seq ${seq}` })
         else if (job?.last_error) problem({ ...at, class: 'vector-failed', path: note.path, detail: `embedding for seq ${seq} failed: ${job.last_error}` })
         else if (note.no_embedding) problem({ ...at, class: 'vector-missing', path: note.path, detail: 'no embedding and no embedding job' })
-        // As `replaceLinks` stores them: one row per target and start line; `(no line)` rows are from before migration 0031.
-        const expected = [
-          ...new Set(extractWikilinkLocations(note.body).map((l) => (l.startLine === l.endLine ? `${l.target}#L${l.startLine}` : `${l.target}#L${l.startLine}-L${l.endLine}`))),
-        ].sort()
+        // The rows `replaceLinks` would store (`linkRows`: one per target and start line); `(no line)` rows are from before migration 0031.
+        const expected = linkRows(note.id, note.body)
+          .map((l) => (l.startLine === l.endLine ? `${l.targetPath}#L${l.startLine}` : `${l.targetPath}#L${l.startLine}-L${l.endLine}`))
+          .sort()
         const stored = [...note.links].sort()
         if (expected.join('\n') !== stored.join('\n')) {
           const missing = expected.filter((t) => !stored.includes(t))
