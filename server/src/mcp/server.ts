@@ -735,7 +735,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       description: 'Update user vault preferences including storage mode, folders, colors, and favorites.',
       inputSchema: {
-        storageMode: z.enum(['online', 'local']).optional().describe('Where the vault is stored'),
+        storageMode: z.enum(['online', 'local']).optional().describe('Where these preferences live: online (synced with the account) or local (this browser only)'),
         folders: z.record(z.string(), z.string()).optional().describe('Vault id to folder name'),
         folderColors: z.record(z.string(), z.string()).optional().describe('Folder name to color'),
         vaultColors: z.record(z.string(), z.string()).optional().describe('Vault id to color'),
@@ -1022,7 +1022,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       .min(1)
       .max(200)
       .optional()
-      .describe('Same key + same arguments from this connection within 24 h returns the first result (`replayed: true`), writes nothing'),
+      .describe('Send one when you may retry after a lost connection: the same key + arguments from this connection within 24 h returns the first result (`replayed: true`), writes nothing'),
   }
   const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: return the result (status, diff_stats, note) without writing') }
   const WRITE_DOC =
@@ -2357,7 +2357,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: {
         vaultId: UUID_ARG.optional().describe('Vault graph'),
         repositoryId: UUID_ARG.optional().describe('Repository graph'),
-        types: z.array(z.string()).optional().describe('Only these note types'),
+        types: z.array(z.string()).optional().describe('Only nodes of these types (note type, or code language)'),
         tags: z.array(z.string()).optional().describe('Only these tags'),
         aggregate: z.enum(['community']).optional().describe('"community": one node per community (start here)'),
         community: z.number().int().optional().describe('Only this community\'s members'),

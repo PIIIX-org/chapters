@@ -11,7 +11,7 @@ import { buildApp } from '../src/app.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
-/** Serialized tools/list size for an admin account token, in characters (#430: 51,972 before, 45,869 after). */
+/** Characters of `JSON.stringify({ tools })` for an admin account token (#430: 51,972 before, 46,385 after). */
 const TOOLS_LIST_CEILING = 47_000
 
 let app: FastifyInstance
@@ -112,7 +112,7 @@ describe('tools/list schemas (#430)', () => {
       .catch((err: unknown) => err)
     const text =
       result instanceof Error ? result.message : JSON.stringify(result)
-    expect(text).toMatch(/-32602|isError/)
+    expect(text).toMatch(/-32602/)
     expect(text).toMatch(/vaultId/)
     expect(text).toMatch(/Invalid UUID/i)
   })
