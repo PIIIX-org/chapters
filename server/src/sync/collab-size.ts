@@ -1,4 +1,5 @@
 import * as Y from 'yjs'
+import { jsonBytes } from '../notes/size-cap.js'
 
 /**
  * The relay's side of the note size cap (#491, notes/size-cap.ts): decides,
@@ -172,30 +173,6 @@ function addsRest(doc: Y.Doc, structs: Struct[]): boolean {
       !(struct.content instanceof Y.ContentDeleted) &&
       (!(struct.content instanceof Y.ContentString) || struct.parentSub !== null || !inBody(struct)),
   )
-}
-
-/**
- * Bytes `value` (a value Yjs stores as JSON-like content) takes written out
- * as JSON; binary data counts its length. Measured without building the
- * JSON text: a large Uint8Array would turn into an object ten times its size.
- */
-function jsonBytes(value: unknown): number {
-  if (typeof value === 'string') return Buffer.byteLength(JSON.stringify(value))
-  if (value === null || value === undefined) return 4
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value).length
-  if (value instanceof Uint8Array) return value.length
-  if (Array.isArray(value)) {
-    let bytes = 2 + Math.max(0, value.length - 1)
-    for (const item of value) bytes += jsonBytes(item)
-    return bytes
-  }
-  if (typeof value === 'object') {
-    const entries = Object.entries(value)
-    let bytes = 2 + Math.max(0, entries.length - 1)
-    for (const [key, item] of entries) bytes += Buffer.byteLength(JSON.stringify(key)) + 1 + jsonBytes(item)
-    return bytes
-  }
-  return 0
 }
 
 /** Bytes of `item`'s own content (a nested type counts one; its content is in its own items). */
