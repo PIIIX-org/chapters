@@ -15,9 +15,10 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
 - **Capabilities** (set when the token is minted, never raised later; every tool declares one, and the server checks them before the scope):
   - Each token has an access level, ordered `read` < `write` < `admin`. A tool runs only if the level is at or above the tool's **Capability** below. `read` tools only read; `write` tools create, edit, trash, restore or revert; `admin` tools widen access to or destroy a resource or change its settings (share, revoke, `update_vault`/`update_repository`, `delete_vault`, `purge_*`, `purge_revision`, `connect_repository`, team membership, `delete_team`).
   - Defaults: an account token minted through the API without a level gets `admin` (every tool); a vault- or repository-pinned token gets `write`, so it cannot share, update, trash or purge its pin or erase history. A pinned token never gets more than its user's permission on the pin: only the owner can mint it with `admin`, and with a read-only vault share (direct or through a team) asking for `write` is refused with HTTP 403 and the default becomes `read`. The Settings form and the vault form start at `write`, or at `read` for a read-only vault member.
+  - Each token has a **profile** (#428), the set of tools it lists and may call, nested `reader` < `writer` < `admin`. `reader` finds and reads: `list_vaults`, `list_repositories`, `browse_vault`, `browse_repository`, `search`, `read_note`, `read_file`, `find_symbols`, `graph`, `find_graph_path` (10 tools; 5 on a vault-pinned token, 6 on a repository-pinned one). `writer` adds `create_note`, `edit_note` and `append_note`. `admin` has every tool. Each tool's **Profile** line below names the smallest profile it is in; a tool without one is in `admin` only. The profile only narrows what the access level, allow-list and scope allow: a `read` token with the `writer` profile lists the reader tools only. Tokens minted before profiles existed, and tokens minted through the API without `profile`, are `admin` (every tool, as before). The Settings and vault forms start the profile at the one that matches the access level (`read` → `reader`, `write` → `writer`, `admin` → `admin`) until you pick one.
   - An optional tool allow-list limits the token to the named tools. A token with an allow-list gets no MCP prompts (prompts read notes on the server side).
   - An optional expiry: after it, every request is refused with HTTP 401 (`invalid, revoked or expired MCP token`).
-  - `tools/list` shows only the tools the token can call: those in its allow-list, within its access level, and of a scope its own scope reaches (no account-only tools on a pinned token, no vault tools on a repository token, no repository tools on a vault token). On a pinned token it also leaves out tools that need more than the user's current permission on the pin: the owner-only tools below unless the user owns it, and the tools that need edit access on the vault (note writes, `list_trash`, `note_history`, `get_revision`, `export_vault`, saving and deleting perspectives) unless the user can edit it. A tool missing from the list can still be called by name; the call is refused with a message naming what is missing: `<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`, a scope refusal such as `<tool> requires an account-scoped connection`, or `owner permission required` / `not found` for missing permission on the pin.
+  - `tools/list` shows only the tools the token can call: those in its allow-list, within its access level and its profile, and of a scope its own scope reaches (no account-only tools on a pinned token, no vault tools on a repository token, no repository tools on a vault token). On a pinned token it also leaves out tools that need more than the user's current permission on the pin: the owner-only tools below unless the user owns it, and the tools that need edit access on the vault (note writes, `list_trash`, `note_history`, `get_revision`, `export_vault`, saving and deleting perspectives) unless the user can edit it. A tool missing from the list can still be called by name; the call is refused with a message naming what is missing: `<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`, `<tool> needs the writer profile; this connection has the reader profile (mint a token with that profile)`, a scope refusal such as `<tool> requires an account-scoped connection`, or `owner permission required` / `not found` for missing permission on the pin.
 - **Response**: the result is returned as JSON text (`content[0].text`). Errors come back as `Error: <message>` with `isError: true`. A filesystem or network error is reported only by its code (`internal storage error (ENOENT)`); the full error goes to the server log.
 - **Budgets and `truncated`** (#420, #421, #422): `browse_vault`, `read_note`, `list_trash`, `note_history`, `get_revision`, `browse_repository`, `read_file`, `find_symbols`, `graph` and `find_graph_path` take `budget_tokens` (integer 256-25,000; default 2,000, or 4,000 for `read_note`, `read_file` and `get_revision`), counted as characters / 4 of the answer text. The answer stays within it: lists drop whole items from the end, and text (a note body, a file) is cut at a line boundary; only a line longer than a whole page is split. A text that would show nothing at all shows its first line anyway. When a list could not show at least 5 whole items (or all that are left) even on a page of its own, the answer steps down the ladder instead (see `level`). Each of these answers is an object whose last key is `truncated`: `false` when nothing was left out, else `{ shown, total, dropped, level, cursor, narrow }`.
   - `shown`, `total` and `dropped` count items per list (lines for text) from where this page starts, so `shown + dropped = total`. A `total` of `">n"` means the tool fetched `limit` + 1 and found more than `limit`.
@@ -44,6 +45,7 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
 ### `list_vaults`
 - **Scope**: account only.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**: none.
 - **Returns**: array of `{ id, name, ownerId, mergeable, access }`, where `access` is `owner` | `edit` | `read`.
 
@@ -58,6 +60,7 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
 ### `browse_vault`
 - **Scope**: vault. Read access.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, optional): a folder such as `domains/auth` (leading/trailing `/` ignored); without it, the vault root.
@@ -179,6 +182,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `read_note`
 - **Scope**: vault. Read access.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -188,6 +192,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `create_note`
 - **Scope**: vault. Edit access.
 - **Capability**: `write`.
+- **Profile**: `writer`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, optional): full note path, for example `domains/storage/postgres`.
@@ -200,6 +205,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `edit_note`
 - **Scope**: vault. Edit access.
 - **Capability**: `write`.
+- **Profile**: `writer`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -237,6 +243,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `append_note`
 - **Scope**: vault. Edit access.
 - **Capability**: `write`.
+- **Profile**: `writer`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -376,6 +383,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `list_repositories`
 - **Scope**: account only.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**: none.
 - **Returns**: array of repository records: `{ id, name, ownerId, ingestionMethod, gitUrl, localPath, defaultBranch, mergeable, syncStatus, lastSyncedAt, lastSyncError, lastWebhookAt, webhookConfigured, createdAt, access }`. Credentials are never returned.
 
@@ -393,6 +401,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `browse_repository`
 - **Scope**: repository. Repository access.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `path` (string, optional): a folder; only the files under it are listed (`src/lib` lists `src/lib/a.ts` and `src/lib/b/c.ts`, not `src/library.ts`). Leading and trailing `/` are ignored; a file's path lists nothing (use `read_file`). Omitted: every file.
@@ -401,6 +410,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `read_file`
 - **Scope**: repository. Repository access.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `path` (string, required): file path inside the repository.
@@ -479,6 +489,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `search`
 - **Scope**: vault, repository, or account. Read access to each resource searched.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `query` (string, required).
   - `vaultId` (uuid, optional) and/or `repositoryId` (uuid, optional). An account-scoped token must pass at least one, or `everywhere`.
@@ -490,6 +501,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `find_symbols`
 - **Scope**: repository, or account. A repository-scoped token searches its pinned repository; another `repositoryId` is an error. A vault-scoped token cannot use it. An account-scoped token searches `repositoryId` if given, otherwise (or with `everywhere`) every repository you can access.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `query` (string, required).
   - `kind` (enum `"function"` | `"class"` | `"interface"` | `"type"`, optional).
@@ -506,6 +518,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `graph`
 - **Scope**: vault and/or repository. An account-scoped token must pass `vaultId` or `repositoryId`.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters** (these are all of them):
   - `vaultId` (uuid, optional).
   - `repositoryId` (uuid, optional).
@@ -539,6 +552,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `find_graph_path`
 - **Scope**: as for `graph`.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `source` (string, required): a node `id` or exact node `path` (note path without `.md`, or repository file path).
   - `target` (string, required): same.

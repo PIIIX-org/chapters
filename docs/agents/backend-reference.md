@@ -162,7 +162,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | `vaultShares` | direct-user or team grants on a vault, `read`/`edit`, unique on `(vaultId, granteeType, granteeId)` |
 | `vaultGraphPreferences` | per-user opt-in for a vault in the merged graph view |
 | `userVaultPreferences` | per-user vault organization preferences: storage mode ('online'/'local'), folders, colors, and favorites |
-| `mcpConnections` | issued MCP bearer tokens, scoped `account`/`vault`/`repository`, hashed; `access` (`read`/`write`/`admin`), `allowedTools` (null = all), `expiresAt` (null = never), all set at mint time |
+| `mcpConnections` | issued MCP bearer tokens, scoped `account`/`vault`/`repository`, hashed; `access` (`read`/`write`/`admin`), `profile` (`reader`/`writer`/`admin`, default `admin`, #428), `allowedTools` (null = all), `expiresAt` (null = never), all set at mint time |
 | `instanceState` | singleton row: setup-token lifecycle, instance-wide MFA requirement |
 | `securityEvents` | append-only audit log (login failures, permission denials, admin actions, MFA events, export/backup access) |
 | `notifications` | in-app notification rows |
@@ -482,15 +482,20 @@ collab socket and live view it opened closes at once (#498, §5.7).
   have read permission, so mint a read token`); a repository share
   allows `write`. An omitted level takes the pin default lowered to the
   cap, so a read-only member's token is `read`.
-  `allowedTools` (names checked against `listMcpTools()`, 400 for an
-  unknown one) and `expiresAt` (ISO time, must be in the future).
-  The Settings and vault forms always send a level. The vault form
+  `profile` (`reader` | `writer` | `admin`, #428; default `admin`, so a
+  token minted without one lists every tool its access allows, as
+  before), `allowedTools` (names checked against `listMcpTools()`, 400
+  for an unknown one) and `expiresAt` (ISO time, must be in the future).
+  The Settings and vault forms always send a level and a profile; the
+  profile starts at the one matching the level (`read` → `reader`,
+  `write` → `writer`, `admin` → `admin`) until the user picks one, and
+  the allow-list picker offers only tools inside it. The vault form
   offers only the levels the route grants (`admin` to the owner, up to
   `write` to an editor, `read` alone to a read-only member) and starts
   at `write`, or at `read` for a read-only member; its allow-list picker
   leaves out tools whose `pinPermission` is above the user's permission.
   `GET /mcp-connections/tools` returns `listMcpTools()` (name, scope,
-  capability, pinPermission) for the allow-list picker. Migration 0019 set
+  capability, pinPermission, profile) for the allow-list picker. Migration 0019 set
   existing account tokens to `admin` and left existing pinned tokens at
   `write`, whoever minted them; a restore of an older dump applies the
   same rule. Such a token held by a read-only member keeps `write` in
@@ -498,6 +503,9 @@ collab socket and live view it opened closes at once (#498, §5.7).
   and every call is refused by the handler's own permission check, so no
   data migration is needed. Migration
   0020 dropped the column default, so every insert names its level.
+  Migration 0032 (#428) added `profile` with the default `admin` kept on
+  the column: every existing token became `admin` (no change), and the
+  column and the route share one default.
   Resolution (`resolveMcpToken`) is fully live — a revoked, expired, or
   now-inactive-owner token never resolves regardless of when it was
   issued (HTTP 401 `invalid, revoked or expired MCP token`).
@@ -1536,11 +1544,22 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   any access to a repository, `read` for a read-only vault share. An
   explicit `access` above that is refused (403, the message names the
   permission needed); an omitted one takes the pin default (`write`)
-  lowered to it. Prompts are
+  lowered to it. Then the profile (#428): every `tool()` may declare
+  `profile: 'reader' | 'writer'`, the smallest profile it is in
+  (omitted: `admin` only), and the connection's `profile` must rank at
+  or above it (reader < writer < admin; `<tool> needs the writer
+  profile; this connection has the reader profile (mint a token with
+  that profile)`). `reader`: `list_vaults`, `list_repositories`,
+  `browse_vault`, `browse_repository`, `search`, `read_note`,
+  `read_file`, `find_symbols`, `graph`, `find_graph_path`; `writer`
+  adds `create_note`, `edit_note`, `append_note`. A new tool is
+  `admin` unless it declares a smaller profile. The profile only
+  intersects with the allow-list, access level, scope and pin; it never
+  widens them. Prompts are
   not registered for a connection with an allow-list (they read notes
   outside `tool()`). `tools/list` advertises only the tools the
   connection can call (#641): in its allow-list, within its access level
-  and of a scope class its scope reaches (`account` tools for account
+  and profile, and of a scope class its scope reaches (`account` tools for account
   tokens only, `vault`/`vault-or-account` not for repository tokens,
   `repository`/`repository-or-account` not for vault tokens). For a
   pinned token it also leaves out every tool whose `pinPermission` is
@@ -1562,8 +1581,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   registrations; `test/mcp-tool-capabilities.test.ts` pins the admin
   set and the `owner`/`edit` pin-permission sets (a new tool whose
   handler checks owner or edit permission must declare `pinPermission`),
-  `test/mcp-capabilities.test.ts` covers each rule and
-  `test/mcp-tool-visibility.test.ts` the filtered `tools/list`.
+  `test/mcp-capabilities.test.ts` covers each rule,
+  `test/mcp-tool-visibility.test.ts` the filtered `tools/list` and
+  `test/mcp-tool-profiles.test.ts` the profiles (exact reader and writer
+  sets, refusals, no widening, `admin` for older and API-minted tokens).
+  The test registries (`mcp-secret-scan`, `mcp-scope`,
+  `mcp-strict-args`, `account-separation`, `mcp-tool-visibility`)
+  enumerate an `admin` account token's `tools/list`, which lists every
+  tool.
 - **Tools** (60, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):
   - *Vaults* (14): `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `get_vault_graph_preference`, `set_vault_graph_preference`, `get_vault_preferences`, `update_vault_preferences`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.
