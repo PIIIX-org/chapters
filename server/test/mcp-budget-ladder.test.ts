@@ -92,8 +92,11 @@ async function page(tool: string, args: Args): Promise<Answer> {
       `${tool}: a ${t.level} page's cursor continues a text`,
     ).toBe(true)
   }
-  // Never truncated for nothing: a further page, a dropped item, or items shown below full.
-  expect(t.cursor !== null || Object.values(t.dropped).some((n) => n > 0) || t.level !== 'full').toBe(true)
+  // Never truncated for nothing: a further page, a dropped item, more past a ranked `limit` (">n"), or items
+  // shown below full.
+  expect(
+    t.cursor !== null || Object.values(t.dropped).some((n) => n > 0) || Object.values(t.total).some((n) => typeof n === 'string') || t.level !== 'full',
+  ).toBe(true)
   return json
 }
 
