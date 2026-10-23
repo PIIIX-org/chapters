@@ -1076,7 +1076,11 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   past the cap: in `newNoteState` (create, upsert/append creating a note,
   import) and in `writeNote` after `compute` (REST PUT, MCP
   `edit_note`/`append_note`/`upsert_note`/`revert_note`, dry runs, the
-  relay's store), plus the fold's `refusal`. Same rule as the body: refused
+  relay's store), plus the fold's `refusal` and a rename's `type` rewrite
+  (`moveNote`). Inside `compute` it runs before any revision can be
+  written: in `updateNote` and `writeThroughCollab` before the write
+  quarantine (`refuseSuspiciousWrite`), and in `propose` before the
+  `proposal` revision, so neither stores an over-cap map. Same rule as the body: refused
   (`NoteTooLargeError`, REST 413, MCP `isError`, import `skipped`: `note
   frontmatter (keys and values as JSON) is N bytes (UTF-8); the limit is
   L bytes (ELARA_NOTE_MAX_BYTES)`) when over the cap **and** larger than

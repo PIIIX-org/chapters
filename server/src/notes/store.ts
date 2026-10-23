@@ -960,6 +960,7 @@ export async function updateNote(
       validateNote(row.type, row.name, frontmatter, body)
       // The size cap first: an over-cap body is refused, never kept as a quarantine revision (#491).
       assertBodyFits(body, row.body)
+      assertFrontmatterFits(frontmatter, row.frontmatter as Record<string, unknown>)
       if (options.quarantine) {
         await refuseSuspiciousWrite(row, { frontmatter: edit.frontmatter, body }, actor, options.quarantine, options.episode)
       }
@@ -1160,6 +1161,7 @@ async function moveNote(
       // body (the note's own, then each referrer's) is checked before anything is
       // written, so a refused rename leaves the vault as it was.
       assertBodyFits(newBody, row.body, `${renaming} rewrites its own links`)
+      assertFrontmatterFits(newFrontmatter, row.frontmatter as Record<string, unknown>)
       const referrers = isMoving ? await linkReferrers(tx, vaultId, row.id, fromResolved.fullPath) : []
       for (const referrer of referrers) {
         const rewritten = refactorWikilinks(referrer.body, fromResolved.fullPath, toResolved.fullPath)
