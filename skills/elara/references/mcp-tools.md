@@ -392,8 +392,10 @@ The write is committed when the call returns; a connection lost before the answe
 ### `browse_repository`
 - **Scope**: repository. Repository access.
 - **Capability**: `read`.
-- **Parameters**: `repositoryId` (uuid, optional). There is no `path` parameter.
-- **Returns**: `{ files, truncated }`: every indexed file by path (code-unit order), as `{ id, path, language, size, updatedAt }`. The cursor resumes after the last path shown.
+- **Parameters**:
+  - `repositoryId` (uuid, optional).
+  - `path` (string, optional): a folder; only the files under it are listed (`src/lib` lists `src/lib/a.ts` and `src/lib/b/c.ts`, not `src/library.ts`). Leading and trailing `/` are ignored; a file's path lists nothing (use `read_file`). Omitted: every file.
+- **Returns**: `{ files, truncated }`: the indexed files by path (code-unit order), as `{ id, path, language, size, updatedAt }`, read from the database 500 at a time from where the cursor resumes (after the last path shown). With more than 500 files left, `truncated.total.files` is `">500"`. `truncated.narrow` suggests the largest folders one level below `path` on the page. The cursor is bound to `path`: a cursor from another folder, or from no `path`, is refused (`invalid cursor`). A file added while paging shows up if its path sorts after the cursor; every file present throughout is listed exactly once.
 
 ### `read_file`
 - **Scope**: repository. Repository access.

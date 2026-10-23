@@ -56,7 +56,7 @@ import { serializeNote } from '../notes/okf.js'
 import { indexRows, renderDirIndex } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
-import { getRepositoryFile, listFileSymbols, listRepositoryFiles } from '../repositories/store.js'
+import { getRepositoryFile, listFileSymbols, listRepositoryFilesPage } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { prepareGitRemote } from '../repositories/git-remote.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
@@ -231,6 +231,13 @@ const NO_PAGE = new Page(null)
 
 /** The budgeted tools' shared description fragment (#420, #422). */
 const ENVELOPE_DOC = ' Ends with `truncated` (what was left out; `cursor` for more).'
+
+/**
+ * Files `browse_repository` reads per page (#424), fetching one more to know
+ * there are more (`truncated.total` ">500"). The default budget shows about
+ * a tenth of this at `full`, so the budget usually ends a page first.
+ */
+const BROWSE_PAGE = 500
 
 /** A note listed by `browse_vault` or `list_trash` down the ladder (#421): without frontmatter and timestamps, then its path; counted per folder. */
 const NOTE_LADDER: Ladder<{ id: string; path: string; type: string; name: string }> = {
@@ -1824,24 +1831,39 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'read',
-      description: 'List the files of a repository as `{files}` (path, language, size), by path.' + ENVELOPE_DOC,
-      inputSchema: { repositoryId: REPOSITORY_ID },
+      description: 'List the files of a repository as `{files}` (path, language, size), by path; `path` lists one folder\'s subtree.' + ENVELOPE_DOC,
+      inputSchema: {
+        repositoryId: REPOSITORY_ID,
+        path: z.string().optional().describe('Folder: only the files under it, e.g. `src/lib`'),
+      },
       budget: 'list',
     },
-    async (_args, { repositoryId: target }, page) => {
+    async (args: { path?: string }, { repositoryId: target }, page) => {
       await requireRepositoryAccess(target)
-      const after = page.after(0, z.string())
-      const files = (await listRepositoryFiles(target)).sort((a, b) => compareCodeUnits(a.path, b.path))
+      const folder = args.path?.replace(/^\/+|\/+$/g, '') || null
+      // A keyset in SQL from the cursor's path: the fetch of one page + 1 tells there are more.
+      const rows = await listRepositoryFilesPage(target, { folder, after: page.after(0, z.string()), limit: BROWSE_PAGE + 1 })
+      const files = rows.slice(0, BROWSE_PAGE)
+      // Narrowing: the largest folders one level below `folder` on this page.
+      const base = folder === null ? '' : `${folder}/`
+      const children = new Map<string, number>()
+      for (const { path } of files) {
+        const slash = path.indexOf('/', base.length)
+        if (slash !== -1) children.set(path.slice(0, slash), (children.get(path.slice(0, slash)) ?? 0) + 1)
+      }
       return {
         head: {},
         sections: [
           keyset({
             name: 'files',
-            items: files.filter((f) => after === null || f.path > after),
+            items: files,
+            limit: BROWSE_PAGE,
+            more: rows.length > BROWSE_PAGE,
             resume: (f) => f.path,
             ladder: { no_context: ({ path, language }) => ({ path, language }), locations: (f) => f.path, group: (f) => folderOf(f.path) },
           }),
         ],
+        narrow: [...children].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([child]) => `path: ${JSON.stringify(child)}`),
       }
     },
   )
