@@ -69,10 +69,27 @@ export interface GraphNode {
 export const EDGE_KINDS = ['extracted', 'structural', 'semantic'] as const
 export type EdgeKind = (typeof EDGE_KINDS)[number]
 
+/** Why an edge exists (ADR-004 §2.8); `kind` says how it was found. */
+export type EdgeRelation = 'link' | 'import' | 'same_type' | 'same_tag' | 'same_language' | 'same_folder' | 'similar'
+
 export interface GraphEdge {
   source: string
   target: string
   kind: EdgeKind
+  /** True for links and imports: the source links to or imports the target. Structural and semantic edges have no direction. */
+  directed: boolean
+  relation: EdgeRelation
+  /** `resolved` (links, resolved imports, shared groups), or a semantic edge's similarity (the higher of its two stored directions). */
+  confidence: 'resolved' | number
+  /**
+   * Where the edge is written, as stored: `[start, end]` lines of the source
+   * (a link: body-relative lines of its note; an import: the line of its
+   * specifier), null when not known (an import extracted before migration
+   * 0031, a link row not located yet) and for semantic edges; for a
+   * structural edge the group (`type:`, `tag:`, `language:` or `folder:`).
+   * `graph/edges.ts` renders it as `path#La-Lb` in whole-file lines.
+   */
+  evidence: readonly [number, number] | string | null
 }
 
 export interface VaultGraph {
@@ -233,17 +250,98 @@ export function groupKeys(n: InternalNode): string[] {
   return [...(n.type ? [`language:${n.type}`] : []), `dir:${n.resourceId}:${topDirectory(n.path)}`]
 }
 
-/** Edges deduplicated per unordered pair and kind, in the order first added; a self-edge is dropped. */
+/** The structural edge between two members of group `key` (`groupKeys`): its relation and the group as evidence. */
+export function structuralEdge(source: string, target: string, key: string): GraphEdge {
+  const at = key.indexOf(':')
+  const prefix = key.slice(0, at)
+  const relation = prefix === 'type' ? 'same_type' : prefix === 'tag' ? 'same_tag' : prefix === 'language' ? 'same_language' : 'same_folder'
+  // `dir:<repositoryId>:<directory>`: the folder's name, both ends being in that repository.
+  const evidence = prefix === 'dir' ? `folder:${key.slice(key.indexOf(':', at + 1) + 1)}` : key
+  return { source, target, kind: 'structural', directed: false, relation, confidence: 'resolved', evidence }
+}
+
+/** A wikilink row as an edge from its note: its lines when located (0: not located yet). */
+export const linkEdge = (source: string, target: string, startLine: number, endLine: number): GraphEdge => ({
+  source,
+  target,
+  kind: 'extracted',
+  directed: true,
+  relation: 'link',
+  confidence: 'resolved',
+  evidence: startLine > 0 ? [startLine, endLine] : null,
+})
+
+/** A resolved import as an edge from the importing file: the line of its specifier when known. */
+export const importEdge = (source: string, target: string, line: number | null): GraphEdge => ({
+  source,
+  target,
+  kind: 'extracted',
+  directed: true,
+  relation: 'import',
+  confidence: 'resolved',
+  evidence: line === null ? null : [line, line],
+})
+
+/** A stored semantic row as an edge: undirected, its similarity as the confidence. */
+export const semanticEdge = (source: string, target: string, similarity: number): GraphEdge => ({
+  source,
+  target,
+  kind: 'semantic',
+  directed: false,
+  relation: 'similar',
+  confidence: similarity,
+  evidence: null,
+})
+
+const GROUP_RANK: readonly EdgeRelation[] = ['same_type', 'same_tag', 'same_language', 'same_folder']
+
+/** Whether structural edge `a` names a better group than `b`: type, tag, language, folder; then the group in code-unit order. */
+const betterGroup = (a: GraphEdge, b: GraphEdge): boolean =>
+  GROUP_RANK.indexOf(a.relation) - GROUP_RANK.indexOf(b.relation) < 0 || (a.relation === b.relation && String(a.evidence) < String(b.evidence))
+
+/**
+ * Edges in the order first added; a self-edge is dropped (#558). A directed
+ * edge (link, import) is kept per ordered pair and relation, so a→b and b→a
+ * are two edges; written on several lines, it names the first. An
+ * undirected one is kept per unordered pair and kind: a structural pair
+ * sharing several groups names the best-ranked group, a semantic pair keeps
+ * the higher similarity. So the whole graph and a neighbourhood give the
+ * same rows whatever order they add them in.
+ *
+ * `pairs` is the undirected projection Louvain and the community weights
+ * read: the first edge per unordered pair and kind, with its ends as first
+ * added. That is exactly this list before directions were kept, so keeping
+ * them moves no community.
+ */
 export class EdgeList {
   readonly edges: GraphEdge[] = []
-  private readonly seen = new Set<string>()
+  readonly pairs: Array<readonly [string, string]> = []
+  private readonly byKey = new Map<string, GraphEdge>()
+  private readonly paired = new Set<string>()
 
-  add(a: string, b: string, kind: EdgeKind): void {
+  add(edge: GraphEdge): void {
+    const { source: a, target: b } = edge
     if (a === b) return
-    const key = a < b ? `${a}|${b}|${kind}` : `${b}|${a}|${kind}`
-    if (this.seen.has(key)) return
-    this.seen.add(key)
-    this.edges.push({ source: a, target: b, kind })
+    const pair = a < b ? `${a}|${b}|${edge.kind}` : `${b}|${a}|${edge.kind}`
+    if (!this.paired.has(pair)) {
+      this.paired.add(pair)
+      this.pairs.push([a, b])
+    }
+    const key = edge.directed ? `${a}>${b}|${edge.relation}` : pair
+    const seen = this.byKey.get(key)
+    if (!seen) {
+      this.byKey.set(key, edge)
+      this.edges.push(edge)
+    } else if (edge.directed) {
+      const line = (edge.evidence as readonly [number, number] | null)?.[0]
+      const seenLine = (seen.evidence as readonly [number, number] | null)?.[0]
+      if (line !== undefined && (seenLine === undefined || line < seenLine)) seen.evidence = edge.evidence
+    } else if (edge.kind === 'semantic' && (edge.confidence as number) > (seen.confidence as number)) {
+      seen.confidence = edge.confidence
+    } else if (edge.kind === 'structural' && betterGroup(edge, seen)) {
+      seen.relation = edge.relation
+      seen.evidence = edge.evidence
+    }
   }
 }
 
@@ -261,9 +359,10 @@ export function passesFilters(
 /**
  * Collapses an assembled graph into one node per Louvain community. This
  * shrinks the payload and what the client has to draw; it does NOT make
- * buildGraph cheaper — the full assembly still runs (see issue #93).
+ * buildGraph cheaper — the full assembly still runs (see issue #93). The
+ * weights count `pairs` (`EdgeList.pairs`): a link both ways counts once.
  */
-function collapseToCommunities(graph: VaultGraph): CommunityGraph {
+function collapseToCommunities(graph: VaultGraph, pairs: ReadonlyArray<readonly [string, string]>): CommunityGraph {
   const byCommunity = new Map<number, CommunityNode>()
   const communityOf = new Map<string, number>()
 
@@ -289,9 +388,9 @@ function collapseToCommunities(graph: VaultGraph): CommunityGraph {
   }
 
   const weights = new Map<string, CommunityEdge>()
-  for (const e of graph.edges) {
-    const a = communityOf.get(e.source)
-    const b = communityOf.get(e.target)
+  for (const [source, target] of pairs) {
+    const a = communityOf.get(source)
+    const b = communityOf.get(target)
     if (a === undefined || b === undefined) continue
     if (a === b) continue // intra-community edges are already implied by size
     const [lo, hi] = a < b ? [a, b] : [b, a]
@@ -336,7 +435,7 @@ export async function buildGraph(
   const { vaultIds, repositoryIds } = resources
   if (vaultIds.length === 0 && repositoryIds.length === 0) {
     const empty: VaultGraph = { nodes: [], edges: [], cappedGroups: [] }
-    return filters.aggregate === 'community' ? collapseToCommunities(empty) : empty
+    return filters.aggregate === 'community' ? collapseToCommunities(empty, []) : empty
   }
 
   let internalNodes: InternalNode[] = []
@@ -387,7 +486,8 @@ export async function buildGraph(
       .select()
       .from(noteLinks)
       .where(inArray(noteLinks.sourceNoteId, noteIds))
-      .orderBy(noteLinks.sourceNoteId, noteLinks.targetPath)
+      // A target linked on several lines: the first line is the edge's evidence.
+      .orderBy(noteLinks.sourceNoteId, noteLinks.targetPath, noteLinks.startLine)
     for (const link of links) {
       const source = byId.get(link.sourceNoteId)
       if (!source) continue
@@ -396,7 +496,7 @@ export async function buildGraph(
         file === undefined
           ? noteByVaultPath.get(`${source.resourceId}:${link.targetPath}`)
           : file && codeByRepoPath.get(`${file.repositoryId}:${file.path}`)
-      if (targetId) list.add(link.sourceNoteId, targetId, 'extracted')
+      if (targetId) list.add(linkEdge(link.sourceNoteId, targetId, link.startLine, link.endLine))
     }
   }
 
@@ -409,7 +509,7 @@ export async function buildGraph(
       .orderBy(repositoryFileImports.sourceFileId, repositoryFileImports.targetPath)
     for (const imp of imports) {
       if (imp.resolvedTargetFileId && byId.has(imp.resolvedTargetFileId)) {
-        list.add(imp.sourceFileId, imp.resolvedTargetFileId, 'extracted')
+        list.add(importEdge(imp.sourceFileId, imp.resolvedTargetFileId, imp.line))
       }
     }
   }
@@ -427,7 +527,7 @@ export async function buildGraph(
       .orderBy(semanticEdges.sourceId, semanticEdges.targetId)
     for (const edge of sem) {
       if (byId.has(edge.sourceId) && byId.has(edge.targetId)) {
-        list.add(edge.sourceId, edge.targetId, 'semantic')
+        list.add(semanticEdge(edge.sourceId, edge.targetId, edge.similarity))
       }
     }
   }
@@ -451,16 +551,16 @@ export async function buildGraph(
         continue
       }
       for (let i = 0; i < ids.length; i++) {
-        for (let j = i + 1; j < ids.length; j++) list.add(ids[i]!, ids[j]!, 'structural')
+        for (let j = i + 1; j < ids.length; j++) list.add(structuralEdge(ids[i]!, ids[j]!, key))
       }
     }
   }
 
-  // Louvain communities over the full assembled edge graph.
+  // Louvain communities over the undirected projection of the assembled edges (`EdgeList.pairs`).
   const g = new UndirectedGraph()
   for (const id of byId.keys()) g.addNode(id)
-  for (const e of edges) {
-    if (!g.hasEdge(e.source, e.target)) g.addEdge(e.source, e.target)
+  for (const [a, b] of list.pairs) {
+    if (!g.hasEdge(a, b)) g.addEdge(a, b)
   }
   const communities: Record<string, number> =
     g.order > 0 && g.size > 0 ? louvain(g, { rng: mulberry32(seedFromNodeIds(byId.keys())) }) : {}
@@ -471,7 +571,7 @@ export async function buildGraph(
   }))
 
   const assembled: VaultGraph = { nodes, edges, cappedGroups }
-  if (filters.aggregate === 'community') return collapseToCommunities(assembled)
+  if (filters.aggregate === 'community') return collapseToCommunities(assembled, list.pairs)
   if (filters.community !== undefined) {
     const members = assembled.nodes.filter((n) => n.community === filters.community)
     const sliced = members

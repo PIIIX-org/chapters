@@ -247,6 +247,17 @@ export function renderNoteFile(note: { frontmatter: unknown; frontmatterSrc: unk
 }
 
 /**
+ * The line of the note's file, as `renderNoteFile` writes it, where the body
+ * begins: the offset that turns a body-relative line (how `note_links`
+ * stores them, ADR-004 §2.2) into a line of that file. A file the projector
+ * adopted keeps its own bytes (§7), so its frontmatter can span another
+ * number of lines.
+ */
+export function bodyStartLine(note: { frontmatter: unknown; frontmatterSrc: unknown }): number {
+  return renderNoteFile({ ...note, body: '' }).split('\n').length
+}
+
+/**
  * The adopt rule (§7): a file that parses to the row's content (frontmatter
  * key by key with deep equality, body exactly). Returns the file's key order
  * as `frontmatter_src`, or null when the file does not adopt.

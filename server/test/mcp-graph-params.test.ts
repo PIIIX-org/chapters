@@ -33,6 +33,12 @@ interface Edge {
   target: string
   kind: string
 }
+/** An edge row (#558): its ends by name, `in` the vault or repository (the calls span both). */
+interface Row {
+  from: { path: string; in?: string }
+  to: { path: string; in?: string }
+  kind: string
+}
 
 let app: FastifyInstance
 let baseUrl: string
@@ -83,7 +89,9 @@ async function refused(args: Args, why: RegExp): Promise<void> {
 }
 
 const nodesOf = (json: Answer) => json.nodes as Node[]
-const edgesOf = (json: Answer) => json.edges as Edge[]
+/** The rows as id pairs: notes are keyed by path in `idOf`, files by `file:<path>`. */
+const idAt = (end: Row['from']) => (end.in?.startsWith(`${REPO}#`) ? idOf[`file:${end.path}`]! : idOf[end.path]!)
+const edgesOf = (json: Answer): Edge[] => (json.edges as Row[]).map((r) => ({ source: idAt(r.from), target: idAt(r.to), kind: r.kind }))
 const pairKey = (e: Edge) => `${[e.source, e.target].sort().join('|')}:${e.kind}`
 
 /** The whole graph as node list, one page. */
@@ -346,16 +354,24 @@ describe('graph: limit (#426)', () => {
     expect(pages.flatMap((p) => nodesOf(p).map((n) => n.id)).sort()).toEqual(nodesOf(whole).map((n) => n.id).sort())
     expect(pages.flatMap((p) => edgesOf(p).map(pairKey)).sort()).toEqual(edgesOf(whole).map(pairKey).sort())
 
-    const limited = await walk({ neighborsOf: 'p0/c', depth: 3, limit: 6, budget_tokens: 300 })
+    // Down the ladder an edge row is one line, `from -> to relation …` (#558): six nodes and their edges fit 300 tokens, so eight at 256 page.
+    const limited = await walk({ neighborsOf: 'p0/c', depth: 3, limit: 8, budget_tokens: 256 })
     expect(limited.length).toBeGreaterThan(1)
-    expect(limited[0]!.truncated).toMatchObject({ total: { nodes: '>6' }, cursor: expect.any(String) })
+    expect(limited[0]!.truncated).toMatchObject({ total: { nodes: '>8' }, cursor: expect.any(String) })
     const shownNodes = limited.flatMap((p) => nodesOf(p).map((n) => n.id))
-    expect(shownNodes).toHaveLength(6)
-    expect(new Set(shownNodes).size).toBe(6)
+    expect(shownNodes).toHaveLength(8)
+    expect(new Set(shownNodes).size).toBe(8)
     const kept = new Set(shownNodes)
-    for (const e of limited.flatMap(edgesOf)) expect(kept.has(e.source) && kept.has(e.target)).toBe(true)
+    const end = (text: string) => {
+      const at = text.indexOf(':')
+      return idAt({ in: text.slice(0, at), path: text.slice(at + 1) })
+    }
+    for (const e of limited.flatMap((p) => p.edges as Array<Row | string>)) {
+      const ends = typeof e === 'string' ? /^(.+?) (?:->|--) (.+?) (?:link|import|same_\w+|similar)\b/.exec(e)!.slice(1).map(end) : [idAt(e.from), idAt(e.to)]
+      expect(ends.every((id) => kept.has(id)), JSON.stringify(e)).toBe(true)
+    }
     // A cursor is bound to its arguments: another limit refuses it.
-    await refused({ neighborsOf: 'p0/c', depth: 3, limit: 5, budget_tokens: 300, cursor: (limited[0]!.truncated as { cursor: string }).cursor }, /invalid cursor/)
+    await refused({ neighborsOf: 'p0/c', depth: 3, limit: 7, budget_tokens: 256, cursor: (limited[0]!.truncated as { cursor: string }).cursor }, /invalid cursor/)
   })
 })
 

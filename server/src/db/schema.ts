@@ -589,7 +589,14 @@ export const noteReads = pgTable(
   ],
 )
 
-/** EXTRACTED edges: wikilink targets per note, replaced on every save. */
+/**
+ * EXTRACTED edges: one row per wikilink of a note body, replaced on every
+ * body save. `start_line`/`end_line` are body-relative (ADR-004 §2.2: a
+ * frontmatter edit leaves them valid; answers add the body's first file
+ * line). A note may link one target on several lines (#472). 0 means "not
+ * located yet": rows written before 0031, or by older code after a
+ * rollback; the boot backfill (`backfillLinkLines`) locates them.
+ */
 export const noteLinks = pgTable(
   'note_links',
   {
@@ -597,32 +604,24 @@ export const noteLinks = pgTable(
       .notNull()
       .references(() => notes.id, { onDelete: 'cascade' }),
     targetPath: text('target_path').notNull(),
+    startLine: integer('start_line').notNull().default(0),
+    endLine: integer('end_line').notNull().default(0),
   },
   (t) => [
-    primaryKey({ columns: [t.sourceNoteId, t.targetPath] }),
+    primaryKey({ name: 'note_links_source_note_id_target_path_start_line_pk', columns: [t.sourceNoteId, t.targetPath, t.startLine] }),
     index('note_links_target_idx').on(t.targetPath),
+    index('note_links_unlocated_idx').on(t.sourceNoteId).where(sql`start_line = 0`),
   ],
 )
 
 export const semanticNodeType = pgEnum('semantic_node_type', ['note', 'code'])
 
 /**
- * Semantic INFERRED edges, maintained by the embedding/extraction
- * queues. Polymorphic across notes and repository files (spec 9) — one
- * shared embedding space means a note and a code file can be semantic
- * neighbors, so the node identity is (type, id) rather than a plain
- * note-only FK. No FK constraint on the id columns (same posture as
- * `vaultShares.granteeId`'s user/team polymorphism) since they point at
- * different tables depending on type. Ordered pair (canonical string
- * form `type:id`, A < B). Deliberately not vault/repository-restricted
- * — permission filtering happens at query time against the caller's
- * live resource set.
- */
-/**
  * Semantic kNN edges, stored **directed**: one row means "source holds target
  * in its top-k", and the row is owned by its source. kNN is asymmetric, so the
  * reverse row may or may not exist — `recomputeSemanticEdges()` only ever
- * deletes rows it owns, and `buildGraph()` dedups both directions on read.
+ * deletes rows it owns, and `buildGraph()` merges both directions into one
+ * undirected edge with the higher similarity (#558).
  *
  * Treating these as undirected in storage is the bug fixed in #91: deleting by
  * either side wipes edges another node owns, and nothing restores them.
@@ -783,6 +782,8 @@ export const repositoryFileImports = pgTable(
     resolvedTargetFileId: uuid('resolved_target_file_id').references(() => repositoryFiles.id, {
       onDelete: 'cascade',
     }),
+    /** The line of the import's specifier (1-based); null for rows extracted before 0031 (#453 re-extracts them). */
+    line: integer('line'),
   },
   (t) => [
     primaryKey({ columns: [t.sourceFileId, t.targetPath] }),
