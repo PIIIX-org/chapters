@@ -82,22 +82,35 @@ function insertsText(structs: Struct[]): boolean {
  * True when `structs` (a decoded update and the structs Yjs holds pending,
  * which it can unblock) may add to the rest of `doc` (#947): an item that is
  * anything but text in the body (other content, a map entry, text in another
- * type). Deletions add nothing. A decoded item typed next to another one
- * names no parent, only its neighbours (`origin`, `rightOrigin`), so its
- * parent is the one of the neighbour it was typed against, found in these
- * structs or in the document. A neighbour found in neither (it is still on
- * its way) counts as rest: the full check then runs, as before. So plain
- * typing on a note whose rest is over the cap is not measured per keystroke.
+ * type). Deletions add nothing. So plain typing on a note whose rest is over
+ * the cap is not measured per keystroke.
+ *
+ * The answer must follow what Yjs does with the update, not what the update
+ * says about itself (#949 review): Yjs skips the structs the document already
+ * holds and keeps only the last of two sections for one client, so an
+ * update that re-sends an id the document has, or holds one id twice, counts
+ * as rest (an honest editor's update carries only new structs) and the full
+ * check runs. A decoded item typed next to another one names no parent, only
+ * its neighbours (`origin`, `rightOrigin`): its parent is the neighbour's, in
+ * the document first (where Yjs looks), else in these structs. A neighbour
+ * found in neither (still on its way) counts as rest too.
  */
 function addsRest(doc: Y.Doc, structs: Struct[]): boolean {
   const items = new Map<number, Y.Item[]>()
   for (const struct of structs) {
+    if (struct instanceof Y.Skip) continue
+    // An id the document already holds: Yjs would skip or split it, whatever the update claims for it.
+    if (struct.id.clock < Y.getState(doc.store, struct.id.client)) return true
     if (!(struct instanceof Y.Item)) continue
     const list = items.get(struct.id.client)
     if (list) list.push(struct)
     else items.set(struct.id.client, [struct])
   }
-  for (const list of items.values()) list.sort((a, b) => a.id.clock - b.id.clock)
+  for (const list of items.values()) {
+    list.sort((a, b) => a.id.clock - b.id.clock)
+    // Two structs for one id (a client's section twice): Yjs keeps one, not necessarily the one read here.
+    for (let i = 1; i < list.length; i++) if (list[i]!.id.clock < list[i - 1]!.id.clock + list[i - 1]!.length) return true
+  }
   /** The item of these structs that holds `id`, or null. */
   const local = (id: Y.ID): Y.Item | null => {
     const list = items.get(id.client)
@@ -129,6 +142,8 @@ function addsRest(doc: Y.Doc, structs: Struct[]): boolean {
       // A cycle of neighbours (a malformed update) ends here, as rest.
       if (walked.length > structs.length) break
       walked.push(item)
+      // A map entry (an item typed next to one inherits its key): never body text.
+      if (item.parentSub !== null) break
       // Decoded: a root's name, the id of a nested type (never the body, a root), or null (typed next to a neighbour).
       const parent: unknown = item.parent
       if (typeof parent === 'string') {
@@ -138,13 +153,15 @@ function addsRest(doc: Y.Doc, structs: Struct[]): boolean {
       if (parent !== null) break
       const neighbour = item.origin ?? item.rightOrigin
       if (neighbour === null) break
-      const next = local(neighbour)
-      if (next) {
-        item = next
-        continue
+      // The document first: Yjs links the item to the neighbour it holds.
+      if (neighbour.clock < Y.getState(doc.store, neighbour.client)) {
+        const held = Y.getItem(doc.store, neighbour)
+        answer = held instanceof Y.Item && held.parent === body && held.parentSub === null
+        break
       }
-      if (neighbour.clock < Y.getState(doc.store, neighbour.client)) answer = Y.getItem(doc.store, neighbour).parent === body
-      break
+      const next = local(neighbour)
+      if (!next) break
+      item = next
     }
     for (const item of walked) known.set(item, answer)
     return answer
