@@ -113,6 +113,7 @@ import {
   ranked,
   render,
   textSection,
+  type Block,
   type BudgetKind,
   type Budgeted,
   type Ladder,
@@ -290,14 +291,20 @@ function withoutDefaults(tool: Tool): Tool {
 }
 
 /**
- * A successful tool answer (#433, ADR-004 §2.1): `text` is the whole JSON
- * answer, and when it is an object, `structuredContent` is the same object
- * (parsed from `text`, so it holds exactly what the text shows: dates as
- * their strings). A bare array has none: MCP's structuredContent is an object.
+ * A successful tool answer (#433, ADR-004 §2.1): `text` is the JSON answer,
+ * and when it is an object, `structuredContent` is the same object (parsed
+ * from `text`, so it holds exactly what the text shows: dates as their
+ * strings). A bare array has none: MCP's structuredContent is an object.
+ * `blocks` (read_note's body, #445) follow `text` as text blocks of their
+ * own, unescaped, where `text` holds `{"in": "content[n]"}`; in
+ * `structuredContent` each is its key's string, so that object is whole.
  */
-function answered(text: string): CallToolResult {
-  const content = [{ type: 'text' as const, text }]
-  return text.startsWith('{') ? { content, structuredContent: JSON.parse(text) as Record<string, unknown> } : { content }
+function answered(text: string, blocks: readonly Block[] = []): CallToolResult {
+  const content = [{ type: 'text' as const, text }, ...blocks.map((block) => ({ type: 'text' as const, text: block.text }))]
+  if (!text.startsWith('{')) return { content }
+  const structuredContent = JSON.parse(text) as Record<string, unknown>
+  for (const block of blocks) structuredContent[block.name] = block.text
+  return { content, structuredContent }
 }
 
 /**
@@ -753,9 +760,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         const at = typeof args.cursor === 'string' ? decodeCursor(args.cursor, name, fingerprint) : null
         const answer = (await handler(args, scoped, new Page(at))) as Budgeted
         const budgetTokens = typeof args.budget_tokens === 'number' ? args.budget_tokens : DEFAULT_BUDGET[budget]
-        const { text, truncated } = render(answer, { tool: name, fingerprint, budget: budgetTokens, at })
+        const { text, blocks, truncated } = render(answer, { tool: name, fingerprint, budget: budgetTokens, at })
         await answer.rendered?.(truncated)
-        return answered(text)
+        return answered(text, blocks)
       } catch (err) {
         const result = errorResult(toErrorEnvelope(err))
         toolErrors.add(result)
@@ -1333,7 +1340,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           indexed: await noteIndexed(note.row.id, note.row.seq),
           ...(note.foldError ? { fold_error: note.foldError } : {}),
         },
-        sections: [textSection({ name: 'body', text: note.body, lines: true })],
+        // The body is sent as plain text after the JSON, not as an escaped string in it (#445).
+        sections: [textSection({ name: 'body', text: note.body, lines: true, block: true })],
         // Every page reports `rev` and is that rev's text (a changed note refuses the cursor), so every read
         // records it: the base a later whole-body edit three-way merges from (#864, #961). It replaces an older read.
         rendered: async () => {

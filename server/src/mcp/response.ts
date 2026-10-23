@@ -8,10 +8,14 @@ import { z } from 'zod'
  * `tool()` renders it here, at the one serialisation point:
  *
  * - The answer stays within the budget, counted as `approxTokens`, what the
- *   premise benchmark counts. Lists drop whole items from the end, text is
- *   cut at a line boundary; nothing is cut without being counted. A text
- *   that would show nothing at all shows its first line anyway (split when
- *   longer than the page), so paging always moves on.
+ *   premise benchmark counts, over every text block it is sent in. Lists
+ *   drop whole items from the end, text is cut at a line boundary; nothing
+ *   is cut without being counted. A text that would show nothing at all
+ *   shows its first line anyway (split when longer than the page), so
+ *   paging always moves on.
+ * - A `block` text (read_note's body, #445) is not a JSON string: it is sent
+ *   unescaped as its own text block after the JSON, whose key holds
+ *   `{"in": "content[n]"}` in its place, and counted by its characters.
  * - The ladder (#421): when a list would show fewer than `MIN_ITEMS` (or
  *   fewer than are left) even on a page of its own, every list on the page
  *   steps down one level, `full` → `no_context` → `locations` → `counts` →
@@ -141,12 +145,15 @@ export interface RankedSection<T> {
 /**
  * Text cut at line boundaries (a line longer than the budget is split). Its
  * shown/total/dropped count lines. `lines`: add `lines: [first, last]`
- * (1-based) to the answer when only part of the text is shown.
+ * (1-based) to the answer when only part of the text is shown. `block`: send
+ * this page's text as a text block of its own after the JSON (#445), on
+ * every page, empty or not.
  */
 export interface TextSection {
   name: string
   text: string
   lines?: boolean
+  block?: boolean
 }
 
 export type Section =
@@ -281,6 +288,8 @@ const countLines = (text: string) => (text === '' ? 0 : newlines(text) + (text.e
 
 /** Characters `s` takes inside a JSON string. */
 const escapedLength = (s: string) => JSON.stringify(s).length - 2
+/** Characters `s` takes as a text block of its own. */
+const rawLength = (s: string) => s.length
 
 /** One section on this page: where it starts and what it can show. */
 interface Slot {
@@ -355,19 +364,20 @@ function fill(slots: Slot[], room: number, itemLength: (slot: number, i: number)
     if (slot.section.kind === 'text') {
       if (counted) continue
       const { text } = slot.section
+      const length = slot.section.block ? rawLength : escapedLength
       let at = slot.start
       while (at < text.length) {
         const nl = text.indexOf('\n', at)
         const end = nl === -1 ? text.length : nl + 1
-        const cost = escapedLength(text.slice(at, end))
+        const cost = length(text.slice(at, end))
         if (used + cost > room) {
           if (!any) {
             const left = Math.max(room - used, 1_024)
-            shown[n] = (cost <= left ? end : splitLine(text, at, end, left)) - slot.start
+            shown[n] = (cost <= left ? end : splitLine(text, at, end, left, length)) - slot.start
             return { shown, forced: true, stop: n }
           }
           // A line no page holds whole starts here, split at the room left; any other line starts the next page.
-          if (cost > room && room - used > 0) at = splitLine(text, at, end, room - used)
+          if (cost > room && room - used > 0) at = splitLine(text, at, end, room - used, length)
           break
         }
         used += cost
@@ -399,13 +409,13 @@ function fill(slots: Slot[], room: number, itemLength: (slot: number, i: number)
   return { shown, forced: false, stop: -1 }
 }
 
-/** The end of a split line's first part: at most `room` JSON characters, never inside a surrogate pair, at least one code point. */
-function splitLine(text: string, from: number, end: number, room: number): number {
+/** The end of a split line's first part: at most `room` characters (as `length` counts them), never inside a surrogate pair, at least one code point. */
+function splitLine(text: string, from: number, end: number, room: number, length: (s: string) => number): number {
   let at = from
   let used = 0
   while (at < end) {
     const step = text.codePointAt(at)! > 0xffff ? 2 : 1
-    const cost = escapedLength(text.slice(at, at + step))
+    const cost = length(text.slice(at, at + step))
     if (used + cost > room && at > from) break
     used += cost
     at += step
@@ -441,6 +451,22 @@ interface Rendering {
   narrow: string[]
 }
 
+/** A `block` text section's text on this page, sent as its own text block after the JSON (#445). */
+export interface Block {
+  name: string
+  text: string
+}
+
+/** A rendered answer: the JSON text, the blocks after it in order, and what was left out. */
+export interface Rendered {
+  text: string
+  blocks: Block[]
+  truncated: Truncated
+}
+
+/** The characters a rendered answer is sent in: the JSON and every block after it. */
+const charsOf = (r: Rendered) => r.blocks.reduce((n, block) => n + block.text.length, r.text.length)
+
 /**
  * Renders a budgeted answer: `{...head, lines?, ...sections, truncated}`
  * within `budget` tokens. `at` is the cursor's position (null: first page).
@@ -456,7 +482,7 @@ interface Rendering {
 export function render(
   answer: Budgeted,
   ctx: { tool: string; fingerprint: string; budget: number; at: CursorAt | null },
-): { text: string; truncated: Truncated } {
+): Rendered {
   const plan = slots(answer, ctx.at)
   const maxChars = ctx.budget * 4
   const lists = plan.filter((slot) => slot.start >= 0 && slot.section.kind !== 'text')
@@ -467,7 +493,7 @@ export function render(
   }
   if (lists.some((slot) => slot.avail.length > 0)) levels.push('counts', 'total')
   let narrow = answer.narrow ?? []
-  let out: { text: string; truncated: Truncated } | undefined
+  let out: Rendered | undefined
   for (const level of levels) {
     const forms = plan.map((slot) => formOf(slot.section, level))
     const lengths = plan.map((slot) => new Array<number | undefined>(slot.avail.length))
@@ -477,7 +503,7 @@ export function render(
     }
     const rendering: Rendering = { ...ctx, level, narrow }
     const aggregate = level === 'counts' || level === 'total'
-    const empty = compose(answer, plan, plan.map(() => 0), rendering).text.length
+    const empty = charsOf(compose(answer, plan, plan.map(() => 0), rendering))
     // The truncated block grows with what is left out: refill with that much less room until the answer fits.
     // Nothing shown is as small as the answer gets: a head over the budget (a huge frontmatter over an empty
     // body) is answered as it is.
@@ -486,10 +512,10 @@ export function render(
     for (;;) {
       page = fill(plan, maxChars - empty - reserve, itemLength, aggregate)
       out = compose(answer, plan, page.shown, rendering)
-      if (out.text.length <= maxChars || page.forced || page.shown.every((n) => n === 0)) break
-      reserve += out.text.length - maxChars
+      if (charsOf(out) <= maxChars || page.forced || page.shown.every((n) => n === 0)) break
+      reserve += charsOf(out) - maxChars
     }
-    const fits = out.text.length <= maxChars
+    const fits = charsOf(out) <= maxChars
     if (level === 'total' || (level === 'counts' && fits)) return out
     if (aggregate) continue
     const stop = plan[page.stop]
@@ -503,14 +529,14 @@ export function render(
     if (level === 'full') {
       // Below full, `narrow` first names the budget that shows this page's list at full.
       const shown = page.shown.map((n, i) => (i === page.stop ? Math.min(MIN_ITEMS, stop.avail.length) : i < page.stop ? n : 0))
-      const needed = Math.ceil(approxTokens(compose(answer, plan, shown, rendering).text) / 50) * 50 + 50
+      const needed = Math.ceil(Math.ceil(charsOf(compose(answer, plan, shown, rendering)) / 4) / 50) * 50 + 50
       if (needed <= MAX_BUDGET) narrow = [`budget_tokens: ${needed}`, ...narrow]
     }
   }
   return out!
 }
 
-function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering): { text: string; truncated: Truncated } {
+function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering): Rendered {
   const out: Record<string, unknown> = { ...answer.head }
   const counts = { shown: {} as Record<string, number>, total: {} as Record<string, number | `>${number}`>, dropped: {} as Record<string, number> }
   const aggregate = ctx.level === 'counts' || ctx.level === 'total' ? ctx.level : null
@@ -520,6 +546,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
   let counted = false
   let anyMore = false
   const values: Array<[string, unknown]> = []
+  const blocks: Block[] = []
   for (const [n, slot] of plan.entries()) {
     const { section } = slot
     if (section.kind === 'text') {
@@ -528,7 +555,13 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       // A line counts as shown on the page where it ends, so a line split across pages counts once.
       const shownLines = chunk.length < rest.length ? newlines(chunk) : countLines(chunk)
       const total = countLines(rest)
-      values.push([section.name, chunk])
+      if (section.block) {
+        // content[0] is the JSON, so the blocks after it are content[1], content[2], ...
+        values.push([section.name, { in: `content[${blocks.length + 1}]` }])
+        blocks.push({ name: section.name, text: chunk })
+      } else {
+        values.push([section.name, chunk])
+      }
       counts.shown[section.name] = shownLines
       counts.total[section.name] = total
       counts.dropped[section.name] = total - shownLines
@@ -577,5 +610,5 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
   const whole = cursor === null && !anyDropped && !anyMore && ctx.level === 'full'
   const truncated: Truncated = whole ? false : { ...counts, level: ctx.level, cursor, narrow: ctx.narrow }
   out.truncated = truncated
-  return { text: JSON.stringify(out), truncated }
+  return { text: JSON.stringify(out), blocks, truncated }
 }

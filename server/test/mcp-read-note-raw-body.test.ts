@@ -176,7 +176,8 @@ describe('read_note: the body as a plain text block', () => {
     const raw = r.blocks.join('')
     const measured = { escapedTokens: approxTokens(escaped), rawTokens: approxTokens(raw), bodyChars: DENSE.length, escapedBodyChars: JSON.stringify(DENSE).length - 2 }
     console.log(`#445 token comparison on docs/dense: ${JSON.stringify(measured)}`)
-    expect(escaped.length - raw.length).toBe(JSON.stringify(DENSE).length - JSON.stringify({ in: 'content[1]' }).length)
+    // What is saved: the body's escapes and quotes, less the marker.
+    expect(escaped.length - raw.length).toBe(JSON.stringify(DENSE).length - DENSE.length - JSON.stringify({ in: 'content[1]' }).length)
     expect(measured.rawTokens).toBeLessThan(measured.escapedTokens)
   })
 })

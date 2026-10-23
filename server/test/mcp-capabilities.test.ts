@@ -13,7 +13,7 @@ import { db, sql } from '../src/db/client.js'
 import { mcpConnections } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
 
@@ -44,7 +44,7 @@ async function call(client: Client, name: string, args: Args): Promise<{ isError
   resetRateLimits()
   const result = await client.callTool({ name, arguments: args })
   const content = result.content as Array<{ type: string; text?: string }>
-  return { isError: result.isError === true, text: content.map((c) => c.text ?? '').join('') }
+  return { isError: result.isError === true, text: toolText(content) }
 }
 
 async function must<T>(client: Client, name: string, args: Args): Promise<T> {
