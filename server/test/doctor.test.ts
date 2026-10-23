@@ -399,6 +399,16 @@ describe('doctor', () => {
     await expectRepaired('unlinked', 'links-differ')
   })
 
+  it('links-differ: one target linked twice from the same line (one stored row) is no problem', async () => {
+    // The second link starts on line 1 too but ends on line 2: `linkRows` keeps the first, and so does the check.
+    const twice = await createNote(vaultId, { path: 'checks/twice', body: 'see [[checks/healthy]] and [[checks/healthy|two\nlines]]\n' })
+    await flushProjections()
+    await flushEmbeddings()
+    expect((await doctor()).problems.filter((p) => p.noteId === twice.id)).toEqual([])
+    await softDeleteNote(vaultId, 'checks/twice')
+    await flushProjections()
+  })
+
   it('checks trashed notes against .trash/<id>.md', async () => {
     const trashed = await createNote(vaultId, { path: 'checks/trashed', body: 'to the trash' })
     await softDeleteNote(vaultId, 'checks/trashed')

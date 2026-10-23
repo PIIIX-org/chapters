@@ -176,6 +176,7 @@ export function AccessOversight() {
                   <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 align-top font-mono text-xs tabular-nums text-muted-foreground h-auto">
                     <span className="sm:hidden font-mono text-muted-foreground/70">Scope: </span>
                     {connection.scope}
+                    <span className="block">{connection.profile} profile</span>
                     {connection.vaultId && (
                       <span className="block">
                         {vaultName.get(connection.vaultId) ?? 'deleted vault'}
