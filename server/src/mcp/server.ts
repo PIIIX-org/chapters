@@ -624,17 +624,19 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault',
       capability: 'read',
       description:
-        'List a vault folder (`path`; the root without it) as `{directory, subdirectories, notes}`: one level by default, its subtree with `recursive: true`. Notes are `{path, title}`; `fields` picks others.' +
+        'List one level of a vault folder as `{directory, subdirectories, notes}`, or its subtree with `recursive`. Notes are `{path, title}`.' +
         ENVELOPE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
-        path: z.string().optional().describe('Folder, e.g. `domains/auth`; the vault root without it'),
-        recursive: z.boolean().optional().describe('Every note under the folder instead of one level (default false)'),
+        path: z.string().optional().describe('Folder; omit for the root'),
+        recursive: z.boolean().optional().describe('true: the whole subtree'),
+        // In allowlist order without repeats, so the cursor's fingerprint does not depend on how they were listed.
         fields: z
           .array(z.enum(BROWSE_FIELDS))
           .min(1)
-          .optional()
-          .describe(`Note fields besides \`path\` (default title): ${BROWSE_FIELDS.join(', ')}`),
+          .describe('Note fields (default path, title)')
+          .transform((picked) => BROWSE_FIELDS.filter((f) => picked.includes(f)))
+          .optional(),
       },
       budget: 'list',
     },
@@ -644,8 +646,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const folder = args.path?.replace(/^\/+|\/+$/g, '')
       const dir = folder ? resolveNotePath(folder).fullPath : ''
       // `path` is always shown: it is the note's location and where the cursor resumes.
-      const picked = new Set<BrowseField>(['path', ...(args.fields ?? ['title'])])
-      const fields = BROWSE_FIELDS.filter((f) => picked.has(f))
+      const picked = args.fields ?? ['title']
+      const fields = BROWSE_FIELDS.filter((f) => f === 'path' || picked.includes(f))
       const notesSection = (rows: BrowsedNote[]) =>
         keyset({
           name: 'notes',
