@@ -80,7 +80,7 @@ import { prepareGitRemote } from '../repositories/git-remote.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord } from '../vaults/routes.js'
-import { isTeamOwner, notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
+import { notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
 import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
 import { edgeRowKey, edgeRows, type EdgeRow } from '../graph/edges.js'
@@ -546,8 +546,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     if (!atLeast(access, needed)) throw new McpToolError('NOT_FOUND', 'not found')
   }
 
+  /** Owner only: a vault the caller cannot reach answers NOT_FOUND, like a missing one (#439); a visible one PERMISSION_REQUIRED. */
   async function requireVaultOwner(vaultId: string) {
     const access = await resolveAccess(auth.user.id, vaultId)
+    if (!access) throw new McpToolError('NOT_FOUND', 'not found')
     if (access !== 'owner') throw new McpToolError('PERMISSION_REQUIRED', 'owner permission required')
   }
 
@@ -556,9 +558,21 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     if (!access) throw new McpToolError('NOT_FOUND', 'not found')
   }
 
+  /** Owner only, as requireVaultOwner. */
   async function requireRepositoryOwner(repositoryId: string) {
     const access = await resolveRepositoryAccess(auth.user.id, repositoryId)
+    if (!access) throw new McpToolError('NOT_FOUND', 'not found')
     if (access !== 'owner') throw new McpToolError('PERMISSION_REQUIRED', 'owner permission required')
+  }
+
+  /** Team owner only: a team the caller is not a member of answers NOT_FOUND, like a missing one (#439); a member PERMISSION_REQUIRED. */
+  async function requireTeamOwner(teamId: string) {
+    const [membership] = await db
+      .select({ role: teamMemberships.role })
+      .from(teamMemberships)
+      .where(and(eq(teamMemberships.teamId, teamId), eq(teamMemberships.userId, auth.user.id)))
+    if (!membership) throw new McpToolError('NOT_FOUND', 'not found')
+    if (membership.role !== 'owner') throw new McpToolError('PERMISSION_REQUIRED', 'team owner required')
   }
 
   /** For `*-or-account` scopes: `null` (the account-wide set) only for an account-scoped connection. */
@@ -2433,7 +2447,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       },
     },
     async ({ teamId, userId }: { teamId: string; userId: string }) => {
-      if (!(await isTeamOwner(auth.user.id, teamId))) throw new McpToolError('PERMISSION_REQUIRED', 'team owner required')
+      await requireTeamOwner(teamId)
       const member = (await db.select().from(users).where(eq(users.id, userId)))[0]
       if (!member || member.status !== 'active') throw new McpToolError('INVALID_ARGUMENT', 'user must be active', { field: 'userId' })
       await db.insert(teamMemberships).values({ teamId, userId: member.id }).onConflictDoNothing()
@@ -2468,7 +2482,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       },
     },
     async ({ teamId, userId }: { teamId: string; userId: string }) => {
-      if (!(await isTeamOwner(auth.user.id, teamId))) throw new McpToolError('PERMISSION_REQUIRED', 'team owner required')
+      await requireTeamOwner(teamId)
       const [removed] = await db
         .delete(teamMemberships)
         .where(
@@ -2509,7 +2523,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: { teamId: UUID_ARG.describe('Team id') },
     },
     async ({ teamId }: { teamId: string }) => {
-      if (!(await isTeamOwner(auth.user.id, teamId))) throw new McpToolError('PERMISSION_REQUIRED', 'team owner required')
+      await requireTeamOwner(teamId)
       const removed = await db
         .delete(vaultShares)
         .where(and(eq(vaultShares.granteeType, 'team'), eq(vaultShares.granteeId, teamId)))

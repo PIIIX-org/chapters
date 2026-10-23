@@ -25,10 +25,10 @@ describe('error envelope catalogue (#439)', () => {
     })
   })
 
-  it('busy stores are BUSY and retryable; a note waiting for an administrator is not', () => {
+  it('busy stores are BUSY and retryable, a note waiting for the store migration too (a write answers it as status retry)', () => {
     expect(toErrorEnvelope(new StoreBusyError('lock timeout'))).toMatchObject({ code: 'BUSY', retryable: true })
     expect(toErrorEnvelope(new MaintenanceInProgressError('shared'))).toMatchObject({ code: 'BUSY', retryable: true })
-    expect(toErrorEnvelope(new NoteNotMigratedError())).toMatchObject({ code: 'BUSY', retryable: false })
+    expect(toErrorEnvelope(new NoteNotMigratedError())).toMatchObject({ code: 'BUSY', retryable: true })
   })
 
   it('domain refusals keep their message and get their code and rule', () => {

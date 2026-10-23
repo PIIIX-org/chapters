@@ -16,7 +16,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
-import { repositories } from '../src/db/schema.js'
+import { notes, repositories } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -260,5 +260,54 @@ describe('structured MCP errors (#439)', () => {
       message: 'a sync is already running',
       retryable: true,
     })
+  })
+  it("owner-only tools answer a missing id and another account's id with the same NOT_FOUND bytes; a visible one PERMISSION_REQUIRED (#439 review)", async () => {
+    const repoB = (await post(cookieB, '/api/repositories', { name: `errors-repo-b-${Date.now()}`, ingestionMethod: 'agent_push' })) as { id: string }
+    resetRateLimits()
+    const teamB = JSON.parse(
+      ((await acctB.callTool({ name: 'create_team', arguments: { name: `errors-team-b-${Date.now()}` } })).content as Array<{ text: string }>)[0]!.text,
+    ) as { id: string }
+    for (const [tool, key, theirs] of [
+      ['delete_vault', 'vaultId', VB],
+      ['list_vault_shares', 'vaultId', VB],
+      ['delete_repository', 'repositoryId', repoB.id],
+      ['delete_team', 'teamId', teamB.id],
+    ] as const) {
+      const foreign = await failure(acctA, tool, { [key]: theirs })
+      const missing = await failure(acctA, tool, { [key]: randomUUID() })
+      expect(foreign.text, `${tool} on B's id`).toBe(NOT_FOUND)
+      expect(missing.text, `${tool} on a missing id`).toBe(NOT_FOUND)
+    }
+    // B is a member of A's team but not its owner: the team is visible, the action needs more.
+    resetRateLimits()
+    const teamA = JSON.parse(
+      ((await acctA.callTool({ name: 'create_team', arguments: { name: `errors-team-a-${Date.now()}` } })).content as Array<{ text: string }>)[0]!.text,
+    ) as { id: string }
+    await ok(acctA, 'add_team_member', { teamId: teamA.id, userId: userB })
+    expect((await failure(acctB, 'delete_team', { teamId: teamA.id })).error).toEqual({
+      code: 'PERMISSION_REQUIRED',
+      message: 'team owner required',
+      retryable: false,
+    })
+  })
+
+  it('a bad or missing union tag (an ops[] entry\'s op) suggests the tag values (#439 review)', async () => {
+    const { error } = await failure(acctA, 'edit_note', { vaultId: VA, path: 'concepts/alpha-note', ops: [{ op: 'apend', text: 'x' }] })
+    expect(error).toMatchObject({ code: 'INVALID_ARGUMENT', field: 'ops.0.op' })
+    expect(error.suggestions).toContain('append')
+    expect(error.suggestions).toContain('replace_text')
+  })
+
+  it('a large subfolder does not crowd the siblings out of the suggestions (#439 review)', async () => {
+    const vault = field(await post(cookieA, '/api/vaults', { name: 'errors-a-big' }), 'id')
+    await ok(acctA, 'create_note', { vaultId: vault, path: 'concepts/alpha-note', body: 'alpha' })
+    // 501 notes in concepts/aaa/, which sort before concepts/alpha-note.
+    await db.insert(notes).values(
+      Array.from({ length: 501 }, (_, i) => {
+        const name = `aaa/n-${String(i).padStart(3, '0')}`
+        return { vaultId: vault, type: 'concepts', name, path: `concepts/${name}`, frontmatter: { type: 'concepts' }, body: '' }
+      }),
+    )
+    expect((await failure(acctA, 'read_note', { vaultId: vault, path: 'concepts/alpha-nte' })).error.suggestions).toEqual(['concepts/alpha-note'])
   })
 })

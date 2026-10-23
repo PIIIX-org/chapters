@@ -2,7 +2,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import type { z } from 'zod'
 import { OkfValidationError, type OkfRefusal } from '../notes/okf.js'
 import { NoteTooLargeError } from '../notes/size-cap.js'
-import { NoteNotMigratedError, StoreBusyError } from '../notes/store-tx.js'
+import { StoreBusyError } from '../notes/store-tx.js'
 import { MaintenanceInProgressError } from '../notes/maintenance-lock.js'
 import { NoteWriteQuarantinedError, NoteWriteWouldQuarantineError } from '../notes/growth-guard.js'
 import { NoteEditError } from '../sync/edit-ops.js'
@@ -141,8 +141,7 @@ export function toErrorEnvelope(err: unknown): ErrorEnvelope {
   if (err instanceof CursorError) return envelope(err.code, err.message)
   if (err instanceof NoteTooLargeError) return envelope('TOO_LARGE', err.message, { rule: err.rule })
   if (err instanceof OkfValidationError) return envelope(OKF_CODES[err.refusal], err.message, { rule: err.rule })
-  // Waits for an administrator, not for time.
-  if (err instanceof NoteNotMigratedError) return envelope('BUSY', err.message, { retryable: false })
+  // Every StoreBusyError (lock timeout, a note waiting for the store migration) is BUSY and retryable, as a write's `status: retry`.
   if (err instanceof StoreBusyError || err instanceof MaintenanceInProgressError) return envelope('BUSY', err.message)
   if (err instanceof NoteWriteQuarantinedError || err instanceof NoteWriteWouldQuarantineError) {
     return envelope('QUARANTINED', err.message, { rule: err.code })
@@ -231,7 +230,8 @@ function declaredAt(schema: z.ZodType, path: readonly PropertyKey[], input: unkn
  * same arguments. An unknown key comes first, since it often explains a
  * missing one: `field` is the key, `suggestions` the parameters it may
  * have meant (all of that object's parameters when none is close). An
- * enum suggests its values. `message` is the SDK's, without its
+ * enum, and the tag of a discriminated union (an `ops[]` entry's `op`),
+ * suggests its values. `message` is the SDK's, without its
  * `MCP error -32602: Input validation error: ` prefix.
  */
 export function argumentRefusal(message: string, issues: readonly z.core.$ZodIssue[], schema: z.ZodType, args: unknown): ErrorEnvelope {
@@ -243,6 +243,12 @@ export function argumentRefusal(message: string, issues: readonly z.core.$ZodIss
     const meant = issue.keys.map((key) => suggestion(key, names)).filter((name): name is string => name !== undefined)
     return envelope('INVALID_ARGUMENT', message, { field: [...path, issue.keys[0]!].join('.'), suggestions: meant.length > 0 ? [...new Set(meant)] : names })
   }
-  const values = issue.code === 'invalid_value' ? issue.values.map(String) : []
+  // zod's discriminated union reports a bad or missing tag with its `options` (not in the issue's type).
+  const values =
+    issue.code === 'invalid_value'
+      ? issue.values.map(String)
+      : issue.code === 'invalid_union' && 'options' in issue && Array.isArray(issue.options)
+        ? issue.options.map(String)
+        : []
   return envelope('INVALID_ARGUMENT', message, { ...(path.length > 0 ? { field: path.join('.') } : {}), suggestions: values })
 }
