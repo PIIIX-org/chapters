@@ -78,7 +78,8 @@ async function page(tool: string, args: Args): Promise<Answer> {
     if (Array.isArray(value)) expect(value, `${tool} ${name}: one entry per item shown`).toHaveLength(shown)
   }
   if (t.level === 'counts' || t.level === 'total') expect(t.cursor).toBeNull()
-  expect(t.cursor !== null || Object.values(t.dropped).some((n) => n > 0)).toBe(true)
+  // Never truncated for nothing: a further page, a dropped item, or items shown below full.
+  expect(t.cursor !== null || Object.values(t.dropped).some((n) => n > 0) || t.level !== 'full').toBe(true)
   return json
 }
 
@@ -184,21 +185,24 @@ describe('find_symbols steps down when whole hits leave too little', () => {
     const pages = await walk('find_symbols', { ...query, repositoryId: repoId, budget_tokens: 256 })
     expect(pages.length).toBeGreaterThan(1)
     for (const p of pages.slice(0, -1)) expect(levelOf(p)).toBe('locations')
-    const shown = pages.flatMap((p) => p.results as string[])
+    // The last page, with fewer hits left, may fit them at a higher level.
+    const shown = pages.flatMap((p) =>
+      (p.results as Array<string | { startLine: number; endLine: number }>).map((r) => (typeof r === 'string' ? r : `src/ladder.ts#L${r.startLine}-L${r.endLine}`)),
+    )
     expect(shown).toEqual(ranking)
   })
 
-  it('one hit larger than the whole budget no longer breaks the budget', async () => {
+  it('one hit larger than the whole budget steps down instead of breaking the budget', async () => {
     const json = await page('find_symbols', { ...query, repositoryId: repoId, limit: 1, budget_tokens: 256 })
-    expect(levelOf(json)).not.toBe('full')
-    expect(json.results).toEqual([expect.stringMatching(/^src\/ladder\.ts#L\d+-L\d+$/)])
+    expect(levelOf(json)).toBe('no_context')
+    expect(json.results).toEqual([expect.not.objectContaining({ snippet: expect.anything() })])
     expect(truncatedOf(json)).toMatchObject({ shown: { results: 1 }, total: { results: '>1' }, dropped: { results: 0 } })
   })
 })
 
 describe('browse_vault steps down to counts, then to the total', () => {
   it('locations: paths only, as long as 5 of them fit', async () => {
-    const json = await page('browse_vault', { vaultId: longPathsVault, budget_tokens: 1_000 })
+    const json = await page('browse_vault', { vaultId: longPathsVault, budget_tokens: 500 })
     expect(truncatedOf(json).level).toBe('locations')
     const notes = json.notes as string[]
     expect(notes.length).toBeGreaterThanOrEqual(5)
@@ -230,6 +234,26 @@ describe('browse_vault steps down to counts, then to the total', () => {
     expect(json).toMatchObject({ directory: 'alpha', subdirectories: {}, notes: { alpha: 15 }, indexContent: '' })
     expect(t.shown.indexContent).toBe(0)
     expect(t.dropped.indexContent).toBeGreaterThan(0)
+  })
+})
+
+describe('a budget sweep steps down in order', () => {
+  it('from 25,000 down to 256 tokens the level never rises, and every answer keeps the envelope invariants', async () => {
+    const budgets = [25_000, 8_000, 4_000, 2_000, 1_500, 1_000, 700, 500, 400, 300, 256]
+    const calls: Array<[string, Args]> = [
+      ['find_symbols', { repositoryId: repoId, query: 'ladderStep', limit: 30 }],
+      ['browse_vault', { vaultId: longPathsVault }],
+      ['browse_vault', { vaultId: manyFoldersVault }],
+      ['graph', { vaultId: graphVault }],
+    ]
+    for (const [tool, args] of calls) {
+      const levels: string[] = []
+      for (const budget_tokens of budgets) levels.push(levelOf(await page(tool, { ...args, budget_tokens })))
+      const ranks = levels.map((l) => LEVELS.indexOf(l))
+      expect(ranks, `${tool} ${JSON.stringify(levels)}`).toEqual([...ranks].sort((a, b) => a - b))
+      expect(levels[0], tool).toBe('full')
+      expect(levels.at(-1), tool).not.toBe('full')
+    }
   })
 })
 

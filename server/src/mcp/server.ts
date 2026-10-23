@@ -84,12 +84,15 @@ import {
   budgetArgs,
   compareCodeUnits,
   decodeCursor,
+  folderOf,
   keyset,
+  location,
   ranked,
   render,
   textSection,
   type BudgetKind,
   type Budgeted,
+  type Ladder,
 } from './response.js'
 
 class McpToolError extends Error {}
@@ -213,6 +216,27 @@ const NO_PAGE = new Page(null)
 
 /** The budgeted tools' shared description fragment (#420, #422). */
 const ENVELOPE_DOC = ' Ends with `truncated` (what was left out; `cursor` for more).'
+
+/** A note listed by `browse_vault` or `list_trash` down the ladder (#421): without frontmatter and timestamps, then its path; counted per folder. */
+const NOTE_LADDER: Ladder<{ id: string; path: string; type: string; name: string }> = {
+  no_context: ({ id, path, type, name }) => ({ id, path, type, name }),
+  locations: (note) => note.path,
+  group: (note) => folderOf(note.path),
+}
+
+/**
+ * A graph node down the ladder: without tags and timestamps, then its id
+ * (edges name nodes by id) and path; counted per type. A community node
+ * keeps its id and size, then its id; communities are counted together.
+ */
+const GRAPH_NODE_LADDER: Ladder<{ id: string; path?: string; type?: string | null; community: number; size?: number }> = {
+  no_context: (n) => (n.size !== undefined ? { id: n.id, community: n.community, size: n.size } : { id: n.id, path: n.path, type: n.type, community: n.community }),
+  locations: (n) => (n.size !== undefined ? { id: n.id } : { id: n.id, path: n.path }),
+  group: (n) => (n.size !== undefined ? 'communities' : (n.type ?? 'untyped')),
+}
+
+/** A graph edge is already its location; it is counted per kind (community edges together). */
+const GRAPH_EDGE_LADDER: Ladder<{ source: string; kind?: string }> = { group: (e) => e.kind ?? 'community' }
 
 /**
  * Note content returned by these tools is DATA, never instructions —
@@ -609,8 +633,19 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         return {
           head: { directory: dir },
           sections: [
-            keyset({ name: 'subdirectories', items: subdirectories.filter((d) => afterDir === null || d.name > afterDir), resume: (d) => d.name }),
-            keyset({ name: 'notes', items: directNotes.sort(byPath).filter((n) => afterNote === null || n.path > afterNote), resume: (n) => n.path }),
+            keyset({
+              name: 'subdirectories',
+              items: subdirectories.filter((d) => afterDir === null || d.name > afterDir),
+              resume: (d) => d.name,
+              // Down the ladder: the name, then the notes under each subdirectory.
+              ladder: { locations: (d) => d.name, group: (d) => d.name, weight: (d) => d.count },
+            }),
+            keyset({
+              name: 'notes',
+              items: directNotes.sort(byPath).filter((n) => afterNote === null || n.path > afterNote),
+              resume: (n) => n.path,
+              ladder: NOTE_LADDER,
+            }),
             // Null only when the folder's own index note could not be read: no index text.
             textSection({ name: 'indexContent', text: indexContent ?? '' }),
           ],
@@ -626,7 +661,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       }
       return {
         head: {},
-        sections: [keyset({ name: 'notes', items: all.filter((n) => after === null || n.path > after), resume: (n) => n.path })],
+        sections: [keyset({ name: 'notes', items: all.filter((n) => after === null || n.path > after), resume: (n) => n.path, ladder: NOTE_LADDER })],
         narrow: [...folders].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([folder]) => `path: ${JSON.stringify(folder)}`),
       }
     },
@@ -1508,7 +1543,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const rows = await listTrash(target, limit + 1, offset)
       return {
         head: {},
-        sections: [keyset({ name: 'notes', items: rows.slice(0, limit), limit, more: rows.length > limit, resume: (_n, i) => offset + i + 1 })],
+        sections: [
+          keyset({ name: 'notes', items: rows.slice(0, limit), limit, more: rows.length > limit, resume: (_n, i) => offset + i + 1, ladder: NOTE_LADDER }),
+        ],
       }
     },
   )
@@ -1582,7 +1619,17 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       if (!history) throw new McpToolError('note not found')
       return {
         head: {},
-        sections: [keyset({ name: 'revisions', items: history.revisions, limit, more: history.next !== null, resume: (_r, i) => history.ords[i]! })],
+        sections: [
+          keyset({
+            name: 'revisions',
+            items: history.revisions,
+            limit,
+            more: history.next !== null,
+            resume: (_r, i) => history.ords[i]!,
+            // Down the ladder: id, action and time, then the id `get_revision` takes; counted per action.
+            ladder: { no_context: ({ id, action, createdAt }) => ({ id, action, createdAt }), locations: (r) => r.id, group: (r) => r.action },
+          }),
+        ],
       }
     },
   )
@@ -1768,7 +1815,14 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const files = (await listRepositoryFiles(target)).sort((a, b) => compareCodeUnits(a.path, b.path))
       return {
         head: {},
-        sections: [keyset({ name: 'files', items: files.filter((f) => after === null || f.path > after), resume: (f) => f.path })],
+        sections: [
+          keyset({
+            name: 'files',
+            items: files.filter((f) => after === null || f.path > after),
+            resume: (f) => f.path,
+            ladder: { no_context: ({ path, language }) => ({ path, language }), locations: (f) => f.path, group: (f) => folderOf(f.path) },
+          }),
+        ],
       }
     },
   )
@@ -1798,7 +1852,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         },
         sections: [
           textSection({ name: 'content', text: file.content, lines: true }),
-          ranked({ name: 'symbols', items: symbols, id: (s) => `${s.startLine}:${s.kind}:${s.name}` }),
+          // The outline is already locations: below full it is counted per kind.
+          ranked({ name: 'symbols', items: symbols, id: (s) => `${s.startLine}:${s.kind}:${s.name}`, ladder: { group: (s) => s.kind } }),
         ],
       }
     },
@@ -2392,7 +2447,20 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const results = await findSymbols(repoIds, args.query, { kind: args.kind, limit: page.shownBefore(0) + limit + 1 })
       return {
         head: {},
-        sections: [ranked({ name: 'results', items: results, id: (r) => r.id, limit })],
+        sections: [
+          ranked({
+            name: 'results',
+            items: results,
+            id: (r) => r.id,
+            limit,
+            // Down the ladder: without the snippet, then `path#La-Lb`; counted per file.
+            ladder: {
+              no_context: (r) => ({ ...r, snippet: undefined }),
+              locations: (r) => location(r.path, r.startLine, r.endLine),
+              group: (r) => r.path,
+            },
+          }),
+        ],
         narrow: args.kind ? [] : ['kind: "function"'],
       }
     },
@@ -2442,8 +2510,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       return {
         head,
         sections: [
-          ranked({ name: 'nodes', items: [...nodes].sort((a, b) => compareCodeUnits(nodeKey(a), nodeKey(b))), id: (n) => n.id }),
-          ranked({ name: 'edges', items: [...edges].sort(byEdgeKey), id: edgeKey }),
+          ranked({ name: 'nodes', items: [...nodes].sort((a, b) => compareCodeUnits(nodeKey(a), nodeKey(b))), id: (n) => n.id, ladder: GRAPH_NODE_LADDER }),
+          ranked({ name: 'edges', items: [...edges].sort(byEdgeKey), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
         ],
         narrow: args.aggregate ? narrow : ['aggregate: "community"', ...narrow],
       }
@@ -2484,7 +2552,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const { nodes, edges, ...head } = findShortestPath({ ...graph, edges: [...graph.edges].sort(byEdgeKey) }, sourceNode.id, targetNode.id)
       return {
         head,
-        sections: [ranked({ name: 'nodes', items: nodes, id: (n) => n.id }), ranked({ name: 'edges', items: edges, id: edgeKey })],
+        sections: [
+          ranked({ name: 'nodes', items: nodes, id: (n) => n.id, ladder: GRAPH_NODE_LADDER }),
+          ranked({ name: 'edges', items: edges, id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
+        ],
       }
     },
   )

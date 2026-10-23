@@ -9,20 +9,24 @@ import { z } from 'zod'
  *
  * - The answer stays within the budget, counted as `approxTokens`, what the
  *   premise benchmark counts. Lists drop whole items from the end, text is
- *   cut at a line boundary; nothing is cut without being counted. The one
- *   exception is an answer that would show nothing at all: it shows the
- *   first item (or line) anyway, so paging always moves on.
+ *   cut at a line boundary; nothing is cut without being counted. A text
+ *   that would show nothing at all shows its first line anyway (split when
+ *   longer than the page), so paging always moves on.
+ * - The ladder (#421): when a list would show fewer than `MIN_ITEMS` (or
+ *   fewer than are left) even on a page of its own, every list on the page
+ *   steps down one level, `full` → `no_context` → `locations` → `counts` →
+ *   `total`, until it fits. A level no list on the page defines is skipped.
+ *   Text is never laddered: it pages by lines.
  * - Every answer ends with `truncated`: `false` when nothing was left out
  *   and there is no further page, else what each section showed, its total
  *   from where this page starts (`">n"` when the fetch of limit + 1 found
  *   more), what was dropped, the ladder level, a cursor and narrowing
- *   suggestions.
+ *   suggestions (below `full`, first the budget that shows `full`).
  * - A cursor continues with the same arguments only (an argument
  *   fingerprint), and refuses to continue content that changed under it (a
  *   guard: the text's hash, or the ids already shown of a ranking).
  *
- * The over-budget ladder (#421) and result handles (#423) build on this:
- * `level` is always `full` until the ladder lands.
+ * Result handles (#423) build on this.
  */
 
 /** Tokens as the benchmark counts them: UTF-16 code units / 4, rounded up. */
@@ -47,8 +51,42 @@ export function budgetArgs(kind: BudgetKind): z.ZodRawShape {
   }
 }
 
-/** One ladder level per answer (#421); only `full` until the ladder lands. */
-export type Level = 'full'
+/**
+ * The ladder's levels (#421), from whole items down. `full`, `no_context`
+ * and `locations` show items (whole, without context, a location only) and
+ * page with the cursor; `counts` shows each list as `{group: n}` and
+ * `total` as `n`, over the items from where the page starts, with no
+ * cursor (the same budget would show the same counts again).
+ */
+export type Level = 'full' | 'no_context' | 'locations' | 'counts' | 'total'
+
+/**
+ * How a list's items step down the ladder. `no_context`: the item without
+ * its context (snippets, frontmatter, timestamps); `locations`: its
+ * location only (a path, `path#La-Lb`, an id); a missing form falls back to
+ * the level above. `group`: the key `counts` counts an item under (its
+ * folder, file or kind), `weight` how much it counts (default 1); without
+ * `group`, `counts` shows the list's total.
+ */
+export interface Ladder<T> {
+  no_context?: (item: T) => unknown
+  locations?: (item: T) => unknown
+  group?: (item: T) => string
+  weight?: (item: T) => number
+}
+
+/** Fewer items than this (or than are left) on a page of their own: the list steps down a level. */
+export const MIN_ITEMS = 5
+
+/** A line range as a location string (ADR-004 §2.2): `path#La-Lb`, or `path#La` for one line. */
+export const location = (path: string, first: number, last: number): string =>
+  first === last ? `${path}#L${first}` : `${path}#L${first}-L${last}`
+
+/** The folder `counts` groups a path under: its directory, or `.` at the root. */
+export function folderOf(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash === -1 ? '.' : path.slice(0, slash)
+}
 
 export type Truncated =
   | false
@@ -75,6 +113,7 @@ export interface KeysetSection<T> {
   resume: (item: T, index: number) => string | number
   limit?: number
   more?: boolean
+  ladder?: Ladder<T>
 }
 
 /**
@@ -88,6 +127,7 @@ export interface RankedSection<T> {
   items: readonly T[]
   id: (item: T) => string
   limit?: number
+  ladder?: Ladder<T>
 }
 
 /**
@@ -268,10 +308,15 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
   })
 }
 
-/** What one page shows of each section (an item count, or a text length in characters), and whether it is only the unit shown to move on. */
+/**
+ * What one page shows of each section (an item count, or a text length in
+ * characters), whether it is only the unit shown to move on, and the
+ * section the page stopped in (-1: it showed everything).
+ */
 interface Fill {
   shown: number[]
   forced: boolean
+  stop: number
 }
 
 /**
@@ -280,15 +325,19 @@ interface Fill {
  * ends the page. A line longer than a whole page is split where the room
  * ends. When nothing at all fits, the first item or line is shown anyway
  * (`forced`; a line over the room left, at least 1,024 characters, is split
- * there), so a cursor always moves on.
+ * there). `aggregate` (the `counts` and `total` levels): lists are counted,
+ * not filled (their counts are in the empty answer), and text after a list
+ * shows nothing.
  */
-function fill(slots: Slot[], room: number, itemLength: (slot: number, i: number) => number): Fill {
+function fill(slots: Slot[], room: number, itemLength: (slot: number, i: number) => number, aggregate: boolean): Fill {
   const shown = slots.map(() => 0)
   let used = 0
   let any = false
+  let counted = false
   for (const [n, slot] of slots.entries()) {
     if (slot.start < 0) continue
     if (slot.section.kind === 'text') {
+      if (counted) continue
       const { text } = slot.section
       let at = slot.start
       while (at < text.length) {
@@ -299,7 +348,7 @@ function fill(slots: Slot[], room: number, itemLength: (slot: number, i: number)
           if (!any) {
             const left = Math.max(room - used, 1_024)
             shown[n] = (cost <= left ? end : splitLine(text, at, end, left)) - slot.start
-            return { shown, forced: true }
+            return { shown, forced: true, stop: n }
           }
           // A line no page holds whole starts here, split at the room left; any other line starts the next page.
           if (cost > room && room - used > 0) at = splitLine(text, at, end, room - used)
@@ -310,23 +359,27 @@ function fill(slots: Slot[], room: number, itemLength: (slot: number, i: number)
         any = true
       }
       shown[n] = at - slot.start
-      if (at < text.length) return { shown, forced: false }
+      if (at < text.length) return { shown, forced: false, stop: n }
+      continue
+    }
+    if (aggregate) {
+      counted = true
       continue
     }
     for (let i = 0; i < slot.avail.length; i++) {
       const cost = itemLength(n, i) + (i > 0 ? 1 : 0)
       if (used + cost > room) {
-        if (any) return { shown, forced: false }
+        if (any) return { shown, forced: false, stop: n }
         shown[n] = 1
-        return { shown, forced: true }
+        return { shown, forced: true, stop: n }
       }
       used += cost
       shown[n] = i + 1
       any = true
     }
-    if (slot.more) return { shown, forced: false }
+    if (slot.more) return { shown, forced: false, stop: n }
   }
-  return { shown, forced: false }
+  return { shown, forced: false, stop: -1 }
 }
 
 /** The end of a split line's first part: at most `room` JSON characters, never inside a surrogate pair, at least one code point. */
@@ -343,44 +396,114 @@ function splitLine(text: string, from: number, end: number, room: number): numbe
   return at
 }
 
+/** How a list shows its items at an item level: the ladder's form, the level above's, or the item itself. */
+function formOf(section: Section, level: Level): ((item: never) => unknown) | undefined {
+  if (section.kind === 'text') return undefined
+  if (level === 'no_context') return section.ladder?.no_context
+  if (level === 'locations') return section.ladder?.locations ?? section.ladder?.no_context
+  return undefined
+}
+
+/** A list at `counts` (`{group: n}`, keys in code-unit order) or `total` (`n`), over the items from the page start. */
+function aggregateOf(slot: Slot, level: 'counts' | 'total'): unknown {
+  const ladder = slot.section.kind === 'text' ? undefined : slot.section.ladder
+  if (level === 'total' || !ladder?.group) return slot.avail.length
+  const counts = new Map<string, number>()
+  for (const item of slot.avail as never[]) {
+    const key = ladder.group(item)
+    counts.set(key, (counts.get(key) ?? 0) + (ladder.weight?.(item) ?? 1))
+  }
+  return Object.fromEntries([...counts].sort(([a], [b]) => compareCodeUnits(a, b)))
+}
+
+interface Rendering {
+  tool: string
+  fingerprint: string
+  at: CursorAt | null
+  level: Level
+  narrow: string[]
+}
+
 /**
  * Renders a budgeted answer: `{...head, lines?, ...sections, truncated}`
  * within `budget` tokens. `at` is the cursor's position (null: first page).
+ *
+ * Levels are tried from `full` down. An item level is kept when the page
+ * fits and either did not stop in a list, or that list could show at least
+ * `min(MIN_ITEMS, items left)` items at this level on a page of its own: so
+ * whole items are dropped first, and a list that an earlier section crowded
+ * out starts the next page instead. `counts` is kept when it fits; `total`
+ * always is (the one answer that can exceed the budget: a head larger than
+ * the budget).
  */
 export function render(
   answer: Budgeted,
   ctx: { tool: string; fingerprint: string; budget: number; at: CursorAt | null },
 ): { text: string; truncated: Truncated } {
   const plan = slots(answer, ctx.at)
-  const lengths = plan.map((slot) => new Array<number | undefined>(slot.avail.length))
-  const itemLength = (n: number, i: number) => (lengths[n]![i] ??= JSON.stringify(plan[n]!.avail[i]).length)
   const maxChars = ctx.budget * 4
-  const empty = compose(answer, plan, plan.map(() => 0), ctx).text.length
-  // The truncated block grows with what is left out: refill with that much less room until the answer fits.
-  let reserve = 0
-  for (;;) {
-    const { shown, forced } = fill(plan, maxChars - empty - reserve, itemLength)
-    const out = compose(answer, plan, shown, ctx)
-    if (out.text.length <= maxChars || forced) return out
-    reserve += out.text.length - maxChars
+  const lists = plan.filter((slot) => slot.start >= 0 && slot.section.kind !== 'text')
+  const levels: Level[] = ['full']
+  if (lists.some((slot) => formOf(slot.section, 'no_context'))) levels.push('no_context')
+  if (lists.some((slot) => formOf(slot.section, 'locations') && formOf(slot.section, 'locations') !== formOf(slot.section, 'no_context'))) {
+    levels.push('locations')
   }
+  if (lists.some((slot) => slot.avail.length > 0)) levels.push('counts', 'total')
+  let narrow = answer.narrow ?? []
+  let out: { text: string; truncated: Truncated } | undefined
+  for (const level of levels) {
+    const forms = plan.map((slot) => formOf(slot.section, level))
+    const lengths = plan.map((slot) => new Array<number | undefined>(slot.avail.length))
+    const itemLength = (n: number, i: number) => {
+      const item = plan[n]!.avail[i] as never
+      return (lengths[n]![i] ??= JSON.stringify(forms[n] ? forms[n](item) : item).length)
+    }
+    const rendering: Rendering = { ...ctx, level, narrow }
+    const aggregate = level === 'counts' || level === 'total'
+    const empty = compose(answer, plan, plan.map(() => 0), rendering).text.length
+    // The truncated block grows with what is left out: refill with that much less room until the answer fits.
+    let reserve = 0
+    let page: Fill
+    for (;;) {
+      page = fill(plan, maxChars - empty - reserve, itemLength, aggregate)
+      out = compose(answer, plan, page.shown, rendering)
+      if (out.text.length <= maxChars || page.forced || page.shown.every((n) => n === 0)) break
+      reserve += out.text.length - maxChars
+    }
+    const fits = out.text.length <= maxChars
+    if (level === 'total' || (level === 'counts' && fits)) return out
+    if (aggregate) continue
+    const stop = plan[page.stop]
+    if (!stop || stop.section.kind === 'text') return out
+    if (fits) {
+      // The list the page stopped in, on a page of its own at this level.
+      const alone = plan.map((slot, n) => (n === page.stop ? slot : { ...slot, start: -1 }))
+      const solo = fill(alone, maxChars - empty - reserve, itemLength, false)
+      if (!solo.forced && solo.shown[page.stop]! >= Math.min(MIN_ITEMS, stop.avail.length)) return out
+    }
+    if (level === 'full') {
+      // Below full, `narrow` first names the budget that shows this page's list at full.
+      const shown = page.shown.map((n, i) => (i === page.stop ? Math.min(MIN_ITEMS, stop.avail.length) : i < page.stop ? n : 0))
+      const needed = Math.ceil(approxTokens(compose(answer, plan, shown, rendering).text) / 50) * 50 + 50
+      if (needed <= MAX_BUDGET) narrow = [`budget_tokens: ${needed}`, ...narrow]
+    }
+  }
+  return out!
 }
 
-function compose(
-  answer: Budgeted,
-  plan: Slot[],
-  shown: number[],
-  ctx: { tool: string; fingerprint: string; at: CursorAt | null },
-): { text: string; truncated: Truncated } {
+function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering): { text: string; truncated: Truncated } {
   const out: Record<string, unknown> = { ...answer.head }
   const counts = { shown: {} as Record<string, number>, total: {} as Record<string, number | `>${number}`>, dropped: {} as Record<string, number> }
+  const aggregate = ctx.level === 'counts' || ctx.level === 'total' ? ctx.level : null
   let cursor: string | null = null
   let anyDropped = false
+  // At counts and total: a list on this page was counted, so nothing after it is shown or continued.
+  let counted = false
   const values: Array<[string, unknown]> = []
   for (const [n, slot] of plan.entries()) {
     const { section } = slot
     if (section.kind === 'text') {
-      const chunk = slot.start < 0 ? '' : section.text.slice(slot.start, slot.start + shown[n]!)
+      const chunk = slot.start < 0 || counted ? '' : section.text.slice(slot.start, slot.start + shown[n]!)
       const rest = slot.start < 0 ? '' : section.text.slice(slot.start)
       const shownLines = countLines(chunk)
       const total = countLines(rest)
@@ -393,17 +516,26 @@ function compose(
         const first = newlines(section.text, slot.start) + 1
         out.lines = [first, first + shownLines - 1]
       }
-      if (cursor === null && chunk.length < rest.length) {
+      if (cursor === null && !counted && chunk.length < rest.length) {
         cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p: slot.start + chunk.length }, g: guardOf(section.text) })
       }
       anyDropped ||= chunk.length < rest.length
       continue
     }
-    const items = slot.avail.slice(0, shown[n])
-    values.push([section.name, items])
     const exact = slot.start < 0 ? 0 : slot.avail.length
-    counts.shown[section.name] = items.length
     counts.total[section.name] = slot.more ? `>${slot.limit === Infinity ? exact : slot.limit}` : exact
+    if (aggregate && slot.start >= 0) {
+      values.push([section.name, aggregateOf(slot, aggregate)])
+      counts.shown[section.name] = 0
+      counts.dropped[section.name] = exact
+      anyDropped ||= exact > 0 || slot.more
+      counted = true
+      continue
+    }
+    const items = slot.avail.slice(0, shown[n])
+    const form = formOf(section, ctx.level)
+    values.push([section.name, form ? items.map((item) => form(item as never)) : items])
+    counts.shown[section.name] = items.length
     counts.dropped[section.name] = exact - items.length
     anyDropped ||= exact > items.length
     if (cursor !== null || (exact === items.length && !slot.more) || slot.start < 0) continue
@@ -417,8 +549,9 @@ function compose(
     }
   }
   for (const [name, value] of values) out[name] = value
-  const truncated: Truncated =
-    cursor === null && !anyDropped ? false : { ...counts, level: 'full', cursor, narrow: answer.narrow ?? [] }
+  // Below full every item lost its context or more, so the answer is never whole.
+  const whole = cursor === null && !anyDropped && ctx.level === 'full'
+  const truncated: Truncated = whole ? false : { ...counts, level: ctx.level, cursor, narrow: ctx.narrow }
   out.truncated = truncated
   return { text: JSON.stringify(out), truncated }
 }
