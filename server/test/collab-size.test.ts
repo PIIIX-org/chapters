@@ -214,3 +214,173 @@ describe('collab size guard: the rest of the document (#780)', () => {
     expect(toJSON).not.toHaveBeenCalled()
   })
 })
+
+/** A server document whose frontmatter is already over the cap (stored before #780, or by an unbounded REST/MCP merge), and a client sharing it. */
+function overCapFrontmatter(): { server: Y.Doc; client: Y.Doc } {
+  const server = new Y.Doc()
+  server.getText('body').insert(0, 'the body of a note whose properties are too large')
+  server.getText('junk').insert(0, 'other root')
+  server.getMap('frontmatter').set('big', 'b'.repeat(LIMIT + 200))
+  server.getMap('frontmatter').set('title', 'Over')
+  const client = new Y.Doc()
+  Y.applyUpdate(client, Y.encodeStateAsUpdate(server))
+  return { server, client }
+}
+
+// #947: on such a note every update, plain typing included, measured the whole rest and built a scratch copy.
+describe('collab size guard: updates that add nothing to the rest (#947)', () => {
+  /** The rest is measured item by item; a frontmatter value's content is read through getContent. */
+  const contentPrototype: { getContent(): unknown[] } = Y.ContentAny.prototype
+
+  it('lets body typing through without measuring the rest, wherever it is typed', () => {
+    const { server, client } = overCapFrontmatter()
+    // The first check sets up the document's meter (one measure at load).
+    const first = updateFrom(client, (t) => t.insert(t.length, '.'))
+    expect(updateFits(server, first, LIMIT)).toBe(true)
+    Y.applyUpdate(server, first)
+
+    const getContent = vi.spyOn(contentPrototype, 'getContent')
+    const edits: Array<(t: Y.Text) => void> = [
+      (t) => t.insert(0, 'start '),
+      (t) => t.insert(10, 'middle '),
+      (t) => t.insert(t.length, ' end'),
+      (t) => {
+        t.insert(3, 'two ')
+        t.insert(t.length, ' places')
+      },
+      (t) => t.delete(0, 6),
+    ]
+    for (const edit of edits) {
+      const update = updateFrom(client, edit)
+      expect(updateFits(server, update, LIMIT)).toBe(true)
+      Y.applyUpdate(server, update)
+    }
+    expect(getContent).not.toHaveBeenCalled()
+    expect(server.getText('body').toString()).toBe(client.getText('body').toString())
+  })
+
+  it('still refuses an update that grows the rest: frontmatter, another root typed into, an embed in the body', () => {
+    // A fresh pair each time: a refused update is never applied, so the client's next one would wait on it (pending).
+    const refused = (edit: (doc: Y.Doc) => void) => {
+      const { server, client } = overCapFrontmatter()
+      return !updateFits(server, docUpdateFrom(client, edit), LIMIT)
+    }
+    expect(refused((doc) => doc.getMap('frontmatter').set('more', 'm'))).toBe(true)
+    // Typed after an existing character, or before one: the decoded item names no parent, only its origin.
+    expect(refused((doc) => doc.getText('junk').insert(5, 'x'))).toBe(true)
+    expect(refused((doc) => doc.getText('junk').insert(0, 'x'))).toBe(true)
+    expect(refused((doc) => doc.getText('body').insertEmbed(4, { e: 1 }))).toBe(true)
+    expect(refused((doc) => doc.getText('body').format(0, 3, { bold: true }))).toBe(true)
+    // Body typing in the same update as rest growth.
+    expect(
+      refused((doc) => {
+        doc.getText('body').insert(0, 'typed ')
+        doc.getMap('frontmatter').set('more', 'm')
+      }),
+    ).toBe(true)
+    // A text nested in the frontmatter (stored before, like the rest), then typed into after its first character.
+    const { server, client } = overCapFrontmatter()
+    const nested = new Y.Text('n')
+    Y.applyUpdate(server, docUpdateFrom(client, (doc) => doc.getMap('frontmatter').set('nested', nested)))
+    expect(updateFits(server, docUpdateFrom(client, () => nested.insert(1, 'more')), LIMIT)).toBe(false)
+  })
+
+  it('still refuses body typing that unblocks rest growth Yjs held pending', () => {
+    const { server, client } = overCapFrontmatter()
+    const typing = updateFrom(client, (t) => t.insert(0, 'typed '))
+    const growth = docUpdateFrom(client, (doc) => doc.getMap('frontmatter').set('more', 'm'.repeat(50)))
+    // The growth arrives first: Yjs holds it pending, nothing is in the document yet.
+    expect(updateFits(server, growth, LIMIT)).toBe(true)
+    Y.applyUpdate(server, growth)
+    expect(server.getMap('frontmatter').has('more')).toBe(false)
+    expect(updateFits(server, typing, LIMIT)).toBe(false)
+  })
+
+  it('still lets the rest shrink', () => {
+    const { server, client } = overCapFrontmatter()
+    expect(updateFits(server, docUpdateFrom(client, (doc) => doc.getMap('frontmatter').delete('title')), LIMIT)).toBe(true)
+  })
+})
+
+/** A Yjs document whose own edits carry client id `client`. */
+function docOf(client: number): Y.Doc {
+  const doc = new Y.Doc()
+  doc.clientID = client
+  return doc
+}
+
+/**
+ * One v1 update made of the client sections of `parts`, in order, with no
+ * deletions: what a forged client can send, duplicate sections included.
+ * Each part is one client's update and the bytes of its delete set (one
+ * empty: `[0]`), which are dropped.
+ */
+function concatSections(parts: Array<[Uint8Array, number[]]>): Uint8Array {
+  const sections = parts.map(([update, deletes]) => {
+    // varuint 1 (one client), the section, then the delete set.
+    expect(update[0]).toBe(1)
+    expect([...update.subarray(update.length - deletes.length)]).toEqual(deletes)
+    return update.subarray(1, update.length - deletes.length)
+  })
+  return Uint8Array.from([parts.length, ...sections.flatMap((section) => [...section]), 0])
+}
+
+// #949 review: addsRest believed an update's own account of where a neighbour lives, but Yjs skips the
+// structs the document already holds and keeps only the last section per client, so a forged update could
+// type past the cap into a part other than the body. Each is refused, as dev (no skip) refuses it.
+describe('collab size guard: forged updates cannot skip the rest check (#947)', () => {
+  const GROWTH = 5 * LIMIT
+
+  it('refuses typing attached to a known id the update re-sends as if it were in the body', () => {
+    const server = docOf(1)
+    server.getText('junk').insert(0, 'other root')
+    // The same id range (client 1, clocks 0..9), but in the body.
+    const forged = docOf(1)
+    forged.getText('body').insert(0, 'xxxxxxxxxx')
+    const attacker = docOf(99)
+    Y.applyUpdate(attacker, Y.encodeStateAsUpdate(forged))
+    attacker.getText('body').insert(10, 'y'.repeat(GROWTH))
+    const update = Y.encodeStateAsUpdate(attacker)
+
+    expect(updateFits(server, update, LIMIT)).toBe(false)
+    // What Yjs would do with it: the typing lands in the other root.
+    Y.applyUpdate(server, update)
+    expect(server.getText('junk').length).toBe(10 + GROWTH)
+  })
+
+  it('refuses typing attached to a known frontmatter value the update re-sends as body text', () => {
+    const server = docOf(1)
+    server.getMap('frontmatter').set('title', 'Small')
+    const forged = docOf(1)
+    forged.getText('body').insert(0, 'x')
+    const attacker = docOf(99)
+    Y.applyUpdate(attacker, Y.encodeStateAsUpdate(forged))
+    attacker.getText('body').insert(1, 'y'.repeat(GROWTH))
+    expect(updateFits(server, Y.encodeStateAsUpdate(attacker), LIMIT)).toBe(false)
+  })
+
+  it('refuses an update with two sections for one client, of which Yjs keeps the last', () => {
+    const server = docOf(2)
+    server.getText('body').insert(0, 'note')
+    const inBody = docOf(50)
+    inBody.getText('body').insert(0, 'x')
+    // The same id, deleted in another root: a deletion adds nothing, so on its own it is no rest.
+    const inJunk = docOf(50)
+    inJunk.getText('junk').insert(0, 'x')
+    inJunk.getText('junk').delete(0, 1)
+    const typist = docOf(99)
+    Y.applyUpdate(typist, Y.encodeStateAsUpdate(inBody))
+    const before = Y.encodeStateVector(typist)
+    typist.getText('body').insert(1, 'y'.repeat(GROWTH))
+    const update = concatSections([
+      [Y.encodeStateAsUpdate(inBody), [0]],
+      // Its delete set: one client (50), one range, clock 0, length 1.
+      [Y.encodeStateAsUpdate(inJunk), [1, 50, 1, 0, 1]],
+      [Y.encodeStateAsUpdate(typist, before), [0]],
+    ])
+
+    expect(updateFits(server, update, LIMIT)).toBe(false)
+    Y.applyUpdate(server, update)
+    expect(server.getText('junk').length).toBe(GROWTH)
+  })
+})
