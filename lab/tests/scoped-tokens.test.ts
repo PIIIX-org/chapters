@@ -202,7 +202,8 @@ function classify(c: Case, r: ToolResult): { actual: Outcome['actual']; message:
   if (r.ok) return { actual: 'allowed', message: r.text.slice(0, 160) }
   // A perspective outside the pin answers "not found", like a missing id (no existence oracle).
   // prepare() makes a fresh perspective right before such a case, so here it is a denial.
-  const hidden = c.tool === 'delete_graph_perspective' && c.expect === 'deny' && /^Error: not found$/.test(r.text)
+  const hidden =
+    c.tool === 'delete_graph_perspective' && c.expect === 'deny' && r.text === '{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}'
   return { actual: hidden || SCOPE_DENIAL.test(r.text) ? 'denied-scope' : 'error', message: r.text.slice(0, 240) }
 }
 

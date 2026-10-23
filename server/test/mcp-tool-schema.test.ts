@@ -110,16 +110,15 @@ describe('tools/list schemas (#430)', () => {
 
   it('still refuses an invalid uuid argument', async () => {
     resetRateLimits()
-    const result = await client
-      .callTool({
-        name: 'read_note',
-        arguments: { vaultId: 'not-a-uuid', path: 'docs/x' },
-      })
-      .catch((err: unknown) => err)
-    const text =
-      result instanceof Error ? result.message : JSON.stringify(result)
-    expect(text).toMatch(/-32602/)
-    expect(text).toMatch(/vaultId/)
-    expect(text).toMatch(/Invalid UUID/i)
+    const result = await client.callTool({
+      name: 'read_note',
+      arguments: { vaultId: 'not-a-uuid', path: 'docs/x' },
+    })
+    expect(result.isError).toBe(true)
+    const content = result.content as Array<{ type: string; text?: string }>
+    // The SDK's refusal, as the error envelope (#439).
+    const envelope = JSON.parse(content[0]?.text ?? '') as { error: { code: string; message: string; field?: string } }
+    expect(envelope.error).toMatchObject({ code: 'INVALID_ARGUMENT', field: 'vaultId' })
+    expect(envelope.error.message).toMatch(/Invalid UUID/i)
   })
 })

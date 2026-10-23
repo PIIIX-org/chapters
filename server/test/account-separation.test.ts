@@ -39,8 +39,8 @@ const FILE = { A: 'src/a-only.ts', B: 'src/b-only.ts' }
 const CONTAINER_KEYS = ['vaultId', 'repositoryId'] as const
 /** Arguments that address an object inside a container: probed from B's own container. */
 const OBJECT_KEYS = ['noteId', 'revisionId', 'shareId', 'notificationId', 'teamId', 'id'] as const
-/** A call the SDK refused for its arguments (#439: the error envelope's code), before any id was looked up. */
-const ARGS_REJECTED = /^\{"error":\{"code":"INVALID_ARGUMENT"/
+/** A call the SDK refused for its arguments (#439: the error envelope wraps it), before any id was looked up. */
+const ARGS_REJECTED = /^\{"error":\{"code":"INVALID_ARGUMENT","message":"Invalid arguments for tool /
 /** The not-found answer, byte for byte, for an id B cannot reach and for one that does not exist (#439, ADR-004 §2.7). */
 const NOT_FOUND = '{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}'
 

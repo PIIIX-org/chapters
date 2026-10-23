@@ -20,7 +20,7 @@ export interface ToolResult {
   httpStatus: number
   /** True when the tool answered (HTTP 200, JSON-RPC result, isError false). */
   ok: boolean
-  /** The tool ran and returned isError: true (Elara's `Error: ...` text). */
+  /** The tool ran and returned isError: true (Elara's error envelope `{"error":{"code",...}}`, #439). */
   isError: boolean
   /** Concatenated text content, or the HTTP/RPC/network error text. */
   text: string
