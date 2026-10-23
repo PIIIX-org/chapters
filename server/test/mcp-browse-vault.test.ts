@@ -153,12 +153,12 @@ describe('browse_vault fields', () => {
     ])
   })
 
-  it('`fields` picks from the allowlist, in the allowlist order', async () => {
+  it('`fields` picks from the allowlist, in the allowlist order; `path` is always shown', async () => {
     const json = await page({ path: 'docs', fields: ['tags', 'id', 'path', 'updatedAt'], budget_tokens: 25_000 })
     expect(json.notes[0]).toEqual({ id: expect.any(String), path: 'docs/intro', tags: ['guide', 'start'], updatedAt: expect.any(String) })
     expect(Object.keys(json.notes[0]!)).toEqual(['id', 'path', 'tags', 'updatedAt'])
     const typed = await page({ path: 'docs', fields: ['type', 'name'], budget_tokens: 25_000 })
-    expect(typed.notes[1]).toEqual({ type: 'docs', name: 'setup' })
+    expect(typed.notes[1]).toEqual({ path: 'docs/setup', type: 'docs', name: 'setup' })
   })
 
   it('fields outside the allowlist (frontmatter, body, embedding) are refused', async () => {

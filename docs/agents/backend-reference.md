@@ -171,7 +171,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 
 | Table | Purpose |
 |---|---|
-| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed) |
+| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus `(vault_id, path COLLATE "C")` on live rows (migration 0030) for `browse_vault`'s code-unit-order pages (#425) |
 | `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
@@ -1576,6 +1576,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     cursor's fingerprint, so a cursor from another folder is refused. The
     REST `GET /repositories/:id/files` keeps `listRepositoryFiles`: every
     file, unordered, no paging.
+  - `browse_vault` (#425) pages in SQL the same way, one code path for
+    the root (the empty folder) and a folder: `browseNotesPage`
+    (`notes/store.ts`) reads 500 + 1 live notes after the cursor's path
+    under the `COLLATE "C"` folder range, one level (`strpos(rest, '/') =
+    0`) unless `recursive: true` (then the subtree; the whole vault at the
+    root). One level also lists `browseSubfoldersPage` (section 0: the
+    first path segment below the folder, grouped, with its note count,
+    keyset by name) before the notes (section 1), and for a folder the
+    `indexContent` text (section 2: its own `index` note, else
+    `renderDirIndex` over `folderIndexRows`, the folder's rows only). A
+    page starting past a section does not query it. Items are `{path,
+    title}` (title = `frontmatter->>'title'`, else `name`) unless `fields`
+    picks from `BROWSE_FIELDS` (id, path, title, type, name, tags =
+    `frontmatter->'tags'`, updatedAt; `path` always); never body,
+    frontmatter or embedding. `path`, `recursive` and `fields` are in the
+    cursor's fingerprint. Index `notes_vault_path_c_live` (`vault_id`,
+    `path COLLATE "C"`, live rows; migration 0030). REST's `listNotes`
+    (tree, audit, export) is unchanged: every note, whole.
   - Size: `approxTokens` = `ceil(text.length / 4)`, the premise
     benchmark's estimate; the rendered text stays within the budget
     (items dropped whole from the end, a refill loop accounts for the
@@ -1600,8 +1618,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `full`, `narrow` starts with `budget_tokens: N`, the budget measured
     to show `min(5, left)` items of that list at `full` (omitted over
     25,000), and `truncated` is never `false`.
-  - Forms per tool: `browse_vault`/`list_trash` notes `{id, path, type,
-    name}` → path → per folder (`folderOf`, `.` at the root); directory
+  - Forms per tool: `list_trash` notes `{id, path, type, name}` → path →
+    per folder (`folderOf`, `.` at the root); `browse_vault` notes the
+    asked fields without `tags`/`updatedAt` → path → per folder; directory
     `subdirectories` → name → `{name: notes under it}`;
     `browse_repository` files `{path, language}` → path → per folder;
     `note_history` revisions `{id, action, createdAt}` → id → per action;

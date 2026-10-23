@@ -365,6 +365,10 @@ export const notes = pgTable(
     uniqueIndex('notes_vault_path_live')
       .on(t.vaultId, t.path)
       .where(sql`deleted_at is null`),
+    // browse_vault's folder pages in code-unit order (#425, migration 0030).
+    index('notes_vault_path_c_live')
+      .on(t.vaultId, sql`${t.path} collate "C"`)
+      .where(sql`deleted_at is null`),
     index('notes_vault_type_idx').on(t.vaultId, t.type),
   ],
 )
