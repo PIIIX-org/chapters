@@ -62,12 +62,12 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
   - `vaultId` (uuid, optional).
   - `path` (string, optional): a folder such as `domains/auth` (leading/trailing `/` ignored); without it, the vault root.
   - `recursive` (boolean, optional, default `false`): `false` lists one level of the folder (or root); `true` lists every note under it (the whole vault without `path`).
-  - `fields` (array, optional): note fields to return, from `id`, `path`, `title`, `type`, `name`, `tags`, `updatedAt`. Default `["path", "title"]`; `path` is always returned. Any other name (`frontmatter`, `body`, …) is refused.
+  - `fields` (array, optional): note fields to return, from `id`, `path`, `title`, `type`, `name`, `tags`, `updatedAt`. Default `["path", "title"]`; `path` is always returned, and the fields come in this order whatever order you list them in. Any other name (`frontmatter`, `body`, …) is refused.
 - **Returns**:
-  - One level (default): `{ directory, subdirectories: [{ name, count }], notes, indexContent, truncated }`. `directory` is `""` at the root. `subdirectories` are the folders directly in it, with the number of notes under each (any depth); `notes` are the notes directly in it. `indexContent` (folders only, not the root) is the folder's index text: its own `index` note, or the listing generated from its notes. Pages list the subdirectories (by name), then the notes (by path), then the index text.
+  - One level (default): `{ directory, subdirectories: [{ name, count }], notes, indexContent, truncated }`. `directory` is `""` at the root. `subdirectories` are the folders directly in it, with the number of notes under each (any depth), in the order of their paths with a trailing `/` (so `docs-old` comes before `docs`); `notes` are the notes directly in it. `indexContent` (folders only, not the root) is the folder's index text: its own `index` note, or the listing generated from its notes. Pages list the subdirectories (by name), then the notes (by path), then the index text.
   - `recursive: true`: `{ directory, notes, truncated }`, every note under `path` (the subtree only) or in the whole vault.
-  - A note is `{ path, title }` by default; `title` is the frontmatter `title`, else the note name; `tags` is the frontmatter `tags` value (or `null`).
-  - Paths and names are in code-unit order (`B` before `a`), read from the database at most 500 per page (`truncated.total` `">500"` when there are more). The cursor resumes after the last path shown, so a note added meanwhile does not shift the pages; it is bound to `path`, `recursive` and `fields`.
+  - A note is `{ path, title }` by default; `title` is the frontmatter `title`, else (missing or empty) the note name; `tags` is the frontmatter `tags` value (or `null`).
+  - Paths and names are in code-unit order (`B` before `a`), read from the database at most 500 per page (`truncated.total` `">500"` when there are more). The cursor resumes after the last path shown, so a note added meanwhile does not shift the pages; it is bound to `path`, `recursive` and the set of `fields`.
 
 ### `update_vault`
 - **Scope**: vault. Owner only.

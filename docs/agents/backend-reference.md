@@ -171,7 +171,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 
 | Table | Purpose |
 |---|---|
-| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus `(vault_id, path COLLATE "C")` on live rows (migration 0030) for `browse_vault`'s code-unit-order pages (#425) |
+| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages |
 | `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
@@ -1577,23 +1577,32 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     REST `GET /repositories/:id/files` keeps `listRepositoryFiles`: every
     file, unordered, no paging.
   - `browse_vault` (#425) pages in SQL the same way, one code path for
-    the root (the empty folder) and a folder: `browseNotesPage`
-    (`notes/store.ts`) reads 500 + 1 live notes after the cursor's path
-    under the `COLLATE "C"` folder range, one level (`strpos(rest, '/') =
-    0`) unless `recursive: true` (then the subtree; the whole vault at the
-    root). One level also lists `browseSubfoldersPage` (section 0: the
-    first path segment below the folder, grouped, with its note count,
-    keyset by name) before the notes (section 1), and for a folder the
-    `indexContent` text (section 2: its own `index` note, else
-    `renderDirIndex` over `folderIndexRows`, the folder's rows only). A
+    the root (the empty folder) and a folder (`notes/store.ts`), reading
+    only the page: `browseNotesPage` reads 500 + 1 live notes after the
+    cursor's path, either directly in the folder (`recursive` false: the
+    note's folder `coalesce(substring(path from '^(.*/)'), '')` equals
+    `folder/`, `''` at the root; index `notes_vault_dir_c_live`) or under
+    it (`recursive: true`: the `COLLATE "C"` range `folder/` ≤ path <
+    `folder0`, the whole vault at the root; index
+    `notes_vault_path_c_live`). One level also lists
+    `browseSubfoldersPage` (section 0) before the notes (section 1): a
+    skip scan of `notes_vault_dir_c_live`, one probe per subfolder from
+    `folder/name0`, so subfolders come in the order of `name/` (`docs-old`
+    before `docs`) and the cursor resumes after a name; each subfolder's
+    note count is one range count of `notes_vault_path_c_live`. A folder
+    (not the root) adds `indexContent` (section 2: its own `index` note,
+    else `renderDirIndex` over `folderIndexRows`, the folder's rows). A
     page starting past a section does not query it. Items are `{path,
-    title}` (title = `frontmatter->>'title'`, else `name`) unless `fields`
-    picks from `BROWSE_FIELDS` (id, path, title, type, name, tags =
-    `frontmatter->'tags'`, updatedAt; `path` always); never body,
-    frontmatter or embedding. `path`, `recursive` and `fields` are in the
-    cursor's fingerprint. Index `notes_vault_path_c_live` (`vault_id`,
-    `path COLLATE "C"`, live rows; migration 0030). REST's `listNotes`
-    (tree, audit, export) is unchanged: every note, whole.
+    title}` (title = `frontmatter->>'title'`, else `name` when missing or
+    empty) unless `fields` picks from `BROWSE_FIELDS` (id, path, title,
+    type, name, tags = `frontmatter->'tags'`, updatedAt; `path` always);
+    never body, frontmatter or embedding. The schema normalises `fields`
+    to allowlist order without repeats, so `path`, `recursive` and the
+    set of `fields` are in the cursor's fingerprint. Both indexes are
+    partial on live rows (migration 0030); the expression in
+    `browseNotesPage`/`browseSubfoldersPage` must match the index's.
+    REST's `listNotes` (tree, audit, export) is unchanged: every note,
+    whole.
   - Size: `approxTokens` = `ceil(text.length / 4)`, the premise
     benchmark's estimate (it undercounts a real tokenizer by roughly
     10-20 % on code and JSON and 1.3-4x on Persian or Chinese text; kept
