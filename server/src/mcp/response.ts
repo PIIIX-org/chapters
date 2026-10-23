@@ -255,6 +255,17 @@ export function compareCodeUnits(a: string, b: string): number {
 
 const guardOf = (value: string) => sha256(value).slice(0, 8)
 
+/**
+ * The guard of a ranked section's cursor at `p`: the ids before it, and the text of every text section before
+ * the ranked one, so a symbols-only `read_file` page is refused once the file changed under it.
+ */
+function rankedGuard(sections: readonly Section[], n: number, p: number): string {
+  const section = sections[n]!
+  if (section.kind !== 'ranked') throw new Error(`section ${section.name} is not ranked`)
+  const texts = sections.slice(0, n).flatMap((s) => (s.kind === 'text' ? [s.text] : []))
+  return guardOf([...texts, section.items.slice(0, p).map(section.id).join('\n')].join('\0'))
+}
+
 /** `\n`s in `text` before `end`. */
 function newlines(text: string, end = text.length): number {
   let n = 0
@@ -292,7 +303,7 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
     if (section.kind === 'ranked') {
       const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
       if (!Number.isSafeInteger(start) || start < 0) throw invalid('not a position of this answer')
-      if (here && (start > section.items.length || at.g !== guardOf(section.items.slice(0, start).map(section.id).join('\n')))) {
+      if (here && (start > section.items.length || at.g !== rankedGuard(answer.sections, i, start))) {
         throw new CursorError('CURSOR_STALE', `stale cursor: the ${section.name} changed since this cursor was issued; start again without \`cursor\``)
       }
       const limit = section.limit ?? Infinity
@@ -462,6 +473,8 @@ export function render(
     const aggregate = level === 'counts' || level === 'total'
     const empty = compose(answer, plan, plan.map(() => 0), rendering).text.length
     // The truncated block grows with what is left out: refill with that much less room until the answer fits.
+    // Nothing shown is as small as the answer gets: a head over the budget (a huge frontmatter over an empty
+    // body) is answered as it is.
     let reserve = 0
     let page: Fill
     for (;;) {
@@ -505,7 +518,8 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
     if (section.kind === 'text') {
       const chunk = slot.start < 0 || counted ? '' : section.text.slice(slot.start, slot.start + shown[n]!)
       const rest = slot.start < 0 ? '' : section.text.slice(slot.start)
-      const shownLines = countLines(chunk)
+      // A line counts as shown on the page where it ends, so a line split across pages counts once.
+      const shownLines = chunk.length < rest.length ? newlines(chunk) : countLines(chunk)
       const total = countLines(rest)
       values.push([section.name, chunk])
       counts.shown[section.name] = shownLines
@@ -513,8 +527,9 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       counts.dropped[section.name] = total - shownLines
       const partial = slot.start > 0 || chunk.length < rest.length
       if (section.lines && partial && chunk !== '') {
+        // The lines this page touches, a split one included.
         const first = newlines(section.text, slot.start) + 1
-        out.lines = [first, first + shownLines - 1]
+        out.lines = [first, first + countLines(chunk) - 1]
       }
       if (cursor === null && !counted && chunk.length < rest.length) {
         cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p: slot.start + chunk.length }, g: guardOf(section.text) })
@@ -545,7 +560,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p } })
     } else {
       const p = slot.start + items.length
-      cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p }, g: guardOf(section.items.slice(0, p).map(section.id).join('\n')) })
+      cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p }, g: rankedGuard(answer.sections, n, p) })
     }
   }
   for (const [name, value] of values) out[name] = value

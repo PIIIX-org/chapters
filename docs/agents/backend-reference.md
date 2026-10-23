@@ -1595,7 +1595,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `path COLLATE "C"`, live rows; migration 0030). REST's `listNotes`
     (tree, audit, export) is unchanged: every note, whole.
   - Size: `approxTokens` = `ceil(text.length / 4)`, the premise
-    benchmark's estimate; the rendered text stays within the budget
+    benchmark's estimate (it undercounts a real tokenizer by roughly
+    10-20 % on code and JSON and 1.3-4x on Persian or Chinese text; kept
+    because it is what the benchmark gate measures, ADR-004 §5); the rendered text stays within the budget
     (items dropped whole from the end, a refill loop accounts for the
     `truncated` block), except that a text which would show nothing
     shows its first line (split when longer than the page), so paging
