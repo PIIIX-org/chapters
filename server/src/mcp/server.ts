@@ -95,7 +95,7 @@ import { instructionsFor } from './instructions.js'
 import { manualText, toolManuals, type ToolManual } from './manuals.js'
 import { strictArgs } from './strict-input.js'
 import { applyBodyOps, type EditOp } from '../sync/edit-ops.js'
-import { advanceRead, lastRead, rememberRead } from './last-read.js'
+import { advanceRead, forgetRead, lastRead, rememberRead } from './last-read.js'
 import {
   DEFAULT_BUDGET,
   Page,
@@ -255,7 +255,7 @@ const DESTRUCTIVE_NAME = /^(delete|purge|revoke|remove)_/
  * `openWorldHint`: each costs about 20 characters per tool against the
  * reader budget (mcp-tool-budget.test.ts).
  */
-function toolAnnotations(name: string, def: { capability: ToolCapability; destructive?: true; idempotent?: true }): ToolAnnotations {
+export function toolAnnotations(name: string, def: { capability: ToolCapability; destructive?: true; idempotent?: true }): ToolAnnotations {
   if (def.capability === 'read') {
     if (def.destructive || def.idempotent) throw new Error(`MCP tool ${name} reads: destructive and idempotent describe writes`)
     return { readOnlyHint: true }
@@ -1283,9 +1283,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           ...(note.foldError ? { fold_error: note.foldError } : {}),
         },
         sections: [textSection({ name: 'body', text: note.body, lines: true })],
-        // Only a read that returned the whole body is a base to merge a whole-body edit from (#864).
+        // Only a read that returned the whole body is a base to merge a whole-body edit from (#864); a paged
+        // read drops an older base, so the next whole-body edit diffs from the live text.
         rendered: async (truncated) => {
           if (truncated === false && page.at === null) await rememberRead(auth.connection.id, note.row.id, note.row.seq)
+          else await forgetRead(auth.connection.id, note.row.id)
         },
       }
     },
@@ -2653,7 +2655,6 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     async (
       args: { query: string; kind?: 'function' | 'class' | 'interface' | 'type'; limit?: number },
       { repositoryId },
-      page,
     ) => {
       // null: an account-scoped connection with no repositoryId, or `everywhere`.
       if (repositoryId) await requireRepositoryAccess(repositoryId)
@@ -2661,8 +2662,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         ? [repositoryId]
         : (await listAccessibleRepositories(auth.user.id)).map((r) => r.id)
       const limit = args.limit ?? 20
-      // The ranking up to this page's end, plus one to know whether more follow.
-      const results = await findSymbols(repoIds, args.query, { kind: args.kind, limit: page.shownBefore(0) + limit + 1 })
+      // The first `limit` symbols of the ranking, plus one to know whether more match.
+      const results = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 })
       return {
         head: {},
         sections: [
