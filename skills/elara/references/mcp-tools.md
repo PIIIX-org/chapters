@@ -23,7 +23,7 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
   - `shown`, `total` and `dropped` count items per list (lines for text) from where this page starts, so `shown + dropped = total`. A `total` of `">n"` means the tool fetched `limit` + 1 and found more than `limit`.
   - `level` is how much of each item is shown, one level for the whole answer, tried in this order until it fits:
     - `full`: whole items.
-    - `no_context`: items without their context: `find_symbols` hits without `snippet`; notes as `{id, path, type, name}` (`list_trash`) or the asked fields without `tags` and `updatedAt` (`browse_vault`); files (`browse_repository`) as `{path, language}`; revisions (`note_history`) as `{id, action, createdAt}`; graph nodes as `{id, path, type, community}` (community nodes `{id, community, size}`).
+    - `no_context`: items without their context: `find_symbols` hits without `snippet`; notes as `{id, path, type, name}` (`list_trash`) or the asked fields without `tags` and `updatedAt` (`browse_vault`); files (`browse_repository`) as `{path, language}`; revisions (`note_history`) as `{id, action, createdAt}`; graph nodes as `{id, path, type, community}` (`distance` instead of `community` for `neighborsOf`; community nodes `{id, community, size}`).
     - `locations`: a location only: a note or file path; a `find_symbols` hit as `path#La-Lb`; a revision id; a subdirectory name; a graph node as `{id, path}` (`{id}` for a community), since edges name nodes by id. Edges and `read_file`'s outline are already locations.
     - `counts`: each list is an object of counts: notes and files per folder (`.` for the root), subdirectories by the notes under each, `find_symbols` hits per file, revisions per action, graph nodes per type and edges per kind, `read_file`'s outline per kind.
     - `total`: each list is the number of its items.
@@ -511,13 +511,18 @@ The write is committed when the call returns; a connection lost before the answe
   - `repositoryId` (uuid, optional).
   - `types` (array<string>, optional): keep nodes whose `type` (note type, or code language) is in the list.
   - `tags` (array<string>, optional): keep notes having any of these tags.
-  - `aggregate` (enum `"community"`, optional): collapse the graph to one node per Louvain community.
-  - `community` (integer, optional): return only the members of one community (the 2,500 most recently updated at most, with `memberTotal`).
-- There is no `neighborsOf`, `edgeTypes`, or `limit` parameter, and saved perspectives cannot be applied. Without `aggregate` or `community`, the whole graph of the resource is listed page by page, which is many pages for a real repository. Start with `aggregate: "community"`.
+  - `aggregate` (enum `"community"` | `"none"`, optional, **default `"community"`**, #426): `"community"` collapses the graph to one node per Louvain community; `"none"` lists every node.
+  - `community` (integer, optional): list only the members of one community (the 2,500 most recently updated at most, with `memberTotal`). Implies the node list.
+  - `neighborsOf` (string, optional): the local graph around one node, given by its `id` or exact `path` (note path without `.md`, or repository file path). A path that names several nodes (a note and a file with one path) is refused with their ids; pass one id.
+  - `depth` (integer 1-3, optional, default 1): with `neighborsOf`, how many edges from it.
+  - `edgeTypes` (array of `"extracted"` | `"structural"` | `"semantic"`, optional, default all): build only these edge kinds. Applied before assembly, so the communities and the `neighborsOf` walk use these edges only.
+  - `limit` (integer 1-1,000, optional): keep the first `limit` nodes and the edges among them: the largest communities, the nodes with the most edges (then by path), or for `neighborsOf` the nearest (by distance, then path). `truncated.total.nodes` is `">limit"` when more were there; no cursor goes past the limit (a larger `limit` does).
+  - Refused rather than ignored: `depth` without `neighborsOf`; `neighborsOf` with `community` or `aggregate: "community"`; `aggregate: "community"` with `community`. Saved perspectives cannot be applied.
 - **Returns**:
-  - Pages list the nodes (by path), then the edges (by source and target); the cursor continues the same listing and is stale once the graph changed.
-  - Default: `{ cappedGroups, memberTotal?, nodes, edges, truncated }`. Nodes are `{ id, resourceType: "note" | "code", resourceId, path, type, tags, timestamp, updatedAt, community }`. Edges are `{ source, target, kind: "extracted" | "structural" | "semantic" }`. There is no PageRank or degree field.
-  - `aggregate: "community"`: `{ aggregated: true, cappedGroups, nodes: [{ id: "community:<n>", community, size, noteCount, codeCount, lastActivity }], edges: [{ source, target, weight }], truncated }`.
+  - Pages list the nodes, then the edges (by source and target); the cursor continues the same listing within the `limit` and is stale once the graph changed.
+  - Default (`aggregate: "community"`): `{ aggregated: true, cappedGroups, nodes: [{ id: "community:<n>", community, size, noteCount, codeCount, lastActivity }], edges: [{ source, target, weight }], truncated }`, largest community first. Pass a community's number as `community`, or a node as `neighborsOf`, to drill down.
+  - `aggregate: "none"` or `community`: `{ cappedGroups, memberTotal?, nodes, edges, truncated }`, nodes with the most edges first. Nodes are `{ id, resourceType: "note" | "code", resourceId, path, type, tags, timestamp, updatedAt, community }`. Edges are `{ source, target, kind: "extracted" | "structural" | "semantic" }`. There is no PageRank or degree field.
+  - `neighborsOf`: `{ center: { id, path }, depth, cappedGroups, nodes, edges, truncated }`: every node within `depth` edges of the centre (the centre first, then by distance and path) and every edge among them. Nodes carry `distance` instead of `community` (communities need the whole graph, which this view does not assemble). `types` and `tags` keep the nodes around the centre; the centre is always listed.
 - Edge kinds:
   - `extracted`: `[[wikilinks]]` between notes, `[[repo:<repo>/<file>]]` links from a note to a code file, and resolved code imports.
   - `structural`: notes sharing a type or tag; code files sharing a language or a top-level directory. Groups over 50 members are skipped and listed in `cappedGroups`.

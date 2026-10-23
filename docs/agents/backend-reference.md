@@ -125,7 +125,7 @@ chapters/
 │   │   ├── vaults/                 # vaults, sharing, teams, MCP connection management
 │   │   ├── notes/                  # OKF file storage, validation, the note write path
 │   │   ├── notifications/          # single notify() write path + routes
-│   │   ├── graph/                  # buildGraph() — the one graph assembly function
+│   │   ├── graph/                  # buildGraph() — the one graph assembly function; neighbors.ts — the local graph around one node (#426)
 │   │   ├── search/                 # hybrid search, embeddings, embedding queue, semantic edges
 │   │   ├── sync/                   # Hocuspocus relay, permission-event bus, SSE viewers
 │   │   ├── mcp/                    # MCP server, tools, rate limiting, CRDT-aware writes
@@ -1170,6 +1170,29 @@ additionally requires the resource owner's `mergeable` flag and the
 viewing user's own per-resource opt-in — three independent gates, all
 re-resolved live.
 
+`filters.edgeTypes` (#426) names the edge kinds to build; the others are
+never queried or grouped, so Louvain runs over the kept edges only. The
+shared pieces (`noteNode`/`fileNode` and their columns, `repoLinkTarget`
+for `repo:`/`code:` links, `groupKeys`, `EdgeList`, `STRUCTURAL_GROUP_CAP`)
+are exported for `neighbors.ts`.
+
+`neighbors.ts` (#426) is the local graph without the whole graph:
+`resolveGraphNode(resources, ref)` takes a node id or exact path (none or
+several matches are refused, the latter with the ids; #447 widens it), and
+`neighborhood(resources, center, {depth, edgeTypes, types, tags, limit})`
+walks ring by ring in SQL over the frontier's ids only: links out and in
+(`note_links_target_idx`; `repo:` links to a frontier file by reading the
+vaults' `repo:`/`code:` link rows), imports both ways
+(`repository_file_imports_resolved_idx`), semantic rows on either side,
+and the frontier's structural groups counted in SQL (a group over 50 is
+skipped and reported in `cappedGroups`, as above). It reads node rows only
+for the nodes reached, applies `types`/`tags` as `passesFilters` does (the
+centre is always kept), stops at the ring that reaches `limit` + 1 nodes,
+and reads the edges among the kept outer-ring nodes in a last round, so
+the result is `buildGraph`'s graph restricted to the neighbourhood (the
+test compares the two). No Louvain: nodes carry `distance`. #472's
+`neighbors(depth)` (REST local graph, backlinks) is meant to reuse it.
+
 **Saved perspectives** (`graph_perspectives`; REST `GET/POST
 /graph/perspectives`, `DELETE /graph/perspectives/:id`, and the three MCP
 perspective tools) follow one rule set, shared through
@@ -1533,7 +1556,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - *Repositories* (13): `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `get_repository_graph_preference`, `set_repository_graph_preference`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
   - *Teams & Users* (7): `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
   - *Export & Notifications* (4): `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`.
-  - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols`, `graph` (nodes, extracted/structural/semantic edges, Louvain communities; filters `types`, `tags`, `aggregate`, `community`), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
+  - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols`, `graph` (the community view by default since #426, `aggregate: "none"` for every node, `community` for one community's members, `neighborsOf` + `depth` 1-3 for the local graph from `neighbors.ts`; `edgeTypes` applied before assembly; `limit` keeps the first nodes of the view's ranking (largest communities; most edges, then path; nearest, then path) and the edges among them, `truncated.total.nodes` `">limit"`; filters `types`, `tags`; conflicting arguments are refused), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
   - *Prompts*: 20, registered in `prompts.ts`.
   *(Security invariant: MCP connections cannot create new MCP connections or mint tokens).*
   Every handler is wrapped so thrown errors become a structured `isError`
@@ -1626,12 +1649,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `note_history` revisions `{id, action, createdAt}` → id → per action;
     `find_symbols` results without `snippet` → `path#La-Lb` (`location`,
     ADR-004 §2.2) → per file; `graph`/`find_graph_path` nodes `{id, path,
-    type, community}` (community nodes `{id, community, size}`) → `{id,
-    path}` (`{id}`) → per type (`communities`), edges → per kind;
+    type, community}` (`distance` for `neighborsOf`; community nodes `{id,
+    community, size}`) → `{id, path}` (`{id}`) → per type (`communities`),
+    edges → per kind;
     `read_file`'s outline → per kind.
   - `truncated` is always the last key: `false`, or `{shown, total,
     dropped, level, cursor, narrow}`, counted from the page start
-    (`total` `">n"` from a limit + 1 fetch).
+    (`total` `">n"` from a limit + 1 fetch). A `ranked` section the
+    handler cut at its `limit` argument (`capped`, `graph`'s nodes) reads
+    `">n"` too and is never whole, with no cursor past the cut.
   - Cursor: base64url JSON `{v: 1, t: tool, f, k: {s, p}, g?}`. `f` is 16
     hex of sha256 over the canonical arguments without `cursor`,
     `budget_tokens` and the id arguments, plus the resolved scope
@@ -1649,6 +1675,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
+  `graph`'s `neighborsOf` uses `neighborhood()` (`graph/neighbors.ts`),
+  which the REST local graph does not use yet (#472); REST graph routes
+  keep their own default (the full graph) and take no `edgeTypes`.
 - **Secret-scan guard** (`test/mcp-secret-scan.test.ts`, #577): CI calls
   every tool from `tools/list` and every prompt from `prompts/list`
   against a fixture world seeded with real secrets (git URLs with
