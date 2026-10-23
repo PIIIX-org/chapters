@@ -51,7 +51,7 @@ import {
   splitPath,
 } from './okf/paths.js'
 import { withKeyLock, withKeyLocks } from './key-lock.js'
-import { assertBodyFits, NoteTooLargeError } from './size-cap.js'
+import { assertBodyFits, assertFrontmatterFits, NoteTooLargeError } from './size-cap.js'
 import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from './growth-guard.js'
 import { orderKeys, presentedFrontmatter, sameContent } from './frontmatter-order.js'
 import {
@@ -403,6 +403,7 @@ function refusal(row: NoteRow, state: DocState): string | null {
   try {
     validateNote(row.type, row.name, { ...state.frontmatter, type: row.type } as Frontmatter, state.body)
     assertBodyFits(state.body, row.body)
+    assertFrontmatterFits(state.frontmatter, row.frontmatter as Record<string, unknown>)
   } catch (err) {
     return err instanceof Error ? err.message : String(err)
   }
@@ -579,6 +580,7 @@ function newNoteState(input: NewNote, asImported = false): { resolved: ResolvedN
   const body = input.body ?? ''
   validateNote(resolved.type, resolved.name, frontmatter, body)
   assertBodyFits(body)
+  assertFrontmatterFits(frontmatter)
   return { resolved, frontmatter, body }
 }
 
@@ -872,6 +874,7 @@ export async function writeNote(
         try {
           const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
           const next = await compute(current, plainRow(seen))
+          assertFrontmatterFits({ ...next.frontmatter, type: seen.type }, seen.frontmatter as Record<string, unknown>)
           if (options.outcome) options.outcome.before = current
           return { ...plainRow(seen), frontmatter: { ...next.frontmatter, type: seen.type }, body: next.body }
         } finally {
@@ -891,6 +894,8 @@ export async function writeNote(
           const { row, refused } = await catchUp(tx, locked, crdt, fold, { storeRow: !options.relay })
           const current = crdt ? docState(crdt.doc) : { frontmatter: row.frontmatter as Record<string, unknown>, body: row.body }
           const next = await compute(current, plainRow(row))
+          // Every write path's frontmatter, merged or whole, against the stored one (#933), before anything is written.
+          assertFrontmatterFits({ ...next.frontmatter, type: row.type }, row.frontmatter as Record<string, unknown>)
           if (options.outcome) options.outcome.before = current
           const { row: written } = await applyRowChange(
             tx,

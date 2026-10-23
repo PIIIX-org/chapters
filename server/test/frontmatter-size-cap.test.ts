@@ -156,7 +156,7 @@ describe('note frontmatter size cap (#933)', () => {
       method: 'PUT',
       url: `/api/vaults/${vaultId}/notes/docs/fm-legacy`,
       headers: { cookie },
-      body: { frontmatter: { type: 'docs', a: 'a'.repeat(CAP) } },
+      body: { removeKeys: ['b'] },
     })
     expect(shrink.statusCode).toBe(200)
     expect(await storedFrontmatter('docs/fm-legacy')).not.toHaveProperty('b')
