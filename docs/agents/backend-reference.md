@@ -1057,7 +1057,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
 - **Body size cap** (#491, `size-cap.ts`): one cap on every write path,
   `ELARA_NOTE_MAX_BYTES` (`config.noteMaxBytes`, default 1 MiB =
   1048576), measured as the **UTF-8 bytes of the body** (frontmatter is
-  not counted). `assertBodyFits` runs in `createNote` and `updateNote`
+  counted apart, next item). `assertBodyFits` runs in `createNote` and `updateNote`
   (REST, MCP, import, the relay's store) and in `writeThroughCollab`
   before the live document is edited, so a refused write never reaches
   editors. A write is refused (`NoteTooLargeError`, an
@@ -1088,6 +1088,26 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   body under 1 MiB with JSON escaping was refused), import took any size
   and the relay stored up to ws's 100 MiB default (60 MiB froze the
   server ~20 s in the lab).
+- **Frontmatter size cap** (#933, `assertFrontmatterFits` in
+  `size-cap.ts`): the same `ELARA_NOTE_MAX_BYTES` bounds the frontmatter
+  as stored, counted apart from the body and measured as the relay
+  measures the rest of a live document (#780): each key's UTF-8 bytes
+  plus its value as JSON (`frontmatterBytes`). It runs on the *resulting*
+  map, after a per-key merge (#438), so many small merges cannot grow it
+  past the cap: in `newNoteState` (create, upsert/append creating a note,
+  import) and in `writeNote` after `compute` (REST PUT, MCP
+  `edit_note`/`append_note`/`upsert_note`/`revert_note`, dry runs, the
+  relay's store), plus the fold's `refusal` and a rename's `type` rewrite
+  (`moveNote`). Inside `compute` it runs before any revision can be
+  written: in `updateNote` and `writeThroughCollab` before the write
+  quarantine (`refuseSuspiciousWrite`), and in `propose` before the
+  `proposal` revision, so neither stores an over-cap map. Same rule as the body: refused
+  (`NoteTooLargeError`, REST 413, MCP `isError`, import `skipped`: `note
+  frontmatter (keys and values as JSON) is N bytes (UTF-8); the limit is
+  L bytes (ELARA_NOTE_MAX_BYTES)`) when over the cap **and** larger than
+  the stored frontmatter, before anything is written; a note already over
+  it can shrink (`removeKeys`, `replace`) and take body-only edits.
+  `restore_note` puts a trashed note back unchanged, so it cannot grow.
 - **Write quarantine** (`growth-guard.ts`, #492): a stale reload once
   doubled a whole note (#488) and the store wrote it like any edit. A body
   write is checked against the stored body (UTF-8 bytes, linear time:
@@ -1510,7 +1530,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   same way, by the same cap and separately from the body: `restBytes` is
   the content of every live item that is not body text (frontmatter keys
   and values as JSON, strings in other root types, embeds, formatting,
-  binaries, nested types), so frontmatter can no longer grow without
+  binaries, nested types, and entries of the `body` type's own map: body
+  text is only a string item in its list, `parentSub` null, #952), so
+  frontmatter can no longer grow without
   limit into the row and the file, and nothing else can grow in the CRDT
   log. Its running bound counts 6× each update's length (the worst JSON
   expansion of Yjs's encoding: `false` is 1 byte encoded and 5 as JSON, a
@@ -1526,7 +1548,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   an item it cannot place counts as rest; the full check then runs.
   The editor measures both parts alike (`client/src/lib/noteSize.ts`),
   `tooLarge.otherBytes` says how large the properties are, and it reconnects
-  only once both fit. REST and MCP frontmatter is bounded only by the request size.
+  only once both fit. REST, MCP and import bound frontmatter with the same
+  measure (`jsonBytes` from `size-cap.ts`; Frontmatter size cap, #933).
   Before a `note-too-large` close the relay sends the refused connection a
   stateless `{"type": "elara-size", limitBytes, bodyBytes, otherBytes}`:
   the exact sizes of the document it holds (`documentSizes`, which also
