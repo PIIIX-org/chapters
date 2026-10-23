@@ -1612,12 +1612,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `tools/list` wrapper also drops what restates a default: the input
   schemas' `$schema` (draft-07; only keywords draft-07 and 2020-12 read
   alike are used) and `execution: {taskSupport: "forbidden"}`.
-  `test/mcp-tool-budget.test.ts` fails a reader account token over 2,000
-  tokens (characters / 4 of `tools/list` plus `initialize`
-  instructions; measured 7,649 characters) and a writer one over 4,000
-  (14,222), reports admin (37,493; its ceiling is in
-  `mcp-tool-schema.test.ts`), checks the bytes are the same on every call
-  and for two pins of one profile, and counts each description's
+  `test/mcp-tool-budget.test.ts` measures, per profile, the ADR-004 §2.6
+  sum: characters / 4 of `tools/list`, `prompts/list` and the
+  `initialize` instructions. It fails a reader account token over 2,000
+  tokens (no prompts on reader, #428; measured 7,676 characters) and a
+  writer one whose `tools/list` plus instructions are over 4,000 (14,286;
+  its `prompts/list`, 10,042, is reported), reports admin (`tools/list`
+  37,512; its ceiling is in `mcp-tool-schema.test.ts`), checks the
+  `tools/list` bytes are the same on every call and for two vault pins of
+  a reader token (a writer or admin list follows the live pin permission),
+  and counts each description's
   sentences. `test/mcp-manuals.test.ts` covers the manual scoping (profile,
   pin, allow-list, live permission) and that every tool has exactly one
   entry.
