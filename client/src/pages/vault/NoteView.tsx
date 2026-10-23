@@ -902,7 +902,7 @@ function CollabNote({ vaultId, noteId, path, accessRevoked, initialBody, access 
 
   // The note bar's pill, mirrored into the shell's top bar — same mapping,
   // so the two can never disagree (spec: shell shows the page's live status).
-  useShellStatus(collabShellStatus(collab.status, collab.synced))
+  useShellStatus(collabShellStatus(collab.status, collab.synced, collab.quarantined !== null))
 
   const rawType = collab.ydoc.getMap('frontmatter').get('type')
   const noteType =
@@ -938,7 +938,7 @@ function CollabNote({ vaultId, noteId, path, accessRevoked, initialBody, access 
               {noteType}
             </Pill>
           )}
-          <CollabStatusLine status={collab.status} synced={collab.synced} syncedAt={mark.at} />
+          <CollabStatusLine status={collab.status} synced={collab.synced} syncedAt={mark.at} heldBack={collab.quarantined !== null} />
           {/* Presence lives in this bar and nowhere else — never a global
               "who's online", which leaks who is working on what. */}
           <CollaboratorAvatars peers={collab.peers} />
@@ -958,6 +958,7 @@ function CollabNote({ vaultId, noteId, path, accessRevoked, initialBody, access 
           reloadRequired={collab.status === 'reload-required'}
           deleted={collab.status === 'deleted'}
           tooLarge={collab.tooLarge}
+          quarantined={collab.quarantined}
           unmerged={collab.unmerged}
           onDiscard={collab.discardUnmerged}
         />

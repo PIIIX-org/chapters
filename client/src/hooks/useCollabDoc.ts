@@ -7,6 +7,7 @@ import { ApiError } from '../lib/api.js'
 import { claimLeftoverCopies, keepCollabCopy } from '../lib/collabStash.js'
 import type { CollabCopy } from '../lib/collabStash.js'
 import { collabStashName, hasCollabStash } from '../lib/collabStashNames.js'
+import { restBytes, utf8Length } from '../lib/noteSize.js'
 import { AI_INK, inkFor } from '../lib/ink.js'
 import type { Ink } from '../lib/ink.js'
 
@@ -114,8 +115,82 @@ export interface CollabSession {
   /** Deletes the copy behind `unmerged` from this browser. */
   discardUnmerged: () => void
   /** Set while `status` is `too-large`: the server's cap and the note's size
-   *  here, both in UTF-8 bytes as the server measures them. */
-  tooLarge: { limitBytes: number; bodyBytes: number } | null
+   *  here, both in bytes as the server measures them: the body's text, and
+   *  everything else in the document (the properties, #780). Each part must
+   *  end up within its room: the cap, or what the relay already holds of it
+   *  when that is more (a note stored over the cap may shrink, #948). */
+  tooLarge: { limitBytes: number; bodyBytes: number; otherBytes: number; bodyRoomBytes: number; otherRoomBytes: number } | null
+  /** Set while the relay holds this note's stores back (#784, server
+   *  `elara-store` notice): the note keeps its saved text, and what is typed
+   *  here is kept by the server but not saved to the note until the repeated
+   *  text is removed. */
+  quarantined: CollabQuarantine | null
+}
+
+/**
+ * A quarantine (#492) of this note's stores, as the relay reports it
+ * (server/src/sync/collab-server.ts `QuarantineNotice`): the text repeats a
+ * large block of the saved note, which is how a stale tab once doubled whole
+ * notes (#488).
+ */
+export interface CollabQuarantine {
+  /** The revision that holds the text the note did not take ("Held back" in History), if one is known. */
+  revisionId: string | null
+  /** UTF-8 bytes of the saved note's text that appear again. */
+  repeatedBytes: number
+  /** The saved note's body, in UTF-8 bytes. */
+  noteBytes: number
+  /** The start of the first repeated passage, so the person can find it. */
+  excerpt: string
+}
+
+/** A stateless message from the relay, parsed; undefined when it is not JSON. Its shape is checked by each reader. */
+function parseStateless(payload: string): unknown {
+  try {
+    return JSON.parse(payload)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The relay's `elara-store` notice in a stateless message: the quarantine
+ * that stands (null for none), or undefined for any other message. Checked
+ * field by field: nothing from the socket is trusted to have a shape.
+ */
+function readStoreNotice(message: unknown): { quarantine: CollabQuarantine | null } | undefined {
+  if (typeof message !== 'object' || message === null || !('type' in message) || message.type !== 'elara-store' || !('quarantine' in message)) {
+    return undefined
+  }
+  const q = message.quarantine
+  if (q === null) return { quarantine: null }
+  if (typeof q !== 'object') return undefined
+  const revisionId = 'revisionId' in q && typeof q.revisionId === 'string' ? q.revisionId : null
+  const repeatedBytes = 'repeatedBytes' in q && typeof q.repeatedBytes === 'number' ? q.repeatedBytes : 0
+  const noteBytes = 'noteBytes' in q && typeof q.noteBytes === 'number' ? q.noteBytes : 0
+  const excerpt = 'excerpt' in q && typeof q.excerpt === 'string' ? q.excerpt : ''
+  return { quarantine: { revisionId, repeatedBytes, noteBytes, excerpt } }
+}
+
+/** The sizes of the document the relay holds (UTF-8 bytes of the body, and of the rest as it measures it). */
+interface RelaySizes {
+  bodyBytes: number
+  otherBytes: number
+}
+
+/**
+ * The relay's `elara-size` notice, sent just before it refuses a change as
+ * too large (server/src/sync/collab-server.ts): the sizes of the document it
+ * holds. It takes a part that ends up within the cap or no larger than
+ * these, so the editor resumes by the same rule (#948). Undefined for any
+ * other message, or one without both sizes.
+ */
+function readSizeNotice(message: unknown): RelaySizes | undefined {
+  if (typeof message !== 'object' || message === null || !('type' in message) || message.type !== 'elara-size') return undefined
+  if (!('bodyBytes' in message) || typeof message.bodyBytes !== 'number' || !('otherBytes' in message) || typeof message.otherBytes !== 'number') {
+    return undefined
+  }
+  return { bodyBytes: message.bodyBytes, otherBytes: message.otherBytes }
 }
 
 export interface UseCollabDocOptions {
@@ -208,25 +283,6 @@ function sharesHistory(a: Y.Doc, b: Y.Doc): boolean {
 }
 
 /**
- * UTF-8 bytes of `text`, which is how the relay measures a note body against
- * its cap (server/src/notes/size-cap.ts), counted without encoding a copy.
- */
-function utf8Length(text: string): number {
-  let bytes = 0
-  for (let i = 0; i < text.length; i++) {
-    const unit = text.charCodeAt(i)
-    if (unit < 0x80) bytes += 1
-    else if (unit < 0x800) bytes += 2
-    else if (unit >= 0xd800 && unit < 0xdc00 && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
-      // A surrogate pair: one 4-byte character.
-      bytes += 4
-      i++
-    } else bytes += 3
-  }
-  return bytes
-}
-
-/**
  * Joins the note's Yjs document on the Hocuspocus relay
  * (`server/src/sync/collab-server.ts`). Editors only.
  *
@@ -253,6 +309,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
   const [unmerged, setUnmerged] = useState<string | null>(null)
   const [peers, setPeers] = useState<CollabPeer[]>([])
   const [tooLarge, setTooLarge] = useState<CollabSession['tooLarge']>(null)
+  const [quarantined, setQuarantined] = useState<CollabQuarantine | null>(null)
   // The document is keyed on the note, not on the mount: the connect effect
   // re-runs on a docName change, and reconnecting the OLD doc under the NEW
   // name uploads note A's body into note B. React's adjust-state-during-render
@@ -276,6 +333,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     setUnmerged(null)
     setPeers([])
     setTooLarge(null)
+    setQuarantined(null)
   } else if (doc.enabled !== enabled) {
     setDoc({ ...doc, enabled })
   }
@@ -293,7 +351,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
   const unmergedRef = useRef<CollabCopy[] | null>(null)
   // A document rebuilt after a refusal (see `rebuild` below) and this
   // browser's copy of it, for the connect effect it re-runs to adopt.
-  const handoffRef = useRef<{ ydoc: Y.Doc; copy: CollabCopy | null } | null>(null)
+  const handoffRef = useRef<{ ydoc: Y.Doc; copy: CollabCopy | null; sizes: RelaySizes | null } | null>(null)
 
   useEffect(() => {
     if (!enabled) return
@@ -314,7 +372,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     let dirty = false
     // A connection attempt failed since the socket last opened.
     let attemptFailed = false
-    // The relay refused a change as too large; no reconnect until the body fits.
+    // The relay refused a change as too large; no reconnect until the note fits (measureTooLarge).
     let refused = false
     // The server's store is busy (`store-busy`): reconnecting after RETRY_MS.
     let paused = false
@@ -324,6 +382,8 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     // provider only exists once the first ticket is in).
     let maxNoteBytes = 0
     let maxFrameBytes = 0
+    // What the relay said it holds when it last refused a change as too large (#948), or null: then each part must fit the cap.
+    let relaySizes: RelaySizes | null = null
     // This effect's document is being replaced by a rebuilt one (`rebuild`).
     let handingOff = false
 
@@ -346,6 +406,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     if (handed?.ydoc === ydoc) {
       handoffRef.current = null
       live = handed.copy
+      relaySizes = handed.sizes
       dirty = true
       everConnected = true
     }
@@ -435,11 +496,19 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
       }
     }
 
-    /** Shows the note's size against the cap; true when it fits again. */
+    /**
+     * Shows the note's size against the cap, the body's and the rest's
+     * (#780); true when both fit again. A part fits as the relay decides it
+     * (server/src/sync/collab-size.ts): within the cap, or no larger than
+     * what the relay holds of it (#948), which it said when it refused.
+     */
     const measureTooLarge = () => {
       const bodyBytes = utf8Length(ydoc.getText('body').toString())
-      setTooLarge({ limitBytes: maxNoteBytes, bodyBytes })
-      return bodyBytes <= maxNoteBytes
+      const otherBytes = restBytes(ydoc)
+      const bodyRoomBytes = Math.max(maxNoteBytes, relaySizes?.bodyBytes ?? 0)
+      const otherRoomBytes = Math.max(maxNoteBytes, relaySizes?.otherBytes ?? 0)
+      setTooLarge({ limitBytes: maxNoteBytes, bodyBytes, otherBytes, bodyRoomBytes, otherRoomBytes })
+      return bodyBytes <= bodyRoomBytes && otherBytes <= otherRoomBytes
     }
 
     /**
@@ -478,7 +547,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
         void (copy ? copy.flushed().then((ok) => (ok ? old.release() : old.close())) : old.close())
       }
       handingOff = true
-      handoffRef.current = { ydoc: rebuilt, copy }
+      handoffRef.current = { ydoc: rebuilt, copy, sizes: relaySizes }
       setDoc((current) => (current.ydoc === ydoc ? { ...current, ydoc: rebuilt } : current))
     }
 
@@ -751,6 +820,18 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
           handshake = true
           settle()
         },
+        // The relay says where this note's stores stand on every connect and
+        // whenever that changes (#784): a quarantine that holds them back, or
+        // none; and, just before it refuses a change as too large, the sizes
+        // of the document it holds (#948).
+        onStateless: ({ payload }) => {
+          if (cancelled) return
+          const message = parseStateless(payload)
+          const notice = readStoreNotice(message)
+          if (notice) setQuarantined(notice.quarantine)
+          const sizes = readSizeNotice(message)
+          if (sizes) relaySizes = sizes
+        },
         onUnsyncedChanges: () => settle(),
         onAwarenessChange: ({ states }) => {
           const self = provider?.awareness?.clientID
@@ -853,5 +934,6 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     unmerged,
     discardUnmerged,
     tooLarge,
+    quarantined,
   }
 }

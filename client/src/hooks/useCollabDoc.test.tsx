@@ -4,6 +4,7 @@ import * as Y from 'yjs'
 import { getCollabTicket } from '../api/collab.js'
 import { ApiError } from '../lib/api.js'
 import { AI_INK, inkFor } from '../lib/ink.js'
+import { restBytes } from '../lib/noteSize.js'
 import { useCollabDoc } from './useCollabDoc.js'
 
 /** The subset of the provider's configuration this hook actually passes. */
@@ -17,6 +18,7 @@ interface ProviderOptions {
   onClose: (data: { event: { code: number; reason: string } }) => void
   onSynced: (data: { state: boolean }) => void
   onUnsyncedChanges: (data: { number: number }) => void
+  onStateless: (data: { payload: string }) => void
   onAwarenessChange: (data: {
     states: { clientId: number; user?: { id: string; name: string }; agent?: { name?: string; activity?: string } }[]
   }) => void
@@ -415,7 +417,7 @@ describe('useCollabDoc', () => {
 
       expect(view.result.current.status).toBe('too-large')
       expect(provider.disconnected).toBe(true)
-      expect(view.result.current.tooLarge).toEqual({ limitBytes: LIMIT, bodyBytes: LIMIT + 10 })
+      expect(view.result.current.tooLarge).toEqual({ limitBytes: LIMIT, bodyBytes: LIMIT + 10, otherBytes: 0, bodyRoomBytes: LIMIT, otherRoomBytes: LIMIT })
       // Writable, so the person can cut it down; nothing is dropped.
       expect(view.result.current.writable).toBe(true)
       expect(view.result.current.unsynced).toBe(true)
@@ -431,7 +433,7 @@ describe('useCollabDoc', () => {
       act(() => provider.options.onClose({ event: { code: 1000, reason: 'note-too-large' } }))
 
       act(() => view.result.current.ydoc.getText('body').delete(0, 2))
-      expect(view.result.current.tooLarge).toEqual({ limitBytes: LIMIT, bodyBytes: LIMIT + 6 })
+      expect(view.result.current.tooLarge).toEqual({ limitBytes: LIMIT, bodyBytes: LIMIT + 6, otherBytes: 0, bodyRoomBytes: LIMIT, otherRoomBytes: LIMIT })
       expect(provider.reconnects).toBe(0)
 
       const ydoc = view.result.current.ydoc
@@ -481,6 +483,88 @@ describe('useCollabDoc', () => {
       expect(view.result.current.status).toBe('reconnecting')
     })
 
+    // #780: the relay bounds the properties and the rest of the document too; the editor must
+    // not reconnect (and be refused again) on every keystroke while only the body fits.
+    it('a refusal for the properties waits until they fit, not just the body, and says which part is too large', async () => {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      const ydoc = view.result.current.ydoc
+      act(() => ydoc.getMap('frontmatter').set('huge', 'p'.repeat(LIMIT + 100)))
+      act(() => provider.options.onClose({ event: { code: 1000, reason: 'note-too-large' } }))
+
+      expect(view.result.current.status).toBe('too-large')
+      expect(view.result.current.tooLarge?.bodyBytes).toBe(0)
+      expect(view.result.current.tooLarge?.otherBytes).toBeGreaterThan(LIMIT)
+
+      // Typing in the body changes nothing: the properties are still too large.
+      act(() => ydoc.getText('body').insert(0, 'typed'))
+      expect(provider.reconnects).toBe(0)
+      expect(stub.providers).toHaveLength(1)
+      expect(view.result.current.status).toBe('too-large')
+
+      act(() => ydoc.getMap('frontmatter').delete('huge'))
+      expect(view.result.current.tooLarge).toBeNull()
+      expect(view.result.current.status).toBe('reconnecting')
+      await waitFor(() => expect(stub.providers).toHaveLength(2))
+    })
+
+    // #948: the relay takes a part that fits the cap or is no larger than what it holds; the editor must resume by the same rule.
+    describe('resuming under the relay\'s rule (#948)', () => {
+      /** What the relay sends before it refuses: the sizes of the document it holds. */
+      const relaySizes = (bodyBytes: number, otherBytes: number) =>
+        JSON.stringify({ type: 'elara-size', limitBytes: LIMIT, bodyBytes, otherBytes })
+
+      /** Connected to a note whose properties are already over the cap (the relay holds them), then a body paste refused. */
+      async function overCapPropertiesThenPaste() {
+        const { view, provider } = await connected()
+        act(() => provider.options.onStatus({ status: 'connected' }))
+        const ydoc = view.result.current.ydoc
+        act(() => ydoc.getMap('frontmatter').set('stored', 'p'.repeat(LIMIT + 400)))
+        const stored = restBytes(ydoc)
+        act(() => ydoc.getText('body').insert(0, 'x'.repeat(LIMIT + 20)))
+        act(() => provider.options.onStateless({ payload: relaySizes(0, stored) }))
+        act(() => provider.options.onClose({ event: { code: 4413, reason: 'note-too-large' } }))
+        expect(view.result.current.status).toBe('too-large')
+        return { view, provider, ydoc, stored }
+      }
+
+      it('reconnects once the body is cut under the cap, though the properties the relay holds are over it', async () => {
+        const { view, ydoc, stored } = await overCapPropertiesThenPaste()
+        expect(view.result.current.tooLarge).toMatchObject({ bodyBytes: LIMIT + 20, otherBytes: stored, bodyRoomBytes: LIMIT, otherRoomBytes: stored })
+
+        act(() => ydoc.getText('body').delete(0, 30))
+        expect(view.result.current.tooLarge).toBeNull()
+        expect(view.result.current.status).toBe('reconnecting')
+        await waitFor(() => expect(stub.providers).toHaveLength(2))
+      })
+
+      it('still waits while the properties are larger than the relay holds, and reconnects once they are not', async () => {
+        const { view, ydoc } = await overCapPropertiesThenPaste()
+        act(() => ydoc.getMap('frontmatter').set('added', 'more'))
+        act(() => ydoc.getText('body').delete(0, 30))
+        expect(view.result.current.status).toBe('too-large')
+        expect(stub.providers).toHaveLength(1)
+
+        act(() => ydoc.getMap('frontmatter').delete('added'))
+        expect(view.result.current.status).toBe('reconnecting')
+        await waitFor(() => expect(stub.providers).toHaveLength(2))
+      })
+
+      it('lets a body the relay holds over the cap shrink without going under the cap', async () => {
+        const { view, provider } = await connected()
+        act(() => provider.options.onStatus({ status: 'connected' }))
+        const ydoc = view.result.current.ydoc
+        act(() => ydoc.getText('body').insert(0, 'y'.repeat(LIMIT + 500)))
+        act(() => provider.options.onStateless({ payload: relaySizes(LIMIT + 400, 0) }))
+        act(() => provider.options.onClose({ event: { code: 4413, reason: 'note-too-large' } }))
+        expect(view.result.current.status).toBe('too-large')
+
+        act(() => ydoc.getText('body').delete(0, 150))
+        expect(view.result.current.status).toBe('reconnecting')
+        await waitFor(() => expect(stub.providers).toHaveLength(2))
+      })
+    })
+
     it('a frame the relay closed for its size (1009) is the same refusal', async () => {
       const { view, provider } = await overTheCap(5)
 
@@ -497,6 +581,43 @@ describe('useCollabDoc', () => {
 
       expect(view.result.current.status).toBe('connected')
       expect(view.result.current.tooLarge).toBeNull()
+    })
+  })
+
+  // #784: a quarantined store was only logged on the server; the editor kept saying "Synced".
+  describe('a store the relay quarantines (#784)', () => {
+    const notice = (quarantine: unknown) => JSON.stringify({ type: 'elara-store', quarantine })
+    const held = { revisionId: 'rev-1', rule: 'repeated-block', repeatedBytes: 3000, noteBytes: 3100, excerpt: 'paragraph 0: the' }
+
+    it('reports the quarantine the relay announces, and clears it when the relay says nothing is held back', async () => {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStatus({ status: 'connected' }))
+      act(() => provider.options.onStateless({ payload: notice(null) }))
+      expect(view.result.current.quarantined).toBeNull()
+
+      act(() => provider.options.onStateless({ payload: notice(held) }))
+      expect(view.result.current.quarantined).toEqual({ revisionId: 'rev-1', repeatedBytes: 3000, noteBytes: 3100, excerpt: 'paragraph 0: the' })
+      // Still writable and connected: the person fixes the duplicate in the editor.
+      expect(view.result.current.writable).toBe(true)
+      expect(view.result.current.status).toBe('connected')
+
+      // A dropped socket does not make it go away: the relay says again on reconnect.
+      act(() => provider.options.onStatus({ status: 'disconnected' }))
+      expect(view.result.current.quarantined).not.toBeNull()
+
+      act(() => provider.options.onStateless({ payload: notice(null) }))
+      expect(view.result.current.quarantined).toBeNull()
+    })
+
+    it('ignores stateless messages that are not the relay store notice, or not shaped like one', async () => {
+      const { view, provider } = await connected()
+      act(() => provider.options.onStateless({ payload: notice(held) }))
+      for (const payload of ['not json', JSON.stringify({ type: 'other', quarantine: null }), JSON.stringify({ type: 'elara-store' }), notice('x')]) {
+        act(() => provider.options.onStateless({ payload }))
+        expect(view.result.current.quarantined?.revisionId).toBe('rev-1')
+      }
+      act(() => provider.options.onStateless({ payload: notice({ revisionId: 7, excerpt: ['x'] }) }))
+      expect(view.result.current.quarantined).toEqual({ revisionId: null, repeatedBytes: 0, noteBytes: 0, excerpt: '' })
     })
   })
 
