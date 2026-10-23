@@ -3,7 +3,7 @@ import { basename, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import * as Y from 'yjs'
-import { and, asc, desc, eq, inArray, isNotNull, isNull, like, lt, ne, notInArray, or, sql, type SQL } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, lt, ne, notInArray, notLike, or, sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { recordJob } from '../monitoring/metrics.js'
@@ -671,15 +671,17 @@ export async function getLiveNote(vaultId: string, path: string): Promise<NoteRo
   return rows[0] ?? null
 }
 
-/** Live notes of a vault fetched as candidates for a not-found path's suggestions (#439). */
+/** Live notes fetched per query as candidates for a not-found path's suggestions (#439). */
 const NEARBY_CANDIDATES = 500
 
 /**
- * Candidates for "did you mean" when no live note is at `path` (#439): live
- * paths of the vault with the same last segment in any folder, or in the
- * same folder (the vault root for a root path). The caller ranks them
- * (errors.ts `closest`) and must have checked the caller can read the vault.
- * A path that does not resolve has none.
+ * Candidates for "did you mean" when no live note is at `path` (#439): the
+ * live notes directly in the same folder (the vault root for a root path;
+ * not its subfolders, so a large subtree cannot crowd the siblings out),
+ * and live notes with the same last segment in any folder, each up to
+ * NEARBY_CANDIDATES. The caller ranks them (errors.ts `closest`) and must
+ * have checked the caller can read the vault. A path that does not
+ * resolve has none.
  */
 export async function nearbyNotePaths(vaultId: string, path: string): Promise<string[]> {
   let resolved: ResolvedNotePath
@@ -689,23 +691,17 @@ export async function nearbyNotePaths(vaultId: string, path: string): Promise<st
     return []
   }
   const literal = (text: string) => text.replace(/[\\%_]/g, '\\$&')
-  const rows = await db
-    .select({ path: notes.path })
-    .from(notes)
-    .where(
-      and(
-        eq(notes.vaultId, vaultId),
-        isNull(notes.deletedAt),
-        or(
-          eq(notes.path, resolved.baseName),
-          like(notes.path, `%/${literal(resolved.baseName)}`),
-          resolved.directory ? like(notes.path, `${literal(resolved.directory)}/%`) : sql`strpos(${notes.path}, '/') = 0`,
-        ),
-      ),
-    )
-    .orderBy(notes.path)
-    .limit(NEARBY_CANDIDATES)
-  return rows.map((row) => row.path)
+  const live = and(eq(notes.vaultId, vaultId), isNull(notes.deletedAt))
+  const inFolder = resolved.directory
+    ? and(like(notes.path, `${literal(resolved.directory)}/%`), notLike(notes.path, `${literal(resolved.directory)}/%/%`))
+    : sql`strpos(${notes.path}, '/') = 0`
+  const sameName = or(eq(notes.path, resolved.baseName), like(notes.path, `%/${literal(resolved.baseName)}`))
+  const [siblings, namesakes] = await Promise.all(
+    [inFolder, sameName].map((where) =>
+      db.select({ path: notes.path }).from(notes).where(and(live, where)).orderBy(notes.path).limit(NEARBY_CANDIDATES),
+    ),
+  )
+  return [...siblings!, ...namesakes!].map((row) => row.path)
 }
 
 /** A note as a read serves it: the row (with `seq`, its `rev`) and the frontmatter in the key order of its file. */
