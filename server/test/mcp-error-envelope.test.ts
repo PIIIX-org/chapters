@@ -39,6 +39,10 @@ describe('error envelope catalogue (#439)', () => {
       rule: '^[a-z0-9][a-z0-9-]*$',
     })
     expect(toErrorEnvelope(new NoteTooLargeError(20, 10))).toMatchObject({ code: 'TOO_LARGE', rule: 'note body at most 10 bytes (UTF-8, ELARA_NOTE_MAX_BYTES)' })
+    expect(toErrorEnvelope(new NoteTooLargeError(20, 10, undefined, false, 'frontmatter'))).toMatchObject({
+      code: 'TOO_LARGE',
+      rule: 'note frontmatter (keys and values as JSON) at most 10 bytes (UTF-8, ELARA_NOTE_MAX_BYTES)',
+    })
     const finding = { rule: 'growth' as const, previousBytes: 4096, nextBytes: 9000, repeatedBytes: 0 }
     expect(toErrorEnvelope(new NoteWriteQuarantinedError('docs/a', finding, 'rev-1', false))).toMatchObject({ code: 'QUARANTINED', rule: 'growth', retryable: false })
     expect(toErrorEnvelope(new NoteEditError('ops[0] append: `text` is empty'))).toMatchObject({ code: 'INVALID_ARGUMENT' })
