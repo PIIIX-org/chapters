@@ -1829,8 +1829,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   code), `OkfValidationError` by its `refusal` (`OKF_INVALID`,
   `TYPE_MISMATCH`, `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the
   type rule, the depth limit), `NoteTooLargeError` (`TOO_LARGE`, the
-  limit as `rule`), `StoreBusyError` and `MaintenanceInProgressError`
-  (`BUSY`, retryable; `NoteNotMigratedError` not retryable), the
+  limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
+  included) and `MaintenanceInProgressError` (`BUSY`, retryable), the
   quarantine errors (`QUARANTINED`, the rule), `NoteEditError`
   (`INVALID_ARGUMENT`), `NoteEditConflictError` and
   `IdempotencyKeyReusedError` (`CONFLICT`), a Node system error
@@ -1845,16 +1845,22 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   envelope: arguments → `INVALID_ARGUMENT` (`argumentRefusal`: the tool's
   strict schema re-parses the arguments; an unknown key first, `field`
   its dotted path, `suggestions` the names strict-input would suggest,
-  else all of that object's keys; an enum's values), an unknown tool →
+  else all of that object's keys; an enum's values, a discriminated
+  union's tag values for a bad `op`), an unknown tool →
   `NOT_FOUND` (close names among `listedTools()`), else `INTERNAL`; the
   message is the SDK's without `MCP error -32602: Input validation
   error: `. Suggestions only from what the caller reaches: a `note not
   found` after the access check carries `closest()` of
-  `nearbyNotePaths()` (live paths of that vault with the same last
-  segment, or in the same folder; at most 3), while the access check's
+  `nearbyNotePaths()` (live paths of that vault directly in the same
+  folder, and with the same last segment anywhere, each query up to 500;
+  at most 3 shown), while the access check's
   own `not found` has none, so another account's id answers exactly
   `{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}`
-  like a missing id (`account-separation`). An ambiguous graph node
+  like a missing id (`account-separation`). The owner-only checks
+  (`requireVaultOwner`, `requireRepositoryOwner`, `requireTeamOwner`)
+  answer that same `NOT_FOUND` for a container the caller cannot reach
+  (a team it is not a member of) and `PERMISSION_REQUIRED` only for one
+  it can see. An ambiguous graph node
   reference (`resolveGraphNode`) is `AMBIGUOUS` with the node ids; #447
   turns it into a candidates answer and adds suggestions to graph
   lookups through the same `McpToolError` extra. `rateLimitedError(ms)`
