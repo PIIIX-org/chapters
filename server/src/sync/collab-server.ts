@@ -21,7 +21,7 @@ import { COLLAB_PATH } from './routes.js'
 import { recordJob } from '../monitoring/metrics.js'
 import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
-import { bodyMeasured, updateFits } from './collab-size.js'
+import { bodyMeasured, documentSizes, updateFits } from './collab-size.js'
 import { liveTookUpdate, updateToLog } from './collab-append.js'
 import { advanceStoredState, rejectUpdate, rememberLoadedState } from './note-crdt.js'
 import { failpoint } from '../failpoints.js'
@@ -52,7 +52,12 @@ const SYNC_UPDATE = 2
  * client put in it, #780), would pass the cap. Hocuspocus closes the
  * document connection with this code and reason before applying anything;
  * the reason reaches the client in the close message
- * (client/src/hooks/useCollabDoc.ts reads `note-too-large`).
+ * (client/src/hooks/useCollabDoc.ts reads `note-too-large`). Just before,
+ * the refused connection gets a stateless SIZE_NOTICE
+ * `{"type":"elara-size","limitBytes","bodyBytes","otherBytes"}`: the exact
+ * sizes of the document the relay holds, against which a part may end up
+ * within the cap or no larger (collab-size.ts), so the editor resumes by the
+ * relay's own rule (#948).
  */
 class NoteTooLargeRefusal extends Error {
   readonly code = 4413
@@ -61,6 +66,8 @@ class NoteTooLargeRefusal extends Error {
     super(`refused an update to ${documentName}: the note body or the rest of the document (frontmatter) would pass ${limit} bytes (ELARA_NOTE_MAX_BYTES)`)
   }
 }
+
+const SIZE_NOTICE = 'elara-size'
 
 /**
  * The store is not taking writes for a moment (ADR-003 §5.1: this process's
@@ -490,7 +497,11 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       if (writesPaused()) throw refuseStoreBusy(connection.webSocket, documentName, 'writes paused')
       const toLog = updateToLog(document, payload)
       const limit = config.noteMaxBytes
-      if (!updateFits(document, payload, limit)) throw new NoteTooLargeRefusal(documentName, limit)
+      if (!updateFits(document, payload, limit)) {
+        // What this document holds, which the editor resumes against (#948): sent first, so it reaches the editor before the close.
+        connection.sendStateless(JSON.stringify({ type: SIZE_NOTICE, limitBytes: limit, ...documentSizes(document) }))
+        throw new NoteTooLargeRefusal(documentName, limit)
+      }
       if (!toLog) return
       const noteId = documentNotes.get(document)
       const { vaultId } = parseDocName(documentName)
