@@ -712,7 +712,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   so it keeps text typed after the agent's `read_note`, which itself
   serves the live document (#474, below). REST PUT takes `baseRev` (#865,
   the `rev` REST GET returned, or a revision id) and is rebased from it
-  the same way: a clean merge answers the row plus `status`
+  the same way: a clean merge answers `noteReply` of the row plus `status`
   (`applied`/`merged`), `concurrentChanges` and `baseRev`; an overlap
   writes nothing, keeps the body as a `proposal` revision and answers 409
   `{ error, status: "conflicted", baseRev, proposalId, conflicts }`; a
@@ -739,7 +739,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   ids, #822): `getBaseRevision`, never a `quarantine` or `proposal` row;
   anything else is refused and nothing changes.
 - **Write results** (#477, `mcp/write-result.ts`): every MCP note write
-  answers its row (without `seq`) plus `rev`, `status`
+  answers `noteReply` of its row (`notes/reply-fields.ts`, #427, #931:
+  only `NOTE_REPLY_FIELDS` = id, vaultId, type, name, path, frontmatter,
+  body, createdAt, updatedAt, plus `rev` = `seq`; never `embedding`,
+  `deletedAt`, `seq` or other columns) plus `status`
   (`applied`/`merged`/`conflicted`, or `retry` when `StoreBusyError`
   refused it: nothing written, `rev` null), `diff_stats` (`diffLines`
   hunks from `WriteOutcome.before`, the state writeNote met, to the
@@ -753,7 +756,11 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   recording (`proposalId: null`, `NoteWriteWouldQuarantineError`).
   `idempotency_key`: `write_idempotency` (above). A read whose fold
   the store refuses (StoreBusyError) fails as `NoteReadBusyError`, with a
-  read's wording.
+  read's wording. The REST write routes (POST `/notes`, PUT `/notes/*`,
+  POST `/notes-rename`, POST `/trash/:noteId/restore`, POST `/revert/*`)
+  answer the same `noteReply` (PUT with `baseRev` adds `status`,
+  `concurrentChanges`, `baseRev`, above); REST GET answers id, path,
+  `rev`, frontmatter, body, updatedAt.
 - **Stale base: three-way merge or proposal** (#475): with `base_rev`,
   `writeThroughCollab` gets `NoteEdit.base` and rebases the edit
   onto the live document inside the same transaction
@@ -1429,6 +1436,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `tooLarge.otherBytes` says how large the properties are, and it reconnects
   only once both fit. REST, MCP and import bound frontmatter with the same
   measure (`jsonBytes` from `size-cap.ts`; Frontmatter size cap, #933).
+  Before a `note-too-large` close the relay sends the refused connection a
+  stateless `{"type": "elara-size", limitBytes, bodyBytes, otherBytes}`:
+  the exact sizes of the document it holds (`documentSizes`, which also
+  restarts both bounds). "Fits" for the editor is then the relay's own
+  rule (#948): each part within the cap or no larger than the relay's
+  (`tooLarge.bodyRoomBytes`/`otherRoomBytes`), so a note whose
+  frontmatter is stored over the cap resumes once the body is cut, and
+  `TooLargeNotice` asks only for the cuts that are needed. Without the
+  message (a 1009 close, an older relay) each part must fit the cap.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
   Every share/team/deactivation mutation calls `emitPermissionChange()`,
   and every session delete announces the ended sessions' hashes on it;

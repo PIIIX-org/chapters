@@ -110,6 +110,21 @@ export function restBytes(doc: Y.Doc): number {
   return bytes
 }
 
+/**
+ * The exact sizes of `doc`'s two parts, the "now" updateFits compares an
+ * update against (each part may end up within the cap or no larger than
+ * this); both bounds restart from them. The relay sends them to an editor it
+ * refuses, so the editor resumes under the same rule (#948).
+ */
+export function documentSizes(doc: Y.Doc): { bodyBytes: number; otherBytes: number } {
+  const meter = meterFor(doc)
+  meter.bytes = Buffer.byteLength(doc.getText('body').toString())
+  meter.since = 0
+  meter.rest = restBytes(doc)
+  meter.restSince = 0
+  return { bodyBytes: meter.bytes, otherBytes: meter.rest }
+}
+
 /** False when applying `update` (a Yjs v1 update from a client) would leave the body or the rest over `limit` and larger than now. */
 export function updateFits(doc: Y.Doc, update: Uint8Array, limit: number): boolean {
   const meter = meterFor(doc)

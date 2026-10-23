@@ -47,7 +47,15 @@ export function CollabNotices({
   if (!tooLarge && !quarantined && unmerged === null) return null
   return (
     <>
-      {tooLarge && <TooLargeNotice limitBytes={tooLarge.limitBytes} bodyBytes={tooLarge.bodyBytes} otherBytes={tooLarge.otherBytes} />}
+      {tooLarge && (
+        <TooLargeNotice
+          limitBytes={tooLarge.limitBytes}
+          bodyBytes={tooLarge.bodyBytes}
+          otherBytes={tooLarge.otherBytes}
+          bodyRoomBytes={tooLarge.bodyRoomBytes}
+          otherRoomBytes={tooLarge.otherRoomBytes}
+        />
+      )}
       {quarantined && <QuarantineNotice quarantine={quarantined} />}
       {unmerged !== null && <UnmergedNotice text={unmerged} onDiscard={onDiscard} />}
     </>

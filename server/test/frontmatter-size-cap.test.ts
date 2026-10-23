@@ -10,7 +10,7 @@ import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
-import { createNote, getLiveNote, readNote, renameNote } from '../src/notes/store.js'
+import { createNote, getLiveNote, readNote, renameNote, updateNote } from '../src/notes/store.js'
 import { NoteTooLargeError } from '../src/notes/size-cap.js'
 import { serializeNote } from '../src/notes/okf.js'
 import { db } from '../src/db/client.js'
@@ -265,5 +265,20 @@ describe('note frontmatter size cap (#933)', () => {
     await expect(renameNote(vaultId, 'docs/fm-move', 'documentation/fm-move')).rejects.toBeInstanceOf(NoteTooLargeError)
     expect(await readNote(vaultId, 'docs/fm-move')).not.toBeNull()
     expect(await readNote(vaultId, 'documentation/fm-move')).toBeNull()
+  })
+
+  it('a store-level updateNote with the write quarantine and frontmatter over the cap is refused before any quarantine revision', async () => {
+    await createNote(vaultId, { path: 'docs/fm-store-quarantine', body: 'q'.repeat(2048) })
+    const before = await revisionsOf('docs/fm-store-quarantine')
+    await expect(
+      updateNote(
+        vaultId,
+        'docs/fm-store-quarantine',
+        { body: 'q'.repeat(4000), frontmatter: { type: 'docs', blob: 'x'.repeat(12 * 1024) } },
+        undefined,
+        { quarantine: 'all' },
+      ),
+    ).rejects.toBeInstanceOf(NoteTooLargeError)
+    expect(await revisionsOf('docs/fm-store-quarantine')).toEqual(before)
   })
 })

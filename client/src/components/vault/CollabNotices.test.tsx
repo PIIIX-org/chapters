@@ -10,7 +10,7 @@ describe('CollabNotices', () => {
     render(
       <CollabNotices
         revoked={false}
-        tooLarge={{ limitBytes: MiB, bodyBytes: 2 * MiB, otherBytes: 0 }}
+        tooLarge={{ limitBytes: MiB, bodyBytes: 2 * MiB, otherBytes: 0, bodyRoomBytes: MiB, otherRoomBytes: MiB }}
         unmerged="text from an earlier session"
         onDiscard={onDiscard}
       />,
@@ -39,7 +39,7 @@ describe('CollabNotices', () => {
     render(
       <CollabNotices
         revoked
-        tooLarge={{ limitBytes: MiB, bodyBytes: 2 * MiB, otherBytes: 0 }}
+        tooLarge={{ limitBytes: MiB, bodyBytes: 2 * MiB, otherBytes: 0, bodyRoomBytes: MiB, otherRoomBytes: MiB }}
         unmerged="text from an earlier session"
         onDiscard={() => {}}
       />,

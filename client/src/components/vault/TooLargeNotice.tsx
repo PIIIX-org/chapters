@@ -7,6 +7,10 @@ interface TooLargeNoticeProps {
   bodyBytes: number
   /** Everything else in the note in this tab (its properties), measured the same way. */
   otherBytes?: number
+  /** How large the body may end up: the cap, or what the server already holds when that is more (#948). */
+  bodyRoomBytes?: number
+  /** The same for the properties. */
+  otherRoomBytes?: number
 }
 
 /**
@@ -18,13 +22,13 @@ interface TooLargeNoticeProps {
  * person needs is that nothing since the refusal is on the server, which
  * part is too large, and how much to cut.
  */
-export function TooLargeNotice({ limitBytes, bodyBytes, otherBytes = 0 }: TooLargeNoticeProps) {
-  const propertiesOnly = otherBytes > limitBytes && bodyBytes <= limitBytes
-  // Each part over the cap, and how much to cut from it.
+export function TooLargeNotice({ limitBytes, bodyBytes, otherBytes = 0, bodyRoomBytes = limitBytes, otherRoomBytes = limitBytes }: TooLargeNoticeProps) {
+  const propertiesOnly = otherBytes > otherRoomBytes && bodyBytes <= bodyRoomBytes
+  // Each part past its room, and how much to cut from it: a part the server already holds over the cap may stay as large (#948).
   const cuts: string[] = []
-  if (bodyBytes > limitBytes) cuts.push(`text is ${formatBytes(bodyBytes)}: remove about ${formatBytes(bodyBytes - limitBytes)}`)
-  if (otherBytes > limitBytes) {
-    cuts.push(`properties are ${formatBytes(otherBytes)}: remove about ${formatBytes(otherBytes - limitBytes)} of them (a very long value, or many of them)`)
+  if (bodyBytes > bodyRoomBytes) cuts.push(`text is ${formatBytes(bodyBytes)}: remove about ${formatBytes(bodyBytes - bodyRoomBytes)}`)
+  if (otherBytes > otherRoomBytes) {
+    cuts.push(`properties are ${formatBytes(otherBytes)}: remove about ${formatBytes(otherBytes - otherRoomBytes)} of them (a very long value, or many of them)`)
   }
   return (
     <div role="status" className="border-b border-border bg-muted px-8 py-3 text-sm">
