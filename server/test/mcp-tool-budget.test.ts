@@ -1,11 +1,13 @@
 // What a token pays before its first call (#429, ADR-004 §2.6): the
-// `tools/list` result plus the `initialize` instructions, counted as
-// characters / 4 like the benchmark counts tokens. A reader token stays
-// within 2,000 tokens and a writer token within 4,000; the admin size is
-// reported (its ceiling is in mcp-tool-schema.test.ts). Every tool
-// description is at most two sentences: the long manuals are MCP resources
-// (mcp-manuals.test.ts). The bytes do not depend on the call or the pin, so
-// a client can cache them.
+// `tools/list` result, the `prompts/list` result and the `initialize`
+// instructions, counted as characters / 4 like the benchmark counts tokens.
+// A reader token (no prompts, #428) stays within 2,000 tokens. A writer
+// token's tools/list + instructions stay within 4,000; its prompts are
+// reported, as is the admin size (its tools/list ceiling is in
+// mcp-tool-schema.test.ts). Every tool description is at most two
+// sentences: the long manuals are MCP resources (mcp-manuals.test.ts). The
+// tools/list bytes do not depend on the call, nor, for reader tokens, on the
+// pin, so a client can cache them.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -17,7 +19,7 @@ import { createActiveUser, loginCookie } from './helpers.js'
 type Args = Record<string, unknown>
 type Profile = 'reader' | 'writer' | 'admin'
 
-/** Tokens (characters / 4) of `tools/list` + `initialize.instructions` a profile may cost. */
+/** Tokens (characters / 4) a profile may cost: reader everything, writer tools/list + instructions. */
 const BUDGET_TOKENS: Partial<Record<Profile, number>> = { reader: 2_000, writer: 4_000 }
 
 let app: FastifyInstance
@@ -82,20 +84,26 @@ afterAll(async () => {
 
 describe('tools/list budget per profile (#429)', () => {
   it('keeps each profile within its budget (characters / 4)', async () => {
-    const sizes = {} as Record<Profile, number>
+    const sizes = {} as Record<Profile, { tools: number; prompts: number; instructions: number }>
     for (const profile of ['reader', 'writer', 'admin'] as const) {
-      // What a token pays before its first call: `tools/list` plus the instructions.
       const client = await connect({ name: `budget-${profile}`, scope: 'account', access: 'admin', profile })
-      sizes[profile] = (await toolsList(client)).length + (client.getInstructions() ?? '').length
+      resetRateLimits()
+      // A token without the prompts capability (reader, #428) pays nothing for prompts.
+      const prompts = client.getServerCapabilities()?.prompts ? JSON.stringify(await client.listPrompts()).length : 0
+      sizes[profile] = { tools: (await toolsList(client)).length, prompts, instructions: (client.getInstructions() ?? '').length }
     }
     console.log(
-      (Object.entries(sizes) as Array<[Profile, number]>)
-        .map(([profile, chars]) => `tools/list + instructions, ${profile} account token: ${chars} chars, ~${Math.ceil(chars / 4)} tokens`)
+      (Object.entries(sizes) as Array<[Profile, (typeof sizes)[Profile]]>)
+        .map(([profile, s]) => {
+          const total = s.tools + s.prompts + s.instructions
+          return `${profile} account token: tools/list ${s.tools}, prompts/list ${s.prompts}, instructions ${s.instructions} = ${total} chars, ~${Math.ceil(total / 4)} tokens`
+        })
         .join('\n'),
     )
-    for (const [profile, budget] of Object.entries(BUDGET_TOKENS)) {
-      expect(Math.ceil(sizes[profile as Profile] / 4), `${profile} tokens`).toBeLessThanOrEqual(budget)
-    }
+    expect(sizes.reader.prompts, 'reader prompts/list').toBe(0)
+    const reader = sizes.reader.tools + sizes.reader.prompts + sizes.reader.instructions
+    expect(Math.ceil(reader / 4), 'reader tokens').toBeLessThanOrEqual(BUDGET_TOKENS.reader!)
+    expect(Math.ceil((sizes.writer.tools + sizes.writer.instructions) / 4), 'writer tokens').toBeLessThanOrEqual(BUDGET_TOKENS.writer!)
   })
 
   it('answers the same bytes on every call, and for every pin of one profile and scope', async () => {

@@ -122,14 +122,22 @@ export function toolManuals(): readonly ToolManual[] {
 }
 
 /**
- * A manual as a connection that lists the tools `listed` reads it: the
- * conventions when it lists any tool; a family's preamble and the entries of
- * the tools it lists, when it lists at least one of them. `null`: the
- * connection has no tool of the manual, and neither lists nor reads it.
+ * Whether a connection that lists the tools `listed` sees the manual: the
+ * conventions when it lists any tool, a family's manual when it lists at
+ * least one of the family's tools. One it does not see is neither listed nor
+ * read. Builds no text.
  */
-export function manualText(manual: ToolManual, listed: ReadonlySet<string>): string | null {
-  if (listed.size === 0) return null
+export function manualVisible(manual: ToolManual, listed: ReadonlySet<string>): boolean {
+  if (listed.size === 0) return false
+  return manual.entries === null || [...manual.entries.keys()].some((name) => listed.has(name))
+}
+
+/**
+ * A manual as a connection that lists the tools `listed` reads it (call only
+ * when `manualVisible`): the conventions whole; a family's preamble and the
+ * entries of the tools it lists.
+ */
+export function manualText(manual: ToolManual, listed: ReadonlySet<string>): string {
   const entries = manual.entries ? [...manual.entries].filter(([name]) => listed.has(name)).map(([, text]) => text) : []
-  if (manual.entries && entries.length === 0) return null
   return [manual.heading, ...(manual.preamble ? [manual.preamble] : []), ...entries].join('\n\n') + '\n'
 }

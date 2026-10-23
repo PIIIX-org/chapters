@@ -16,7 +16,7 @@ import { createActiveUser, loginCookie } from './helpers.js'
  * With `budget_tokens`, `cursor` and the envelope sentence on the 10 budgeted tools (#420, #422): 49,084.
  * With `browse_repository`'s `path` (#424) and `browse_vault`'s `fields` (#425): 49,388.
  * With `graph`'s `neighborsOf`, `depth`, `edgeTypes` and `limit` (#426; its description kept to the old length): 49,805.
- * Two-sentence descriptions and no default `$schema`/`execution` fields (#429): 37,493. The reader and writer
+ * Two-sentence descriptions and no default `$schema`/`execution` fields (#429): 37,512. The reader and writer
  * budgets are in mcp-tool-budget.test.ts.
  */
 const TOOLS_LIST_CEILING = 38_000
