@@ -282,14 +282,16 @@ async function processFile(fileId: string): Promise<void> {
 
     await db.delete(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, fileId))
     if (imports.length > 0) {
-      const rows = imports.map((targetPath) => {
+      const rows = imports.map(({ target: targetPath, line }) => {
         const resolved = resolveImportPath(row.path, targetPath, knownPaths)
         return {
           sourceFileId: fileId,
           targetPath,
           resolvedTargetFileId: resolved ? pathToId.get(resolved) : undefined,
+          line,
         }
       })
+      // One row per specifier: a file importing one path twice keeps the first line.
       await db.insert(repositoryFileImports).values(rows).onConflictDoNothing()
     }
 

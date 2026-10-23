@@ -57,8 +57,8 @@ const mockNodes: GraphNode[] = [
 ]
 
 const mockEdges: GraphEdge[] = [
-  { source: 'n1', target: 'n2', kind: 'extracted' },
-  { source: 'n2', target: 'n3', kind: 'structural' },
+  { source: 'n1', target: 'n2', kind: 'extracted', directed: true, relation: 'link', confidence: 'resolved', evidence: [3, 3] },
+  { source: 'n2', target: 'n3', kind: 'structural', directed: false, relation: 'same_type', confidence: 'resolved', evidence: 'type:docs' },
 ]
 
 const mockGraph: VaultGraph = {
