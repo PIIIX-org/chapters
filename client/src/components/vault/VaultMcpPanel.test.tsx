@@ -287,6 +287,10 @@ describe('VaultMcpPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'POST')).toBe(true))
     expect(postBody(fetchMock)).toEqual({ name: 'Searcher', scope: 'account', access: 'write', profile: 'reader' })
+
+    // After the token is created the next one starts again from its access level.
+    await screen.findByText('mcp_live_secret_token')
+    expect(screen.getByLabelText('Profile')).toHaveValue('writer')
   })
 
   it('the allow-list offers only tools inside the chosen profile (#428)', async () => {
