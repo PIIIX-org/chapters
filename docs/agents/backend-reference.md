@@ -1544,7 +1544,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   allowed."},"id":null}`), before authentication, and `buildServer`
   overrides the SDK's `listChanged: true` with `false` on each list
   capability it has (`tools`; `resources` when a manual is registered;
-  `prompts` unless an allow-list leaves them out). A list changes only
+  `prompts` when they are registered: not with an allow-list, not on a
+  `reader` profile). A list changes only
   with permissions, and the next `tools/list` shows it.
   `test/mcp-list-changed.test.ts` covers both paths.
 - **Auth**: bearer token → `resolveMcpToken()` (same live-resolution
