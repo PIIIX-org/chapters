@@ -24,7 +24,7 @@ import { writeThroughCollab } from '../src/sync/crdt-write.js'
 import { db } from '../src/db/client.js'
 import { noteRevisions } from '../src/db/schema.js'
 import { and, eq } from 'drizzle-orm'
-import { createActiveUser, loginCookie, loginToken, noteDocName, storedCrdtText } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName, storedCrdtDoc, storedCrdtText } from './helpers.js'
 
 /** The default cap: 1 MiB of UTF-8. */
 const CAP = 1024 * 1024
@@ -257,6 +257,47 @@ describe('note body size cap (#491)', () => {
 
     expect(await restBody('docs/collab-frame')).toBe('frame start')
     expect(await storedCrdtText(vaultId, 'docs/collab-frame')).toBe('frame start')
+  })
+
+  // #780: the relay bounded the body only; frontmatter and other document content reached the row, the file and the CRDT log.
+  it('collab refuses frontmatter that would pass the cap before it is applied, and never stores it', async () => {
+    await newNote('collab-fm-over', 'fm start')
+    const closes: Closed[] = []
+    const provider = await connect('docs/collab-fm-over', closes)
+    await waitFor(() => provider.isSynced)
+    const serverDoc = () => collab.hocuspocus.documents.get(provider.configuration.name)
+    const refused = () => closes.some((c) => c.reason === 'note-too-large')
+
+    provider.document.getMap('frontmatter').set('huge', `FM-MARKER ${'f'.repeat(CAP)}`)
+    await waitFor(() => refused() || serverDoc()?.getMap('frontmatter').has('huge') === true)
+    expect(refused()).toBe(true)
+    expect(serverDoc()?.getMap('frontmatter').has('huge') ?? false).toBe(false)
+    await storeSettled('docs/collab-fm-over')
+
+    const rest = await app.inject({ method: 'GET', url: `/api/vaults/${vaultId}/notes/docs/collab-fm-over`, headers: { cookie: ownerCookie } })
+    expect((rest.json() as { frontmatter: Record<string, unknown> }).frontmatter).not.toHaveProperty('huge')
+    await flushProjections()
+    const file = await readFile(join(config.dataDir, 'vaults', vaultId, 'docs', 'collab-fm-over.md'), 'utf8')
+    expect(file).not.toContain('FM-MARKER')
+    expect((await storedCrdtDoc(vaultId, 'docs/collab-fm-over')).getMap('frontmatter').has('huge')).toBe(false)
+    provider.destroy()
+  })
+
+  it('collab refuses other document content past the cap, which is never stored to the note but was kept in its CRDT log', async () => {
+    await newNote('collab-junk', 'junk start')
+    const closes: Closed[] = []
+    const provider = await connect('docs/collab-junk', closes)
+    await waitFor(() => provider.isSynced)
+    const refused = () => closes.some((c) => c.reason === 'note-too-large')
+    const serverDoc = () => collab.hocuspocus.documents.get(provider.configuration.name)
+
+    provider.document.getMap('junk').set('k', `JUNK-MARKER ${'j'.repeat(CAP)}`)
+    await waitFor(() => refused() || serverDoc()?.getMap('junk').has('k') === true)
+    expect(refused()).toBe(true)
+    await storeSettled('docs/collab-junk')
+    expect((await storedCrdtDoc(vaultId, 'docs/collab-junk')).getMap('junk').has('k')).toBe(false)
+    expect(await restBody('docs/collab-junk')).toBe('junk start')
+    provider.destroy()
   })
 
   it('a note of exactly the cap round-trips: collab stores it, an agent reads and edits it, the editor sees the edit', async () => {
