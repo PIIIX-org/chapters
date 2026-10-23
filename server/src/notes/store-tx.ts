@@ -319,7 +319,8 @@ export async function replaceLinks(tx: Tx, noteId: string, body: string): Promis
  * Locates link rows written without lines (#558): rows from before
  * migration 0031, or written by older code after a rollback, have
  * `start_line` 0. Each such note's rows are written again from its body
- * under its lock, as the doctor's `links-differ` repair does. Runs at boot;
+ * under its lock, as the doctor's `links-differ` repair does. Runs at boot,
+ * in the background after `listen` (about 8 ms a note);
  * a note that fails is reported and left for the next boot. Returns the
  * notes located.
  */

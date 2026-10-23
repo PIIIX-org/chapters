@@ -146,6 +146,17 @@ describe('tools/list per profile (#428)', () => {
     expect(await listed(repo.client)).toEqual(['browse_repository', 'find_graph_path', 'find_symbols', 'graph', 'read_file', 'search'])
   })
 
+  it('a reader token lists no prompts; writer and admin tokens keep them (owner decision on #930)', async () => {
+    const reader = await mint({ name: 'profiles-prompts-reader', scope: 'account', profile: 'reader' })
+    expect(reader.client.getServerCapabilities()?.prompts).toBeUndefined()
+    for (const profile of ['writer', 'admin']) {
+      const { client } = await mint({ name: `profiles-prompts-${profile}`, scope: 'account', profile })
+      expect(client.getServerCapabilities()?.prompts, profile).toBeDefined()
+      resetRateLimits()
+      expect((await client.listPrompts()).prompts.length, profile).toBeGreaterThan(0)
+    }
+  })
+
   it('reports the tools/list size of each profile (characters/4)', async () => {
     const sizes: Record<string, number> = {}
     for (const profile of ['reader', 'writer', 'admin']) {
