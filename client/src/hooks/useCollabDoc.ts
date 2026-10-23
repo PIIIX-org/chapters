@@ -7,6 +7,7 @@ import { ApiError } from '../lib/api.js'
 import { claimLeftoverCopies, keepCollabCopy } from '../lib/collabStash.js'
 import type { CollabCopy } from '../lib/collabStash.js'
 import { collabStashName, hasCollabStash } from '../lib/collabStashNames.js'
+import { restBytes, utf8Length } from '../lib/noteSize.js'
 import { AI_INK, inkFor } from '../lib/ink.js'
 import type { Ink } from '../lib/ink.js'
 
@@ -114,8 +115,57 @@ export interface CollabSession {
   /** Deletes the copy behind `unmerged` from this browser. */
   discardUnmerged: () => void
   /** Set while `status` is `too-large`: the server's cap and the note's size
-   *  here, both in UTF-8 bytes as the server measures them. */
-  tooLarge: { limitBytes: number; bodyBytes: number } | null
+   *  here, both in bytes as the server measures them: the body's text, and
+   *  everything else in the document (the properties, #780). Each part must
+   *  fit the cap. */
+  tooLarge: { limitBytes: number; bodyBytes: number; otherBytes: number } | null
+  /** Set while the relay holds this note's stores back (#784, server
+   *  `elara-store` notice): the note keeps its saved text, and what is typed
+   *  here is kept by the server but not saved to the note until the repeated
+   *  text is removed. */
+  quarantined: CollabQuarantine | null
+}
+
+/**
+ * A quarantine (#492) of this note's stores, as the relay reports it
+ * (server/src/sync/collab-server.ts `QuarantineNotice`): the text repeats a
+ * large block of the saved note, which is how a stale tab once doubled whole
+ * notes (#488).
+ */
+export interface CollabQuarantine {
+  /** The revision that holds the text the note did not take ("Held back" in History), if one is known. */
+  revisionId: string | null
+  /** UTF-8 bytes of the saved note's text that appear again. */
+  repeatedBytes: number
+  /** The saved note's body, in UTF-8 bytes. */
+  noteBytes: number
+  /** The start of the first repeated passage, so the person can find it. */
+  excerpt: string
+}
+
+/**
+ * The relay's `elara-store` notice in a stateless message: the quarantine
+ * that stands (null for none), or undefined for any other message. Checked
+ * field by field: nothing from the socket is trusted to have a shape.
+ */
+function readStoreNotice(payload: string): { quarantine: CollabQuarantine | null } | undefined {
+  let message: unknown
+  try {
+    message = JSON.parse(payload)
+  } catch {
+    return undefined
+  }
+  if (typeof message !== 'object' || message === null || !('type' in message) || message.type !== 'elara-store' || !('quarantine' in message)) {
+    return undefined
+  }
+  const q = message.quarantine
+  if (q === null) return { quarantine: null }
+  if (typeof q !== 'object') return undefined
+  const revisionId = 'revisionId' in q && typeof q.revisionId === 'string' ? q.revisionId : null
+  const repeatedBytes = 'repeatedBytes' in q && typeof q.repeatedBytes === 'number' ? q.repeatedBytes : 0
+  const noteBytes = 'noteBytes' in q && typeof q.noteBytes === 'number' ? q.noteBytes : 0
+  const excerpt = 'excerpt' in q && typeof q.excerpt === 'string' ? q.excerpt : ''
+  return { quarantine: { revisionId, repeatedBytes, noteBytes, excerpt } }
 }
 
 export interface UseCollabDocOptions {
@@ -208,25 +258,6 @@ function sharesHistory(a: Y.Doc, b: Y.Doc): boolean {
 }
 
 /**
- * UTF-8 bytes of `text`, which is how the relay measures a note body against
- * its cap (server/src/notes/size-cap.ts), counted without encoding a copy.
- */
-function utf8Length(text: string): number {
-  let bytes = 0
-  for (let i = 0; i < text.length; i++) {
-    const unit = text.charCodeAt(i)
-    if (unit < 0x80) bytes += 1
-    else if (unit < 0x800) bytes += 2
-    else if (unit >= 0xd800 && unit < 0xdc00 && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
-      // A surrogate pair: one 4-byte character.
-      bytes += 4
-      i++
-    } else bytes += 3
-  }
-  return bytes
-}
-
-/**
  * Joins the note's Yjs document on the Hocuspocus relay
  * (`server/src/sync/collab-server.ts`). Editors only.
  *
@@ -253,6 +284,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
   const [unmerged, setUnmerged] = useState<string | null>(null)
   const [peers, setPeers] = useState<CollabPeer[]>([])
   const [tooLarge, setTooLarge] = useState<CollabSession['tooLarge']>(null)
+  const [quarantined, setQuarantined] = useState<CollabQuarantine | null>(null)
   // The document is keyed on the note, not on the mount: the connect effect
   // re-runs on a docName change, and reconnecting the OLD doc under the NEW
   // name uploads note A's body into note B. React's adjust-state-during-render
@@ -276,6 +308,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     setUnmerged(null)
     setPeers([])
     setTooLarge(null)
+    setQuarantined(null)
   } else if (doc.enabled !== enabled) {
     setDoc({ ...doc, enabled })
   }
@@ -435,11 +468,12 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
       }
     }
 
-    /** Shows the note's size against the cap; true when it fits again. */
+    /** Shows the note's size against the cap, the body's and the rest's (#780); true when both fit again. */
     const measureTooLarge = () => {
       const bodyBytes = utf8Length(ydoc.getText('body').toString())
-      setTooLarge({ limitBytes: maxNoteBytes, bodyBytes })
-      return bodyBytes <= maxNoteBytes
+      const otherBytes = restBytes(ydoc)
+      setTooLarge({ limitBytes: maxNoteBytes, bodyBytes, otherBytes })
+      return bodyBytes <= maxNoteBytes && otherBytes <= maxNoteBytes
     }
 
     /**
@@ -751,6 +785,12 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
           handshake = true
           settle()
         },
+        // The relay says where this note's stores stand on every connect and
+        // whenever that changes (#784): a quarantine that holds them back, or none.
+        onStateless: ({ payload }) => {
+          const notice = readStoreNotice(payload)
+          if (notice && !cancelled) setQuarantined(notice.quarantine)
+        },
         onUnsyncedChanges: () => settle(),
         onAwarenessChange: ({ states }) => {
           const self = provider?.awareness?.clientID
@@ -853,5 +893,6 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     unmerged,
     discardUnmerged,
     tooLarge,
+    quarantined,
   }
 }
