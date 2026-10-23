@@ -136,10 +136,14 @@ beforeAll(async () => {
   // 40 notes in docs/, 5 in docs/sub/, 12 in the trash; the chain in its own vault.
   for (let i = 0; i < 40; i++) await createNote(vaultId, { path: `docs/note-${String(i).padStart(2, '0')}`, body: `Note ${i}.` })
   for (let i = 0; i < 5; i++) await createNote(vaultId, { path: `docs/sub/inner-${i}`, body: `Inner ${i}.` })
-  // Distinct words per note, so the test embedder finds no similar pair (no semantic shortcut).
+  // No semantic shortcut, whatever the timing: tests run with SEMANTIC_THRESHOLD=0.2 (vitest.config.ts), and the
+  // embedded text also holds the path and frontmatter, whose `timestamp` tokens two notes made in the same second
+  // share. With 8 repeats of each note's word the test embedder put chain pairs at ~0.16, and a timestamp's shared
+  // tokens could lift one over 0.2 (distance 3 instead of 9). Each word below hashes to its own dimension, and 40
+  // repeats keep any pair under ~0.1 however many of the ~25 other tokens two notes share.
   const words = ['apple', 'river', 'stone', 'cloud', 'maple', 'ember', 'frost', 'tiger', 'violet', 'quartz']
   for (let i = 0; i < 10; i++) {
-    await createNote(graphVaultId, { path: `c${i}/link`, body: `${`${words[i]} `.repeat(8)}${i < 9 ? `[[c${i + 1}/link]]` : ''}` })
+    await createNote(graphVaultId, { path: `c${i}/link`, body: `${`${words[i]} `.repeat(40)}${i < 9 ? `[[c${i + 1}/link]]` : ''}` })
   }
   for (let i = 0; i < 12; i++) {
     await createNote(vaultId, { path: `trash/gone-${i}`, body: `Gone ${i}.` })
@@ -319,6 +323,8 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
   it('graph: paging shows every node and edge once; a cursor for other filters is refused', async () => {
     const all = await page('graph', { vaultId: graphVaultId, budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
+    // The fixture: the 9 chain links and nothing else (no semantic or structural edge).
+    expect(ids([all], 'edges', (e) => e.kind as string)).toEqual(Array.from({ length: 9 }, () => 'extracted'))
     const pages = await walk('graph', { vaultId: graphVaultId, budget_tokens: 256 })
     expect(pages.length).toBeGreaterThan(2)
     expect(ids(pages, 'nodes').sort()).toEqual(ids([all], 'nodes').sort())
