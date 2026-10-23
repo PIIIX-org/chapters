@@ -13,9 +13,11 @@ import { createActiveUser, loginCookie } from './helpers.js'
 
 /**
  * Characters of `JSON.stringify({ tools })` for an admin account token (#430: 51,972 before, 46,385 after).
- * With the paged-envelope descriptions of the #942 stack merged in: 50,459.
+ * With `budget_tokens`, `cursor` and the envelope sentence on the 10 budgeted tools (#420, #422): 49,084.
+ * With `browse_repository`'s `path` (#424) and `browse_vault`'s `fields` and one-level description (#425): 49,578.
+ * With `graph`'s `neighborsOf`, `depth`, `edgeTypes`, `limit` and its longer description (#426): 50,206.
  */
-const TOOLS_LIST_CEILING = 51_000
+const TOOLS_LIST_CEILING = 50_500
 
 let app: FastifyInstance
 let client: Client

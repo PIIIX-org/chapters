@@ -20,7 +20,6 @@
 // `check-notes` (server/src/scripts) is run.
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { CollabClient, collabDocName } from '../lib/collab.ts'
-import { stringField } from '../lib/mcp.ts'
 import { RestSession } from '../lib/rest.ts'
 import {
   appLogsSince,
@@ -466,12 +465,16 @@ const test: LabTest = {
     const fin = analyse(finalDump, finalRows)
     const probes: Record<string, unknown>[] = []
     for (const d of fin.divergent.slice(0, 10)) {
-      const r = await editMcp.call('read_note', { vaultId: vault.id, path: d.path })
-      const body = stringField(r.json, 'body')
+      // The whole body: read_note pages a long one (#420).
+      const read = await editMcp.whole<{ body?: string }>('read_note', { vaultId: vault.id, path: d.path }, 'body').then(
+        (r) => ({ body: r.body, error: '' }),
+        (err: unknown) => ({ body: undefined, error: String(err) }),
+      )
+      const body = read.body
       probes.push({
         path: d.path,
         issue: d.issue,
-        readNoteServes: body === undefined ? `error: ${r.text.slice(0, 120)}` : sha(body) === fin.disk.get(d.path)?.bodySha ? 'file' : sha(body) === fin.rowByPath.get(d.path)?.body_sha ? 'row' : 'neither',
+        readNoteServes: body === undefined ? `error: ${read.error.slice(0, 120)}` : sha(body) === fin.disk.get(d.path)?.bodySha ? 'file' : sha(body) === fin.rowByPath.get(d.path)?.body_sha ? 'row' : 'neither',
       })
     }
     const logs = await appLogsSince(startedIso, 3000)
