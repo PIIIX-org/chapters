@@ -121,7 +121,8 @@ export interface KeysetSection<T> {
  * A ranking an offset cursor pages: `items` is the whole ranking from its
  * first item (recomputed per page); the cursor holds the offset and a guard
  * over the `id`s before it, so a ranking that changed is refused, never
- * skipped or repeated. At most `limit` items per answer.
+ * skipped or repeated. `limit` bounds the whole ranking: pages walk its first
+ * `limit` items, and an item past them (a limit + 1 fetch) only sets `">limit"`.
  */
 export interface RankedSection<T> {
   name: string
@@ -242,11 +243,6 @@ export class Page {
     if (!parsed.success) throw invalid('not a position of this answer')
     return parsed.data
   }
-
-  /** How many items of ranked section `section` earlier pages showed (0 on its first page): a handler fetches this many plus its limit + 1. */
-  shownBefore(section: number): number {
-    return this.at?.s === section && typeof this.at.p === 'number' ? this.at.p : 0
-  }
 }
 
 /** Code-unit order: the same in JS and in Postgres `COLLATE "C"`, whatever the locale. */
@@ -308,8 +304,9 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
         throw new CursorError('CURSOR_STALE', `stale cursor: the ${section.name} changed since this cursor was issued; start again without \`cursor\``)
       }
       const limit = section.limit ?? Infinity
-      const rest = section.items.slice(start)
-      return { section, start, avail: rest.slice(0, limit), more: rest.length > limit, limit }
+      // `limit` bounds the ranking as a whole, not each page: pages walk its first `limit` items, and the
+      // lookahead item past them (a limit + 1 fetch) only says that more exist.
+      return { section, start, avail: section.items.slice(start, limit), more: section.items.length > limit, limit }
     }
     const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
     if (!Number.isSafeInteger(start) || start < 0) throw invalid('not a position of this answer')
@@ -513,6 +510,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
   let anyDropped = false
   // At counts and total: a list on this page was counted, so nothing after it is shown or continued.
   let counted = false
+  let anyMore = false
   const values: Array<[string, unknown]> = []
   for (const [n, slot] of plan.entries()) {
     const { section } = slot
@@ -539,7 +537,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       continue
     }
     const exact = slot.start < 0 ? 0 : slot.avail.length
-    counts.total[section.name] = slot.more ? `>${slot.limit === Infinity ? exact : slot.limit}` : exact
+    counts.total[section.name] = slot.more ? `>${exact}` : exact
     if (aggregate && slot.start >= 0) {
       values.push([section.name, aggregateOf(slot, aggregate)])
       counts.shown[section.name] = 0
@@ -554,7 +552,9 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
     counts.shown[section.name] = items.length
     counts.dropped[section.name] = exact - items.length
     anyDropped ||= exact > items.length
-    if (cursor !== null || (exact === items.length && !slot.more) || slot.start < 0) continue
+    anyMore ||= slot.start >= 0 && slot.more
+    // Past a ranked section's `limit` there is no page: a larger `limit` shows more.
+    if (cursor !== null || (exact === items.length && (!slot.more || section.kind === 'ranked')) || slot.start < 0) continue
     if (section.kind === 'keyset') {
       const last = items.length - 1
       const p: Resume = last >= 0 ? section.resume(items[last] as never, last) : n === ctx.at?.s ? ctx.at.p : null
@@ -566,7 +566,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
   }
   for (const [name, value] of values) out[name] = value
   // Below full every item lost its context or more, so the answer is never whole.
-  const whole = cursor === null && !anyDropped && ctx.level === 'full'
+  const whole = cursor === null && !anyDropped && !anyMore && ctx.level === 'full'
   const truncated: Truncated = whole ? false : { ...counts, level: ctx.level, cursor, narrow: ctx.narrow }
   out.truncated = truncated
   return { text: JSON.stringify(out), truncated }
