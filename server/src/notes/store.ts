@@ -2005,14 +2005,15 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
  * same transaction when it has none; a row changed behind the store is
  * rebased into it and folded first, and so is a tail left unfolded. Never
  * reads a file or a `.crdt` bin, and never rebuilds the text (#488).
- * Returns the state to apply to the document, the note's path, and the last
+ * Returns the state to apply to the document, the note's path, the last
  * update id that state includes (null while `fold_error` is set: the open
- * document then caches nothing, see note-crdt.ts readNoteCrdt).
+ * document then caches nothing, see note-crdt.ts readNoteCrdt), and that
+ * `fold_error` (the relay tells the editors of a quarantine it names, #784).
  */
 export async function loadCollabState(
   vaultId: string,
   noteId: string,
-): Promise<{ state: Uint8Array; path: string; lastId: number | null }> {
+): Promise<{ state: Uint8Array; path: string; lastId: number | null; foldError: string | null }> {
   for (let round = 0; round < WRITE_ROUNDS; round++) {
     const [note] = await db
       .select({ path: notes.path })
@@ -2029,11 +2030,11 @@ export async function loadCollabState(
         if (stored) {
           const { row } = await catchUp(tx, locked, stored, null, { storeRow: true })
           if (row.seq !== locked.seq) foldedRow = true
-          return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null }
+          return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null, foldError: stored.foldError }
         }
         const seed = seedDocument(noteId, { frontmatter: locked.frontmatter as Record<string, unknown>, body: locked.body })
         await insertNoteCrdt(tx, noteId, seed, locked.seq)
-        return { state: Y.encodeStateAsUpdate(seed), lastId: 0 }
+        return { state: Y.encodeStateAsUpdate(seed), lastId: 0, foldError: null }
       }),
     )
     // A fold that stored the row wakes the projector, so the file follows at once, not at its next poll.
