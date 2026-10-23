@@ -77,8 +77,8 @@ procedure, so a run is deterministic up to the index Elara builds.
 |---|---|---|
 | ranking call | MCP `search {query: question, repositoryId, limit: 10}`; hits of exactly equal score are read in path order (the server leaves such ties to row order, #623) | `rg --count -i -e <keywords>` over the checkout, files sorted by matching lines (ties by path), first 50 shown |
 | where in the files | (the `search` response itself) | one `rg -n -i -m 5 -e <keywords> -- <top 10 files>`: the first 5 matching lines of each, each line cut at 200 characters |
-| reads, best file first | MCP `read_file` of each hit (the whole file; Elara has no line ranges) | up to 2 ranged reads per file of 41 lines (10 before, 30 after a match the earlier read did not show) |
-| lines put in context | whole files read; for `search` symbol hits, the snippet's lines (file hits carry a keyword headline without line numbers, so they show none) | the `rg -n` lines and the ranged reads |
+| reads, best file first | MCP `read_file` of each hit, page by page from line 1 (the default 4,000-token budget, #420), following `truncated.cursor` until the gold is seen or the file ends; Elara has no ranged reads yet | up to 2 ranged reads per file of 41 lines (10 before, 30 after a match the earlier read did not show) |
+| lines put in context | the lines of the pages read (a line split across pages counts on the page where it ends); for `search` symbol hits, the snippet's lines (file hits carry a keyword headline without line numbers, so they show none) | the `rg -n` lines and the ranged reads |
 
 Note that the grep ranking lists up to 50 files and Elara's at most 10
 hits; hit@k, MRR and NDCG are cut at 10, so this does not favour either.

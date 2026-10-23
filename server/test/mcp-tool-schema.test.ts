@@ -11,8 +11,11 @@ import { buildApp } from '../src/app.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
-/** Characters of `JSON.stringify({ tools })` for an admin account token (#430: 51,972 before, 46,385 after). */
-const TOOLS_LIST_CEILING = 47_000
+/**
+ * Characters of `JSON.stringify({ tools })` for an admin account token (#430: 51,972 before, 46,385 after).
+ * With `budget_tokens`, `cursor` and the envelope sentence on the 10 budgeted tools (#420, #422): 49,084.
+ */
+const TOOLS_LIST_CEILING = 49_500
 
 let app: FastifyInstance
 let client: Client

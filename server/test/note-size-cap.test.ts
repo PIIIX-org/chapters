@@ -116,6 +116,19 @@ function textOf(result: Awaited<ReturnType<Client['callTool']>>): string {
   return content[0]?.text ?? ''
 }
 
+/** A note's whole body over MCP: read_note pages a long one (#420). */
+async function mcpBody(client: Client, args: Record<string, unknown>): Promise<string> {
+  let body = ''
+  let cursor: string | null = null
+  for (;;) {
+    const read = await client.callTool({ name: 'read_note', arguments: { ...args, budget_tokens: 25_000, ...(cursor ? { cursor } : {}) } })
+    const page = JSON.parse(textOf(read)) as { body: string; truncated: false | { cursor: string | null } }
+    body += page.body
+    cursor = page.truncated === false ? null : page.truncated.cursor
+    if (cursor === null) return body
+  }
+}
+
 beforeAll(async () => {
   app = await buildApp()
   await app.listen({ port: 0, host: '127.0.0.1' })
@@ -349,8 +362,7 @@ describe('note body size cap (#491)', () => {
     expect(closes).toEqual([])
 
     const client = await mcpClient()
-    const read = await client.callTool({ name: 'read_note', arguments: { vaultId, path: 'docs/collab-fits' } })
-    expect((JSON.parse(textOf(read)) as { body: string }).body).toBe(full)
+    expect(await mcpBody(client, { vaultId, path: 'docs/collab-fits' })).toBe(full)
     // Same size: the last line swapped for the agent's own.
     const edited = `${full.slice(0, full.length - 20)}appended by agent!!!`
     expect(Buffer.byteLength(edited)).toBe(CAP)

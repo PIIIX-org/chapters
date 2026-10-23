@@ -145,7 +145,7 @@ const test: LabTest = {
         )
         // Real time on purpose: the collab relay's debounced store runs on the server clock; let it land before reading.
         await Bun.sleep(SETTLE_MS)
-        const final = (await admin.must<{ body: string }>('read_note', { vaultId: vault.id, path: shared })).body
+        const final = (await admin.whole<{ body: string }>('read_note', { vaultId: vault.id, path: shared }, 'body')).body
         const okWriters = outcomes.filter((o) => o.ok).map((o) => o.writer)
         const lost = okWriters.filter((i) => !final.includes(line(i)))
         const revs = await historySince(admin, vault.id, shared, since)
@@ -182,7 +182,7 @@ const test: LabTest = {
         )
         // Real time on purpose: the collab relay's debounced store runs on the server clock.
         await Bun.sleep(SETTLE_MS)
-        const file = await admin.must<{ body: string; frontmatter: { description?: string } }>('read_note', { vaultId: vault.id, path: shared })
+        const file = await admin.whole<{ body: string; frontmatter: { description?: string } }>('read_note', { vaultId: vault.id, path: shared }, 'body')
         const row = await dbNote(ctx, vault.id, shared)
         const okWriters = outcomes.filter((o) => o.ok).map((o) => o.writer)
         const bodyWriter = /R\d+ w(\d+)\./.exec(file.body)?.[1]

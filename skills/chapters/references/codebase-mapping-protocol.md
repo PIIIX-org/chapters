@@ -94,7 +94,7 @@ Phase 0 only reads from the target repository and asks the user questions. It wr
 3. **Core Data Structures & Models**:
    - Locate migrations, ORM schema definitions, and protobuf/OpenAPI schemas.
 
-**Large repositories**: `browse_repository` returns every indexed file in one flat list, and `read_file` always returns the whole file. Read manifests and entrypoints first and open files selectively; if a local clone is available, it is cheaper for bulk reading.
+**Large repositories**: `browse_repository` lists every indexed file by path and `read_file` reads a file from line 1, both in pages of `budget_tokens` (follow `truncated.cursor`); there is no ranged read yet. Read manifests and entrypoints first and open files selectively; if a local clone is available, it is cheaper for bulk reading.
 
 ---
 

@@ -58,11 +58,20 @@ export interface RevisionMeta {
   bodyBytes: number
 }
 
+/** The block every budgeted tool's answer ends with (#422): false, or what was left out and the next page's cursor. */
+export type Truncated = false | { shown: Record<string, number>; total: Record<string, number | string>; dropped: Record<string, number>; cursor: string | null }
+
+/** `truncated.cursor` of a budgeted tool's answer, or null on its last page. */
+export function nextCursor(json: unknown): string | null {
+  const truncated: unknown = json && typeof json === 'object' ? Reflect.get(json, 'truncated') : undefined
+  const cursor: unknown = truncated && typeof truncated === 'object' ? Reflect.get(truncated, 'cursor') : undefined
+  return typeof cursor === 'string' ? cursor : null
+}
+
 /** note_history's result: one page, newest first. */
 export interface HistoryPage {
   revisions: RevisionMeta[]
-  hasMore: boolean
-  nextCursor: string | null
+  truncated: Truncated
 }
 
 /** get_revision's result: one revision with its content. */
@@ -203,10 +212,27 @@ export class McpClient {
       const page: HistoryPage = await this.must('note_history', { vaultId, path, limit: 100, ...(cursor ? { cursor } : {}) })
       const newer = page.revisions.filter((r) => r.createdAt > sinceIso)
       kept.push(...newer)
-      cursor = newer.length === page.revisions.length ? page.nextCursor : null
+      cursor = newer.length === page.revisions.length ? nextCursor(page) : null
     } while (cursor)
     const out: RevisionContent[] = []
-    for (const r of kept) out.push(await this.must<RevisionContent>('get_revision', { vaultId, path, revisionId: r.id }))
+    for (const r of kept) out.push(await this.whole<RevisionContent>('get_revision', { vaultId, path, revisionId: r.id }, 'body'))
     return out
+  }
+
+  /**
+   * A read tool's answer with its text field `field` whole (read_note and
+   * get_revision `body`, read_file `content`): a long text comes in pages
+   * (#420), followed here with the largest budget. The other fields are the
+   * first page's. Throws when a call fails.
+   */
+  async whole<T>(tool: string, args: Record<string, unknown>, field: string): Promise<T> {
+    const first = await this.must<Record<string, unknown>>(tool, { budget_tokens: 25_000, ...args })
+    let text = stringField(first, field) ?? ''
+    for (let cursor = nextCursor(first); cursor; ) {
+      const page = await this.must<Record<string, unknown>>(tool, { budget_tokens: 25_000, ...args, cursor })
+      text += stringField(page, field) ?? ''
+      cursor = nextCursor(page)
+    }
+    return { ...first, [field]: text } as T
   }
 }

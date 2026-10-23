@@ -280,7 +280,7 @@ async function prepare(c: Case, acct: McpClient, fx: Fixtures, memberId: string)
   const trashedNoteId = async (vaultId: string) => {
     const path = await freshNote(vaultId)
     await acct.must('delete_note', { vaultId, path })
-    const trash = await acct.must<Array<{ id: string; path: string }>>('list_trash', { vaultId, limit: 100 })
+    const { notes: trash } = await acct.must<{ notes: Array<{ id: string; path: string }> }>('list_trash', { vaultId, limit: 100, budget_tokens: 25_000 })
     return trash.find((t) => t.path === path)!.id
   }
   if (v && c.tool === 'rename_note') args.from = await freshNote(v.id)
@@ -330,7 +330,7 @@ async function vaultFixture(acct: McpClient, id: string, name: string, marker: s
   await note('concepts/lab-purge-probe')
   await acct.must('delete_note', { vaultId: id, path: 'concepts/lab-trash-probe' })
   await acct.must('delete_note', { vaultId: id, path: 'concepts/lab-purge-probe' })
-  const trash = await acct.must<Array<{ id: string; path: string }>>('list_trash', { vaultId: id })
+  const { notes: trash } = await acct.must<{ notes: Array<{ id: string; path: string }> }>('list_trash', { vaultId: id, budget_tokens: 25_000 })
   const history = (await acct.must<HistoryPage>('note_history', { vaultId: id, path: 'concepts/lab-scope-probe' })).revisions
   return {
     id,
@@ -377,7 +377,7 @@ const test: LabTest = {
     const repoFixture = async (id: string, name: string): Promise<RepoFixture> => {
       await acct.must('share_repository', { repositoryId: id, granteeType: 'user', granteeId: env.users.member.id })
       const shares = await acct.must<Array<{ id: string }>>('list_repository_shares', { repositoryId: id })
-      const files = await acct.must<Array<{ path: string; language: string | null }>>('browse_repository', { repositoryId: id })
+      const { files } = await acct.must<{ files: Array<{ path: string; language: string | null }> }>('browse_repository', { repositoryId: id, budget_tokens: 25_000 })
       const code = files.filter((f) => f.language === 'python' || f.language === 'typescript' || f.language === 'javascript')
       return {
         id,

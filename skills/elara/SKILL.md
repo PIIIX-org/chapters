@@ -44,7 +44,7 @@ When exploring a project or answering questions about architecture, concepts, or
   - Use `list_graph_perspectives` to see curated domain or subsystem perspectives.
 - **Step 3 — Read Context**:
   - Use `read_note` for the specific notes identified by the search/graph.
-  - For code, `read_file` returns the whole file. When the repo is checked out locally, read only the line range that `find_symbols` or `search` returned; use `read_file` only for repos you do not have locally.
+  - For code, `read_file` reads from line 1 in pages (`budget_tokens`, default 4,000; `truncated.cursor` continues). When the repo is checked out locally, read only the line range that `find_symbols` or `search` returned; use `read_file` only for repos you do not have locally.
 
 ### 2. Note Creation & Editing (OKF Standard)
 When creating or editing notes via `create_note` or `edit_note`:
@@ -247,7 +247,7 @@ Elara exposes 60 tools across 7 functional domains. **Capability** is the token 
 | `list_repositories` | Account | `read` | List all connected codebase repositories. |
 | `connect_repository` | Account | `admin` | Connect a repo (git URL or local filesystem path). |
 | `browse_repository` | Repo/Account | `read` | List every indexed file of a repository (flat list). |
-| `read_file` | Repo/Account | `read` | Read a whole code file with its symbol outline. |
+| `read_file` | Repo/Account | `read` | Read a code file from line 1, in pages of `budget_tokens`, with its symbol outline. |
 | `repository_status` | Repo/Account | `read` | Check sync state, last sync time, last sync error, `filesPendingExtraction` and `extractionFailures`. |
 | `sync_repository` | Repo/Account | `write` | Trigger immediate synchronization of a repository. |
 | `update_repository` | Repo/Account | `admin` | Update repository name or mergeable setting (owner only). |

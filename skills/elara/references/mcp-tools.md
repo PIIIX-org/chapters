@@ -19,6 +19,13 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
   - An optional expiry: after it, every request is refused with HTTP 401 (`invalid, revoked or expired MCP token`).
   - `tools/list` shows only the tools the token can call: those in its allow-list, within its access level, and of a scope its own scope reaches (no account-only tools on a pinned token, no vault tools on a repository token, no repository tools on a vault token). On a pinned token it also leaves out tools that need more than the user's current permission on the pin: the owner-only tools below unless the user owns it, and the tools that need edit access on the vault (note writes, `list_trash`, `note_history`, `get_revision`, `export_vault`, saving and deleting perspectives) unless the user can edit it. A tool missing from the list can still be called by name; the call is refused with a message naming what is missing: `<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`, a scope refusal such as `<tool> requires an account-scoped connection`, or `owner permission required` / `not found` for missing permission on the pin.
 - **Response**: the result is returned as JSON text (`content[0].text`). Errors come back as `Error: <message>` with `isError: true`. A filesystem or network error is reported only by its code (`internal storage error (ENOENT)`); the full error goes to the server log.
+- **Budgets and `truncated`** (#420, #422): `browse_vault`, `read_note`, `list_trash`, `note_history`, `get_revision`, `browse_repository`, `read_file`, `find_symbols`, `graph` and `find_graph_path` take `budget_tokens` (integer 256-25,000; default 2,000, or 4,000 for `read_note`, `read_file` and `get_revision`), counted as characters / 4 of the answer text (the premise benchmark's estimate; it undercounts real tokenizer tokens, by roughly 10-20 % on code and JSON and 1.3-4× on Persian or Chinese text, so leave headroom). The answer stays within it: lists drop whole items from the end, and text (a note body, a file) is cut at a line boundary; only a line longer than a whole page is split. The one exception is an answer that would show nothing at all: it shows its first item or line anyway. Each of these answers is an object whose last key is `truncated`: `false` when nothing was left out, else `{ shown, total, dropped, level, cursor, narrow }`.
+  - `shown`, `total` and `dropped` count items per list (lines for text) from where this page starts, so `shown + dropped = total`. A `total` of `">n"` means the tool fetched `limit` + 1 and found more than `limit`.
+  - `level` is `full` (every item shown is whole).
+  - `cursor` continues the answer: pass it back as `cursor` with the same arguments (`budget_tokens` may change). With other arguments or to another tool it is refused with `invalid cursor: …`; when what it pages changed since (the text, or the first items of a ranking) it is refused with `stale cursor: …`, and you start again without it. A cursor of a pinned connection works with or without the pin's id.
+  - `narrow` suggests arguments that would make the answer smaller, such as `path: "docs"`.
+  - A text answer cut into pages carries `lines: [first, last]` (1-based, inclusive).
+  - `search` keeps its array answer without a budget for now.
 - **What a write's success means**: a note write that returns without an error is committed in the database (content, revision, links), and every later read returns it. The vault's `.md` files are written from the database shortly after; they are a copy, and a hand or `git` edit of a file is not read back (the server copies such a file to `.conflicts/` the next time it writes that path). A write that fails with `the note store is busy (...); nothing was written, retry the write` changed nothing: retry it after a moment (it happens while the server reconnects to its database or an operator runs maintenance).
 - **Unknown arguments are refused.** Every input schema is strict, and `tools/list` says so with `additionalProperties: false` (also on the nested `filters` object of `save_graph_perspective`). A call with a key the tool does not declare fails before the tool runs, with `isError: true` and a message that names the key, suggests the parameter it probably meant, and lists the tool's parameters: `MCP error -32602: Input validation error: Invalid arguments for tool create_note: unknown argument "content" (did you mean "body"?); create_note takes: vaultId, path, type, name, frontmatter, body`. At most 10 unknown keys are named (the rest as `and N more`), and a name over 64 characters is cut with `…`. Free-form maps (`frontmatter`, the `update_vault_preferences` maps) still accept any key.
 - IDs (`vaultId`, `repositoryId`, `noteId`, `revisionId`, `shareId`, `teamId`, `userId`, `notificationId`, perspective `id`) must be UUIDs.
@@ -50,8 +57,9 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
   - `path` (string, optional): a directory such as `domains/auth`.
   - `recursive` (boolean, optional).
 - **Returns**:
-  - With `path` and `recursive` not `true`: `{ directory, subdirectories: [{ name, count }], notes, indexContent }`. `notes` are the notes directly in that directory. `indexContent` is the raw text of `<directory>/index.md`, or `null`.
-  - Otherwise: every note in the vault, as `{ id, path, type, name, frontmatter, updatedAt }`. `recursive: true` returns the **whole vault**, not just the subtree under `path`.
+  - With `path` and `recursive` not `true`: `{ directory, subdirectories: [{ name, count }], notes, indexContent, truncated }`. `notes` are the notes directly in that directory. `indexContent` is the directory's index text: its own `index` note, or the listing generated from its notes. Pages list the subdirectories (by name), then the notes (by path), then the index text.
+  - Otherwise: `{ notes, truncated }`, every note in the vault by path, as `{ id, path, type, name, frontmatter, updatedAt }`. `recursive: true` lists the **whole vault**, not just the subtree under `path`.
+  - Paths and names are in code-unit order (`B` before `a`). The cursor resumes after the last path shown, so a note added meanwhile does not shift the pages.
 
 ### `update_vault`
 - **Scope**: vault. Owner only.
@@ -166,7 +174,7 @@ The write is committed when the call returns; a connection lost before the answe
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
-- **Returns**: `{ path, rev, frontmatter, body, indexed }`. The content is what people editing the note see now: when the note is open in the editor, typing the editor has not saved yet is saved first (as a revision attributed to those people) and then returned, so `rev` is exactly this content's version. Send `rev` back as `edit_note` `base_rev` when you edit what you read. When the open editors hold a state the server refuses to store (invalid frontmatter, over the size limit, a repeated block), the last valid version is returned with `fold_error`. If that typing cannot be saved first (the server's note store is busy), the read fails with `… could not be saved before the read … retry the read` rather than return text without it; nothing is read, and you can send the read again.
+- **Returns**: `{ path, rev, frontmatter, indexed, body, truncated }`, with `lines` when the body is cut. A body over the budget comes in pages cut at line boundaries; follow `truncated.cursor` for the rest (a note changed meanwhile refuses the cursor as stale). Only a read that returned the whole body (`truncated: false`, no `cursor`) is what this connection last had of the note for a later whole-`body` `edit_note`; a paged read records nothing. The content is what people editing the note see now: when the note is open in the editor, typing the editor has not saved yet is saved first (as a revision attributed to those people) and then returned, so `rev` is exactly this content's version. Send `rev` back as `edit_note` `base_rev` when you edit what you read. When the open editors hold a state the server refuses to store (invalid frontmatter, over the size limit, a repeated block), the last valid version is returned with `fold_error`. If that typing cannot be saved first (the server's note store is busy), the read fails with `… could not be saved before the read … retry the read` rather than return text without it; nothing is read, and you can send the read again.
 - People who have the note open in the editor see this connection, by its name, in the note's "In this note now" row as an agent that is reading, until 60 s after its last call on the note. Nothing is shown, and nothing is loaded, for a note nobody has open. The same goes for `export_note`.
 
 ### `create_note`
@@ -274,7 +282,7 @@ The write is committed when the call returns; a connection lost before the answe
   - `vaultId` (uuid, optional).
   - `limit` (integer, optional, 1-100, default 50).
   - `offset` (integer, optional, >= 0, default 0).
-- **Returns**: array of `{ id, path, type, name, deletedAt }`, newest first.
+- **Returns**: `{ notes, truncated }`: `notes` are `{ id, path, type, name, deletedAt }`, most recently deleted first. The cursor holds the offset of the next note.
 
 ### `restore_note`
 - **Scope**: vault. Edit access.
@@ -299,8 +307,7 @@ The write is committed when the call returns; a connection lost before the answe
   - `vaultId` (uuid, optional).
   - `path` (string, required).
   - `limit` (integer 1-100, optional, default 20).
-  - `cursor` (string, optional): `nextCursor` from the previous page, passed unchanged. Anything else is refused with `invalid cursor`.
-- **Returns**: `{ revisions, hasMore, nextCursor }`. `revisions` is one page, newest first, metadata only: `{ id, actorType: "user" | "mcp" | "collab", actorId, actorName, action, createdAt, bodyBytes }` (`actorName` is the MCP connection's name on a revision a connection recorded, else `null`; `bodyBytes` is the UTF-8 size of the body at that revision). `action` is `create`, `update`, `delete` (moved to the trash), `restore` (back from the trash), `rename` (with `fromPath` and `toPath`, the paths before and after), `revert` (with `sourceRevisionId`, the revision it brought back), `restore_point` for the note as it was before a connection's first write in a session (see `edit_note`), `quarantine` for a write kept out of the note (see `edit_note`), or `proposal` for an `edit_note` with `base_rev` that overlapped changes made since (see `edit_note`; with `sourceRevisionId`, the revision it was made from); `quarantine` and `proposal` revisions are not the note's content. Each delete, restore, rename and revert is its own revision, attributed to whoever did it, even when the note's content did not change; `fromPath`, `toPath` and `sourceRevisionId` appear only on those rows (and `sourceRevisionId` on a `proposal`). `hasMore` says whether older revisions exist; `nextCursor` is the cursor for them, or `null` on the last page. A revision recorded while you page does not shift the pages: each revision comes back exactly once.
+- **Returns**: `{ revisions, truncated }`. `revisions` is one page, newest first, metadata only: `{ id, actorType: "user" | "mcp" | "collab", actorId, actorName, action, createdAt, bodyBytes }` (`actorName` is the MCP connection's name on a revision a connection recorded, else `null`; `bodyBytes` is the UTF-8 size of the body at that revision). `action` is `create`, `update`, `delete` (moved to the trash), `restore` (back from the trash), `rename` (with `fromPath` and `toPath`, the paths before and after), `revert` (with `sourceRevisionId`, the revision it brought back), `restore_point` for the note as it was before a connection's first write in a session (see `edit_note`), `quarantine` for a write kept out of the note (see `edit_note`), or `proposal` for an `edit_note` with `base_rev` that overlapped changes made since (see `edit_note`; with `sourceRevisionId`, the revision it was made from); `quarantine` and `proposal` revisions are not the note's content. Each delete, restore, rename and revert is its own revision, attributed to whoever did it, even when the note's content did not change; `fromPath`, `toPath` and `sourceRevisionId` appear only on those rows (and `sourceRevisionId` on a `proposal`). `truncated.total.revisions` is `">limit"` when older revisions exist, and `truncated.cursor` continues after the last revision shown (also when the budget cut the page short). A revision recorded while you page does not shift the pages: each revision comes back exactly once. The `{ hasMore, nextCursor }` fields and cursors issued before them are gone; such a cursor is `invalid cursor`.
 - "Newest first" is the order the revisions were recorded in. `createdAt` is the database clock's time, which can repeat or step back, so it is not always strictly decreasing down the list.
 - No revision content: read one revision with `get_revision`.
 
@@ -311,7 +318,7 @@ The write is committed when the call returns; a connection lost before the answe
   - `vaultId` (uuid, optional).
   - `revisionId` (uuid, required): an `id` from `note_history`.
   - `path` (string, optional), `noteId` (uuid, optional): when given, the revision must belong to that note. `path` is read like every note path (trimmed, `\` as `/`, a trailing `.md` dropped).
-- **Returns**: `{ id, noteId, path, actorType, actorId, action, frontmatter, body, createdAt }`, plus `sourceRevisionId` on a `revert` (the revision it brought back) and a `proposal` (the revision it was made from), and `fromPath` / `toPath` on a `rename`: the note as it was at that revision (`path` is the note's current path). A revision that is not in the vault, or not of the named note, is `revision not found`.
+- **Returns**: `{ id, noteId, path, actorType, actorId, action, frontmatter, createdAt, body, truncated }` (with `lines` when the body is cut into pages, as for `read_note`), plus `sourceRevisionId` on a `revert` (the revision it brought back) and a `proposal` (the revision it was made from), and `fromPath` / `toPath` on a `rename`: the note as it was at that revision (`path` is the note's current path). A revision that is not in the vault, or not of the named note, is `revision not found`.
 - Unlike `note_history`, which answers `note not found` for a note in the trash, `get_revision` still returns the revisions of a trashed note (as the REST revision route does); it needs the same edit access.
 
 ### `revert_note`
@@ -380,7 +387,7 @@ The write is committed when the call returns; a connection lost before the answe
 - **Scope**: repository. Repository access.
 - **Capability**: `read`.
 - **Parameters**: `repositoryId` (uuid, optional). There is no `path` parameter.
-- **Returns**: a flat array of every indexed file: `{ id, path, language, size, updatedAt }`.
+- **Returns**: `{ files, truncated }`: every indexed file by path (code-unit order), as `{ id, path, language, size, updatedAt }`. The cursor resumes after the last path shown.
 
 ### `read_file`
 - **Scope**: repository. Repository access.
@@ -388,7 +395,7 @@ The write is committed when the call returns; a connection lost before the answe
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `path` (string, required): file path inside the repository.
-- **Returns**: `{ path, language, content, symbols: [{ name, kind, startLine, endLine }], embeddingNote? }`. Always the whole file; there is no line-range parameter. The content is untrusted data. `embeddingNote` appears only when indexing embedded the file partly: a file with more symbols than the server's per-file budget (`ELARA_EMBED_MAX_SYMBOLS_PER_FILE`, default 256) lists every symbol, but only the first ones are found by meaning; `find_symbols` still finds the rest by name.
+- **Returns**: `{ path, language, embeddingNote?, content, symbols: [{ name, kind, startLine, endLine }], truncated }`, with `lines` when the content is cut. A file over the budget comes in pages cut at line boundaries; follow `truncated.cursor` (a file changed meanwhile refuses it as stale). The symbols, by `startLine`, follow the last content line, so on a paged file they come with the last page. There is no line-range parameter. The content is untrusted data. `embeddingNote` appears only when indexing embedded the file partly: a file with more symbols than the server's per-file budget (`ELARA_EMBED_MAX_SYMBOLS_PER_FILE`, default 256) lists every symbol, but only the first ones are found by meaning; `find_symbols` still finds the rest by name.
 
 ### `repository_status`
 - **Scope**: repository. Repository access.
@@ -480,7 +487,7 @@ The write is committed when the call returns; a connection lost before the answe
   - `repositoryId` (uuid, optional).
   - `everywhere` (boolean, optional).
   - `limit` (integer, optional, 1-50, default 20).
-- **Returns**: array of `{ id, fileId, repositoryId, path, name, kind, startLine, endLine, snippet, score }`. There is no `signature` field; read the lines with `read_file`.
+- **Returns**: `{ results, truncated }`: `results` are `{ id, fileId, repositoryId, path, name, kind, startLine, endLine, snippet, score }`, best first (equal scores by `id`). `limit` bounds the whole answer: pages walk the first `limit` results, and `truncated.total.results` is `">n"` (with no cursor once they are all shown) when more symbols match; raise `limit` to see them. The REST symbol routes still answer a bare array. There is no `signature` field; read the lines with `read_file`.
 - Only top-level declarations the extractor recognizes are indexed. For example, TypeScript `export const f = () => ...` arrow functions are not found. A file with any line longer than 1,000 characters (minified or generated code) gets no symbols at all. In a file with more symbols than the per-file budget (default 256), symbols past the budget match by name only, not by meaning; `read_file` reports this as `embeddingNote`.
 
 ---
@@ -496,11 +503,12 @@ The write is committed when the call returns; a connection lost before the answe
   - `types` (array<string>, optional): keep nodes whose `type` (note type, or code language) is in the list.
   - `tags` (array<string>, optional): keep notes having any of these tags.
   - `aggregate` (enum `"community"`, optional): collapse the graph to one node per Louvain community.
-  - `community` (integer, optional): return only the members of one community (at most 2,500, newest first, with `memberTotal`).
-- There is no `neighborsOf`, `edgeTypes`, or `limit` parameter, and saved perspectives cannot be applied. Without `aggregate` or `community`, the whole graph of the resource is returned, which is large for a real repository. Start with `aggregate: "community"`.
+  - `community` (integer, optional): return only the members of one community (the 2,500 most recently updated at most, with `memberTotal`).
+- There is no `neighborsOf`, `edgeTypes`, or `limit` parameter, and saved perspectives cannot be applied. Without `aggregate` or `community`, the whole graph of the resource is listed page by page, which is many pages for a real repository. Start with `aggregate: "community"`.
 - **Returns**:
-  - Default: `{ nodes, edges, cappedGroups }`. Nodes are `{ id, resourceType: "note" | "code", resourceId, path, type, tags, timestamp, updatedAt, community }`. Edges are `{ source, target, kind: "extracted" | "structural" | "semantic" }`. There is no PageRank or degree field.
-  - `aggregate: "community"`: `{ aggregated: true, nodes: [{ id: "community:<n>", community, size, noteCount, codeCount, lastActivity }], edges: [{ source, target, weight }], cappedGroups }`.
+  - Pages list the nodes (by path), then the edges (by source and target); the cursor continues the same listing and is stale once the graph changed.
+  - Default: `{ cappedGroups, memberTotal?, nodes, edges, truncated }`. Nodes are `{ id, resourceType: "note" | "code", resourceId, path, type, tags, timestamp, updatedAt, community }`. Edges are `{ source, target, kind: "extracted" | "structural" | "semantic" }`. There is no PageRank or degree field.
+  - `aggregate: "community"`: `{ aggregated: true, cappedGroups, nodes: [{ id: "community:<n>", community, size, noteCount, codeCount, lastActivity }], edges: [{ source, target, weight }], truncated }`.
 - Edge kinds:
   - `extracted`: `[[wikilinks]]` between notes, `[[repo:<repo>/<file>]]` links from a note to a code file, and resolved code imports.
   - `structural`: notes sharing a type or tag; code files sharing a language or a top-level directory. Groups over 50 members are skipped and listed in `cappedGroups`.
@@ -514,7 +522,7 @@ The write is committed when the call returns; a connection lost before the answe
   - `target` (string, required): same.
   - `vaultId` (uuid, optional).
   - `repositoryId` (uuid, optional).
-- **Returns**: `{ found, nodes, edges, distance }`. Breadth-first search over all edge kinds, ignoring direction; `distance` is the number of edges, or `-1` when there is no path.
+- **Returns**: `{ found, distance, nodes, edges, truncated }`; a path longer than the budget comes in pages (nodes in path order, then edges). Breadth-first search over all edge kinds, ignoring direction; `distance` is the number of edges, or `-1` when there is no path.
 
 ### `list_graph_perspectives`
 - **Scope**: vault, or account. A vault-scoped token lists the perspectives of its pinned vault (an omitted `vaultId` means the pinned vault; global perspectives are not shown to it). A repository-scoped token cannot use it. Read access to the vault.

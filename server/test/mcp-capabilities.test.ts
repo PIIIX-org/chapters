@@ -71,7 +71,7 @@ async function vaultFixture(name: string) {
   await must(acct, 'create_note', { vaultId: vault.id, type: 'docs', name: 'kept', body: 'kept' })
   await must(acct, 'create_note', { vaultId: vault.id, type: 'docs', name: 'trashed', body: 'trashed' })
   await must(acct, 'delete_note', { vaultId: vault.id, path: 'docs/trashed' })
-  const trash = await must<Array<{ id: string }>>(acct, 'list_trash', { vaultId: vault.id })
+  const { notes: trash } = await must<{ notes: Array<{ id: string }> }>(acct, 'list_trash', { vaultId: vault.id })
   const { revisions } = await must<{ revisions: Array<{ id: string }> }>(acct, 'note_history', { vaultId: vault.id, path: 'docs/kept' })
   // A past state: the revision of the note as it is now cannot be purged (ADR-003 §5.5).
   // Edited and put back, so the note still reads `kept`.
@@ -222,7 +222,7 @@ describe('Pinned tokens and admin tools (#549)', () => {
     }
     // Nothing changed: the share, the trashed note, the revision and the vault are all still there.
     expect((await must<Array<{ id: string }>>(acct, 'list_vault_shares', { vaultId: v.id })).map((s) => s.id)).toEqual([v.shareId])
-    expect((await must<Array<{ id: string }>>(acct, 'list_trash', { vaultId: v.id })).map((t) => t.id)).toContain(v.trashedId)
+    expect((await must<{ notes: Array<{ id: string }> }>(acct, 'list_trash', { vaultId: v.id })).notes.map((t) => t.id)).toContain(v.trashedId)
     expect((await must<{ revisions: Array<{ id: string }> }>(acct, 'note_history', { vaultId: v.id, path: 'docs/kept' })).revisions.map((r) => r.id)).toContain(
       v.revisionId,
     )

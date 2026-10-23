@@ -174,7 +174,7 @@ beforeAll(async () => {
   ).id
   await must(acctA, 'create_note', { vaultId: VA, type: 'docs', name: 'a-trashed', body: MARK_A })
   await must(acctA, 'delete_note', { vaultId: VA, path: 'docs/a-trashed' })
-  const trash = await must<Array<{ id: string; path: string }>>(acctA, 'list_trash', { vaultId: VA })
+  const { notes: trash } = await must<{ notes: Array<{ id: string; path: string }> }>(acctA, 'list_trash', { vaultId: VA })
   const { revisions } = await must<{ revisions: Array<{ id: string }> }>(acctA, 'note_history', { vaultId: VA, path: PATH.A })
   await must(acctA, 'share_vault', { vaultId: VA, granteeType: 'user', granteeId: c.id, permission: 'read' })
   const vaultShares = await must<Array<{ id: string }>>(acctA, 'list_vault_shares', { vaultId: VA })
