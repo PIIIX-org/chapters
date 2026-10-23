@@ -13,9 +13,9 @@ type Reply = Record<string, unknown>
 const NOTE_FIELDS = ['id', 'vaultId', 'type', 'name', 'path', 'frontmatter', 'body', 'createdAt', 'updatedAt', 'rev']
 const PUT_BASE_REV_EXTRAS = ['status', 'concurrentChanges', 'baseRev']
 const ALLOWED = new Set([...NOTE_FIELDS, ...PUT_BASE_REV_EXTRAS])
-const INTERNAL = ['embedding', 'deletedAt', 'frontmatterSrc', 'fts', 'seq', 'storeMigratedAt', 'collabMigratedAt']
-/** A small note's whole reply: far below one 384-float embedding (~7 kB of JSON). */
-const MAX_REPLY_CHARS = 1500
+const INTERNAL = ['embedding', 'deletedAt', 'frontmatterSrc', 'seq']
+/** A small note's whole reply: 212-385 chars measured (#931); one 384-float embedding is ~7 kB of JSON. */
+const MAX_REPLY_CHARS = 600
 
 let app: FastifyInstance
 let cookie: string
