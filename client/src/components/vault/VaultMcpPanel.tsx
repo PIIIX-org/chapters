@@ -233,6 +233,8 @@ function CreateMcpConnectionForm({
           onCreated(connection.token, connection.name)
           setName('')
           setAllowedTools([])
+          // The next token's profile follows its access level again.
+          setPickedProfile(null)
         },
         onError: (err) => setError(err.message || copy.createError),
       },

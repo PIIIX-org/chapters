@@ -255,15 +255,6 @@ export function serializeNote(note: OkfNote): string {
 }
 
 /**
- * The line of the note file (`serializeNote`) where the body begins: the
- * offset that turns a body-relative line (how `note_links` stores them,
- * ADR-004 §2.2) into a whole-file line. Key order does not change it.
- */
-export function bodyStartLine(frontmatter: Frontmatter): number {
-  return serializeNote({ frontmatter, body: '' }).split('\n').length
-}
-
-/**
  * Frontmatter is everything between an opening `---` line and the first line
  * that is exactly `---` (trailing spaces/tabs allowed). Both fences must be
  * whole lines: a `---` inside a value (`title: alpha---beta`, a block scalar
