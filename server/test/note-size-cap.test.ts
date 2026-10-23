@@ -21,6 +21,7 @@ import { createNote, getLiveNote, readNote, updateNote } from '../src/notes/stor
 import { flushProjections } from '../src/notes/projector.js'
 import { NoteTooLargeError } from '../src/notes/size-cap.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
+import { restBytes } from '../src/sync/collab-size.js'
 import { db } from '../src/db/client.js'
 import { noteRevisions } from '../src/db/schema.js'
 import { and, eq } from 'drizzle-orm'
@@ -221,6 +222,38 @@ describe('note body size cap (#491)', () => {
     expect(result.skipped).toHaveLength(1)
     expect(result.skipped[0]).toMatch(/^docs\/too-big: .*1048576/)
     expect(await readNote(result.vaultId, 'docs/too-big')).toBeNull()
+  })
+
+  // #948: the editor resumes under the relay's rule (a part fits the cap or is no larger than the relay holds), so the relay says what it holds.
+  it('collab tells a refused editor the sizes of the document it holds, before it closes', async () => {
+    await newNote('collab-sizes', 'sized start')
+    const events: Array<{ close: string } | { sizes: Record<string, unknown> }> = []
+    const provider = new HocuspocusProvider({
+      url: collabUrl,
+      name: await noteDocName(vaultId, 'docs/collab-sizes'),
+      token: ownerToken,
+      document: new Y.Doc(),
+      onClose: ({ event }) => events.push({ close: event.reason }),
+      onStateless: ({ payload }) => {
+        const message = JSON.parse(payload) as Record<string, unknown>
+        if (message.type === 'elara-size') events.push({ sizes: message })
+      },
+    })
+    providers.push(provider)
+    await waitFor(() => provider.isSynced)
+    provider.document.getMap('frontmatter').set('title', 'Sized')
+    await waitFor(() => collab.hocuspocus.documents.get(provider.configuration.name)?.getMap('frontmatter').get('title') === 'Sized')
+    const serverDoc = collab.hocuspocus.documents.get(provider.configuration.name)!
+    const otherBytes = restBytes(serverDoc)
+
+    provider.document.getText('body').insert(0, bodyOfBytes(CAP))
+    await waitFor(() => events.some((e) => 'close' in e && e.close === 'note-too-large'))
+    const closeAt = events.findIndex((e) => 'close' in e)
+    const sizesAt = events.findIndex((e) => 'sizes' in e)
+    expect(sizesAt).toBeGreaterThanOrEqual(0)
+    expect(sizesAt).toBeLessThan(closeAt)
+    expect(events[sizesAt]).toEqual({ sizes: { type: 'elara-size', limitBytes: CAP, bodyBytes: Buffer.byteLength('sized start'), otherBytes } })
+    provider.destroy()
   })
 
   it('collab refuses an update that would push the body over the cap, and never stores it', async () => {
