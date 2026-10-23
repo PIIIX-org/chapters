@@ -59,11 +59,3 @@ export async function lastRead(connectionId: string, noteId: string): Promise<{ 
   return row
 }
 
-/**
- * `connectionId` read note `noteId` only in part (a paged `read_note`, #420): an earlier read is no base any
- * more, since what the connection now has is newer and not whole, so its next whole-body edit diffs from the
- * live text instead of merging from that older read.
- */
-export async function forgetRead(connectionId: string, noteId: string): Promise<void> {
-  await db.delete(noteReads).where(and(eq(noteReads.connectionId, connectionId), eq(noteReads.noteId, noteId)))
-}

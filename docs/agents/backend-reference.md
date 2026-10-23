@@ -196,7 +196,7 @@ revision bodies, so older code goes on a migrated database only after
 | `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), actor detail (#403). `idempotency_key` stays unused: #477's keys need the call's arguments and its whole answer, also for writes that record no revision, so they live in `write_idempotency` |
 | `note_revisions.body_delta` / `delta_base_id` / `body_bytes` (migration 0026) | a compacted revision (#501, **Revision compaction** below): `body` is `''`, `body_delta` (jsonb) rebuilds the body from the revision `delta_base_id` (FK to `note_revisions`, NO ACTION, partial index `note_revisions_delta_base`), `body_bytes` is its UTF-8 size; all three null on a revision stored whole (check `note_revisions_delta_check`). SQL `note_revision_body(body, body_delta, delta_base_id)` returns any revision's body (`revisionBody` in store-tx.ts); `note_revision_patch(base, delta)` applies a delta. Kept out of the Drizzle model like `seq`. 0026 merged after 0027, so its journal `when` (1791750000000) is above 0027's: drizzle applies an entry only when its `when` is above the newest one already applied, so an instance that ran 0027 first still runs 0026 (`test/migration-order.test.ts`) |
 | `write_idempotency` (migration 0025) | the first answer of an MCP write sent with `idempotency_key` (#477, `mcp/write-result.ts` `runWrite`): PK (`connection_id`, `key`), `tool`, `args_hash` (sha256 of the tool, vault and canonical arguments), `note_id` (FK to `notes`, cascade: purging the note deletes its keys and the note text their answers hold), `result` jsonb, `created_at` (indexed). A write that commits inserts its row **inside its own store transaction** (`WriteOptions.recordKey`, called with the committed row by `createNote`, `writeNote`, the rename move, `softDeleteNote`, `restoreNote`), so a crash after COMMIT and before the answer still leaves the key and the retry replays (ADR-003 §4, §10); its recorded answer has `indexed: false`. Answers that commit nothing (`conflicted`) are inserted after the call. A repeat with the same hash answers `result` + `replayed: true`; another hash is refused. Every keyed call first deletes rows older than 24 h. Calls with one key run one at a time (in-process key lock). Rows also go with their connection (FK cascade) |
-| `note_reads` (migration 0028, after #861's 0026 and #869's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` (only a read that returned the whole body, #420) and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
+| `note_reads` (migration 0028, after #861's 0026 and #869's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` (every page too: the `rev` it reports, #961) and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
 | `note_crdt` | Yjs snapshot per note id (replaced `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
 | `note_projections` | per note and projection (`file`/`dir_index`/`embedding`): `target_seq`, `applied_seq`, `index_version`, lease and error columns; `note_projections_pending` indexes the work queue |
@@ -808,8 +808,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
 - **A whole body without `base_rev` uses the last read as its base**
   (#408, #476, `mcp/last-read.ts`): MCP `read_note` and `export_note`
   record, per connection and note id, the `rev` they served (`read_note`
-  only when it returned the whole body: a first page with `truncated:
-  false`, #420); an
+  on every page too: all pages of a cursor are that rev's text, since a
+  changed note refuses the cursor, so the base is exact; #961 replaced
+  #420's whole-body-only rule, which left no base after a paged read and
+  let the next whole body replace concurrent edits); an
   `edit_note` with `body` and no `base_rev` takes that revision as
   `NoteEdit.base` (stale-base merge above; the answer echoes it as
   `baseRev`). Each whole body the connection writes moves it to the
@@ -1669,9 +1671,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   page long bodies only that way), manuals are
   `elara://manual/conventions` and one per family. Writer and admin (the
   same text) add the whole-`body` merge base (`base_rev`, else this
-  token's last unpaged `read_note` within `READ_WINDOW_HOURS`, 24 h,
-  `last-read.ts`; a paged read records nothing, so after one the agent
-  sends its `rev` as `base_rev`; `ops` edit the live text) and the retry
+  token's last `read_note`, paged or not, within `READ_WINDOW_HOURS`,
+  24 h, `last-read.ts`; `ops` edit the live text) and the retry
   rule, scoped to note writes ("Retry a note write with the same
   `idempotency_key`": only the note writes take the key, admin's other
   writes refuse it). Keyed on profile only: a
@@ -1895,8 +1896,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `g` guards text (8 hex of the text's sha256) and rankings (of the ids
     before the position); a change refuses the cursor (`stale cursor`,
     `CURSOR_STALE`). The codes wait for the error envelope (#439).
-  - `read_note` records the last read (#864) in `Budgeted.rendered`, only
-    for a first page with `truncated: false` (the whole body).
+  - `read_note` records the last read (#864) in `Budgeted.rendered`, on
+    every page: the `rev` it reports, the merge base of a later whole-body
+    edit (#961).
   - `search` keeps its bare array and has no budget (its envelope waits
     for #441/#442/#458). `test/mcp-response-envelope.test.ts` drives each
     tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`

@@ -75,8 +75,9 @@ describe('initialize.instructions (#435)', () => {
     const admin = adminClient.getInstructions() ?? ''
     for (const text of [writer, admin]) {
       for (const rule of ['budget_tokens', 'truncated', 'cursor', 'elara://manual/', 'base_rev', 'idempotency_key']) expect(text).toContain(rule)
-      // A paged read_note records no last read, so a whole body would replace the live text: the rule says so.
-      expect(text).toContain('last unpaged read_note; after a paged read send its `rev` as `base_rev`')
+      // Every read_note, paged or not, records its rev as the merge base (#961): no "unpaged" caveat.
+      expect(text).toContain('merges from `base_rev`, else from your last read_note.')
+      expect(text).not.toContain('unpaged')
       // Only the note writes take idempotency_key; admin's other writes refuse it as an unknown argument.
       expect(text).toContain('Retry a note write with the same `idempotency_key`')
     }

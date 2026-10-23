@@ -99,7 +99,7 @@ import { manualText, toolManuals, type ToolManual } from './manuals.js'
 import { strictArgs } from './strict-input.js'
 import { McpToolError, argumentRefusal, closest, envelope, errorResult, toErrorEnvelope, type ErrorEnvelope } from './errors.js'
 import { applyBodyOps, type EditOp } from '../sync/edit-ops.js'
-import { advanceRead, forgetRead, lastRead, rememberRead } from './last-read.js'
+import { advanceRead, lastRead, rememberRead } from './last-read.js'
 import {
   DEFAULT_BUDGET,
   Page,
@@ -1304,7 +1304,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: { vaultId: VAULT_ID, path: NOTE_PATH },
       budget: 'read',
     },
-    async ({ path }: { path: string }, { vaultId: target }, page) => {
+    async ({ path }: { path: string }, { vaultId: target }) => {
       await requireAccess(target, 'read')
       const note = await readLiveNote(target, path)
       if (!note) throw await noteNotFound(target, path)
@@ -1318,11 +1318,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           ...(note.foldError ? { fold_error: note.foldError } : {}),
         },
         sections: [textSection({ name: 'body', text: note.body, lines: true })],
-        // Only a read that returned the whole body is a base to merge a whole-body edit from (#864); a paged
-        // read drops an older base, so the next whole-body edit diffs from the live text.
-        rendered: async (truncated) => {
-          if (truncated === false && page.at === null) await rememberRead(auth.connection.id, note.row.id, note.row.seq)
-          else await forgetRead(auth.connection.id, note.row.id)
+        // Every page reports `rev` and is that rev's text (a changed note refuses the cursor), so every read
+        // records it: the base a later whole-body edit three-way merges from (#864, #961). It replaces an older read.
+        rendered: async () => {
+          await rememberRead(auth.connection.id, note.row.id, note.row.seq)
         },
       }
     },
