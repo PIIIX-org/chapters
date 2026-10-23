@@ -97,6 +97,8 @@ export class LabContext {
       vaultId?: string
       repositoryId?: string
       access?: 'read' | 'write' | 'admin'
+      /** The tool profile (#428); omitted: `admin`, every tool `access` allows. */
+      profile?: 'reader' | 'writer' | 'admin'
       allowedTools?: string[]
       expiresAt?: string
     } = {},

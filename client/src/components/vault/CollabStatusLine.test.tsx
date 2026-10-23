@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { expectNoA11yViolations } from '../../test/axe.js'
-import { CollabStatusLine } from './CollabStatusLine.js'
+import { CollabStatusLine, collabShellStatus } from './CollabStatusLine.js'
 
 const AT = new Date('2026-08-25T10:04:00.000Z')
 
@@ -19,6 +19,17 @@ describe('CollabStatusLine', () => {
     expect(time.className).toContain('font-mono')
     expect(time.getAttribute('datetime')).toBe(AT.toISOString())
     expect(time.textContent).toBe(AT.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
+  })
+
+  // #784: synced to the server but not saved to the note must not read as "Synced".
+  it('says "Held back" while the relay quarantines the stores, in the shell pill too', () => {
+    render(<CollabStatusLine status="connected" synced syncedAt={AT} heldBack />)
+    const line = screen.getByRole('status')
+    expect(line.textContent).toContain('Held back')
+    expect(line.textContent).toContain('not saved to the note')
+    expect(line.textContent).not.toContain('Synced')
+    expect(collabShellStatus('connected', true, true)).toEqual({ tone: 'error', label: 'Held back' })
+    expect(collabShellStatus('connected', true)).toEqual({ tone: 'live', label: 'Synced' })
   })
 
   it('is still syncing while the handshake is done but local edits are unsent', () => {

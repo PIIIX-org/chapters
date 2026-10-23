@@ -67,8 +67,9 @@ async function answer(name: string, args: Args): Promise<Answer> {
 
 const graph = (args: Args) => answer('graph', { vaultId, repositoryId: repoId, ...args })
 const rowsOf = (json: Answer) => json.edges as Row[]
-const note = (path: string): Endpoint => ({ path, in: VAULT })
-const file = (path: string): Endpoint => ({ path, in: REPO })
+/** `in`: the container's name and the first 8 characters of its id. */
+const note = (path: string): Endpoint => ({ path, in: `${VAULT}#${vaultId.slice(0, 8)}` })
+const file = (path: string): Endpoint => ({ path, in: `${REPO}#${repoId.slice(0, 8)}` })
 /** A row as a string; an undirected row's ends in either order. */
 const rowKey = (r: Row) => {
   const ends = [JSON.stringify(r.from), JSON.stringify(r.to)]

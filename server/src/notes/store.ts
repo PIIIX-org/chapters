@@ -1370,7 +1370,7 @@ export async function listNotes(vaultId: string): Promise<
 export const BROWSE_FIELDS = ['id', 'path', 'title', 'type', 'name', 'tags', 'updatedAt'] as const
 export type BrowseField = (typeof BROWSE_FIELDS)[number]
 
-/** A note as `browse_vault` lists it (#425): its title is `frontmatter.title`, else its name; never the body or the embedding. */
+/** A note as `browse_vault` lists it (#425): its title is `frontmatter.title` (an empty one too: its name); never the body or the embedding. */
 export interface BrowsedNote {
   id: string
   path: string
@@ -1384,64 +1384,85 @@ export interface BrowsedNote {
 const browsedNote = {
   id: notes.id,
   path: notes.path,
-  title: sql<string>`coalesce(${notes.frontmatter}->>'title', ${notes.name})`,
+  title: sql<string>`coalesce(nullif(${notes.frontmatter}->>'title', ''), ${notes.name})`,
   type: notes.type,
   name: notes.name,
   tags: sql<unknown>`${notes.frontmatter}->'tags'`,
   updatedAt: notes.updatedAt,
 }
 
-/**
- * The live notes of a vault in a folder (`''`: the root), as `COLLATE "C"`
- * conditions on `path` (the index 0030 adds): the subtree `folder/` ≤ path <
- * `folder0` ('0' is the code unit after '/'), which needs no LIKE escaping,
- * and the path relative to the folder.
- */
-function underFolder(vaultId: string, folder: string): { where: SQL[]; rest: SQL } {
-  const path = sql`${notes.path} collate "C"`
-  const where: SQL[] = [eq(notes.vaultId, vaultId), isNull(notes.deletedAt)]
-  if (folder === '') return { where, rest: sql`${notes.path}` }
-  where.push(sql`${path} >= ${`${folder}/`}`, sql`${path} < ${`${folder}0`}`)
-  return { where, rest: sql`substr(${notes.path}, char_length(${`${folder}/`}::text) + 1)` }
-}
+/** A path in code-unit order, as `notes_vault_path_c_live` (migration 0030) holds it. */
+const pathC = sql`${notes.path} collate "C"`
 
 /**
- * One page of `browse_vault`'s notes (#425), in path order by code unit: the
- * notes under `folder` (every level when `recursive`, else only those
- * directly in it) whose path sorts after `after`, at most `limit` of them.
- * REST's `listNotes` (tree, audit, export) stays whole.
+ * The folder a note is in with its trailing '/' ('' at the root), as
+ * `notes_vault_dir_c_live` (migration 0030) holds it: the expression must
+ * stay as written there, with the pattern inline, for the index to serve it.
+ */
+const dirC = sql`coalesce(substring(${notes.path} from '^(.*/)'), '') collate "C"`
+
+const live = (vaultId: string) => sql`${notes.vaultId} = ${vaultId} and ${notes.deletedAt} is null`
+
+/** The folder's path with its trailing '/' ('' at the root), and what every path under it sorts below (none at the root): '0' is the code unit after '/'. */
+const folderRange = (folder: string) => ({ prefix: folder ? `${folder}/` : '', below: folder ? `${folder}0` : null })
+
+/**
+ * One page of `browse_vault`'s notes (#425), in path order by code unit,
+ * whose path sorts after `after`, at most `limit`: the notes directly in
+ * `folder` (`''`: the root), one range of `notes_vault_dir_c_live`, or with
+ * `recursive` every note under it, one range of `notes_vault_path_c_live`
+ * (`folder/` ≤ path < `folder0`, no LIKE escaping). REST's `listNotes`
+ * (tree, audit, export) stays whole.
  */
 export async function browseNotesPage(
   vaultId: string,
   opts: { folder: string; recursive: boolean; after: string | null; limit: number },
 ): Promise<BrowsedNote[]> {
-  const { where, rest } = underFolder(vaultId, opts.folder)
-  if (!opts.recursive) where.push(sql`strpos(${rest}, '/') = 0`)
-  if (opts.after !== null) where.push(sql`${notes.path} collate "C" > ${opts.after}`)
-  return db
-    .select(browsedNote)
-    .from(notes)
-    .where(and(...where))
-    .orderBy(sql`${notes.path} collate "C"`)
-    .limit(opts.limit)
+  const { prefix, below } = folderRange(opts.folder)
+  const where: SQL[] = [live(vaultId)]
+  if (!opts.recursive) where.push(sql`${dirC} = ${prefix}`)
+  else if (below !== null) where.push(sql`${pathC} >= ${prefix}`, sql`${pathC} < ${below}`)
+  if (opts.after !== null) where.push(sql`${pathC} > ${opts.after}`)
+  return db.select(browsedNote).from(notes).where(and(...where)).orderBy(pathC).limit(opts.limit)
 }
 
 /**
  * One page of the subfolders directly in `folder` (`''`: the root) for
- * `browse_vault` (#425), by name in code-unit order after `after`, each with
- * the number of live notes under it (at any depth); at most `limit`.
+ * `browse_vault` (#425), after the subfolder `after`, at most `limit`, each
+ * with the number of live notes under it (at any depth). They come in the
+ * order of their paths with the trailing '/' (`docs-old/` before `docs/`),
+ * which is the order of `notes_vault_dir_c_live`: each subfolder is one probe
+ * of that index from the end of the one before (a skip scan), and its count
+ * one range of `notes_vault_path_c_live`. Neither the notes directly in
+ * `folder` nor the subfolders past the page are read.
  */
 export async function browseSubfoldersPage(
   vaultId: string,
   opts: { folder: string; after: string | null; limit: number },
 ): Promise<Array<{ name: string; count: number }>> {
-  const { where, rest } = underFolder(vaultId, opts.folder)
-  where.push(sql`strpos(${rest}, '/') > 0`)
+  const { prefix, below } = folderRange(opts.folder)
+  const inFolder = below === null ? sql`` : sql` and ${dirC} < ${below}`
+  // A subfolder's name is the first segment of a folder below `prefix`; the next one starts at or after `prefix` + name + '0'.
+  const nameOf = (d: SQL) => sql`split_part(substr(${d}, char_length(${prefix}::text) + 1), '/', 1)`
+  const first = opts.after === null ? sql`${dirC} > ${prefix}` : sql`${dirC} >= ${`${prefix}${opts.after}0`}`
   const rows = (await db.execute(sql`
-    SELECT name, count(*)::int AS count
-    FROM (SELECT split_part(${rest}, '/', 1) COLLATE "C" AS name FROM ${notes} WHERE ${and(...where)}) AS children
-    ${opts.after === null ? sql`` : sql`WHERE name > ${opts.after}`}
-    GROUP BY name ORDER BY name LIMIT ${opts.limit}`)) as unknown as Array<{ name: string; count: number }>
+    WITH RECURSIVE sub(d) AS (
+      (SELECT ${dirC} FROM ${notes} WHERE ${live(vaultId)} AND ${first}${inFolder} ORDER BY ${dirC} LIMIT 1)
+      UNION ALL
+      SELECT (
+        SELECT ${dirC} FROM ${notes}
+        WHERE ${live(vaultId)} AND ${dirC} >= ${prefix}::text || ${nameOf(sql`sub.d`)} || '0'${inFolder}
+        ORDER BY ${dirC} LIMIT 1
+      ) FROM sub WHERE sub.d IS NOT NULL
+    )
+    SELECT page.name, (
+      SELECT count(*)::int FROM ${notes}
+      WHERE ${live(vaultId)} AND ${pathC} >= ${prefix}::text || page.name || '/' AND ${pathC} < ${prefix}::text || page.name || '0'
+    ) AS count
+    FROM (SELECT ${nameOf(sql`d`)} AS name FROM sub WHERE d IS NOT NULL LIMIT ${opts.limit}) AS page`)) as unknown as Array<{
+    name: string
+    count: number
+  }>
   return rows.map(({ name, count }) => ({ name, count }))
 }
 
@@ -1450,7 +1471,9 @@ export async function folderIndexRows(
   vaultId: string,
   folder: string,
 ): Promise<Array<{ path: string; type: string; frontmatter: Record<string, unknown> }>> {
-  const { where } = underFolder(vaultId, folder)
+  const { prefix, below } = folderRange(folder)
+  const where: SQL[] = [live(vaultId)]
+  if (below !== null) where.push(sql`${pathC} >= ${prefix}`, sql`${pathC} < ${below}`)
   return db
     .select({ path: notes.path, type: notes.type, frontmatter: sql<Record<string, unknown>>`${notes.frontmatter}` })
     .from(notes)
@@ -2133,14 +2156,15 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
  * same transaction when it has none; a row changed behind the store is
  * rebased into it and folded first, and so is a tail left unfolded. Never
  * reads a file or a `.crdt` bin, and never rebuilds the text (#488).
- * Returns the state to apply to the document, the note's path, and the last
+ * Returns the state to apply to the document, the note's path, the last
  * update id that state includes (null while `fold_error` is set: the open
- * document then caches nothing, see note-crdt.ts readNoteCrdt).
+ * document then caches nothing, see note-crdt.ts readNoteCrdt), and that
+ * `fold_error` (the relay tells the editors of a quarantine it names, #784).
  */
 export async function loadCollabState(
   vaultId: string,
   noteId: string,
-): Promise<{ state: Uint8Array; path: string; lastId: number | null }> {
+): Promise<{ state: Uint8Array; path: string; lastId: number | null; foldError: string | null }> {
   for (let round = 0; round < WRITE_ROUNDS; round++) {
     const [note] = await db
       .select({ path: notes.path })
@@ -2157,11 +2181,11 @@ export async function loadCollabState(
         if (stored) {
           const { row } = await catchUp(tx, locked, stored, null, { storeRow: true })
           if (row.seq !== locked.seq) foldedRow = true
-          return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null }
+          return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null, foldError: stored.foldError }
         }
         const seed = seedDocument(noteId, { frontmatter: locked.frontmatter as Record<string, unknown>, body: locked.body })
         await insertNoteCrdt(tx, noteId, seed, locked.seq)
-        return { state: Y.encodeStateAsUpdate(seed), lastId: 0 }
+        return { state: Y.encodeStateAsUpdate(seed), lastId: 0, foldError: null }
       }),
     )
     // A fold that stored the row wakes the projector, so the file follows at once, not at its next poll.
