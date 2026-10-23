@@ -2,7 +2,7 @@
 // note-growth-quarantine.test.ts covers the write paths; this file the rules,
 // their floors and the cost on ~1 MiB bodies.
 import { describe, expect, it } from 'vitest'
-import { suspiciousWrite } from '../src/notes/growth-guard.js'
+import { firstRepeatAt, suspiciousWrite } from '../src/notes/growth-guard.js'
 
 /** `n` distinct lines of varied text, about 90 bytes each. */
 function lines(tag: string, n: number, sep = '\n'): string {
@@ -63,5 +63,22 @@ describe('suspiciousWrite', () => {
     const ms = performance.now() - t
     // Each check is one pass per body: four 1-3 MiB checks well under a second.
     expect(ms).toBeLessThan(1500)
+  })
+})
+
+// #784: the relay's quarantine notice quotes where the repeat starts, so the person can find it.
+describe('firstRepeatAt', () => {
+  it('points into the second copy of a doubled note, at text the note already has', () => {
+    const body = lines('d', 40)
+    const doubled = `${body}\n\ntyped ${body}`
+    const at = firstRepeatAt(body, doubled)
+    expect(at).toBeGreaterThan(body.length)
+    expect(body).toContain(doubled.slice(at, at + 60))
+  })
+
+  it('is -1 when nothing repeats', () => {
+    const body = lines('e', 40)
+    expect(firstRepeatAt(body, `${body}\nQ9 zebra quokka axolotl narwhal okapi tapir`)).toBe(-1)
+    expect(firstRepeatAt('', 'anything')).toBe(-1)
   })
 })
