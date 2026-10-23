@@ -297,7 +297,7 @@ Elara exposes 60 tools across 7 functional domains. **Capability** is the token 
 
 ## Elara MCP Engineering Prompts (20 Prompts)
 
-Elara serves 20 MCP prompts (`prompts/list`, `prompts/get`). A prompt returns instructions telling the agent which tools to call; it does not run them. Arguments are listed in [`references/mcp-tools.md`](references/mcp-tools.md#8-mcp-prompts-20).
+Elara serves 20 MCP prompts (`prompts/list`, `prompts/get`). A prompt returns instructions telling the agent which tools to call; it does not run them. Tokens with a tool allow-list or the `reader` profile get no prompts. Arguments are listed in [`references/mcp-tools.md`](references/mcp-tools.md#8-mcp-prompts-20).
 
 | Prompt | Purpose |
 | :--- | :--- |

@@ -1559,7 +1559,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   intersects with the allow-list, access level, scope and pin; it never
   widens them. Prompts are
   not registered for a connection with an allow-list (they read notes
-  outside `tool()`). `tools/list` advertises only the tools the
+  outside `tool()`) or with the `reader` profile (owner decision on
+  #930). `tools/list` advertises only the tools the
   connection can call (#641): in its allow-list, within its access level
   and profile, and of a scope class its scope reaches (`account` tools for account
   tokens only, `vault`/`vault-or-account` not for repository tokens,

@@ -2900,8 +2900,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   )
 
   // Prompts read notes, search and the graph on the server side, outside
-  // tool(): a connection limited to a tool allow-list gets none.
-  if (!auth.connection.allowedTools) {
+  // tool(): a connection limited to a tool allow-list gets none, and neither
+  // does a `reader`-profile one, whose list stays the reader tools (#428,
+  // owner decision on #930).
+  if (!auth.connection.allowedTools && auth.connection.profile !== 'reader') {
     registerMcpPrompts(server, auth, {
       vaultFor,
       repositoryFor,
