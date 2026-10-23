@@ -196,7 +196,7 @@ revision bodies, so older code goes on a migrated database only after
 | `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), actor detail (#403). `idempotency_key` stays unused: #477's keys need the call's arguments and its whole answer, also for writes that record no revision, so they live in `write_idempotency` |
 | `note_revisions.body_delta` / `delta_base_id` / `body_bytes` (migration 0026) | a compacted revision (#501, **Revision compaction** below): `body` is `''`, `body_delta` (jsonb) rebuilds the body from the revision `delta_base_id` (FK to `note_revisions`, NO ACTION, partial index `note_revisions_delta_base`), `body_bytes` is its UTF-8 size; all three null on a revision stored whole (check `note_revisions_delta_check`). SQL `note_revision_body(body, body_delta, delta_base_id)` returns any revision's body (`revisionBody` in store-tx.ts); `note_revision_patch(base, delta)` applies a delta. Kept out of the Drizzle model like `seq`. 0026 merged after 0027, so its journal `when` (1791750000000) is above 0027's: drizzle applies an entry only when its `when` is above the newest one already applied, so an instance that ran 0027 first still runs 0026 (`test/migration-order.test.ts`) |
 | `write_idempotency` (migration 0025) | the first answer of an MCP write sent with `idempotency_key` (#477, `mcp/write-result.ts` `runWrite`): PK (`connection_id`, `key`), `tool`, `args_hash` (sha256 of the tool, vault and canonical arguments), `note_id` (FK to `notes`, cascade: purging the note deletes its keys and the note text their answers hold), `result` jsonb, `created_at` (indexed). A write that commits inserts its row **inside its own store transaction** (`WriteOptions.recordKey`, called with the committed row by `createNote`, `writeNote`, the rename move, `softDeleteNote`, `restoreNote`), so a crash after COMMIT and before the answer still leaves the key and the retry replays (ADR-003 §4, §10); its recorded answer has `indexed: false`. Answers that commit nothing (`conflicted`) are inserted after the call. A repeat with the same hash answers `result` + `replayed: true`; another hash is refused. Every keyed call first deletes rows older than 24 h. Calls with one key run one at a time (in-process key lock). Rows also go with their connection (FK cascade) |
-| `note_reads` (migration 0028, after #861's 0026 and #869's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
+| `note_reads` (migration 0028, after #861's 0026 and #869's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` (only a read that returned the whole body, #420) and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
 | `note_crdt` | Yjs snapshot per note id (replaced `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
 | `note_projections` | per note and projection (`file`/`dir_index`/`embedding`): `target_seq`, `applied_seq`, `index_version`, lease and error columns; `note_projections_pending` indexes the work queue |
@@ -799,7 +799,9 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   <connection name>".
 - **A whole body without `base_rev` uses the last read as its base**
   (#408, #476, `mcp/last-read.ts`): MCP `read_note` and `export_note`
-  record, per connection and note id, the `rev` they served; an
+  record, per connection and note id, the `rev` they served (`read_note`
+  only when it returned the whole body: a first page with `truncated:
+  false`, #420); an
   `edit_note` with `body` and no `base_rev` takes that revision as
   `NoteEdit.base` (stale-base merge above; the answer echoes it as
   `baseRev`). Each whole body the connection writes moves it to the
@@ -1516,10 +1518,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   more query adds `actorName` for MCP rows, #482),
   keyset on `ord` descending (the order recorded, #825) over
   `note_revisions_note_ord (note_id, ord)`, `limit` default 20,
-  max 100, one extra row to set `hasMore`. The opaque `cursor` is
-  base64url JSON of the last row's `ord` (`{"ord":n}`; the `{at, id}`
-  cursor from before #825 is refused as invalid), so a revision recorded
-  while a caller pages shifts nothing. `get_revision` returns one
+  max 100, one extra row to know whether older ones exist
+  (`truncated.total.revisions` is `">limit"`). The cursor is the
+  envelope's (below) at the last row shown, keyed on its `ord`
+  (`listRevisionPage()` returns the page's `ords`); the bare `{"ord":n}`
+  cursor of #411 and the `{at, id}` one from before #825 are refused as
+  invalid, and there is no `hasMore`/`nextCursor` any more (#422). A
+  revision recorded while a caller pages shifts nothing. `get_revision` returns one
   revision's frontmatter and body (`getRevision()`, the same query as
   the REST revision route), gated like `note_history`. Both, and the
   REST history list, add `sourceRevisionId` / `fromPath` / `toPath`
@@ -1542,6 +1547,44 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `filters`); free-form maps (`frontmatter`, the preference maps) are
   `z.record` and accept any key. `test/mcp-strict-args.test.ts` loops
   over every tool.
+- **Budgets and the response envelope** (`response.ts`, #420, #422;
+  ADR-004 §2.1): a tool registered with `budget: 'list' | 'read'`
+  (`browse_vault`, `read_note`, `list_trash`, `note_history`,
+  `get_revision`, `browse_repository`, `read_file`, `find_symbols`,
+  `graph`, `find_graph_path`) gets `budget_tokens` (256-25,000; default
+  2,000 for lists, 4,000 for reads) and `cursor` added to its schema by
+  `tool()`. Its handler returns a `Budgeted` answer, a head of fixed
+  fields plus sections, and `tool()` renders it with `render()` at the one
+  serialisation point:
+  - Sections: `keyset` lists (the handler starts after `Page.after()`,
+    the cursor's path/`ord`/offset; `browse_*` by path in code-unit
+    order, `note_history` by `ord`, `list_trash` by offset), `ranked`
+    lists (the whole ranking recomputed per page, offset plus a guard:
+    `find_symbols`, `graph`, `find_graph_path`, `read_file`'s outline) and
+    `textSection` (a body or file cut at line boundaries; a line longer
+    than a page is split).
+  - Size: `approxTokens` = `ceil(text.length / 4)`, the premise
+    benchmark's estimate; the rendered text stays within the budget
+    (items dropped whole from the end, a refill loop accounts for the
+    `truncated` block), except that an answer which would show nothing
+    shows its first item or line, so paging always moves on.
+  - `truncated` is always the last key: `false`, or `{shown, total,
+    dropped, level: 'full', cursor, narrow}`, counted from the page start
+    (`total` `">n"` from a limit + 1 fetch). `level` is a hook for the
+    ladder (#421), which is not built.
+  - Cursor: base64url JSON `{v: 1, t: tool, f, k: {s, p}, g?}`. `f` is 16
+    hex of sha256 over the canonical arguments without `cursor`,
+    `budget_tokens` and the id arguments, plus the resolved scope
+    (`argsFingerprint`); `decodeCursor` refuses another tool or other
+    arguments (`invalid cursor`, `CursorError` code `CURSOR_INVALID`).
+    `g` guards text (8 hex of the text's sha256) and rankings (of the ids
+    before the position); a change refuses the cursor (`stale cursor`,
+    `CURSOR_STALE`). The codes wait for the error envelope (#439).
+  - `read_note` records the last read (#864) in `Budgeted.rendered`, only
+    for a first page with `truncated: false` (the whole body).
+  - `search` keeps its bare array and has no budget (its envelope waits
+    for #441/#442/#458). `test/mcp-response-envelope.test.ts` drives each
+    tool family through the MCP HTTP path.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.

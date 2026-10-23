@@ -42,8 +42,8 @@ export function budgetArgs(kind: BudgetKind): z.ZodRawShape {
       .min(MIN_BUDGET)
       .max(MAX_BUDGET)
       .optional()
-      .describe(`Answer size cap in tokens (chars/4); default ${DEFAULT_BUDGET[kind]}`),
-    cursor: z.string().optional().describe('`truncated.cursor` of the previous answer, with the same arguments'),
+      .describe(`Max tokens (chars/4); default ${DEFAULT_BUDGET[kind]}`),
+    cursor: z.string().optional().describe('`truncated.cursor` of the last answer'),
   }
 }
 
@@ -250,7 +250,7 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
       return { section, start: 0, avail: section.items.slice(0, limit), more: section.more === true || section.items.length > limit, limit }
     }
     if (section.kind === 'ranked') {
-      const start = here ? Number(at.p) : 0
+      const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
       if (!Number.isSafeInteger(start) || start < 0) throw invalid('not a position of this answer')
       if (here && (start > section.items.length || at.g !== guardOf(section.items.slice(0, start).map(section.id).join('\n')))) {
         throw new CursorError('CURSOR_STALE', `stale cursor: the ${section.name} changed since this cursor was issued; start again without \`cursor\``)
@@ -259,7 +259,7 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
       const rest = section.items.slice(start)
       return { section, start, avail: rest.slice(0, limit), more: rest.length > limit, limit }
     }
-    const start = here ? Number(at.p) : 0
+    const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
     if (!Number.isSafeInteger(start) || start < 0) throw invalid('not a position of this answer')
     if (here && (start > section.text.length || at.g !== guardOf(section.text))) {
       throw new CursorError('CURSOR_STALE', `stale cursor: the ${section.name} changed since this cursor was issued; start again without \`cursor\``)
