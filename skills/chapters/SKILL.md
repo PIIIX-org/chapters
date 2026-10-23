@@ -40,7 +40,7 @@ When exploring a project or answering questions about architecture, concepts, or
   - Run `search` (or `/elara-search` / legacy `/chapters-search`) with a query to find relevant notes and code files using hybrid (lexical + vector) retrieval.
   - Run `find_symbols` (or `/elara-symbols` / legacy `/chapters-symbols`) to pinpoint specific functions, classes, interfaces, or types with exact declaration line numbers without reading whole files.
 - **Step 2 — Graph Topology & Pathfinding**:
-  - Use `graph` (or `/elara-graph` / legacy `/chapters-graph`) scoped to one `vaultId` or `repositoryId` with `aggregate: "community"` to view community clusters, then `community: <n>` to list one cluster's members. `graph` has no neighbour query and no `limit`; an unaggregated call returns the whole resource graph, which is large for a real repository.
+  - Use `graph` (or `/elara-graph` / legacy `/chapters-graph`) scoped to one `vaultId` or `repositoryId` with `aggregate: "community"` to view community clusters, then `community: <n>` to list one cluster's members. Communities are the default (#426). For the graph around one note or file, pass `neighborsOf` (its id or exact path) with `depth` (1-3); `edgeTypes` keeps some edge kinds and `limit` the first nodes. `aggregate: "none"` lists the whole resource graph, which is large for a real repository.
   - Use `find_graph_path` (or `/elara-path` / legacy `/chapters-path`) to trace the shortest conceptual path between two components, notes, or code files.
   - Use `list_graph_perspectives` to see curated domain or subsystem perspectives.
 - **Step 3 — Read Context**:
@@ -123,10 +123,10 @@ Fine-grained search for code declarations (functions, classes, interfaces, types
 - **Tool called**: `find_symbols`
 - **Example**: `/elara-symbols "buildGraph" --kind function`
 
-### `/elara-graph [--vault <id>] [--repo <id>] [--aggregate] [--community <id>] [--types <t,...>] [--tags <t,...>]` (alias: `/chapters-graph`)
+### `/elara-graph [--vault <id>] [--repo <id>] [--aggregate none] [--community <id>] [--neighbors-of <id or path>] [--depth <1-3>] [--edge-types <kinds>] [--limit <n>] [--types <t,...>] [--tags <t,...>]` (alias: `/chapters-graph`)
 Queries the knowledge graph of one vault or repository (there is no free-text query; use `/elara-search` for that).
 - **Tool called**: `graph`
-- **Example**: `/elara-graph --aggregate`
+- **Example**: `/elara-graph` (communities), `/elara-graph --neighbors-of docs/auth --depth 2`
 
 ### `/elara-path <source> <target> [--vault <id>] [--repo <id>]` (alias: `/chapters-path`)
 Finds the shortest conceptual path connecting two notes, concepts, or code files.
@@ -268,7 +268,7 @@ Elara exposes 60 tools across 7 functional domains. **Capability** is the token 
 ### 5. Knowledge Graph & Perspectives (5 tools)
 | Tool | Scope | Capability | Description |
 | :--- | :--- | :--- | :--- |
-| `graph` | Any (needs `vaultId` or `repositoryId`) | `read` | Graph nodes and edges (`extracted`/`structural`/`semantic`) with Louvain communities; filters `types`, `tags`, `aggregate: "community"`, `community`. |
+| `graph` | Any (needs `vaultId` or `repositoryId`) | `read` | Graph nodes and edges (`extracted`/`structural`/`semantic`) with Louvain communities; communities by default (`aggregate: "none"` for every node), `community`, `neighborsOf` + `depth`, `edgeTypes`, `limit`, filters `types`, `tags`. |
 | `find_graph_path` | Any | `read` | Find shortest path connecting two concepts, notes, or code files in the knowledge graph. |
 | `list_graph_perspectives` | Vault/Account | `read` | List saved graph perspectives (UI presets) for a vault, or global ones (account tokens only): your own only. |
 | `save_graph_perspective` | Vault/Account | `write` | Save a graph perspective (types, tags, date range, color mode). `graph` cannot apply it. Needs edit access to the vault; a global one needs an account token and an instance admin, and is visible only to you. |

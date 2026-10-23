@@ -265,7 +265,7 @@ describe('a budget sweep steps down in order', () => {
       ['find_symbols', { repositoryId: repoId, query: 'ladderStep', limit: 30 }],
       ['browse_vault', { vaultId: longPathsVault, recursive: true }],
       ['browse_vault', { vaultId: manyFoldersVault, recursive: true }],
-      ['graph', { vaultId: graphVault }],
+      ['graph', { vaultId: graphVault, aggregate: 'none' }],
     ]
     for (const [tool, args] of calls) {
       const levels: string[] = []
@@ -280,10 +280,10 @@ describe('a budget sweep steps down in order', () => {
 
 describe('graph and reads', () => {
   it('graph: a 256-token page steps below full; paging still shows every node and edge once', async () => {
-    const all = await page('graph', { vaultId: graphVault, budget_tokens: 25_000 })
+    const all = await page('graph', { vaultId: graphVault, aggregate: 'none', budget_tokens: 25_000 })
     expect(levelOf(all)).toBe('full')
     const nodeIds = (all.nodes as Array<{ id: string }>).map((n) => n.id).sort()
-    const pages = await walk('graph', { vaultId: graphVault, budget_tokens: 256 })
+    const pages = await walk('graph', { vaultId: graphVault, aggregate: 'none', budget_tokens: 256 })
     expect(pages.some((p) => levelOf(p) === 'no_context' || levelOf(p) === 'locations')).toBe(true)
     for (const p of pages) {
       for (const n of p.nodes as Array<Record<string, unknown>>) {
