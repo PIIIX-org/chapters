@@ -254,7 +254,7 @@ const DESTRUCTIVE_NAME = /^(delete|purge|revoke|remove)_/
  * `openWorldHint`: each costs about 20 characters per tool against the
  * reader budget (mcp-tool-budget.test.ts).
  */
-function toolAnnotations(name: string, def: { capability: ToolCapability; destructive?: true; idempotent?: true }): ToolAnnotations {
+export function toolAnnotations(name: string, def: { capability: ToolCapability; destructive?: true; idempotent?: true }): ToolAnnotations {
   if (def.capability === 'read') {
     if (def.destructive || def.idempotent) throw new Error(`MCP tool ${name} reads: destructive and idempotent describe writes`)
     return { readOnlyHint: true }

@@ -53,15 +53,16 @@ const THIS_VAULT: McpConnection = {
   revokedAt: null,
 }
 
+const READ_ONLY = { readOnlyHint: true }
 const TOOLS: McpToolInfo[] = [
-  { name: 'list_vaults', scope: 'account', capability: 'read', pinPermission: 'read', profile: 'reader' },
-  { name: 'read_note', scope: 'vault', capability: 'read', pinPermission: 'read', profile: 'reader' },
-  { name: 'list_trash', scope: 'vault', capability: 'read', pinPermission: 'edit', profile: 'admin' },
-  { name: 'list_vault_shares', scope: 'vault', capability: 'read', pinPermission: 'owner', profile: 'admin' },
-  { name: 'create_note', scope: 'vault', capability: 'write', pinPermission: 'edit', profile: 'writer' },
-  { name: 'rename_note', scope: 'vault', capability: 'write', pinPermission: 'edit', profile: 'admin' },
-  { name: 'share_vault', scope: 'vault', capability: 'admin', pinPermission: 'owner', profile: 'admin' },
-  { name: 'search', scope: 'vault-or-repo', capability: 'read', pinPermission: 'read', profile: 'reader' },
+  { name: 'list_vaults', scope: 'account', capability: 'read', pinPermission: 'read', profile: 'reader', annotations: READ_ONLY },
+  { name: 'read_note', scope: 'vault', capability: 'read', pinPermission: 'read', profile: 'reader', annotations: READ_ONLY },
+  { name: 'list_trash', scope: 'vault', capability: 'read', pinPermission: 'edit', profile: 'admin', annotations: READ_ONLY },
+  { name: 'list_vault_shares', scope: 'vault', capability: 'read', pinPermission: 'owner', profile: 'admin', annotations: READ_ONLY },
+  { name: 'create_note', scope: 'vault', capability: 'write', pinPermission: 'edit', profile: 'writer', annotations: { destructiveHint: false } },
+  { name: 'rename_note', scope: 'vault', capability: 'write', pinPermission: 'edit', profile: 'admin', annotations: { destructiveHint: false } },
+  { name: 'share_vault', scope: 'vault', capability: 'admin', pinPermission: 'owner', profile: 'admin', annotations: { destructiveHint: false } },
+  { name: 'search', scope: 'vault-or-repo', capability: 'read', pinPermission: 'read', profile: 'reader', annotations: READ_ONLY },
 ]
 
 function postBody(fetchMock: Mock): Record<string, unknown> {
