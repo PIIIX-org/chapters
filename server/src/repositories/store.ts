@@ -142,13 +142,19 @@ export async function listRepositoryFiles(
 export async function listRepositoryFilesPage(
   repositoryId: string,
   opts: { folder: string | null; after: string | null; limit: number },
-): Promise<Array<Pick<RepositoryFileRow, 'path' | 'language' | 'size'>>> {
+): Promise<Array<Pick<RepositoryFileRow, 'id' | 'path' | 'language' | 'size' | 'updatedAt'>>> {
   const path = sql`${repositoryFiles.path} collate "C"`
   const where: SQL[] = [eq(repositoryFiles.repositoryId, repositoryId)]
   if (opts.folder !== null) where.push(sql`${path} >= ${`${opts.folder}/`}`, sql`${path} < ${`${opts.folder}0`}`)
   if (opts.after !== null) where.push(sql`${path} > ${opts.after}`)
   return db
-    .select({ path: repositoryFiles.path, language: repositoryFiles.language, size: repositoryFiles.size })
+    .select({
+      id: repositoryFiles.id,
+      path: repositoryFiles.path,
+      language: repositoryFiles.language,
+      size: repositoryFiles.size,
+      updatedAt: repositoryFiles.updatedAt,
+    })
     .from(repositoryFiles)
     .where(and(...where))
     .orderBy(path)

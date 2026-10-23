@@ -137,7 +137,8 @@ describe('browse_repository path filter', () => {
     const json = await page({ repositoryId: repoId, path: 'src/lib', budget_tokens: 25_000 })
     expect(json.truncated).toBe(false)
     expect(json.files.map((f) => f.path)).toEqual(expected)
-    expect(json.files[0]).toEqual({ path: 'src/lib/Z.ts', language: 'typescript', size: 'src/lib/Z.ts'.length + 3 })
+    // The file fields browse_repository has always shown.
+    expect(json.files[0]).toEqual({ id: expect.any(String), path: 'src/lib/Z.ts', language: 'typescript', size: 'src/lib/Z.ts'.length + 3, updatedAt: expect.any(String) })
     // A trailing slash names the same folder; a nested folder lists its own subtree.
     expect((await page({ repositoryId: repoId, path: 'src/lib/', budget_tokens: 25_000 })).files.map((f) => f.path)).toEqual(expected)
     expect((await page({ repositoryId: repoId, path: 'src/lib/b' })).files.map((f) => f.path)).toEqual(['src/lib/b/c.ts'])
