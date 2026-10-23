@@ -25,6 +25,15 @@ describe('TooLargeNotice', () => {
     expect(screen.getByRole('status').textContent).toMatch(/remove some text/i)
   })
 
+  // #780: the relay bounds the properties too; telling the person to cut text would not help.
+  it('says it is the properties that are too large, and how much to remove from them', () => {
+    render(<TooLargeNotice limitBytes={MiB} bodyBytes={100} otherBytes={MiB + 200 * 1024} />)
+    const text = screen.getByRole('status').textContent!
+    expect(text).toMatch(/properties are too large to save/i)
+    expect(text).toMatch(/remove about 200\.0 KB of them/i)
+    expect(text).not.toMatch(/the text is/i)
+  })
+
   it('is inline, not a dialog, and asks nothing of the user', () => {
     render(<TooLargeNotice limitBytes={MiB} bodyBytes={2 * MiB} />)
     expect(screen.queryByRole('dialog')).toBeNull()
