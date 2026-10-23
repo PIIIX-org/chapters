@@ -48,6 +48,7 @@ let repoId: string
 let graphVaultId: string
 let agent: Client
 let agentConnectionId: string
+let ownerId: string
 const clients: Client[] = []
 
 async function mcpClient(token: string): Promise<Client> {
@@ -84,7 +85,8 @@ async function page(tool: string, args: Args): Promise<Answer> {
       if (typeof total === 'number') expect(shown + t.dropped[name]!, `${tool} ${name}: shown + dropped = total`).toBe(total)
       else expect(total).toMatch(/^>\d+$/)
     }
-    expect(t.cursor !== null || Object.values(t.dropped).some((n) => n > 0)).toBe(true)
+    // Something was left out: a next page, dropped items, or more past a ranked `limit` (">n").
+    expect(t.cursor !== null || Object.values(t.dropped).some((n) => n > 0) || Object.values(t.total).some((n) => typeof n === 'string')).toBe(true)
   }
   return json
 }
@@ -100,6 +102,15 @@ async function walk(tool: string, args: Args): Promise<Answer[]> {
     if (cursor === null) return pages
     if (pages.length > 400) throw new Error(`${tool} never reached the last page`)
   }
+}
+
+/** The id of a note's `create` revision. */
+async function createdRevision(noteId: string): Promise<string> {
+  const [created] = await db
+    .select({ id: noteRevisions.id })
+    .from(noteRevisions)
+    .where(and(eq(noteRevisions.noteId, noteId), eq(noteRevisions.action, 'create')))
+  return created!.id
 }
 
 const cursorOf = (json: Answer): string => {
@@ -128,6 +139,8 @@ const BIG = 'docs/big'
 /** ~150 KB over 2,500 numbered lines, so even the largest budget pages it. */
 const bigBody = (tag: string) => Array.from({ length: 2_500 }, (_, i) => `${tag} line ${i + 1} ${'lorem ipsum '.repeat(4)}`).join('\n') + '\n'
 const bigFile = Array.from({ length: 3_000 }, (_, i) => `export const value${i} = ${i} // ${'x'.repeat(30)}`).join('\n')
+/** Every path of the test repository: a sync deletes the paths it does not list. */
+const REPO_PATHS = ['src/big.ts', 'src/alpha.ts', ...Array.from({ length: 30 }, (_, i) => `src/mod-${String(i).padStart(2, '0')}.ts`)]
 const symbolFile = Array.from({ length: 30 }, (_, i) => `export function alphaHandler${i}(input: string) {\n  return input + '${i}'\n}`).join('\n')
 
 beforeAll(async () => {
@@ -136,6 +149,7 @@ beforeAll(async () => {
   const address = app.server.address()
   baseUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
   const owner = await createActiveUser()
+  ownerId = owner.id
   const cookie = await loginCookie(app, owner.email)
   vaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope vault' } })).json<{ id: string }>().id
   graphVaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope graph' } })).json<{ id: string }>().id
@@ -306,6 +320,44 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
     expect(await recorded('docs/small')).toMatchObject({ rev: small.rev })
   })
 
+  it('a head over the budget over an empty body is answered as it is (read_note, get_revision), not looped on', async () => {
+    for (const [path, chars, budget] of [
+      ['docs/fm-1500', 1_500, 256],
+      ['docs/fm-17000', 17_000, undefined],
+    ] as const) {
+      const note = await createNote(vaultId, { path, frontmatter: { type: 'docs', summary: 'f'.repeat(chars) }, body: '' })
+      const args = budget === undefined ? {} : { budget_tokens: budget }
+      for (const [tool, toolArgs] of [
+        ['read_note', { vaultId, path, ...args }],
+        ['get_revision', { vaultId, revisionId: await createdRevision(note.id), ...args }],
+      ] as const) {
+        const r = await call(tool, toolArgs)
+        expect(r.isError, `${tool} ${path}: ${r.text.slice(0, 200)}`).toBe(false)
+        const json = JSON.parse(r.text) as Answer
+        expect(json).toMatchObject({ body: '', truncated: false })
+        expect(r.text.length).toBeGreaterThan(chars)
+      }
+    }
+  })
+
+  it('a paged read drops an older base: read, a person grows the note, paged read, whole-body edit is applied', async () => {
+    const path = 'docs/grows'
+    await createNote(vaultId, { path, body: 'short\n' })
+    const first = await page('read_note', { vaultId, path })
+    expect(first.truncated).toBe(false)
+    const grown = bigBody('grown')
+    await updateNote(vaultId, path, { body: grown }, { type: 'user', id: ownerId })
+    const pages = await walk('read_note', { vaultId, path })
+    expect(pages.length).toBeGreaterThan(1)
+    const body = pages.map((p) => p.body).join('')
+    expect(body).toBe(grown)
+    const [note] = await db.select({ id: notes.id }).from(notes).where(and(eq(notes.vaultId, vaultId), eq(notes.path, path)))
+    expect(await db.select().from(noteReads).where(and(eq(noteReads.connectionId, agentConnectionId), eq(noteReads.noteId, note!.id)))).toEqual([])
+    const edit = await call('edit_note', { vaultId, path, body: `${body}agent line\n` })
+    expect(edit.isError, edit.text.slice(0, 300)).toBe(false)
+    expect(JSON.parse(edit.text)).toMatchObject({ status: 'applied', body: `${grown}agent line\n` })
+  })
+
   it('get_revision pages the revision body the same way', async () => {
     const [created] = await db
       .select({ id: noteRevisions.id })
@@ -332,6 +384,13 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
     const cut = await walk('read_file', { repositoryId: repoId, path: 'src/alpha.ts', budget_tokens: 256 })
     expect(cut.map((p) => p.content).join('')).toBe(symbolFile)
     expect(cut.flatMap((p) => p.symbols as unknown[])).toEqual(alpha.symbols)
+    // A cursor into the outline alone still guards the content: a changed file refuses it.
+    const inOutline = cut.map((p) => (p.truncated === false ? null : p.truncated.cursor)).find((c) => c !== null && JSON.parse(Buffer.from(c, 'base64url').toString()).k.s === 1)
+    expect(inOutline).toEqual(expect.any(String))
+    const changed = `${symbolFile}\n// edited`
+    await syncRepositoryFiles(repoId, [{ path: 'src/alpha.ts', content: changed }], REPO_PATHS)
+    await refused('read_file', { repositoryId: repoId, path: 'src/alpha.ts', budget_tokens: 256, cursor: inOutline }, /stale cursor/)
+    await syncRepositoryFiles(repoId, [{ path: 'src/alpha.ts', content: symbolFile }], REPO_PATHS)
   })
 })
 
@@ -371,6 +430,15 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
     expect(pages.length).toBeGreaterThan(2)
     expect(ids(pages, 'results')).toEqual(ids([all], 'results'))
     await refused('find_symbols', { repositoryId: repoId, query: 'other', limit: 50, budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
+
+    // `limit` bounds the ranking, not each page: a walk of a limit + 1 fetch shows exactly `limit` results, the
+    // same as one large answer, and the lookahead result past them only says ">limit" (no cursor beyond it).
+    const capped = await page('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 29, budget_tokens: 25_000 })
+    expect(capped.results).toHaveLength(29)
+    expect(capped.truncated).toMatchObject({ total: { results: '>29' }, dropped: { results: 0 }, cursor: null })
+    const walked = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 29, budget_tokens: LIST_PAGE })
+    expect(walked.length).toBeGreaterThan(2)
+    expect(ids(walked, 'results')).toEqual(ids([capped], 'results'))
   })
 })
 

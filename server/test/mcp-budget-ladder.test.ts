@@ -32,6 +32,8 @@ type Answer = Record<string, unknown> & { truncated: Truncated }
 let app: FastifyInstance
 let baseUrl: string
 let repoId: string
+/** Holds only `outlineFile`, so `ladderFile`'s `find_symbols` ranking stays its 30 functions. */
+let outlineRepoId: string
 /** 30 notes under two long folder names: their paths do not fit 5 to a 256-token page. */
 let longPathsVault: string
 /** 30 notes, each in its own long-named folder: not even the per-folder counts fit 256 tokens. */
@@ -42,6 +44,12 @@ let agent: Client
 
 const pad = (tag: string) => `${tag}-${'x'.repeat(140)}`
 /** 30 functions of 25 lines: each symbol's snippet is ~1,200 characters, larger than a 256-token page. */
+/**
+ * 5 one-line functions with 136-character names: an outline entry is longer than its line, so for budgets
+ * near 280 tokens the content fits at `full` beside fewer than 5 entries, and the content does not fit beside
+ * the outline's counts and the `budget_tokens` hint.
+ */
+const outlineFile = Array.from({ length: 5 }, (_, i) => `export function outl${i}_${'z'.repeat(130)}() {}`).join('\n')
 const ladderFile = Array.from(
   { length: 30 },
   (_, i) =>
@@ -58,7 +66,7 @@ async function call(tool: string, args: Args): Promise<{ isError: boolean; text:
 /**
  * One answer, checked against the envelope's invariants at every level: within
  * budget, `truncated` last, a ladder level, shown + dropped = total, and at
- * `counts`/`total` no item shown, everything dropped and no cursor.
+ * `counts`/`total` no item shown, everything dropped and no cursor but a text's.
  */
 async function page(tool: string, args: Args): Promise<Answer> {
   const r = await call(tool, args)
@@ -77,9 +85,18 @@ async function page(tool: string, args: Args): Promise<Answer> {
     const value = json[name]
     if (Array.isArray(value)) expect(value, `${tool} ${name}: one entry per item shown`).toHaveLength(shown)
   }
-  if (t.level === 'counts' || t.level === 'total') expect(t.cursor).toBeNull()
-  // Never truncated for nothing: a further page, a dropped item, or items shown below full.
-  expect(t.cursor !== null || Object.values(t.dropped).some((n) => n > 0) || t.level !== 'full').toBe(true)
+  // At counts and total the lists issue no cursor; one continues only a text before them that did not fit.
+  if ((t.level === 'counts' || t.level === 'total') && t.cursor !== null) {
+    expect(
+      Object.keys(t.dropped).some((name) => typeof json[name] === 'string' && t.dropped[name]! > 0),
+      `${tool}: a ${t.level} page's cursor continues a text`,
+    ).toBe(true)
+  }
+  // Never truncated for nothing: a further page, a dropped item, more past a ranked `limit` (">n"), or items
+  // shown below full.
+  expect(
+    t.cursor !== null || Object.values(t.dropped).some((n) => n > 0) || Object.values(t.total).some((n) => typeof n === 'string') || t.level !== 'full',
+  ).toBe(true)
   return json
 }
 
@@ -118,9 +135,10 @@ beforeAll(async () => {
   longPathsVault = await vault('ladder long paths')
   manyFoldersVault = await vault('ladder many folders')
   graphVault = await vault('ladder graph')
-  repoId = (
-    await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: 'ladder-repo', ingestionMethod: 'agent_push' } })
-  ).json<{ id: string }>().id
+  const repository = async (name: string) =>
+    (await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name, ingestionMethod: 'agent_push' } })).json<{ id: string }>().id
+  repoId = await repository('ladder-repo')
+  outlineRepoId = await repository('ladder-outline-repo')
   const minted = await app.inject({ method: 'POST', url: '/api/mcp-connections', headers: { cookie }, body: { name: 'ladder-agent', scope: 'account' } })
   agent = new Client({ name: 'budget-ladder-test', version: '0.0.0' })
   await agent.connect(
@@ -140,6 +158,8 @@ beforeAll(async () => {
   }
   const files = [{ path: 'src/ladder.ts', content: ladderFile }]
   await syncRepositoryFiles(repoId, files, files.map((f) => f.path))
+  const outline = [{ path: 'src/outline.ts', content: outlineFile }]
+  await syncRepositoryFiles(outlineRepoId, outline, outline.map((f) => f.path))
   await flushExtraction()
 }, 180_000)
 
@@ -281,5 +301,21 @@ describe('graph and reads', () => {
     expect(pages.length).toBeGreaterThan(5)
     expect(pages.map((p) => p.content).join('')).toBe(ladderFile)
     for (const p of pages) expect(levelOf(p)).toBe('full')
+  })
+
+  it('a counted outline keeps the content cursor: every budget reads the file once', async () => {
+    const full = await page('read_file', { repositoryId: outlineRepoId, path: 'src/outline.ts', budget_tokens: 25_000 })
+    expect(full.symbols).toHaveLength(5)
+    let countedWithCursor = 0
+    for (let budget = 256; budget <= 320; budget++) {
+      const pages = await walk('read_file', { repositoryId: outlineRepoId, path: 'src/outline.ts', budget_tokens: budget })
+      expect(pages.map((p) => p.content).join(''), `budget ${budget}`).toBe(outlineFile)
+      for (const p of pages) {
+        const t = p.truncated
+        if (t !== false && (t.level === 'counts' || t.level === 'total') && t.cursor !== null) countedWithCursor++
+      }
+    }
+    // The case under test happens in this sweep: a counts or total page whose content goes on to the next page.
+    expect(countedWithCursor).toBeGreaterThan(0)
   })
 })

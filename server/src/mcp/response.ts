@@ -55,8 +55,9 @@ export function budgetArgs(kind: BudgetKind): z.ZodRawShape {
  * The ladder's levels (#421), from whole items down. `full`, `no_context`
  * and `locations` show items (whole, without context, a location only) and
  * page with the cursor; `counts` shows each list as `{group: n}` and
- * `total` as `n`, over the items from where the page starts, with no
- * cursor (the same budget would show the same counts again).
+ * `total` as `n`, over the items from where the page starts; the lists
+ * issue no cursor (the same budget would show the same counts again), but
+ * a text before them that did not fit still continues with its cursor.
  */
 export type Level = 'full' | 'no_context' | 'locations' | 'counts' | 'total'
 
@@ -120,10 +121,11 @@ export interface KeysetSection<T> {
  * A ranking an offset cursor pages: `items` is the whole ranking from its
  * first item (recomputed per page); the cursor holds the offset and a guard
  * over the `id`s before it, so a ranking that changed is refused, never
- * skipped or repeated. At most `limit` items per answer. `capped`: the
- * handler cut the ranking at `items`' end (a `limit` argument, from a fetch
- * of limit + 1): the total reads `">n"` and the answer is never whole, but
- * no cursor continues past the cut (a larger limit does).
+ * skipped or repeated. `limit` bounds the whole ranking: pages walk its first
+ * `limit` items, and an item past them (a limit + 1 fetch) only sets `">limit"`.
+ * `capped`: the handler cut the ranking at `items`' end (a `limit` argument,
+ * from a fetch of limit + 1): the total reads `">n"` and the answer is never
+ * whole, but no cursor continues past the cut (a larger limit does).
  */
 export interface RankedSection<T> {
   name: string
@@ -245,11 +247,6 @@ export class Page {
     if (!parsed.success) throw invalid('not a position of this answer')
     return parsed.data
   }
-
-  /** How many items of ranked section `section` earlier pages showed (0 on its first page): a handler fetches this many plus its limit + 1. */
-  shownBefore(section: number): number {
-    return this.at?.s === section && typeof this.at.p === 'number' ? this.at.p : 0
-  }
 }
 
 /** Code-unit order: the same in JS and in Postgres `COLLATE "C"`, whatever the locale. */
@@ -258,6 +255,17 @@ export function compareCodeUnits(a: string, b: string): number {
 }
 
 const guardOf = (value: string) => sha256(value).slice(0, 8)
+
+/**
+ * The guard of a ranked section's cursor at `p`: the ids before it, and the text of every text section before
+ * the ranked one, so a symbols-only `read_file` page is refused once the file changed under it.
+ */
+function rankedGuard(sections: readonly Section[], n: number, p: number): string {
+  const section = sections[n]!
+  if (section.kind !== 'ranked') throw new Error(`section ${section.name} is not ranked`)
+  const texts = sections.slice(0, n).flatMap((s) => (s.kind === 'text' ? [s.text] : []))
+  return guardOf([...texts, section.items.slice(0, p).map(section.id).join('\n')].join('\0'))
+}
 
 /** `\n`s in `text` before `end`. */
 function newlines(text: string, end = text.length): number {
@@ -298,12 +306,13 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
     if (section.kind === 'ranked') {
       const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
       if (!Number.isSafeInteger(start) || start < 0) throw invalid('not a position of this answer')
-      if (here && (start > section.items.length || at.g !== guardOf(section.items.slice(0, start).map(section.id).join('\n')))) {
+      if (here && (start > section.items.length || at.g !== rankedGuard(answer.sections, i, start))) {
         throw new CursorError('CURSOR_STALE', `stale cursor: the ${section.name} changed since this cursor was issued; start again without \`cursor\``)
       }
       const limit = section.limit ?? Infinity
-      const rest = section.items.slice(start)
-      return { section, start, avail: rest.slice(0, limit), more: rest.length > limit, capped: section.capped === true && rest.length <= limit, limit }
+      // `limit` bounds the ranking as a whole, not each page: pages walk its first `limit` items, and the
+      // lookahead item past them (a limit + 1 fetch) only says that more exist.
+      return { section, start, avail: section.items.slice(start, limit), more: section.items.length > limit, capped: section.capped === true && section.items.length <= limit, limit }
     }
     const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
     if (!Number.isSafeInteger(start) || start < 0) throw invalid('not a position of this answer')
@@ -468,6 +477,8 @@ export function render(
     const aggregate = level === 'counts' || level === 'total'
     const empty = compose(answer, plan, plan.map(() => 0), rendering).text.length
     // The truncated block grows with what is left out: refill with that much less room until the answer fits.
+    // Nothing shown is as small as the answer gets: a head over the budget (a huge frontmatter over an empty
+    // body) is answered as it is.
     let reserve = 0
     let page: Fill
     for (;;) {
@@ -505,13 +516,15 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
   let anyDropped = false
   // At counts and total: a list on this page was counted, so nothing after it is shown or continued.
   let counted = false
+  let anyMore = false
   const values: Array<[string, unknown]> = []
   for (const [n, slot] of plan.entries()) {
     const { section } = slot
     if (section.kind === 'text') {
       const chunk = slot.start < 0 || counted ? '' : section.text.slice(slot.start, slot.start + shown[n]!)
       const rest = slot.start < 0 ? '' : section.text.slice(slot.start)
-      const shownLines = countLines(chunk)
+      // A line counts as shown on the page where it ends, so a line split across pages counts once.
+      const shownLines = chunk.length < rest.length ? newlines(chunk) : countLines(chunk)
       const total = countLines(rest)
       values.push([section.name, chunk])
       counts.shown[section.name] = shownLines
@@ -519,8 +532,9 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       counts.dropped[section.name] = total - shownLines
       const partial = slot.start > 0 || chunk.length < rest.length
       if (section.lines && partial && chunk !== '') {
+        // The lines this page touches, a split one included.
         const first = newlines(section.text, slot.start) + 1
-        out.lines = [first, first + shownLines - 1]
+        out.lines = [first, first + countLines(chunk) - 1]
       }
       if (cursor === null && !counted && chunk.length < rest.length) {
         cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p: slot.start + chunk.length }, g: guardOf(section.text) })
@@ -529,7 +543,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       continue
     }
     const exact = slot.start < 0 ? 0 : slot.avail.length
-    counts.total[section.name] = slot.more ? `>${slot.limit === Infinity ? exact : slot.limit}` : slot.capped ? `>${exact}` : exact
+    counts.total[section.name] = slot.more || slot.capped ? `>${exact}` : exact
     anyDropped ||= slot.capped
     if (aggregate && slot.start >= 0) {
       values.push([section.name, aggregateOf(slot, aggregate)])
@@ -545,19 +559,21 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
     counts.shown[section.name] = items.length
     counts.dropped[section.name] = exact - items.length
     anyDropped ||= exact > items.length
-    if (cursor !== null || (exact === items.length && !slot.more) || slot.start < 0) continue
+    anyMore ||= slot.start >= 0 && slot.more
+    // Past a ranked section's `limit` there is no page: a larger `limit` shows more.
+    if (cursor !== null || (exact === items.length && (!slot.more || section.kind === 'ranked')) || slot.start < 0) continue
     if (section.kind === 'keyset') {
       const last = items.length - 1
       const p: Resume = last >= 0 ? section.resume(items[last] as never, last) : n === ctx.at?.s ? ctx.at.p : null
       cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p } })
     } else {
       const p = slot.start + items.length
-      cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p }, g: guardOf(section.items.slice(0, p).map(section.id).join('\n')) })
+      cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p }, g: rankedGuard(answer.sections, n, p) })
     }
   }
   for (const [name, value] of values) out[name] = value
   // Below full every item lost its context or more, so the answer is never whole.
-  const whole = cursor === null && !anyDropped && ctx.level === 'full'
+  const whole = cursor === null && !anyDropped && !anyMore && ctx.level === 'full'
   const truncated: Truncated = whole ? false : { ...counts, level: ctx.level, cursor, narrow: ctx.narrow }
   out.truncated = truncated
   return { text: JSON.stringify(out), truncated }
