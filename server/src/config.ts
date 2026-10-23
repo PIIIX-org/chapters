@@ -191,11 +191,16 @@ export const config = {
   /**
    * Search's relevance gate (#441): a vector hit counts only when its cosine
    * distance to the query is below this; a keyword hit always counts.
-   * bge-small (`local`): MEASURED. The fake test embedder's bag-of-words
-   * vectors: 0.8, the 0.2 similarity its semantic edges use in the tests.
+   * bge-small (`local`): 0.40, measured on the five benchmark corpora at their
+   * pinned commits, indexed with this model: for the 99 of 109 questions with
+   * a judged-relevant file among a vector leg's 30 nearest rows, the nearest
+   * such file or symbol was at most 0.387 away; of 110 off-topic queries
+   * (recipes, sport, nonsense strings) with vector rows, 104 had none nearer
+   * than 0.40 (nearest 0.375). The fake test embedder's
+   * bag-of-words vectors: 0.8, the 0.2 similarity its semantic edges use in the tests.
    */
   get searchMaxDistance(): number {
-    return Number(env.SEARCH_MAX_DISTANCE ?? (this.embeddings === 'local' ? 0.5 : 0.8))
+    return Number(env.SEARCH_MAX_DISTANCE ?? (this.embeddings === 'local' ? 0.4 : 0.8))
   },
   semanticThreshold: Number(env.SEMANTIC_THRESHOLD ?? 0.75),
   semanticK: Number(env.SEMANTIC_K ?? 8),
