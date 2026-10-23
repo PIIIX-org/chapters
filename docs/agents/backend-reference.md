@@ -381,7 +381,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable` |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
-| `repositoryFiles` | indexed file content — same `fts`/`embedding` pattern as `notes`; **hard-deleted** on resync, no trash |
+| `repositoryFiles` | indexed file content — same `fts`/`embedding` pattern as `notes`; **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s code-unit-order pages (#424) |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible |
 | `repositoryFileSymbols` | per-file top-level declarations (function/class/interface/type), surfaced as a file "outline" — **not** emitted as a graph edge despite the schema comment calling them "contains" edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
@@ -1563,6 +1563,19 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `find_symbols`, `graph`, `find_graph_path`, `read_file`'s outline) and
     `textSection` (a body or file cut at line boundaries; a line longer
     than a page is split).
+  - `browse_repository` (#424) pages in SQL, not in memory:
+    `listRepositoryFilesPage` (`repositories/store.ts`) reads `BROWSE_PAGE`
+    (500) + 1 files after the cursor's path, `ORDER BY path COLLATE "C"`,
+    and its `path` folder is the `COLLATE "C"` range `folder/` ≤ path <
+    `folder0` (leading/trailing `/` ignored; a file's path lists nothing).
+    The index `repository_files_repo_path_c` (`repository_id`, `path
+    COLLATE "C"`, migration 0029) serves both: the unique
+    `repository_files_repo_path` is in the database collation. Past 500
+    files `truncated.total.files` is `">500"`; `narrow` names the three
+    largest folders one level below `folder` on the page. `path` is in the
+    cursor's fingerprint, so a cursor from another folder is refused. The
+    REST `GET /repositories/:id/files` keeps `listRepositoryFiles`: every
+    file, unordered, no paging.
   - Size: `approxTokens` = `ceil(text.length / 4)`, the premise
     benchmark's estimate; the rendered text stays within the budget
     (items dropped whole from the end, a refill loop accounts for the
