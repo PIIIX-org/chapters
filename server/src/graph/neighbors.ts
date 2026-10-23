@@ -10,10 +10,14 @@ import {
   STRUCTURAL_GROUP_CAP,
   fileNode,
   groupKeys,
+  importEdge,
+  linkEdge,
   noteNode,
   passesFilters,
   repoLinkTarget,
   repositoryNames,
+  semanticEdge,
+  structuralEdge,
   type EdgeKind,
   type GraphEdge,
   type GraphResourceSet,
@@ -139,84 +143,90 @@ function fileFilterSql(filters: Walk['filters']): SQL[] {
   return clauses
 }
 
+/** An edge a ring found from a frontier node, and its other end. */
+interface Found {
+  far: string
+  edge: GraphEdge
+}
+
 /**
- * One ring: every edge with an end in `frontier`, as pairs `[frontier node,
- * other node, kind]`. Other nodes not reached yet are read and added to the
- * reach when they pass the filters; with `within`, none is added and only
- * pairs inside `within` are kept (the last round, for the edges among the
- * kept nodes).
+ * One ring: every edge with an end in `frontier`, in its own direction.
+ * Other ends not reached yet are read and added to the reach when they pass
+ * the filters; with `within`, none is added and only edges inside `within`
+ * are kept (the last round, for the edges among the kept nodes).
  */
-async function ring(walk: Walk, frontier: InternalNode[], within: ReadonlySet<string> | null): Promise<Array<[string, string, EdgeKind]>> {
+async function ring(walk: Walk, frontier: InternalNode[], within: ReadonlySet<string> | null): Promise<Found[]> {
   const { resources, reach, kinds, filters } = walk
   const { vaultIds, repositoryIds } = resources
   const inFrontier = new Set(frontier.map((n) => n.id))
   const noteIds = frontier.filter((n) => n.resourceType === 'note').map((n) => n.id)
   const codeIds = frontier.filter((n) => n.resourceType === 'code').map((n) => n.id)
-  // Other ends named by id, by path, or read whole (rows).
-  const byId: Array<[string, string, EdgeKind]> = []
-  const byPath: Array<[string, 'note' | 'code', string, string]> = []
-  // rows: [frontier node, the other end read whole, kind]
-  const rows: Array<[string, InternalNode, EdgeKind]> = []
+  // Other ends named by id: [frontier node, other end, edge].
+  const byId: Array<[string, string, GraphEdge]> = []
+  // Links out to an end named by path: [frontier note, its type, its container, its path, start line, end line].
+  const byPath: Array<[string, 'note' | 'code', string, string, number, number]> = []
+  // Other ends read whole: [frontier node, the other end, edge].
+  const rows: Array<[string, InternalNode, GraphEdge]> = []
 
   if (kinds.has('extracted') && noteIds.length > 0) {
     // A frontier note's links: to a note of its vault, or to a file of a repository in the call (`repo:` links).
     const links = await db
-      .select({ source: noteLinks.sourceNoteId, target: noteLinks.targetPath })
+      .select({ source: noteLinks.sourceNoteId, target: noteLinks.targetPath, startLine: noteLinks.startLine, endLine: noteLinks.endLine })
       .from(noteLinks)
       .where(anyId(noteLinks.sourceNoteId, noteIds))
     for (const link of links) {
       const file = repoLinkTarget(link.target, walk.repoNameToId, repositoryIds)
-      if (file === undefined) byPath.push([link.source, 'note', reach.byId.get(link.source)!.resourceId, link.target])
-      else if (file) byPath.push([link.source, 'code', file.repositoryId, file.path])
+      if (file === undefined) byPath.push([link.source, 'note', reach.byId.get(link.source)!.resourceId, link.target, link.startLine, link.endLine])
+      else if (file) byPath.push([link.source, 'code', file.repositoryId, file.path, link.startLine, link.endLine])
     }
     // Links to a frontier note from a live note of its vault.
     const target = alias(notes, 'target')
     const backlinks = await db
-      .select({ ...NOTE_NODE_COLUMNS, to: target.id })
+      .select({ ...NOTE_NODE_COLUMNS, to: target.id, startLine: noteLinks.startLine, endLine: noteLinks.endLine })
       .from(noteLinks)
       .innerJoin(target, eq(target.path, noteLinks.targetPath))
       .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
       .where(and(anyId(target.id, noteIds), eq(notes.vaultId, target.vaultId), isNull(notes.deletedAt)))
-    for (const { to, ...source } of backlinks) rows.push([to, noteNode(source), 'extracted'])
+    for (const { to, startLine, endLine, ...source } of backlinks) rows.push([to, noteNode(source), linkEdge(source.id, to, startLine, endLine)])
   }
 
   if (kinds.has('extracted') && codeIds.length > 0) {
     if (vaultIds.length > 0) {
       // `repo:`/`code:` links to a frontier file, resolved as `buildGraph` resolves them.
       const repoLinks = await db
-        .select({ ...NOTE_NODE_COLUMNS, target: noteLinks.targetPath })
+        .select({ ...NOTE_NODE_COLUMNS, target: noteLinks.targetPath, startLine: noteLinks.startLine, endLine: noteLinks.endLine })
         .from(noteLinks)
         .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
         .where(and(inArray(notes.vaultId, vaultIds), isNull(notes.deletedAt), or(like(noteLinks.targetPath, 'repo:%'), like(noteLinks.targetPath, 'code:%'))))
-      for (const { target: link, ...source } of repoLinks) {
+      for (const { target: link, startLine, endLine, ...source } of repoLinks) {
         const file = repoLinkTarget(link, walk.repoNameToId, repositoryIds)
         const to = file ? reach.idAt('code', file.repositoryId, file.path) : undefined
-        if (to && inFrontier.has(to)) rows.push([to, noteNode(source), 'extracted'])
+        if (to && inFrontier.has(to)) rows.push([to, noteNode(source), linkEdge(source.id, to, startLine, endLine)])
       }
     }
     // Resolved imports both ways (within one repository).
     const imports = await db
-      .select({ source: repositoryFileImports.sourceFileId, target: repositoryFileImports.resolvedTargetFileId })
+      .select({ source: repositoryFileImports.sourceFileId, target: repositoryFileImports.resolvedTargetFileId, line: repositoryFileImports.line })
       .from(repositoryFileImports)
       .where(and(anyId(repositoryFileImports.sourceFileId, codeIds), isNotNull(repositoryFileImports.resolvedTargetFileId)))
-    for (const imp of imports) byId.push([imp.source, imp.target!, 'extracted'])
+    for (const imp of imports) byId.push([imp.source, imp.target!, importEdge(imp.source, imp.target!, imp.line)])
     const importers = await db
-      .select({ ...FILE_NODE_COLUMNS, to: repositoryFileImports.resolvedTargetFileId })
+      .select({ ...FILE_NODE_COLUMNS, to: repositoryFileImports.resolvedTargetFileId, line: repositoryFileImports.line })
       .from(repositoryFileImports)
       .innerJoin(repositoryFiles, eq(repositoryFiles.id, repositoryFileImports.sourceFileId))
       .where(and(anyId(repositoryFileImports.resolvedTargetFileId, codeIds), inArray(repositoryFiles.repositoryId, repositoryIds)))
-    for (const { to, ...source } of importers) rows.push([to!, fileNode(source), 'extracted'])
+    for (const { to, line, ...source } of importers) rows.push([to!, fileNode(source), importEdge(source.id, to!, line)])
   }
 
   if (kinds.has('semantic')) {
     const ids = [...inFrontier]
     const sem = await db
-      .select({ source: semanticEdges.sourceId, target: semanticEdges.targetId })
+      .select({ source: semanticEdges.sourceId, target: semanticEdges.targetId, similarity: semanticEdges.similarity })
       .from(semanticEdges)
       .where(or(anyId(semanticEdges.sourceId, ids), anyId(semanticEdges.targetId, ids)))
-    for (const edge of sem) {
-      if (inFrontier.has(edge.source)) byId.push([edge.source, edge.target, 'semantic'])
-      if (inFrontier.has(edge.target)) byId.push([edge.target, edge.source, 'semantic'])
+    for (const s of sem) {
+      if (inFrontier.has(s.source)) byId.push([s.source, s.target, semanticEdge(s.source, s.target, s.similarity)])
+      if (inFrontier.has(s.target)) byId.push([s.target, s.source, semanticEdge(s.source, s.target, s.similarity)])
     }
   }
 
@@ -256,21 +266,21 @@ async function ring(walk: Walk, frontier: InternalNode[], within: ReadonlySet<st
     }
   }
 
-  const pairs: Array<[string, string, EdgeKind]> = []
-  const keep = (from: string, to: string | undefined, kind: EdgeKind) => {
-    if (to === undefined || to === from || !reach.byId.has(to)) return
-    if (within && !within.has(to)) return
-    pairs.push([from, to, kind])
+  const found: Found[] = []
+  const keep = (near: string, far: string | undefined, edge: (far: string) => GraphEdge) => {
+    if (far === undefined || far === near || !reach.byId.has(far)) return
+    if (within && !within.has(far)) return
+    found.push({ far, edge: edge(far) })
   }
-  for (const [from, id, kind] of byId) keep(from, id, kind)
-  for (const [from, type, resourceId, path] of byPath) keep(from, reach.idAt(type, resourceId, path), 'extracted')
-  for (const [from, n, kind] of rows) keep(from, n.id, kind)
+  for (const [near, far, edge] of byId) keep(near, far, () => edge)
+  for (const [near, type, resourceId, path, startLine, endLine] of byPath) keep(near, reach.idAt(type, resourceId, path), (far) => linkEdge(near, far, startLine, endLine))
+  for (const [near, n, edge] of rows) keep(near, n.id, () => edge)
   for (const n of frontier) {
     for (const key of groupKeys(n)) {
-      for (const member of groups.get(key) ?? []) keep(n.id, member.id, 'structural')
+      for (const member of groups.get(key) ?? []) keep(n.id, member.id, (far) => structuralEdge(n.id, far, key))
     }
   }
-  return pairs
+  return found
 }
 
 /**
@@ -381,14 +391,14 @@ export async function neighborhood(resources: GraphResourceSet, center: Internal
   for (let d = 1; d <= options.depth && frontier.length > 0; d++) {
     // The nearest limit + 1 are known: every further node ranks after them.
     if (options.limit !== undefined && distance.size > options.limit) break
-    const pairs = await ring(walk, frontier, null)
+    const found = await ring(walk, frontier, null)
     for (const n of frontier) expanded.add(n.id)
     const next: InternalNode[] = []
-    for (const [from, to, kind] of pairs) {
-      edges.add(from, to, kind)
-      if (!distance.has(to)) {
-        distance.set(to, d)
-        next.push(walk.reach.byId.get(to)!)
+    for (const { far, edge } of found) {
+      edges.add(edge)
+      if (!distance.has(far)) {
+        distance.set(far, d)
+        next.push(walk.reach.byId.get(far)!)
       }
     }
     frontier = next
@@ -400,7 +410,7 @@ export async function neighborhood(resources: GraphResourceSet, center: Internal
   // The edges among kept nodes the walk did not expand (the outer ring).
   const outer = nodes.filter((n) => !expanded.has(n.id))
   if (outer.length > 0) {
-    for (const [from, to, kind] of await ring(walk, outer, kept)) edges.add(from, to, kind)
+    for (const { edge } of await ring(walk, outer, kept)) edges.add(edge)
   }
   return {
     nodes,

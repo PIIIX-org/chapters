@@ -20,7 +20,7 @@
  * - FTS: the stored `fts` vector differs from the one the row gives.
  * - vectors: a live note with no embedding and no job, or whose job for its
  *   current `seq` failed.
- * - links: the `note_links` rows differ from the wikilinks of the body.
+ * - links: the `note_links` rows (targets and lines) differ from the wikilinks of the body.
  *
  * Work that is still running (pending projections, embedding jobs, CRDT
  * tails not folded yet) is listed apart and is not a problem. So is `info`:
@@ -54,7 +54,7 @@ import { onJobConflict } from '../jobs/durable.js'
 import { EMBEDDING_JOB } from '../search/embedding-queue.js'
 import { sameContent } from './frontmatter-order.js'
 import { compareNoteFile, orphanFiles } from './integrity.js'
-import { extractWikilinks } from './okf.js'
+import { extractWikilinkLocations } from './okf.js'
 import { PROJECTION_VERSIONS, noteFileRel, sha256 } from './projector.js'
 import { foldPendingCollab, vaultDir } from './store.js'
 import { docState } from '../sync/live-docs.js'
@@ -303,7 +303,8 @@ export async function runDoctor(
       SELECT n.id, n.vault_id, v.name AS vault_name, n.path, n.deleted_at, n.seq, n.frontmatter, n.body,
         n.embedding IS NULL AS no_embedding, ${FTS_STALE} AS fts_stale,
         r.id IS NOT NULL AS has_revision, (r.frontmatter = n.frontmatter AND r.body = n.body) AS revision_same,
-        COALESCE((SELECT array_agg(l.target_path) FROM note_links l WHERE l.source_note_id = n.id), '{}') AS links
+        COALESCE((SELECT array_agg(CASE WHEN l.start_line = 0 THEN l.target_path || ' (no line)' WHEN l.start_line = l.end_line THEN l.target_path || '#L' || l.start_line
+          ELSE l.target_path || '#L' || l.start_line || '-L' || l.end_line END) FROM note_links l WHERE l.source_note_id = n.id), '{}') AS links
       FROM notes n
       JOIN vaults v ON v.id = n.vault_id
       LEFT JOIN note_revisions r ON r.note_id = n.id AND r.seq = n.seq
@@ -391,7 +392,10 @@ export async function runDoctor(
         if (job && !job.done) pending.push({ ...pendingAt, kind: 'embedding', detail: `embedding job for seq ${seq}` })
         else if (job?.last_error) problem({ ...at, class: 'vector-failed', path: note.path, detail: `embedding for seq ${seq} failed: ${job.last_error}` })
         else if (note.no_embedding) problem({ ...at, class: 'vector-missing', path: note.path, detail: 'no embedding and no embedding job' })
-        const expected = [...new Set(extractWikilinks(note.body))].sort()
+        // As `replaceLinks` stores them: one row per target and start line; `(no line)` rows are from before migration 0031.
+        const expected = [
+          ...new Set(extractWikilinkLocations(note.body).map((l) => (l.startLine === l.endLine ? `${l.target}#L${l.startLine}` : `${l.target}#L${l.startLine}-L${l.endLine}`))),
+        ].sort()
         const stored = [...note.links].sort()
         if (expected.join('\n') !== stored.join('\n')) {
           const missing = expected.filter((t) => !stored.includes(t))

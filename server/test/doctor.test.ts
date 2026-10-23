@@ -394,7 +394,8 @@ describe('doctor', () => {
   it('links-differ: rederives the link rows from the body', async () => {
     await db.execute(sql`DELETE FROM note_links WHERE source_note_id = ${ids.unlinked}`)
     await db.execute(sql`INSERT INTO note_links (source_note_id, target_path) VALUES (${ids.unlinked}, 'nowhere')`)
-    expect((await doctor()).problems[0]!.detail).toBe('missing [checks/healthy], extra [nowhere]')
+    // Rows carry the link's body line (#558); a row written without one says so.
+    expect((await doctor()).problems[0]!.detail).toBe('missing [checks/healthy#L1], extra [nowhere (no line)]')
     await expectRepaired('unlinked', 'links-differ')
   })
 

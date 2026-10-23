@@ -12,11 +12,11 @@
  * own advisory lock keyed by its id. Per-note locks are always
  * transaction-scoped. Table order: notes → note_projections → projected_files.
  */
-import { getTableColumns, sql, eq, and, desc, notInArray } from 'drizzle-orm'
+import { getTableColumns, sql, eq, and, asc, desc, gt, notInArray } from 'drizzle-orm'
 import { isDeepStrictEqual } from 'node:util'
 import { db } from '../db/client.js'
 import { noteLinks, noteRevisions, notes } from '../db/schema.js'
-import { extractWikilinks, type Frontmatter } from './okf.js'
+import { extractWikilinkLocations, type Frontmatter } from './okf.js'
 import { orderKeys, sameContent } from './frontmatter-order.js'
 import { holdsExclusiveLock, INSTANCE_LOCK_KEY, writesPaused } from './maintenance-lock.js'
 import type { Actor, NoteRow } from './store.js'
@@ -291,15 +291,50 @@ export async function insertRevision(
       ${spec.sourceRevisionId ?? null}, ${spec.fromPath ?? null}, ${spec.toPath ?? null}, clock_timestamp())`)
 }
 
-/** Replaces the note's EXTRACTED link rows from `body`, inside `tx`. */
+/** Replaces the note's EXTRACTED link rows from `body`, inside `tx`: one per wikilink, with its body-relative lines. */
 export async function replaceLinks(tx: Tx, noteId: string, body: string): Promise<void> {
-  const targets = extractWikilinks(body)
+  const links = extractWikilinkLocations(body)
   await tx.delete(noteLinks).where(eq(noteLinks.sourceNoteId, noteId))
-  if (targets.length > 0) {
+  if (links.length > 0) {
     await tx
       .insert(noteLinks)
-      .values(targets.map((targetPath) => ({ sourceNoteId: noteId, targetPath })))
+      .values(links.map((l) => ({ sourceNoteId: noteId, targetPath: l.target, startLine: l.startLine, endLine: l.endLine })))
+      // Two links to one target that start on one line: the first is kept.
       .onConflictDoNothing()
+  }
+}
+
+/**
+ * Locates link rows written without lines (#558): rows from before
+ * migration 0031, or written by older code after a rollback, have
+ * `start_line` 0. Each such note's rows are written again from its body
+ * under its lock, as the doctor's `links-differ` repair does. Runs at boot;
+ * a note that fails is reported and left for the next boot. Returns the
+ * notes located.
+ */
+export async function backfillLinkLines(): Promise<number> {
+  let located = 0
+  let after = ''
+  for (;;) {
+    const batch = await db
+      .selectDistinct({ id: noteLinks.sourceNoteId })
+      .from(noteLinks)
+      .where(and(eq(noteLinks.startLine, 0), after ? gt(noteLinks.sourceNoteId, after) : undefined))
+      .orderBy(asc(noteLinks.sourceNoteId))
+      .limit(500)
+    for (const { id } of batch) {
+      try {
+        await storeTransaction([id], async (tx) => {
+          const [row] = (await tx.execute(sql`SELECT body FROM notes WHERE id = ${id}`)) as unknown as Array<{ body: string }>
+          if (row) await replaceLinks(tx, id, row.body)
+        })
+        located++
+      } catch (err) {
+        console.warn(`link lines of note ${id} not located (next boot retries): ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    if (batch.length < 500) return located
+    after = batch.at(-1)!.id
   }
 }
 

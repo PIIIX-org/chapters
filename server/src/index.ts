@@ -15,7 +15,7 @@ import { bootCollab } from './sync/collab-backfill.js'
 import { flushProjections, sweepOrphanFiles } from './notes/projector.js'
 import { holdSharedLockOrExit } from './notes/maintenance-lock.js'
 import { scheduleRevisionCompaction } from './notes/revision-compaction.js'
-import { COMPACT_REVISIONS_JOB } from './notes/store-tx.js'
+import { COMPACT_REVISIONS_JOB, backfillLinkLines } from './notes/store-tx.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 
@@ -81,6 +81,9 @@ try {
   if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)
   const backfilled = await backfillUnresolvedImports()
   if (backfilled > 0) console.log(`resolved ${backfilled} previously unresolved code import(s)`)
+  // Wikilink rows without lines (#558: before migration 0031, or written by older code) located from the bodies.
+  const located = await backfillLinkLines()
+  if (located > 0) console.log(`located the wikilinks of ${located} note(s)`)
   const { setupPending, setupToken } = await ensureInstanceState()
   if (setupPending && setupToken) {
     // The only place the setup token ever appears in plaintext.

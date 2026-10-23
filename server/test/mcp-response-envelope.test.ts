@@ -116,6 +116,13 @@ async function refused(tool: string, args: Args, why: RegExp): Promise<void> {
 const ids = (pages: Answer[], key: string, id: (item: Record<string, unknown>) => string = (x) => x.id as string) =>
   pages.flatMap((p) => ((p[key] as Array<Record<string, unknown>> | undefined) ?? []).map(id))
 
+/** A graph edge row (#558) as `from -> to`, also in its one-line form down the ladder. */
+const edge = (e: unknown) => {
+  if (typeof e === 'string') return e.split(' ').slice(0, 3).join(' ')
+  const row = e as { from: { path: string }; to: { path: string }; directed: boolean }
+  return `${row.from.path} ${row.directed ? '->' : '--'} ${row.to.path}`
+}
+
 const HISTORY = 'docs/history'
 const BIG = 'docs/big'
 /** ~150 KB over 2,500 numbered lines, so even the largest budget pages it. */
@@ -337,8 +344,8 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
     const pages = await walk('graph', { vaultId: graphVaultId, aggregate: 'none', budget_tokens: LIST_PAGE })
     expect(pages.length).toBeGreaterThan(1)
     expect(ids(pages, 'nodes').sort()).toEqual(ids([all], 'nodes').sort())
-    const edge = (e: Record<string, unknown>) => `${e.source}>${e.target}:${e.kind}`
     expect(ids(pages, 'edges', edge).sort()).toEqual(ids([all], 'edges', edge).sort())
+    expect(new Set(ids([all], 'edges', edge)).size).toBe(9)
     await refused('graph', { vaultId: graphVaultId, aggregate: 'none', types: ['c1'], budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
   })
 
@@ -349,7 +356,8 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
     const pages = await walk('find_graph_path', { ...args, budget_tokens: LIST_PAGE })
     expect(pages.length).toBeGreaterThan(1)
     expect(ids(pages, 'nodes')).toEqual(ids([all], 'nodes'))
-    expect(ids(pages, 'edges', (e) => `${e.source}>${e.target}`)).toEqual(ids([all], 'edges', (e) => `${e.source}>${e.target}`))
+    expect(ids(pages, 'edges', edge)).toEqual(ids([all], 'edges', edge))
+    expect(ids([all], 'edges', edge)).toEqual(Array.from({ length: 9 }, (_, i) => `c${i}/link -> c${i + 1}/link`))
   })
 
   it('find_symbols is {results, truncated}: ">limit" from limit+1, paging keeps the ranking, other queries refuse the cursor', async () => {

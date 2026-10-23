@@ -255,6 +255,15 @@ export function serializeNote(note: OkfNote): string {
 }
 
 /**
+ * The line of the note file (`serializeNote`) where the body begins: the
+ * offset that turns a body-relative line (how `note_links` stores them,
+ * ADR-004 §2.2) into a whole-file line. Key order does not change it.
+ */
+export function bodyStartLine(frontmatter: Frontmatter): number {
+  return serializeNote({ frontmatter, body: '' }).split('\n').length
+}
+
+/**
  * Frontmatter is everything between an opening `---` line and the first line
  * that is exactly `---` (trailing spaces/tabs allowed). Both fences must be
  * whole lines: a `---` inside a value (`title: alpha---beta`, a block scalar
@@ -274,17 +283,36 @@ export function parseNote(raw: string): OkfNote {
   return { frontmatter, body: match[2] ?? '' }
 }
 
-/** Extracts `[[wikilink]]` targets from a note body (for the graph engine). */
-export function extractWikilinks(body: string): string[] {
-  // ponytail: strip code blocks, inline backticks, and HTML comments to prevent phantom graph edges (GRAPH-09).
+/** A `[[wikilink]]` of a note body: its target and the body lines (1-based, inclusive) it is written on. */
+export interface WikilinkLocation {
+  target: string
+  startLine: number
+  endLine: number
+}
+
+/** Every `[[wikilink]]` of a note body, in document order (a target linked twice is listed twice). */
+export function extractWikilinkLocations(body: string): WikilinkLocation[] {
+  // ponytail: ignore code blocks, inline backticks, and HTML comments to prevent phantom graph edges (GRAPH-09).
+  // They are blanked (line breaks kept), not removed, so offsets and line numbers stay those of `body`.
+  const blank = (text: string) => text.replace(/[^\n]/g, ' ')
   const stripped = body
-    .replace(/```[\s\S]*?```/g, '')
-    .replace(/`[^`\n]+`/g, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-  const links: string[] = []
+    .replace(/```[\s\S]*?```/g, blank)
+    .replace(/`[^`\n]+`/g, blank)
+    .replace(/<!--[\s\S]*?-->/g, blank)
+  const links: WikilinkLocation[] = []
+  let line = 1
+  let counted = 0
   for (const match of stripped.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g)) {
     const target = match[1]!.trim()
-    if (target) links.push(target)
+    if (!target) continue
+    for (; counted < match.index; counted++) if (stripped.charCodeAt(counted) === 10) line++
+    const breaks = match[0].split('\n').length - 1
+    links.push({ target, startLine: line, endLine: line + breaks })
   }
-  return [...new Set(links)]
+  return links
+}
+
+/** The distinct `[[wikilink]]` targets of a note body (for the graph engine and the audit). */
+export function extractWikilinks(body: string): string[] {
+  return [...new Set(extractWikilinkLocations(body).map((l) => l.target))]
 }

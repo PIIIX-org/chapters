@@ -283,7 +283,9 @@ describe('direction and communities (#558)', () => {
     }
     // Louvain sees the same undirected graph: the same community for every node, the same community view and weights.
     expect(both.communities).toEqual(one.communities)
-    expect({ nodes: both.view.nodes, edges: both.view.edges }).toEqual({ nodes: one.view.nodes, edges: one.view.edges })
+    // (`lastActivity` moved: the reverse links were written after.)
+    const view = (v: Answer) => ({ nodes: (v.nodes as Array<Record<string, unknown>>).map((c) => ({ ...c, lastActivity: undefined })), edges: v.edges })
+    expect(view(both.view)).toEqual(view(one.view))
     expect(new Set(Object.values(one.communities)).size).toBeGreaterThan(1)
   })
 })

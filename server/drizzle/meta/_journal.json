@@ -218,6 +218,13 @@
       "when": 1791900000000,
       "tag": "0030_notes_vault_path_c",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1791950000000,
+      "tag": "0031_edge_lines",
+      "breakpoints": true
     }
   ]
 }
