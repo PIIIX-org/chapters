@@ -35,9 +35,37 @@ import { ConnectRepositoryDialog } from '../repositories/ConnectRepositoryDialog
 import { cn } from '../../lib/utils.js'
 import { canEdit, type VaultAccess } from '../../api/vaults.js'
 import type { AccessibleRepository } from '../../api/repositories.js'
-import type { SearchResult } from '../../api/search.js'
+import type { SearchResponse, SearchResult } from '../../api/search.js'
 import type { ThemePreference } from '../../lib/theme.js'
 import { recentsStore, type Recent, type RecentKind } from './recents.js'
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
+
+/**
+ * What an empty result list means (#442): nothing matched, the scope is still
+ * being indexed, or search could not run. The server says which; "No results"
+ * is only true for `no_match` (and for hits the type filter hid).
+ */
+function emptyMessage(data: SearchResponse | undefined): string {
+  if (data?.status === 'unavailable') return 'Search is unavailable right now. Try again in a moment.'
+  if (data?.status === 'index_building') {
+    const pending = [data.index?.pending_notes ? plural(data.index.pending_notes, 'note') : null, data.index?.pending_files ? plural(data.index.pending_files, 'file') : null]
+    return `No results yet: ${pending.filter(Boolean).join(' and ') || 'items'} still being indexed.`
+  }
+  return 'No results found.'
+}
+
+/** A line above the results when a search channel was missing (#458) or indexing is still going on. */
+function searchNotice(data: SearchResponse | undefined): string | null {
+  if (!data || data.status !== 'ok') return null
+  if (data.degraded) {
+    return data.degraded.reason === 'keyword_leg_failed'
+      ? 'Showing related matches only: keyword search is unavailable right now.'
+      : 'Showing keyword matches only: search by meaning is unavailable right now.'
+  }
+  const pending = (data.index?.pending_notes ?? 0) + (data.index?.pending_files ?? 0)
+  return pending > 0 ? `Still indexing ${plural(pending, 'item')}: more results may appear.` : null
+}
 
 interface SearchOverlayProps {
   open: boolean
@@ -247,7 +275,8 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
     filters,
     { symbols: includeSymbols },
   )
-  const rawItems = results.data ?? []
+  const rawItems = results.data?.results ?? []
+  const notice = searchNotice(results.data)
   const items = rawItems.filter((r) => {
     if (effectiveResourceType === 'note') return r.resourceType === 'note'
     if (effectiveResourceType === 'code') return r.resourceType === 'code'
@@ -634,6 +663,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                   <Eyebrow as="div" className="px-3 pb-1 pt-2">
                     Results
                   </Eyebrow>
+                  {notice && <div className="px-3 pb-1 text-xs text-muted-foreground">{notice}</div>}
                   {items.map((r) => {
                     const key = resultKey(r)
                     const optionId = resultOptionId(r)
@@ -733,7 +763,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                     <div className="px-3 py-2 font-mono text-[11px] text-faint">Searching…</div>
                   )}
                   {!results.isPending && items.length === 0 && (
-                    <div className="px-3 py-2 text-[13px] text-muted-foreground">No results found.</div>
+                    <div className="px-3 py-2 text-[13px] text-muted-foreground">{emptyMessage(results.data)}</div>
                   )}
                 </div>
               )}
