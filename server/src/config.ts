@@ -188,6 +188,15 @@ export const config = {
   get embedMaxSymbolsPerFile(): number {
     return readEmbedMaxSymbolsPerFile(env.ELARA_EMBED_MAX_SYMBOLS_PER_FILE) ?? DEFAULT_EMBED_MAX_SYMBOLS_PER_FILE
   },
+  /**
+   * Search's relevance gate (#441): a vector hit counts only when its cosine
+   * distance to the query is below this; a keyword hit always counts.
+   * bge-small (`local`): MEASURED. The fake test embedder's bag-of-words
+   * vectors: 0.8, the 0.2 similarity its semantic edges use in the tests.
+   */
+  get searchMaxDistance(): number {
+    return Number(env.SEARCH_MAX_DISTANCE ?? (this.embeddings === 'local' ? 0.5 : 0.8))
+  },
   semanticThreshold: Number(env.SEMANTIC_THRESHOLD ?? 0.75),
   semanticK: Number(env.SEMANTIC_K ?? 8),
   smtp: (env.ELARA_SMTP_HOST ?? env.CHAPTERS_SMTP_HOST ?? env.SMTP_HOST)

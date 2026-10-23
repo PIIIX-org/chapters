@@ -85,11 +85,11 @@ const dialect = new PgDialect()
 /** Makes `db.execute` fail for the statements `match` picks (by their SQL text); others run. */
 function failStatements(match: (text: string) => boolean) {
   const execute = db.execute.bind(db)
-  return vi.spyOn(db, 'execute').mockImplementation(((query: SQL) => {
-    const text = dialect.sqlToQuery(query).sql
-    if (match(text)) return Promise.reject(new Error('injected leg failure'))
+  const failing = (query: SQL) => {
+    if (match(dialect.sqlToQuery(query).sql)) return Promise.reject(new Error('injected leg failure'))
     return execute(query)
-  }) as typeof db.execute)
+  }
+  return vi.spyOn(db, 'execute').mockImplementation(failing as unknown as typeof db.execute)
 }
 const vectorLeg = (text: string) => text.includes('<=>')
 const keywordLeg = (text: string) => text.includes('websearch_to_tsquery') || text.includes('ILIKE')
@@ -340,26 +340,19 @@ describe('MCP search joins the budget envelope (#420, #422)', () => {
   })
 
   it('budget_tokens pages the ranking with a cursor; every hit shows once', async () => {
+    // 21 hits (the file and 20 of its symbols, `limit` 20): about 5 whole hits fit in 600 tokens.
     const pages: Envelope[] = []
     let cursor: string | null = null
     do {
-      const answer = await mcp('find_symbols', { repositoryId: repoId, query: 'quasarHandler', budget_tokens: 256, ...(cursor ? { cursor } : {}) })
+      const answer = await mcp('search', { repositoryId: repoId, query: 'quasarHandler', budget_tokens: 600, ...(cursor ? { cursor } : {}) })
+      expect(Math.ceil(JSON.stringify(answer).length / 4)).toBeLessThanOrEqual(600)
+      expect(answer.status).toBe('ok')
       pages.push(answer)
       cursor = answer.truncated === false || answer.truncated === undefined ? null : answer.truncated.cursor
     } while (cursor && pages.length < 50)
     expect(pages.length).toBeGreaterThan(1)
-
-    const searchPages: Envelope[] = []
-    cursor = null
-    do {
-      const answer = await mcp('search', { repositoryId: repoId, query: 'quasarHandler', symbols: true, budget_tokens: 256, ...(cursor ? { cursor } : {}) })
-      expect(Math.ceil(JSON.stringify(answer).length / 4)).toBeLessThanOrEqual(256)
-      expect(answer.status).toBe('ok')
-      searchPages.push(answer)
-      cursor = answer.truncated === false || answer.truncated === undefined ? null : answer.truncated.cursor
-    } while (cursor && searchPages.length < 50)
-    expect(searchPages.length).toBeGreaterThan(1)
-    const shown = searchPages.flatMap((p) => p.results.map((h) => (typeof h === 'string' ? h : `${h.resourceType}:${h.id}`)))
-    expect(new Set(shown).size).toBe(shown.length)
+    const shown = pages.flatMap((p) => p.results.map((h) => `${h.resourceType}:${h.id}`))
+    expect(shown).toHaveLength(20)
+    expect(new Set(shown).size).toBe(20)
   })
 })

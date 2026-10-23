@@ -182,19 +182,28 @@ export async function scheduleMissingExtractions(): Promise<number> {
 }
 
 /**
- * Files of a repository whose extraction for their current content is still
- * to come: a pending (queued or running) job, or no job and no embedding
- * (written before the jobs table; the boot scan adds its job). Failed files
- * are not counted: `extractionFailures` lists them. 0 = extraction finished.
+ * Extraction state of the files of these repositories: `pending`, files whose
+ * extraction for their current content is still to come (a pending, queued or
+ * running, job, or no job and no embedding: written before the jobs table,
+ * the boot scan adds its job); `failed`, files whose job for their current
+ * content gave up (`extractionFailures` lists them); `files`, all of them.
+ * Search reports it next to its results (#442).
  */
-export async function countPendingExtractions(repositoryId: string): Promise<number> {
+export async function extractionState(repositoryIds: string[]): Promise<{ files: number; pending: number; failed: number }> {
+  if (repositoryIds.length === 0) return { files: 0, pending: 0, failed: 0 }
   const [row] = (await db.execute(sql`
-    SELECT count(*)::int AS pending
+    SELECT count(*)::int AS files,
+      (count(*) FILTER (WHERE j.id IS NOT NULL AND j.done_at IS NULL OR j.id IS NULL AND f.embedding IS NULL))::int AS pending,
+      (count(*) FILTER (WHERE j.done_at IS NOT NULL AND j.last_error IS NOT NULL))::int AS failed
     FROM repository_files f
     LEFT JOIN jobs j ON j.idempotency_key = ${EXTRACTION_JOB} || ':' || f.id || ':' || f.content_hash
-    WHERE f.repository_id = ${repositoryId}
-      AND (j.id IS NOT NULL AND j.done_at IS NULL OR j.id IS NULL AND f.embedding IS NULL)`)) as unknown as [{ pending: number }]
-  return row?.pending ?? 0
+    WHERE f.repository_id = ANY(${`{${repositoryIds.join(',')}}`}::uuid[])`)) as unknown as [{ files: number; pending: number; failed: number }]
+  return row ?? { files: 0, pending: 0, failed: 0 }
+}
+
+/** Files of a repository whose extraction for their current content is still to come (`extractionState`); 0 = extraction finished. */
+export async function countPendingExtractions(repositoryId: string): Promise<number> {
+  return (await extractionState([repositoryId])).pending
 }
 
 /**
