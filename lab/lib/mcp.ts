@@ -209,7 +209,9 @@ export class McpClient {
     const kept: RevisionMeta[] = []
     let cursor: string | null = null
     do {
-      const page: HistoryPage = await this.must('note_history', { vaultId, path, limit: 100, ...(cursor ? { cursor } : {}) })
+      // The largest budget keeps a page of 100 revisions at `full` (#421): a stepped-down page drops `createdAt`
+      // (`locations`) or the list itself (`counts`, `total`).
+      const page: HistoryPage = await this.must('note_history', { vaultId, path, limit: 100, budget_tokens: 25_000, ...(cursor ? { cursor } : {}) })
       const newer = page.revisions.filter((r) => r.createdAt > sinceIso)
       kept.push(...newer)
       cursor = newer.length === page.revisions.length ? nextCursor(page) : null

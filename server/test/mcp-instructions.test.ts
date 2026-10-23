@@ -1,7 +1,7 @@
 // initialize.instructions (#435): the rules an agent needs before its first
 // call, one fixed text per profile. A reader learns the budget, the
 // `truncated` block and its cursor, and where the manuals are; writer and
-// admin also learn how a whole body merges and how to retry a write. The
+// admin also learn how a whole body merges and how to retry a note write. The
 // text names no id, date or pin, so every token of a profile gets the same
 // bytes (#681), and it counts in the tools/list budget
 // (mcp-tool-budget.test.ts).
@@ -61,12 +61,32 @@ describe('initialize.instructions (#435)', () => {
     for (const rule of ['budget_tokens', 'truncated', 'cursor', 'read_note', 'read_file', 'elara://manual/']) expect(text).toContain(rule)
     expect(text).not.toContain('idempotency_key')
     expect(text).not.toContain('base_rev')
+    // `truncated` is promised only for tools with `budget_tokens`: search, list_vaults and list_repositories have none.
+    expect(text).toContain('Tools with `budget_tokens`')
+    const { tools } = await reader.listTools()
+    const unbudgeted = tools.filter((t) => !('budget_tokens' in (t.inputSchema.properties ?? {}))).map((t) => t.name)
+    expect(unbudgeted).toEqual(expect.arrayContaining(['search', 'list_vaults', 'list_repositories']))
   })
 
-  it('adds the merge and retry rules for writer and admin, the same text for both', async () => {
-    const writer = (await session({ name: 'instr-writer', scope: 'account', access: 'admin', profile: 'writer' })).getInstructions() ?? ''
-    const admin = (await session({ name: 'instr-admin', scope: 'account', access: 'admin', profile: 'admin' })).getInstructions() ?? ''
-    for (const rule of ['budget_tokens', 'truncated', 'cursor', 'elara://manual/', 'base_rev', 'idempotency_key']) expect(writer).toContain(rule)
+  it('adds the merge and retry rules for writer and admin, scoped to what they are true of', async () => {
+    const writerClient = await session({ name: 'instr-writer', scope: 'account', access: 'admin', profile: 'writer' })
+    const adminClient = await session({ name: 'instr-admin', scope: 'account', access: 'admin', profile: 'admin' })
+    const writer = writerClient.getInstructions() ?? ''
+    const admin = adminClient.getInstructions() ?? ''
+    for (const text of [writer, admin]) {
+      for (const rule of ['budget_tokens', 'truncated', 'cursor', 'elara://manual/', 'base_rev', 'idempotency_key']) expect(text).toContain(rule)
+      // A paged read_note records no last read, so a whole body would replace the live text: the rule says so.
+      expect(text).toContain('last unpaged read_note; after a paged read send its `rev` as `base_rev`')
+      // Only the note writes take idempotency_key; admin's other writes refuse it as an unknown argument.
+      expect(text).toContain('Retry a note write with the same `idempotency_key`')
+    }
+    resetRateLimits()
+    const keyed = (await adminClient.listTools()).tools
+      .filter((t) => 'idempotency_key' in (t.inputSchema.properties ?? {}))
+      .map((t) => t.name)
+    expect(keyed.length).toBeGreaterThan(0)
+    expect(keyed.filter((name) => !name.includes('note'))).toEqual([])
+    // Scoped to note writes, the one text is true for both profiles.
     expect(admin).toBe(writer)
   })
 

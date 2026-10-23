@@ -130,6 +130,8 @@ describe('tool annotations (#434)', () => {
   it('keeps the same annotations on the shared tool record', async () => {
     const tools = await listed('admin')
     const record = new Map(listMcpTools().map((t) => [t.name, t]))
+    // Both sides must be present: two missing annotations would stringify equal.
+    expect(tools.filter((t) => t.annotations === undefined || record.get(t.name)?.annotations === undefined).map((t) => t.name)).toEqual([])
     const differ = tools.filter((t) => JSON.stringify(record.get(t.name)?.annotations) !== JSON.stringify(t.annotations)).map((t) => t.name)
     expect(differ).toEqual([])
   })
