@@ -30,8 +30,8 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 <body>
 <main>
 <h1>Elara fix programme: hand-off after phase 2</h1>
-<p>Date: 2026-10-22. Repository: <a href="https://github.com/PIIIX-org/chapters">PIIIX-org/chapters</a> (product name Elara). Written for whoever continues the work: the owner, another agent, or a future session. Phase 1&#39;s hand-off is <a href="phase-1.md">phase-1.md</a>; its working method (section 3) and gotchas (section 10) still apply.</p>
-<p>Every phase-2 pull request has merged; no line of this document waits on an open PR. The promotion results go into section 5 once it has run.</p>
+<p>Date: 2026-10-22; promotion recorded 2026-10-23. Repository: <a href="https://github.com/PIIIX-org/chapters">PIIIX-org/chapters</a> (product name Elara). Written for whoever continues the work: the owner, another agent, or a future session. Phase 1&#39;s hand-off is <a href="phase-1.md">phase-1.md</a>. This document covers what phase 2 changed; where phase-1 text still holds it links there instead of repeating it. Sections 7–13 and Appendix A follow phase-1&#39;s sections 3 and 5–10 and its Appendix A.</p>
+<p>Every phase-2 pull request has merged, and phase 2 is on <code>prod</code> since 2026-10-23 (two promotion steps, section 5).</p>
 <h2>1. Where things stand</h2>
 <table>
 <thead>
@@ -54,11 +54,11 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 </tr>
 <tr>
 <td><code>dev</code></td>
-<td><code>e3ff312</code> (#885&#39;s merge, the last phase-2 PR), 609 commits ahead of <code>prod</code>.</td>
+<td><code>e3ff312</code> was #885&#39;s merge, the last phase-2 PR. After the hand-off, #902, #909, #910 and #912 merged; <code>dev</code> was <code>d3b210e</code> at step B.</td>
 </tr>
 <tr>
 <td><code>prod</code></td>
-<td><code>5c5bdc0</code> (phase 1). It does <strong>not</strong> ship the #720 client; the owner decided a two-step promotion (section 5).</td>
+<td><strong><code>d3b210e</code></strong> since 2026-10-23 07:55 UTC: step A (<a href="https://github.com/PIIIX-org/chapters/pull/899">#899</a>, <code>f3724d0</code>) on 2026-10-22, then step B (<a href="https://github.com/PIIIX-org/chapters/pull/920">#920</a>). Section 5.</td>
 </tr>
 </tbody></table>
 <h3>1.1 How #486 and #489 closed</h3>
@@ -686,72 +686,2117 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 </ul>
 <p><strong>Monitoring.</strong> <code>/api/admin/monitoring</code> with <code>Authorization: Bearer $ELARA_MONITORING_TOKEN</code> reports 5xx, failed jobs per kind and slow endpoints; the uptime monitor alerts on them (#705, <a href="https://github.com/PIIIX-org/chapters/pull/764">#764</a>). Migration and projector conflict copies are reported as <code>conflictCopies</code>, not as job failures (#842, <a href="https://github.com/PIIIX-org/chapters/pull/866">#866</a>). <code>docs/self-hosting/monitoring.md</code>.</p>
 <p><strong>Backup and restore docs.</strong> <code>globals.sql</code> no longer leaves the app unable to connect: set the role password from <code>.env</code> after loading it (#841, <a href="https://github.com/PIIIX-org/chapters/pull/855">#855</a>). The data-volume steps use the app service and the cron target is a <code>backup.sh</code> the operator saves (#848, <a href="https://github.com/PIIIX-org/chapters/pull/859">#859</a>).</p>
-<p><strong>Offline image scripts (#872).</strong> <a href="https://github.com/PIIIX-org/chapters/pull/878">#878</a> makes <code>pnpm &lt;script&gt;</code> run without network in the published image (<code>pnpm_config_verify_deps_before_run=false</code>). Images built before it (including promotion step A, section 5) still need <code>node --import tsx src/scripts/&lt;name&gt;.ts</code> inside the container.</p>
-<h2>5. Promotion plan (<code>dev</code> → <code>prod</code>)</h2>
+<p><strong>Offline image scripts (#872).</strong> <a href="https://github.com/PIIIX-org/chapters/pull/878">#878</a> makes <code>pnpm &lt;script&gt;</code> run without network in the published image (<code>pnpm_config_verify_deps_before_run=false</code>). Images built before it (promotion step A) needed <code>node --import tsx src/scripts/&lt;name&gt;.ts</code> inside the container.</p>
+<h2>5. Promotion to <code>prod</code> (done)</h2>
 <h3>5.1 Two steps (owner&#39;s decision)</h3>
-<p>ADR-003 R3-2/Q4: S2b ships only after a promotion put the #720 client in production, so a refused tab&#39;s typing survives in the browser copy. <strong><code>prod</code> (<code>5c5bdc0</code>) does not contain #720&#39;s merge commit <code>150669c</code>.</strong> <strong>The owner decided on two steps.</strong> <strong>The coordinator asks the owner before opening each promotion PR.</strong></p>
+<p>ADR-003 R3-2/Q4: S2b ships only after a promotion has put the #720 client in production, so that a refused tab&#39;s typing survives in the browser copy. <code>prod</code> (<code>5c5bdc0</code>) did not contain #720&#39;s merge commit <code>150669c</code>, so <strong>the owner decided on two steps</strong>. The coordinator asked the owner before opening each promotion PR. A single promotion was rejected by the owner.</p>
 <table>
 <thead>
 <tr>
 <th>Step</th>
+<th>PR</th>
 <th><code>prod</code> ←</th>
-<th>Contains</th>
-<th>Not yet</th>
+<th>Pushed to <code>prod</code> (UTC, branch activity)</th>
+<th>CI + publish on <code>prod</code></th>
+<th>Dry run on the production snapshot</th>
+<th>After</th>
 </tr>
 </thead>
 <tbody><tr>
 <td>A</td>
-<td><code>ae6ffb9</code> (<code>dev</code> just before #843; fast-forward from <code>5c5bdc0</code>)</td>
-<td>#720 client, S1, S2a-1, S4, S5, migrations 0021–0025, every phase-2 fix merged before #843</td>
-<td>S2b, S2a-2 (<code>store-export-legacy</code>, maintenance lock), S3, S6 doctor, #878</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/899">#899</a></td>
+<td><code>f3724d0</code> = <code>ae6ffb9</code> (<code>dev</code> just before #843) + one baseline-only commit</td>
+<td>2026-10-22 12:55:48 (PR marked merged 12:55:50)</td>
+<td><a href="https://github.com/PIIIX-org/chapters/actions/runs/39782450732">run 39782450732</a></td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6337997585">#703 comment 6337997585</a> (GO)</td>
+<td>prod→dev sync <a href="https://github.com/PIIIX-org/chapters/pull/904">#904</a>; the owner confirmed post-flight on the server</td>
 </tr>
 <tr>
 <td>B</td>
-<td>the <code>dev</code> head at promotion time (<code>e3ff312</code> when phase 2 finished), after tabs have loaded step A&#39;s page</td>
-<td>S2a-2, S2b, S3, S6, the #885 bin export, 0026–0028, #878, the rest</td>
-<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/920">#920</a></td>
+<td><code>d3b210e</code> (<code>dev</code> head; fast-forward, <code>prod</code> <code>ahead_by</code> 0)</td>
+<td>2026-10-23 07:55:27 (PR marked merged 07:55:29)</td>
+<td><a href="https://github.com/PIIIX-org/chapters/actions/runs/39921053378">run 39921053378</a></td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6359468988">#703 comment 6359468988</a> (GO, rerun on the exact head)</td>
+<td>no sync needed; <a href="https://github.com/PIIIX-org/chapters/issues/900">#900</a> closed; the owner confirmed post-flight on the live server</td>
 </tr>
 </tbody></table>
+<p><strong>Step A</strong> shipped:</p>
 <ul>
-<li><strong>Between A and B</strong>, every browser that keeps an editor open must load step A&#39;s page once; leave at least a day, then reload tabs right before B.</li>
-<li><strong>Rollback differs per step.</strong> Step A&#39;s rollback is <strong>restore-only</strong> (the pre-step-A backup): #838 (<code>store-export-legacy</code>) merged after #843, so no prefix of <code>dev</code> has S2a with the export but without S2b. Step B&#39;s rollback to the step-A image uses the <strong>#885 export</strong> (files and <code>.crdt</code> bins), plus the 0026 <code>UPDATE</code> (section 5.4). The #703 S2a rehearsal ran the S2a + S2a-2 image, not <code>ae6ffb9</code>; a dry run plus boot of <code>ae6ffb9</code> on the rehearsal snapshot before step A closes that gap.</li>
-<li>A single promotion was rejected by the owner.</li>
+<li>the #720 client;</li>
+<li>S1, S2a-1, S4 and S5;</li>
+<li>migrations 0021–0025;</li>
+<li>every phase-2 fix merged before #843.</li>
 </ul>
-<h3>5.2 Pre-flight (each step)</h3>
-<ol>
-<li>Owner asked before the promotion PR is opened. Every check on the promotion PR green, full lab tier and full benchmark on the exact head, independent promotion review (phase-1 section 3). Only then <code>git push origin &lt;sha&gt;:prod</code>: production deploys on that push (#664, still open).</li>
-<li><strong>Backup immediately before</strong> (backup.md §1: pg_dump + data volume), checksums verified. For step A it is the only way back. Step B also has the #885 export, but take the backup anyway (#703 condition 1 is met by <a href="https://github.com/PIIIX-org/chapters/pull/885">#885</a>).</li>
-<li><strong>Reload open editor tabs</strong> before the upgrade, and nobody types during it (#703 condition 2; required for step B). Announce it: a step-A tab left open shows &quot;Offline — not saved yet&quot; after the upgrade, keeps its typing in the browser and reconnects about once a second until it is reloaded; the reload brings the typing back once (#907).</li>
-<li>Operator scripts (#703 condition 3): step A&#39;s image predates <a href="https://github.com/PIIIX-org/chapters/pull/878">#878</a>, so run them as <code>node --import tsx src/scripts/&lt;name&gt;.ts</code> inside the container; step B ships #878, so <code>pnpm &lt;script&gt;</code> works offline.</li>
-<li><strong><code>ELARA_MONITORING_TOKEN</code></strong> set in the production <code>.env</code> and in the uptime monitor&#39;s environment (owner).</li>
-<li>Dry run on production (read-only) or a fresh copy: <code>migrate-store --dry-run --report /data/elara/migration-dry-run.json</code>; expect 0 conflicts, as on #703. Owner sign-off on Q3/Q5/Q6 asked for in the S2a rehearsal comment. In step B the dry run also predicts the <code>attach-equal</code> / <code>attach-diffed</code> split (<a href="https://github.com/PIIIX-org/chapters/pull/876">#876</a>).</li>
-<li>Step B adds S3, migrations 0026–0028 and #861&#39;s compaction, which the #703 S2b rehearsal (<code>aa73289</code>) did not cover: rerun the S2b rehearsal on the snapshot with the step-B head.</li>
-</ol>
-<h3>5.3 Post-flight</h3>
-<ol>
-<li><code>/health</code>: up, new <code>bootId</code>, <code>lastShutdown: graceful</code>.</li>
-<li>Boot log: <code>[store] backfill:</code> summary with 0 failed (step A); collab backfill with 0 set aside and 0 failed, <code>.crdt.pre-adr-003/</code> present (step B); <code>DATA_DIR/migration-report-*.json</code> and <code>collab-migration-report-*.json</code>.</li>
-<li><code>check-notes --wait-idle --fail-on-pending</code>: 0 broken, 0 pending. <code>doctor</code> (step B): <code>doctor --repair</code> (exit 0, or 3 with the <code>links-differ</code> repairs it queued for link rows from before GRAPH-09), then <code>doctor</code>: exit 0, <code>0 problem(s)</code>, one <code>INFO migration-copy</code> line per unparseable file the migration report counts (<a href="https://github.com/PIIIX-org/chapters/issues/908">#908</a>).</li>
-<li><code>/api/admin/monitoring</code> answers with the token; <code>conflictCopies</code> matches the migration report&#39;s unparseable count; the next uptime run is green.</li>
-<li>Lab smoke: there is no staging server. The lab (<code>docs/agents/lab.md</code>) builds its own instance from the commit under test on the CI runner, bootstraps it and runs <code>lab/tests</code> against it, never against production (phase-1 section 10: &quot;the lab instance is the staging server&quot;). Run it on the promoted commit: <code>gh workflow run elara-lab.yml --ref prod -f tier=fast</code>.</li>
-</ol>
-<h3>5.4 Rollback</h3>
+<p>Its lab baseline needed one commit: <a href="https://github.com/PIIIX-org/chapters/issues/900">#900</a> tracked the defects whose fixes were still only on <code>dev</code> (&quot;Phase 2 step A: defects live in production until step B&quot;). Prod&#39;s lab gate refuses a baseline entry for a closed issue (rule 5), so the baseline entries of those closed issues pointed at #900 for step A, and <code>prod</code> then had one commit <code>dev</code> lacked; #904 merged it back.</p>
+<p><strong>Step B</strong> shipped:</p>
 <ul>
-<li><strong>Step A: restore-only.</strong> Restore the backup taken in pre-flight 2 (backup.md §2), then start the <code>5c5bdc0</code> image. Writes made since step A are lost.</li>
-<li><strong>Step B: the #885 export</strong>, keeping the data written since, with nobody typing:<ol>
-<li><code>docker compose stop app</code>.</li>
-<li><code>docker compose run --rm --no-deps app pnpm store-export-legacy</code> (files, <code>index.md</code> and <code>.crdt</code> bins; exit 0 required).</li>
-<li>With the app still stopped, run backup.md §5&#39;s 0026 <code>UPDATE</code> (section 4, &quot;Rollback&quot;, step 3), so the step-A code reads whole revision bodies.</li>
-<li>Start the step-A image (<code>ae6ffb9</code>). It reads the exported bins, so tabs that reload keep their history.</li>
-<li>Rolling forward to step B again needs nothing: the S2b boot merges the bins the step-A relay wrote and recompacts the history.</li>
-</ol>
+<li>S2a-2, S2b and S3;</li>
+<li>S6 and the #885 bin export;</li>
+<li>migrations 0026–0028;</li>
+<li>the whole-body merges, #837 and #878;</li>
+<li>the fixes made after the hand-off:<ul>
+<li><a href="https://github.com/PIIIX-org/chapters/pull/902">#902</a> (#901): rollback per release in backup.md §5; migration.md describes what shipped;</li>
+<li><a href="https://github.com/PIIIX-org/chapters/pull/909">#909</a> (#908): <code>doctor</code> treats the upgrade&#39;s own conflict copies as <code>INFO</code> and stale links as repairable (exit 3);</li>
+<li><a href="https://github.com/PIIIX-org/chapters/pull/910">#910</a> (#907): a step-A tab left open says &quot;Offline — not saved yet&quot;, keeps its typing and reconnects until it is reloaded, instead of &quot;Access removed&quot;;</li>
+<li><a href="https://github.com/PIIIX-org/chapters/pull/912">#912</a> (#911): <code>ELARA_TRUST_PROXY</code>.</li>
+</ul>
 </li>
-<li>If the export fails and cannot be fixed, restore the pre-step-B backup.</li>
+</ul>
+<p>Open after the promotion: <a href="https://github.com/PIIIX-org/chapters/issues/921">#921</a>, an Ajv <code>allowUnionTypes</code> warning on every boot (REST PUT <code>baseRev</code> schema from #865). It is cosmetic: integer and revision-id <code>baseRev</code> are both accepted.</p>
+<h3>5.2 Pre-flight (as the promotion PRs instructed; for the next promotion)</h3>
+<p>These are the instructions in the #899 and #920 bodies. Items 2 and 3 have no separate record of how they were carried out.</p>
+<ol>
+<li>The owner was asked before the promotion PR was opened. Every check on the promotion PR had to be done, including the full lab tier and the full benchmark on the exact head, then an independent promotion review. Only then <code>git push origin &lt;sha&gt;:prod</code>: production deploys on that push (#664 is still open).</li>
+<li>A backup immediately before the push, per backup.md §1 (pg_dump + the data volume through a one-off app container). Step A&#39;s own backup.md had data-volume steps that fail (#848), so #899 pointed at <code>dev</code>&#39;s backup.md at <code>b465e2a</code>; #920 used its own head&#39;s.</li>
+<li>Reload open editor tabs before step B, and tell users first: a step-A tab left open shows &quot;Offline — not saved yet&quot; until it is reloaded, and the reload brings its typing back once (#910).</li>
+<li>Operator scripts: in step A&#39;s image, <code>node --import tsx src/scripts/&lt;name&gt;.ts</code> (#872); from step B, <code>pnpm &lt;script&gt;</code> works offline (#878).</li>
+<li><code>ELARA_MONITORING_TOKEN</code> in the production <code>.env</code>: the repository secret&#39;s value, at least 32 characters.</li>
+<li>A dry run and first boot of the exact head on the production snapshot, posted to #703 (comments above).</li>
+</ol>
+<h3>5.3 Post-flight: what is on record</h3>
+<p>The promotion PRs listed the post-flight checks: <code>/health</code>, the boot report (store backfill; for step B the collab backfill and <code>.crdt.pre-adr-003/</code>), <code>check-notes</code>, <code>doctor</code> (step B), the monitoring endpoint, and the editor showing <code>Synced</code>. What the record shows:</p>
+<ul>
+<li><strong>Step A, the owner</strong> (<a href="https://github.com/PIIIX-org/chapters/pull/899#issuecomment-6358929809">#899 comment 6358929809</a>): &quot;all checks good after the step A deploy of f3724d0 — /health version, first-boot store backfill, check-notes, editor Synced&quot;. To the coordinator: &quot;everything on the server seems good&quot;.</li>
+<li><strong>Step B, the owner</strong> (<a href="https://github.com/PIIIX-org/chapters/pull/920#issuecomment-6360647981">#920 comment 6360647981</a>): &quot;all checks good on d3b210e. Phase 2 is complete in production.&quot; To the coordinator: &quot;everything works on the live server&quot;.</li>
+<li><strong><code>version</code> in <code>/health</code>:</strong> the uptime monitor&#39;s restart comment on #636 (<a href="https://github.com/PIIIX-org/chapters/issues/636#issuecomment-6342600068">comment 6342600068</a>, 2026-10-22 13:59 UTC) shows <code>version</code> <em>none</em> for the process started at 13:11:08 UTC, after step A. That fits <a href="https://github.com/PIIIX-org/chapters/issues/664">#664</a>: production builds from source on the push, not from the published image that carries <code>ELARA_VERSION</code>. So <code>/health</code> cannot be relied on to name the promoted commit until #664 is fixed.</li>
+<li><strong>Uptime monitor after step B: pending.</strong> The last <code>uptime.yml</code> run before this was written ran at 04:58 UTC (<a href="https://github.com/PIIIX-org/chapters/actions/runs/39903154428">run 39903154428</a>), before the 07:55 UTC push.</li>
+<li><strong>The lab never runs against production.</strong> It builds its own instance from the commit under test on the CI runner (<code>docs/agents/lab.md</code>). That lab instance is what phase-1 §10 calls &quot;the staging server&quot;. There is no separate staging deployment.</li>
+</ul>
+<h3>5.4 Rollback (valid until the next promotion)</h3>
+<p><code>prod</code> runs step B (<code>d3b210e</code>). backup.md §5, &quot;Which way back&quot;, has the commands.</p>
+<ul>
+<li><p><strong>Code-only to step A, keeping every write since step B</strong> (ADR-003 Q10: supported for one release, so until the next promotion; keep <code>.crdt.pre-adr-003/</code> until then). With nobody typing:</p>
+<ol>
+<li><code>docker compose stop app</code>.</li>
+<li><code>docker compose run --rm --no-deps app pnpm store-export-legacy</code>. It writes files, <code>index.md</code> and <code>.crdt</code> bins; exit 0 is required, and the summary must count the bins written.</li>
+<li>With the app still stopped, run backup.md §5&#39;s 0026 <code>UPDATE</code>, so step A&#39;s code reads whole revision bodies.</li>
+<li>Check out <code>f3724d0</code> and run <code>docker compose up -d --build app</code>. It reads the exported bins, so tabs that reload keep their history.</li>
+<li>Rolling forward to step B again needs nothing: the S2b boot merges the bins the step-A relay wrote and compacts the history again.</li>
+</ol>
+<p>This was rehearsed from the exact step-B head (#703 comment 6359468988), with one caveat. The rehearsal started the step-A image by its tag, so its <code>--build</code> was a no-op; <code>git checkout f3724d0 &amp;&amp; docker compose up -d --build app</code> itself has never been run from source.</p>
+</li>
+<li><p><strong>Restore, losing every write since the upgrade:</strong> stop the app, remove the database and data volumes (<code>docker compose down -v</code>), check out the release the backup was taken on, follow backup.md §2 steps 1–8 with the pre-step-B backup, and start it. After the next promotion this is the only way back over phase 2.</p>
+</li>
 </ul>
 <h2>6. Open pull requests</h2>
 <p>None. The last phase-2 PRs merged on 2026-10-22: <a href="https://github.com/PIIIX-org/chapters/pull/892">#892</a>, <a href="https://github.com/PIIIX-org/chapters/pull/889">#889</a>, <a href="https://github.com/PIIIX-org/chapters/pull/861">#861</a>, <a href="https://github.com/PIIIX-org/chapters/pull/864">#864</a>, <a href="https://github.com/PIIIX-org/chapters/pull/879">#879</a>, <a href="https://github.com/PIIIX-org/chapters/pull/896">#896</a>, <a href="https://github.com/PIIIX-org/chapters/pull/885">#885</a>. Merged on 2026-10-21, after the first draft: <a href="https://github.com/PIIIX-org/chapters/pull/837">#837</a>, <a href="https://github.com/PIIIX-org/chapters/pull/847">#847</a>, <a href="https://github.com/PIIIX-org/chapters/pull/869">#869</a>, <a href="https://github.com/PIIIX-org/chapters/pull/874">#874</a>, <a href="https://github.com/PIIIX-org/chapters/pull/876">#876</a>, <a href="https://github.com/PIIIX-org/chapters/pull/878">#878</a>, <a href="https://github.com/PIIIX-org/chapters/pull/882">#882</a>, <a href="https://github.com/PIIIX-org/chapters/pull/883">#883</a>.</p>
+<h2>7. How the work is done (changes since phase 1)</h2>
+<p>The loop of <a href="phase-1.md#3-how-the-work-is-done-keep-doing-it-this-way">phase-1.md §3</a> still holds: issue → plan note → failing test → fix → CI, lab and benchmark → independent review → merge. Promotions still need a full lab tier, the full benchmark and an independent review of the exact head. What changed in phase 2:</p>
+<ul>
+<li><strong>Machine and paths.</strong> The work moved to macOS. Everything lives under <code>~/elara</code>, never under <code>/tmp</code> (section 12). Docker and pnpm now run locally, so local test runs are possible as well as CI.</li>
+<li><strong>Roles.</strong><ul>
+<li><strong>Coordinator.</strong> One coordinator session spawns fix agents and does not fix issues itself.</li>
+<li><strong>Fix agents.</strong> Each fix agent takes one issue and opens one PR to <code>dev</code>. It works in a worktree <code>~/elara/worktrees/&lt;branch&gt;</code> made from <code>origin/dev</code>, after <code>source ~/elara/env.sh</code> (Node 24; a private test database <code>elara_test_&lt;worktree&gt;</code> on the shared <code>elara-test-pg</code> at <code>localhost:5444</code>; the commit identity). Every commit carries the trailer <code>Co-Authored-By: Claude Opus &lt;noreply@anthropic.com&gt;</code>. It follows <code>~/elara/tools/BRIEF.md</code> and keeps the plan note <code>fixes/&lt;n&gt;-&lt;slug&gt;</code> in Elara (Problem, Plan, Test plan, Result, append-only Log). It opens its PR without waiting for CI and stops.</li>
+<li><strong>Reviewer.</strong> A separate reviewer session follows <code>~/elara/tools/REVIEW.md</code>. It posts the <code>VERDICT:</code> comment with a gist review record and <code>Head reviewed:</code>, then merges with <code>safe-merge.ts</code>.</li>
+<li><strong>CHANGES verdicts.</strong> The coordinator forwards each CHANGES verdict to the authoring agent at once (owner&#39;s instruction: don&#39;t wait until every PR has been reviewed). The agent fixes it on the same branch and reports the new head.</li>
+</ul>
+</li>
+<li><strong>Watching.</strong> <code>~/elara/tools/watch-verdicts.sh</code> scans every open PR for verdict comments and for merges and closes. It keeps a persistent handled-state file (<code>~/elara/tools/.handled</code>), so a restart loses no event, and acknowledges with <code>--ack</code> or <code>--ack-all</code>. MERGE verdicts and merges only go to <code>merged.log</code>, unless the PR is in <code>WAKE_ON_MERGE</code> (PRs other work depends on). CHANGES verdicts and closes always wake the coordinator.</li>
+<li><strong>Agents never</strong> post <code>VERDICT</code> comments, review other PRs, press &quot;Update branch&quot;, merge, or push to <code>prod</code>.</li>
+</ul>
+<p><strong>Rules learned in phase 2</strong></p>
+<ul>
+<li><strong>Migration journal <code>when</code>.</strong><ul>
+<li>Drizzle skips a migration whose <code>when</code> is at or below the newest applied one. On every <code>dev</code> merge, a PR carrying a migration renumbers it, or moves its <code>when</code> above <code>dev</code>&#39;s newest.</li>
+<li>Phase 2&#39;s case: 0027 (#869, <code>when</code> 1791700000000) merged before 0026 (#861). 0026 kept its number but took <code>when</code> 1791750000000, and 0028 (#864) has 1791800000000.</li>
+<li><code>server/test/migration-order.test.ts</code> pins this (section 4).</li>
+</ul>
+</li>
+<li><strong>Order revisions by <code>ord</code>, never by <code>created_at</code> or the database clock.</strong> The test database&#39;s clock steps back by seconds, and rows written in one transaction share <code>now()</code> (#826 for revisions, #854/#860 for the audit trail, #858/#869 for security events).<ul>
+<li>The exception is #852. lastActivityAt keeps <code>max(created_at)</code>, and the test was fixed instead (#870, decision in section 8).</li>
+</ul>
+</li>
+<li><strong>Lab gate rule 5.</strong> A baseline entry pointing at a closed issue fails every lab run (prod&#39;s gate too).<ul>
+<li>Close an issue only with the PR that removes its last baseline entry. Write <code>Refs #N</code> everywhere else; GitHub closes on any &quot;fixes #N&quot;.</li>
+<li>#408 was reopened once for this, after an automatic close by a merge keyword.</li>
+<li>A duplicate is closed as a duplicate and its entries point at the open issue: #875 and #888 were closed as duplicates of #408.</li>
+</ul>
+</li>
+<li><strong>Stacked PRs.</strong> When a PR builds on another open PR, merge the base branch into it every time the base moves. Say &quot;merges after #N&quot; in the body (#864&#39;s &quot;Merge order&quot; note is the pattern).</li>
+<li><strong>Fails-before must fail on an assertion.</strong> A test that only times out, or fails only on a missing export, is not proof. #774 records one way the job miscounts.</li>
+<li><strong>Promotions.</strong><ul>
+<li>A promotion goes through a branch pinned at a SHA (<code>promote/&lt;name&gt;</code>), not <code>dev</code> itself, so <code>dev</code> keeps moving.</li>
+<li>It is pushed to <code>prod</code> by fast-forward after the verdict on that head.</li>
+<li>It may need a baseline-only commit on the promotion branch, plus the documented prod→dev sync afterwards (#899, #904; section 5).</li>
+</ul>
+</li>
+<li><strong>Owner decisions without an answer</strong> still get the conservative default, recorded on the issue and in the plan note, with the alternatives listed.</li>
+</ul>
+<h2>8. Decisions taken for the owner (can be changed)</h2>
+<table>
+<thead>
+<tr>
+<th>Issue</th>
+<th>Decision</th>
+<th>Alternatives / record</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/704">#704</a></td>
+<td>ADR-003 (rev 7) approved by the owner with every default (Q1–Q11), including: Postgres is the only authority; hand edits are copied to <code>.conflicts/</code>; frontmatter key order is kept; documents are id-named; the file wins at migration; migration is offline at boot; code-only rollback for one release.</td>
+<td>ADR-003 §13 in Elara <code>decision/adr-003-authoritative-store</code>.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/703">#703</a></td>
+<td>Production backup and rehearsals signed off by the owner (closed); every promotion step got its own GO report (section 5).</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Promotion</td>
+<td>Two steps (section 5.1); single promotion rejected by the owner.</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/621">#621</a></td>
+<td>A vault import grants no shares unless the importer opts in (<code>applyShares=true</code>); skipped shares are listed.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/621#issuecomment-6286998890">Issue comment</a>.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/483">#483</a></td>
+<td>Ctrl+Z in the editor undoes only the person&#39;s own edits; agent edits are reverted through history.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/483#issuecomment-6288682254">Issue comment</a>.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/499">#499</a></td>
+<td>An imported revision keeps its author id only if that author is the importer (user or the importer&#39;s MCP connection); otherwise the actor kind stays and the id is null.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/499#issuecomment-6288295125">Issue comment</a>.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/705">#705</a></td>
+<td>Monitoring alerts go through the existing uptime monitor and issue #636; <code>ALERT_WEBHOOK_URL</code> optional.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/705#issuecomment-6266719352">Issue comment</a>.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/872">#872</a></td>
+<td>Kept the image ENV defence (<code>pnpm_config_verify_deps_before_run=false</code>) as well as the manifest fix (#878).</td>
+<td>Manifest fix alone.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/851">#851</a></td>
+<td>The embedding test with the real model is opt-in and runs in the nightly lab (<code>real-model</code> job); the server suite uses a fake worker (#857).</td>
+<td>Download the model in every CI run.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/852">#852</a></td>
+<td>Team stats keep <code>max(created_at)</code> for <code>lastActivityAt</code>; the test was fixed (#870). Ordering by <code>ord</code> was reverted on review because imported revisions get a new <code>ord</code> but keep their date.</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/891">#891</a></td>
+<td>Moved to phase 5: only manual SQL on <code>note_crdt</code>/<code>note_updates</code> reaches it after S2b.</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/488#issuecomment-6324028607">#488 analysis</a>.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/408">#408</a></td>
+<td>#864&#39;s server client id is 2^32 + 48 random bits, above every editor&#39;s id, so typing in flight goes before a server insert at the same spot. This deviates from ADR-003 §5.2 (&quot;one random uint32 per process&quot;).</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/408#issuecomment-6318626577">Issue comment</a>.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/pull/909">#909</a></td>
+<td>Stale link rows are reported as repairable (<code>doctor --repair</code>), not rebuilt at boot.</td>
+<td>A one-time rebuild at boot with a new marker.</td>
+</tr>
+</tbody></table>
+<p>The phase-1 decisions (<a href="phase-1.md#5-decisions-taken-for-the-owner-can-be-changed">phase-1.md §5</a>) still stand.</p>
+<h2>9. Waiting on the owner (optional unless marked)</h2>
+<ol>
+<li><p><strong><a href="https://github.com/PIIIX-org/chapters/issues/589">#589</a> (required):</strong> revoke the 5 GitHub tokens exposed before #383, then close the issue.</p>
+</li>
+<li><p><strong><a href="https://github.com/PIIIX-org/chapters/issues/664">#664</a> (required):</strong> production deploys on the push to <code>prod</code>, before CI publishes the gated image. Both phase-2 promotions were pushed only after every check on the head was done, which made this safe, but the gap remains.</p>
+<p>These two are all that is open in the Phase 0 milestone.</p>
+</li>
+<li><p><strong>Optional, <a href="https://github.com/PIIIX-org/chapters/pull/912">#912</a>:</strong> if production sits behind a reverse proxy on the host, set <code>ELARA_TRUST_PROXY</code> (<code>docs/self-hosting/checklist.md</code> §3). Without it, rate limits, lockout and security events see the proxy&#39;s address for every user (#911).</p>
+</li>
+<li><p><strong>Optional, from phase 1 and unchanged:</strong></p>
+<ul>
+<li>replace <code>STATE_MD_TOKEN</code> with a fine-grained token;</li>
+<li>turn on the agent trial: the <code>agent-trial</code> environment still has no secret or variable;</li>
+<li>delete the unused repository connections.</li>
+</ul>
+<p>See <a href="phase-1.md#6-waiting-on-the-owner-optional-unless-marked">phase-1.md §6</a> items 4–6.</p>
+</li>
+<li><p><strong>Optional, <a href="https://github.com/PIIIX-org/chapters/issues/905">#905</a>:</strong> decide how the <code>collab-s3-perf</code> p95 bound should work on CI runners. Its reviewer left the assertion as it is for the owner.</p>
+</li>
+</ol>
+<h2>10. Open follow-ups found during phase 2</h2>
+<p>Every issue filed from 2026-10-19 to 2026-10-23 09:00 UTC (the time of writing) that is still open (<code>gh issue list --search &quot;created:&gt;=2026-10-19&quot; --state open</code>), classified. Section 3.2 has the reasons for the ones moved out during the phase.</p>
+<table>
+<thead>
+<tr>
+<th>Issue</th>
+<th>Kind</th>
+<th>Proposed</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/784">#784</a></td>
+<td>Bug, user-visible: editors are not told their stores were quarantined (#492); the typing vanishes on reload</td>
+<td>First in the next phase: it is the one remaining way typing disappears.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/780">#780</a></td>
+<td>Bug: the relay bounds the body (#491) but not frontmatter or other document content</td>
+<td>Next phase, with #784.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/891">#891</a></td>
+<td>Bug, manual SQL only</td>
+<td>Phase 5 (decided, section 8); the lab keeps measuring it (2 baseline entries).</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/923">#923</a></td>
+<td>Bug, P2, filed 2026-10-23 08:38 UTC: a repository file that grows past 1 MB or gains a NUL byte keeps its old indexed content in <code>read_file</code>, search, symbols and imports, and nothing reports it (both sync paths skip the file but keep its path current)</td>
+<td>Phase 3, with the code-index items (#449–#456, #465 &quot;report skipped files&quot;): it makes answers silently stale.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/921">#921</a></td>
+<td>Cosmetic: an Ajv <code>allowUnionTypes</code> warning on every boot (REST PUT <code>baseRev</code>, #865)</td>
+<td>Any time; small.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/905">#905</a></td>
+<td>Flake: <code>collab-s3-perf</code> p95 &lt; 250 ms on CI runners</td>
+<td>Needs the owner&#39;s call (section 9).</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/877">#877</a>, <a href="https://github.com/PIIIX-org/chapters/issues/787">#787</a>, <a href="https://github.com/PIIIX-org/chapters/issues/799">#799</a></td>
+<td>Test and lab flakes (monitoring extraction count, repository-routes teardown log, monitoring-alerts sync check)</td>
+<td>Phase 5, or earlier whenever one turns a required check red.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/774">#774</a>, <a href="https://github.com/PIIIX-org/chapters/issues/785">#785</a></td>
+<td>Tooling: <code>fails-before</code> and <code>vi.waitFor</code>; agent-trial T8 grades against old facts</td>
+<td>Phase 5 (with #650, #657, #662).</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/918">#918</a></td>
+<td>Tooling: the STATE.md bot alternates real and empty data</td>
+<td>Soon: the bot PRs are merged by the reviewer and can publish wrong numbers.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/830">#830</a></td>
+<td>The nightly-lab alert issue</td>
+<td>Closes itself on the next green nightly; the last red one failed only on rule 5 before #864/#896.</td>
+</tr>
+</tbody></table>
+<p>The phase-1 follow-ups in <a href="phase-1.md#7-open-follow-ups-found-during-phase-1">phase-1.md §7</a> that phase 2 closed: #658, #663, #621. The rest are in their phases (Appendix A).</p>
+<h2>11. What the next phases fix</h2>
+<p>Phase 3 comes next: <strong><a href="https://github.com/PIIIX-org/chapters/milestone/4">milestone 4</a>, 74 open (29 P0, 34 P1, 11 P2).</strong> Goal: exact answers in fewer tokens than grep. Every retrieval or token change has to show its improvement in the benchmark and record the new median in <code>benchmarks/baseline.json</code> (<code>bench-gate</code>). The themes, in fix-list order:</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Theme</th>
+<th>Issues</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>Token budgets and honest truncation; slim write replies; working limits on browse and graph</td>
+<td>#420–#423, #427, #424–#426</td>
+</tr>
+<tr>
+<td>2</td>
+<td>A small tool surface: reader/writer/admin profiles, two-sentence descriptions, schema cleanup, short path ids, <code>structuredContent</code>, annotations, <code>initialize.instructions</code>, tool search</td>
+<td>#428, #429, #430, #432–#436, #431</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Errors and empty answers that say what happened: structured errors, 429 as JSON-RPC, &quot;no match&quot; vs &quot;index unavailable&quot;, NUL bytes, OKF <code>type</code>, plain-text <code>read_note</code>, timestamps, fuzzy graph lookups, cross-vault search</td>
+<td>#439–#448</td>
+</tr>
+<tr>
+<td>4</td>
+<td>A code index that works: TSX, arrow functions, <code>.mts</code>/<code>.cts</code>, content-hash keys, symbol chunking, filters inside both channels, identifier-aware keyword channel, RRF fusion</td>
+<td>#449–#456</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Located hits and reads: blocks with stable ids, <code>path#Lx-Ly</code> hits, grouping, multi-target reads, outlines instead of whole bodies, newlines kept, frontmatter off by default</td>
+<td>#413–#419</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Ranking and vectors: code above docs, <code>retrieval_mode</code>/<code>degraded</code>, no timestamps in embeddings, all vectors replaced on edit, tenant-filtered neighbours, <code>ef_search</code>, stale re-embeds; then more languages, <code>build/</code>, imports, reranker only if it helps</td>
+<td>#457–#463, #464–#467</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Code questions without grep: <code>grep</code>, symbol and edge tables, <code>symbol_at</code>/<code>references</code>/<code>callers</code>/<code>impact</code>, git awareness, backlinks with context, deterministic answers, <code>orient</code></td>
+<td>#468–#473, #534</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Added issues: tie-breaks (#623); then the cacheable prompt and caching contract (#681, #680), result caches (#682–#685); then routing hints, compound calls, working-tree overlay, vault as a git remote, usage learning, shared reading cache (#674–#679), and client compatibility runs (#709)</td>
+<td>#623, #674–#685, #709</td>
+</tr>
+</tbody></table>
+<p>Work order: slim profile and budgets first, then #681, #680 and the caches, then #674–#679 and #709 (<a href="phase-1.md#8a-new-features-added-2026-10-17">phase-1.md §8a</a>, &quot;Work order&quot;). After phase 3:</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Open</th>
+<th>Goal</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>4: knowledge truth and memory</td>
+<td>35</td>
+<td>Code claims tied to commits and re-checked on sync; lessons and drift repair.</td>
+</tr>
+<tr>
+<td>5: everything else</td>
+<td>47</td>
+<td>Persian/Arabic search, sync, prompts, graph, attachments, OKF, docs, flakes and tooling (#891 added).</td>
+</tr>
+<tr>
+<td>6: rendered views and data attachments</td>
+<td>5</td>
+<td>Rendered views, queryable attachments, text extraction, sandboxed HTML (#667: Markdown stays the stored format).</td>
+</tr>
+<tr>
+<td>7: new capabilities</td>
+<td>8</td>
+<td>Secret guard, issue/PR/CI links, coordination, events, transclusion, capture, importers, review inbox.</td>
+</tr>
+<tr>
+<td>8: UI and UX</td>
+<td>46</td>
+<td>The UI/UX audit&#39;s fixes (<a href="phase-1.md#8b-ui-and-ux-audit-2026-10-17">phase-1.md §8b</a>); the owner may pull them forward.</td>
+</tr>
+</tbody></table>
+<p>Appendix A lists every open item per phase.</p>
+<h2>12. Where everything is</h2>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Workspace</td>
+<td><code>~/elara</code> (= <code>/Users/taha/elara</code>; never <code>/tmp</code>).</td>
+</tr>
+<tr>
+<td>Main checkout</td>
+<td><code>~/elara/chapters</code>: never edited, only fetched.</td>
+</tr>
+<tr>
+<td>Work trees</td>
+<td><code>~/elara/worktrees/&lt;branch&gt;</code>, one per PR. Remove each when it is done and drop its database.</td>
+</tr>
+<tr>
+<td>Tools</td>
+<td><code>~/elara/tools/</code>, listed below.</td>
+</tr>
+<tr>
+<td>Rehearsal</td>
+<td><code>~/elara/rehearsal/</code> (mode 700, private: compose file, app env, build logs, reports and hashes of the production-copy runs; never commit or upload it). The Docker volume <code>elara-rehearsal_db-data</code> remains; the <code>elara-rehearsal:*</code> images named in the #703 reports have since been removed.</td>
+</tr>
+<tr>
+<td>Review records</td>
+<td><code>~/elara/reviews/&lt;pr&gt;.md</code>, the gists linked from each verdict, and Elara <code>reviews/pr-&lt;n&gt;</code>.</td>
+</tr>
+<tr>
+<td>Scratch</td>
+<td><code>~/elara/scratch/</code>: PR bodies, one-off scripts such as <code>handoff-html.mjs</code> (renders <code>docs/handoff/phase-N.md</code> to <code>.html</code> in the phase-1 layout), and <code>stepa-gate-proof.mjs</code> (prod&#39;s lab gate on a baseline with live issue states).</td>
+</tr>
+<tr>
+<td>Environment</td>
+<td><code>~/elara/env.sh</code>: Node 24 on <code>PATH</code>; <code>TEST_DATABASE_URL</code>/<code>DATABASE_URL</code> for <code>elara_test_&lt;worktree&gt;</code> on <code>elara-test-pg</code> (<code>localhost:5444</code>); <code>DATA_DIR=$PWD/.test-data</code>; the commit identity. The monitoring token sits in a separate file of mode 600 in <code>~/elara</code>; never print or paste it.</td>
+</tr>
+<tr>
+<td>Elara</td>
+<td>Production MCP via <code>bun ~/elara/tools/elara-call.ts &lt;tool&gt; &#39;&lt;json&gt;&#39;</code> (<code>ELARA_AGENT=fix-&lt;n&gt;</code>; large arguments via <code>ELARA_ARGS_FILE</code>). Vault &quot;Chapters&quot; <code>c1e3c446-d3f9-4868-9716-44b9c3234e72</code>: ADR-003 at <code>decision/adr-003-authoritative-store</code>, the plan in <code>fixes/phase-N</code>, one <code>fixes/&lt;n&gt;-&lt;slug&gt;</code> per item, <code>fixes/phase-2-handoff</code>, <code>fixes/phase-2-promotion</code>, <code>reviews/*</code>.</td>
+</tr>
+<tr>
+<td>Rehearsal reports</td>
+<td>#703: <a href="https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6314996795">S2a</a>, <a href="https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6321492109">S2b</a>, <a href="https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6337997585">step A</a>, <a href="https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6342575659">step B on 1f419a0</a>, <a href="https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6359468988">step B on d3b210e</a>. Aggregate numbers only.</td>
+</tr>
+<tr>
+<td>Phase-1 locations</td>
+<td>Study reports, fix list, the archive repo: <a href="phase-1.md#9-where-everything-is">phase-1.md §9</a>.</td>
+</tr>
+</tbody></table>
+<p><strong>Tools in <code>~/elara/tools/</code></strong></p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>BRIEF.md</code>, <code>REVIEW.md</code></td>
+<td>The fix-agent brief and the reviewer brief. Hand them over as they are.</td>
+</tr>
+<tr>
+<td><code>safe-merge.ts</code></td>
+<td>The only sanctioned merge: refuses unless every check on the PR head is green, then merges with <code>--match-head-commit</code>.</td>
+</tr>
+<tr>
+<td><code>verdict-merge.sh</code></td>
+<td>Posts an independent MERGE verdict and merges with <code>safe-merge.ts</code>. Refuses if the head moved since the review.</td>
+</tr>
+<tr>
+<td><code>update-branch.sh</code></td>
+<td>Merges <code>origin/dev</code> into a PR branch with the trailer, pushes, waits for the checks. Refuses on conflicts.</td>
+</tr>
+<tr>
+<td><code>watch-verdicts.sh</code></td>
+<td>Verdict and merge watcher with a persistent state file and <code>WAKE_ON_MERGE</code>.</td>
+</tr>
+<tr>
+<td><code>watch-prs.sh</code>, <code>watch-merges.sh</code></td>
+<td>Exit on the first change (comment, review, merge, close) of the given PRs.</td>
+</tr>
+<tr>
+<td><code>pr-status.sh</code></td>
+<td>For each open PR: the head, the latest verdict and the head it reviewed (<code>NEEDS-WORK</code> = CHANGES on the current head).</td>
+</tr>
+<tr>
+<td><code>elara-call.ts</code></td>
+<td>Calls one Elara MCP tool or prompt from the shell.</td>
+</tr>
+<tr>
+<td><code>fix-status.ts</code></td>
+<td>Sets an item&#39;s status cell in its <code>fixes/phase-N</code> note.</td>
+</tr>
+<tr>
+<td><code>merged.log</code></td>
+<td>Merges and MERGE verdicts logged by the watcher.</td>
+</tr>
+</tbody></table>
+<h2>13. Gotchas</h2>
+<p>Phase-1&#39;s gotchas (<a href="phase-1.md#10-gotchas">phase-1.md §10</a>) still hold, except for &quot;Local machine&quot;, which described the old Windows sandbox. New in phase 2:</p>
+<ul>
+<li><strong>Strict branch protection keeps every other PR <code>BEHIND</code></strong> after each merge to <code>dev</code>, so expect constant dev-merge churn and stale verdicts. Agents merge <code>origin/dev</code> themselves (with the trailer); nobody presses &quot;Update branch&quot;.</li>
+<li><strong>A PR head can lag a push.</strong> Closing and reopening the PR resyncs it (#839 and #859, both closed and reopened within seconds on 2026-10-21).</li>
+<li><strong>The test Postgres clock steps back.</strong> On Docker Desktop on this Mac, <code>clock_timestamp()</code> on <code>elara-test-pg</code> stepped back by up to 3.47 s (#860, #870). Never order or bound by the database clock in tests or code (section 7).</li>
+<li><strong>Load on the shared test database.</strong> Many agents running suites against the one shared Postgres pushed the load average to 20–80 on 10 cores (#862, #863, #870), and 5 s test timeouts failed. #874 raised them to 30 s. Keep parallel fix agents to about 6–8.</li>
+<li><strong>Never <code>pkill</code> machine-wide.</strong> A <code>pkill</code> of vitest killed every agent&#39;s suite. A <code>pkill -f &lt;pattern&gt;</code> can also match and kill the shell running it. (From the coordinator&#39;s session record; there is no issue for these.)</li>
+<li><strong>Watchers die silently</strong> when the session that started them restarts. Restart <code>watch-verdicts.sh</code> after any restart; its state file means nothing is lost.</li>
+<li><strong><code>/tmp</code> is wiped on reboot.</strong> Keep work, scripts and bodies under <code>~/elara</code>.</li>
+<li><strong>Stacked-PR fixtures can pollute the shared database.</strong> #861&#39;s fixture inserted <code>note_crdt.snapshot = &#39;\x&#39;</code> (zero bytes, not a valid Yjs update), which broke #885&#39;s tests on the same database (#885&#39;s PR thread). Each worktree has its own database; drop it when the worktree goes.</li>
+<li><strong>The Elara MCP on production</strong> still runs the code it was promoted with. <code>edit_note</code> frontmatter merges per key (#438); never put <code>---</code> inside a frontmatter value.</li>
+</ul>
+<h2>Appendix A. Every remaining item, in order</h2>
+<p>Generated 2026-10-23 from phase-1&#39;s Appendix A (order, fix-list item, priority) and the GitHub milestones (state and title at generation time). Only open issues are listed. The full change text of each fix-list item is in <a href="phase-1.md#appendix-a-every-remaining-item-in-order">phase-1.md Appendix A</a> and in Elara <code>fixes/phase-N</code>; it has not changed. Phase 1 (25/25) and phase 2 (52/52) are closed.</p>
+<h3>Phase 0: owner actions</h3>
+<p>2 open (<a href="https://github.com/PIIIX-org/chapters/milestone/1">milestone 1</a>). 4 fix-list items plus 2 added issues (after the fix-list items). Closed: #586, #587, #588, #635.</p>
+<table>
+<thead>
+<tr>
+<th>Order</th>
+<th>Item</th>
+<th>Issue</th>
+<th>Priority</th>
+<th>Title</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>4</td>
+<td>192</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/589">#589</a></td>
+<td>Now</td>
+<td>[fix 192] Revoke the 5 GitHub tokens exposed before #383</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/664">#664</a></td>
+<td>P1</td>
+<td>Production deploys on the push to prod, before CI publishes the gated image (#590 is bypassed)</td>
+</tr>
+</tbody></table>
+<h3>Phase 3: the premise (fewer tokens, exact answers)</h3>
+<p>74 open (<a href="https://github.com/PIIIX-org/chapters/milestone/4">milestone 4</a>). 60 fix-list items plus 14 added issues (after the fix-list items: #681, #680, #682–#685, then #674–#679 and #709; #623 where it fits).</p>
+<table>
+<thead>
+<tr>
+<th>Order</th>
+<th>Item</th>
+<th>Issue</th>
+<th>Priority</th>
+<th>Title</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>17</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/420">#420</a></td>
+<td>P0</td>
+<td>[fix 17] Every read, search, browse, graph and history tool takes budget_tokens</td>
+</tr>
+<tr>
+<td>2</td>
+<td>18</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/421">#421</a></td>
+<td>P0</td>
+<td>[fix 18] Over budget: drop whole low-ranked items, then step down a ladder</td>
+</tr>
+<tr>
+<td>3</td>
+<td>19</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/422">#422</a></td>
+<td>P0</td>
+<td>[fix 19] Every response ends with a truncated block: shown, total (fetch limit+1 to know),…</td>
+</tr>
+<tr>
+<td>4</td>
+<td>20</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/423">#423</a></td>
+<td>P0</td>
+<td>[fix 20] Very large results become a pageable, greppable handle instead of inline text</td>
+</tr>
+<tr>
+<td>5</td>
+<td>25</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/427">#427</a></td>
+<td>P0</td>
+<td>[fix 25] Strip embedding and internal columns from every write reply</td>
+</tr>
+<tr>
+<td>6</td>
+<td>21</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/424">#424</a></td>
+<td>P0</td>
+<td>[fix 21] browse_repository: path prefix filter and cursor</td>
+</tr>
+<tr>
+<td>7</td>
+<td>22</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/425">#425</a></td>
+<td>P0</td>
+<td>[fix 22] browse_vault: root listing must respect recursive:false; return path and title only by…</td>
+</tr>
+<tr>
+<td>8</td>
+<td>23</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/426">#426</a></td>
+<td>P0</td>
+<td>[fix 23] graph: limit, neighborsOf, depth, edgeTypes actually implemented</td>
+</tr>
+<tr>
+<td>9</td>
+<td>26</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/428">#428</a></td>
+<td>P0</td>
+<td>[fix 26] Tool profiles: reader (~6 tools: orient, search, grep, read, outline, code questions),…</td>
+</tr>
+<tr>
+<td>10</td>
+<td>27</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/429">#429</a></td>
+<td>P0</td>
+<td>[fix 27] Two-sentence tool descriptions; long manuals served as MCP resources; CI fails if the…</td>
+</tr>
+<tr>
+<td>11</td>
+<td>28</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/430">#430</a></td>
+<td>P1</td>
+<td>[fix 28] Replace the UUID regex repeated 60 times with format: &quot;uuid&quot;; describe every parameter…</td>
+</tr>
+<tr>
+<td>12</td>
+<td>30</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/432">#432</a></td>
+<td>P1</td>
+<td>[fix 30] Print paths once per response with short ids the agent can cite</td>
+</tr>
+<tr>
+<td>13</td>
+<td>31</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/433">#433</a></td>
+<td>P1</td>
+<td>[fix 31] Return structuredContent with outputSchema, plus a short text summary</td>
+</tr>
+<tr>
+<td>14</td>
+<td>32</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/434">#434</a></td>
+<td>P1</td>
+<td>[fix 32] Tool annotations: readOnlyHint, destructiveHint, idempotentHint, title</td>
+</tr>
+<tr>
+<td>15</td>
+<td>33</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/435">#435</a></td>
+<td>P1</td>
+<td>[fix 33] Put essential usage rules in MCP initialize.instructions</td>
+</tr>
+<tr>
+<td>16</td>
+<td>34</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/436">#436</a></td>
+<td>P1</td>
+<td>[fix 34] Drop the listChanged:true capability or implement it (GET /mcp returns 404)</td>
+</tr>
+<tr>
+<td>17</td>
+<td>29</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/431">#431</a></td>
+<td>P1</td>
+<td>[fix 29] Tool search for the long tail instead of listing every tool (Cognee pattern)</td>
+</tr>
+<tr>
+<td>18</td>
+<td>37</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/439">#439</a></td>
+<td>P1</td>
+<td>[fix 37] Structured errors: {code, rule, retryable, retryAfterMs, suggestions}</td>
+</tr>
+<tr>
+<td>19</td>
+<td>38</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/440">#440</a></td>
+<td>P1</td>
+<td>[fix 38] HTTP 429 sent as a JSON-RPC error with a Retry-After header</td>
+</tr>
+<tr>
+<td>20</td>
+<td>39</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/441">#441</a></td>
+<td>P1</td>
+<td>[fix 39] find_symbols and search say &quot;no match&quot; instead of returning unrelated low-score hits…</td>
+</tr>
+<tr>
+<td>21</td>
+<td>40</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/442">#442</a></td>
+<td>P1</td>
+<td>[fix 40] Distinguish &quot;no match&quot; from &quot;index unavailable or still building&quot; in every search response</td>
+</tr>
+<tr>
+<td>22</td>
+<td>41</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/443">#443</a></td>
+<td>P1</td>
+<td>[fix 41] A NUL byte in a body must produce a clean error, not echo the SQL and full body</td>
+</tr>
+<tr>
+<td>23</td>
+<td>42</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/444">#444</a></td>
+<td>P1</td>
+<td>[fix 42] Split the semantic OKF type from the folder</td>
+</tr>
+<tr>
+<td>24</td>
+<td>43</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/445">#445</a></td>
+<td>P1</td>
+<td>[fix 43] read_note returns the body as plain text, not escaped JSON inside JSON</td>
+</tr>
+<tr>
+<td>25</td>
+<td>44</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/446">#446</a></td>
+<td>P1</td>
+<td>[fix 44] Update a note&#39;s timestamp on edit so recency ranking works</td>
+</tr>
+<tr>
+<td>26</td>
+<td>45</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/447">#447</a></td>
+<td>P2</td>
+<td>[fix 45] find_graph_path and graph lookups accept names or partial paths with candidate…</td>
+</tr>
+<tr>
+<td>27</td>
+<td>46</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/448">#448</a></td>
+<td>P2</td>
+<td>[fix 46] Cross-vault search for account tokens (today search refuses without a vaultId)</td>
+</tr>
+<tr>
+<td>28</td>
+<td>47</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/449">#449</a></td>
+<td>P0</td>
+<td>[fix 47] Parse .tsx with the TSX grammar (230 of 231 .tsx files fail to parse today)</td>
+</tr>
+<tr>
+<td>29</td>
+<td>48</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/450">#450</a></td>
+<td>P0</td>
+<td>[fix 48] Extract export const f = () =&gt; and other arrow-function or exported consts, and class…</td>
+</tr>
+<tr>
+<td>30</td>
+<td>49</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/451">#451</a></td>
+<td>P0</td>
+<td>[fix 49] Give .mts/.cts files a language and parse them</td>
+</tr>
+<tr>
+<td>31</td>
+<td>51</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/453">#453</a></td>
+<td>P0</td>
+<td>[fix 51] Key every derived artifact by content hash + parser version + embedder id; save…</td>
+</tr>
+<tr>
+<td>32</td>
+<td>50</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/452">#452</a></td>
+<td>P0</td>
+<td>[fix 50] Chunk code by symbol plus a skeleton chunk per large file or class; chunk notes by…</td>
+</tr>
+<tr>
+<td>33</td>
+<td>52</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/454">#454</a></td>
+<td>P0</td>
+<td>[fix 52] Apply repo, vault, path glob, language and kind filters inside both the keyword and the…</td>
+</tr>
+<tr>
+<td>34</td>
+<td>53</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/455">#455</a></td>
+<td>P0</td>
+<td>[fix 53] Keyword channel: split camelCase and snake_case, add a trigram index, weight path,…</td>
+</tr>
+<tr>
+<td>35</td>
+<td>54</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/456">#456</a></td>
+<td>P0</td>
+<td>[fix 54] Fuse keyword and vector with RRF over a fixed window; exact and identifier matches…</td>
+</tr>
+<tr>
+<td>36</td>
+<td>10</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/413">#413</a></td>
+<td>P0</td>
+<td>[fix 10] Index every note heading section and every code symbol as a block with a stable id,…</td>
+</tr>
+<tr>
+<td>37</td>
+<td>11</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/414">#414</a></td>
+<td>P0</td>
+<td>[fix 11] Search hits return {path#Lx-Ly, block id, heading path, approx tokens, snippet of up to…</td>
+</tr>
+<tr>
+<td>38</td>
+<td>12</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/415">#415</a></td>
+<td>P0</td>
+<td>[fix 12] Group hits by note, at most 3 passages per note</td>
+</tr>
+<tr>
+<td>39</td>
+<td>13</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/416">#416</a></td>
+<td>P0</td>
+<td>[fix 13] One read call accepts several targets (line range, block id or heading path) and…</td>
+</tr>
+<tr>
+<td>40</td>
+<td>14</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/417">#417</a></td>
+<td>P0</td>
+<td>[fix 14] read_file and read_note without a range return an outline with line spans, not the…</td>
+</tr>
+<tr>
+<td>41</td>
+<td>15</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/418">#418</a></td>
+<td>P0</td>
+<td>[fix 15] Never collapse newlines in stored text, so line addressing stays valid</td>
+</tr>
+<tr>
+<td>42</td>
+<td>16</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/419">#419</a></td>
+<td>P1</td>
+<td>[fix 16] Search results stop carrying frontmatter by default (53% of a note hit today)</td>
+</tr>
+<tr>
+<td>43</td>
+<td>55</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/457">#457</a></td>
+<td>P1</td>
+<td>[fix 55] Rank code above docs and plans for code-shaped queries (35% of code top-10 were docs)</td>
+</tr>
+<tr>
+<td>44</td>
+<td>56</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/458">#458</a></td>
+<td>P1</td>
+<td>[fix 56] Report retrieval_mode and degraded in search responses</td>
+</tr>
+<tr>
+<td>45</td>
+<td>57</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/459">#459</a></td>
+<td>P1</td>
+<td>[fix 57] Don&#39;t bake timestamps into embedded text (caused unstable Persian ranking)</td>
+</tr>
+<tr>
+<td>46</td>
+<td>58</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/460">#460</a></td>
+<td>P1</td>
+<td>[fix 58] On edit, replace all of a note&#39;s vectors, not one row</td>
+</tr>
+<tr>
+<td>47</td>
+<td>59</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/461">#461</a></td>
+<td>P1</td>
+<td>[fix 59] Semantic-edge neighbour lookup filtered by vault/tenant</td>
+</tr>
+<tr>
+<td>48</td>
+<td>60</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/462">#462</a></td>
+<td>P1</td>
+<td>[fix 60] Set hnsw.ef_search / iterative scan on every vector query, not only semantic-edge…</td>
+</tr>
+<tr>
+<td>49</td>
+<td>61</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/463">#463</a></td>
+<td>P1</td>
+<td>[fix 61] Re-embed notes whose embedding is stale after a restart, not only notes with no embedding</td>
+</tr>
+<tr>
+<td>50</td>
+<td>62</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/464">#464</a></td>
+<td>P2</td>
+<td>[fix 62] Structure for more languages (Rust, Java, C/C++, Swift) and heading outlines for…</td>
+</tr>
+<tr>
+<td>51</td>
+<td>63</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/465">#465</a></td>
+<td>P2</td>
+<td>[fix 63] Don&#39;t silently skip real source in folders named build/; report skipped files</td>
+</tr>
+<tr>
+<td>52</td>
+<td>64</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/466">#466</a></td>
+<td>P2</td>
+<td>[fix 64] Resolve ?raw and workspace-package imports</td>
+</tr>
+<tr>
+<td>53</td>
+<td>65</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/467">#467</a></td>
+<td>P2</td>
+<td>[fix 65] Only add a reranker after the benchmark shows it helps</td>
+</tr>
+<tr>
+<td>54</td>
+<td>66</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/468">#468</a></td>
+<td>P0</td>
+<td>[fix 66] grep over notes and code: regex, path glob, repo, ref, context lines, same line…</td>
+</tr>
+<tr>
+<td>55</td>
+<td>67</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/469">#469</a></td>
+<td>P0</td>
+<td>[fix 67] Symbol and edge table at index time: definitions, references, calls, imports, tests</td>
+</tr>
+<tr>
+<td>56</td>
+<td>68</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/470">#470</a></td>
+<td>P0</td>
+<td>[fix 68] Tools symbol_at(path:line), references, callers, impact(depth)</td>
+</tr>
+<tr>
+<td>57</td>
+<td>69</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/471">#471</a></td>
+<td>P0</td>
+<td>[fix 69] Git awareness: indexed commit SHA everywhere, changed_since(commit or date, path),…</td>
+</tr>
+<tr>
+<td>58</td>
+<td>70</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/472">#472</a></td>
+<td>P1</td>
+<td>[fix 70] Note backlinks carry the link&#39;s line and surrounding paragraph; neighbors(depth)…</td>
+</tr>
+<tr>
+<td>59</td>
+<td>71</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/473">#473</a></td>
+<td>P1</td>
+<td>[fix 71] No LLM in the query path for these tools; deterministic answers only</td>
+</tr>
+<tr>
+<td>60</td>
+<td>136</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/534">#534</a></td>
+<td>P0</td>
+<td>[fix 136] orient(query?, focus?, budget): ranked repo map</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/623">#623</a></td>
+<td>P2</td>
+<td>Search results with equal scores have no tie-breaker: ranks move between identical instances</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/674">#674</a></td>
+<td>P1</td>
+<td>[phase 3] Elara tells the agent when not to use it</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/675">#675</a></td>
+<td>P1</td>
+<td>[phase 3] One budgeted call for compound questions: where, who calls it, why, is it still true</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/676">#676</a></td>
+<td>P1</td>
+<td>[phase 3] Answer for the code the agent is editing: branch, ref and working-tree overlay</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/677">#677</a></td>
+<td>P1</td>
+<td>[phase 3] Vault as a git remote: clone, grep locally, push back</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/678">#678</a></td>
+<td>P2</td>
+<td>[phase 3] Learn from real usage: zero-result searches, unread notes, fallbacks to grep</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/679">#679</a></td>
+<td>P1</td>
+<td>[phase 3] Shared reading cache across agents: one digest per file at a commit</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/680">#680</a></td>
+<td>P1</td>
+<td>[phase 3] Caching contract: every cache key carries the caller&#39;s scope and the content revision</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/681">#681</a></td>
+<td>P1</td>
+<td>[phase 3] Make the agent&#39;s prompt cacheable: stable, deterministic tool list and instructions</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/682">#682</a></td>
+<td>P1</td>
+<td>[phase 3] &quot;Unchanged since revision N&quot; answers instead of repeating content</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/683">#683</a></td>
+<td>P2</td>
+<td>[phase 3] Per-session de-duplication: refer to content already sent in this session</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/684">#684</a></td>
+<td>P1</td>
+<td>[phase 3] Content-addressed index caches: reuse parse, symbols and embeddings by blob hash</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/685">#685</a></td>
+<td>P2</td>
+<td>[phase 3] Search and graph result cache keyed by query, scope and index version</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/709">#709</a></td>
+<td>P2</td>
+<td>[phase 3] Compatibility runs with several agent clients (Claude Code, Codex, Cursor, Gemini)</td>
+</tr>
+</tbody></table>
+<h3>Phase 4: knowledge truth and memory</h3>
+<p>35 open (<a href="https://github.com/PIIIX-org/chapters/milestone/5">milestone 5</a>). 29 fix-list items plus 6 added issues (#686 comes before the fix-list items; #687–#691 after the claim items #502–#505).</p>
+<table>
+<thead>
+<tr>
+<th>Order</th>
+<th>Item</th>
+<th>Issue</th>
+<th>Priority</th>
+<th>Title</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>104</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/502">#502</a></td>
+<td>P0</td>
+<td>[fix 104] Code claims in notes carry a quote, source ref, resolved path:Lx-Ly, commit, a hash of…</td>
+</tr>
+<tr>
+<td>2</td>
+<td>105</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/503">#503</a></td>
+<td>P0</td>
+<td>[fix 105] Resolve the quote at write time; a quote that can&#39;t be found makes the claim unverified</td>
+</tr>
+<tr>
+<td>3</td>
+<td>106</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/504">#504</a></td>
+<td>P0</td>
+<td>[fix 106] On every index sync, regrade each claim: fresh, moved, stale or lost; show the state in…</td>
+</tr>
+<tr>
+<td>4</td>
+<td>107</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/505">#505</a></td>
+<td>P0</td>
+<td>[fix 107] repository_drift MCP tool: notes whose cited code changed since verified_against, so…</td>
+</tr>
+<tr>
+<td>5</td>
+<td>108</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/506">#506</a></td>
+<td>P0</td>
+<td>[fix 108] Audit checks content, not just format: cited files and lines exist and match, future…</td>
+</tr>
+<tr>
+<td>6</td>
+<td>111</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/509">#509</a></td>
+<td>P1</td>
+<td>[fix 111] Actually enforce stale_after and superseded (format-checked today, never read)</td>
+</tr>
+<tr>
+<td>7</td>
+<td>110</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/508">#508</a></td>
+<td>P1</td>
+<td>[fix 110] Agent-written claims labelled unverified until a check passes</td>
+</tr>
+<tr>
+<td>8</td>
+<td>109</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/507">#507</a></td>
+<td>P1</td>
+<td>[fix 109] Note-level verification: human verifier, verified_at_commit, review_every, expiry;…</td>
+</tr>
+<tr>
+<td>9</td>
+<td>112</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/510">#510</a></td>
+<td>P1</td>
+<td>[fix 112] Extract [[repo:...]] links consistently: one link parser shared by graph, audit and…</td>
+</tr>
+<tr>
+<td>10</td>
+<td>113</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/511">#511</a></td>
+<td>P1</td>
+<td>[fix 113] Rename: rewrite bare [[name]] links, don&#39;t rewrite links inside code spans, update…</td>
+</tr>
+<tr>
+<td>11</td>
+<td>114</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/512">#512</a></td>
+<td>P1</td>
+<td>[fix 114] Repo links to files survive file and repo renames; repo names unique or case-insensitive</td>
+</tr>
+<tr>
+<td>12</td>
+<td>115</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/513">#513</a></td>
+<td>P1</td>
+<td>[fix 115] Per-vault REST graph includes repository edges (today hard-codes repositoryIds: [])</td>
+</tr>
+<tr>
+<td>13</td>
+<td>116</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/514">#514</a></td>
+<td>P1</td>
+<td>[fix 116] types/tags/date filters must not drop every code node and repo-link edge</td>
+</tr>
+<tr>
+<td>14</td>
+<td>117</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/515">#515</a></td>
+<td>P0</td>
+<td>[fix 117] Session log per agent: append-only typed events</td>
+</tr>
+<tr>
+<td>15</td>
+<td>118</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/516">#516</a></td>
+<td>P0</td>
+<td>[fix 118] Rolling session summary that records which event it covers up to</td>
+</tr>
+<tr>
+<td>16</td>
+<td>119</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/517">#517</a></td>
+<td>P0</td>
+<td>[fix 119] handoff(budget): best summary (≤40% of budget), newer events, pinned facts, open items,…</td>
+</tr>
+<tr>
+<td>17</td>
+<td>120</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/518">#518</a></td>
+<td>P0</td>
+<td>[fix 120] First-class handoff and decision-log note types; append-only logs that can&#39;t lose entries</td>
+</tr>
+<tr>
+<td>18</td>
+<td>121</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/519">#519</a></td>
+<td>P1</td>
+<td>[fix 121] Facts/claims with status (active, superseded, invalidated, expired), superseded_by, and…</td>
+</tr>
+<tr>
+<td>19</td>
+<td>122</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/520">#520</a></td>
+<td>P1</td>
+<td>[fix 122] A contradicting fact closes the old one instead of deleting it; reads default to…</td>
+</tr>
+<tr>
+<td>20</td>
+<td>123</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/521">#521</a></td>
+<td>P1</td>
+<td>[fix 123] Every fact links to the note, message or session it came from; a source is deleted only…</td>
+</tr>
+<tr>
+<td>21</td>
+<td>124</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/522">#522</a></td>
+<td>P1</td>
+<td>[fix 124] Dedup and contradiction detection on write: exact matches merge, similar ones become…</td>
+</tr>
+<tr>
+<td>22</td>
+<td>125</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/523">#523</a></td>
+<td>P1</td>
+<td>[fix 125] Don&#39;t use ingestion time as event time unless the text has no date (Zep pitfall)</td>
+</tr>
+<tr>
+<td>23</td>
+<td>126</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/524">#524</a></td>
+<td>P1</td>
+<td>[fix 126] Ingestion and job states an agent can check per item (processed, error) (Zep batch tasks)</td>
+</tr>
+<tr>
+<td>24</td>
+<td>127</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/525">#525</a></td>
+<td>P1</td>
+<td>[fix 127] Batch operations: read_notes, bulk import/export as one async job with per-item status</td>
+</tr>
+<tr>
+<td>25</td>
+<td>128</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/526">#526</a></td>
+<td>P2</td>
+<td>[fix 128] A budgeted context call that packs the best facts across scopes into a character budget…</td>
+</tr>
+<tr>
+<td>26</td>
+<td>129</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/527">#527</a></td>
+<td>P2</td>
+<td>[fix 129] Prompt that prepares the next session from the log</td>
+</tr>
+<tr>
+<td>27</td>
+<td>137</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/535">#535</a></td>
+<td>P1</td>
+<td>[fix 137] Retire the heavy mapping protocol: one deterministic, cited outline note per repo;…</td>
+</tr>
+<tr>
+<td>28</td>
+<td>138</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/536">#536</a></td>
+<td>P1 (partial)</td>
+<td>[fix 138] Mapping protocol: templates server-valid and links un-backticked (#406); still to do:…</td>
+</tr>
+<tr>
+<td>29</td>
+<td>139</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/537">#537</a></td>
+<td>P1</td>
+<td>[fix 139] One elara vault per project; remove the duplicate codebase/chapters and…</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/686">#686</a></td>
+<td>P1</td>
+<td>[phase 4] Lessons shown at the moment they matter (procedural memory)</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/687">#687</a></td>
+<td>P1</td>
+<td>[phase 4] Drift auto-repair: re-anchor moved citations automatically on every sync</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/688">#688</a></td>
+<td>P1</td>
+<td>[phase 4] Drift repair proposals: fix_drift tool and a drift inbox in the app</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/689">#689</a></td>
+<td>P1</td>
+<td>[phase 4] Catch drift before merge: PR check lists notes that cite the changed lines</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/690">#690</a></td>
+<td>P2</td>
+<td>[phase 4] Treat Markdown docs inside repositories as claim-bearing documents</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/691">#691</a></td>
+<td>P1</td>
+<td>[phase 4] Index drift self-check: compare indexed tree with the remote and the files, repair automatically</td>
+</tr>
+</tbody></table>
+<h3>Phase 5: everything else</h3>
+<p>47 open (<a href="https://github.com/PIIIX-org/chapters/milestone/6">milestone 6</a>). 34 fix-list items plus 13 added issues: 12 from phase 1 (#707 together with #556; the rest where they fit) and #891 from phase 2.</p>
+<table>
+<thead>
+<tr>
+<th>Order</th>
+<th>Item</th>
+<th>Issue</th>
+<th>Priority</th>
+<th>Title</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>130</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/528">#528</a></td>
+<td>P1 (P0 for Persian vaults)</td>
+<td>[fix 130] Canonical search view: NFC, ي/ى→ی, ك→ک, strip tatweel and diacritics, map…</td>
+</tr>
+<tr>
+<td>2</td>
+<td>131</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/529">#529</a></td>
+<td>P1</td>
+<td>[fix 131] Trigram channel and a recorded language per note; pick the text-search analyser by script</td>
+</tr>
+<tr>
+<td>3</td>
+<td>132</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/530">#530</a></td>
+<td>P1</td>
+<td>[fix 132] Multilingual embedder (e5 or bge-m3 class) with its query/passage prefixes; today…</td>
+</tr>
+<tr>
+<td>4</td>
+<td>133</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/531">#531</a></td>
+<td>P1</td>
+<td>[fix 133] index_version with a shadow reindex when the embedder changes</td>
+</tr>
+<tr>
+<td>5</td>
+<td>134</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/532">#532</a></td>
+<td>P1</td>
+<td>[fix 134] Judged Persian/English benchmark before the switch</td>
+</tr>
+<tr>
+<td>6</td>
+<td>135</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/533">#533</a></td>
+<td>P2</td>
+<td>[fix 135] Vector search must be able to say &quot;nothing relevant&quot; for nonsense queries</td>
+</tr>
+<tr>
+<td>7</td>
+<td>141</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/538">#538</a></td>
+<td>P1</td>
+<td>[fix 141] Webhook receiver: ignore ping and pushes to non-default branches; remember delivery ids…</td>
+</tr>
+<tr>
+<td>8</td>
+<td>142</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/539">#539</a></td>
+<td>P1</td>
+<td>[fix 142] Non-UUID repository id returns 404, not 500 (22P02 mapping misses wrapped errors)</td>
+</tr>
+<tr>
+<td>9</td>
+<td>143</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/540">#540</a></td>
+<td>P1</td>
+<td>[fix 143] repository_status: indexed commit SHA, lastWebhookAt, symbol coverage, last extraction…</td>
+</tr>
+<tr>
+<td>10</td>
+<td>144</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/541">#541</a></td>
+<td>P1</td>
+<td>[fix 144] Track a non-default branch</td>
+</tr>
+<tr>
+<td>11</td>
+<td>145</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/542">#542</a></td>
+<td>P1</td>
+<td>[fix 145] Don&#39;t re-clone the whole repo every poll when nothing changed (rea: 71 MB every 5 min)</td>
+</tr>
+<tr>
+<td>12</td>
+<td>146</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/543">#543</a></td>
+<td>P1</td>
+<td>[fix 146] Viewer-only users must not be able to force a sync over MCP (REST already blocks it)</td>
+</tr>
+<tr>
+<td>13</td>
+<td>147</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/544">#544</a></td>
+<td>P1</td>
+<td>[fix 147] UI confirms the first valid webhook delivery after a secret is generated</td>
+</tr>
+<tr>
+<td>14</td>
+<td>148</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/545">#545</a></td>
+<td>P2</td>
+<td>[fix 148] lastSyncedAt should not lag the actual visible state</td>
+</tr>
+<tr>
+<td>15</td>
+<td>154</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/551">#551</a></td>
+<td>P2</td>
+<td>[fix 154] graph actually applies saved perspectives</td>
+</tr>
+<tr>
+<td>16</td>
+<td>156</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/553">#553</a></td>
+<td>P1</td>
+<td>[fix 156] Cut the 20 prompts to the ~6 that inject real data</td>
+</tr>
+<tr>
+<td>17</td>
+<td>157</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/554">#554</a></td>
+<td>P1</td>
+<td>[fix 157] Fix templates that produce notes the server rejects</td>
+</tr>
+<tr>
+<td>18</td>
+<td>158</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/555">#555</a></td>
+<td>P1</td>
+<td>[fix 158] Hydrate code too (take repositoryId); surface hydration failures</td>
+</tr>
+<tr>
+<td>19</td>
+<td>159</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/556">#556</a></td>
+<td>P1</td>
+<td>[fix 159] Put injected note content in an embedded-resource block marked untrusted, not in…</td>
+</tr>
+<tr>
+<td>20</td>
+<td>160</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/557">#557</a></td>
+<td>P1</td>
+<td>[fix 160] Label communities; drop singleton communities from output</td>
+</tr>
+<tr>
+<td>21</td>
+<td>161</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/558">#558</a></td>
+<td>P1</td>
+<td>[fix 161] Paths and edges returned with names, direction and the reason the edge exists, not bare…</td>
+</tr>
+<tr>
+<td>22</td>
+<td>162</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/559">#559</a></td>
+<td>P2</td>
+<td>[fix 162] Keep LLM-extracted entity graphs out of the default lookup path</td>
+</tr>
+<tr>
+<td>23</td>
+<td>163</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/560">#560</a></td>
+<td>P1</td>
+<td>[fix 163] Index PDF text for search</td>
+</tr>
+<tr>
+<td>24</td>
+<td>164</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/561">#561</a></td>
+<td>P1</td>
+<td>[fix 164] Purging a note cleans up its attachments; add an attachment delete route and MCP tool</td>
+</tr>
+<tr>
+<td>25</td>
+<td>165</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/562">#562</a></td>
+<td>P1</td>
+<td>[fix 165] Send private files with Cache-Control: private</td>
+</tr>
+<tr>
+<td>26</td>
+<td>166</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/563">#563</a></td>
+<td>P1</td>
+<td>[fix 166] Accept OKF verified without a tier field; fix the vendored schema that wrongly requires…</td>
+</tr>
+<tr>
+<td>27</td>
+<td>167</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/564">#564</a></td>
+<td>P1</td>
+<td>[fix 167] Quote YAML values that other parsers misread (yes, NO, 1:20)</td>
+</tr>
+<tr>
+<td>28</td>
+<td>168</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/565">#565</a></td>
+<td>P2</td>
+<td>[fix 168] Export attachment links relative to the bundle, not as instance API URLs</td>
+</tr>
+<tr>
+<td>29</td>
+<td>169</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/566">#566</a></td>
+<td>P1</td>
+<td>[fix 169] CI check that regenerates mcp-tools.md, SKILL tables and llms.txt from live…</td>
+</tr>
+<tr>
+<td>30</td>
+<td>170</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/567">#567</a></td>
+<td>P1</td>
+<td>[fix 170] Delete the legacy skills/chapters copy once nothing depends on it</td>
+</tr>
+<tr>
+<td>31</td>
+<td>171</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/568">#568</a></td>
+<td>P1</td>
+<td>[fix 171] Keep the always-on rule text short and load the long reference on demand; allow grep…</td>
+</tr>
+<tr>
+<td>32</td>
+<td>172</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/569">#569</a></td>
+<td>P2</td>
+<td>[fix 172] Make elara.piiix.org live with a valid certificate, or keep docs on chapters.piiix.org</td>
+</tr>
+<tr>
+<td>33</td>
+<td>187</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/584">#584</a></td>
+<td>P2</td>
+<td>[fix 187] Freeze UI redesigns, rebrands and new editions until the benchmark shows Elara beating…</td>
+</tr>
+<tr>
+<td>34</td>
+<td>188</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/585">#585</a></td>
+<td>P2</td>
+<td>[fix 188] Move HTML reports, profile generators and benchmarks/runs (14 MB) out of the product…</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/617">#617</a></td>
+<td>P2</td>
+<td>Web client logs a 401 console error after logout</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/618">#618</a></td>
+<td>P2</td>
+<td>MCP has no tool to list or read vault attachments</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/619">#619</a></td>
+<td>P2</td>
+<td>Attachment upload drops non-ASCII file names</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/620">#620</a></td>
+<td>P2</td>
+<td>OKF interop: exports have no root index.md/okf_version; OKF markdown links are not graph edges on import</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/644">#644</a></td>
+<td>P2</td>
+<td>Git credential redaction is quadratic on long error text (200 KB: 10 s+)</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/650">#650</a></td>
+<td>P2</td>
+<td>fails-before cannot check .github/scripts/*.test.mjs tests</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/656">#656</a></td>
+<td>P2</td>
+<td>Deactivation leaves repository sync tokens and export links working; concurrent admin deactivation</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/657">#657</a></td>
+<td>P2</td>
+<td>Agent trial follow-ups from the #651 review</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/662">#662</a></td>
+<td>P2</td>
+<td>Gate hardening follow-ups from the post-merge delta reviews (#590, #597, #602, #622)</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/707">#707</a></td>
+<td>P1</td>
+<td>[phase 5] Mark note and file content as untrusted data in every tool response, not only prompts</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/708">#708</a></td>
+<td>P1</td>
+<td>[phase 5] Real account deletion: erase a user and their data</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/710">#710</a></td>
+<td>P2</td>
+<td>[phase 5] User-facing release notes for each promotion</td>
+</tr>
+<tr>
+<td>—</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/891">#891</a> (added in phase 2)</td>
+<td>P2</td>
+<td>collab: a CRDT state put back by SQL behind a newer row doubles an open tab&#39;s typing (rebase stand-ins vs. original items)</td>
+</tr>
+</tbody></table>
+<h3>Phase 6: rendered views and data attachments</h3>
+<p>5 open (<a href="https://github.com/PIIIX-org/chapters/milestone/7">milestone 7</a>). 6 issues, not from the fix list; plan note in Elara <code>fixes/phase-6</code>. Closed: #667.</p>
+<table>
+<thead>
+<tr>
+<th>Order</th>
+<th>Item</th>
+<th>Issue</th>
+<th>Priority</th>
+<th>Title</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>2</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/668">#668</a></td>
+<td>P2</td>
+<td>[phase 6] Rendered views of any note: HTML page, PDF, public link</td>
+</tr>
+<tr>
+<td>3</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/669">#669</a></td>
+<td>P2</td>
+<td>[phase 6] Data attachments that can be queried: JSON, CSV, YAML</td>
+</tr>
+<tr>
+<td>4</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/670">#670</a></td>
+<td>P2</td>
+<td>[phase 6] Extract text from every attachment type for search and citations</td>
+</tr>
+<tr>
+<td>5</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/671">#671</a></td>
+<td>P2</td>
+<td>[phase 6] Sandboxed interactive HTML attachments</td>
+</tr>
+<tr>
+<td>6</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/692">#692</a></td>
+<td>P1</td>
+<td>[phase 6] Structured note fields and live queries: user-defined types, query_notes, live tables</td>
+</tr>
+</tbody></table>
+<h3>Phase 7: new capabilities</h3>
+<p>8 open (<a href="https://github.com/PIIIX-org/chapters/milestone/8">milestone 8</a>). 8 issues, not from the fix list; plan note in Elara <code>fixes/phase-7</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Order</th>
+<th>Item</th>
+<th>Issue</th>
+<th>Priority</th>
+<th>Title</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/693">#693</a></td>
+<td>P1</td>
+<td>[phase 7] Secret guard on write: block, quarantine or redact secrets in notes</td>
+</tr>
+<tr>
+<td>2</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/694">#694</a></td>
+<td>P1</td>
+<td>[phase 7] Index issues, PRs, reviews and CI runs, linked to code and notes</td>
+</tr>
+<tr>
+<td>3</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/695">#695</a></td>
+<td>P2</td>
+<td>[phase 7] Coordination for many agents: task claims, expiring locks, assignment, agent inbox</td>
+</tr>
+<tr>
+<td>4</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/696">#696</a></td>
+<td>P2</td>
+<td>[phase 7] Outbound events and subscriptions: note changed, claim stale, drift found</td>
+</tr>
+<tr>
+<td>5</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/697">#697</a></td>
+<td>P2</td>
+<td>[phase 7] Embed a section of one note in another (transclusion by block id)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/698">#698</a></td>
+<td>P2</td>
+<td>[phase 7] Save external sources as citable notes: URL snapshots with date and provenance</td>
+</tr>
+<tr>
+<td>7</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/699">#699</a></td>
+<td>P2</td>
+<td>[phase 7] Importers for Obsidian, Notion and Logseq</td>
+</tr>
+<tr>
+<td>8</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/700">#700</a></td>
+<td>P2</td>
+<td>[phase 7] Review inbox for agent changes: approve or revert what agents wrote</td>
+</tr>
+</tbody></table>
+<h3>Phase 8: UI and UX</h3>
+<p>46 open (<a href="https://github.com/PIIIX-org/chapters/milestone/9">milestone 9</a>). 46 issues, not from the fix list; plan note in Elara <code>fixes/phase-8</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Order</th>
+<th>Item</th>
+<th>Issue</th>
+<th>Priority</th>
+<th>Title</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/713">#713</a></td>
+<td>P1</td>
+<td>[ui] Landing page says &quot;No notes&quot; to a user with notes</td>
+</tr>
+<tr>
+<td>2</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/714">#714</a></td>
+<td>P1</td>
+<td>[ui] Floating top bar collides with page controls; status pill duplicated (DEF-02, DEF-08 still present)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/715">#715</a></td>
+<td>P1</td>
+<td>[ui] Primary actions rest at 20 % opacity</td>
+</tr>
+<tr>
+<td>4</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/716">#716</a></td>
+<td>P1</td>
+<td>[ui] Session expiry is not handled</td>
+</tr>
+<tr>
+<td>5</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/717">#717</a></td>
+<td>P2</td>
+<td>[ui] Settings and Admin sections are not in the URL</td>
+</tr>
+<tr>
+<td>6</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/718">#718</a></td>
+<td>P2</td>
+<td>[ui] Mobile navigation gaps</td>
+</tr>
+<tr>
+<td>7</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/719">#719</a></td>
+<td>P2</td>
+<td>[ui] Bottom bar paints over popovers and content</td>
+</tr>
+<tr>
+<td>8</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/721">#721</a></td>
+<td>P1</td>
+<td>[ui] Note load: blank while loading, one message for every error</td>
+</tr>
+<tr>
+<td>9</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/722">#722</a></td>
+<td>P2</td>
+<td>[ui] Markdown tables render as raw pipes in the editor</td>
+</tr>
+<tr>
+<td>10</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/723">#723</a></td>
+<td>P2</td>
+<td>[ui] Notes are shown by slug, not title</td>
+</tr>
+<tr>
+<td>11</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/724">#724</a></td>
+<td>P2</td>
+<td>[ui] Duplicate surfaces and inconsistent dialogs</td>
+</tr>
+<tr>
+<td>12</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/725">#725</a></td>
+<td>P2</td>
+<td>[ui] Global Ctrl+Z</td>
+</tr>
+<tr>
+<td>13</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/726">#726</a></td>
+<td>P2</td>
+<td>[ui] Untyped wikilinks still cannot be created (prior &quot;missing journey&quot;, still present)</td>
+</tr>
+<tr>
+<td>14</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/727">#727</a></td>
+<td>P2</td>
+<td>[ui] Read-only note gives no feedback to typing</td>
+</tr>
+<tr>
+<td>15</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/728">#728</a></td>
+<td>P1</td>
+<td>[ui] Enter after a search creates a vault</td>
+</tr>
+<tr>
+<td>16</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/729">#729</a></td>
+<td>P1</td>
+<td>[ui] Snippets show markup; mobile drops the title</td>
+</tr>
+<tr>
+<td>17</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/730">#730</a></td>
+<td>P2</td>
+<td>[ui] Opening a note result starts at the top (prior item, still present)</td>
+</tr>
+<tr>
+<td>18</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/731">#731</a></td>
+<td>P1</td>
+<td>[ui] The default graph of a small vault is four unlabeled dots</td>
+</tr>
+<tr>
+<td>19</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/732">#732</a></td>
+<td>P2</td>
+<td>[ui] Perspective and inspector polish</td>
+</tr>
+<tr>
+<td>20</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/733">#733</a></td>
+<td>P1</td>
+<td>[ui] Vault card footer clips &quot;Delete&quot;; the delete confirmation is unreadable</td>
+</tr>
+<tr>
+<td>21</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/734">#734</a></td>
+<td>P1</td>
+<td>[ui] The irreversible action has the weaker guard</td>
+</tr>
+<tr>
+<td>22</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/735">#735</a></td>
+<td>P2</td>
+<td>[ui] Vault settings is one long dialog</td>
+</tr>
+<tr>
+<td>23</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/736">#736</a></td>
+<td>P2</td>
+<td>[ui] Delete wording disagrees with behaviour</td>
+</tr>
+<tr>
+<td>24</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/737">#737</a></td>
+<td>P2</td>
+<td>[ui] Vault pages lack identity and actions</td>
+</tr>
+<tr>
+<td>25</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/738">#738</a></td>
+<td>P2</td>
+<td>[ui] Attachments and export have no feedback surfaces</td>
+</tr>
+<tr>
+<td>26</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/739">#739</a></td>
+<td>P1</td>
+<td>[ui] Repository page double-offsets the content</td>
+</tr>
+<tr>
+<td>27</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/740">#740</a></td>
+<td>P2</td>
+<td>[ui] Two token concepts, no repository MCP</td>
+</tr>
+<tr>
+<td>28</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/741">#741</a></td>
+<td>P1</td>
+<td>[ui] Token tables are unusable on desktop</td>
+</tr>
+<tr>
+<td>29</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/742">#742</a></td>
+<td>P1</td>
+<td>[ui] Some tokens are invisible to their owner</td>
+</tr>
+<tr>
+<td>30</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/743">#743</a></td>
+<td>P1</td>
+<td>[ui] No screen says how to connect a client</td>
+</tr>
+<tr>
+<td>31</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/744">#744</a></td>
+<td>P1</td>
+<td>[ui] The allow-list picker is raw and overlapping</td>
+</tr>
+<tr>
+<td>32</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/745">#745</a></td>
+<td>P2</td>
+<td>[ui] Form and list polish</td>
+</tr>
+<tr>
+<td>33</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/746">#746</a></td>
+<td>P1</td>
+<td>[ui] Admin oversight cannot see token capabilities</td>
+</tr>
+<tr>
+<td>34</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/747">#747</a></td>
+<td>P1</td>
+<td>[ui] Role dropdown promises what the server does not do</td>
+</tr>
+<tr>
+<td>35</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/748">#748</a></td>
+<td>P1</td>
+<td>[ui] Export links cannot be revoked later</td>
+</tr>
+<tr>
+<td>36</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/749">#749</a></td>
+<td>P2</td>
+<td>[ui] Sharing panel rough edges</td>
+</tr>
+<tr>
+<td>37</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/750">#750</a></td>
+<td>P2</td>
+<td>[ui] Approvals queue has no decline</td>
+</tr>
+<tr>
+<td>38</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/751">#751</a></td>
+<td>P2</td>
+<td>[ui] Team page stats and membership</td>
+</tr>
+<tr>
+<td>39</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/752">#752</a></td>
+<td>P1</td>
+<td>[ui] Email verification dead end</td>
+</tr>
+<tr>
+<td>40</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/753">#753</a></td>
+<td>P2</td>
+<td>[ui] Auth copy and states</td>
+</tr>
+<tr>
+<td>41</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/754">#754</a></td>
+<td>P2</td>
+<td>[ui] Security settings has only MFA</td>
+</tr>
+<tr>
+<td>42</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/755">#755</a></td>
+<td>P1</td>
+<td>[ui] Color contrast</td>
+</tr>
+<tr>
+<td>43</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/756">#756</a></td>
+<td>P1</td>
+<td>[ui] Missing focus indicators and a non-keyboard menu</td>
+</tr>
+<tr>
+<td>44</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/757">#757</a></td>
+<td>P1</td>
+<td>[ui] Touch targets (DEF-16 still present)</td>
+</tr>
+<tr>
+<td>45</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/758">#758</a></td>
+<td>P1</td>
+<td>[ui] Note drawer has no semantics</td>
+</tr>
+<tr>
+<td>46</td>
+<td>—</td>
+<td><a href="https://github.com/PIIIX-org/chapters/issues/759">#759</a></td>
+<td>P2</td>
+<td>[ui] Structure</td>
+</tr>
+</tbody></table>
 
-<footer>Generated from phase-2.md on 2026-10-22.</footer>
+<footer>Generated from phase-2.md on 2026-10-23.</footer>
 </main>
 </body>
 </html>
