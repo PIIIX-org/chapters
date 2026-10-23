@@ -1096,7 +1096,21 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   MCP/REST write continues only an identical retry of the newest quarantine
   by the same actor. `recordRevision`'s
   dedupe skips quarantine and proposal rows. Restore one
-  with `revert_note` / the REST revert route.
+  with `revert_note` / the REST revert route. The relay **tells the
+  editors** (#784): a Hocuspocus stateless message `{"type":
+  "elara-store", "quarantine": {revisionId, rule, repeatedBytes,
+  noteBytes, excerpt} | null}`. It is sent to every connection on connect
+  (`connected` hook) and broadcast whenever it changes: set by a
+  quarantined store, cleared by the next written store. A document loaded
+  with `note_crdt.fold_error` set (after an unload or a restart) rebuilds
+  it from the repeat check against the row and the newest quarantine
+  revision by `ord`. `excerpt` is the first 80 characters of the first
+  repeated chunk (`firstRepeatAt`). The editor shows `QuarantineNotice`
+  and the status pill reads "Held back". Clients cannot send it: their
+  stateless messages go to the default `onStateless`, which relays
+  nothing. The typing itself survives a reload through the CRDT log
+  (ADR-003: `keepRefusedTyping` appends the refused state with
+  `fold_error`), not through the browser's copy.
 - **Restore points** (`withRestorePoint` in `store.ts`, #482): the MCP
   write tools (`edit_note`, `rename_note`, `delete_note`, `revert_note`)
   run through `withRestorePoint(vaultId, path, connectionId, write)`.
@@ -1382,7 +1396,18 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   e.g. an undone paste), it first rebuilds the document from its own
   state: same history, so it still merges, but deleted text and the undo
   history are dropped (the notice says so); the browser's copy moves to
-  the new document.
+  the new document. **The rest of the document** (#780) is bounded the
+  same way, by the same cap and separately from the body: `restBytes` is
+  the content of every live item that is not body text (frontmatter keys
+  and values as JSON, strings in other root types, embeds, formatting,
+  binaries, nested types), so frontmatter can no longer grow without
+  limit into the row and the file, and nothing else can grow in the CRDT
+  log. Its running bound counts 6× each update's length (the worst JSON
+  expansion of Yjs's encoding: `false` is 1 byte encoded and 5 as JSON, a
+  control character 1 and 6), so property edits far from the cap measure
+  nothing. The editor measures both parts alike (`client/src/lib/noteSize.ts`),
+  `tooLarge.otherBytes` says how large the properties are, and it reconnects
+  only once both fit. REST and MCP frontmatter is bounded only by the request size.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
   Every share/team/deactivation mutation calls `emitPermissionChange()`,
   and every session delete announces the ended sessions' hashes on it;
