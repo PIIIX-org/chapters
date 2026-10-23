@@ -10,7 +10,7 @@ describe('CollabNotices', () => {
     render(
       <CollabNotices
         revoked={false}
-        tooLarge={{ limitBytes: MiB, bodyBytes: 2 * MiB }}
+        tooLarge={{ limitBytes: MiB, bodyBytes: 2 * MiB, otherBytes: 0, bodyRoomBytes: MiB, otherRoomBytes: MiB }}
         unmerged="text from an earlier session"
         onDiscard={onDiscard}
       />,
@@ -21,11 +21,25 @@ describe('CollabNotices', () => {
     expect(onDiscard).toHaveBeenCalledOnce()
   })
 
+  it('says the changes are held back when the relay quarantines them (#784), with the other notices', () => {
+    render(
+      <CollabNotices
+        revoked={false}
+        tooLarge={null}
+        quarantined={{ revisionId: 'abcdef12-3456', repeatedBytes: 3000, noteBytes: 3100, excerpt: 'the repeated start' }}
+        unmerged="text from an earlier session"
+        onDiscard={() => {}}
+      />,
+    )
+    expect(screen.getByText(/not being saved to this note/i)).toBeTruthy()
+    expect(screen.getByText(/text from an earlier session/)).toBeTruthy()
+  })
+
   it('shows only the revocation once access is gone', () => {
     render(
       <CollabNotices
         revoked
-        tooLarge={{ limitBytes: MiB, bodyBytes: 2 * MiB }}
+        tooLarge={{ limitBytes: MiB, bodyBytes: 2 * MiB, otherBytes: 0, bodyRoomBytes: MiB, otherRoomBytes: MiB }}
         unmerged="text from an earlier session"
         onDiscard={() => {}}
       />,

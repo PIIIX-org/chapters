@@ -228,7 +228,7 @@ describe('admin oversight dashboard', () => {
         method: 'POST',
         url: '/api/mcp-connections',
         headers: { cookie: ownerCookie },
-        body: { name: 'still-live', scope: 'account' },
+        body: { name: 'still-live', scope: 'account', profile: 'reader' },
       })
     ).json() as { id: string; token: string }
     const dead = (
@@ -255,6 +255,7 @@ describe('admin oversight dashboard', () => {
       id: string
       name: string
       userEmail: string
+      profile: string
       revokedAt: string | null
       tokenHash?: string
     }>
@@ -266,6 +267,9 @@ describe('admin oversight dashboard', () => {
     expect(liveRow?.name).toBe('still-live')
     expect(liveRow?.revokedAt).toBeNull()
     expect(deadRow?.revokedAt).not.toBeNull()
+    // The tool profile (#428): the one minted, `admin` when none was named.
+    expect(liveRow?.profile).toBe('reader')
+    expect(deadRow?.profile).toBe('admin')
     expect(liveRow!.userEmail).not.toBe(deadRow!.userEmail)
 
     // Metadata only: no hash on the row, and the raw token never appears.

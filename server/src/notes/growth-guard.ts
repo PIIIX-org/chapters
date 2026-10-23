@@ -53,7 +53,7 @@ const GEAR = new Uint32Array(256)
   }
 }
 
-function forEachChunk(text: string, visit: (chunk: string) => void): void {
+function forEachChunk(text: string, visit: (chunk: string, start: number) => void): void {
   let hash = 0
   let start = 0
   for (let i = 0; i < text.length; i++) {
@@ -61,18 +61,23 @@ function forEachChunk(text: string, visit: (chunk: string) => void): void {
     hash = ((hash << 1) + GEAR[(c ^ (c >>> 8)) & 0xff]!) >>> 0
     const len = i - start + 1
     if ((len >= MIN_CHUNK && hash >>> CUT_SHIFT === 0) || len >= MAX_CHUNK) {
-      visit(text.slice(start, i + 1))
+      visit(text.slice(start, i + 1), start)
       start = i + 1
     }
   }
-  if (start < text.length) visit(text.slice(start))
+  if (start < text.length) visit(text.slice(start), start)
+}
+
+/** Counts of each chunk of `previous`: how many times `next` may have it before a copy is a repeat. */
+function chunkCounts(previous: string): Map<string, number> {
+  const unused = new Map<string, number>()
+  forEachChunk(previous, (chunk) => unused.set(chunk, (unused.get(chunk) ?? 0) + 1))
+  return unused
 }
 
 /** Bytes of `next` that repeat chunks of `previous` beyond the number of times `previous` has them. */
 function repeatedBytes(previous: string, next: string): number {
-  /** chunk -> how many more times `next` may have it before a copy is a repeat */
-  const unused = new Map<string, number>()
-  forEachChunk(previous, (chunk) => unused.set(chunk, (unused.get(chunk) ?? 0) + 1))
+  const unused = chunkCounts(previous)
   let repeated = 0
   forEachChunk(next, (chunk) => {
     const left = unused.get(chunk)
@@ -81,6 +86,23 @@ function repeatedBytes(previous: string, next: string): number {
     else repeated += Buffer.byteLength(chunk)
   })
   return repeated
+}
+
+/**
+ * Where in `next` (a UTF-16 offset) the first repeat of `previous`'s text
+ * starts, as repeatedBytes counts repeats, or -1 when nothing repeats: what
+ * the relay's quarantine notice quotes (#784) so the person can find it.
+ */
+export function firstRepeatAt(previous: string, next: string): number {
+  const unused = chunkCounts(previous)
+  let at = -1
+  forEachChunk(next, (chunk, start) => {
+    const left = unused.get(chunk)
+    if (at >= 0 || left === undefined) return
+    if (left > 0) unused.set(chunk, left - 1)
+    else at = start
+  })
+  return at
 }
 
 /** The rule `next` breaks against the stored `previous` body, or null for an ordinary write. */

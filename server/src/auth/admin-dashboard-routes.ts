@@ -164,6 +164,7 @@ export function adminDashboardRoutes(app: FastifyInstance) {
         id: mcpConnections.id,
         name: mcpConnections.name,
         scope: mcpConnections.scope,
+        profile: mcpConnections.profile,
         userEmail: users.email,
         vaultId: mcpConnections.vaultId,
         repositoryId: mcpConnections.repositoryId,
