@@ -1407,7 +1407,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   same way, by the same cap and separately from the body: `restBytes` is
   the content of every live item that is not body text (frontmatter keys
   and values as JSON, strings in other root types, embeds, formatting,
-  binaries, nested types), so frontmatter can no longer grow without
+  binaries, nested types, and entries of the `body` type's own map: body
+  text is only a string item in its list, `parentSub` null, #952), so
+  frontmatter can no longer grow without
   limit into the row and the file, and nothing else can grow in the CRDT
   log. Its running bound counts 6× each update's length (the worst JSON
   expansion of Yjs's encoding: `false` is 1 byte encoded and 5 as JSON, a
