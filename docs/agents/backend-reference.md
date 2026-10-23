@@ -1639,7 +1639,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     list is `{group: n}` (keys in code-unit order) and at `total` `n`,
     over the items from the page start; no item is shown (`shown` 0,
     everything `dropped`), lists issue no cursor, and text after a
-    counted list is left out (counted). Text is never laddered. Below
+    counted list is left out (counted); a text before the counted lists
+    that did not fit keeps its cursor (`read_file`'s content beside a
+    counted outline). Text is never laddered. Below
     `full`, `narrow` starts with `budget_tokens: N`, the budget measured
     to show `min(5, left)` items of that list at `full` (omitted over
     25,000), and `truncated` is never `false`.

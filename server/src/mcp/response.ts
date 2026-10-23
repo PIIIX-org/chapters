@@ -55,8 +55,9 @@ export function budgetArgs(kind: BudgetKind): z.ZodRawShape {
  * The ladder's levels (#421), from whole items down. `full`, `no_context`
  * and `locations` show items (whole, without context, a location only) and
  * page with the cursor; `counts` shows each list as `{group: n}` and
- * `total` as `n`, over the items from where the page starts, with no
- * cursor (the same budget would show the same counts again).
+ * `total` as `n`, over the items from where the page starts; the lists
+ * issue no cursor (the same budget would show the same counts again), but
+ * a text before them that did not fit still continues with its cursor.
  */
 export type Level = 'full' | 'no_context' | 'locations' | 'counts' | 'total'
 
