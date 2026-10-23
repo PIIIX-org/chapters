@@ -94,7 +94,7 @@ Phase 0 only reads from the target repository and asks the user questions. It wr
 3. **Core Data Structures & Models**:
    - Locate migrations, ORM schema definitions, and protobuf/OpenAPI schemas.
 
-**Large repositories**: `browse_repository` lists every indexed file by path and `read_file` reads a file from line 1, both in pages of `budget_tokens` (follow `truncated.cursor`); there is no ranged read yet. Read manifests and entrypoints first and open files selectively; if a local clone is available, it is cheaper for bulk reading.
+**Large repositories**: `browse_repository` lists the indexed files by path (one folder's subtree with `path`, e.g. `path: "src/auth"`) and `read_file` reads a file from line 1, both in pages of `budget_tokens` (follow `truncated.cursor`); there is no ranged read yet. Browse the folders `truncated.narrow` suggests rather than the whole repository, read manifests and entrypoints first and open files selectively; if a local clone is available, it is cheaper for bulk reading.
 
 ---
 
@@ -365,7 +365,7 @@ An agent answering "How does session revocation work?" then reads `index` → `d
    - `missingIndices`: directories without an `index.md`.
    Rerun until it is clean. The audit checks structure only; it does not check that what a note says matches the code.
 2. **Content spot-check**: for each domain note, check a few concrete claims (file paths, function names, invariants) against the code with `find_symbols` or `read_file`.
-3. **Community check**: call `graph` **scoped to the vault** (`vaultId`) with `aggregate: "community"` and check that the notes form a few sensible clusters. Use `community: <n>` to list one cluster's members. Don't request the unaggregated graph of a whole repository; it has no size limit.
+3. **Community check**: call `graph` **scoped to the vault** (`vaultId`; communities are the default, `aggregate: "community"`) and check that the notes form a few sensible clusters. Use `community: <n>` to list one cluster's members. Don't request the unaggregated graph (`aggregate: "none"`) of a whole repository without a `limit`; use `neighborsOf` for one file's surroundings.
 4. **Search check**: call `search` with the `vaultId` and one query per domain (e.g. `"authentication token lifecycle"`) and confirm the new notes rank near the top.
 
 ---

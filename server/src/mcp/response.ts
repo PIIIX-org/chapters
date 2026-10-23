@@ -122,7 +122,9 @@ export interface KeysetSection<T> {
  * first item (recomputed per page); the cursor holds the offset and a guard
  * over the `id`s before it, so a ranking that changed is refused, never
  * skipped or repeated. `limit` bounds the whole ranking: pages walk its first
- * `limit` items, and an item past them (a limit + 1 fetch) only sets `">limit"`.
+ * `limit` items, and an item past them (a limit + 1 fetch) only sets `">limit"`:
+ * the answer is not whole, but no cursor continues past it (a larger limit
+ * does), and the page goes on to the sections after this one.
  */
 export interface RankedSection<T> {
   name: string
@@ -283,6 +285,7 @@ interface Slot {
   start: number
   /** Ranked and keyset sections: the items this page may show, in order. */
   avail: readonly unknown[]
+  /** More items than `avail`: a keyset section's next page, or a ranked section's items past its `limit` (no page). */
   more: boolean
   limit: number
 }
@@ -386,7 +389,8 @@ function fill(slots: Slot[], room: number, itemLength: (slot: number, i: number)
       shown[n] = i + 1
       any = true
     }
-    if (slot.more) return { shown, forced: false, stop: n }
+    // A keyset list's next page starts here; past a ranked list's `limit` there is no page, so the next section fills on.
+    if (slot.more && slot.section.kind === 'keyset') return { shown, forced: false, stop: n }
   }
   return { shown, forced: false, stop: -1 }
 }

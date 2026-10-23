@@ -29,12 +29,15 @@ import {
 } from '../repositories/permissions.js'
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 import {
+  BROWSE_FIELDS,
+  browseNotesPage,
+  browseSubfoldersPage,
   createNote,
   createNoteIfMissing,
   getBaseRevision,
   getLiveNote,
   getRevision,
-  listNotes,
+  folderIndexRows,
   listRevisionPage,
   listTrash,
   noteIndexed,
@@ -49,14 +52,16 @@ import {
   softDeleteNote,
   withRestorePoint,
   type Actor,
+  type BrowseField,
+  type BrowsedNote,
   type WriteOutcome,
   type WrittenNote,
 } from '../notes/store.js'
 import { serializeNote } from '../notes/okf.js'
-import { indexRows, renderDirIndex } from '../notes/projector.js'
+import { renderDirIndex } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
-import { getRepositoryFile, listFileSymbols, listRepositoryFiles } from '../repositories/store.js'
+import { getRepositoryFile, listFileSymbols, listRepositoryFilesPage } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { prepareGitRemote } from '../repositories/git-remote.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
@@ -64,7 +69,8 @@ import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord } from '../vaults/routes.js'
 import { isTeamOwner, notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
-import { buildGraph, findShortestPath } from '../graph/assemble.js'
+import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type EdgeKind } from '../graph/assemble.js'
+import { neighborhood, resolveGraphNode } from '../graph/neighbors.js'
 import { isInstanceAdmin, visibleGlobalPerspectives } from '../graph/perspective-access.js'
 import { buildVaultZip } from '../export/archive.js'
 import { notify } from '../notifications/notify.js'
@@ -232,7 +238,14 @@ const NO_PAGE = new Page(null)
 /** The budgeted tools' shared description fragment (#420, #422). */
 const ENVELOPE_DOC = ' Ends with `truncated` (what was left out; `cursor` for more).'
 
-/** A note listed by `browse_vault` or `list_trash` down the ladder (#421): without frontmatter and timestamps, then its path; counted per folder. */
+/**
+ * Files `browse_repository` (#424) and notes `browse_vault` (#425) read per page, fetching one more to know
+ * there are more (`truncated.total` ">500"). The default budget shows about
+ * a tenth of this at `full`, so the budget usually ends a page first.
+ */
+const BROWSE_PAGE = 500
+
+/** A note listed by `list_trash` down the ladder (#421): without frontmatter and timestamps, then its path; counted per folder. */
 const NOTE_LADDER: Ladder<{ id: string; path: string; type: string; name: string }> = {
   no_context: ({ id, path, type, name }) => ({ id, path, type, name }),
   locations: (note) => note.path,
@@ -240,12 +253,26 @@ const NOTE_LADDER: Ladder<{ id: string; path: string; type: string; name: string
 }
 
 /**
+ * A note listed by `browse_vault` down the ladder (#425): the fields it was
+ * asked for without tags and timestamp (a field it was not asked for stays
+ * out), then its path; counted per folder.
+ */
+const BROWSED_NOTE_LADDER: Ladder<Partial<BrowsedNote> & { path: string }> = {
+  no_context: ({ id, path, title, type, name }) => ({ id, path, title, type, name }),
+  locations: (note) => note.path,
+  group: (note) => folderOf(note.path),
+}
+
+/**
  * A graph node down the ladder: without tags and timestamps, then its id
  * (edges name nodes by id) and path; counted per type. A community node
- * keeps its id and size, then its id; communities are counted together.
+ * keeps its id and size, then its id; communities are counted together. A
+ * node of a `neighborsOf` answer keeps its distance where another keeps its
+ * community.
  */
-const GRAPH_NODE_LADDER: Ladder<{ id: string; path?: string; type?: string | null; community: number; size?: number }> = {
-  no_context: (n) => (n.size !== undefined ? { id: n.id, community: n.community, size: n.size } : { id: n.id, path: n.path, type: n.type, community: n.community }),
+const GRAPH_NODE_LADDER: Ladder<{ id: string; path?: string; type?: string | null; community?: number; size?: number; distance?: number }> = {
+  no_context: (n) =>
+    n.size !== undefined ? { id: n.id, community: n.community, size: n.size } : { id: n.id, path: n.path, type: n.type, community: n.community, distance: n.distance },
   locations: (n) => (n.size !== undefined ? { id: n.id } : { id: n.id, path: n.path }),
   group: (n) => (n.size !== undefined ? 'communities' : (n.type ?? 'untyped')),
 }
@@ -601,84 +628,81 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault',
       capability: 'read',
       description:
-        'List a vault\'s notes as `{notes}`, or a directory (`path`) with its subdirectories, notes and index.' + ENVELOPE_DOC,
+        'List one level of a vault folder as `{directory, subdirectories, notes}`, or its subtree with `recursive`. Notes are `{path, title}`.' +
+        ENVELOPE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
-        path: z.string().optional().describe('Directory to browse; omit for the whole type tree'),
-        recursive: z.boolean().optional().describe('true: every note in the vault'),
+        path: z.string().optional().describe('Folder; omit for the root'),
+        recursive: z.boolean().optional().describe('true: the whole subtree'),
+        // In allowlist order without repeats, so the cursor's fingerprint does not depend on how they were listed.
+        fields: z
+          .array(z.enum(BROWSE_FIELDS))
+          .min(1)
+          .describe('Note fields (default path, title)')
+          .transform((picked) => BROWSE_FIELDS.filter((f) => picked.includes(f)))
+          .optional(),
       },
       budget: 'list',
     },
-    async (args: { path?: string; recursive?: boolean }, { vaultId: target }, page) => {
+    async (args: { path?: string; recursive?: boolean; fields?: BrowseField[] }, { vaultId: target }, page) => {
       await requireAccess(target, 'read')
-      const byPath = (a: { path: string }, b: { path: string }) => compareCodeUnits(a.path, b.path)
-      if (args.path && args.recursive !== true) {
-        const resolved = resolveNotePath(args.path)
-        const dir = resolved.fullPath
-        const prefix = `${dir}/`
-        const allNotes = await listNotes(target)
-        const directNotes: typeof allNotes = []
-        const subdirCounts = new Map<string, number>()
+      // One code path for the root and a folder: the root is the empty folder.
+      const folder = args.path?.replace(/^\/+|\/+$/g, '')
+      const dir = folder ? resolveNotePath(folder).fullPath : ''
+      // `path` is always shown: it is the note's location and where the cursor resumes.
+      const picked = args.fields ?? ['title']
+      const fields = BROWSE_FIELDS.filter((f) => f === 'path' || picked.includes(f))
+      const notesSection = (rows: BrowsedNote[]) =>
+        keyset({
+          name: 'notes',
+          items: rows.slice(0, BROWSE_PAGE).map((note) => Object.fromEntries(fields.map((f) => [f, note[f]])) as Partial<BrowsedNote> & { path: string }),
+          limit: BROWSE_PAGE,
+          more: rows.length > BROWSE_PAGE,
+          resume: (n) => n.path,
+          ladder: BROWSED_NOTE_LADDER,
+        })
+      const narrowTo = (counts: Iterable<[string, number]>) =>
+        [...counts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([child]) => `path: ${JSON.stringify(dir ? `${dir}/${child}` : child)}`)
 
-        for (const note of allNotes) {
-          if (!note.path.startsWith(prefix)) continue
-          const remainder = note.path.slice(prefix.length)
-          if (!remainder) continue
-          const slashIndex = remainder.indexOf('/')
-          if (slashIndex === -1) {
-            directNotes.push(note)
-          } else {
-            const subdir = remainder.slice(0, slashIndex)
-            subdirCounts.set(subdir, (subdirCounts.get(subdir) ?? 0) + 1)
-          }
+      if (args.recursive === true) {
+        // A keyset in SQL from the cursor's path: the fetch of one page + 1 tells there are more.
+        const rows = await browseNotesPage(target, { folder: dir, recursive: true, after: page.after(0, z.string()), limit: BROWSE_PAGE + 1 })
+        // Narrowing: the largest folders one level below `dir` on this page.
+        const base = dir ? `${dir}/` : ''
+        const children = new Map<string, number>()
+        for (const { path } of rows.slice(0, BROWSE_PAGE)) {
+          const slash = path.indexOf('/', base.length)
+          if (slash !== -1) children.set(path.slice(base.length, slash), (children.get(path.slice(base.length, slash)) ?? 0) + 1)
         }
+        return { head: { directory: dir }, sections: [notesSection(rows)], narrow: narrowTo(children) }
+      }
 
-        const subdirectories = [...subdirCounts.entries()]
-          .map(([name, count]) => ({ name, count }))
-          .sort((a, b) => compareCodeUnits(a.name, b.name))
-
-        // Rendered from the rows like the dir_index projection (ADR-003 §6): never the file, which lags.
+      // One level: the subfolders (section 0), the notes directly in `dir` (1), a folder's index text (2).
+      // A page that starts past a section does not query it.
+      const section = page.at?.s ?? 0
+      const subdirectories = section === 0 ? await browseSubfoldersPage(target, { folder: dir, after: page.after(0, z.string()), limit: BROWSE_PAGE + 1 }) : []
+      const rows = section <= 1 ? await browseNotesPage(target, { folder: dir, recursive: false, after: page.after(1, z.string()), limit: BROWSE_PAGE + 1 }) : []
+      const sections = [
+        keyset({
+          name: 'subdirectories',
+          items: subdirectories,
+          limit: BROWSE_PAGE,
+          resume: (d) => d.name,
+          // Down the ladder: the name, then the notes under each subdirectory.
+          ladder: { locations: (d) => d.name, group: (d) => d.name, weight: (d) => d.count },
+        }),
+        notesSection(rows),
+      ]
+      if (dir) {
+        // Rendered from the folder's rows like the dir_index projection (ADR-003 §6): never the file, which lags.
         const userIndex = await readNote(target, `${dir}/index`).catch(() => null)
         const indexContent = userIndex
           ? serializeNote({ frontmatter: userIndex.frontmatter, body: userIndex.body })
-          : renderDirIndex(await indexRows(target), dir)
-
-        const afterDir = page.after(0, z.string())
-        const afterNote = page.after(1, z.string())
-        return {
-          head: { directory: dir },
-          sections: [
-            keyset({
-              name: 'subdirectories',
-              items: subdirectories.filter((d) => afterDir === null || d.name > afterDir),
-              resume: (d) => d.name,
-              // Down the ladder: the name, then the notes under each subdirectory.
-              ladder: { locations: (d) => d.name, group: (d) => d.name, weight: (d) => d.count },
-            }),
-            keyset({
-              name: 'notes',
-              items: directNotes.sort(byPath).filter((n) => afterNote === null || n.path > afterNote),
-              resume: (n) => n.path,
-              ladder: NOTE_LADDER,
-            }),
-            // Null only when the folder's own index note could not be read: no index text.
-            textSection({ name: 'indexContent', text: indexContent ?? '' }),
-          ],
-          narrow: [...subdirectories].sort((a, b) => b.count - a.count).slice(0, 3).map((d) => `path: ${JSON.stringify(`${dir}/${d.name}`)}`),
-        }
+          : renderDirIndex(await folderIndexRows(target, dir), dir)
+        // Null only when the folder's own index note could not be read: no index text.
+        sections.push(textSection({ name: 'indexContent', text: indexContent ?? '' }))
       }
-      const after = page.after(0, z.string())
-      const all = (await listNotes(target)).sort(byPath)
-      const folders = new Map<string, number>()
-      for (const note of all) {
-        const top = note.path.split('/', 1)[0]!
-        folders.set(top, (folders.get(top) ?? 0) + 1)
-      }
-      return {
-        head: {},
-        sections: [keyset({ name: 'notes', items: all.filter((n) => after === null || n.path > after), resume: (n) => n.path, ladder: NOTE_LADDER })],
-        narrow: [...folders].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([folder]) => `path: ${JSON.stringify(folder)}`),
-      }
+      return { head: { directory: dir }, sections, narrow: narrowTo(subdirectories.slice(0, BROWSE_PAGE).map((d) => [d.name, d.count])) }
     },
   )
 
@@ -1824,24 +1848,39 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'read',
-      description: 'List the files of a repository as `{files}` (path, language, size), by path.' + ENVELOPE_DOC,
-      inputSchema: { repositoryId: REPOSITORY_ID },
+      description: 'List the files of a repository as `{files}` (path, language, size), by path; `path` lists one folder\'s subtree.' + ENVELOPE_DOC,
+      inputSchema: {
+        repositoryId: REPOSITORY_ID,
+        path: z.string().optional().describe('Folder: only the files under it, e.g. `src/lib`'),
+      },
       budget: 'list',
     },
-    async (_args, { repositoryId: target }, page) => {
+    async (args: { path?: string }, { repositoryId: target }, page) => {
       await requireRepositoryAccess(target)
-      const after = page.after(0, z.string())
-      const files = (await listRepositoryFiles(target)).sort((a, b) => compareCodeUnits(a.path, b.path))
+      const folder = args.path?.replace(/^\/+|\/+$/g, '') || null
+      // A keyset in SQL from the cursor's path: the fetch of one page + 1 tells there are more.
+      const rows = await listRepositoryFilesPage(target, { folder, after: page.after(0, z.string()), limit: BROWSE_PAGE + 1 })
+      const files = rows.slice(0, BROWSE_PAGE)
+      // Narrowing: the largest folders one level below `folder` on this page.
+      const base = folder === null ? '' : `${folder}/`
+      const children = new Map<string, number>()
+      for (const { path } of files) {
+        const slash = path.indexOf('/', base.length)
+        if (slash !== -1) children.set(path.slice(0, slash), (children.get(path.slice(0, slash)) ?? 0) + 1)
+      }
       return {
         head: {},
         sections: [
           keyset({
             name: 'files',
-            items: files.filter((f) => after === null || f.path > after),
+            items: files,
+            limit: BROWSE_PAGE,
+            more: rows.length > BROWSE_PAGE,
             resume: (f) => f.path,
             ladder: { no_context: ({ path, language }) => ({ path, language }), locations: (f) => f.path, group: (f) => folderOf(f.path) },
           }),
         ],
+        narrow: [...children].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([child]) => `path: ${JSON.stringify(child)}`),
       }
     },
   )
@@ -2495,43 +2534,101 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault-or-repo',
       capability: 'read',
       description:
-        'Query the knowledge graph over notes and code: nodes (by path) plus extracted/structural/semantic edges and Louvain communities. Optional filters.' + ENVELOPE_DOC,
+        'Knowledge graph of notes and code. Default: one node per Louvain community; `aggregate: "none"` lists every node, `neighborsOf` the nodes near one.' +
+        ENVELOPE_DOC,
       inputSchema: {
         vaultId: UUID_ARG.optional().describe('Vault graph'),
         repositoryId: UUID_ARG.optional().describe('Repository graph'),
         types: z.array(z.string()).optional().describe('Only nodes of these types (note type, or code language)'),
         tags: z.array(z.string()).optional().describe('Only these tags'),
-        aggregate: z.enum(['community']).optional().describe('"community": one node per community (start here)'),
+        aggregate: z.enum(['community', 'none']).optional().describe('Default "community"'),
         community: z.number().int().optional().describe('Only this community\'s members'),
+        neighborsOf: z.string().min(1).optional().describe('Node id or exact path'),
+        depth: z.number().int().min(1).max(3).optional().describe('Edges from neighborsOf; default 1'),
+        edgeTypes: z.array(z.enum(EDGE_KINDS)).min(1).optional().describe('Only these edge kinds'),
+        limit: z.number().int().min(1).max(1_000).optional().describe('First n nodes and their edges'),
       },
       budget: 'list',
     },
     async (
-      args: { types?: string[]; tags?: string[]; aggregate?: 'community'; community?: number },
+      args: {
+        types?: string[]
+        tags?: string[]
+        aggregate?: 'community' | 'none'
+        community?: number
+        neighborsOf?: string
+        depth?: number
+        edgeTypes?: EdgeKind[]
+        limit?: number
+      },
       { resources },
     ) => {
-      const { nodes, edges, ...head } = await buildGraph(resources, {
-        types: args.types,
-        tags: args.tags,
-        aggregate: args.aggregate,
-        community: args.community,
-      })
-      // A stable order, so a cursor's next page continues the same listing.
-      const nodeKey = (n: (typeof nodes)[number]) => ('path' in n ? `${n.path}\0${n.id}` : n.id)
-      // Narrowing: the largest communities when aggregated, else the commonest node types.
-      const groups = new Map<string, number>()
-      for (const n of nodes) {
-        const group = 'size' in n ? `community: ${n.community}` : n.type === null ? null : `types: ${JSON.stringify([n.type])}`
-        if (group) groups.set(group, (groups.get(group) ?? 0) + ('size' in n ? n.size : 1))
+      // Arguments that would be ignored are refused (#426).
+      if (args.depth !== undefined && args.neighborsOf === undefined) throw new McpToolError('`depth` counts edges from `neighborsOf`: pass both, or neither')
+      if (args.neighborsOf !== undefined && args.community !== undefined) throw new McpToolError('`neighborsOf` and `community` are two views: pass one')
+      if (args.neighborsOf !== undefined && args.aggregate === 'community') {
+        throw new McpToolError('`neighborsOf` lists nodes and `aggregate: "community"` collapses them: pass one')
       }
-      const narrow = [...groups].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([group]) => group)
+      if (args.aggregate === 'community' && args.community !== undefined) {
+        throw new McpToolError('`aggregate: "community"` collapses every community and `community` lists one: pass one')
+      }
+      // Narrowing by the commonest node types.
+      const typeGroups = (nodes: ReadonlyArray<{ type: string | null }>) => {
+        const counts = new Map<string, number>()
+        for (const n of nodes) if (n.type !== null) counts.set(n.type, (counts.get(n.type) ?? 0) + 1)
+        return [...counts].sort((a, b) => b[1] - a[1] || compareCodeUnits(a[0], b[0])).slice(0, 3).map(([type]) => `types: ${JSON.stringify([type])}`)
+      }
+      const edgesAmong = <E extends { source: string; target: string }>(edges: readonly E[], nodes: ReadonlyArray<{ id: string }>) => {
+        const ids = new Set(nodes.map((n) => n.id))
+        return edges.filter((e) => ids.has(e.source) && ids.has(e.target)).sort(byEdgeKey)
+      }
+
+      if (args.neighborsOf !== undefined) {
+        const center = await resolveGraphNode(resources, args.neighborsOf)
+        const depth = args.depth ?? 1
+        const local = await neighborhood(resources, center, { depth, edgeTypes: args.edgeTypes, types: args.types, tags: args.tags, limit: args.limit })
+        return {
+          head: { center: { id: center.id, path: center.path }, depth, cappedGroups: local.cappedGroups },
+          sections: [
+            // Already ranked: nearest first, the centre at the top; `next` only says that more exist.
+            ranked({ name: 'nodes', items: local.next ? [...local.nodes, local.next] : local.nodes, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER }),
+            ranked({ name: 'edges', items: [...local.edges].sort(byEdgeKey), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
+          ],
+          narrow: [...(depth > 1 ? [`depth: ${depth - 1}`] : []), ...(args.edgeTypes ? [] : ['edgeTypes: ["extracted"]']), ...typeGroups(local.nodes.slice(1))],
+        }
+      }
+
+      const filters = { types: args.types, tags: args.tags, edgeTypes: args.edgeTypes, community: args.community }
+      // The community view is the default (#426); `community` and `aggregate: "none"` list nodes.
+      if (args.community === undefined && args.aggregate !== 'none') {
+        const { nodes, edges, ...head } = await buildGraph(resources, { ...filters, aggregate: 'community' })
+        const ranking = [...nodes].sort((a, b) => b.size - a.size || a.community - b.community)
+        return {
+          // Its cappedGroups are the whole graph's: every node went into the communities.
+          head,
+          sections: [
+            ranked({ name: 'nodes', items: ranking, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER }),
+            ranked({ name: 'edges', items: edgesAmong(edges, ranking.slice(0, args.limit)), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
+          ],
+          narrow: ranking.slice(0, 3).map((c) => `community: ${c.community}`),
+        }
+      }
+      const { nodes, edges, cappedGroups, ...head } = await buildGraph(resources, filters)
+      // Best-connected first (edges listed), then path and id: what `limit` keeps.
+      const degree = new Map<string, number>()
+      for (const e of edges) for (const id of [e.source, e.target]) degree.set(id, (degree.get(id) ?? 0) + 1)
+      const ranking = [...nodes].sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) || compareCodeUnits(a.path, b.path) || compareCodeUnits(a.id, b.id))
+      const kept = ranking.slice(0, args.limit)
+      // As for `neighborsOf`: the skipped groups a listed node belongs to.
+      const listedGroups = new Set(kept.flatMap(groupKeys))
       return {
-        head,
+        head: { cappedGroups: cappedGroups.filter((key) => listedGroups.has(key)), ...head },
         sections: [
-          ranked({ name: 'nodes', items: [...nodes].sort((a, b) => compareCodeUnits(nodeKey(a), nodeKey(b))), id: (n) => n.id, ladder: GRAPH_NODE_LADDER }),
-          ranked({ name: 'edges', items: [...edges].sort(byEdgeKey), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
+          ranked({ name: 'nodes', items: ranking, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER }),
+          ranked({ name: 'edges', items: edgesAmong(edges, kept), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
         ],
-        narrow: args.aggregate ? narrow : ['aggregate: "community"', ...narrow],
+        // An id, not the path: a note and a file can share a path.
+        narrow: [...(ranking[0] ? [`neighborsOf: ${JSON.stringify(ranking[0].id)}`] : []), ...typeGroups(ranking)],
       }
     },
   )

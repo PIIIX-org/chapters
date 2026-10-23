@@ -365,6 +365,13 @@ export const notes = pgTable(
     uniqueIndex('notes_vault_path_live')
       .on(t.vaultId, t.path)
       .where(sql`deleted_at is null`),
+    // browse_vault's pages in code-unit order (#425, migration 0030): a subtree, and one folder level by the note's folder.
+    index('notes_vault_path_c_live')
+      .on(t.vaultId, sql`${t.path} collate "C"`)
+      .where(sql`deleted_at is null`),
+    index('notes_vault_dir_c_live')
+      .on(t.vaultId, sql`(coalesce(substring(${t.path} from '^(.*/)'), '')) collate "C"`, sql`${t.path} collate "C"`)
+      .where(sql`deleted_at is null`),
     index('notes_vault_type_idx').on(t.vaultId, t.type),
   ],
 )
@@ -758,7 +765,11 @@ export const repositoryFiles = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [uniqueIndex('repository_files_repo_path').on(t.repositoryId, t.path)],
+  (t) => [
+    uniqueIndex('repository_files_repo_path').on(t.repositoryId, t.path),
+    // browse_repository's keyset in code-unit order (#424, migration 0029).
+    index('repository_files_repo_path_c').on(t.repositoryId, sql`${t.path} collate "C"`),
+  ],
 )
 
 /** EXTRACTED edges for code: raw import targets, resolved against the same repository's files. */

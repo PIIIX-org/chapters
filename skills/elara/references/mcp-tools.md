@@ -23,7 +23,7 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
   - `shown`, `total` and `dropped` count items per list (lines for text) from where this page starts, so `shown + dropped = total`. A `total` of `">n"` means the tool fetched `limit` + 1 and found more than `limit`.
   - `level` is how much of each item is shown, one level for the whole answer, tried in this order until it fits:
     - `full`: whole items.
-    - `no_context`: items without their context: `find_symbols` hits without `snippet`; notes (`browse_vault`, `list_trash`) as `{id, path, type, name}`; files (`browse_repository`) as `{path, language}`; revisions (`note_history`) as `{id, action, createdAt}`; graph nodes as `{id, path, type, community}` (community nodes `{id, community, size}`).
+    - `no_context`: items without their context: `find_symbols` hits without `snippet`; notes as `{id, path, type, name}` (`list_trash`) or the asked fields without `tags` and `updatedAt` (`browse_vault`); files (`browse_repository`) as `{path, language}`; revisions (`note_history`) as `{id, action, createdAt}`; graph nodes as `{id, path, type, community}` (`distance` instead of `community` for `neighborsOf`; community nodes `{id, community, size}`).
     - `locations`: a location only: a note or file path; a `find_symbols` hit as `path#La-Lb`; a revision id; a subdirectory name; a graph node as `{id, path}` (`{id}` for a community), since edges name nodes by id. Edges and `read_file`'s outline are already locations.
     - `counts`: each list is an object of counts: notes and files per folder (`.` for the root), subdirectories by the notes under each, `find_symbols` hits per file, revisions per action, graph nodes per type and edges per kind, `read_file`'s outline per kind.
     - `total`: each list is the number of its items.
@@ -60,12 +60,14 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
 - **Capability**: `read`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
-  - `path` (string, optional): a directory such as `domains/auth`.
-  - `recursive` (boolean, optional).
+  - `path` (string, optional): a folder such as `domains/auth` (leading/trailing `/` ignored); without it, the vault root.
+  - `recursive` (boolean, optional, default `false`): `false` lists one level of the folder (or root); `true` lists every note under it (the whole vault without `path`).
+  - `fields` (array, optional): note fields to return, from `id`, `path`, `title`, `type`, `name`, `tags`, `updatedAt`. Default `["path", "title"]`; `path` is always returned, and the fields come in this order whatever order you list them in. Any other name (`frontmatter`, `body`, …) is refused.
 - **Returns**:
-  - With `path` and `recursive` not `true`: `{ directory, subdirectories: [{ name, count }], notes, indexContent, truncated }`. `notes` are the notes directly in that directory. `indexContent` is the directory's index text: its own `index` note, or the listing generated from its notes. Pages list the subdirectories (by name), then the notes (by path), then the index text.
-  - Otherwise: `{ notes, truncated }`, every note in the vault by path, as `{ id, path, type, name, frontmatter, updatedAt }`. `recursive: true` lists the **whole vault**, not just the subtree under `path`.
-  - Paths and names are in code-unit order (`B` before `a`). The cursor resumes after the last path shown, so a note added meanwhile does not shift the pages.
+  - One level (default): `{ directory, subdirectories: [{ name, count }], notes, indexContent, truncated }`. `directory` is `""` at the root. `subdirectories` are the folders directly in it, with the number of notes under each (any depth), in the order of their paths with a trailing `/` (so `docs-old` comes before `docs`); `notes` are the notes directly in it. `indexContent` (folders only, not the root) is the folder's index text: its own `index` note, or the listing generated from its notes. Pages list the subdirectories (by name), then the notes (by path), then the index text.
+  - `recursive: true`: `{ directory, notes, truncated }`, every note under `path` (the subtree only) or in the whole vault.
+  - A note is `{ path, title }` by default; `title` is the frontmatter `title`, else (missing or empty) the note name; `tags` is the frontmatter `tags` value (or `null`).
+  - Paths and names are in code-unit order (`B` before `a`), read from the database at most 500 per page (`truncated.total` `">500"` when there are more). The cursor resumes after the last path shown, so a note added meanwhile does not shift the pages; it is bound to `path`, `recursive` and the set of `fields`.
 
 ### `update_vault`
 - **Scope**: vault. Owner only.
@@ -392,8 +394,10 @@ The write is committed when the call returns; a connection lost before the answe
 ### `browse_repository`
 - **Scope**: repository. Repository access.
 - **Capability**: `read`.
-- **Parameters**: `repositoryId` (uuid, optional). There is no `path` parameter.
-- **Returns**: `{ files, truncated }`: every indexed file by path (code-unit order), as `{ id, path, language, size, updatedAt }`. The cursor resumes after the last path shown.
+- **Parameters**:
+  - `repositoryId` (uuid, optional).
+  - `path` (string, optional): a folder; only the files under it are listed (`src/lib` lists `src/lib/a.ts` and `src/lib/b/c.ts`, not `src/library.ts`). Leading and trailing `/` are ignored; a file's path lists nothing (use `read_file`). Omitted: every file.
+- **Returns**: `{ files, truncated }`: the indexed files by path (code-unit order), as `{ id, path, language, size, updatedAt }`, read from the database 500 at a time from where the cursor resumes (after the last path shown). With more than 500 files left, `truncated.total.files` is `">500"`. `truncated.narrow` suggests the largest folders one level below `path` on the page. The cursor is bound to `path`: a cursor from another folder, or from no `path`, is refused (`invalid cursor`). A file added while paging shows up if its path sorts after the cursor; every file present throughout is listed exactly once.
 
 ### `read_file`
 - **Scope**: repository. Repository access.
@@ -508,16 +512,21 @@ The write is committed when the call returns; a connection lost before the answe
   - `repositoryId` (uuid, optional).
   - `types` (array<string>, optional): keep nodes whose `type` (note type, or code language) is in the list.
   - `tags` (array<string>, optional): keep notes having any of these tags.
-  - `aggregate` (enum `"community"`, optional): collapse the graph to one node per Louvain community.
-  - `community` (integer, optional): return only the members of one community (the 2,500 most recently updated at most, with `memberTotal`).
-- There is no `neighborsOf`, `edgeTypes`, or `limit` parameter, and saved perspectives cannot be applied. Without `aggregate` or `community`, the whole graph of the resource is listed page by page, which is many pages for a real repository. Start with `aggregate: "community"`.
+  - `aggregate` (enum `"community"` | `"none"`, optional, **default `"community"`**, #426): `"community"` collapses the graph to one node per Louvain community; `"none"` lists every node.
+  - `community` (integer, optional): list only the members of one community (the 2,500 most recently updated at most, with `memberTotal`). Implies the node list. Community numbers come from a Louvain pass over the graph as filtered: take them from a community view with the same `types`, `tags` and `edgeTypes`; under other filters the same number names another community.
+  - `neighborsOf` (string, optional): the local graph around one node, given by its `id` or exact `path` (note path without `.md`, or repository file path). A path that names several nodes (a note and a file with one path) is refused with their ids; pass one id.
+  - `depth` (integer 1-3, optional, default 1): with `neighborsOf`, how many edges from it.
+  - `edgeTypes` (array of `"extracted"` | `"structural"` | `"semantic"`, optional, default all): build only these edge kinds. Applied before assembly, so the communities and the `neighborsOf` walk use these edges only.
+  - `limit` (integer 1-1,000, optional): keep the first `limit` nodes and the edges among them: the largest communities, the nodes with the most edges (then by path), or for `neighborsOf` the nearest (by distance, then path). With `community`, edges (and so the ranking) are counted among the at most 2,500 members listed. `truncated.total.nodes` is `">limit"` when more were there; no cursor goes past the limit (a larger `limit` does).
+  - Refused rather than ignored: `depth` without `neighborsOf`; `neighborsOf` with `community` or `aggregate: "community"`; `aggregate: "community"` with `community`. Saved perspectives cannot be applied.
 - **Returns**:
-  - Pages list the nodes (by path), then the edges (by source and target); the cursor continues the same listing and is stale once the graph changed.
-  - Default: `{ cappedGroups, memberTotal?, nodes, edges, truncated }`. Nodes are `{ id, resourceType: "note" | "code", resourceId, path, type, tags, timestamp, updatedAt, community }`. Edges are `{ source, target, kind: "extracted" | "structural" | "semantic" }`. There is no PageRank or degree field.
-  - `aggregate: "community"`: `{ aggregated: true, cappedGroups, nodes: [{ id: "community:<n>", community, size, noteCount, codeCount, lastActivity }], edges: [{ source, target, weight }], truncated }`.
+  - Pages list the nodes, then the edges (by source and target); the cursor continues the same listing within the `limit` and is stale once the graph changed.
+  - Default (`aggregate: "community"`): `{ aggregated: true, cappedGroups, nodes: [{ id: "community:<n>", community, size, noteCount, codeCount, lastActivity }], edges: [{ source, target, weight }], truncated }`, largest community first. Pass a community's number as `community` (with the same filters and `edgeTypes`), or a node as `neighborsOf`, to drill down. `truncated.narrow` suggests the largest communities; under a node list it suggests `neighborsOf` with the best-connected node's id.
+  - `aggregate: "none"` or `community`: `{ cappedGroups, memberTotal?, nodes, edges, truncated }`, nodes with the most edges first. Nodes are `{ id, resourceType: "note" | "code", resourceId, path, type, tags, timestamp, updatedAt, community }`. Edges are `{ source, target, kind: "extracted" | "structural" | "semantic" }`. There is no PageRank or degree field.
+  - `neighborsOf`: `{ center: { id, path }, depth, cappedGroups, nodes, edges, truncated }`: every node within `depth` edges of the centre (the centre first, then by distance and path) and every edge among them. Nodes carry `distance` instead of `community` (communities need the whole graph, which this view does not assemble). `types` and `tags` keep the nodes around the centre; the centre is always listed.
 - Edge kinds:
   - `extracted`: `[[wikilinks]]` between notes, `[[repo:<repo>/<file>]]` links from a note to a code file, and resolved code imports.
-  - `structural`: notes sharing a type or tag; code files sharing a language or a top-level directory. Groups over 50 members are skipped and listed in `cappedGroups`.
+  - `structural`: notes sharing a type or tag; code files sharing a language or a top-level directory. Groups over 50 members are skipped (no structural edges at all) and listed in `cappedGroups`: in the community view every skipped group of the graph (all its nodes went into the communities); in the other views the skipped groups a listed node belongs to.
   - `semantic`: nearest neighbours by embedding similarity.
 
 ### `find_graph_path`

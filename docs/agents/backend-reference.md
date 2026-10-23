@@ -125,7 +125,7 @@ chapters/
 │   │   ├── vaults/                 # vaults, sharing, teams, MCP connection management
 │   │   ├── notes/                  # OKF file storage, validation, the note write path
 │   │   ├── notifications/          # single notify() write path + routes
-│   │   ├── graph/                  # buildGraph() — the one graph assembly function
+│   │   ├── graph/                  # buildGraph() — the one graph assembly function; neighbors.ts — the local graph around one node (#426)
 │   │   ├── search/                 # hybrid search, embeddings, embedding queue, semantic edges
 │   │   ├── sync/                   # Hocuspocus relay, permission-event bus, SSE viewers
 │   │   ├── mcp/                    # MCP server, tools, rate limiting, CRDT-aware writes
@@ -171,7 +171,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 
 | Table | Purpose |
 |---|---|
-| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed) |
+| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages |
 | `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
 | `exportLinks` | expiring/revocable vault export download links |
@@ -381,7 +381,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable` |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
-| `repositoryFiles` | indexed file content — same `fts`/`embedding` pattern as `notes`; **hard-deleted** on resync, no trash |
+| `repositoryFiles` | indexed file content — same `fts`/`embedding` pattern as `notes`; **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s code-unit-order pages (#424) |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible |
 | `repositoryFileSymbols` | per-file top-level declarations (function/class/interface/type), surfaced as a file "outline" — **not** emitted as a graph edge despite the schema comment calling them "contains" edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
@@ -1211,6 +1211,29 @@ additionally requires the resource owner's `mergeable` flag and the
 viewing user's own per-resource opt-in — three independent gates, all
 re-resolved live.
 
+`filters.edgeTypes` (#426) names the edge kinds to build; the others are
+never queried or grouped, so Louvain runs over the kept edges only. The
+shared pieces (`noteNode`/`fileNode` and their columns, `repoLinkTarget`
+for `repo:`/`code:` links, `groupKeys`, `EdgeList`, `STRUCTURAL_GROUP_CAP`)
+are exported for `neighbors.ts`.
+
+`neighbors.ts` (#426) is the local graph without the whole graph:
+`resolveGraphNode(resources, ref)` takes a node id or exact path (none or
+several matches are refused, the latter with the ids; #447 widens it), and
+`neighborhood(resources, center, {depth, edgeTypes, types, tags, limit})`
+walks ring by ring in SQL over the frontier's ids only: links out and in
+(`note_links_target_idx`; `repo:` links to a frontier file by reading the
+vaults' `repo:`/`code:` link rows), imports both ways
+(`repository_file_imports_resolved_idx`), semantic rows on either side,
+and the frontier's structural groups counted in SQL (a group over 50 is
+skipped and reported in `cappedGroups`, as above). It reads node rows only
+for the nodes reached, applies `types`/`tags` as `passesFilters` does (the
+centre is always kept), stops at the ring that reaches `limit` + 1 nodes,
+and reads the edges among the kept outer-ring nodes in a last round, so
+the result is `buildGraph`'s graph restricted to the neighbourhood (the
+test compares the two). No Louvain: nodes carry `distance`. #472's
+`neighbors(depth)` (REST local graph, backlinks) is meant to reuse it.
+
 **Saved perspectives** (`graph_perspectives`; REST `GET/POST
 /graph/perspectives`, `DELETE /graph/perspectives/:id`, and the three MCP
 perspective tools) follow one rule set, shared through
@@ -1606,7 +1629,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - *Repositories* (13): `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `get_repository_graph_preference`, `set_repository_graph_preference`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
   - *Teams & Users* (7): `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
   - *Export & Notifications* (4): `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`.
-  - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols`, `graph` (nodes, extracted/structural/semantic edges, Louvain communities; filters `types`, `tags`, `aggregate`, `community`), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
+  - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols`, `graph` (the community view by default since #426, `aggregate: "none"` for every node, `community` for one community's members, `neighborsOf` + `depth` 1-3 for the local graph from `neighbors.ts`; `edgeTypes` applied before assembly; `limit` keeps the first nodes of the view's ranking (largest communities; most edges, then path; nearest, then path) and the edges among them, `truncated.total.nodes` `">limit"`; filters `types`, `tags`; conflicting arguments are refused; community numbers depend on `types`, `tags` and `edgeTypes`; `cappedGroups` is the whole graph's in the community view and the listed nodes' groups otherwise; `narrow` names `neighborsOf` by id), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
   - *Prompts*: 20, registered in `prompts.ts`.
   *(Security invariant: MCP connections cannot create new MCP connections or mint tokens).*
   Every handler is wrapped so thrown errors become a structured `isError`
@@ -1636,6 +1659,46 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `find_symbols`, `graph`, `find_graph_path`, `read_file`'s outline) and
     `textSection` (a body or file cut at line boundaries; a line longer
     than a page is split).
+  - `browse_repository` (#424) pages in SQL, not in memory:
+    `listRepositoryFilesPage` (`repositories/store.ts`) reads `BROWSE_PAGE`
+    (500) + 1 files after the cursor's path, `ORDER BY path COLLATE "C"`,
+    and its `path` folder is the `COLLATE "C"` range `folder/` ≤ path <
+    `folder0` (leading/trailing `/` ignored; a file's path lists nothing).
+    The index `repository_files_repo_path_c` (`repository_id`, `path
+    COLLATE "C"`, migration 0029) serves both: the unique
+    `repository_files_repo_path` is in the database collation. Past 500
+    files `truncated.total.files` is `">500"`; `narrow` names the three
+    largest folders one level below `folder` on the page. `path` is in the
+    cursor's fingerprint, so a cursor from another folder is refused. The
+    REST `GET /repositories/:id/files` keeps `listRepositoryFiles`: every
+    file, unordered, no paging.
+  - `browse_vault` (#425) pages in SQL the same way, one code path for
+    the root (the empty folder) and a folder (`notes/store.ts`), reading
+    only the page: `browseNotesPage` reads 500 + 1 live notes after the
+    cursor's path, either directly in the folder (`recursive` false: the
+    note's folder `coalesce(substring(path from '^(.*/)'), '')` equals
+    `folder/`, `''` at the root; index `notes_vault_dir_c_live`) or under
+    it (`recursive: true`: the `COLLATE "C"` range `folder/` ≤ path <
+    `folder0`, the whole vault at the root; index
+    `notes_vault_path_c_live`). One level also lists
+    `browseSubfoldersPage` (section 0) before the notes (section 1): a
+    skip scan of `notes_vault_dir_c_live`, one probe per subfolder from
+    `folder/name0`, so subfolders come in the order of `name/` (`docs-old`
+    before `docs`) and the cursor resumes after a name; each subfolder's
+    note count is one range count of `notes_vault_path_c_live`. A folder
+    (not the root) adds `indexContent` (section 2: its own `index` note,
+    else `renderDirIndex` over `folderIndexRows`, the folder's rows). A
+    page starting past a section does not query it. Items are `{path,
+    title}` (title = `frontmatter->>'title'`, else `name` when missing or
+    empty) unless `fields` picks from `BROWSE_FIELDS` (id, path, title,
+    type, name, tags = `frontmatter->'tags'`, updatedAt; `path` always);
+    never body, frontmatter or embedding. The schema normalises `fields`
+    to allowlist order without repeats, so `path`, `recursive` and the
+    set of `fields` are in the cursor's fingerprint. Both indexes are
+    partial on live rows (migration 0030); the expression in
+    `browseNotesPage`/`browseSubfoldersPage` must match the index's.
+    REST's `listNotes` (tree, audit, export) is unchanged: every note,
+    whole.
   - Size: `approxTokens` = `ceil(text.length / 4)`, the premise
     benchmark's estimate (it undercounts a real tokenizer by roughly
     10-20 % on code and JSON and 1.3-4x on Persian or Chinese text; kept
@@ -1664,19 +1727,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `full`, `narrow` starts with `budget_tokens: N`, the budget measured
     to show `min(5, left)` items of that list at `full` (omitted over
     25,000), and `truncated` is never `false`.
-  - Forms per tool: `browse_vault`/`list_trash` notes `{id, path, type,
-    name}` → path → per folder (`folderOf`, `.` at the root); directory
+  - Forms per tool: `list_trash` notes `{id, path, type, name}` → path →
+    per folder (`folderOf`, `.` at the root); `browse_vault` notes the
+    asked fields without `tags`/`updatedAt` → path → per folder; directory
     `subdirectories` → name → `{name: notes under it}`;
     `browse_repository` files `{path, language}` → path → per folder;
     `note_history` revisions `{id, action, createdAt}` → id → per action;
     `find_symbols` results without `snippet` → `path#La-Lb` (`location`,
     ADR-004 §2.2) → per file; `graph`/`find_graph_path` nodes `{id, path,
-    type, community}` (community nodes `{id, community, size}`) → `{id,
-    path}` (`{id}`) → per type (`communities`), edges → per kind;
+    type, community}` (`distance` for `neighborsOf`; community nodes `{id,
+    community, size}`) → `{id, path}` (`{id}`) → per type (`communities`),
+    edges → per kind;
     `read_file`'s outline → per kind.
   - `truncated` is always the last key: `false`, or `{shown, total,
     dropped, level, cursor, narrow}`, counted from the page start
-    (`total` `">n"` from a limit + 1 fetch).
+    (`total` `">n"` from a limit + 1 fetch). A `ranked` section's `limit`
+    bounds the whole ranking (`find_symbols`, `graph`'s nodes): past it
+    there is no cursor (a larger limit shows more), and the page goes on
+    to the next section, so `graph`'s edges among the kept nodes follow.
   - Cursor: base64url JSON `{v: 1, t: tool, f, k: {s, p}, g?}`. `f` is 16
     hex of sha256 over the canonical arguments without `cursor`,
     `budget_tokens` and the id arguments, plus the resolved scope
@@ -1694,6 +1762,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
+  `graph`'s `neighborsOf` uses `neighborhood()` (`graph/neighbors.ts`),
+  which the REST local graph does not use yet (#472); REST graph routes
+  keep their own default (the full graph) and take no `edgeTypes`.
 - **Secret-scan guard** (`test/mcp-secret-scan.test.ts`, #577): CI calls
   every tool from `tools/list` and every prompt from `prompts/list`
   against a fixture world seeded with real secrets (git URLs with
