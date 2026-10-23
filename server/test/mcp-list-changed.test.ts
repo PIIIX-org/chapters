@@ -18,6 +18,7 @@ let app: FastifyInstance
 let baseUrl: string
 let token: string
 let limitedToken: string
+let readerToken: string
 const clients: Client[] = []
 
 async function capabilitiesOf(bearer: string, path: string) {
@@ -43,6 +44,7 @@ beforeAll(async () => {
     (await app.inject({ method: 'POST', url: '/api/mcp-connections', headers: { cookie }, body })).json<{ token: string }>().token
   token = await mint({ name: 'list-changed', scope: 'account', access: 'admin' })
   limitedToken = await mint({ name: 'list-changed-allow-list', scope: 'account', access: 'admin', allowedTools: ['search'] })
+  readerToken = await mint({ name: 'list-changed-reader', scope: 'account', access: 'admin', profile: 'reader' })
 }, 60_000)
 
 afterAll(async () => {
@@ -60,11 +62,13 @@ describe('listChanged (#436)', () => {
     }
   })
 
-  it('adds no prompts capability where an allow-list leaves the prompts out', async () => {
-    const capabilities = await capabilitiesOf(limitedToken, '/mcp')
-    expect(capabilities?.tools).toEqual({ listChanged: false })
-    expect(capabilities?.resources).toEqual({ listChanged: false })
-    expect(capabilities?.prompts).toBeUndefined()
+  it('adds no prompts capability where an allow-list or the reader profile leaves the prompts out', async () => {
+    for (const bearer of [limitedToken, readerToken]) {
+      const capabilities = await capabilitiesOf(bearer, '/mcp')
+      expect(capabilities?.tools).toEqual({ listChanged: false })
+      expect(capabilities?.resources).toEqual({ listChanged: false })
+      expect(capabilities?.prompts).toBeUndefined()
+    }
   })
 
   it('answers GET and DELETE with 405 and Allow: POST, with or without a token', async () => {

@@ -7,6 +7,7 @@ import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
 import { NoteEditConflictError, requestedEdit, writeThroughCollab, type WriteReport } from '../sync/crdt-write.js'
 import { NoteEditError } from '../sync/edit-ops.js'
+import { noteReply } from './reply-fields.js'
 import {
   createNote,
   getBaseRevision,
@@ -85,7 +86,7 @@ export function noteRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       if (!(await guard(req as VaultReq, reply, 'edit'))) return
-      return createNote(req.params.id, req.body, { type: 'user', id: req.user!.id })
+      return noteReply(await createNote(req.params.id, req.body, { type: 'user', id: req.user!.id }))
     },
   )
 
@@ -161,8 +162,8 @@ export function noteRoutes(app: FastifyInstance) {
         })
       }
       if (!updated) return reply.code(404).send({ error: 'note not found' })
-      if (baseRev === undefined) return updated
-      return { ...updated, status: report.status ?? 'applied', concurrentChanges: report.concurrentChanges ?? null, baseRev }
+      if (baseRev === undefined) return noteReply(updated)
+      return { ...noteReply(updated), status: report.status ?? 'applied', concurrentChanges: report.concurrentChanges ?? null, baseRev }
     },
   )
 
@@ -191,7 +192,7 @@ export function noteRoutes(app: FastifyInstance) {
         writeThroughCollab,
       )
       if (!renamed) return reply.code(404).send({ error: 'note not found' })
-      return renamed
+      return noteReply(renamed)
     },
   )
 
@@ -234,7 +235,7 @@ export function noteRoutes(app: FastifyInstance) {
       if (!(await guard(req as unknown as VaultReq, reply, 'edit'))) return
       const restored = await restoreNote(req.params.id, req.params.noteId, { type: 'user', id: req.user!.id })
       if (!restored) return reply.code(404).send({ error: 'trashed note not found' })
-      return restored
+      return noteReply(restored)
     },
   )
 
@@ -317,7 +318,7 @@ export function noteRoutes(app: FastifyInstance) {
       )
       if (!reverted) return reply.code(404).send({ error: 'note or revision not found' })
       await notifyRevert(req.params.id, req.params['*'], req.user!.id)
-      return reverted
+      return noteReply(reverted)
     },
   )
 

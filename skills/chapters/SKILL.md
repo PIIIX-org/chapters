@@ -42,7 +42,7 @@ When exploring a project or answering questions about architecture, concepts, or
 - **Step 2 — Graph Topology & Pathfinding**:
   - Use `graph` (or `/elara-graph` / legacy `/chapters-graph`) scoped to one `vaultId` or `repositoryId` with `aggregate: "community"` to view community clusters, then `community: <n>` to list one cluster's members. Communities are the default (#426). For the graph around one note or file, pass `neighborsOf` (its id or exact path) with `depth` (1-3); `edgeTypes` keeps some edge kinds and `limit` the first nodes. `aggregate: "none"` lists the whole resource graph, which is large for a real repository.
   - Use `find_graph_path` (or `/elara-path` / legacy `/chapters-path`) to trace the shortest conceptual path between two components, notes, or code files.
-  - Use `list_graph_perspectives` to see curated domain or subsystem perspectives.
+  - Use `list_graph_perspectives` to see curated domain or subsystem perspectives (an `admin`-profile token; reader and writer tokens do not list it).
 - **Step 3 — Read Context**:
   - Use `read_note` for the specific notes identified by the search/graph.
   - For code, `read_file` reads from line 1 in pages (`budget_tokens`, default 4,000; `truncated.cursor` continues). When the repo is checked out locally, read only the line range that `find_symbols` or `search` returned; use `read_file` only for repos you do not have locally.
@@ -67,9 +67,9 @@ When creating or editing notes via `create_note` or `edit_note`:
   }
   ```
 - Write `[[...]]` links bare. Links inside backticks or code blocks are ignored by the graph and the audit.
-- To add to a log or running note, call `append_note` (`createIfMissing: true` creates it if needed) rather than `read_note` followed by `edit_note` with the old body plus your line: it needs no read and no whole body, and every agent's append lands however many write at once. `upsert_note` creates or replaces a note in one call, so two agents writing a missing note never get "already exists".
+- To add to a log or running note, call `append_note` (`createIfMissing: true` creates it if needed) rather than `read_note` followed by `edit_note` with the old body plus your line: it needs no read and no whole body, and every agent's append lands however many write at once. `upsert_note` (an `admin`-profile token) creates or replaces a note in one call, so two agents writing a missing note never get "already exists".
 - `edit_note`: for a partial change use `ops` (`append`, `prepend`, `replace_text`, `insert_before`/`insert_after` an anchor, `replace_section` under a heading, `delete_block`, `frontmatter_set`/`frontmatter_add`/`frontmatter_remove`); they apply to the live text, so a person's unsaved typing is kept, and an anchor that is missing or occurs more than once fails the whole call with nothing changed. `frontmatter` **merges per top-level key** (keys you send are set, keys you leave out are kept; `null` is stored as a value), `replace: true` replaces the whole map instead, `removeKeys` deletes keys, and `body` **replaces the whole body** (not with `ops`); omit a field to leave it unchanged. The merged frontmatter is validated before anything is written. The edit streams into the live collaboration document as a minimal change and is recorded as a revision. A whole `body` is merged with what changed since its base: the `rev` you send as `base_rev`, or else the `rev` of your connection's last `read_note` of the note (only a connection that never read the note replaces what a person typed since): only the lines and keys you changed are applied (`status: "merged"` lists what changed meanwhile), lines you add at the end go after text typed there, and if a person changed the same lines or keys nothing changes (`status: "conflicted"`, your version kept as a `proposal` revision): read the note again and redo the change.
-- Run `audit_okf_conformance` to check structure (frontmatter, datetimes, link targets, indexes, orphans). It does not check whether the content is correct.
+- On an `admin`-profile token, run `audit_okf_conformance` to check structure (frontmatter, datetimes, link targets, indexes, orphans). It does not check whether the content is correct.
 
 ### 3. Post-Task Note Evaluation Protocol
 At the conclusion of any task that inspects, refactors, or extends the codebase or notes:
@@ -135,13 +135,14 @@ Finds the shortest conceptual path connecting two notes, concepts, or code files
 
 ### `/elara-perspective [list|save|delete] [...]` (alias: `/chapters-perspective`)
 Manages saved graph perspectives and filter presets.
-- **Tools called**: `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`
+- **Tools called** (an `admin`-profile token): `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`
 
 ### `/elara-prompt <name> [args...]` (alias: `/chapters-prompt`)
 Invokes one of the 20 first-class Elara MCP engineering prompts (e.g. `active_project_companion`, `plan_feature_implementation`, `draft_adr`, `refactor_impact_analysis`).
 
 ### `/elara-note <action> [arguments...]` (alias: `/chapters-note`)
 Performs operations on notes:
+- `rename`, `delete`, `history`, `revert` and `audit` need an `admin`-profile token; a `writer` token has `read`, `create`, `append` and `edit`, a `reader` token `read`.
 - `/elara-note read <vault-id> <path>`: Read note content and frontmatter.
 - `/elara-note create <vault-id> <path> [body]`: Create a new OKF note (`create_note` with `frontmatter` and `body`).
 - `/elara-note append <vault-id> <path> <text>`: Append lines via `append_note` (add `createIfMissing: true` to create the note).
@@ -191,13 +192,13 @@ Maps an entire project or codebase repository into an interconnected, Open Knowl
   5. **Phase 4 — Progressive Disclosure Synthesis**:
      - The server writes a generated `index.md` into each directory when notes are created, renamed, or deleted. Write your own `<dir>/index` note where a directory needs a real summary; the server then leaves that directory's index alone.
   6. **Phase 5 — Audit & Validation**:
-     - Call `audit_okf_conformance` and fix every entry in `violations`, `brokenWikilinks`, `brokenRepoLinks`, `orphanNotes`, and `missingIndices`. The audit checks structure only, so also spot-check claims against the code.
+     - Call `audit_okf_conformance` (an `admin`-profile token) and fix every entry in `violations`, `brokenWikilinks`, `brokenRepoLinks`, `orphanNotes`, and `missingIndices`. The audit checks structure only, so also spot-check claims against the code.
      - Call `graph` scoped to the vault (`vaultId`) with `aggregate: "community"` to check that the notes form sensible clusters. Do not dump the unaggregated graph of a whole repository.
      - Call `search` with one query per mapped domain to check that the new notes are found.
 
 ### `/elara-export <vault-id|note-path>` (alias: `/chapters-export`)
 Exports a vault zip archive or single note markdown file.
-- **Tools called**: `export_vault`, `export_note`
+- **Tools called** (an `admin`-profile token): `export_vault`, `export_note`
 
 ---
 
@@ -297,7 +298,7 @@ Elara exposes 60 tools across 7 functional domains. **Capability** is the token 
 
 ## Elara MCP Engineering Prompts (20 Prompts)
 
-Elara serves 20 MCP prompts (`prompts/list`, `prompts/get`). A prompt returns instructions telling the agent which tools to call; it does not run them. Arguments are listed in [`references/mcp-tools.md`](references/mcp-tools.md#8-mcp-prompts-20).
+Elara serves 20 MCP prompts (`prompts/list`, `prompts/get`). A prompt returns instructions telling the agent which tools to call; it does not run them. Tokens with a tool allow-list or the `reader` profile get no prompts. Arguments are listed in [`references/mcp-tools.md`](references/mcp-tools.md#8-mcp-prompts-20).
 
 | Prompt | Purpose |
 | :--- | :--- |
