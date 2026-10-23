@@ -5,6 +5,8 @@ import helmet from '@fastify/helmet'
 import multipart from '@fastify/multipart'
 import rateLimit from '@fastify/rate-limit'
 import { config, type TrustProxy } from './config.js'
+import { DATABASE_FAILED, databaseFailure } from './db/errors.js'
+import { findNulByte, nulByteMessage } from './nul-bytes.js'
 import { registerStatic } from './static.js'
 import { sql } from './db/client.js'
 import { bootInfo } from './lifecycle.js'
@@ -20,7 +22,7 @@ import { noteRoutes } from './notes/routes.js'
 import { graphRoutes } from './graph/routes.js'
 import { searchRoutes } from './search/routes.js'
 import { syncRoutes } from './sync/routes.js'
-import { mcpRoutes } from './mcp/routes.js'
+import { MCP_PATHS, mcpRoutes } from './mcp/routes.js'
 import { exportRoutes } from './export/routes.js'
 import { teamRoutes } from './vaults/team-routes.js'
 import { mcpConnectionRoutes } from './vaults/mcp-connection-routes.js'
@@ -69,6 +71,14 @@ export async function buildApp(
     if ((error as { code?: string }).code === '22P02') {
       return reply.code(404).send({ error: 'not found' })
     }
+    // A failed query is a 500 with a fixed message in every environment: drizzle's
+    // wrapper names the SQL and every parameter, the note body included (#443).
+    const failure = databaseFailure(error)
+    if (failure) {
+      serverErrors.set(req, error)
+      req.log.error({ err: failure.logged }, DATABASE_FAILED)
+      return reply.code(500).send({ statusCode: 500, error: DATABASE_FAILED, message: DATABASE_FAILED })
+    }
     const statusCode = error.statusCode ?? 500
     if (statusCode >= 500) {
       serverErrors.set(req, error)
@@ -87,6 +97,23 @@ export async function buildApp(
       error: message,
       message,
     })
+  })
+
+  // A NUL byte (U+0000) never reaches a query (#443): refused in every
+  // route's path parameters (`params.<name>`), query string (`query.<name>`)
+  // and parsed body (the body's own field path), before the route's schema
+  // check. The MCP routes answer one in their JSON-RPC body themselves, as
+  // an MCP error (mcp/server.ts).
+  app.addHook('preValidation', async (req, reply) => {
+    // Path parameters are a per-route class instance, not a plain object: walked as a copy.
+    const inParams = findNulByte({ ...(req.params as object) })
+    const inQuery = inParams ? undefined : findNulByte({ ...(req.query as object) })
+    const found = inParams ?? inQuery ?? (MCP_PATHS.includes(req.routeOptions.url ?? '') ? undefined : findNulByte(req.body))
+    if (!found) return
+    const prefix = inParams ? 'params' : inQuery ? 'query' : ''
+    const field = [prefix, found.field].filter(Boolean).join('.') || 'body'
+    const message = nulByteMessage(field, found.inKey)
+    return reply.code(400).send({ statusCode: 400, error: message, message, code: 'INVALID_ARGUMENT', field })
   })
 
   // The CSP is spelled out rather than left to helmet's defaults because this

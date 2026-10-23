@@ -1,4 +1,5 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { DATABASE_FAILED, databaseFailure } from '../db/errors.js'
 import type { z } from 'zod'
 import { OkfValidationError, type OkfRefusal } from '../notes/okf.js'
 import { NoteTooLargeError } from '../notes/size-cap.js'
@@ -129,12 +130,13 @@ export function envelope(code: ErrorCode, message: string, extra: ErrorExtra = {
 const OKF_CODES: Record<OkfRefusal, ErrorCode> = { invalid: 'OKF_INVALID', type_mismatch: 'TYPE_MISMATCH', exists: 'ALREADY_EXISTS' }
 
 /**
- * The envelope of an error a tool call threw. A Node system error (fs, net)
- * names the absolute server paths it touched, e.g. `ENOENT: no such file or
- * directory, rename '/data/vaults/…'`; the caller gets only its code, and
- * the full error goes to the server log. Any other unknown error is
- * INTERNAL with its message (#443 maps database errors here to a fixed
- * message and the SQLSTATE).
+ * The envelope of an error a tool call threw. A failed query (drizzle's
+ * wrapper names the SQL and every parameter, the note body included) is
+ * INTERNAL with a fixed message and the SQLSTATE (#443). A Node system
+ * error (fs, net) names the absolute server paths it touched, e.g.
+ * `ENOENT: no such file or directory, rename '/data/vaults/…'`; the caller
+ * gets only its code. Both go to the server log in full. Any other unknown
+ * error is INTERNAL with its message.
  */
 export function toErrorEnvelope(err: unknown): ErrorEnvelope {
   if (err instanceof McpToolError) return envelope(err.code, err.message, err.extra)
@@ -148,6 +150,11 @@ export function toErrorEnvelope(err: unknown): ErrorEnvelope {
   }
   if (err instanceof NoteEditError) return envelope('INVALID_ARGUMENT', err.message)
   if (err instanceof NoteEditConflictError || err instanceof IdempotencyKeyReusedError) return envelope('CONFLICT', err.message)
+  const failure = databaseFailure(err)
+  if (failure) {
+    console.error('[mcp] tool failed:', failure.logged)
+    return envelope('INTERNAL', `${DATABASE_FAILED}${failure.code ? ` (${failure.code})` : ''}`)
+  }
   if (err instanceof Error && 'syscall' in err && typeof err.syscall === 'string') {
     console.error('[mcp] tool failed:', err)
     const code = 'code' in err && typeof err.code === 'string' ? err.code : 'unknown'

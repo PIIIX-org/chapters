@@ -6,6 +6,9 @@ import { buildMcpServer } from './server.js'
 import { checkRateLimit } from './rate-limit.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
 
+/** The MCP endpoint's paths; a NUL byte in their JSON-RPC body is answered by the MCP server, not app.ts's hook (#443). */
+export const MCP_PATHS: readonly string[] = ['/mcp', '/elara/mcp']
+
 /**
  * MCP endpoint: stateless Streamable HTTP — a fresh server+transport per
  * request, authenticated per request against live permissions (spec 6:
@@ -42,8 +45,7 @@ export function mcpRoutes(app: FastifyInstance) {
 
   // Room for a note body at the cap (#491); create_note/edit_note check the body itself.
   const options = { bodyLimit: noteTransportLimit() }
-  app.post('/mcp', options, handler)
-  app.post('/elara/mcp', options, handler)
+  for (const url of MCP_PATHS) app.post(url, options, handler)
 
   // Stateless: no session to end and no GET stream to open, so no
   // list_changed or other server-sent message (initialize advertises
@@ -54,5 +56,5 @@ export function mcpRoutes(app: FastifyInstance) {
       .code(405)
       .header('allow', 'POST')
       .send({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null })
-  for (const url of ['/mcp', '/elara/mcp']) app.route({ method: ['GET', 'DELETE'], url, handler: notAllowed })
+  for (const url of MCP_PATHS) app.route({ method: ['GET', 'DELETE'], url, handler: notAllowed })
 }

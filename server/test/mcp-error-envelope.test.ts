@@ -5,6 +5,7 @@
 // its own file: before #439 the module does not exist, so this file fails on
 // its import; mcp-errors.test.ts is the assertion-level proof.
 import { describe, expect, it } from 'vitest'
+import { DrizzleQueryError } from 'drizzle-orm/errors'
 import { McpToolError, envelope, errorResult, rateLimitedError, toErrorEnvelope } from '../src/mcp/errors.js'
 import { CursorError } from '../src/mcp/response.js'
 import { IdempotencyKeyReusedError } from '../src/mcp/write-result.js'
@@ -60,6 +61,19 @@ describe('error envelope catalogue (#439)', () => {
       console.error = original
     }
     expect(toErrorEnvelope(new Error('boom'))).toEqual({ code: 'INTERNAL', message: 'boom', retryable: false })
+  })
+
+  it('a failed query is INTERNAL with a fixed message and its code, never its SQL or parameters (#443)', () => {
+    const original = console.error
+    console.error = () => {}
+    try {
+      const driver = Object.assign(new Error('write CONNECTION_CLOSED'), { code: 'CONNECTION_CLOSED' })
+      const wrapped = new DrizzleQueryError('insert into "notes" ("body") values ($1)', ['secret body'], driver)
+      expect(toErrorEnvelope(wrapped)).toEqual({ code: 'INTERNAL', message: 'a database query failed (CONNECTION_CLOSED)', retryable: false })
+      expect(toErrorEnvelope(new DrizzleQueryError('select 1', []))).toEqual({ code: 'INTERNAL', message: 'a database query failed', retryable: false })
+    } finally {
+      console.error = original
+    }
   })
 
   it('keys come in one order, absent fields and empty suggestions left out', () => {

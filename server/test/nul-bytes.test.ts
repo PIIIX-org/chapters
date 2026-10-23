@@ -122,6 +122,13 @@ describe('MCP: a NUL byte in a string argument is INVALID_ARGUMENT naming the fi
     await expectNulRefused('read_file', { repositoryId, path: `src/${SECRET}\u0000.ts` }, 'path')
   })
 
+  it('a prompt argument (prompts/get) is InvalidParams naming the field', async () => {
+    resetRateLimits()
+    await expect(
+      agent.getPrompt({ name: 'active_project_companion', arguments: { projectName: `${SECRET}\u0000`, taskDescription: 't' } }),
+    ).rejects.toThrow('MCP error -32602: arguments.projectName: NUL bytes (U+0000) are not allowed')
+  })
+
   it('tab, LF, CR and other control characters stay legal', async () => {
     const r = await call('create_note', { vaultId, path: 'concepts/controls', body: 'a\tb\nc\r\nd \u001b[0m \u0007 e' })
     expect(r.isError, r.text).toBe(false)
