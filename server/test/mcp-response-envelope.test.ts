@@ -234,12 +234,15 @@ describe('list_trash', () => {
 })
 
 describe('browse_vault and browse_repository', () => {
-  it('browse_vault: the default answer stays within 2,000 tokens; paging lists every note once, by path', async () => {
-    const first = await page('browse_vault', { vaultId })
+  it('browse_vault: the whole vault (`recursive: true`) stays within the budget; paging lists every note once, by path', async () => {
+    // Every field (#425): the default `{path, title}` items of 48 notes fit one page.
+    const args = { vaultId, recursive: true, fields: ['id', 'title', 'type', 'name', 'tags', 'updatedAt'] }
+    const first = await page('browse_vault', args)
     expect(first.truncated).not.toBe(false)
-    const pages = await walk('browse_vault', { vaultId, budget_tokens: LIST_PAGE })
+    const pages = await walk('browse_vault', { ...args, budget_tokens: LIST_PAGE })
+    expect(pages.length).toBeGreaterThan(1)
     const paths = pages.flatMap((p) => (p.notes as Array<{ path: string }>).map((n) => n.path))
-    const all = await page('browse_vault', { vaultId, budget_tokens: 25_000 })
+    const all = await page('browse_vault', { ...args, budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
     const allPaths = (all.notes as Array<{ path: string }>).map((n) => n.path)
     expect(allPaths).toHaveLength(48)
@@ -250,13 +253,13 @@ describe('browse_vault and browse_repository', () => {
   it('browse_vault of a directory pages subdirectories, notes and the index text; a cursor of the whole-vault view is refused', async () => {
     const all = await page('browse_vault', { vaultId, path: 'docs', budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
-    const pages = await walk('browse_vault', { vaultId, path: 'docs', budget_tokens: LIST_PAGE })
+    const pages = await walk('browse_vault', { vaultId, path: 'docs', budget_tokens: 256 })
     expect(pages.length).toBeGreaterThan(2)
     expect(pages.flatMap((p) => p.subdirectories as unknown[])).toEqual(all.subdirectories)
     expect(ids(pages, 'notes', (n) => n.path as string)).toEqual(ids([all], 'notes', (n) => n.path as string))
     expect(pages.map((p) => p.indexContent ?? '').join('')).toBe(all.indexContent)
-    const whole = await page('browse_vault', { vaultId, budget_tokens: LIST_PAGE })
-    await refused('browse_vault', { vaultId, path: 'docs', budget_tokens: LIST_PAGE, cursor: cursorOf(whole) }, /invalid cursor/)
+    const whole = await page('browse_vault', { vaultId, recursive: true, budget_tokens: 256 })
+    await refused('browse_vault', { vaultId, path: 'docs', budget_tokens: 256, cursor: cursorOf(whole) }, /invalid cursor/)
   })
 
   it('browse_repository is {files, truncated}; paging lists every file once', async () => {

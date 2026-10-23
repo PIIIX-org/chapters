@@ -29,12 +29,15 @@ import {
 } from '../repositories/permissions.js'
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 import {
+  BROWSE_FIELDS,
+  browseNotesPage,
+  browseSubfoldersPage,
   createNote,
   createNoteIfMissing,
   getBaseRevision,
   getLiveNote,
   getRevision,
-  listNotes,
+  folderIndexRows,
   listRevisionPage,
   listTrash,
   noteIndexed,
@@ -49,11 +52,13 @@ import {
   softDeleteNote,
   withRestorePoint,
   type Actor,
+  type BrowseField,
+  type BrowsedNote,
   type WriteOutcome,
   type WrittenNote,
 } from '../notes/store.js'
 import { serializeNote } from '../notes/okf.js'
-import { indexRows, renderDirIndex } from '../notes/projector.js'
+import { renderDirIndex } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
 import { getRepositoryFile, listFileSymbols, listRepositoryFilesPage } from '../repositories/store.js'
@@ -233,15 +238,26 @@ const NO_PAGE = new Page(null)
 const ENVELOPE_DOC = ' Ends with `truncated` (what was left out; `cursor` for more).'
 
 /**
- * Files `browse_repository` reads per page (#424), fetching one more to know
+ * Files `browse_repository` (#424) and notes `browse_vault` (#425) read per page, fetching one more to know
  * there are more (`truncated.total` ">500"). The default budget shows about
  * a tenth of this at `full`, so the budget usually ends a page first.
  */
 const BROWSE_PAGE = 500
 
-/** A note listed by `browse_vault` or `list_trash` down the ladder (#421): without frontmatter and timestamps, then its path; counted per folder. */
+/** A note listed by `list_trash` down the ladder (#421): without frontmatter and timestamps, then its path; counted per folder. */
 const NOTE_LADDER: Ladder<{ id: string; path: string; type: string; name: string }> = {
   no_context: ({ id, path, type, name }) => ({ id, path, type, name }),
+  locations: (note) => note.path,
+  group: (note) => folderOf(note.path),
+}
+
+/**
+ * A note listed by `browse_vault` down the ladder (#425): the fields it was
+ * asked for without tags and timestamp (a field it was not asked for stays
+ * out), then its path; counted per folder.
+ */
+const BROWSED_NOTE_LADDER: Ladder<Partial<BrowsedNote> & { path: string }> = {
+  no_context: ({ id, path, title, type, name }) => ({ id, path, title, type, name }),
   locations: (note) => note.path,
   group: (note) => folderOf(note.path),
 }
@@ -608,84 +624,81 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault',
       capability: 'read',
       description:
-        'List a vault\'s notes as `{notes}`, or a directory (`path`) with its subdirectories, notes and index.' + ENVELOPE_DOC,
+        'List one level of a vault folder as `{directory, subdirectories, notes}`, or its subtree with `recursive`. Notes are `{path, title}`.' +
+        ENVELOPE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
-        path: z.string().optional().describe('Directory to browse; omit for the whole type tree'),
-        recursive: z.boolean().optional().describe('true: every note in the vault'),
+        path: z.string().optional().describe('Folder; omit for the root'),
+        recursive: z.boolean().optional().describe('true: the whole subtree'),
+        // In allowlist order without repeats, so the cursor's fingerprint does not depend on how they were listed.
+        fields: z
+          .array(z.enum(BROWSE_FIELDS))
+          .min(1)
+          .describe('Note fields (default path, title)')
+          .transform((picked) => BROWSE_FIELDS.filter((f) => picked.includes(f)))
+          .optional(),
       },
       budget: 'list',
     },
-    async (args: { path?: string; recursive?: boolean }, { vaultId: target }, page) => {
+    async (args: { path?: string; recursive?: boolean; fields?: BrowseField[] }, { vaultId: target }, page) => {
       await requireAccess(target, 'read')
-      const byPath = (a: { path: string }, b: { path: string }) => compareCodeUnits(a.path, b.path)
-      if (args.path && args.recursive !== true) {
-        const resolved = resolveNotePath(args.path)
-        const dir = resolved.fullPath
-        const prefix = `${dir}/`
-        const allNotes = await listNotes(target)
-        const directNotes: typeof allNotes = []
-        const subdirCounts = new Map<string, number>()
+      // One code path for the root and a folder: the root is the empty folder.
+      const folder = args.path?.replace(/^\/+|\/+$/g, '')
+      const dir = folder ? resolveNotePath(folder).fullPath : ''
+      // `path` is always shown: it is the note's location and where the cursor resumes.
+      const picked = args.fields ?? ['title']
+      const fields = BROWSE_FIELDS.filter((f) => f === 'path' || picked.includes(f))
+      const notesSection = (rows: BrowsedNote[]) =>
+        keyset({
+          name: 'notes',
+          items: rows.slice(0, BROWSE_PAGE).map((note) => Object.fromEntries(fields.map((f) => [f, note[f]])) as Partial<BrowsedNote> & { path: string }),
+          limit: BROWSE_PAGE,
+          more: rows.length > BROWSE_PAGE,
+          resume: (n) => n.path,
+          ladder: BROWSED_NOTE_LADDER,
+        })
+      const narrowTo = (counts: Iterable<[string, number]>) =>
+        [...counts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([child]) => `path: ${JSON.stringify(dir ? `${dir}/${child}` : child)}`)
 
-        for (const note of allNotes) {
-          if (!note.path.startsWith(prefix)) continue
-          const remainder = note.path.slice(prefix.length)
-          if (!remainder) continue
-          const slashIndex = remainder.indexOf('/')
-          if (slashIndex === -1) {
-            directNotes.push(note)
-          } else {
-            const subdir = remainder.slice(0, slashIndex)
-            subdirCounts.set(subdir, (subdirCounts.get(subdir) ?? 0) + 1)
-          }
+      if (args.recursive === true) {
+        // A keyset in SQL from the cursor's path: the fetch of one page + 1 tells there are more.
+        const rows = await browseNotesPage(target, { folder: dir, recursive: true, after: page.after(0, z.string()), limit: BROWSE_PAGE + 1 })
+        // Narrowing: the largest folders one level below `dir` on this page.
+        const base = dir ? `${dir}/` : ''
+        const children = new Map<string, number>()
+        for (const { path } of rows.slice(0, BROWSE_PAGE)) {
+          const slash = path.indexOf('/', base.length)
+          if (slash !== -1) children.set(path.slice(base.length, slash), (children.get(path.slice(base.length, slash)) ?? 0) + 1)
         }
+        return { head: { directory: dir }, sections: [notesSection(rows)], narrow: narrowTo(children) }
+      }
 
-        const subdirectories = [...subdirCounts.entries()]
-          .map(([name, count]) => ({ name, count }))
-          .sort((a, b) => compareCodeUnits(a.name, b.name))
-
-        // Rendered from the rows like the dir_index projection (ADR-003 §6): never the file, which lags.
+      // One level: the subfolders (section 0), the notes directly in `dir` (1), a folder's index text (2).
+      // A page that starts past a section does not query it.
+      const section = page.at?.s ?? 0
+      const subdirectories = section === 0 ? await browseSubfoldersPage(target, { folder: dir, after: page.after(0, z.string()), limit: BROWSE_PAGE + 1 }) : []
+      const rows = section <= 1 ? await browseNotesPage(target, { folder: dir, recursive: false, after: page.after(1, z.string()), limit: BROWSE_PAGE + 1 }) : []
+      const sections = [
+        keyset({
+          name: 'subdirectories',
+          items: subdirectories,
+          limit: BROWSE_PAGE,
+          resume: (d) => d.name,
+          // Down the ladder: the name, then the notes under each subdirectory.
+          ladder: { locations: (d) => d.name, group: (d) => d.name, weight: (d) => d.count },
+        }),
+        notesSection(rows),
+      ]
+      if (dir) {
+        // Rendered from the folder's rows like the dir_index projection (ADR-003 §6): never the file, which lags.
         const userIndex = await readNote(target, `${dir}/index`).catch(() => null)
         const indexContent = userIndex
           ? serializeNote({ frontmatter: userIndex.frontmatter, body: userIndex.body })
-          : renderDirIndex(await indexRows(target), dir)
-
-        const afterDir = page.after(0, z.string())
-        const afterNote = page.after(1, z.string())
-        return {
-          head: { directory: dir },
-          sections: [
-            keyset({
-              name: 'subdirectories',
-              items: subdirectories.filter((d) => afterDir === null || d.name > afterDir),
-              resume: (d) => d.name,
-              // Down the ladder: the name, then the notes under each subdirectory.
-              ladder: { locations: (d) => d.name, group: (d) => d.name, weight: (d) => d.count },
-            }),
-            keyset({
-              name: 'notes',
-              items: directNotes.sort(byPath).filter((n) => afterNote === null || n.path > afterNote),
-              resume: (n) => n.path,
-              ladder: NOTE_LADDER,
-            }),
-            // Null only when the folder's own index note could not be read: no index text.
-            textSection({ name: 'indexContent', text: indexContent ?? '' }),
-          ],
-          narrow: [...subdirectories].sort((a, b) => b.count - a.count).slice(0, 3).map((d) => `path: ${JSON.stringify(`${dir}/${d.name}`)}`),
-        }
+          : renderDirIndex(await folderIndexRows(target, dir), dir)
+        // Null only when the folder's own index note could not be read: no index text.
+        sections.push(textSection({ name: 'indexContent', text: indexContent ?? '' }))
       }
-      const after = page.after(0, z.string())
-      const all = (await listNotes(target)).sort(byPath)
-      const folders = new Map<string, number>()
-      for (const note of all) {
-        const top = note.path.split('/', 1)[0]!
-        folders.set(top, (folders.get(top) ?? 0) + 1)
-      }
-      return {
-        head: {},
-        sections: [keyset({ name: 'notes', items: all.filter((n) => after === null || n.path > after), resume: (n) => n.path, ladder: NOTE_LADDER })],
-        narrow: [...folders].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([folder]) => `path: ${JSON.stringify(folder)}`),
-      }
+      return { head: { directory: dir }, sections, narrow: narrowTo(subdirectories.slice(0, BROWSE_PAGE).map((d) => [d.name, d.count])) }
     },
   )
 

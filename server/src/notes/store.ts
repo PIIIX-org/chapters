@@ -3,7 +3,7 @@ import { basename, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import * as Y from 'yjs'
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { recordJob } from '../monitoring/metrics.js'
@@ -1334,6 +1334,120 @@ export async function listNotes(vaultId: string): Promise<
     .from(notes)
     .where(and(eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
     .orderBy(asc(notes.path))
+}
+
+/** The note fields `browse_vault` can return (#425), in the order it shows them: never the body, the whole frontmatter or the embedding. */
+export const BROWSE_FIELDS = ['id', 'path', 'title', 'type', 'name', 'tags', 'updatedAt'] as const
+export type BrowseField = (typeof BROWSE_FIELDS)[number]
+
+/** A note as `browse_vault` lists it (#425): its title is `frontmatter.title` (an empty one too: its name); never the body or the embedding. */
+export interface BrowsedNote {
+  id: string
+  path: string
+  title: string
+  type: string
+  name: string
+  tags: unknown
+  updatedAt: Date
+}
+
+const browsedNote = {
+  id: notes.id,
+  path: notes.path,
+  title: sql<string>`coalesce(nullif(${notes.frontmatter}->>'title', ''), ${notes.name})`,
+  type: notes.type,
+  name: notes.name,
+  tags: sql<unknown>`${notes.frontmatter}->'tags'`,
+  updatedAt: notes.updatedAt,
+}
+
+/** A path in code-unit order, as `notes_vault_path_c_live` (migration 0030) holds it. */
+const pathC = sql`${notes.path} collate "C"`
+
+/**
+ * The folder a note is in with its trailing '/' ('' at the root), as
+ * `notes_vault_dir_c_live` (migration 0030) holds it: the expression must
+ * stay as written there, with the pattern inline, for the index to serve it.
+ */
+const dirC = sql`coalesce(substring(${notes.path} from '^(.*/)'), '') collate "C"`
+
+const live = (vaultId: string) => sql`${notes.vaultId} = ${vaultId} and ${notes.deletedAt} is null`
+
+/** The folder's path with its trailing '/' ('' at the root), and what every path under it sorts below (none at the root): '0' is the code unit after '/'. */
+const folderRange = (folder: string) => ({ prefix: folder ? `${folder}/` : '', below: folder ? `${folder}0` : null })
+
+/**
+ * One page of `browse_vault`'s notes (#425), in path order by code unit,
+ * whose path sorts after `after`, at most `limit`: the notes directly in
+ * `folder` (`''`: the root), one range of `notes_vault_dir_c_live`, or with
+ * `recursive` every note under it, one range of `notes_vault_path_c_live`
+ * (`folder/` ≤ path < `folder0`, no LIKE escaping). REST's `listNotes`
+ * (tree, audit, export) stays whole.
+ */
+export async function browseNotesPage(
+  vaultId: string,
+  opts: { folder: string; recursive: boolean; after: string | null; limit: number },
+): Promise<BrowsedNote[]> {
+  const { prefix, below } = folderRange(opts.folder)
+  const where: SQL[] = [live(vaultId)]
+  if (!opts.recursive) where.push(sql`${dirC} = ${prefix}`)
+  else if (below !== null) where.push(sql`${pathC} >= ${prefix}`, sql`${pathC} < ${below}`)
+  if (opts.after !== null) where.push(sql`${pathC} > ${opts.after}`)
+  return db.select(browsedNote).from(notes).where(and(...where)).orderBy(pathC).limit(opts.limit)
+}
+
+/**
+ * One page of the subfolders directly in `folder` (`''`: the root) for
+ * `browse_vault` (#425), after the subfolder `after`, at most `limit`, each
+ * with the number of live notes under it (at any depth). They come in the
+ * order of their paths with the trailing '/' (`docs-old/` before `docs/`),
+ * which is the order of `notes_vault_dir_c_live`: each subfolder is one probe
+ * of that index from the end of the one before (a skip scan), and its count
+ * one range of `notes_vault_path_c_live`. Neither the notes directly in
+ * `folder` nor the subfolders past the page are read.
+ */
+export async function browseSubfoldersPage(
+  vaultId: string,
+  opts: { folder: string; after: string | null; limit: number },
+): Promise<Array<{ name: string; count: number }>> {
+  const { prefix, below } = folderRange(opts.folder)
+  const inFolder = below === null ? sql`` : sql` and ${dirC} < ${below}`
+  // A subfolder's name is the first segment of a folder below `prefix`; the next one starts at or after `prefix` + name + '0'.
+  const nameOf = (d: SQL) => sql`split_part(substr(${d}, char_length(${prefix}::text) + 1), '/', 1)`
+  const first = opts.after === null ? sql`${dirC} > ${prefix}` : sql`${dirC} >= ${`${prefix}${opts.after}0`}`
+  const rows = (await db.execute(sql`
+    WITH RECURSIVE sub(d) AS (
+      (SELECT ${dirC} FROM ${notes} WHERE ${live(vaultId)} AND ${first}${inFolder} ORDER BY ${dirC} LIMIT 1)
+      UNION ALL
+      SELECT (
+        SELECT ${dirC} FROM ${notes}
+        WHERE ${live(vaultId)} AND ${dirC} >= ${prefix}::text || ${nameOf(sql`sub.d`)} || '0'${inFolder}
+        ORDER BY ${dirC} LIMIT 1
+      ) FROM sub WHERE sub.d IS NOT NULL
+    )
+    SELECT page.name, (
+      SELECT count(*)::int FROM ${notes}
+      WHERE ${live(vaultId)} AND ${pathC} >= ${prefix}::text || page.name || '/' AND ${pathC} < ${prefix}::text || page.name || '0'
+    ) AS count
+    FROM (SELECT ${nameOf(sql`d`)} AS name FROM sub WHERE d IS NOT NULL LIMIT ${opts.limit}) AS page`)) as unknown as Array<{
+    name: string
+    count: number
+  }>
+  return rows.map(({ name, count }) => ({ name, count }))
+}
+
+/** The live notes under `folder` with what `renderDirIndex` reads, for `browse_vault`'s generated `indexContent` (#425). */
+export async function folderIndexRows(
+  vaultId: string,
+  folder: string,
+): Promise<Array<{ path: string; type: string; frontmatter: Record<string, unknown> }>> {
+  const { prefix, below } = folderRange(folder)
+  const where: SQL[] = [live(vaultId)]
+  if (below !== null) where.push(sql`${pathC} >= ${prefix}`, sql`${pathC} < ${below}`)
+  return db
+    .select({ path: notes.path, type: notes.type, frontmatter: sql<Record<string, unknown>>`${notes.frontmatter}` })
+    .from(notes)
+    .where(and(...where))
 }
 
 export async function listTrash(

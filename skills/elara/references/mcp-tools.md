@@ -23,7 +23,7 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
   - `shown`, `total` and `dropped` count items per list (lines for text) from where this page starts, so `shown + dropped = total`. A `total` of `">n"` means the tool fetched `limit` + 1 and found more than `limit`.
   - `level` is how much of each item is shown, one level for the whole answer, tried in this order until it fits:
     - `full`: whole items.
-    - `no_context`: items without their context: `find_symbols` hits without `snippet`; notes (`browse_vault`, `list_trash`) as `{id, path, type, name}`; files (`browse_repository`) as `{path, language}`; revisions (`note_history`) as `{id, action, createdAt}`; graph nodes as `{id, path, type, community}` (community nodes `{id, community, size}`).
+    - `no_context`: items without their context: `find_symbols` hits without `snippet`; notes as `{id, path, type, name}` (`list_trash`) or the asked fields without `tags` and `updatedAt` (`browse_vault`); files (`browse_repository`) as `{path, language}`; revisions (`note_history`) as `{id, action, createdAt}`; graph nodes as `{id, path, type, community}` (community nodes `{id, community, size}`).
     - `locations`: a location only: a note or file path; a `find_symbols` hit as `path#La-Lb`; a revision id; a subdirectory name; a graph node as `{id, path}` (`{id}` for a community), since edges name nodes by id. Edges and `read_file`'s outline are already locations.
     - `counts`: each list is an object of counts: notes and files per folder (`.` for the root), subdirectories by the notes under each, `find_symbols` hits per file, revisions per action, graph nodes per type and edges per kind, `read_file`'s outline per kind.
     - `total`: each list is the number of its items.
@@ -60,12 +60,14 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
 - **Capability**: `read`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
-  - `path` (string, optional): a directory such as `domains/auth`.
-  - `recursive` (boolean, optional).
+  - `path` (string, optional): a folder such as `domains/auth` (leading/trailing `/` ignored); without it, the vault root.
+  - `recursive` (boolean, optional, default `false`): `false` lists one level of the folder (or root); `true` lists every note under it (the whole vault without `path`).
+  - `fields` (array, optional): note fields to return, from `id`, `path`, `title`, `type`, `name`, `tags`, `updatedAt`. Default `["path", "title"]`; `path` is always returned, and the fields come in this order whatever order you list them in. Any other name (`frontmatter`, `body`, …) is refused.
 - **Returns**:
-  - With `path` and `recursive` not `true`: `{ directory, subdirectories: [{ name, count }], notes, indexContent, truncated }`. `notes` are the notes directly in that directory. `indexContent` is the directory's index text: its own `index` note, or the listing generated from its notes. Pages list the subdirectories (by name), then the notes (by path), then the index text.
-  - Otherwise: `{ notes, truncated }`, every note in the vault by path, as `{ id, path, type, name, frontmatter, updatedAt }`. `recursive: true` lists the **whole vault**, not just the subtree under `path`.
-  - Paths and names are in code-unit order (`B` before `a`). The cursor resumes after the last path shown, so a note added meanwhile does not shift the pages.
+  - One level (default): `{ directory, subdirectories: [{ name, count }], notes, indexContent, truncated }`. `directory` is `""` at the root. `subdirectories` are the folders directly in it, with the number of notes under each (any depth), in the order of their paths with a trailing `/` (so `docs-old` comes before `docs`); `notes` are the notes directly in it. `indexContent` (folders only, not the root) is the folder's index text: its own `index` note, or the listing generated from its notes. Pages list the subdirectories (by name), then the notes (by path), then the index text.
+  - `recursive: true`: `{ directory, notes, truncated }`, every note under `path` (the subtree only) or in the whole vault.
+  - A note is `{ path, title }` by default; `title` is the frontmatter `title`, else (missing or empty) the note name; `tags` is the frontmatter `tags` value (or `null`).
+  - Paths and names are in code-unit order (`B` before `a`), read from the database at most 500 per page (`truncated.total` `">500"` when there are more). The cursor resumes after the last path shown, so a note added meanwhile does not shift the pages; it is bound to `path`, `recursive` and the set of `fields`.
 
 ### `update_vault`
 - **Scope**: vault. Owner only.

@@ -90,7 +90,7 @@ const CASES: Record<string, ScopeCase> = {
   mark_notification_read: { kind: 'account', args: () => ({ notificationId: randomUUID() }) },
 
   // one vault
-  browse_vault: { kind: 'vault', finds: { vault: ['docs/probe'] } },
+  browse_vault: { kind: 'vault', args: () => ({ recursive: true }), finds: { vault: ['docs/probe'] } },
   update_vault: { kind: 'vault', args: () => ({ mergeable: false }) },
   get_vault_graph_preference: { kind: 'vault' },
   set_vault_graph_preference: { kind: 'vault', args: () => ({ include: false }) },
