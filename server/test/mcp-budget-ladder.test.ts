@@ -135,7 +135,8 @@ beforeAll(async () => {
   }
   const words = ['apple', 'river', 'stone', 'cloud', 'maple', 'ember', 'frost', 'tiger', 'violet', 'quartz']
   for (let i = 0; i < 10; i++) {
-    await createNote(graphVault, { path: `c${i}/link`, body: `${`${words[i]} `.repeat(8)}${i < 9 ? `[[c${i + 1}/link]]` : ''}` })
+    // 40 repeats keep every pair far under SEMANTIC_THRESHOLD (as in mcp-response-envelope.test.ts): no shortcut edge.
+    await createNote(graphVault, { path: `c${i}/link`, body: `${`${words[i]} `.repeat(40)}${i < 9 ? `[[c${i + 1}/link]]` : ''}` })
   }
   const files = [{ path: 'src/ladder.ts', content: ladderFile }]
   await syncRepositoryFiles(repoId, files, files.map((f) => f.path))
