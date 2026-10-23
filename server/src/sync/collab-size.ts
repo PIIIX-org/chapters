@@ -117,8 +117,10 @@ function contentBytes(content: Y.Item['content']): number {
 
 /**
  * The rest of `doc` (everything but the body's text): the bytes of every
- * live item's content and map key, frontmatter included. One pass over the
- * document's items, no serialization of the body.
+ * live item's content and map key, frontmatter included, and entries of the
+ * body type's own map (anything under `body` that is not its text, #952), so
+ * every byte falls under one of the two bounds. One pass over the document's
+ * items, no serialization of the body.
  */
 export function restBytes(doc: Y.Doc): number {
   const body = doc.getText('body')
@@ -126,7 +128,8 @@ export function restBytes(doc: Y.Doc): number {
   for (const structs of doc.store.clients.values()) {
     for (const struct of structs) {
       if (!(struct instanceof Y.Item) || struct.deleted) continue
-      if (struct.parent === body && struct.content instanceof Y.ContentString) continue
+      // Only the body's own text is the body measure's; a map entry on the body root is rest (#952).
+      if (struct.parent === body && struct.parentSub === null && struct.content instanceof Y.ContentString) continue
       bytes += contentBytes(struct.content) + (struct.parentSub === null ? 0 : Buffer.byteLength(struct.parentSub))
     }
   }
