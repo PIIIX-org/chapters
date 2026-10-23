@@ -510,7 +510,7 @@ The write is committed when the call returns; a connection lost before the answe
   - `repositoryId` (uuid, optional).
   - `everywhere` (boolean, optional).
   - `limit` (integer, optional, 1-50, default 20).
-- **Returns**: `{ results, truncated }`: `results` are `{ id, fileId, repositoryId, path, name, kind, startLine, endLine, snippet, score }`, best first (equal scores by `id`). `truncated.total.results` is `">limit"` when more symbols match. The REST symbol routes still answer a bare array. There is no `signature` field; read the lines with `read_file`.
+- **Returns**: `{ results, truncated }`: `results` are `{ id, fileId, repositoryId, path, name, kind, startLine, endLine, snippet, score }`, best first (equal scores by `id`). `limit` bounds the whole answer: pages walk the first `limit` results, and `truncated.total.results` is `">n"` (with no cursor once they are all shown) when more symbols match; raise `limit` to see them. The REST symbol routes still answer a bare array. There is no `signature` field; read the lines with `read_file`.
 - Only top-level declarations the extractor recognizes are indexed. For example, TypeScript `export const f = () => ...` arrow functions are not found. A file with any line longer than 1,000 characters (minified or generated code) gets no symbols at all. In a file with more symbols than the per-file budget (default 256), symbols past the budget match by name only, not by meaning; `read_file` reports this as `embeddingNote`.
 
 ---
