@@ -1408,6 +1408,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   nothing. The editor measures both parts alike (`client/src/lib/noteSize.ts`),
   `tooLarge.otherBytes` says how large the properties are, and it reconnects
   only once both fit. REST and MCP frontmatter is bounded only by the request size.
+  Before a `note-too-large` close the relay sends the refused connection a
+  stateless `{"type": "elara-size", limitBytes, bodyBytes, otherBytes}`:
+  the exact sizes of the document it holds (`documentSizes`, which also
+  restarts both bounds). "Fits" for the editor is then the relay's own
+  rule (#948): each part within the cap or no larger than the relay's
+  (`tooLarge.bodyRoomBytes`/`otherRoomBytes`), so a note whose
+  frontmatter is stored over the cap resumes once the body is cut, and
+  `TooLargeNotice` asks only for the cuts that are needed. Without the
+  message (a 1009 close, an older relay) each part must fit the cap.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
   Every share/team/deactivation mutation calls `emitPermissionChange()`,
   and every session delete announces the ended sessions' hashes on it;
