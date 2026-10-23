@@ -9,6 +9,7 @@ import {
   type ListResourcesResult,
   type ListToolsResult,
   type Tool,
+  type ToolAnnotations,
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { and, asc, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm'
@@ -237,6 +238,29 @@ export interface McpToolInfo {
   capability: ToolCapability
   pinPermission: PinPermission
   profile: ToolProfile
+  annotations: ToolAnnotations
+}
+
+/** A tool named for deleting, purging, revoking or removing must declare `destructive` (#434). */
+const DESTRUCTIVE_NAME = /^(delete|purge|revoke|remove)_/
+
+/**
+ * A tool's MCP annotations (#434, ADR-004 §2.6), derived from its record,
+ * never written per tool. A read tool lists `readOnlyHint: true` only: MCP
+ * reads the other hints only when a tool is not read-only. Every other tool
+ * lists `destructiveHint` explicitly, because MCP assumes `true` without it;
+ * `idempotentHint` (a repeat of the same call, with no idempotency_key,
+ * changes nothing more or fails) only when true. No `title` and no
+ * `openWorldHint`: each costs about 20 characters per tool against the
+ * reader budget (mcp-tool-budget.test.ts).
+ */
+function toolAnnotations(name: string, def: { capability: ToolCapability; destructive?: true; idempotent?: true }): ToolAnnotations {
+  if (def.capability === 'read') {
+    if (def.destructive || def.idempotent) throw new Error(`MCP tool ${name} reads: destructive and idempotent describe writes`)
+    return { readOnlyHint: true }
+  }
+  if (DESTRUCTIVE_NAME.test(name) && !def.destructive) throw new Error(`MCP tool ${name} must declare destructive`)
+  return { destructiveHint: def.destructive === true, ...(def.idempotent ? { idempotentHint: true } : {}) }
 }
 
 /**
@@ -625,7 +649,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
    * `answered`). `outputSchema` (the write tools' WRITE_RESULT_SCHEMA) is
    * listed in tools/list and checked by the SDK on every successful answer;
    * it must allow other keys (a loose object), and an `isError` answer is
-   * not checked.
+   * not checked. The tool's MCP annotations derive from `capability`,
+   * `destructive` and `idempotent` (`toolAnnotations`, #434).
    */
   function tool<S extends ToolScope, A extends Record<string, unknown> = Record<string, unknown>, B extends BudgetKind | undefined = undefined>(
     name: string,
@@ -638,6 +663,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description: string
       inputSchema?: z.ZodRawShape
       outputSchema?: z.ZodObject<z.ZodRawShape, z.core.$loose>
+      destructive?: true
+      idempotent?: true
       budget?: B
     },
     handler: (args: A, scoped: ScopeTargets[S], page: Page) => Promise<B extends BudgetKind ? Budgeted : unknown>,
@@ -653,10 +680,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     const inputSchema = strictArgs(name, { ...def.inputSchema, ...(budget ? budgetArgs(budget) : {}) })
     const pinPermission = def.pinPermission ?? 'read'
     const profile = def.profile ?? 'admin'
-    tools.push({ name, scope: def.scope, capability: def.capability, pinPermission, profile })
+    const annotations = toolAnnotations(name, def)
+    tools.push({ name, scope: def.scope, capability: def.capability, pinPermission, profile, annotations })
     if (!callable(name, def.scope, def.capability, profile)) hiddenTools.add(name)
     pinPermissionOf.set(name, pinPermission)
-    const config = { description: def.description, inputSchema, ...(def.outputSchema ? { outputSchema: def.outputSchema } : {}) }
+    const config = { description: def.description, inputSchema, annotations, ...(def.outputSchema ? { outputSchema: def.outputSchema } : {}) }
     registerTool(name, config, async (raw: unknown) => {
       try {
         requireCapability(name, def.capability, profile)
@@ -697,7 +725,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'List every vault this account can currently access. Account-scoped connections only.',
+        'List every vault this account can access. Account-scoped connections only.',
       inputSchema: {},
     },
     async () => {
@@ -812,6 +840,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'admin',
+      idempotent: true,
       pinPermission: 'owner',
       description: 'Update vault metadata (name, mergeable). Requires owner permission.',
       inputSchema: {
@@ -869,6 +898,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'write',
+      idempotent: true,
       description: 'Set the graph preference for a vault (whether to include it in your merged graph view). Requires read access.',
       inputSchema: {
         vaultId: VAULT_ID,
@@ -923,6 +953,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'account',
       capability: 'write',
+      destructive: true,
+      idempotent: true,
       description: 'Update user vault preferences including storage mode, folders, colors, and favorites.',
       inputSchema: {
         storageMode: z.enum(['online', 'local']).optional().describe('Where these preferences live: online (synced with the account) or local (this browser only)'),
@@ -989,6 +1021,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'admin',
+      destructive: true,
+      idempotent: true,
       pinPermission: 'owner',
       description: 'Soft-delete a vault to the recoverable trash. Requires owner permission.',
       inputSchema: { vaultId: VAULT_ID },
@@ -1005,6 +1039,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'account',
       capability: 'write',
+      idempotent: true,
       description: 'Restore a soft-deleted vault from the trash. Account-scoped connections only.',
       inputSchema: { vaultId: UUID_ARG.describe('Trashed vault id') },
     },
@@ -1030,6 +1065,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'account',
       capability: 'admin',
+      destructive: true,
+      idempotent: true,
       description:
         'Permanently purge a trashed vault and all its contents from database and disk. Account-scoped connections only.',
       inputSchema: { vaultId: UUID_ARG.describe('Trashed vault id') },
@@ -1167,6 +1204,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'admin',
+      destructive: true,
+      idempotent: true,
       pinPermission: 'owner',
       description: 'Revoke a user or team share on a vault. Requires owner permission.',
       inputSchema: {
@@ -1644,6 +1683,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'write',
+      destructive: true,
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description: 'Move a note to the trash (`id` for restore_note); requires edit access.' + WRITE_DOC,
@@ -1723,6 +1763,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'admin',
+      destructive: true,
+      idempotent: true,
       pinPermission: 'owner',
       description:
         'Permanently delete a trashed note from database and disk. Requires owner permission.',
@@ -1848,6 +1890,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault',
       capability: 'admin',
+      destructive: true,
+      idempotent: true,
       pinPermission: 'owner',
       description:
         'Permanently remove a single recorded revision from history (e.g. leaked secret). Requires owner permission.',
@@ -1875,7 +1919,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'List every repository this account can currently access. Account-scoped connections only.',
+        'List every repository this account can access. Account-scoped connections only.',
       inputSchema: {},
     },
     async () => {
@@ -2092,6 +2136,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'admin',
+      idempotent: true,
       pinPermission: 'owner',
       description: 'Update repository settings (name, mergeable). Requires owner permission.',
       inputSchema: {
@@ -2149,6 +2194,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'write',
+      idempotent: true,
       description: 'Set the graph preference for a repository (whether to include it in your merged graph view). Requires repository access.',
       inputSchema: {
         repositoryId: REPOSITORY_ID,
@@ -2173,6 +2219,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'admin',
+      destructive: true,
+      idempotent: true,
       pinPermission: 'owner',
       description: 'Disconnect and delete a repository. Requires owner permission.',
       inputSchema: { repositoryId: REPOSITORY_ID },
@@ -2205,6 +2253,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'admin',
+      idempotent: true,
       pinPermission: 'owner',
       description: 'Share a repository with a user or team. Requires owner permission.',
       inputSchema: {
@@ -2247,6 +2296,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'repository',
       capability: 'admin',
+      destructive: true,
+      idempotent: true,
       pinPermission: 'owner',
       description: 'Revoke a repository share. Requires owner permission.',
       inputSchema: {
@@ -2367,6 +2418,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'account',
       capability: 'admin',
+      destructive: true,
+      idempotent: true,
       description: 'Remove a member from a team. Requires team owner role.',
       inputSchema: {
         teamId: UUID_ARG.describe('Team id'),
@@ -2409,6 +2462,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'account',
       capability: 'admin',
+      destructive: true,
+      idempotent: true,
       description: 'Delete a team. Requires team owner role.',
       inputSchema: { teamId: UUID_ARG.describe('Team id') },
     },
@@ -2534,6 +2589,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'account',
       capability: 'write',
+      idempotent: true,
       description: 'Mark a notification as read. Account-scoped connections only.',
       inputSchema: { notificationId: UUID_ARG.describe('Notification id') },
     },
@@ -2561,12 +2617,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Hybrid keyword and semantic search over notes and code, as in the app. `everywhere: true` (account tokens) searches every accessible vault and repository.',
+        'Hybrid keyword and semantic search over notes and code, as in the app.',
       inputSchema: {
         query: z.string().describe('Search text'),
         vaultId: UUID_ARG.optional().describe('Vault to search'),
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
-        everywhere: z.boolean().optional().describe('Search every accessible vault and repository'),
+        everywhere: z.boolean().optional().describe('Search every accessible vault and repository (account tokens)'),
         symbols: z.boolean().optional().describe('Include code symbols as results'),
         limit: z.number().int().min(1).max(100).optional().describe('Max results'),
       },
@@ -2884,6 +2940,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     {
       scope: 'vault-or-account',
       capability: 'write',
+      destructive: true,
+      idempotent: true,
       pinPermission: 'edit',
       // The pin applies to the perspective's own vault; a global perspective is account-wide.
       // A pinned connection gets "not found" for anything outside its vault, as for an id that
