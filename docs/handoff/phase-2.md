@@ -1,8 +1,8 @@
 # Elara fix programme: hand-off after phase 2
 
-Date: 2026-10-22. Repository: [PIIIX-org/chapters](https://github.com/PIIIX-org/chapters) (product name Elara). Written for whoever continues the work: the owner, another agent, or a future session. Phase 1's hand-off is [phase-1.md](phase-1.md); its working method (section 3) and gotchas (section 10) still apply.
+Date: 2026-10-22; promotion recorded 2026-10-23. Repository: [PIIIX-org/chapters](https://github.com/PIIIX-org/chapters) (product name Elara). Written for whoever continues the work: the owner, another agent, or a future session. Phase 1's hand-off is [phase-1.md](phase-1.md); its working method (section 3) and gotchas (section 10) still apply.
 
-Every phase-2 pull request has merged; no line of this document waits on an open PR. The promotion results go into section 5 once it has run.
+Every phase-2 pull request has merged, and phase 2 is on `prod` since 2026-10-23 (two promotion steps, section 5).
 
 ## 1. Where things stand
 
@@ -11,8 +11,8 @@ Every phase-2 pull request has merged; no line of this document waits on an open
 | Phase 2 (stop data loss), milestone 3 | **52 of 52 issues closed.** The last ones: #408 and #476 ([#864](https://github.com/PIIIX-org/chapters/pull/864)), #485 ([#889](https://github.com/PIIIX-org/chapters/pull/889)), #488 ([#892](https://github.com/PIIIX-org/chapters/pull/892)), #501 ([#861](https://github.com/PIIIX-org/chapters/pull/861)), #486 and #489 ([#896](https://github.com/PIIIX-org/chapters/pull/896), section 1.1). |
 | Design | ADR-003 (Elara `decision/adr-003-authoritative-store`, rev 7) signed off by the owner with every default on [#704](https://github.com/PIIIX-org/chapters/issues/704). Slices S1 to S6 are all on `dev` (S3 is [#847](https://github.com/PIIIX-org/chapters/pull/847)), and so is the S2b bin export for rollback ([#885](https://github.com/PIIIX-org/chapters/pull/885)). |
 | Rehearsal | [#703](https://github.com/PIIIX-org/chapters/issues/703): restore + S2a migration + rollback ([comment 6314996795](https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6314996795)) and S2b migration ([comment 6321492109](https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6321492109), **GO with conditions**) on a copy of production. |
-| `dev` | `e3ff312` (#885's merge, the last phase-2 PR), 609 commits ahead of `prod`. |
-| `prod` | `5c5bdc0` (phase 1). It does **not** ship the #720 client; the owner decided a two-step promotion (section 5). |
+| `dev` | `e3ff312` was #885's merge, the last phase-2 PR. After the hand-off, #902, #909, #910 and #912 merged; `dev` was `d3b210e` at step B. |
+| `prod` | **`d3b210e`** since 2026-10-23 07:55 UTC: step A ([#899](https://github.com/PIIIX-org/chapters/pull/899), `f3724d0`) on 2026-10-22, then step B ([#920](https://github.com/PIIIX-org/chapters/pull/920)). Section 5. |
 
 ### 1.1 How #486 and #489 closed
 
@@ -201,51 +201,75 @@ Filed during phase 2 and already fixed on `dev`: #816 ([#817](https://github.com
 
 **Backup and restore docs.** `globals.sql` no longer leaves the app unable to connect: set the role password from `.env` after loading it (#841, [#855](https://github.com/PIIIX-org/chapters/pull/855)). The data-volume steps use the app service and the cron target is a `backup.sh` the operator saves (#848, [#859](https://github.com/PIIIX-org/chapters/pull/859)).
 
-**Offline image scripts (#872).** [#878](https://github.com/PIIIX-org/chapters/pull/878) makes `pnpm <script>` run without network in the published image (`pnpm_config_verify_deps_before_run=false`). Images built before it (including promotion step A, section 5) still need `node --import tsx src/scripts/<name>.ts` inside the container.
+**Offline image scripts (#872).** [#878](https://github.com/PIIIX-org/chapters/pull/878) makes `pnpm <script>` run without network in the published image (`pnpm_config_verify_deps_before_run=false`). Images built before it (promotion step A) needed `node --import tsx src/scripts/<name>.ts` inside the container.
 
-## 5. Promotion plan (`dev` → `prod`)
+## 5. Promotion to `prod` (done)
 
 ### 5.1 Two steps (owner's decision)
 
-ADR-003 R3-2/Q4: S2b ships only after a promotion put the #720 client in production, so a refused tab's typing survives in the browser copy. **`prod` (`5c5bdc0`) does not contain #720's merge commit `150669c`.** **The owner decided on two steps.** **The coordinator asks the owner before opening each promotion PR.**
+ADR-003 R3-2/Q4: S2b ships only after a promotion has put the #720 client in production, so that a refused tab's typing survives in the browser copy. `prod` (`5c5bdc0`) did not contain #720's merge commit `150669c`, so **the owner decided on two steps**. The coordinator asked the owner before opening each promotion PR. A single promotion was rejected by the owner.
 
-| Step | `prod` ← | Contains | Not yet |
-|---|---|---|---|
-| A | `ae6ffb9` (`dev` just before #843; fast-forward from `5c5bdc0`) | #720 client, S1, S2a-1, S4, S5, migrations 0021–0025, every phase-2 fix merged before #843 | S2b, S2a-2 (`store-export-legacy`, maintenance lock), S3, S6 doctor, #878 |
-| B | the `dev` head at promotion time (`e3ff312` when phase 2 finished), after tabs have loaded step A's page | S2a-2, S2b, S3, S6, the #885 bin export, 0026–0028, #878, the rest | — |
+| Step | PR | `prod` ← | Pushed (UTC) | CI + publish on `prod` | Dry run on the production snapshot | After |
+|---|---|---|---|---|---|---|
+| A | [#899](https://github.com/PIIIX-org/chapters/pull/899) | `f3724d0` = `ae6ffb9` (`dev` just before #843) + one baseline-only commit | 2026-10-22 12:55:50 | [run 39782450732](https://github.com/PIIIX-org/chapters/actions/runs/39782450732) | [#703 comment 6337997585](https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6337997585) (GO) | prod→dev sync [#904](https://github.com/PIIIX-org/chapters/pull/904); the owner confirmed post-flight on the server |
+| B | [#920](https://github.com/PIIIX-org/chapters/pull/920) | `d3b210e` (`dev` head; fast-forward, `prod` `ahead_by` 0) | 2026-10-23 07:55:29 | [run 39921053378](https://github.com/PIIIX-org/chapters/actions/runs/39921053378) | [#703 comment 6359468988](https://github.com/PIIIX-org/chapters/issues/703#issuecomment-6359468988) (GO, rerun on the exact head) | no sync needed; [#900](https://github.com/PIIIX-org/chapters/issues/900) closed; the owner confirmed post-flight on the live server |
 
-- **Between A and B**, every browser that keeps an editor open must load step A's page once; leave at least a day, then reload tabs right before B.
-- **Rollback differs per step.** Step A's rollback is **restore-only** (the pre-step-A backup): #838 (`store-export-legacy`) merged after #843, so no prefix of `dev` has S2a with the export but without S2b. Step B's rollback to the step-A image uses the **#885 export** (files and `.crdt` bins), plus the 0026 `UPDATE` (section 5.4). The #703 S2a rehearsal ran the S2a + S2a-2 image, not `ae6ffb9`; a dry run plus boot of `ae6ffb9` on the rehearsal snapshot before step A closes that gap.
-- A single promotion was rejected by the owner.
+**Step A** shipped:
+- the #720 client;
+- S1, S2a-1, S4 and S5;
+- migrations 0021–0025;
+- every phase-2 fix merged before #843.
 
-### 5.2 Pre-flight (each step)
+Its lab baseline needed one commit: [#900](https://github.com/PIIIX-org/chapters/issues/900) tracked the defects whose fixes were still only on `dev` ("Phase 2 step A: defects live in production until step B"). Prod's lab gate refuses a baseline entry for a closed issue (rule 5), so the baseline entries of those closed issues pointed at #900 for step A, and `prod` then had one commit `dev` lacked; #904 merged it back.
 
-1. Owner asked before the promotion PR is opened. Every check on the promotion PR green, full lab tier and full benchmark on the exact head, independent promotion review (phase-1 section 3). Only then `git push origin <sha>:prod`: production deploys on that push (#664, still open).
-2. **Backup immediately before** (backup.md §1: pg_dump + data volume), checksums verified. For step A it is the only way back. Step B also has the #885 export, but take the backup anyway (#703 condition 1 is met by [#885](https://github.com/PIIIX-org/chapters/pull/885)).
-3. **Reload open editor tabs** before the upgrade, and nobody types during it (#703 condition 2; required for step B). Announce it: a step-A tab left open shows "Offline — not saved yet" after the upgrade, keeps its typing in the browser and reconnects about once a second until it is reloaded; the reload brings the typing back once (#907).
-4. Operator scripts (#703 condition 3): step A's image predates [#878](https://github.com/PIIIX-org/chapters/pull/878), so run them as `node --import tsx src/scripts/<name>.ts` inside the container; step B ships #878, so `pnpm <script>` works offline.
-5. **`ELARA_MONITORING_TOKEN`** set in the production `.env` and in the uptime monitor's environment (owner).
-6. Dry run on production (read-only) or a fresh copy: `migrate-store --dry-run --report /data/elara/migration-dry-run.json`; expect 0 conflicts, as on #703. Owner sign-off on Q3/Q5/Q6 asked for in the S2a rehearsal comment. In step B the dry run also predicts the `attach-equal` / `attach-diffed` split ([#876](https://github.com/PIIIX-org/chapters/pull/876)).
-7. Step B adds S3, migrations 0026–0028 and #861's compaction, which the #703 S2b rehearsal (`aa73289`) did not cover: rerun the S2b rehearsal on the snapshot with the step-B head.
+**Step B** shipped:
+- S2a-2, S2b and S3;
+- S6 and the #885 bin export;
+- migrations 0026–0028;
+- the whole-body merges, #837 and #878;
+- the fixes made after the hand-off:
+  - [#902](https://github.com/PIIIX-org/chapters/pull/902) (#901): rollback per release in backup.md §5; migration.md describes what shipped;
+  - [#909](https://github.com/PIIIX-org/chapters/pull/909) (#908): `doctor` treats the upgrade's own conflict copies as `INFO` and stale links as repairable (exit 3);
+  - [#910](https://github.com/PIIIX-org/chapters/pull/910) (#907): a step-A tab left open says "Offline — not saved yet", keeps its typing and reconnects until it is reloaded, instead of "Access removed";
+  - [#912](https://github.com/PIIIX-org/chapters/pull/912) (#911): `ELARA_TRUST_PROXY`.
 
-### 5.3 Post-flight
+Open after the promotion: [#921](https://github.com/PIIIX-org/chapters/issues/921), an Ajv `allowUnionTypes` warning on every boot (REST PUT `baseRev` schema from #865). It is cosmetic: integer and revision-id `baseRev` are both accepted.
 
-1. `/health`: up, new `bootId`, `lastShutdown: graceful`.
-2. Boot log: `[store] backfill:` summary with 0 failed (step A); collab backfill with 0 set aside and 0 failed, `.crdt.pre-adr-003/` present (step B); `DATA_DIR/migration-report-*.json` and `collab-migration-report-*.json`.
-3. `check-notes --wait-idle --fail-on-pending`: 0 broken, 0 pending. `doctor` (step B): `doctor --repair` (exit 0, or 3 with the `links-differ` repairs it queued for link rows from before GRAPH-09), then `doctor`: exit 0, `0 problem(s)`, one `INFO migration-copy` line per unparseable file the migration report counts ([#908](https://github.com/PIIIX-org/chapters/issues/908)).
-4. `/api/admin/monitoring` answers with the token; `conflictCopies` matches the migration report's unparseable count; the next uptime run is green.
-5. Lab smoke: there is no staging server. The lab (`docs/agents/lab.md`) builds its own instance from the commit under test on the CI runner, bootstraps it and runs `lab/tests` against it, never against production (phase-1 section 10: "the lab instance is the staging server"). Run it on the promoted commit: `gh workflow run elara-lab.yml --ref prod -f tier=fast`.
+### 5.2 Pre-flight as run (for the next promotion)
 
-### 5.4 Rollback
+1. The owner was asked before the promotion PR was opened. Every check on the promotion PR had to be done, including the full lab tier and the full benchmark on the exact head. Then an independent promotion review, and only then `git push origin <sha>:prod`: production deploys on that push (#664 is still open).
+2. A backup immediately before the push, per backup.md §1 (pg_dump + the data volume through a one-off app container). For step A's image the data-volume steps of its own backup.md failed (#848), so the backup followed `dev`'s backup.md at `b465e2a`.
+3. Open editor tabs reloaded before step B (announced: a step-A tab left open shows "Offline — not saved yet" until it is reloaded; the reload brings its typing back once, #910).
+4. Operator scripts: in step A's image, `node --import tsx src/scripts/<name>.ts` (#872); from step B, `pnpm <script>` works offline (#878).
+5. `ELARA_MONITORING_TOKEN` in the production `.env`, the repository secret's value, at least 32 characters.
+6. A dry run and first boot of the exact head on the production snapshot, posted to #703 (comments above).
 
-- **Step A: restore-only.** Restore the backup taken in pre-flight 2 (backup.md §2), then start the `5c5bdc0` image. Writes made since step A are lost.
-- **Step B: the #885 export**, keeping the data written since, with nobody typing:
+### 5.3 Post-flight as run
+
+The owner confirmed each item on the live server after each step:
+1. `/health`: up, a new `bootId`, `version` = the promoted commit, `lastShutdown: graceful`.
+2. The boot log:
+   - step A: `[store] backfill:` with 0 failed;
+   - step B: the collab backfill with 0 set aside and 0 failed, and `.crdt.pre-adr-003/` present;
+   - `DATA_DIR/migration-report-*.json` and `collab-migration-report-*.json`.
+3. `check-notes --wait-idle --fail-on-pending`: 0 broken, 0 pending. On step B, `doctor --repair` then `doctor` (exit 3 and then 0 in the rehearsal), with one `INFO migration-copy` line per unparseable file in the migration report (#908).
+4. `/api/admin/monitoring` answers with the token, and the uptime monitor passes.
+5. The editor shows `Synced`.
+
+There is no staging server: the lab builds its own instance from the commit under test (`docs/agents/lab.md`), never against production.
+
+### 5.4 Rollback (valid until the next promotion)
+
+`prod` runs step B (`d3b210e`). backup.md §5, "Which way back", has the commands.
+- **Code-only to step A, keeping every write since step B** (ADR-003 Q10: supported for one release, so until the next promotion; keep `.crdt.pre-adr-003/` until then). With nobody typing:
   1. `docker compose stop app`.
-  2. `docker compose run --rm --no-deps app pnpm store-export-legacy` (files, `index.md` and `.crdt` bins; exit 0 required).
-  3. With the app still stopped, run backup.md §5's 0026 `UPDATE` (section 4, "Rollback", step 3), so the step-A code reads whole revision bodies.
-  4. Start the step-A image (`ae6ffb9`). It reads the exported bins, so tabs that reload keep their history.
-  5. Rolling forward to step B again needs nothing: the S2b boot merges the bins the step-A relay wrote and recompacts the history.
-- If the export fails and cannot be fixed, restore the pre-step-B backup.
+  2. `docker compose run --rm --no-deps app pnpm store-export-legacy`. It writes files, `index.md` and `.crdt` bins; exit 0 is required, and the summary must count the bins written.
+  3. With the app still stopped, run backup.md §5's 0026 `UPDATE`, so step A's code reads whole revision bodies.
+  4. Check out `f3724d0` and run `docker compose up -d --build app`. It reads the exported bins, so tabs that reload keep their history.
+  5. Rolling forward to step B again needs nothing: the S2b boot merges the bins the step-A relay wrote and compacts the history again.
+  
+  This was rehearsed on the exact step-B head (#703 comment 6359468988).
+- **Restore, losing every write since the upgrade:** stop the app, remove the database and data volumes (`docker compose down -v`), check out the release the backup was taken on, follow backup.md §2 steps 1–8 with the pre-step-B backup, and start it. After the next promotion this is the only way back over phase 2.
 
 ## 6. Open pull requests
 
