@@ -92,7 +92,7 @@ import { registerMcpPrompts } from './prompts.js'
 import { manualText, toolManuals, type ToolManual } from './manuals.js'
 import { strictArgs } from './strict-input.js'
 import { applyBodyOps, type EditOp } from '../sync/edit-ops.js'
-import { advanceRead, lastRead, rememberRead } from './last-read.js'
+import { advanceRead, forgetRead, lastRead, rememberRead } from './last-read.js'
 import {
   DEFAULT_BUDGET,
   Page,
@@ -1218,9 +1218,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           ...(note.foldError ? { fold_error: note.foldError } : {}),
         },
         sections: [textSection({ name: 'body', text: note.body, lines: true })],
-        // Only a read that returned the whole body is a base to merge a whole-body edit from (#864).
+        // Only a read that returned the whole body is a base to merge a whole-body edit from (#864); a paged
+        // read drops an older base, so the next whole-body edit diffs from the live text.
         rendered: async (truncated) => {
           if (truncated === false && page.at === null) await rememberRead(auth.connection.id, note.row.id, note.row.seq)
+          else await forgetRead(auth.connection.id, note.row.id)
         },
       }
     },
