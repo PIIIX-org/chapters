@@ -301,3 +301,86 @@ describe('collab size guard: updates that add nothing to the rest (#947)', () =>
     expect(updateFits(server, docUpdateFrom(client, (doc) => doc.getMap('frontmatter').delete('title')), LIMIT)).toBe(true)
   })
 })
+
+/** A Yjs document whose own edits carry client id `client`. */
+function docOf(client: number): Y.Doc {
+  const doc = new Y.Doc()
+  doc.clientID = client
+  return doc
+}
+
+/**
+ * One v1 update made of the client sections of `parts`, in order, with no
+ * deletions: what a forged client can send, duplicate sections included.
+ * Each part is one client's update and the bytes of its delete set (one
+ * empty: `[0]`), which are dropped.
+ */
+function concatSections(parts: Array<[Uint8Array, number[]]>): Uint8Array {
+  const sections = parts.map(([update, deletes]) => {
+    // varuint 1 (one client), the section, then the delete set.
+    expect(update[0]).toBe(1)
+    expect([...update.subarray(update.length - deletes.length)]).toEqual(deletes)
+    return update.subarray(1, update.length - deletes.length)
+  })
+  return Uint8Array.from([parts.length, ...sections.flatMap((section) => [...section]), 0])
+}
+
+// #949 review: addsRest believed an update's own account of where a neighbour lives, but Yjs skips the
+// structs the document already holds and keeps only the last section per client, so a forged update could
+// type past the cap into a part other than the body. Each is refused, as dev (no skip) refuses it.
+describe('collab size guard: forged updates cannot skip the rest check (#947)', () => {
+  const GROWTH = 5 * LIMIT
+
+  it('refuses typing attached to a known id the update re-sends as if it were in the body', () => {
+    const server = docOf(1)
+    server.getText('junk').insert(0, 'other root')
+    // The same id range (client 1, clocks 0..9), but in the body.
+    const forged = docOf(1)
+    forged.getText('body').insert(0, 'xxxxxxxxxx')
+    const attacker = docOf(99)
+    Y.applyUpdate(attacker, Y.encodeStateAsUpdate(forged))
+    attacker.getText('body').insert(10, 'y'.repeat(GROWTH))
+    const update = Y.encodeStateAsUpdate(attacker)
+
+    expect(updateFits(server, update, LIMIT)).toBe(false)
+    // What Yjs would do with it: the typing lands in the other root.
+    Y.applyUpdate(server, update)
+    expect(server.getText('junk').length).toBe(10 + GROWTH)
+  })
+
+  it('refuses typing attached to a known frontmatter value the update re-sends as body text', () => {
+    const server = docOf(1)
+    server.getMap('frontmatter').set('title', 'Small')
+    const forged = docOf(1)
+    forged.getText('body').insert(0, 'x')
+    const attacker = docOf(99)
+    Y.applyUpdate(attacker, Y.encodeStateAsUpdate(forged))
+    attacker.getText('body').insert(1, 'y'.repeat(GROWTH))
+    expect(updateFits(server, Y.encodeStateAsUpdate(attacker), LIMIT)).toBe(false)
+  })
+
+  it('refuses an update with two sections for one client, of which Yjs keeps the last', () => {
+    const server = docOf(2)
+    server.getText('body').insert(0, 'note')
+    const inBody = docOf(50)
+    inBody.getText('body').insert(0, 'x')
+    // The same id, deleted in another root: a deletion adds nothing, so on its own it is no rest.
+    const inJunk = docOf(50)
+    inJunk.getText('junk').insert(0, 'x')
+    inJunk.getText('junk').delete(0, 1)
+    const typist = docOf(99)
+    Y.applyUpdate(typist, Y.encodeStateAsUpdate(inBody))
+    const before = Y.encodeStateVector(typist)
+    typist.getText('body').insert(1, 'y'.repeat(GROWTH))
+    const update = concatSections([
+      [Y.encodeStateAsUpdate(inBody), [0]],
+      // Its delete set: one client (50), one range, clock 0, length 1.
+      [Y.encodeStateAsUpdate(inJunk), [1, 50, 1, 0, 1]],
+      [Y.encodeStateAsUpdate(typist, before), [0]],
+    ])
+
+    expect(updateFits(server, update, LIMIT)).toBe(false)
+    Y.applyUpdate(server, update)
+    expect(server.getText('junk').length).toBe(GROWTH)
+  })
+})
