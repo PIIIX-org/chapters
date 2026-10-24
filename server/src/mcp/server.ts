@@ -16,6 +16,8 @@ import {
 import { z } from 'zod'
 import { and, asc, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
+import { DATABASE_FAILED, databaseFailure } from '../db/errors.js'
+import { findNulByte, nulByteMessage } from '../nul-bytes.js'
 import {
   graphPerspectives,
   notifications,
@@ -444,14 +446,35 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       // The SDK answers what it refuses itself (arguments its schema check
       // rejects, an unknown tool, an answer failing its outputSchema) as
       // `MCP error -32602: ...` text before or after tool(); it becomes the
-      // error envelope here too (#439).
+      // error envelope here too (#439). A NUL byte in any string or key of
+      // the arguments is refused first, for every tool (#443).
       const callTool = handler as (request: CallToolRequest, extra: unknown) => Promise<CallToolResult>
       return setRequestHandler(schema, async (request: CallToolRequest, extra: unknown) => {
+        const nul = findNulByte(request.params.arguments)
+        if (nul) {
+          const field = nul.field || 'arguments'
+          return errorResult(envelope('INVALID_ARGUMENT', nulByteMessage(field, nul.inKey), { field }))
+        }
         const result = await callTool(request, extra)
         return result.isError && !toolErrors.has(result) ? errorResult(await sdkRefusal(request.params, result)) : result
       })
     }
-    return setRequestHandler(schema, handler)
+    // Other requests (prompts/get, resources/read): a NUL byte in their
+    // params is InvalidParams, and a failed query a fixed message, since the
+    // SDK answers a thrown error with its message (#443).
+    const handle = handler as (request: { params?: unknown }, extra: unknown) => unknown
+    return setRequestHandler(schema, async (request: { params?: unknown }, extra: unknown) => {
+      const nul = findNulByte(request.params)
+      if (nul) throw new McpError(ErrorCode.InvalidParams, nulByteMessage(nul.field || 'params', nul.inKey))
+      try {
+        return await handle(request, extra)
+      } catch (err) {
+        const failure = databaseFailure(err)
+        if (!failure) throw err
+        console.error('[mcp] request failed:', failure.logged, { query: failure.query })
+        throw new McpError(ErrorCode.InternalError, DATABASE_FAILED)
+      }
+    })
   }
 
   /**
@@ -2683,18 +2706,39 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Hybrid keyword and semantic search over notes and code, as in the app.',
+        'Keyword and semantic search over notes and code.',
       inputSchema: {
         query: z.string().describe('Search text'),
         vaultId: UUID_ARG.optional().describe('Vault to search'),
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
-        everywhere: z.boolean().optional().describe('Search every accessible vault and repository (account tokens)'),
-        symbols: z.boolean().optional().describe('Include code symbols as results'),
+        everywhere: z.boolean().optional().describe('Every accessible vault and repository (account tokens)'),
+        symbols: z.boolean().optional().describe('Include code symbols'),
         limit: z.number().int().min(1).max(100).optional().describe('Max results'),
       },
+      budget: 'list',
     },
     async (args: { query: string; symbols?: boolean; limit?: number }, { resources }) => {
-      return searchNotes(resources, args.query, args.limit, {}, { includeSymbols: args.symbols ?? true })
+      const limit = args.limit ?? 20
+      // The first `limit` hits of the ranking, plus one to know whether more match.
+      const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true })
+      return {
+        head,
+        sections: [
+          ranked({
+            name: 'results',
+            items: results,
+            id: (r) => `${r.resourceType}:${r.id}`,
+            limit,
+            // Down the ladder: without snippet and frontmatter, then the path (`path#La-Lb` for a symbol); counted per path.
+            ladder: {
+              no_context: (r) => ({ ...r, snippet: undefined, frontmatter: undefined }),
+              locations: (r) => (r.startLine !== undefined && r.endLine !== undefined ? location(r.path, r.startLine, r.endLine) : r.path),
+              group: (r) => r.path,
+            },
+          }),
+        ],
+        narrow: args.symbols === false ? [] : ['symbols: false'],
+      }
     },
   )
 
@@ -2706,12 +2750,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       profile: 'reader',
       // The kinds are the `kind` enum (#450): naming them again in the description would cost reader tokens twice.
       description:
-        'Search code symbols by meaning, signature or name. Returns `{results}`: declarations with line ranges, snippets and file paths, without reading whole files.',
+        'Search code symbols by meaning, signature or name: declarations with line ranges and snippets, without reading whole files.',
       inputSchema: {
-        query: z.string().describe('Symbol name, signature or meaning'),
-        kind: z.enum(SYMBOL_KINDS).optional().describe('Filter by symbol kind'),
+        query: z.string().describe('Name, signature or meaning'),
+        kind: z.enum(SYMBOL_KINDS).optional().describe('Symbol kind'),
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
-        everywhere: z.boolean().optional().describe('Search every accessible repository (account tokens)'),
+        everywhere: z.boolean().optional().describe('Every accessible repository (account tokens)'),
         limit: z.number().int().min(1).max(50).optional().describe('Max results'),
       },
       budget: 'list',
@@ -2727,9 +2771,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         : (await listAccessibleRepositories(auth.user.id)).map((r) => r.id)
       const limit = args.limit ?? 20
       // The first `limit` symbols of the ranking, plus one to know whether more match.
-      const results = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 })
+      const { results, ...head } = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 })
       return {
-        head: {},
+        head,
         sections: [
           ranked({
             name: 'results',
