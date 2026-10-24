@@ -1345,15 +1345,17 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   drain. The job embeds the note as it is when it runs and writes the
   vector and `notes.embedder_id` only if the note is still at the `seq` it
   read (an edit meanwhile queued its own job; the result is dropped). A
-  boot-time scan (`scheduleMissingEmbeddings`, keyset pages of 1,000)
-  adds a job (idempotently) for any live note with a null embedding or one
+  boot-time scan (`scheduleMissingEmbeddings`, keyset pages of 1,000, at
+  catch-up priority: a note saved meanwhile is embedded first) adds a job
+  (idempotently) for any live note with a null embedding or one
   another `EMBEDDER_ID` produced and no job for its current key, and
   re-runs the job of the note's current key if it failed with an error
   (not a `LeaseExpired` crash loop), also when an earlier version left an
   embedding. `pnpm reindex` re-runs finished jobs
-  (`enqueueEmbeddings(ids, 'finished')`): a changed model or embed text
-  no longer needs it (bump `EMBEDDER_ID`), a restore out-of-band still
-  does. A failure is logged and retried with backoff, never stops the drain.
+  (`enqueueEmbeddings(ids, 'finished', JOB_PRIORITY.catchUp)`, behind the
+  server's writes): a changed model or embed text no longer needs it (bump
+  `EMBEDDER_ID`), a restore out-of-band still does. A failure is logged and
+  retried with backoff, never stops the drain.
 - **`semantic-edges.ts`**: `recomputeSemanticEdges()` — kNN against
   both notes and code, filtered to `similarity >= SEMANTIC_THRESHOLD`
   (default 0.75), capped to `SEMANTIC_K` (default 8) per node. Called
@@ -2210,17 +2212,28 @@ serial worker, fair across repositories (#497): each turn claims at most
 the repository with claimable jobs that was served least recently goes
 next (ties: oldest job), so a large repository's backlog delays another
 repository's files by at most one turn per other busy repository, not by
-the whole backlog; a repository's own files keep their order. A file
-whose extraction throws is logged and retried with backoff; the drain goes on.
+the whole backlog; a repository's own files keep their order. Turns go to
+the lowest job priority present (#453): while a push's jobs (`write`) are
+claimable only those get turns, fair among their repositories as above,
+and a catch-up turn ends as soon as a push's job is waiting, so a push
+during a boot catch-up waits for at most the one file being extracted. A
+file whose extraction throws is logged and retried with backoff; the drain goes on.
 **Atomic per file** (#453): `processFile` parses, resolves imports and
 embeds the file and its symbols (the slow part) outside any transaction,
 then one short transaction locks the file row, drops the result if
 `content_hash` changed meanwhile (the push that changed it enqueued the
 new content's job), and replaces imports and symbols and writes the file
 vector, `embedding_note`, `extracted_hash`, `extractor_version` and
-`embedder_id` together; semantic edges are recomputed after the commit. A
-failure or a crash anywhere before the commit leaves the previous imports,
-symbols and vectors whole and searchable. A file
+`embedder_id` together; semantic edges are recomputed after the commit
+(skipped when the file vector is reused). A failure or a crash anywhere
+before the commit leaves the previous imports, symbols and vectors whole
+and searchable. **Vector reuse:** when the row's `embedder_id` is the
+running one, the file vector is kept if `extracted_hash = content_hash`,
+and a symbol's vector is kept if its embed text (kind, name, path, start
+line, snippet) equals one of the previous rows'; only the rest is
+embedded. A re-extraction of unchanged content (an `EXTRACTOR_VERSION`
+bump) therefore calls the embedder only for symbols the new extractor
+finds or words differently. A file
 with a line longer than 1,000
 characters (minified, bundled or generated code) gets its file embedding
 but no symbols or imports. **Per-file budget** (#496): a file's symbols
@@ -2275,19 +2288,42 @@ change to those. Both are in the job keys and stored as plain columns
 `repository_files.extracted_hash`, `extractor_version`, `embedder_id`
 (they also stand for the file's imports and symbols, written in the same
 transaction) and `notes.embedder_id` (out of the Drizzle `notes` model, like
-`seq`). Rows derived before 0033 have null / 0, so the first boot after
-the upgrade re-derives every file and note once in the background, the old
-rows searchable until each result commits; that is also the backfill of
-import `line`s from before 0031 (#558, ADR-004 A7). After a bump, boot does
-the same for the rows the old version produced; `filesPendingExtraction`
-shows the progress.
+`seq`).
+
+*Upgrade to 0033.* The migration stamps the vectors already stored with
+`Xenova/bge-small-en-v1.5+text1`, the id of what made them (the model,
+pooling and the note, file and symbol embed texts are unchanged since
+1f05a6f, 3bc7a5b and 2c584d0), and sets `extracted_hash = content_hash` on
+files; rows whose pre-0033 job for their current content or `seq` is
+pending or failed are left unstamped. Every file keeps `extractor_version`
+0. So the first boot re-embeds only the notes and files without a vector
+or with a pending or failed job (about 100 ms a note and 640 ms a file with
+bge-small on CPU), and re-extracts every repository file once with its
+vectors reused, which costs a parse and a write: measured locally on this
+repository's 766 source files ×3 (2,298 files, 9,807 symbols, shared
+loaded Postgres), 2,298 files queued in 76 ms and drained in 56 s, 24 ms a
+file, with no file or symbol embedded; about 8 minutes for 20,000 files.
+That re-extraction is also the backfill of import `line`s from before 0031
+(#558, ADR-004 A7). A note written 2 s into that catch-up had its vector
+81 ms later and a file pushed then had its symbols in 99 ms: writes go
+first (**Durable jobs**). *Later bumps:* an `EXTRACTOR_VERSION` bump costs
+the same parse per file, plus embedding only symbols whose embed text
+changed; an `EMBEDDER_ID` bump re-embeds every note and file (the ~100 ms /
+640 ms above per item), in the background behind writes, the old vectors
+searchable until each new one commits. `filesPendingExtraction` shows the
+progress.
 
 **Durable jobs** (`jobs/durable.ts`, ADR-003 S5, #494; table `jobs` from
 migration 0021). A job is claimable when `done_at` is null and
 `lease_until` is null or past. `claimJob` is one statement (`UPDATE … WHERE
-id = (SELECT … ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)`) that sets
+id = (SELECT … ORDER BY priority, id LIMIT 1 FOR UPDATE SKIP LOCKED)`) that sets
 `lease_until = now() + 60 s` and `attempts + 1`, and only claims a job
-with `attempts < MAX_JOB_ATTEMPTS`; `completeJob` sets `done_at` and
+with `attempts < MAX_JOB_ATTEMPTS`. `jobs.priority` (migration 0033, #453;
+`JOB_PRIORITY`): 0 for a job a write queued (a note save, a push, the
+doctor's repair), 1 for boot catch-up and `pnpm reindex`, so writes are
+served before any backlog; index `jobs_claim` (`kind, priority, id`, pending
+rows) serves that order, and a job run again takes the priority of the
+enqueue that runs it. `completeJob` sets `done_at` and
 clears `last_error`; `failJob` stores `last_error` (error name and
 message, or those of its `Error` cause, so a Drizzle "Failed query: <SQL>"
 keeps the Postgres error; URL credentials redacted, at most 500
