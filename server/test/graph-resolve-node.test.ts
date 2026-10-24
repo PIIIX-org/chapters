@@ -60,8 +60,12 @@ async function refusal(name: string, args: Args): Promise<ErrorBody> {
 
 /** Both the vault and the repository. */
 const both = () => ({ vaultId, repositoryId: repoId })
-const centerOf = async (neighborsOf: string, scope: Args = both()) =>
-  (await answer('graph', { ...scope, neighborsOf, budget_tokens: 25_000 })).center as { id: string; path: string }
+/** The node `neighborsOf` resolved to; a candidates answer fails here, naming them. */
+async function centerOf(neighborsOf: string, scope: Args = both()): Promise<{ id: string; path: string }> {
+  const json = await answer('graph', { ...scope, neighborsOf, budget_tokens: 25_000 })
+  expect(json.candidates, `${neighborsOf} resolves to one node`).toBeUndefined()
+  return json.center as { id: string; path: string }
+}
 const candidatesOf = (json: Record<string, unknown>) => json.candidates as Candidate[]
 
 beforeAll(async () => {

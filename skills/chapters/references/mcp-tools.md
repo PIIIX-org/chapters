@@ -561,8 +561,8 @@ The write is committed when the call returns; a connection lost before the answe
 - **Node references** (#447; `neighborsOf`, and `find_graph_path`'s `source` and `target`): tried in order, the first that matches anything wins:
   1. the node id;
   2. the exact path (a note path without `.md`, or a repository file path);
-  3. the path in any case, a note path with `.md`, or a file path without its extension (`server/src/notes/store`);
-  4. the end of a path on a `/` boundary, in any case, with or without a file's extension: `store.ts`, `notes/store.ts` and `store` match `server/src/notes/store.ts`, `tes/store.ts` does not, and `store.ts` does not match `store.tsx`;
+  3. the path in any case, a note path with `.md`, or, for a reference without an extension, a file path without its extension (`server/src/notes/store`);
+  4. the end of a path on a `/` boundary, in any case: `store.ts`, `notes/store.ts` and `store` match `server/src/notes/store.ts`, `tes/store.ts` does not. A reference with an extension matches that extension only: `store.ts` does not match `store.tsx` or `store.ts.orig`, `index.js` not `index.js.map`;
   5. a note's frontmatter `title`, in any case.
   - Graph nodes are notes and files, so a symbol name is not a reference (use `find_symbols`). Only the call's vaults and repositories are searched.
   - One match is the node. Several are a successful answer: `candidates` `{ path, kind, id }`, shorter path first, then path and id; at most 10, with `matches` (how many matched) and `truncated.total.candidates` `">10"` when there are more. Pass a candidate's `id` (or a longer path) to choose one.

@@ -1268,9 +1268,11 @@ evidence`. `mcp/prompts.ts`'s path prompt still prints ids.
 `summarize_concept_chain` prompt. `resolveNode(resources, ref)` tries, in
 order: the id; the exact path (both indexed, the fast path); then one
 query per table with the tier as a `CASE` and `count(*) over (partition by
-tier)`, limit 11: the path in any case, a note path with `.md` or a file
-path without its extension; a path suffix on a `/` boundary (`right(lower(path),
-n + 1) = '/' || lower(ref)`, also against the extension-less file path);
+tier)`, limit 11: the path in any case, a note path with `.md` or (for a
+ref without an extension) a file path without its extension; a path
+suffix on a `/` boundary (`right(lower(path), n + 1) = '/' || lower(ref)`,
+for a ref without an extension also against the extension-less file path,
+so `store.ts` never matches `store.ts.orig`);
 a note's frontmatter `title`. Graph nodes have no symbols, so no symbol
 tier. One match is `{node}`; several are `{candidates, next, total}`
 (`{path, kind, id}`, shorter path first, then path and id; 10 shown,

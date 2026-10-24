@@ -13,10 +13,11 @@ import { FILE_NODE_COLUMNS, NOTE_NODE_COLUMNS, fileNode, noteNode, type GraphRes
  * 1. the node id;
  * 2. the exact path (a note path without `.md`, a repository file path);
  * 3. the path in any case, a note path with `.md`, a file path without its
- *    extension (`server/src/notes/store`);
- * 4. a path suffix on a `/` boundary, in any case, with or without a file's
- *    extension (`store.ts`, `notes/store.ts`, `notes/store`): a basename is
- *    the one-segment suffix;
+ *    extension for a reference without one (`server/src/notes/store`);
+ * 4. a path suffix on a `/` boundary, in any case (`store.ts`,
+ *    `notes/store.ts`; without an extension also `notes/store`): a
+ *    basename is the one-segment suffix. A reference with an extension
+ *    matches that extension only: `store.ts` is not `store.ts.orig`;
  * 5. a note's frontmatter `title`, in any case.
  *
  * Graph nodes are notes and files, not symbols, so a symbol name is not a
@@ -113,10 +114,11 @@ async function lenient(resources: GraphResourceSet, ref: string): Promise<TierRo
   }
   if (resources.repositoryIds.length > 0) {
     const path = sql`lower(${repositoryFiles.path})`
-    const bare = sql`lower(${STRIP_EXTENSION_SQL(sql`${repositoryFiles.path}`)})`
+    // Only a reference without an extension is compared with the paths without theirs.
+    const forms = stripExtension(ref) === ref ? [path, sql`lower(${STRIP_EXTENSION_SQL(sql`${repositoryFiles.path}`)})`] : [path]
     const tier = sql<number>`CASE
-      WHEN ${path} = lower(${text(ref)}) OR ${bare} = lower(${text(ref)}) THEN 3
-      WHEN ${endsWithSegment(path, ref)} OR ${endsWithSegment(bare, ref)} THEN 4
+      WHEN ${anyOf(forms.map((f) => sql`${f} = lower(${text(ref)})`))} THEN 3
+      WHEN ${anyOf(forms.map((f) => endsWithSegment(f, ref)))} THEN 4
     END`
     const found = await db
       .select({ ...FILE_NODE_COLUMNS, tier: tier.mapWith(Number), total: sql<number>`count(*) over (partition by ${tier})`.mapWith(Number) })
