@@ -232,6 +232,13 @@
       "when": 1792000000000,
       "tag": "0032_mcp_connection_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792050000000,
+      "tag": "0033_derived_versions",
+      "breakpoints": true
     }
   ]
 }

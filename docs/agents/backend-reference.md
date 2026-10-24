@@ -303,7 +303,8 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   `docs/self-hosting/backup.md` §5.
 - **Failpoints** (`failpoints.ts`): `ELARA_FAILPOINTS=<name>[,…]` SIGKILLs
   the process at that store boundary; inert when unset. The lab's
-  `store-failpoints` test uses them.
+  `store-failpoints` test uses them. Extraction has two (#453):
+  `extract.after-embed-before-write` and `extract.before-commit`.
 - `check-notes` is read-only: it compares a file with its row only where
   the `file` projection is applied; `--wait-idle[=<s>]` waits for the
   projector, `--fail-on-pending` fails on pending projections (CI). It
@@ -382,7 +383,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
 | `repositoryFiles` | indexed file content — same `fts`/`embedding` pattern as `notes`; **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s code-unit-order pages (#424) |
-| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (#453) |
+| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0) |
 | `repositoryFileSymbols` | per-file top-level declarations (function/class/interface/type), surfaced as a file "outline" — **not** emitted as a graph edge despite the schema comment calling them "contains" edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
 
@@ -757,7 +758,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   result; frontmatter keys whose values differ; null for rename, delete
   and restore), `concurrent_changes` (the `base_rev` report) and
   `indexed` (`noteIndexed`: the `file` and `dir_index` projections
-  applied at `seq` and the `embed_note:<id>:<seq>` job done). `dry_run`
+  applied at `seq` and the `embed_note:<id>:<seq>:<EMBEDDER_ID>` job done). `dry_run`
   (create, edit, append, upsert, revert) runs `compute` and returns before
   the transaction (`WriteOptions.dryRun`; `previewCreate` for a create):
   no restore point, and `propose`/the quarantine screen throw without
@@ -1258,7 +1259,7 @@ shifted to whole-file lines by `bodyStartLine(row)` from
 projector writes; an adopted file keeps its own bytes and may differ), `path#Ln` for an
 import, `type:`/`tag:`/`language:`/`folder:` for structural, null for
 semantic and for import rows extracted before migration 0031 (`line` null
-until #453's extractor-version bump extracts them again). On the budget
+until the first boot with #453 re-extracts them: their file has `extractor_version` 0). On the budget
 ladder a row's `locations` form is one line, `from -> to relation
 evidence`. `mcp/prompts.ts`'s path prompt still prints ids.
 
@@ -1352,7 +1353,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     no channel ran, `index_building` when notes, files or repositories
     in scope are pending, `unavailable` when every item in scope failed
     indexing, else `no_match`. `index` comes from `embeddingState()`
-    (notes: `embed_note:<id>:<seq>` job pending, or no job and no
+    (notes: `embed_note:<id>:<seq>:<EMBEDDER_ID>` job pending, or no job and no
     embedding; failed: that job gave up) and `extractionState()` (files:
     the predicates of `countPendingExtractions` and `extractionFailures`;
     repositories with no file whose `sync_status` is `syncing` or that
@@ -1425,16 +1426,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `node --import tsx`, inherited through `execArgv`) and under Node's own
   type stripping (vitest).
 - **`embedding-queue.ts`**: durable jobs (#494, see **Durable jobs**
-  below), kind `embed_note`, key `embed_note:<noteId>:<seq>` —
+  below), kind `embed_note`, key `embed_note:<noteId>:<seq>:<EMBEDDER_ID>`
+  (#453, see **Derived-artifact versions**) —
   `scheduleEmbedding()` never blocks the caller (notes/store.ts calls
   it fire-and-forget on create/update/revert); it inserts the job in
   the background and `flushEmbeddings()` awaits that insert and the
-  drain. The job embeds the note as it is when it runs. A boot-time scan
-  (`scheduleMissingEmbeddings`) adds a job (idempotently) for any live
-  note with a null embedding, and re-runs the job of the note's current
-  `seq` if it failed with an error (not a `LeaseExpired` crash loop),
-  also when an earlier version left an embedding. `pnpm reindex` re-runs finished jobs
-  (`enqueueEmbeddings(ids, 'finished')`). A failure is logged and
+  drain. The job embeds the note as it is when it runs and writes the
+  vector and `notes.embedder_id` only if the note is still at the `seq` it
+  read (an edit meanwhile queued its own job; the result is dropped). A
+  boot-time scan (`scheduleMissingEmbeddings`, keyset pages of 1,000, at
+  catch-up priority: a note saved meanwhile is embedded first) adds a job
+  (idempotently) for any live note with a null embedding or one
+  another `EMBEDDER_ID` produced and no job for its current key, and
+  re-runs the job of the note's current key if it failed with an error
+  (not a `LeaseExpired` crash loop), also when an earlier version left an
+  embedding. `pnpm reindex` re-runs finished jobs
+  (`enqueueEmbeddings(ids, 'finished', JOB_PRIORITY.catchUp)`, behind the
+  server's writes): a changed model or embed text no longer needs it (bump
+  `EMBEDDER_ID`), a restore out-of-band still does. A failure is logged and
   retried with backoff, never stops the drain.
 - **`semantic-edges.ts`**: `recomputeSemanticEdges()` — kNN against
   both notes and code, filtered to `similarity >= SEMANTIC_THRESHOLD`
@@ -2408,13 +2417,15 @@ stored with no resolved target and produces no graph edge.
 `backfillUnresolvedImports()` runs at boot and re-resolves every stored
 import row whose target is still null with the current rules, so
 repositories indexed before #398 gain their import edges without a
-re-sync (unchanged files are never re-extracted). After `listen`, in the
+re-sync (an unchanged file is re-extracted only when `EXTRACTOR_VERSION`
+or `EMBEDDER_ID` changes, #453). After `listen`, in the
 background, `backfillLinkLines()` (#558) writes wikilink rows without
 lines again from their note's body.
 
 **Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
 **Durable jobs** below), kind `extract`, payload `{fileId,
-repositoryId}`, key `extract:<fileId>:<contentHash>`; `syncRepositoryFiles`
+repositoryId}`, key `extract:<fileId>:<contentHash>:<EXTRACTOR_VERSION>:<EMBEDDER_ID>`
+(#453, see **Derived-artifact versions** below); `syncRepositoryFiles`
 enqueues the changed files in one statement after the batch is persisted.
 Enqueueing a key whose job already succeeded runs it again (content went
 back to an earlier version) under a new id, so it queues behind the
@@ -2425,8 +2436,29 @@ serial worker, fair across repositories (#497): each turn claims at most
 the repository with claimable jobs that was served least recently goes
 next (ties: oldest job), so a large repository's backlog delays another
 repository's files by at most one turn per other busy repository, not by
-the whole backlog; a repository's own files keep their order. A file
-whose extraction throws is logged and retried with backoff; the drain goes on. A file
+the whole backlog; a repository's own files keep their order. Turns go to
+the lowest job priority present (#453): while a push's jobs (`write`) are
+claimable only those get turns, fair among their repositories as above,
+and a catch-up turn ends as soon as a push's job is waiting, so a push
+during a boot catch-up waits for at most the one file being extracted. A
+file whose extraction throws is logged and retried with backoff; the drain goes on.
+**Atomic per file** (#453): `processFile` parses, resolves imports and
+embeds the file and its symbols (the slow part) outside any transaction,
+then one short transaction locks the file row, drops the result if
+`content_hash` changed meanwhile (the push that changed it enqueued the
+new content's job), and replaces imports and symbols and writes the file
+vector, `embedding_note`, `extracted_hash`, `extractor_version` and
+`embedder_id` together; semantic edges are recomputed after the commit
+(skipped when the file vector is reused). A failure or a crash anywhere
+before the commit leaves the previous imports, symbols and vectors whole
+and searchable. **Vector reuse:** when the row's `embedder_id` is the
+running one, the file vector is kept if `extracted_hash = content_hash` (or,
+for a file not extracted since 0033, see *Upgrade to 0033* below),
+and a symbol's vector is kept if its embed text (kind, name, path, start
+line, snippet) equals one of the previous rows'; only the rest is
+embedded. A re-extraction of unchanged content (an `EXTRACTOR_VERSION`
+bump) therefore calls the embedder only for symbols the new extractor
+finds or words differently. A file
 with a line longer than 1,000
 characters (minified, bundled or generated code) gets its file embedding
 but no symbols or imports. **Per-file budget** (#496): a file's symbols
@@ -2444,26 +2476,90 @@ each text cut to 16,000 characters, one file costs at most 1 + budget
 texts (the 700 KB lab bundle with 900 declarations: 33 batches instead of
 113). The boot-time scan
 (`scheduleMissingExtractions`) adds a job, idempotently, for every file
-with a null embedding that has none for its current content (rows from
-before the jobs table; a re-sync only enqueues files whose content
-changed, #404), re-runs the job of a file's current content if it failed
+whose derived rows are not those of its current content by the running
+code, unless a job for its current key exists: a null embedding (rows from
+before the jobs table), an `extracted_hash` other than `content_hash` (a
+push the process died in before it enqueued; a re-sync only enqueues
+files whose content changed, #404), or another `extractor_version` /
+`embedder_id`. It re-runs the job of a file's current key if it failed
 with an error (an outage that outlasted the retries; a restart repaired
-that before #494 too), also for an updated file that kept the embedding
-of its previous content, and wakes the worker. A job failed as `LeaseExpired` is not re-run
+that before #494 too), also for an updated file that kept the rows
+of its previous content, and wakes the worker. It reads and enqueues in
+keyset pages of 1,000 files by repository and path
+(`catchUpLimits.batchSize`), one SELECT and one INSERT each, so a version
+bump never enqueues an instance in one transaction (20,000 files, measured
+locally: 14-33 ms when nothing is to do, 0.57 s to find and enqueue all of
+them after a bump). A job failed as `LeaseExpired` is not re-run
 at boot, so a file whose extraction kills the process cannot crash every
-boot. `repository_status` reports `filesPendingExtraction` (files whose
-extraction for the current content is still to come: a pending job, or
+boot; a version bump changes its key, so it gets one new job (3 attempts)
+per new extractor or embedder. `repository_status` reports `filesPendingExtraction` (files whose
+extraction for the current key is still to come: a pending job, or
 no job and no embedding; 0 means extraction is finished) and
 `extractionFailures: {total, files: [{path, attempts, lastError}]}` (all
-files whose job for the current content gave up, counted in `total`, the
+files whose job for the current key gave up, counted in `total`, the
 first 5 by path listed).
+
+**Derived-artifact versions** (#453, migration 0033). Two constants name
+what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
+an integer, now 1): bump it with any change to the grammars and queries,
+symbol kinds, the minified-file rule, the snippet cut or the symbol embed
+text. `EMBEDDER_ID` (`search/embeddings.ts`): the model
+(`Xenova/bge-small-en-v1.5`, `fake` for the test embedder) plus
+`+text<EMBED_TEXT_VERSION>`, the version of the note, file and symbol embed
+texts and the 16,000-character cut; bump `EMBED_TEXT_VERSION` with any
+change to those. Both are in the job keys and stored as plain columns
+(chosen over one jsonb so the catch-up compares them directly):
+`repository_files.extracted_hash`, `extractor_version`, `embedder_id`
+(they also stand for the file's imports and symbols, written in the same
+transaction) and `notes.embedder_id` (out of the Drizzle `notes` model, like
+`seq`).
+
+*Upgrade to 0033.* The migration rewrites no row, so it holds the boot for
+well under a second: 244 ms measured locally on 100,000 notes (501 MB) and
+20,000 files (124 MB) with vectors (the review of #978 measured 590 s for a
+version that updated every row). It adds `notes.embedder_id` and
+`repository_files.embedder_id` with the constant default
+`Xenova/bge-small-en-v1.5+text1`, which PostgreSQL (11+) gives the existing
+rows from the catalog, then drops the default, so later rows start
+without one. That is the id of what made the stored vectors: the model,
+pooling and the note, file and symbol embed texts are unchanged since
+1f05a6f, 3bc7a5b and 2c584d0. The id counts only where `embedding` is set;
+the catch-up and `processFile` check that first. The one UPDATE clears the
+id of the few notes whose pre-0033 job for their current `seq` is pending
+or failed (reached from `jobs` by primary key), so the catch-up embeds them.
+Files keep `extracted_hash` null and `extractor_version` 0, so the first
+boot re-extracts each once. `processFile` keeps such a file's vector unless
+its pre-0033 job `extract:<id>:<hash>` for the current content is pending
+or failed, and a push to it before then records the replaced content in
+`extracted_hash` (`syncRepositoryFiles`), so a vector is only kept for the
+content it was made from. So the first boot re-embeds only the notes and
+files without a vector or with a pending or failed job (about 100 ms a note
+and 640 ms a file with bge-small on CPU), and re-extracts every repository
+file once with its vectors reused, which costs a parse and a write. Measured
+locally on this repository's 766 source files ×3 (2,298 files, 9,807 symbols,
+shared loaded Postgres): queued in 76 ms and drained in 56 s, 24 ms a file,
+with no file or symbol embedded, so about 8 minutes for 20,000 files.
+That re-extraction is also the backfill of import `line`s from before 0031
+(#558, ADR-004 A7). A note written 2 s into that catch-up had its vector
+81 ms later and a file pushed then had its symbols in 99 ms: writes go
+first (**Durable jobs**). *Later bumps:* an `EXTRACTOR_VERSION` bump costs
+the same parse per file, plus embedding only symbols whose embed text
+changed; an `EMBEDDER_ID` bump re-embeds every note and file (the ~100 ms /
+640 ms above per item), in the background behind writes, the old vectors
+searchable until each new one commits. `filesPendingExtraction` shows the
+progress.
 
 **Durable jobs** (`jobs/durable.ts`, ADR-003 S5, #494; table `jobs` from
 migration 0021). A job is claimable when `done_at` is null and
 `lease_until` is null or past. `claimJob` is one statement (`UPDATE … WHERE
-id = (SELECT … ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)`) that sets
+id = (SELECT … ORDER BY priority, id LIMIT 1 FOR UPDATE SKIP LOCKED)`) that sets
 `lease_until = now() + 60 s` and `attempts + 1`, and only claims a job
-with `attempts < MAX_JOB_ATTEMPTS`; `completeJob` sets `done_at` and
+with `attempts < MAX_JOB_ATTEMPTS`. `jobs.priority` (migration 0033, #453;
+`JOB_PRIORITY`): 0 for a job a write queued (a note save, a push, the
+doctor's repair), 1 for boot catch-up and `pnpm reindex`, so writes are
+served before any backlog; index `jobs_claim` (`kind, priority, id`, pending
+rows) serves that order, and a job run again takes the priority of the
+enqueue that runs it. `completeJob` sets `done_at` and
 clears `last_error`; `failJob` stores `last_error` (error name and
 message, or those of its `Error` cause, so a Drizzle "Failed query: <SQL>"
 keeps the Postgres error; URL credentials redacted, at most 500
@@ -2476,7 +2572,15 @@ gets one report then (earlier failures count as `repeated`). `attempts`
 counts claims, so a job whose runs kill the process stops at 3 too:
 before claiming, each drain runs `failCrashedJobs`, which marks failed
 every job of its kind with 3 claims and an expired lease (`last_error`
-`LeaseExpired: …`) and reports it once. A job running at a graceful
+`LeaseExpired: …`) and reports it once. Boot catch-up re-runs jobs that
+failed with an error, never `LeaseExpired` ones (decision kept in #453):
+such a job took the process down 3 times (an out-of-memory parse or embed
+is the known cause, #496), so re-running it at every boot would turn one
+bad file into a crash loop of the instance. It is retried, bounded, when
+the code that crashed changes: a new `EXTRACTOR_VERSION` or `EMBEDDER_ID`
+changes the key, which gives the item one new job with 3 attempts; an
+operator re-runs a note's with `pnpm reindex`; a file's runs again when its content changes.
+A job running at a graceful
 shutdown also keeps its claim (leases are not released). Crash recovery: a job a dead process held becomes claimable
 when its lease runs out; every drainer is woken every 5 s
 (`startJobPolling`, started at boot) for such jobs and for backoffs.
