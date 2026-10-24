@@ -4,7 +4,7 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
 
 ## Transport and conventions
 
-- **Transport**: Streamable HTTP only, `POST /mcp` or `POST /elara/mcp` (same handler, `server/src/mcp/routes.ts`). There is no stdio transport. The server is stateless: each request gets a fresh server and transport, and responses are JSON.
+- **Transport**: Streamable HTTP only, `POST /mcp` or `POST /elara/mcp` (same handler, `server/src/mcp/routes.ts`). There is no stdio transport. The server is stateless: each request gets a fresh server and transport, and responses are JSON. It sends nothing unasked: `initialize` advertises `listChanged: false` for tools, prompts (none on a `reader` token or with an allow-list) and resources (re-run `tools/list` after a permission change), and `GET` and `DELETE` on the endpoint answer `405` with `Allow: POST` (#436).
 - **Auth**: `Authorization: Bearer <token>`. A token is scoped to the whole **account**, one **vault**, or one **repository**.
 - **Scope rules** (every tool declares its scope, and the server checks it before the tool runs):
   - Vault tools on a vault-scoped token use the pinned vault; passing a different `vaultId` is an error. Account-scoped tokens must pass `vaultId`. Repository-scoped tokens cannot use vault tools.

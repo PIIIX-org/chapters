@@ -1560,6 +1560,17 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `sessionIdGenerator: undefined`, a fresh `McpServer` + transport
   built per HTTP request. No cross-connection caching is possible by
   construction; auth and permissions are recomputed every call.
+  With no session and no stream, the server can send nothing unasked
+  (#436): `GET` and `DELETE` on both paths answer `405` with
+  `Allow: POST` and the SDK transport's JSON-RPC error
+  (`{"jsonrpc":"2.0","error":{"code":-32000,"message":"Method not
+  allowed."},"id":null}`), before authentication, and `buildServer`
+  overrides the SDK's `listChanged: true` with `false` on each list
+  capability it has (`tools`; `resources` when a manual is registered;
+  `prompts` when they are registered: not with an allow-list, not on a
+  `reader` profile). A list changes only
+  with permissions, and the next `tools/list` shows it.
+  `test/mcp-list-changed.test.ts` covers both paths.
 - **Auth**: bearer token → `resolveMcpToken()` (same live-resolution
   guarantee as everywhere else) → per-connection rate limit
   (`rate-limit.ts`, default 120/min, in-process — see §9).

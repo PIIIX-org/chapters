@@ -3036,7 +3036,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   // tool(): a connection limited to a tool allow-list gets none, and neither
   // does a `reader`-profile one, whose list stays the reader tools (#428,
   // owner decision on #930).
-  if (!auth.connection.allowedTools && auth.connection.profile !== 'reader') {
+  const hasPrompts = !auth.connection.allowedTools && auth.connection.profile !== 'reader'
+  if (hasPrompts) {
     registerMcpPrompts(server, auth, {
       vaultFor,
       repositoryFor,
@@ -3045,5 +3046,16 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     })
   }
 
+  // The SDK registers each list capability with `listChanged: true`, but
+  // this server is stateless (a fresh one per POST, no session, no GET
+  // stream: routes.ts), so a list_changed notification can never be sent
+  // (#436). Each capability the server has (tools always, the manuals when
+  // one was registered, prompts when they were registered above) is
+  // advertised with `false`; registerCapabilities merges per key.
+  server.server.registerCapabilities({
+    tools: { listChanged: false },
+    ...(manualOf.size > 0 ? { resources: { listChanged: false } } : {}),
+    ...(hasPrompts ? { prompts: { listChanged: false } } : {}),
+  })
   return { server, tools }
 }
