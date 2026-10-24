@@ -3,13 +3,21 @@ packages:
   - shared
   - client
 allowBuilds:
+  '@tree-sitter-grammars/tree-sitter-kotlin': false
   esbuild: true
   onnxruntime-node: true
   protobufjs: true
   sharp: true
+  tree-sitter-c: false
+  tree-sitter-c-sharp: false
+  tree-sitter-cpp: false
   tree-sitter-go: false
+  tree-sitter-java: false
   tree-sitter-javascript: false
+  tree-sitter-php: false
   tree-sitter-python: false
+  tree-sitter-ruby: false
+  tree-sitter-rust: false
   tree-sitter-typescript: false
 overrides:
   adm-zip: '>=0.6.1'
@@ -29,3 +37,8 @@ overrides:
   postcss: '>=8.5.23'
   nanoid: '>=3.3.18'
   vitest: ^5.0.3
+  # Dependencies of grammar packages that only their native or grammar build
+  # reads: a CLI (5.4 MB) and the C grammar C++'s grammar.js extends (a second
+  # copy, 9 MB). Elara loads only each package's .wasm (#464).
+  '@tree-sitter-grammars/tree-sitter-kotlin>npm-check-updates': '-'
+  tree-sitter-cpp>tree-sitter-c: '-'

@@ -9,6 +9,8 @@ import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
 import { recomputeSemanticEdges } from '../search/semantic-edges.js'
 import { codeBlocks } from './code-blocks.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
+import { detectLanguage } from './language.js'
+import { hasOutline, outlineSections } from './outline.js'
 import {
   RESOLUTION_MANIFEST_PATTERN,
   buildResolutionContext,
@@ -442,11 +444,13 @@ async function processFile(fileId: string): Promise<void> {
   const embedderId = EMBEDDER_ID
   const chunkVersion = CHUNK_VERSION
 
+  // The label of this code's language.ts: a file synced before a language was labelled (#464) gets it now.
+  const language = detectLanguage(row.path)
+  const structured = !looksMinified(row.content)
   // An unsupported or minified file gets its file block only, and still loses the imports/symbols an earlier content left.
   const { imports, symbols }: ExtractionResult =
-    isSupportedLanguage(row.language) && !looksMinified(row.content)
-      ? await extractStructure(row.language, row.content, row.path)
-      : { imports: [], symbols: [] }
+    structured && isSupportedLanguage(language) ? await extractStructure(language, row.content, row.path) : { imports: [], symbols: [] }
+  const sections = structured && hasOutline(language) ? outlineSections(language, row.content) : []
 
   const importRows: Array<typeof repositoryFileImports.$inferInsert> = []
   if (imports.length > 0) {
@@ -457,7 +461,7 @@ async function processFile(fileId: string): Promise<void> {
     }
   }
 
-  const fileBlocks = codeBlocks(fileId, row.path, row.content, symbols)
+  const fileBlocks = codeBlocks(fileId, row.path, row.content, symbols, sections)
 
   // Per-file budget (#496): the file-level block and N of its symbols get a
   // vector, the rest are stored without one (null embed_key), so one file
@@ -528,7 +532,7 @@ async function processFile(fileId: string): Promise<void> {
     await replaceBlockSet(tx, 'code', fileId, blockRows)
     await tx
       .update(repositoryFiles)
-      .set({ embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId, chunkVersion })
+      .set({ language, embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId, chunkVersion })
       .where(eq(repositoryFiles.id, fileId))
     failpoint('extract.before-commit')
     return true

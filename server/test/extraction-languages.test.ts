@@ -181,7 +181,7 @@ describe('Ruby (#464)', () => {
       '22-25 method Store.load',
       '27-29 method Store.default',
       '32-34 method Store.instances',
-      '38-38 method Store.helper',
+      '39-39 method Store.helper',
       '43-45 method Elara.mixin_method',
       '48-51 function top_level (exported)',
     ])
