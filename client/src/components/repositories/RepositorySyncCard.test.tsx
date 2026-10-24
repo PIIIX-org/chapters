@@ -152,6 +152,26 @@ describe('RepositorySyncCard', () => {
     expect(screen.queryByText(/nothing was indexed/)).toBeNull()
   })
 
+  it('says in one line how many files the last sync skipped and why (#465), and nothing when none', async () => {
+    const skipped = {
+      too_large: 1,
+      binary: 3,
+      ignored: 2,
+      over_file_cap: 0,
+      sample: [
+        { path: 'big.json', reason: 'too_large' as const },
+        { path: 'dist/', reason: 'ignored' as const },
+      ],
+    }
+    const { unmount } = renderCard([{ ...GIT, lastSyncedAt: '2026-08-24T11:00:00.000Z', skipped }, AGENT], FILES)
+    expect(await screen.findByText('6 skipped (1 over 1 MB, 3 binary, 2 ignored)')).toBeInTheDocument()
+    unmount()
+
+    renderCard([{ ...GIT, lastSyncedAt: '2026-08-24T11:00:00.000Z' }, AGENT], FILES)
+    expect(await screen.findByText('Synced — 2 files')).toBeInTheDocument()
+    expect(screen.queryByText(/skipped/)).toBeNull()
+  })
+
   it('shows the recorded reason a sync failed, and no file count beside it', async () => {
     renderCard(
       [

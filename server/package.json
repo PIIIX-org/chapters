@@ -34,6 +34,7 @@
     "fastify-plugin": "^6.0.0",
     "graphology": "^0.26.0",
     "graphology-communities-louvain": "^2.0.2",
+    "ignore": "^7.0.12",
     "jose": "^6.2.12",
     "nodemailer": "^10.0.15",
     "otpauth": "^9.5.2",
