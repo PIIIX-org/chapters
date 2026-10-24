@@ -345,14 +345,36 @@ export class EdgeList {
   }
 }
 
+/**
+ * A `since`/`until` bound as an ISO instant (`toISOString`, the form of a
+ * node's `updatedAt`), or null when it is no date: the filter then matches
+ * nothing.
+ */
+export function timeBound(value: string): string | null {
+  const ms = Date.parse(value)
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString()
+}
+
+/**
+ * `since`/`until` bound the resource's last change, `updatedAt` (#446, D9 on
+ * #930): a note's `updated_at`, a code file's (the last sync that changed its
+ * content), a symbol's file's. Frontmatter `timestamp` is the creation time
+ * and plays no part.
+ */
 export function passesFilters(
-  node: { type: string | null; tags: string[]; timestamp: string | null },
+  node: { type: string | null; tags: string[]; updatedAt: string | null },
   filters: GraphFilters,
 ): boolean {
   if (filters.types && (!node.type || !filters.types.includes(node.type))) return false
   if (filters.tags && !filters.tags.some((t) => node.tags.includes(t))) return false
-  if (filters.since && (!node.timestamp || node.timestamp < filters.since)) return false
-  if (filters.until && (!node.timestamp || node.timestamp > filters.until)) return false
+  if (filters.since) {
+    const since = timeBound(filters.since)
+    if (since === null || node.updatedAt === null || node.updatedAt < since) return false
+  }
+  if (filters.until) {
+    const until = timeBound(filters.until)
+    if (until === null || node.updatedAt === null || node.updatedAt > until) return false
+  }
   return true
 }
 

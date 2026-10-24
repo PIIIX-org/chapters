@@ -1336,6 +1336,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     code unit (`compareCodeUnits`), so equal scores never depend on row
     order. [INFERENCE] HNSW stays approximate: which rows make a vector
     leg's 30 can still differ between instances.
+  - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
+    search and graph, saved perspectives) bound the last change,
+    `updatedAt`, never frontmatter `timestamp` (the creation time, which
+    edits leave alone). Note legs filter `notes.updated_at` in SQL; code
+    hits use `repository_files.updated_at` (the last sync that changed the
+    file's content: an unchanged hash leaves it) and symbol hits their
+    file's, filtered after the merge by `passesFilters` like `types`. A
+    bound goes through `timeBound` (`Date.parse`); one that is no date
+    matches nothing. Every hit carries `updatedAt` (ISO, milliseconds);
+    MCP drops it with `snippet` at `no_context`. `notes.updated_at` moves
+    only in `applyRowChange` (store-tx.ts), when a write changes the row:
+    every MCP and REST write, rename, trash and restore, and the CRDT
+    fold (`foldCrdt`, so collaborative typing counts once per debounced
+    fold); a write that changes nothing leaves it. A current-format backup
+    restore and a vault import with `.elara/history` keep the source's
+    `updated_at`; a format-1 backup and a plain import take the restore
+    time. No index: note legs are served by the FTS and HNSW indexes and
+    the graph filters in memory.
 - **`embeddings.ts`**: an `Embedder` interface with two
   implementations — `LocalEmbedder` (real: Transformers.js/ONNX,
   `bge-small-en-v1.5`, 384 dimensions, mean-pooled, normalized) and
