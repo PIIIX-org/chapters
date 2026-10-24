@@ -260,7 +260,7 @@ describe('SearchOverlay', () => {
     await search(user, 'zzyx')
     await waitFor(() => expect(screen.getByText('No results found.')).toBeInTheDocument())
 
-    answer = found([], { status: 'index_building', index: { pending_notes: 3, pending_files: 1, failed: 0 } })
+    answer = found([], { status: 'index_building', index: { pending_notes: 3, pending_files: 1, pending_repositories: 0, failed: 0 } })
     await search(user, 'q')
     await waitFor(() => expect(screen.getByText('No results yet: 3 notes and 1 file still being indexed.')).toBeInTheDocument())
     expect(screen.queryByText('No results found.')).toBeNull()
@@ -270,6 +270,16 @@ describe('SearchOverlay', () => {
     await search(user, 'w')
     await waitFor(() => expect(screen.getByText('Search is unavailable right now. Try again in a moment.')).toBeInTheDocument())
     expect(screen.queryByText(/no results/i)).toBeNull()
+
+    answer = found([], { status: 'index_building', index: { pending_notes: 0, pending_files: 0, pending_repositories: 2, failed: 0 } })
+    await search(user, 'r')
+    await waitFor(() => expect(screen.getByText('No results yet: 2 repositories still being indexed.')).toBeInTheDocument())
+
+    // Nothing matched on the keyword channel alone: say the other one was missing (#458).
+    answer = found([], { retrieval_mode: 'keyword_only', degraded: { reason: 'embedder_failed' } })
+    await search(user, 'k')
+    await waitFor(() => expect(screen.getByText('No keyword matches. Search by meaning is unavailable right now.')).toBeInTheDocument())
+    expect(screen.queryByText('No results found.')).toBeNull()
   })
 
   it('says when results are keyword matches only (#458) or indexing is still going on', async () => {
@@ -283,7 +293,7 @@ describe('SearchOverlay', () => {
     await waitFor(() => expect(screen.getByText('people/jane')).toBeInTheDocument())
     expect(screen.getByText('Showing keyword matches only: search by meaning is unavailable right now.')).toBeInTheDocument()
 
-    answer = found(FIXTURE, { index: { pending_notes: 2, pending_files: 0, failed: 0 } })
+    answer = found(FIXTURE, { index: { pending_notes: 2, pending_files: 0, pending_repositories: 0, failed: 0 } })
     await search(user, 'x')
     await waitFor(() => expect(screen.getByText('Still indexing 2 items: more results may appear.')).toBeInTheDocument())
     expect(screen.queryByText(/keyword matches only/)).toBeNull()

@@ -94,6 +94,35 @@ if (readEmbedMaxSymbolsPerFile(env.ELARA_EMBED_MAX_SYMBOLS_PER_FILE) === null) {
   console.warn(`ELARA_EMBED_MAX_SYMBOLS_PER_FILE=${JSON.stringify(env.ELARA_EMBED_MAX_SYMBOLS_PER_FILE)} is not a whole number >= 0: using ${DEFAULT_EMBED_MAX_SYMBOLS_PER_FILE}`)
 }
 
+/**
+ * Search's relevance gate (#441): a vector hit counts only when its cosine
+ * distance to the query is below this; a keyword hit always counts.
+ * bge-small (`local`): 0.40, measured on the five benchmark corpora at their
+ * pinned commits, indexed with this model: for the 99 of 109 questions with a
+ * judged-relevant file among a vector leg's 30 nearest rows, the nearest such
+ * file or symbol was at most 0.387 away; of 110 off-topic queries (recipes,
+ * sport, nonsense strings) with vector rows, 104 had none nearer than 0.40
+ * (nearest 0.375). The fake test embedder's bag-of-words vectors: 0.8, the 0.2
+ * similarity its semantic edges use in the tests.
+ */
+export function defaultSearchMaxDistance(embeddings: string): number {
+  return embeddings === 'local' ? 0.4 : 0.8
+}
+
+/** `SEARCH_MAX_DISTANCE` -> a cosine distance in (0, 2), the embedder's default when unset, or null when it is not one. */
+export function readSearchMaxDistance(raw: string | undefined, embeddings: string): number | null {
+  if (raw === undefined || raw === '') return defaultSearchMaxDistance(embeddings)
+  if (raw.trim() === '') return null
+  const distance = Number(raw)
+  return Number.isFinite(distance) && distance > 0 && distance < 2 ? distance : null
+}
+
+const EMBEDDINGS = env.EMBEDDINGS ?? (env.NODE_ENV === 'production' ? 'local' : 'fake')
+
+if (readSearchMaxDistance(env.SEARCH_MAX_DISTANCE, EMBEDDINGS) === null) {
+  console.warn(`SEARCH_MAX_DISTANCE=${JSON.stringify(env.SEARCH_MAX_DISTANCE)} is not a cosine distance between 0 and 2 (exclusive): using ${defaultSearchMaxDistance(EMBEDDINGS)}`)
+}
+
 export const config = {
   nodeEnv: env.NODE_ENV ?? 'development',
   isProd: env.NODE_ENV === 'production',
@@ -177,7 +206,7 @@ export const config = {
   pollIntervalMs: Number(env.POLL_INTERVAL_MS ?? 5 * 60 * 1000),
   webhookStaleThresholdMs: Number(env.WEBHOOK_STALE_THRESHOLD_MS ?? 10 * 60 * 1000),
   /** 'local' = ONNX bge-small on CPU; 'fake' = deterministic test embedder. */
-  embeddings: env.EMBEDDINGS ?? (env.NODE_ENV === 'production' ? 'local' : 'fake'),
+  embeddings: EMBEDDINGS,
   /**
    * Per-file embedding budget (#496): extraction embeds a repository file and
    * at most this many of its symbols; the rest are stored without a vector
@@ -188,19 +217,9 @@ export const config = {
   get embedMaxSymbolsPerFile(): number {
     return readEmbedMaxSymbolsPerFile(env.ELARA_EMBED_MAX_SYMBOLS_PER_FILE) ?? DEFAULT_EMBED_MAX_SYMBOLS_PER_FILE
   },
-  /**
-   * Search's relevance gate (#441): a vector hit counts only when its cosine
-   * distance to the query is below this; a keyword hit always counts.
-   * bge-small (`local`): 0.40, measured on the five benchmark corpora at their
-   * pinned commits, indexed with this model: for the 99 of 109 questions with
-   * a judged-relevant file among a vector leg's 30 nearest rows, the nearest
-   * such file or symbol was at most 0.387 away; of 110 off-topic queries
-   * (recipes, sport, nonsense strings) with vector rows, 104 had none nearer
-   * than 0.40 (nearest 0.375). The fake test embedder's
-   * bag-of-words vectors: 0.8, the 0.2 similarity its semantic edges use in the tests.
-   */
+  /** Search's relevance gate (#441): see `readSearchMaxDistance`. */
   get searchMaxDistance(): number {
-    return Number(env.SEARCH_MAX_DISTANCE ?? (this.embeddings === 'local' ? 0.4 : 0.8))
+    return readSearchMaxDistance(env.SEARCH_MAX_DISTANCE, this.embeddings) ?? defaultSearchMaxDistance(this.embeddings)
   },
   semanticThreshold: Number(env.SEMANTIC_THRESHOLD ?? 0.75),
   semanticK: Number(env.SEMANTIC_K ?? 8),

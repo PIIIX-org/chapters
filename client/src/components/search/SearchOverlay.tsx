@@ -39,7 +39,7 @@ import type { SearchResponse, SearchResult } from '../../api/search.js'
 import type { ThemePreference } from '../../lib/theme.js'
 import { recentsStore, type Recent, type RecentKind } from './recents.js'
 
-const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
 /**
  * What an empty result list means (#442): nothing matched, the scope is still
@@ -49,8 +49,18 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 function emptyMessage(data: SearchResponse | undefined): string {
   if (data?.status === 'unavailable') return 'Search is unavailable right now. Try again in a moment.'
   if (data?.status === 'index_building') {
-    const pending = [data.index?.pending_notes ? plural(data.index.pending_notes, 'note') : null, data.index?.pending_files ? plural(data.index.pending_files, 'file') : null]
-    return `No results yet: ${pending.filter(Boolean).join(' and ') || 'items'} still being indexed.`
+    const pending = [
+      data.index?.pending_notes ? plural(data.index.pending_notes, 'note') : null,
+      data.index?.pending_files ? plural(data.index.pending_files, 'file') : null,
+      data.index?.pending_repositories ? plural(data.index.pending_repositories, 'repository', 'repositories') : null,
+    ].filter(Boolean)
+    return `No results yet: ${pending.join(' and ') || 'items'} still being indexed.`
+  }
+  // Nothing matched on the one channel that ran (#458): the other might have found something.
+  if (data?.degraded) {
+    return data.degraded.reason === 'keyword_leg_failed'
+      ? 'No related results. Keyword search is unavailable right now.'
+      : 'No keyword matches. Search by meaning is unavailable right now.'
   }
   return 'No results found.'
 }
@@ -63,7 +73,7 @@ function searchNotice(data: SearchResponse | undefined): string | null {
       ? 'Showing related matches only: keyword search is unavailable right now.'
       : 'Showing keyword matches only: search by meaning is unavailable right now.'
   }
-  const pending = (data.index?.pending_notes ?? 0) + (data.index?.pending_files ?? 0)
+  const pending = (data.index?.pending_notes ?? 0) + (data.index?.pending_files ?? 0) + (data.index?.pending_repositories ?? 0)
   return pending > 0 ? `Still indexing ${plural(pending, 'item')}: more results may appear.` : null
 }
 

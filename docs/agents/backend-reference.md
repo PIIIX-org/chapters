@@ -1311,25 +1311,29 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **Relevance gate** (#441): each vector leg takes its 30 nearest rows
     (`ORDER BY distance LIMIT 30`, which the HNSW index serves) and keeps
     those with cosine distance under `config.searchMaxDistance`
-    (`SEARCH_MAX_DISTANCE`; 0.40 for bge-small, measured on the five
-    benchmark corpora as `config.ts` records; 0.8 for the fake embedder).
+    (`SEARCH_MAX_DISTANCE`, in (0, 2), else a boot warning and the
+    default; 0.40 for bge-small, measured on the five benchmark corpora
+    as `config.ts` records; 0.8 for the fake embedder).
     Keyword rows
     always count. The gate cuts a suffix of a distance-ordered list, so the
     RRF ranks of the rows it keeps do not change.
   - **Degraded** (#458): a failed query embedding (`queryVector`) skips the
     vector legs (`keyword_only`, `degraded: {reason: 'embedder_failed'}`);
     a failed leg drops its whole channel (`vector_leg_failed` →
-    `keyword_only`, `keyword_leg_failed` → `vector_only`). The failure is
-    logged; the search answers from the channel that ran.
+    `keyword_only`, `keyword_leg_failed` → `vector_only`; neither →
+    `none`). The failure is logged; the search answers from the channel
+    that ran.
   - **Status** (#442): `ok` with any result; otherwise `unavailable` when
-    no channel ran or every item in scope failed indexing,
-    `index_building` when notes or files in scope are pending, else
-    `no_match`. `index` comes from `embeddingState()` (notes:
-    `embed_note:<id>:<seq>` job pending, or no job and no embedding;
-    failed: that job gave up) and `extractionState()` (the same for
-    files, the predicates of `countPendingExtractions` and
-    `extractionFailures`), read beside the query embedding; left out
-    when all zero.
+    no channel ran, `index_building` when notes, files or repositories
+    in scope are pending, `unavailable` when every item in scope failed
+    indexing, else `no_match`. `index` comes from `embeddingState()`
+    (notes: `embed_note:<id>:<seq>` job pending, or no job and no
+    embedding; failed: that job gave up) and `extractionState()` (files:
+    the predicates of `countPendingExtractions` and `extractionFailures`;
+    repositories with no file whose `sync_status` is `syncing` or that
+    were never synced count in `pending_repositories`, those whose sync
+    failed count as failed items), read beside the query embedding; left
+    out when all zero.
   - **Total order**: keyword legs `ORDER BY rank DESC, path COLLATE "C",
     id`, vector legs re-sorted by `distance, path COLLATE "C", id` outside
     the HNSW limit, final sort score descending then path and id by UTF-16

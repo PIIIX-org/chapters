@@ -181,24 +181,45 @@ export async function scheduleMissingExtractions(): Promise<number> {
   return missing.length
 }
 
+/** What `extractionState` reports for a set of repositories. */
+export interface ExtractionState {
+  /** Files of the repositories. */
+  files: number
+  /** Files whose extraction for their current content is still to come: a pending (queued or running) job, or no job and no embedding (written before the jobs table; the boot scan adds its job). */
+  pending: number
+  /** Files whose job for their current content gave up (`extractionFailures` lists them). */
+  failed: number
+  /** Repositories with no file yet whose first sync is running or has not happened (a git clone in progress, an agent_push repository before its first push); a repository being synced again counts too. */
+  syncing: number
+  /** Repositories with no file whose sync failed. */
+  syncFailed: number
+}
+
 /**
- * Extraction state of the files of these repositories: `pending`, files whose
- * extraction for their current content is still to come (a pending, queued or
- * running, job, or no job and no embedding: written before the jobs table,
- * the boot scan adds its job); `failed`, files whose job for their current
- * content gave up (`extractionFailures` lists them); `files`, all of them.
- * Search reports it next to its results (#442).
+ * Extraction and sync state of these repositories, reported by search next to
+ * its results (#442): an answer with no hit says `index_building` while files
+ * or whole repositories are still to come, `unavailable` when nothing in scope
+ * could be indexed.
  */
-export async function extractionState(repositoryIds: string[]): Promise<{ files: number; pending: number; failed: number }> {
-  if (repositoryIds.length === 0) return { files: 0, pending: 0, failed: 0 }
+export async function extractionState(repositoryIds: string[]): Promise<ExtractionState> {
+  if (repositoryIds.length === 0) return { files: 0, pending: 0, failed: 0, syncing: 0, syncFailed: 0 }
   const [row] = (await db.execute(sql`
-    SELECT count(*)::int AS files,
-      (count(*) FILTER (WHERE j.id IS NOT NULL AND j.done_at IS NULL OR j.id IS NULL AND f.embedding IS NULL))::int AS pending,
-      (count(*) FILTER (WHERE j.done_at IS NOT NULL AND j.last_error IS NOT NULL))::int AS failed
-    FROM repository_files f
-    LEFT JOIN jobs j ON j.idempotency_key = ${EXTRACTION_JOB} || ':' || f.id || ':' || f.content_hash
-    WHERE f.repository_id = ANY(${`{${repositoryIds.join(',')}}`}::uuid[])`)) as unknown as [{ files: number; pending: number; failed: number }]
-  return row ?? { files: 0, pending: 0, failed: 0 }
+    WITH per_repo AS (
+      SELECT f.repository_id, count(*) AS files,
+        count(*) FILTER (WHERE j.id IS NOT NULL AND j.done_at IS NULL OR j.id IS NULL AND f.embedding IS NULL) AS pending,
+        count(*) FILTER (WHERE j.done_at IS NOT NULL AND j.last_error IS NOT NULL) AS failed
+      FROM repository_files f
+      LEFT JOIN jobs j ON j.idempotency_key = ${EXTRACTION_JOB} || ':' || f.id || ':' || f.content_hash
+      WHERE f.repository_id = ANY(${`{${repositoryIds.join(',')}}`}::uuid[])
+      GROUP BY f.repository_id
+    )
+    SELECT coalesce(sum(p.files), 0)::int AS files, coalesce(sum(p.pending), 0)::int AS pending, coalesce(sum(p.failed), 0)::int AS failed,
+      (count(*) FILTER (WHERE r.sync_status = 'syncing' OR r.sync_status <> 'error' AND r.last_synced_at IS NULL AND p.files IS NULL))::int AS syncing,
+      (count(*) FILTER (WHERE r.sync_status = 'error' AND p.files IS NULL))::int AS "syncFailed"
+    FROM repositories r
+    LEFT JOIN per_repo p ON p.repository_id = r.id
+    WHERE r.id = ANY(${`{${repositoryIds.join(',')}}`}::uuid[])`)) as unknown as [ExtractionState]
+  return row ?? { files: 0, pending: 0, failed: 0, syncing: 0, syncFailed: 0 }
 }
 
 /** Files of a repository whose extraction for their current content is still to come (`extractionState`); 0 = extraction finished. */

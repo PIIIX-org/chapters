@@ -72,24 +72,28 @@ export interface SearchNotesOptions {
  *
  * - `status`: `ok` when a result passed the relevance gate; with no result,
  *   `unavailable` when no retrieval channel could run or every item in scope
- *   failed indexing, `index_building` when items in scope are still to be
- *   indexed, else `no_match`.
+ *   failed indexing (a repository whose sync failed before any file landed
+ *   counts as one failed item), `index_building` when notes, files or whole
+ *   repositories in scope are still to be indexed, else `no_match`.
  * - `retrieval_mode`: the channels that answered: `hybrid` (keyword and
- *   vector), `keyword_only` or `vector_only`.
+ *   vector), `keyword_only`, `vector_only`, or `none` (no channel answered:
+ *   `unavailable`, or `no_match` for an empty query or scope).
  * - `degraded`: false, or why a channel is missing: the query embedding
  *   failed (`embedder_failed`), a vector query failed (`vector_leg_failed`)
  *   or a keyword query failed (`keyword_leg_failed`).
- * - `index`: the scope's items still to be indexed and those whose indexing
- *   failed; left out when all three are 0.
+ * - `index`: the scope's notes and files still to be indexed, its
+ *   repositories whose first sync is running or has not happened (no file
+ *   yet), and the items whose indexing failed; left out when all are 0.
  * - `results`: in one total order, score descending, then path and id by
  *   UTF-16 code unit (`COLLATE "C"` in SQL).
  */
 export type SearchStatus = 'ok' | 'no_match' | 'index_building' | 'unavailable'
-export type RetrievalMode = 'hybrid' | 'keyword_only' | 'vector_only'
+export type RetrievalMode = 'hybrid' | 'keyword_only' | 'vector_only' | 'none'
 export type Degraded = false | { reason: 'embedder_failed' | 'vector_leg_failed' | 'keyword_leg_failed' }
 export interface IndexState {
   pending_notes: number
   pending_files: number
+  pending_repositories: number
   failed: number
 }
 export interface SearchResponse<H> {
@@ -287,8 +291,13 @@ async function indexState(vaultIds: string[], repositoryIds: string[]): Promise<
   try {
     const [notes, files] = await Promise.all([embeddingState(vaultIds), extractionState(repositoryIds)])
     return {
-      index: { pending_notes: notes.pending, pending_files: files.pending, failed: notes.failed + files.failed },
-      items: notes.notes + files.files,
+      index: {
+        pending_notes: notes.pending,
+        pending_files: files.pending,
+        pending_repositories: files.syncing,
+        failed: notes.failed + files.failed + files.syncFailed,
+      },
+      items: notes.notes + files.files + files.syncFailed,
     }
   } catch (err) {
     console.warn('[search] the index state could not be read:', err)
@@ -306,7 +315,7 @@ function respond<H>(
 ): SearchResponse<H> {
   const keywordRan = keyword !== null
   const vectorRan = vector !== null
-  const retrieval_mode: RetrievalMode = keywordRan && vectorRan ? 'hybrid' : vectorRan ? 'vector_only' : keywordRan || !vectorTried ? 'keyword_only' : 'hybrid'
+  const retrieval_mode: RetrievalMode = keywordRan && vectorRan ? 'hybrid' : vectorRan ? 'vector_only' : keywordRan ? 'keyword_only' : 'none'
   const degraded: Degraded = !vectorTried
     ? { reason: 'embedder_failed' }
     : !vectorRan
@@ -315,15 +324,17 @@ function respond<H>(
         ? { reason: 'keyword_leg_failed' }
         : false
   const index = state?.index
-  const pending = index ? index.pending_notes + index.pending_files : 0
+  const pending = index ? index.pending_notes + index.pending_files + index.pending_repositories : 0
   const status: SearchStatus =
     results.length > 0
       ? 'ok'
-      : (!keywordRan && !vectorRan) || (index && index.failed > 0 && index.failed === state?.items)
+      : !keywordRan && !vectorRan
         ? 'unavailable'
         : pending > 0
           ? 'index_building'
-          : 'no_match'
+          : index && index.failed > 0 && index.failed === state?.items
+            ? 'unavailable'
+            : 'no_match'
   const shown = index && (pending > 0 || index.failed > 0) ? { index } : {}
   return { status, retrieval_mode, degraded, ...shown, results }
 }
@@ -333,7 +344,8 @@ function byScore(a: { score: number; path: string; id: string }, b: { score: num
   return b.score - a.score || compareCodeUnits(a.path, b.path) || compareCodeUnits(a.id, b.id)
 }
 
-const NOTHING: SearchResponse<never> = { status: 'no_match', retrieval_mode: 'hybrid', degraded: false, results: [] }
+/** The answer to an empty query or an empty scope: nothing was searched. */
+const NOTHING: SearchResponse<never> = { status: 'no_match', retrieval_mode: 'none', degraded: false, results: [] }
 
 /**
  * Fine-grained AST symbol retrieval via vector embeddings + keyword ranking.
