@@ -1,10 +1,13 @@
 // #426's measured token figure: `graph {vaultId}`, the default answer, on a
 // seeded 500-note vault shaped like a working vault (8 type folders, tags,
-// two wikilinks per note; no embeddings, so no semantic edges and the same
-// graph on every run). Tokens are characters / 4, the premise benchmark's
-// estimate. The call takes only `vaultId` (and follows `truncated.cursor`),
-// so this file runs unchanged on code from before #426 to give the "before"
-// figure: it prints the figures there and fails its bound.
+// two wikilinks per note; no embeddings, so no semantic edges). Note ids and
+// timestamps are fixed: Louvain is seeded from the node ids and fed in id
+// order (#816), so random ids gave a different partition, and a different
+// figure, on every run (1,863-2,357 tokens over 5 runs). Tokens are
+// characters / 4, the premise benchmark's estimate. The call takes only
+// `vaultId` (and follows `truncated.cursor`), so this file runs unchanged on
+// code from before #426 to give the "before" figure: it prints the figures
+// there and fails its bound.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -74,13 +77,16 @@ beforeAll(async () => {
   const inserted = await db
     .insert(notes)
     .values(
-      rows.map(({ path, type, tags }) => ({
+      rows.map(({ path, type, tags }, i) => ({
+        // Fixed per note; the test database is created afresh for every run, and no other file uses this prefix.
+        id: `42600000-0000-4000-8000-${String(i).padStart(12, '0')}`,
         vaultId,
         type,
         name: path.slice(path.lastIndexOf('/') + 1),
         path,
         frontmatter: { type, title: path, tags, timestamp: '2026-10-01T00:00:00.000Z' },
         body: `Notes on ${path}.`,
+        updatedAt: new Date('2026-10-01T00:00:00.000Z'),
       })),
     )
     .returning({ id: notes.id, path: notes.path })
@@ -94,7 +100,7 @@ afterAll(async () => {
 })
 
 describe('graph default answer on a 500-note vault', () => {
-  it('is the community view: about one default budget, against ~342k tokens for the node list before #426', async () => {
+  it('is the community view: one page under 1,000 tokens, against ~342k tokens for the node list before #426', async () => {
     let first = 0
     let total = 0
     let pages = 0
@@ -114,8 +120,9 @@ describe('graph default answer on a 500-note vault', () => {
     } while (cursor !== null && pages < 1_000)
     console.log(`[#426] graph {vaultId} on 500 notes: first page ${first} tokens; whole default answer ${total} tokens in ${pages} pages`)
     expect(json!.aggregated).toBe(true)
-    // Before #426 (the node list, 500 nodes and ~3,700 edges): 342,240 tokens in 173 pages.
-    expect(pages).toBeLessThanOrEqual(2)
-    expect(total).toBeLessThan(2_500)
+    // Before #426 (the node list, 500 nodes and ~3,700 edges): 342,218 tokens in 173 pages.
+    // With these fixed ids: 857 tokens, one page.
+    expect(pages).toBe(1)
+    expect(total).toBeLessThan(1_000)
   })
 })
