@@ -1488,8 +1488,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   from both the note embedding queue and the repository extraction
   queue — this is the shared mechanism, not two parallel ones. Both sides
   roll up blocks (ADR-004 §2.5): a neighbour's similarity is its best
-  block's to the best of the node's query vectors — every block of a note,
-  the file-level block of a file — one row per neighbour.
+  block's to the best of the node's query vectors — a note's first 16
+  blocks (`EDGE_QUERY_BLOCKS`; each is one HNSW search per owner type), the
+  file-level block of a file — one row per neighbour. The searches run before
+  the transaction that locks the note (`FOR SHARE`, against a purge), so a
+  long note's recompute never holds off writes to it.
 
 ### 5.7 Real-time collaboration (`server/src/sync/`)
 
