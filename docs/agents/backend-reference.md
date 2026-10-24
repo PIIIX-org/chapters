@@ -1575,7 +1575,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `test/mcp-list-changed.test.ts` covers both paths.
 - **Auth**: bearer token → `resolveMcpToken()` (same live-resolution
   guarantee as everywhere else) → per-connection rate limit
-  (`rate-limit.ts`, default 120/min, in-process — see §9).
+  (`rate-limit.ts`, default 120/min, in-process — see §9). The window
+  runs 60 s from its first request; `checkRateLimit` returns `{ok:
+  false, retryAfterMs}` (time left in the window, 1-60000) for a request
+  over the limit, and the route answers HTTP 429 with `Retry-After:
+  ceil(retryAfterMs / 1000)` and a JSON-RPC error (#440): `{jsonrpc:
+  "2.0", id, error: {code: -32000, message: "rate limit exceeded for this
+  connection", data: <the RATE_LIMITED error envelope: retryable,
+  retryAfterMs>}}`, `id` echoing the request's (null for a batch or a
+  notification). A 401 is still `{error}`.
 - **Scoping** (`server.ts`): an `account`-scoped connection can address
   any resource the user can reach; a `vault`- or `repository`-scoped
   connection is **hard-pinned** — passing a different id throws, it's
@@ -1879,8 +1887,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   reference (`resolveGraphNode`) is `AMBIGUOUS` with the node ids; #447
   turns it into a candidates answer and adds suggestions to graph
   lookups through the same `McpToolError` extra. `rateLimitedError(ms)`
-  is the `RATE_LIMITED` envelope #440 sends as JSON-RPC `error.data`
-  with HTTP 429 (`routes.ts` unchanged until then). Write statuses stay
+  is the `RATE_LIMITED` envelope `routes.ts` sends as JSON-RPC
+  `error.data` with HTTP 429 (#440, **Auth** above). Write statuses stay
   results: `status: 'retry'` (`write-result.ts`), `merged`,
   `conflicted`. `test/mcp-errors.test.ts` covers the code families,
   `retryable`, scoped suggestions and the wrapped SDK refusals.
@@ -2405,7 +2413,7 @@ flips both.
 | Tokens are stored only as a SHA-256 hash; the raw token is in neither the token's `mcp_connections` row, the audit events naming that connection nor the connection listing | holds | `mcp-token-lifecycle` | `token stored only as its SHA-256 hash` |
 | The MCP limit (`MCP_RATE_LIMIT`, default 120/min) refuses request N+1 with HTTP 429 | holds | `mcp-rate-limit` | `rate limit: request MCP_RATE_LIMIT+1 on one connection within a minute gets HTTP 429` |
 | The limit is per connection, not per user: a user with N tokens gets N x the limit | holds (by design today) | `mcp-rate-limit` | `rate limit: counted per connection (another token of the same user is not limited)` |
-| The 429 carries `Retry-After` and a JSON-RPC error body | **defect #440**: no header, body `{"error":"rate limit exceeded for this connection"}` | `mcp-rate-limit` (pins today's 429) | the two `rate limit: the 429 ...` checks (known defects) |
+| The 429 carries `Retry-After` and a JSON-RPC error body | holds (#440): `Retry-After` in seconds until the window ends, a JSON-RPC error with the request's `id` and the `RATE_LIMITED` envelope as `error.data` | `mcp-rate-limit` | the two `rate limit: the 429 ...` checks |
 | B's search, graph, `find_symbols`, related-note edges (local graph, backlinks), notifications, perspective listings, vaults, repositories and teams name nothing of A's | holds | `account-separation` | `separation: B's ... names nothing of A's` (six checks) |
 | `lookup_user` returns only `{id, email}` of an active account; deactivated and unknown emails answer alike | holds; any active account is found by exact email (sharing needs the id) | `account-separation` | `separation: B's lookup_user returns A's id and email only` |
 | B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault); MCP's not-found is the same envelope bytes, with no suggestions from A's containers (#439) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
