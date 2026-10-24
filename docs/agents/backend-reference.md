@@ -1262,9 +1262,34 @@ until #453's extractor-version bump extracts them again). On the budget
 ladder a row's `locations` form is one line, `from -> to relation
 evidence`. `mcp/prompts.ts`'s path prompt still prints ids.
 
+`resolve-node.ts` (#447) turns a node reference into a node for MCP
+`graph`'s `neighborsOf`, `find_graph_path`'s ends, the REST
+`/vaults/:id/graph/path` and `/graph/merged/path` routes and the
+`summarize_concept_chain` prompt. `resolveNode(resources, ref)` tries, in
+order: the id; the exact path (both indexed, the fast path); then one
+query per table with the tier as a `CASE` and `count(*) over (partition by
+tier)`, limit 11: the path in any case, a note path with `.md` or (for a
+ref without an extension) a file path without its extension; a path
+suffix on a `/` boundary (`right(lower(path), n + 1) = '/' || lower(ref)`,
+for a ref without an extension also against the extension-less file path,
+so `store.ts` never matches `store.ts.orig`);
+a note's frontmatter `title`. Graph nodes have no symbols, so no symbol
+tier. One match is `{node}`; several are `{candidates, next, total}`
+(`{path, kind, id}`, shorter path first, then path and id; 10 shown,
+`next` the 11th as a `limit` + 1 read); none is `{suggestions}` (empty for
+a node id, so an id out of reach answers as a missing one): up to 5
+paths from a pool of at most 200 per table (same basename without
+extension, a folder ending like the ref's, a basename containing it or
+sharing its first two characters), ranked by the edit distance between the
+ref and the path's last as many segments. Every query is bounded by
+`resources` (live notes of its vaults, files of its repositories), which
+the caller's access resolved, so neither list can name a node outside its
+reach. MCP answers candidates as a budgeted `{end?, matches?, candidates,
+truncated}` (`end` for `find_graph_path`, `matches` past 10) and none as
+`NOT_FOUND` with `suggestions`; REST answers candidates `200 {end,
+candidates, truncated: false | n more}` and none `404 {error, suggestions?}`.
+
 `neighbors.ts` (#426) is the local graph without the whole graph:
-`resolveGraphNode(resources, ref)` takes a node id or exact path (none or
-several matches are refused, the latter with the ids; #447 widens it), and
 `neighborhood(resources, center, {depth, edgeTypes, types, tags, limit})`
 walks ring by ring in SQL over the frontier's ids only: links out and in
 (`note_links_target_idx`; `repo:` links to a frontier file by reading the
@@ -1575,7 +1600,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `test/mcp-list-changed.test.ts` covers both paths.
 - **Auth**: bearer token → `resolveMcpToken()` (same live-resolution
   guarantee as everywhere else) → per-connection rate limit
-  (`rate-limit.ts`, default 120/min, in-process — see §9).
+  (`rate-limit.ts`, default 120/min, in-process — see §9). The window
+  runs 60 s from its first request; `checkRateLimit` returns `{ok:
+  false, retryAfterMs}` (time left in the window, 1-60000) for a request
+  over the limit, and the route answers HTTP 429 with `Retry-After:
+  ceil(retryAfterMs / 1000)` and a JSON-RPC error (#440): `{jsonrpc:
+  "2.0", id, error: {code: -32000, message: "rate limit exceeded for this
+  connection", data: <the RATE_LIMITED error envelope: retryable,
+  retryAfterMs>}}`, `id` echoing the request's (null for a batch or a
+  notification). A 401 is still `{error}`.
 - **Scoping** (`server.ts`): an `account`-scoped connection can address
   any resource the user can reach; a `vault`- or `repository`-scoped
   connection is **hard-pinned** — passing a different id throws, it's
@@ -1875,12 +1908,12 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   (`requireVaultOwner`, `requireRepositoryOwner`, `requireTeamOwner`)
   answer that same `NOT_FOUND` for a container the caller cannot reach
   (a team it is not a member of) and `PERMISSION_REQUIRED` only for one
-  it can see. An ambiguous graph node
-  reference (`resolveGraphNode`) is `AMBIGUOUS` with the node ids; #447
-  turns it into a candidates answer and adds suggestions to graph
-  lookups through the same `McpToolError` extra. `rateLimitedError(ms)`
-  is the `RATE_LIMITED` envelope #440 sends as JSON-RPC `error.data`
-  with HTTP 429 (`routes.ts` unchanged until then). Write statuses stay
+  it can see. A graph node reference (#447, `graph/resolve-node.ts`)
+  that names several nodes is a successful candidates answer, not an
+  error; one that names none is `NOT_FOUND` with in-reach `suggestions`.
+  `rateLimitedError(ms)`
+  is the `RATE_LIMITED` envelope `routes.ts` sends as JSON-RPC
+  `error.data` with HTTP 429 (#440, **Auth** above). Write statuses stay
   results: `status: 'retry'` (`write-result.ts`), `merged`,
   `conflicted`. `test/mcp-errors.test.ts` covers the code families,
   `retryable`, scoped suggestions and the wrapped SDK refusals.
@@ -2423,7 +2456,7 @@ flips both.
 | Tokens are stored only as a SHA-256 hash; the raw token is in neither the token's `mcp_connections` row, the audit events naming that connection nor the connection listing | holds | `mcp-token-lifecycle` | `token stored only as its SHA-256 hash` |
 | The MCP limit (`MCP_RATE_LIMIT`, default 120/min) refuses request N+1 with HTTP 429 | holds | `mcp-rate-limit` | `rate limit: request MCP_RATE_LIMIT+1 on one connection within a minute gets HTTP 429` |
 | The limit is per connection, not per user: a user with N tokens gets N x the limit | holds (by design today) | `mcp-rate-limit` | `rate limit: counted per connection (another token of the same user is not limited)` |
-| The 429 carries `Retry-After` and a JSON-RPC error body | **defect #440**: no header, body `{"error":"rate limit exceeded for this connection"}` | `mcp-rate-limit` (pins today's 429) | the two `rate limit: the 429 ...` checks (known defects) |
+| The 429 carries `Retry-After` and a JSON-RPC error body | holds (#440): `Retry-After` in seconds until the window ends, a JSON-RPC error with the request's `id` and the `RATE_LIMITED` envelope as `error.data` | `mcp-rate-limit` | the two `rate limit: the 429 ...` checks |
 | B's search, graph, `find_symbols`, related-note edges (local graph, backlinks), notifications, perspective listings, vaults, repositories and teams name nothing of A's | holds | `account-separation` | `separation: B's ... names nothing of A's` (six checks) |
 | `lookup_user` returns only `{id, email}` of an active account; deactivated and unknown emails answer alike | holds; any active account is found by exact email (sharing needs the id) | `account-separation` | `separation: B's lookup_user returns A's id and email only` |
 | B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault); MCP's not-found is the same envelope bytes, with no suggestions from A's containers (#439) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
