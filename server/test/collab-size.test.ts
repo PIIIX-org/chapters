@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as Y from 'yjs'
-import { bodyMeasured, updateFits } from '../src/sync/collab-size.js'
+import { bodyMeasured, restBytes, updateFits } from '../src/sync/collab-size.js'
 
 const LIMIT = 1000
 /** Serializing the body is the whole-document work the guard must keep off ordinary keystrokes (vi.spyOn's key type leaves out `toString`). */
@@ -212,6 +212,63 @@ describe('collab size guard: the rest of the document (#780)', () => {
     }
     expect(toString).not.toHaveBeenCalled()
     expect(toJSON).not.toHaveBeenCalled()
+  })
+})
+
+/** lib0's variable-length unsigned integer, as Yjs's v1 encoder writes it. */
+function varUint(n: number): number[] {
+  const out: number[] = []
+  while (n > 0x7f) {
+    out.push(0x80 | (n & 0x7f))
+    n = Math.floor(n / 128)
+  }
+  out.push(n)
+  return out
+}
+
+function varString(s: string): number[] {
+  const bytes = [...Buffer.from(s, 'utf8')]
+  return [...varUint(bytes.length), ...bytes]
+}
+
+/**
+ * A v1 update holding one string item by `client` at clock 0 under the root
+ * `root`, as the map entry `key` (a struct with `parentSub` set): no editor
+ * makes it, any client can send it. Info byte: content ref 4 (string) and
+ * bit 6 (a parentSub follows); no origins, so the parent is written as a
+ * root's name.
+ */
+function mapEntryOnRoot(client: number, root: string, key: string, text: string): Uint8Array {
+  return Uint8Array.from([
+    ...varUint(1), // one client section
+    ...varUint(1), // one struct
+    ...varUint(client),
+    ...varUint(0), // clock
+    4 | 0x20,
+    ...varUint(1), // the parent is a root, named:
+    ...varString(root),
+    ...varString(key),
+    ...varString(text),
+    ...varUint(0), // no deletions
+  ])
+}
+
+// #952: a map entry on the body root holding a string was neither body text nor rest, so neither bound counted it.
+describe('collab size guard: map entries on the body root (#952)', () => {
+  it('counts a string map entry on the body root as rest, so one past the cap is refused', () => {
+    const { server } = pair('short body')
+    const update = mapEntryOnRoot(77, 'body', 'k', 'x'.repeat(5 * LIMIT))
+    expect(updateFits(server, update, LIMIT)).toBe(false)
+
+    // What Yjs makes of it: an entry of the body type's map, not body text, and the rest counts it.
+    Y.applyUpdate(server, update)
+    expect(server.getText('body').toString()).toBe('short body')
+    expect(restBytes(server)).toBe(1 + 5 * LIMIT)
+  })
+
+  it('still leaves the body text to the body measure', () => {
+    const { server } = pair('x'.repeat(LIMIT))
+    expect(restBytes(server)).toBe(0)
   })
 })
 
