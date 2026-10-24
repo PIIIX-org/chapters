@@ -2,7 +2,6 @@ import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { embedder } from './embeddings.js'
 import { passesFilters, type GraphFilters } from '../graph/assemble.js'
-import { SNIPPET_CHARS, SNIPPET_LINES } from '../repositories/code-blocks.js'
 
 function uuidArray(ids: string[]): SQL {
   // ponytail: single Postgres array parameter literal instead of N placeholders (DB-07).
@@ -86,15 +85,9 @@ async function blockLeg(query: SQL): Promise<unknown> {
 /** A symbol block `b`'s bare name: `inner_path` without its `symbol_parent.` prefix. */
 const SYMBOL_NAME = sql.raw(`CASE WHEN b.symbol_parent IS NULL THEN b.inner_path ELSE substr(b.inner_path, length(b.symbol_parent) + 2) END`)
 
-/**
- * The columns of a symbol hit from block `b` of file `f`, its snippet being
- * the exact text of its first `SNIPPET_LINES` lines cut to `SNIPPET_CHARS`
- * characters (#418: lines split on `\n` only, `\r` and blank lines kept;
- * code-blocks.ts embeds the same text).
- */
+/** The columns of a symbol hit from block `b` of file `f`; the snippet is the one code-blocks.ts stored and embedded. */
 const SYMBOL_COLUMNS = sql`b.id, b.owner_id AS file_id, b.container_id, f.path, ${SYMBOL_NAME} AS name,
-  b.symbol_kind AS kind, b.symbol_parent AS parent, b.start_line, b.end_line,
-  ${sql.raw(`left(array_to_string((string_to_array(f.content, E'\\n'))[b.start_line:least(b.end_line, b.start_line + ${SNIPPET_LINES - 1})], E'\\n'), ${SNIPPET_CHARS})`)} AS snippet`
+  b.symbol_kind AS kind, b.symbol_parent AS parent, b.start_line, b.end_line, coalesce(b.snippet, ${SYMBOL_NAME}) AS snippet`
 
 interface Row {
   id: string
@@ -211,21 +204,11 @@ async function symbolRows(
   const rows =
     mode === 'keyword'
       ? await db.execute(sql`
-          -- By name (inner_path is the name, or Class.name), or by the snippet's text in a file whose content matches at all.
-          WITH matched AS MATERIALIZED (
-            SELECT id, string_to_array(content, E'\n') AS lines FROM repository_files
-            WHERE repository_id = ANY(${repos}) AND content ILIKE ${pattern}
-          ), hits AS (
-            SELECT b.id FROM blocks b
-            WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
-              AND b.inner_path ILIKE ${pattern}
-            UNION
-            SELECT b.id FROM blocks b JOIN matched m ON m.id = b.owner_id
-            WHERE b.owner_type = 'code' AND b.kind = 'symbol' ${kind}
-              AND left(array_to_string(m.lines[b.start_line:least(b.end_line, b.start_line + ${SNIPPET_LINES - 1})], E'\n'), ${SNIPPET_CHARS}) ILIKE ${pattern}
-          )
+          -- By name, by Class.name (inner_path), or by snippet, as the symbol table was matched before blocks.
           SELECT ${SYMBOL_COLUMNS}
-          FROM hits JOIN blocks b ON b.id = hits.id JOIN repository_files f ON f.id = b.owner_id
+          FROM blocks b JOIN repository_files f ON f.id = b.owner_id
+          WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
+            AND (b.inner_path ILIKE ${pattern} OR (b.snippet IS NOT NULL AND b.snippet ILIKE ${pattern}))
           ORDER BY
             CASE
               WHEN lower(${SYMBOL_NAME}) = lower(${query}) OR lower(b.inner_path) = lower(${query}) THEN 1

@@ -853,6 +853,8 @@ export const blocks = pgTable(
      * name may itself hold a `.` (`namespace A.B`), so the split is kept.
      */
     symbolParent: text('symbol_parent'),
+    /** A symbol block's snippet (code-blocks.ts): the keyword legs match it and hits show it, as `repository_file_symbols.snippet` was. */
+    snippet: text('snippet'),
     startLine: integer('start_line').notNull(),
     endLine: integer('end_line').notNull(),
     contentHash: text('content_hash').notNull(),
@@ -862,8 +864,8 @@ export const blocks = pgTable(
   },
   (t) => [
     unique('blocks_owner_block').on(t.ownerType, t.ownerId, t.blockId),
+    // The unique index also serves (owner_type, owner_id) lookups.
     index('blocks_container_idx').on(t.containerId),
-    index('blocks_owner_idx').on(t.ownerType, t.ownerId),
   ],
 )
 
