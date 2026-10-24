@@ -1,4 +1,4 @@
-import { readFile, rm, stat } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -7,14 +7,13 @@ import { and, eq, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositories } from '../db/schema.js'
 import { decryptCredential } from './credentials.js'
-import { listFilesRecursive } from './fs-scan.js'
+import { listFilesRecursive, readRepositoryFiles } from './fs-scan.js'
 import { authenticatedUrl, redactGitSecrets, splitGitUrlCredential } from './git-remote.js'
 import { isSafeGitUrl } from './permissions.js'
-import { syncRepositoryFiles, type FileUpdate } from './store.js'
+import { syncRepositoryFiles } from './store.js'
 import { recordJob } from '../monitoring/metrics.js'
 
 const IGNORED = /(^|\/)(\.git|node_modules|\.next|dist|build|\.turbo)(\/|$)/
-const MAX_FILE_BYTES = 1_048_576 // 1MB per file limit to prevent heap exhaustion
 const MAX_INDEXED_FILES = 10_000
 
 export type RepositorySyncStatus = (typeof repositories.$inferSelect)['syncStatus']
@@ -107,24 +106,8 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     await simpleGit({ timeout: { block: 300_000 } }).clone(cloneUrl, workDir, ['--depth', '1'])
 
     const allPaths = await listFilesRecursive(workDir, IGNORED)
-    const currentPaths = allPaths.slice(0, MAX_INDEXED_FILES)
-    const files: FileUpdate[] = []
-    for (const path of currentPaths) {
-      try {
-        const fullPath = join(workDir, path)
-        const fileStat = await stat(fullPath)
-        if (fileStat.size > MAX_FILE_BYTES) {
-          continue
-        }
-        const content = await readFile(fullPath, 'utf8')
-        if (content.includes('\0')) {
-          continue
-        }
-        files.push({ path, content })
-      } catch (err) {
-        console.warn(`[git-sync] failed reading ${path}:`, err)
-      }
-    }
+    // Skipped files (too large, binary) leave currentPaths, so a stale row goes (#923).
+    const { files, currentPaths } = await readRepositoryFiles(workDir, allPaths.slice(0, MAX_INDEXED_FILES), 'git-sync')
     await syncRepositoryFiles(repositoryId, files, currentPaths)
 
     // A depth-1 clone checks out the remote's default branch, so the name of

@@ -196,7 +196,7 @@ revision bodies, so older code goes on a migrated database only after
 | `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), actor detail (#403). `idempotency_key` stays unused: #477's keys need the call's arguments and its whole answer, also for writes that record no revision, so they live in `write_idempotency` |
 | `note_revisions.body_delta` / `delta_base_id` / `body_bytes` (migration 0026) | a compacted revision (#501, **Revision compaction** below): `body` is `''`, `body_delta` (jsonb) rebuilds the body from the revision `delta_base_id` (FK to `note_revisions`, NO ACTION, partial index `note_revisions_delta_base`), `body_bytes` is its UTF-8 size; all three null on a revision stored whole (check `note_revisions_delta_check`). SQL `note_revision_body(body, body_delta, delta_base_id)` returns any revision's body (`revisionBody` in store-tx.ts); `note_revision_patch(base, delta)` applies a delta. Kept out of the Drizzle model like `seq`. 0026 merged after 0027, so its journal `when` (1791750000000) is above 0027's: drizzle applies an entry only when its `when` is above the newest one already applied, so an instance that ran 0027 first still runs 0026 (`test/migration-order.test.ts`) |
 | `write_idempotency` (migration 0025) | the first answer of an MCP write sent with `idempotency_key` (#477, `mcp/write-result.ts` `runWrite`): PK (`connection_id`, `key`), `tool`, `args_hash` (sha256 of the tool, vault and canonical arguments), `note_id` (FK to `notes`, cascade: purging the note deletes its keys and the note text their answers hold), `result` jsonb, `created_at` (indexed). A write that commits inserts its row **inside its own store transaction** (`WriteOptions.recordKey`, called with the committed row by `createNote`, `writeNote`, the rename move, `softDeleteNote`, `restoreNote`), so a crash after COMMIT and before the answer still leaves the key and the retry replays (ADR-003 §4, §10); its recorded answer has `indexed: false`. Answers that commit nothing (`conflicted`) are inserted after the call. A repeat with the same hash answers `result` + `replayed: true`; another hash is refused. Every keyed call first deletes rows older than 24 h. Calls with one key run one at a time (in-process key lock). Rows also go with their connection (FK cascade) |
-| `note_reads` (migration 0028, after #861's 0026 and #869's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` (only a read that returned the whole body, #420) and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
+| `note_reads` (migration 0028, after #861's 0026 and #869's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` (every page too: the `rev` it reports, #961) and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
 | `note_crdt` | Yjs snapshot per note id (replaced `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
 | `note_projections` | per note and projection (`file`/`dir_index`/`embedding`): `target_seq`, `applied_seq`, `index_version`, lease and error columns; `note_projections_pending` indexes the work queue |
@@ -534,8 +534,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   before the row or file is written): the note is serialized and parsed
   back; if that fails, or the frontmatter (deep-equal) or body (exact)
   differs, the write is refused with an `OkfValidationError`
-  (`note cannot be stored: ...`) — HTTP 400 over REST, an `isError`
-  result over MCP. The file projection renders the row, so a note its own
+  (`note cannot be stored: ...`) — HTTP 400 over REST, an `OKF_INVALID`
+  error over MCP (#439). The file projection renders the row, so a note its own
   file could not reproduce must never be stored.
 - **`store.ts`**: the note write path. Every write validates, then runs
   one store transaction (see "The S2a store" above): row, revision at the
@@ -557,8 +557,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `<file>.tmp` used to let two writes truncate and rename away each
   other's temp file (raw `ENOENT` naming server paths) and leave the row
   and the file on different writes. The MCP tool wrapper returns only the
-  code of a Node system error (`internal storage error (ENOENT)`); the
-  full error goes to the server log. The lock orders writes; it does not
+  code of a Node system error (an `INTERNAL` error `internal storage error
+  (ENOENT)`, #439); the full error goes to the server log. The lock orders writes; it does not
   merge them: a whole `body` write replaces the body, so two agents that
   each read a note and write it back with a line appended still keep only
   the later one (an `append` op resolves against the live text and keeps
@@ -816,8 +816,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
 - **A whole body without `base_rev` uses the last read as its base**
   (#408, #476, `mcp/last-read.ts`): MCP `read_note` and `export_note`
   record, per connection and note id, the `rev` they served (`read_note`
-  only when it returned the whole body: a first page with `truncated:
-  false`, #420); an
+  on every page too: all pages of a cursor are that rev's text, since a
+  changed note refuses the cursor, so the base is exact; #961 replaced
+  #420's whole-body-only rule, which left no base after a paged read and
+  let the next whole body replace concurrent edits); an
   `edit_note` with `body` and no `base_rev` takes that revision as
   `NoteEdit.base` (stale-base merge above; the answer echoes it as
   `baseRev`). Each whole body the connection writes moves it to the
@@ -1064,7 +1066,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   the body it replaces, so a note stored before the cap can still shrink
   and take frontmatter edits. REST answers 413 `{ error: "note body is N
   bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)" }`, MCP
-  `create_note`/`edit_note` an `isError` result with the same text,
+  `create_note`/`edit_note` a `TOO_LARGE` error with the same message and the limit as `rule` (#439),
   import lists the note in `skipped`; a revert to a revision over the cap
   (and larger than the current body) is refused the same way. A rename
   checks every body its link rewrite changes (the note's own self-links,
@@ -1261,9 +1263,34 @@ until the first boot with #453 re-extracts them: their file has `extractor_versi
 ladder a row's `locations` form is one line, `from -> to relation
 evidence`. `mcp/prompts.ts`'s path prompt still prints ids.
 
+`resolve-node.ts` (#447) turns a node reference into a node for MCP
+`graph`'s `neighborsOf`, `find_graph_path`'s ends, the REST
+`/vaults/:id/graph/path` and `/graph/merged/path` routes and the
+`summarize_concept_chain` prompt. `resolveNode(resources, ref)` tries, in
+order: the id; the exact path (both indexed, the fast path); then one
+query per table with the tier as a `CASE` and `count(*) over (partition by
+tier)`, limit 11: the path in any case, a note path with `.md` or (for a
+ref without an extension) a file path without its extension; a path
+suffix on a `/` boundary (`right(lower(path), n + 1) = '/' || lower(ref)`,
+for a ref without an extension also against the extension-less file path,
+so `store.ts` never matches `store.ts.orig`);
+a note's frontmatter `title`. Graph nodes have no symbols, so no symbol
+tier. One match is `{node}`; several are `{candidates, next, total}`
+(`{path, kind, id}`, shorter path first, then path and id; 10 shown,
+`next` the 11th as a `limit` + 1 read); none is `{suggestions}` (empty for
+a node id, so an id out of reach answers as a missing one): up to 5
+paths from a pool of at most 200 per table (same basename without
+extension, a folder ending like the ref's, a basename containing it or
+sharing its first two characters), ranked by the edit distance between the
+ref and the path's last as many segments. Every query is bounded by
+`resources` (live notes of its vaults, files of its repositories), which
+the caller's access resolved, so neither list can name a node outside its
+reach. MCP answers candidates as a budgeted `{end?, matches?, candidates,
+truncated}` (`end` for `find_graph_path`, `matches` past 10) and none as
+`NOT_FOUND` with `suggestions`; REST answers candidates `200 {end,
+candidates, truncated: false | n more}` and none `404 {error, suggestions?}`.
+
 `neighbors.ts` (#426) is the local graph without the whole graph:
-`resolveGraphNode(resources, ref)` takes a node id or exact path (none or
-several matches are refused, the latter with the ids; #447 widens it), and
 `neighborhood(resources, center, {depth, edgeTypes, types, tags, limit})`
 walks ring by ring in SQL over the frontier's ids only: links out and in
 (`note_links_target_idx`; `repo:` links to a frontier file by reading the
@@ -1569,9 +1596,28 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `sessionIdGenerator: undefined`, a fresh `McpServer` + transport
   built per HTTP request. No cross-connection caching is possible by
   construction; auth and permissions are recomputed every call.
+  With no session and no stream, the server can send nothing unasked
+  (#436): `GET` and `DELETE` on both paths answer `405` with
+  `Allow: POST` and the SDK transport's JSON-RPC error
+  (`{"jsonrpc":"2.0","error":{"code":-32000,"message":"Method not
+  allowed."},"id":null}`), before authentication, and `buildServer`
+  overrides the SDK's `listChanged: true` with `false` on each list
+  capability it has (`tools`; `resources` when a manual is registered;
+  `prompts` when they are registered: not with an allow-list, not on a
+  `reader` profile). A list changes only
+  with permissions, and the next `tools/list` shows it.
+  `test/mcp-list-changed.test.ts` covers both paths.
 - **Auth**: bearer token → `resolveMcpToken()` (same live-resolution
   guarantee as everywhere else) → per-connection rate limit
-  (`rate-limit.ts`, default 120/min, in-process — see §9).
+  (`rate-limit.ts`, default 120/min, in-process — see §9). The window
+  runs 60 s from its first request; `checkRateLimit` returns `{ok:
+  false, retryAfterMs}` (time left in the window, 1-60000) for a request
+  over the limit, and the route answers HTTP 429 with `Retry-After:
+  ceil(retryAfterMs / 1000)` and a JSON-RPC error (#440): `{jsonrpc:
+  "2.0", id, error: {code: -32000, message: "rate limit exceeded for this
+  connection", data: <the RATE_LIMITED error envelope: retryable,
+  retryAfterMs>}}`, `id` echoing the request's (null for a batch or a
+  notification). A 401 is still `{error}`.
 - **Scoping** (`server.ts`): an `account`-scoped connection can address
   any resource the user can reach; a `vault`- or `repository`-scoped
   connection is **hard-pinned** — passing a different id throws, it's
@@ -1698,12 +1744,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `test/mcp-tool-budget.test.ts` measures, per profile, the ADR-004 §2.6
   sum: characters / 4 of `tools/list`, `prompts/list` and the
   `initialize` instructions. It fails a reader account token over 2,000
-  tokens (no prompts on reader, #428; measured 7,949 characters with
-  #434's annotations, 7,676 before) and a writer one whose `tools/list`
-  plus instructions are over 4,000 (15,429 with #434; 15,036 with #433's
-  output schemas, 14,286 before; its `prompts/list`, 10,042, is
-  reported), reports admin (`tools/list` 42,101 with #434; 39,512 with
-  #433, 37,512 before; its ceiling, 43,000, is in
+  tokens (no prompts on reader, #428; measured 7,984 characters with
+  #435's instructions, of which `tools/list` 7,746 and instructions 238;
+  7,949 with #434's annotations, 7,676 before) and a writer one whose
+  `tools/list` plus instructions are over 4,000 (15,669 with #435:
+  15,226 + 443; 15,429 with #434; 15,036 with #433's output schemas,
+  14,286 before; its `prompts/list`, 10,042, is reported), reports admin
+  (`tools/list` 41,811 with #435, plus 443 of instructions; 42,101 with
+  #434; 39,512 with #433, 37,512 before; its ceiling, 43,000, is in
   `mcp-tool-schema.test.ts`), checks the
   `tools/list` bytes are the same on every call and for two vault pins of
   a reader token (a writer or admin list follows the live pin permission),
@@ -1727,12 +1775,38 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   successful answer, after the write committed, and a mismatch would
   turn the answer into an `Output validation error`; the schema is
   therefore the fields every write answer has (applied, merged,
-  conflicted, retry, dry run, replay, delete). Errors stay `isError`
-  text without `structuredContent`, which the SDK does not check.
+  conflicted, retry, dry run, replay, delete). Errors are the error
+  envelope (#439, below) in `content[0].text` without `structuredContent`:
+  the SDK server does not check an `isError` answer, but the SDK client
+  checks any `structuredContent` against the listed outputSchema, error
+  or not, so `{error}` there would fail on a write tool.
   Read tools get no output schema until their shapes settle (#445,
   #432, #439). `test/mcp-structured-content.test.ts` covers each tool
   family through the real client (which validates against the listed
   schema), every write answer shape and the errors.
+- **Instructions** (#435): `instructionsFor(profile)` in
+  `mcp/instructions.ts` is the `initialize` result's `instructions`
+  (`new McpServer(info, {instructions})` in `buildServer`): one constant
+  text per profile, with no id, name, date or pin, so every token of a
+  profile gets the same bytes (#681). Reader: tools with
+  `budget_tokens` (characters / 4) fit it and end with `truncated`
+  (`search`, `list_vaults` and `list_repositories` take no budget and
+  answer bare arrays), the cursor is the only way on (read_note/read_file
+  page long bodies only that way), manuals are
+  `elara://manual/conventions` and one per family. Writer and admin (the
+  same text) add the whole-`body` merge base (`base_rev`, else this
+  token's last `read_note`, paged or not, within `READ_WINDOW_HOURS`,
+  24 h, `last-read.ts`; `ops` edit the live text) and the retry
+  rule, scoped to note writes ("Retry a note write with the same
+  `idempotency_key`": only the note writes take the key, admin's other
+  writes refuse it). Keyed on profile only: a
+  `read`-access token with the `writer` profile also gets the write
+  sentence. The reader text fits the 2,000-token budget because the
+  shared `budgetArgs` descriptions (`response.ts`) became `Max tokens;
+  default N` and `` `truncated.cursor` `` (the instructions explain
+  both). `test/mcp-instructions.test.ts` checks the rules per profile,
+  that every manual named is in the token's `resources/list`, and the
+  same bytes across two initializes and two vault pins per profile.
 - **Tool annotations** (#434, ADR-004 §2.6): `toolAnnotations()` in
   `server.ts` derives each tool's MCP `annotations` from its `tool()`
   record; `registerTool` lists them and `McpToolInfo` carries the same
@@ -1790,8 +1864,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols`, `graph` (the community view by default since #426, `aggregate: "none"` for every node, `community` for one community's members, `neighborsOf` + `depth` 1-3 for the local graph from `neighbors.ts`; `edgeTypes` applied before assembly; `limit` keeps the first nodes of the view's ranking (largest communities; most edges, then path; nearest, then path) and the edges among them, `truncated.total.nodes` `">limit"`; filters `types`, `tags`; conflicting arguments are refused; community numbers depend on `types`, `tags` and `edgeTypes`; `cappedGroups` is the whole graph's in the community view and the listed nodes' groups otherwise; `narrow` names `neighborsOf` by id), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
   - *Prompts*: 20, registered in `prompts.ts`.
   *(Security invariant: MCP connections cannot create new MCP connections or mint tokens).*
-  Every handler is wrapped so thrown errors become a structured `isError`
-  result instead of an uncaught exception. Input schemas are strict
+  Every handler is wrapped so thrown errors become an `isError` result
+  instead of an uncaught exception. Input schemas are strict
   (#437): `tool()` wraps each zod shape with `strictArgs()`
   (`strict-input.ts`), so the SDK refuses an undeclared argument before
   anything runs, with a message that names it, suggests the parameter it
@@ -1801,6 +1875,57 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `filters`); free-form maps (`frontmatter`, the preference maps) are
   `z.record` and accept any key. `test/mcp-strict-args.test.ts` loops
   over every tool.
+- **Error envelope** (`mcp/errors.ts`, #439, ADR-004 §2.7): every failed
+  call answers `isError: true`, `content[0].text` =
+  `JSON.stringify({error: {code, message, retryable, retryAfterMs?, rule?,
+  field?, suggestions?}})` and no `structuredContent`. `envelope()` fixes
+  the key order and leaves absent fields out (never `suggestions: []`),
+  so one refusal is one byte string. A handler throws
+  `McpToolError(code, message, extra?)`; `toErrorEnvelope(err)` in the
+  `tool()` catch maps it and the domain errors: `CursorError` (its
+  code), `OkfValidationError` by its `refusal` (`OKF_INVALID`,
+  `TYPE_MISMATCH`, `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the
+  type rule, the depth limit), `NoteTooLargeError` (`TOO_LARGE`, the
+  limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
+  included) and `MaintenanceInProgressError` (`BUSY`, retryable), the
+  quarantine errors (`QUARANTINED`, the rule), `NoteEditError`
+  (`INVALID_ARGUMENT`), `NoteEditConflictError` and
+  `IdempotencyKeyReusedError` (`CONFLICT`), a Node system error
+  (`INTERNAL`, its code only, the error logged), anything else
+  (`INTERNAL` with its message; #443 adds a database-error branch here
+  that shows only the SQLSTATE). `CONFLICT`, `BUSY` and `QUARANTINED`
+  extend ADR-004's list, and `field` its envelope. The SDK's own
+  refusals (arguments its schema check rejects, an unknown tool, an
+  answer failing its outputSchema) are isError text it makes itself; a
+  wrapper on `CallToolRequestSchema` (next to the tools/list one) turns
+  every error result `tool()` did not make (a `WeakSet`) into the
+  envelope: arguments → `INVALID_ARGUMENT` (`argumentRefusal`: the tool's
+  strict schema re-parses the arguments; an unknown key first, `field`
+  its dotted path, `suggestions` the names strict-input would suggest,
+  else all of that object's keys; an enum's values, a discriminated
+  union's tag values for a bad `op`), an unknown tool →
+  `NOT_FOUND` (close names among `listedTools()`), else `INTERNAL`; the
+  message is the SDK's without `MCP error -32602: Input validation
+  error: `. Suggestions only from what the caller reaches: a `note not
+  found` after the access check carries `closest()` of
+  `nearbyNotePaths()` (live paths of that vault directly in the same
+  folder, and with the same last segment anywhere, each query up to 500;
+  at most 3 shown), while the access check's
+  own `not found` has none, so another account's id answers exactly
+  `{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}`
+  like a missing id (`account-separation`). The owner-only checks
+  (`requireVaultOwner`, `requireRepositoryOwner`, `requireTeamOwner`)
+  answer that same `NOT_FOUND` for a container the caller cannot reach
+  (a team it is not a member of) and `PERMISSION_REQUIRED` only for one
+  it can see. A graph node reference (#447, `graph/resolve-node.ts`)
+  that names several nodes is a successful candidates answer, not an
+  error; one that names none is `NOT_FOUND` with in-reach `suggestions`.
+  `rateLimitedError(ms)`
+  is the `RATE_LIMITED` envelope `routes.ts` sends as JSON-RPC
+  `error.data` with HTTP 429 (#440, **Auth** above). Write statuses stay
+  results: `status: 'retry'` (`write-result.ts`), `merged`,
+  `conflicted`. `test/mcp-errors.test.ts` covers the code families,
+  `retryable`, scoped suggestions and the wrapped SDK refusals.
 - **Budgets and the response envelope** (`response.ts`, #420, #422;
   ADR-004 §2.1): a tool registered with `budget: 'list' | 'read'`
   (`browse_vault`, `read_note`, `list_trash`, `note_history`,
@@ -1911,8 +2036,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `g` guards text (8 hex of the text's sha256) and rankings (of the ids
     before the position); a change refuses the cursor (`stale cursor`,
     `CURSOR_STALE`). The codes wait for the error envelope (#439).
-  - `read_note` records the last read (#864) in `Budgeted.rendered`, only
-    for a first page with `truncated: false` (the whole body).
+  - `read_note` records the last read (#864) in `Budgeted.rendered`, on
+    every page: the `rev` it reports, the merge base of a later whole-body
+    edit (#961).
   - `search` keeps its bare array and has no budget (its envelope waits
     for #441/#442/#458). `test/mcp-response-envelope.test.ts` drives each
     tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`
@@ -2111,6 +2237,24 @@ is the history record, not Chapters).
 3. **agent_push** (`push-routes.ts`) — `POST /repositories/sync`,
    bearer sync-token auth, the client sends its own file list directly
    — the closest analog to how a coding agent itself already works.
+
+**Which files are indexed** — git and local_path share one scan
+(`readRepositoryFiles` in `fs-scan.ts`) over the listed paths (each
+method's ignored directories and the binary extensions are not listed; at
+most 10,000 files). It skips a file over `MAX_FILE_BYTES` (1 MiB on disk) or holding
+a NUL byte: a server-side scan can't tell a stray NUL in a text file from
+a binary format, so it takes the file as binary. A skipped file is left out
+of `currentPaths` as well, so a row indexed from an earlier version is
+deleted with its symbols, imports, embedding and semantic edges: a file
+that grows past the cap or gains a NUL byte leaves the index (`read_file`
+answers `NOT_FOUND`, search and `find_symbols` stop finding it) and comes
+back on the first sync after it is indexable again (#923). The scan
+returns the skipped paths with a reason (`too_large`, `binary`), not
+reported anywhere yet (#465). A file that fails to read (gone since the
+listing, no permission) stays current and keeps its row. agent_push is
+the exception: the client chose to send the content as text, so
+`syncRepositoryFiles` strips NUL bytes and indexes the rest, with no
+per-file size check (the request body limit bounds it).
 
 **Credential encryption** (`credentials.ts`): AES-256-GCM,
 `CREDENTIALS_ENCRYPTION_KEY` (32-byte hex), used for both git
@@ -2392,7 +2536,7 @@ are idempotent rewrites.
 - **Secrets in backups** (SEC-06, revised by #409): the instance backup keeps password hashes, token hashes and TOTP secrets as stored (stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The scheduled local backup file is written with mode `0600` (through a temp file of the same mode) in a `0700` directory, whatever the umask (#493). The restore CLI prints counts, and only a driver message and code on errors. The `backup.json` digests (#493) are integrity checks, not a signature: they catch damage and truncation, not someone who can rewrite the whole archive.
 - **OIDC host-header sanitization**: Validated against `APP_URL` and injection characters to protect authorization code callbacks.
 - **Admin role hierarchy**: Strict `ROLE_RANK` enforcement preventing self-promotion or subordinate demotion of superadmins and instance owners.
-- **Ingestion bounds**: Git clone ingestion capped to 1MB per file and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`).
+- **Ingestion bounds**: git and local-path ingestion capped to 1 MiB per file (`MAX_FILE_BYTES`, `fs-scan.ts`) and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`); a file over the cap or with a NUL byte is skipped and drops out of the index (§5.10, #923).
 - **Global perspective guards**: Unvaulted graph perspectives are created only by instance admins and listed to and deleted by their creator only (#550; §5.5).
 - Full findings and the design changes they drove:
   `docs/superpowers/specs/2026-07-12-security-audit-findings.md` and
@@ -2415,10 +2559,10 @@ flips both.
 | Tokens are stored only as a SHA-256 hash; the raw token is in neither the token's `mcp_connections` row, the audit events naming that connection nor the connection listing | holds | `mcp-token-lifecycle` | `token stored only as its SHA-256 hash` |
 | The MCP limit (`MCP_RATE_LIMIT`, default 120/min) refuses request N+1 with HTTP 429 | holds | `mcp-rate-limit` | `rate limit: request MCP_RATE_LIMIT+1 on one connection within a minute gets HTTP 429` |
 | The limit is per connection, not per user: a user with N tokens gets N x the limit | holds (by design today) | `mcp-rate-limit` | `rate limit: counted per connection (another token of the same user is not limited)` |
-| The 429 carries `Retry-After` and a JSON-RPC error body | **defect #440**: no header, body `{"error":"rate limit exceeded for this connection"}` | `mcp-rate-limit` (pins today's 429) | the two `rate limit: the 429 ...` checks (known defects) |
+| The 429 carries `Retry-After` and a JSON-RPC error body | holds (#440): `Retry-After` in seconds until the window ends, a JSON-RPC error with the request's `id` and the `RATE_LIMITED` envelope as `error.data` | `mcp-rate-limit` | the two `rate limit: the 429 ...` checks |
 | B's search, graph, `find_symbols`, related-note edges (local graph, backlinks), notifications, perspective listings, vaults, repositories and teams name nothing of A's | holds | `account-separation` | `separation: B's ... names nothing of A's` (six checks) |
 | `lookup_user` returns only `{id, email}` of an active account; deactivated and unknown emails answer alike | holds; any active account is found by exact email (sharing needs the id) | `account-separation` | `separation: B's lookup_user returns A's id and email only` |
-| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
+| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault); MCP's not-found is the same envelope bytes, with no suggestions from A's containers (#439) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
 | Semantic neighbours are chosen within the owner's reach | **defect #461**: the neighbour lookup spans every account; every read filters the stored edges | `account-separation` (inserts such an edge and checks B's reads) | `semantic edges are stored only between notes of the same account` (known defect) |
 | Note text in a prompt sits in a separate, delimited data block, apart from the instructions | **defect #556**: `active_project_companion`, `prepare_task_context`, `test_gap_analysis` (bodies) and `plan_feature_implementation`, `explain_code_architecture` (snippets) put it inside their one user-role instruction message, after a heading and before the prompt's own instructions | `mcp-prompt-note-content` (pins today's placement) | `prompt note text: placed in a separate data block, not inside the instructions` (known defect) |
 
