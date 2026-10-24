@@ -385,7 +385,7 @@ const test: LabTest = {
     const fidelity: Array<Record<string, unknown>> = []
     for (const [path, want] of finalIntended) {
       const r = await mcp.call('read_note', { vaultId: V, path })
-      // Shape: read_note returns { path, frontmatter, body } (mcp/server.ts:644).
+      // Shape: read_note returns { path, frontmatter, body }, the body as a plain text block (#445) that answerJson puts back in `body`.
       const got = r.json as ReadNote | undefined
       if (!r.ok || !got) {
         fidelity.push({ path, frontmatter: 'read failed', body: r.text.slice(0, 100) })

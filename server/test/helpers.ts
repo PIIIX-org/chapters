@@ -68,6 +68,27 @@ export async function loginCookie(
 }
 
 /**
+ * A tool answer's content as one JSON text: `content[0]` with each
+ * `{"in": "content[n]"}` marker replaced by that block's text (read_note's
+ * body, #445), or the content joined when there are no blocks after the JSON.
+ * For tests that parse a read_note answer as one object.
+ */
+export function toolText(content: readonly unknown[]): string {
+  const texts = content.map((c) => (c !== null && typeof c === 'object' && 'text' in c && typeof c.text === 'string' ? c.text : ''))
+  if (texts.length < 2) return texts.join('')
+  const json = JSON.parse(texts[0]!) as Record<string, unknown>
+  for (const [key, value] of Object.entries(json)) {
+    const marker = value !== null && typeof value === 'object' && 'in' in value ? value.in : undefined
+    const at = typeof marker === 'string' ? /^content\[(\d+)\]$/.exec(marker) : null
+    if (!at) continue
+    const text = texts[Number(at[1])]
+    if (text === undefined) throw new Error(`${key} is in ${marker}, but the answer has ${texts.length} content blocks`)
+    json[key] = text
+  }
+  return JSON.stringify(json)
+}
+
+/**
  * Rewrites a live note's file from its row. For tests that break a note's
  * file on purpose: CI checks every note the suite leaves behind (#578).
  */

@@ -712,7 +712,7 @@ const test: LabTest = {
         const restoredAssets = restoredSession.cookie ? await assetSnapshot(restoredUrl, restoredSession.cookie, V).catch((e) => String(e)) : 'no session'
         const linkedPng = restoredSession.cookie ? (await getRaw(restoredUrl, `/api/vaults/${V}/assets/${pngName}`, restoredSession.cookie)).status : 0
         const srcPersian = srcNotes.find((n) => n.vault_id === V && n.path === 'concepts/persian')
-        // Shape: read_note (mcp/server.ts:644).
+        // Shape: read_note's JSON with `body` from its plain text block (#445; McpClient's answerJson puts it back).
         const readBody = readBack.json as { body?: string } | undefined
         Object.assign(restoredChecks, {
           healthyMs,
