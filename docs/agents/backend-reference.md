@@ -2529,14 +2529,15 @@ same file already has keeps that vector instead of being embedded again, so
 an edit to another symbol, or a version bump that leaves a block's text
 alone, embeds nothing new for it. *Readers*: `search` code
 vector leg — the nearest `file` blocks of the scoped repositories
-(`hnsw.ef_search` 200, #967's distance gate), one hit per file with the
+(their own partial HNSW index `blocks_file_embedding_idx`, as the old
+file index held only files; `hnsw.ef_search` 200; #967's distance gate), one hit per file with the
 same `{…, snippet: left(content, 200)}` as before. Measured alternatives:
 the ADR-004 best-block roll-up let symbol blocks of large files crowd the
 leg (chapters hit@5 0.9655 → 0.8966), and ranking a large file by its
 outline put a 304-line hook above the answer to A13 (0.931), so both wait
 for #414/#415's per-block hits; `search` symbol legs and `find_symbols` —
 `kind = 'symbol'` blocks, keyword by name, `Class.name` or the stored
-`snippet`, vector by the nearest symbol blocks; semantic edges (`semantic-edges.ts`) — a file's
+`snippet`, vector by the nearest symbol blocks (`blocks_symbol_embedding_idx`); semantic edges (`semantic-edges.ts`) — a file's
 similarity to another node is its best block's, the file's own query
 vector its file-level block; `read_file`'s outline, the REST file view's
 `symbols` and `listFileSymbols`; the staleness check (a `#anchor` is a
