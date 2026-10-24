@@ -37,6 +37,9 @@ async function mcpClient(token: string): Promise<Client> {
   return client
 }
 
+/** The error envelope a refused call answers (#439). */
+const NOT_FOUND = { isError: true, text: '{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}' }
+
 async function call(client: Client, name: string, args: Args): Promise<{ isError: boolean; text: string }> {
   resetRateLimits()
   const result = await client.callTool({ name, arguments: args })
@@ -316,7 +319,7 @@ describe("A pinned token is capped at its minter's permission on the pin (#649)"
     expect(names).not.toContain('create_note')
     // Read-level tools whose handler needs edit permission are not listed either, and still refuse.
     for (const editGated of ['list_trash', 'note_history', 'get_revision', 'export_vault']) expect(names).not.toContain(editGated)
-    expect(await call(reader, 'list_trash', {})).toEqual({ isError: true, text: 'Error: not found' })
+    expect(await call(reader, 'list_trash', {})).toEqual(NOT_FOUND)
 
     const read = await mintAs(memberCookie, { name: 'reader-read', scope: 'vault', vaultId: vault.id, access: 'read' })
     expect(read.statusCode).toBe(200)
@@ -353,7 +356,7 @@ describe("A pinned token is capped at its minter's permission on the pin (#649)"
     // A write tool that needs only read permission stays listed, and works.
     expect(names).toContain('set_vault_graph_preference')
     expect((await call(legacy, 'set_vault_graph_preference', { include: false })).isError).toBe(false)
-    expect(await call(legacy, 'create_note', { type: 'docs', name: 'nope', body: 'x' })).toEqual({ isError: true, text: 'Error: not found' })
+    expect(await call(legacy, 'create_note', { type: 'docs', name: 'nope', body: 'x' })).toEqual(NOT_FOUND)
   })
 
   it("tools/list follows an ownership transfer on the next request (both users' pinned tokens)", async () => {
@@ -375,7 +378,7 @@ describe("A pinned token is capped at its minter's permission on the pin (#649)"
     expect(await listedNames(memberClient)).toContain('list_vault_shares')
     // The old owner has no share on the vault: every tool of the pin would refuse, so none is listed.
     expect(await listedNames(ownerClient)).toEqual([])
-    expect(await call(ownerClient, 'read_note', { path: 'docs/kept' })).toEqual({ isError: true, text: 'Error: not found' })
+    expect(await call(ownerClient, 'read_note', { path: 'docs/kept' })).toEqual(NOT_FOUND)
   })
 
   it("share-listing and other owner-only tools are not listed for a non-owner's pinned token", async () => {
@@ -388,7 +391,7 @@ describe("A pinned token is capped at its minter's permission on the pin (#649)"
     expect(memberNames).not.toContain('list_vault_shares')
     // Still registered: the call answers why.
     const refused = await call(memberClient, 'list_vault_shares', {})
-    expect(refused).toEqual({ isError: true, text: 'Error: owner permission required' })
+    expect(refused).toEqual({ isError: true, text: '{"error":{"code":"PERMISSION_REQUIRED","message":"owner permission required","retryable":false}}' })
 
     // The owner's token with the same access lists it, and the call works.
     const ownerClient = await mcpClient((await mint({ name: 'owner-pinned', scope: 'vault', vaultId: v.id })).token)
