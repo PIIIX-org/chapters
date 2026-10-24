@@ -1366,6 +1366,31 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     code unit (`compareCodeUnits`), so equal scores never depend on row
     order. [INFERENCE] HNSW stays approximate: which rows make a vector
     leg's 30 can still differ between instances.
+  - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
+    search and graph, saved perspectives) bound the last change,
+    `updatedAt`, never frontmatter `timestamp` (the creation time, which
+    edits leave alone). Note legs filter `notes.updated_at` in SQL; code
+    hits use `repository_files.updated_at` (the last sync that changed the
+    file's content: an unchanged hash leaves it) and symbol hits their
+    file's, filtered after the merge by `passesFilters` like `types`. A
+    bound goes through `timeBound`: `YYYY-MM-DD` or an ISO date-time
+    (`THH:MM`, `:SS`, a fraction cut to ms, `Z` or `±HH:MM`); one without
+    an offset is UTC, never the server's time zone; anything else (a
+    5-digit year, `2030/01/01`, `2030-02-30`) matches nothing. Both sides compare at millisecond precision (SQL
+    `date_trunc('milliseconds', updated_at)`, a JS `Date` in the graph), so
+    search and graph agree inside a bound's millisecond. A hit carries
+    only `updated`, the UTC day (`YYYY-MM-DD`) of its last change (REST
+    and MCP; coordinator decision on #446: a full instant on every hit
+    cost ~10 tokens each); MCP drops it with `snippet` at `no_context`.
+    Graph nodes and note reads keep the full `updatedAt`. `notes.updated_at` moves
+    only in `applyRowChange` (store-tx.ts), when a write changes the row:
+    every MCP and REST write, rename, trash and restore, and the CRDT
+    fold (`foldCrdt`, so collaborative typing counts once per debounced
+    fold); a write that changes nothing leaves it. A current-format backup
+    restore and a vault import with `.elara/history` keep the source's
+    `updated_at`; a format-1 backup and a plain import take the restore
+    time. No index: note legs are served by the FTS and HNSW indexes and
+    the graph filters in memory.
 - **`embeddings.ts`**: an `Embedder` interface with two
   implementations — `LocalEmbedder` (real: Transformers.js/ONNX,
   `bge-small-en-v1.5`, 384 dimensions, mean-pooled, normalized) and
@@ -2484,13 +2509,14 @@ with thousands of exported consts still commits whole. A failure or a
 crash anywhere before the commit leaves the previous imports, symbols and
 vectors whole and searchable. **Vector reuse:** when the row's
 `embedder_id` is the running one, the file vector is kept if
-`extracted_hash = content_hash`, and a symbol's vector is kept if its
-embed text (kind, parent, name, path, start line, snippet) equals one of
-the previous rows'; only the rest is embedded. A re-extraction of
-unchanged content (an `EXTRACTOR_VERSION` bump) therefore calls the
-embedder only for symbols the new extractor finds or words differently
-(for #450's version 3: the methods, arrow-function consts and exported
-consts version 2 did not find; a symbol without a parent keeps its text). A file
+`extracted_hash = content_hash` (or, for a file not extracted since 0033,
+see *Upgrade to 0033* below), and a symbol's vector is kept if its embed
+text (kind, parent, name, path, start line, snippet) equals one of the
+previous rows'; only the rest is embedded. A re-extraction of unchanged
+content (an `EXTRACTOR_VERSION` bump) therefore calls the embedder only
+for symbols the new extractor finds or words differently (for #450's
+version 3: the methods, arrow-function consts and exported consts version
+2 did not find; a symbol without a parent keeps its text). A file
 with a line longer than 1,000
 characters (minified, bundled or generated code) gets its file embedding
 but no symbols or imports. **Per-file budget** (#496): a file's symbols
@@ -2551,19 +2577,31 @@ change to those. Both are in the job keys and stored as plain columns
 transaction) and `notes.embedder_id` (out of the Drizzle `notes` model, like
 `seq`).
 
-*Upgrade to 0033.* The migration stamps the vectors already stored with
-`Xenova/bge-small-en-v1.5+text1`, the id of what made them (the model,
+*Upgrade to 0033.* The migration rewrites no row, so it holds the boot for
+well under a second: 244 ms measured locally on 100,000 notes (501 MB) and
+20,000 files (124 MB) with vectors (the review of #978 measured 590 s for a
+version that updated every row). It adds `notes.embedder_id` and
+`repository_files.embedder_id` with the constant default
+`Xenova/bge-small-en-v1.5+text1`, which PostgreSQL (11+) gives the existing
+rows from the catalog, then drops the default, so later rows start
+without one. That is the id of what made the stored vectors: the model,
 pooling and the note, file and symbol embed texts are unchanged since
-1f05a6f, 3bc7a5b and 2c584d0), and sets `extracted_hash = content_hash` on
-files; rows whose pre-0033 job for their current content or `seq` is
-pending or failed are left unstamped. Every file keeps `extractor_version`
-0. So the first boot re-embeds only the notes and files without a vector
-or with a pending or failed job (about 100 ms a note and 640 ms a file with
-bge-small on CPU), and re-extracts every repository file once with its
-vectors reused, which costs a parse and a write: measured locally on this
-repository's 766 source files ×3 (2,298 files, 9,807 symbols, shared
-loaded Postgres), 2,298 files queued in 76 ms and drained in 56 s, 24 ms a
-file, with no file or symbol embedded; about 8 minutes for 20,000 files.
+1f05a6f, 3bc7a5b and 2c584d0. The id counts only where `embedding` is set;
+the catch-up and `processFile` check that first. The one UPDATE clears the
+id of the few notes whose pre-0033 job for their current `seq` is pending
+or failed (reached from `jobs` by primary key), so the catch-up embeds them.
+Files keep `extracted_hash` null and `extractor_version` 0, so the first
+boot re-extracts each once. `processFile` keeps such a file's vector unless
+its pre-0033 job `extract:<id>:<hash>` for the current content is pending
+or failed, and a push to it before then records the replaced content in
+`extracted_hash` (`syncRepositoryFiles`), so a vector is only kept for the
+content it was made from. So the first boot re-embeds only the notes and
+files without a vector or with a pending or failed job (about 100 ms a note
+and 640 ms a file with bge-small on CPU), and re-extracts every repository
+file once with its vectors reused, which costs a parse and a write. Measured
+locally on this repository's 766 source files ×3 (2,298 files, 9,807 symbols,
+shared loaded Postgres): queued in 76 ms and drained in 56 s, 24 ms a file,
+with no file or symbol embedded, so about 8 minutes for 20,000 files.
 That re-extraction is also the backfill of import `line`s from before 0031
 (#558, ADR-004 A7). A note written 2 s into that catch-up had its vector
 81 ms later and a file pushed then had its symbols in 99 ms: writes go
