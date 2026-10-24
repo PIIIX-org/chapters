@@ -54,7 +54,7 @@ describe('repository-scoped and merged graph/search routes', () => {
       headers: { cookie: ownerCookie },
     })
     expect(search.statusCode).toBe(200)
-    expect((search.json() as unknown[]).length).toBeGreaterThan(0)
+    expect(search.json<{ results: unknown[] }>().results.length).toBeGreaterThan(0)
 
     const deniedGraph = await app.inject({
       method: 'GET',
@@ -237,7 +237,7 @@ describe('repository-scoped and merged graph/search routes', () => {
       url: '/api/search?q=ridiculousuniquetoken',
       headers: { cookie },
     })
-    expect((res.json() as unknown[]).length).toBeGreaterThan(0)
+    expect(res.json<{ results: unknown[] }>().results.length).toBeGreaterThan(0)
   })
 })
 

@@ -200,7 +200,7 @@ describe('structured MCP errors (#439)', () => {
     expect(error.suggestions).toContain('read_note')
   })
 
-  it('note refusals: OKF_INVALID with the slug rule, TYPE_MISMATCH, ALREADY_EXISTS, TOO_LARGE', async () => {
+  it('note refusals: OKF_INVALID with the slug rule, a non-string type, ALREADY_EXISTS, TOO_LARGE', async () => {
     expect((await failure(acctA, 'create_note', { vaultId: VA, path: 'concepts/Bad_Name', body: 'x' })).error).toEqual({
       code: 'OKF_INVALID',
       message: 'invalid path segment: Bad_Name',
@@ -211,9 +211,12 @@ describe('structured MCP errors (#439)', () => {
       code: 'OKF_INVALID',
       rule: SLUG_RULE,
     })
-    const mismatch = await failure(acctA, 'create_note', { vaultId: VA, path: 'concepts/typed', frontmatter: { type: 'docs' }, body: 'x' })
-    expect(mismatch.error).toMatchObject({ code: 'TYPE_MISMATCH', message: 'frontmatter type "docs" does not match path type "concepts"', retryable: false })
-    expect(mismatch.error.rule).toBeTruthy()
+    // A type other than the folder is the note's own OKF type (#444); only a non-string one is refused.
+    expect((await failure(acctA, 'create_note', { vaultId: VA, path: 'concepts/typed', frontmatter: { type: 7 }, body: 'x' })).error).toEqual({
+      code: 'OKF_INVALID',
+      message: 'frontmatter type must be a non-empty string',
+      retryable: false,
+    })
     expect((await failure(acctA, 'create_note', { vaultId: VA, path: 'concepts/alpha-note', body: 'again' })).error).toEqual({
       code: 'ALREADY_EXISTS',
       message: 'a note already exists at concepts/alpha-note',

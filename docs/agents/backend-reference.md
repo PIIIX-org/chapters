@@ -519,8 +519,18 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   restricted to a slug regex (`^[a-z0-9][a-z0-9-]*$`), which makes path
   traversal impossible by construction — this is the one validation
   function shared by every write path (REST, CRDT persistence, MCP).
-  `validateNote` also requires frontmatter `type` to equal the path's
-  first segment.
+  `validateNote` requires a non-empty string frontmatter `type`; it may
+  differ from the path's first segment (#444, D8). `withType` gives a note
+  without one the folder; `notes.type` is always the folder, which the
+  `types` filter and structural edges key on.
+  Any top-level key may hold a scalar, a list or a mapping (OKF §4.1 and
+  the §10 computation keys, #970), nested at most `MAX_FRONTMATTER_DEPTH`
+  (8) levels of lists and mappings (`assertFrontmatterDepth`, also run
+  first by `assertFrontmatterFits` so the size measure never walks a
+  deeper value); known keys (`type`, `title`, `tags`, `timestamp`,
+  `status`, ...) keep their shapes. A `verified` entry is OKF §5.2's
+  `{ by, at }`; `tier` is optional (#563), and an entry with a `tier` may
+  leave out `by` and `at`.
 - **Frontmatter fence** (#400, `parseNote`): the frontmatter runs from an
   opening `---` line to the first line that is exactly `---` (trailing
   spaces/tabs allowed); LF and CRLF files both parse, and the body is
@@ -1323,11 +1333,73 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 
 - **`search.ts`**: `searchNotes()` — the single hybrid search function
   used by the UI routes and the MCP `search` tool. Runs four queries in
-  parallel (note-keyword, note-semantic, code-keyword, code-semantic)
-  and merges them with **Reciprocal Rank Fusion** (`k=60`), no score
-  normalization to tune. Keyword hits use Postgres
+  parallel (note-keyword, note-semantic, code-keyword, code-semantic;
+  six with symbols) and merges them with **Reciprocal Rank Fusion**
+  (`k=60`), no score normalization to tune. Keyword hits use Postgres
   `websearch_to_tsquery` + `ts_rank` + `ts_headline` snippets; semantic
   hits use pgvector's `<=>` cosine-distance operator over HNSW indexes.
+  `findSymbols()` does the same over symbols (keyword: `ILIKE` on the
+  whole query).
+  - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
+    `SearchResponse` = `{status, retrieval_mode, degraded, index?,
+    results}`, served as is by REST and inside the budget envelope by MCP.
+  - **Relevance gate** (#441): each vector leg takes its 30 nearest rows
+    (`ORDER BY distance LIMIT 30`, which the HNSW index serves) and keeps
+    those with cosine distance under `config.searchMaxDistance`
+    (`SEARCH_MAX_DISTANCE`, in (0, 2), else a boot warning and the
+    default; 0.40 for bge-small, measured on the five benchmark corpora
+    as `config.ts` records; 0.8 for the fake embedder).
+    Keyword rows
+    always count. The gate cuts a suffix of a distance-ordered list, so the
+    RRF ranks of the rows it keeps do not change.
+  - **Degraded** (#458): a failed query embedding (`queryVector`) skips the
+    vector legs (`keyword_only`, `degraded: {reason: 'embedder_failed'}`);
+    a failed leg drops its whole channel (`vector_leg_failed` →
+    `keyword_only`, `keyword_leg_failed` → `vector_only`; neither →
+    `none`). The failure is logged; the search answers from the channel
+    that ran.
+  - **Status** (#442): `ok` with any result; otherwise `unavailable` when
+    no channel ran, `index_building` when notes, files or repositories
+    in scope are pending, `unavailable` when every item in scope failed
+    indexing, else `no_match`. `index` comes from `embeddingState()`
+    (notes: `embed_note:<id>:<seq>` job pending, or no job and no
+    embedding; failed: that job gave up) and `extractionState()` (files:
+    the predicates of `countPendingExtractions` and `extractionFailures`;
+    repositories with no file whose `sync_status` is `syncing` or that
+    were never synced count in `pending_repositories`, those whose sync
+    failed count as failed items), read beside the query embedding; left
+    out when all zero.
+  - **Total order**: keyword legs `ORDER BY rank DESC, path COLLATE "C",
+    id`, vector legs re-sorted by `distance, path COLLATE "C", id` outside
+    the HNSW limit, final sort score descending then path and id by UTF-16
+    code unit (`compareCodeUnits`), so equal scores never depend on row
+    order. [INFERENCE] HNSW stays approximate: which rows make a vector
+    leg's 30 can still differ between instances.
+  - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
+    search and graph, saved perspectives) bound the last change,
+    `updatedAt`, never frontmatter `timestamp` (the creation time, which
+    edits leave alone). Note legs filter `notes.updated_at` in SQL; code
+    hits use `repository_files.updated_at` (the last sync that changed the
+    file's content: an unchanged hash leaves it) and symbol hits their
+    file's, filtered after the merge by `passesFilters` like `types`. A
+    bound goes through `timeBound`: `YYYY-MM-DD` or an ISO date-time
+    (`THH:MM`, `:SS`, a fraction cut to ms, `Z` or `±HH:MM`); one without
+    an offset is UTC, never the server's time zone; anything else (a
+    5-digit year, `2030/01/01`, `2030-02-30`) matches nothing. Both sides compare at millisecond precision (SQL
+    `date_trunc('milliseconds', updated_at)`, a JS `Date` in the graph), so
+    search and graph agree inside a bound's millisecond. A hit carries
+    only `updated`, the UTC day (`YYYY-MM-DD`) of its last change (REST
+    and MCP; coordinator decision on #446: a full instant on every hit
+    cost ~10 tokens each); MCP drops it with `snippet` at `no_context`.
+    Graph nodes and note reads keep the full `updatedAt`. `notes.updated_at` moves
+    only in `applyRowChange` (store-tx.ts), when a write changes the row:
+    every MCP and REST write, rename, trash and restore, and the CRDT
+    fold (`foldCrdt`, so collaborative typing counts once per debounced
+    fold); a write that changes nothing leaves it. A current-format backup
+    restore and a vault import with `.elara/history` keep the source's
+    `updated_at`; a format-1 backup and a plain import take the restore
+    time. No index: note legs are served by the FTS and HNSW indexes and
+    the graph filters in memory.
 - **`embeddings.ts`**: an `Embedder` interface with two
   implementations — `LocalEmbedder` (real: Transformers.js/ONNX,
   `bge-small-en-v1.5`, 384 dimensions, mean-pooled, normalized) and
@@ -1751,12 +1823,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   pin, allow-list, live permission) and that every tool has exactly one
   entry.
 - **Structured content and output schemas** (#433, ADR-004 §2.1, D6
-  default): `tool()` answers every success through `answered(text)`:
-  `content[0].text` stays the whole JSON answer (clients that show the
-  model only `content` lose nothing), and when that text is an object
-  (it starts with `{`) `structuredContent` is `JSON.parse(text)`, so it
-  holds exactly what the text shows (dates as strings) and the two never
-  differ. Bare-array answers (`search`, the unbudgeted list tools) carry
+  default): `tool()` answers every success through `answered(text,
+  blocks)`: `content[0].text` is the JSON answer, followed by the
+  rendered `blocks` as text blocks of their own (`read_note`'s body,
+  #445, below; no other tool has one), so clients that show the model
+  only `content` lose nothing. When that text is an object (it starts
+  with `{`) `structuredContent` is `JSON.parse(text)` with each block's
+  text in its key in place of the `{"in": "content[n]"}` marker, so it
+  holds exactly what the blocks show (dates as strings) and is the whole
+  answer. Bare-array answers (the unbudgeted list tools) carry
   none: MCP's `structuredContent` is an object, and wrapping the array
   would make it differ from the text. A tool may declare `outputSchema`
   (a loose zod object, so other keys pass): today only the eight
@@ -1771,8 +1846,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   the SDK server does not check an `isError` answer, but the SDK client
   checks any `structuredContent` against the listed outputSchema, error
   or not, so `{error}` there would fail on a write tool.
-  Read tools get no output schema until their shapes settle (#445,
-  #432, #439). `test/mcp-structured-content.test.ts` covers each tool
+  Read tools get no output schema until their shapes settle (#957,
+  #432). `test/mcp-structured-content.test.ts` covers each tool
   family through the real client (which validates against the listed
   schema), every write answer shape and the errors.
 - **Instructions** (#435): `instructionsFor(profile)` in
@@ -1781,7 +1856,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   text per profile, with no id, name, date or pin, so every token of a
   profile gets the same bytes (#681). Reader: tools with
   `budget_tokens` (characters / 4) fit it and end with `truncated`
-  (`search`, `list_vaults` and `list_repositories` take no budget and
+  (`list_vaults` and `list_repositories` take no budget and
   answer bare arrays), the cursor is the only way on (read_note/read_file
   page long bodies only that way), manuals are
   `elara://manual/conventions` and one per family. Writer and admin (the
@@ -1875,9 +1950,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `McpToolError(code, message, extra?)`; `toErrorEnvelope(err)` in the
   `tool()` catch maps it and the domain errors: `CursorError` (its
   code), `OkfValidationError` by its `refusal` (`OKF_INVALID`,
-  `TYPE_MISMATCH`, `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the
-  type rule, the depth limit), `NoteTooLargeError` (`TOO_LARGE`, the
-  limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
+  `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the depth limit),
+  `NoteTooLargeError` (`TOO_LARGE`, the limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
   included) and `MaintenanceInProgressError` (`BUSY`, retryable), the
   quarantine errors (`QUARANTINED`, the rule), `NoteEditError`
   (`INVALID_ARGUMENT`), `NoteEditConflictError` and
@@ -1956,7 +2030,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     lists (the whole ranking recomputed per page, offset plus a guard:
     `find_symbols`, `graph`, `find_graph_path`, `read_file`'s outline) and
     `textSection` (a body or file cut at line boundaries; a line longer
-    than a page is split).
+    than a page is split). A `block: true` text section (`read_note`'s
+    body, #445) is not a JSON string: `compose()` puts the marker
+    `{"in": "content[n]"}` (n = 1 for the first block) in its key and
+    returns this page's text, unescaped, as a block that `answered()`
+    sends after the JSON, an empty one included (the shape is fixed).
+    `fill()` counts its lines by their raw characters, other text by
+    their JSON-escaped length.
   - `browse_repository` (#424) pages in SQL, not in memory:
     `listRepositoryFilesPage` (`repositories/store.ts`) reads `BROWSE_PAGE`
     (500) + 1 files after the cursor's path, `ORDER BY path COLLATE "C"`,
@@ -2000,11 +2080,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - Size: `approxTokens` = `ceil(text.length / 4)`, the premise
     benchmark's estimate (it undercounts a real tokenizer by roughly
     10-20 % on code and JSON and 1.3-4x on Persian or Chinese text; kept
-    because it is what the benchmark gate measures, ADR-004 §5); the rendered text stays within the budget
+    because it is what the benchmark gate measures, ADR-004 §5); the rendered
+    answer, the JSON plus every block and one separator character per
+    block (`charsOf`; the benchmark's lab client joins blocks with a
+    newline, so both count the same), stays within the budget
     (items dropped whole from the end, a refill loop accounts for the
     `truncated` block), except that a text which would show nothing
     shows its first line (split when longer than the page), so paging
-    always moves on.
+    always moves on. The ladder and the `budget_tokens: N` suggestion
+    measure the same total.
   - Ladder (#421, ADR-004 §2.1): `render()` tries `full`, `no_context`,
     `locations`, `counts`, `total` in order, one level for the whole
     answer; a level no list on the page defines is skipped. An item level
@@ -2054,8 +2138,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - `read_note` records the last read (#864) in `Budgeted.rendered`, on
     every page: the `rev` it reports, the merge base of a later whole-body
     edit (#961).
-  - `search` keeps its bare array and has no budget (its envelope waits
-    for #441/#442/#458). `test/mcp-response-envelope.test.ts` drives each
+  - `search` (#441) is budgeted like `find_symbols`: the
+    `SearchResponse` head (`status`, `retrieval_mode`, `degraded`,
+    `index`) then the ranked `results` (limit + 1 fetch; ladder: without
+    `snippet`/`frontmatter`, then the path or `path#La-Lb`; counted per
+    path). `test/search-envelope.test.ts` covers each status, the gate,
+    the fallbacks and the order through MCP and REST.
+    `test/mcp-response-envelope.test.ts` drives each
     tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`
     each ladder level.
   `search` and `graph` call

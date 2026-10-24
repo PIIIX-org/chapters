@@ -20,8 +20,8 @@ import { IdempotencyKeyReusedError } from './write-result.js'
  * - NOT_FOUND: every not-found, including an id the caller cannot reach.
  * - PERMISSION_REQUIRED: the resource is visible, the action needs more (owner).
  * - TOOL_NOT_ALLOWED: the token's allow-list, access level, profile or scope.
- * - ALREADY_EXISTS, OKF_INVALID (`rule`: the rule broken), TYPE_MISMATCH
- *   (frontmatter `type` against the folder), TOO_LARGE (`rule`: the limit).
+ * - ALREADY_EXISTS, OKF_INVALID (`rule`: the rule broken), TOO_LARGE
+ *   (`rule`: the limit).
  * - CURSOR_INVALID, CURSOR_STALE: a `cursor` this call cannot resume.
  * - AMBIGUOUS: a reference that names several things (`suggestions`: them).
  * - CONFLICT: the target's state refuses the call (not trashed, an
@@ -41,7 +41,6 @@ export type ErrorCode =
   | 'TOOL_NOT_ALLOWED'
   | 'ALREADY_EXISTS'
   | 'OKF_INVALID'
-  | 'TYPE_MISMATCH'
   | 'TOO_LARGE'
   | 'CURSOR_INVALID'
   | 'CURSOR_STALE'
@@ -60,7 +59,6 @@ const RETRYABLE: Record<ErrorCode, boolean> = {
   TOOL_NOT_ALLOWED: false,
   ALREADY_EXISTS: false,
   OKF_INVALID: false,
-  TYPE_MISMATCH: false,
   TOO_LARGE: false,
   CURSOR_INVALID: false,
   CURSOR_STALE: false,
@@ -79,7 +77,7 @@ export interface ErrorEnvelope {
   message: string
   retryable: boolean
   retryAfterMs?: number
-  /** The rule the call broke: the slug regex, the type rule, the size limit, the quarantine rule. */
+  /** The rule the call broke: the slug regex, the size limit, the quarantine rule. */
   rule?: string
   /** The argument at fault, as a dotted path (`ops.0.text`). */
   field?: string
@@ -127,7 +125,7 @@ export function envelope(code: ErrorCode, message: string, extra: ErrorExtra = {
   }
 }
 
-const OKF_CODES: Record<OkfRefusal, ErrorCode> = { invalid: 'OKF_INVALID', type_mismatch: 'TYPE_MISMATCH', exists: 'ALREADY_EXISTS' }
+const OKF_CODES: Record<OkfRefusal, ErrorCode> = { invalid: 'OKF_INVALID', exists: 'ALREADY_EXISTS' }
 
 /**
  * The envelope of an error a tool call threw. A failed query (drizzle's

@@ -223,7 +223,7 @@ describe('audit_okf_conformance Engine', () => {
       },
       'domains/auth/broken': {
         frontmatter: {
-          type: 'wrong-type', // VIOLATION: type mismatch with path!
+          type: 'Decision Record', // not a violation: the OKF type is free (#444)
         },
         body: 'Content referencing [[domains/auth/session]]',
       },
@@ -250,9 +250,9 @@ describe('audit_okf_conformance Engine', () => {
 
     // Violations:
     // 1. domains/auth/session: timestamp bare date
-    // 2. domains/auth/broken: type mismatch
+    // domains/auth/broken: its type is not its folder, which is no violation (#444)
     expect(result.violations.some((v) => v.path === 'domains/auth/session')).toBe(true)
-    expect(result.violations.some((v) => v.path === 'domains/auth/broken')).toBe(true)
+    expect(result.violations.some((v) => v.path === 'domains/auth/broken')).toBe(false)
 
     // Broken links:
     expect(result.brokenWikilinks.some((b) => b.link === 'non-existent-target')).toBe(true)
@@ -265,9 +265,9 @@ describe('audit_okf_conformance Engine', () => {
     expect(result.orphanNotes).toContain('specs/isolated')
     expect(result.orphanNotes).not.toContain('index')
 
-    // Root 'index' is the only conforming note here
-    expect(result.conformingNotes).toBe(1)
-    expect(result.conformanceScore).toBe(25) // 1 / 4 = 25%
+    // Root 'index' and domains/auth/broken (a free type, #444) conform
+    expect(result.conformingNotes).toBe(2)
+    expect(result.conformanceScore).toBe(50) // 2 / 4 = 50%
   })
 })
 

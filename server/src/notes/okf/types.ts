@@ -18,10 +18,12 @@ export interface SourceDescriptor {
   [key: string]: unknown
 }
 
+/** An OKF §5.2 verification event; `tier` is Elara's older form, optional (#563). */
 export interface VerifiedMetadata {
-  tier: VerificationTier
+  tier?: VerificationTier
   by?: string
   at?: string
+  [key: string]: unknown
 }
 
 export interface UsageWindow {
