@@ -100,8 +100,9 @@ describe('code blocks (#452a)', () => {
     expect(after!.blockId).toBe(before!.blockId)
     expect([after!.startLine, after!.endLine]).toEqual([3, 5])
     expect(after!.contentHash).toBe(before!.contentHash)
-    expect(after!.embedText).toBe(before!.embedText)
-    expect(after!.embedText).toBe('function f in src/f.ts\nexport function f() {\n  return 1\n}')
+    // The embedded text names the line (the vector follows the move).
+    expect(before!.embedText).toBe('function f in src/f.ts:1\nexport function f() {\n  return 1\n}')
+    expect(after!.embedText).toBe('function f in src/f.ts:3\nexport function f() {\n  return 1\n}')
   })
 
   it('overloads and methods: inner_path is Class.method, equal ones get the next sibling_index', () => {
@@ -124,7 +125,7 @@ describe('code blocks (#452a)', () => {
     expect(saves).toEqual([0, 1, 2].map((i) => blockId(FILE, 'symbol', 'Store.save', i)))
   })
 
-  it('a small file is one file block; a larger one with symbols gets a file and a class skeleton instead', () => {
+  it('a small file is one file block; a larger one with symbols also gets a file and a class skeleton', () => {
     const small = codeBlocks(FILE, 'a.rs', 'fn main() {}\n', [])
     expect(small.map((b) => [b.kind, b.startLine, b.endLine, b.embedText])).toEqual([['file', 1, 1, 'a.rs\nfn main() {}\n']])
 
@@ -137,19 +138,19 @@ describe('code blocks (#452a)', () => {
       sym('after', last, last),
     ]
     const blocks = codeBlocks(FILE, 'src/big.ts', content, symbols)
-    expect(blocks[0]).toMatchObject({ kind: 'skeleton', innerPath: '', startLine: 1, endLine: last, budgetTier: null })
-    expect(blocks[0]!.embedText.split('\n').slice(0, 3)).toEqual(['src/big.ts', 'export class Big {', '  m0() { return 0 }'])
+    expect(blocks[0]).toMatchObject({ kind: 'file', innerPath: '', startLine: 1, endLine: last, embedText: `src/big.ts\n${content}` })
+    expect(blocks[1]).toMatchObject({ kind: 'skeleton', innerPath: '', startLine: 1, endLine: last, budgetTier: null })
+    expect(blocks[1]!.embedText.split('\n').slice(0, 3)).toEqual(['src/big.ts', 'export class Big {', '  m0() { return 0 }'])
     const classSkeleton = blocks.find((b) => b.kind === 'skeleton' && b.innerPath === 'Big')!
-    expect(classSkeleton).toMatchObject({ startLine: 1, endLine: SMALL_FILE_MAX_LINES + 2, outlineOf: 1 })
+    expect(classSkeleton).toMatchObject({ startLine: 1, endLine: SMALL_FILE_MAX_LINES + 2, outlineOf: 2 })
     expect(classSkeleton.embedText.split('\n').slice(0, 3)).toEqual(['class Big in src/big.ts', 'export class Big {', '  m0() { return 0 }'])
-    expect(blocks.filter((b) => b.kind === 'file')).toEqual([])
     expect(blocks.filter((b) => b.kind === 'symbol')).toHaveLength(symbols.length)
   })
 
   it('a block hashes and embeds the exact text of its lines: CRLF and blank lines kept', () => {
     const content = 'export function spaced() {\r\n\r\n\r\n  return 1\r\n}\r\n'
     const [, block] = codeBlocks(FILE, 'src/crlf.ts', content, [sym('spaced', 1, 5)])
-    expect(block!.embedText).toBe('function spaced in src/crlf.ts\nexport function spaced() {\r\n\r\n\r\n  return 1\r\n}\r')
+    expect(block!.embedText).toBe('function spaced in src/crlf.ts:1\nexport function spaced() {\r\n\r\n\r\n  return 1\r\n}\r')
     expect(content.includes(block!.embedText.split('\n').slice(1).join('\n'))).toBe(true)
   })
 

@@ -37,6 +37,11 @@ function classifyError(text: string): string {
   if (/HTTP 429/.test(text)) return 'HTTP 429'
   if (/^HTTP /.test(text)) return text.slice(0, 12)
   if (/damaged/.test(text)) return 'damaged-note'
+  // An MCP tool error is the error envelope (#439): tally it by its message.
+  if (text.startsWith('{"error":')) {
+    const envelope = JSON.parse(text) as { error: { message: string } }
+    return envelope.error.message.slice(0, 60)
+  }
   return text.replace(/^Error: /, '').slice(0, 60)
 }
 

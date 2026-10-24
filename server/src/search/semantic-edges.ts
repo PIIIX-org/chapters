@@ -18,7 +18,8 @@ type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]
  * each query vector its 100 nearest blocks (`hnsw.ef_search` is 100 in
  * recomputeSemanticEdges's transaction, so HNSW returns at most that many),
  * then one row per owner with its best block's similarity. Notes count only
- * while live.
+ * while live. The owner type is a literal, so the planner uses that type's
+ * partial HNSW index (migration 0036).
  */
 async function nearestOwners(
   client: DbOrTx,
@@ -31,7 +32,7 @@ async function nearestOwners(
     FROM unnest(${vecs}::text[]) AS q(vec)
     CROSS JOIN LATERAL (
       SELECT owner_id, embedding <=> q.vec::vector AS distance FROM blocks
-      WHERE owner_type = ${ownerType} AND embedding IS NOT NULL ${excludeId ? sql`AND owner_id <> ${excludeId}` : sql``}
+      WHERE owner_type = ${sql.raw(`'${ownerType}'`)} AND embedding IS NOT NULL ${excludeId ? sql`AND owner_id <> ${excludeId}` : sql``}
       ORDER BY embedding <=> q.vec::vector
       LIMIT 100
     ) nearest

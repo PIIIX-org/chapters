@@ -16,7 +16,7 @@ The content below matches the Elara skill, so the two never disagree. "Chapters"
 
 Elara is a team knowledge base and codebase mapping platform built on four foundational pillars:
 
-1. **Notes as Plain Files (OKF v0.2)**: Every note is a markdown file with YAML frontmatter following Google's [Open Knowledge Format (OKF v0.2)](https://github.com/GoogleCloudPlatform/open-knowledge-format). Notes live at slug paths up to 8 segments deep (each segment matches `^[a-z0-9][a-z0-9-]*$`), and the frontmatter `type` must equal the first path segment (`concepts/auth/tokens` → `type: concepts`). Datetimes need an explicit UTC or offset. Links:
+1. **Notes as Plain Files (OKF v0.2)**: Every note is a markdown file with YAML frontmatter following Google's [Open Knowledge Format (OKF v0.2)](https://github.com/GoogleCloudPlatform/open-knowledge-format). Notes live at slug paths up to 8 segments deep (each segment matches `^[a-z0-9][a-z0-9-]*$`). The first segment is the note's folder (`concepts/auth/tokens` → folder `concepts`); the frontmatter `type` is the OKF type, any non-empty string, and defaults to the folder. Datetimes need an explicit UTC or offset. Links:
    - Note-to-note: `[[path/to/note]]` or `[[path/to/note|display text]]`
    - Note-to-code: `[[repo:<repo-name-or-id>/path/to/file]]`
    - Anchored forms such as `[[repo:<repo>/path/to/file#L12-L34]]` are accepted, but the graph edge always points at the file; the anchor is not resolved or checked.
@@ -40,7 +40,7 @@ When exploring a project or answering questions about architecture, concepts, or
   - Run `search` (or `/elara-search` / legacy `/chapters-search`) with a query to find relevant notes and code files using hybrid (lexical + vector) retrieval.
   - Run `find_symbols` (or `/elara-symbols` / legacy `/chapters-symbols`) to pinpoint specific functions, methods, classes, interfaces, types or enums with exact declaration line numbers without reading whole files.
 - **Step 2 — Graph Topology & Pathfinding**:
-  - Use `graph` (or `/elara-graph` / legacy `/chapters-graph`) scoped to one `vaultId` or `repositoryId` with `aggregate: "community"` to view community clusters, then `community: <n>` to list one cluster's members. Communities are the default (#426). For the graph around one note or file, pass `neighborsOf` (its id or exact path) with `depth` (1-3); `edgeTypes` keeps some edge kinds and `limit` the first nodes. `aggregate: "none"` lists the whole resource graph, which is large for a real repository.
+  - Use `graph` (or `/elara-graph` / legacy `/chapters-graph`) scoped to one `vaultId` or `repositoryId` with `aggregate: "community"` to view community clusters, then `community: <n>` to list one cluster's members. Communities are the default (#426). For the graph around one note or file, pass `neighborsOf` (its id, its path or part of it, or its name; several matches answer `candidates` to pick from, #447) with `depth` (1-3); `edgeTypes` keeps some edge kinds and `limit` the first nodes. `aggregate: "none"` lists the whole resource graph, which is large for a real repository.
   - Use `find_graph_path` (or `/elara-path` / legacy `/chapters-path`) to trace the shortest conceptual path between two components, notes, or code files.
   - Use `list_graph_perspectives` to see curated domain or subsystem perspectives (an `admin`-profile token; reader and writer tokens do not list it).
 - **Step 3 — Read Context**:
@@ -50,7 +50,7 @@ When exploring a project or answering questions about architecture, concepts, or
 ### 2. Note Creation & Editing (OKF Standard)
 When creating or editing notes via `create_note` or `edit_note`:
 - `create_note` takes `path` (or `type` + `name`), a `frontmatter` **object**, and a markdown `body` **without** a frontmatter block. There is no `content` argument: every tool refuses an argument it does not declare, and the error lists its real parameters.
-- The frontmatter `type` must equal the first path segment, and every path segment must match `^[a-z0-9][a-z0-9-]*$` (so `decisions/adr-001-crdt-relay`, not `decisions/ADR-001`). `timestamp` defaults to now; datetimes need `Z` or an offset. Example `create_note` arguments:
+- The frontmatter `type` may be any non-empty string (`decision`, `Metric`); left out, it is the first path segment. The `types` filter matches the folder, not the frontmatter `type`. Every path segment must match `^[a-z0-9][a-z0-9-]*$` (so `decisions/adr-001-crdt-relay`, not `decisions/ADR-001`). `timestamp` defaults to now; datetimes need `Z` or an offset. Example `create_note` arguments:
   ```json
   {
     "vaultId": "<vault-uuid>",

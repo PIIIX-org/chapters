@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { and, eq, notInArray, sql, type SQL } from 'drizzle-orm'
+import { and, asc, eq, notInArray, sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { blocks, repositoryFiles } from '../db/schema.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
@@ -51,6 +51,10 @@ export async function syncRepositoryFiles(
   let manifestChanged = false
 
   for (const file of changedOrNewFiles) {
+    // Pushed content is text the client chose to send, so a stray NUL is
+    // stripped. Git and local-path scans skip a file with a NUL as binary
+    // before it gets here (readRepositoryFiles in fs-scan.ts, #923). The hash
+    // is of the stored, stripped text (#418).
     const cleanContent = file.content.replace(/\0/g, '')
     const contentHash = createHash('sha256').update(cleanContent).digest('hex')
     const current = existingByPath.get(file.path)
@@ -186,6 +190,8 @@ export async function listFileSymbols(
     })
     .from(blocks)
     .where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId), eq(blocks.kind, 'symbol')))
+    // Line order: an upsert moves heap rows, so without this the outline comes back in any order.
+    .orderBy(asc(blocks.startLine), asc(blocks.blockId))
   return rows.map(({ innerPath, kind, parent, startLine, endLine }) => ({
     name: parent === null ? innerPath : innerPath.slice(parent.length + 1),
     kind: kind!, // set on every symbol block

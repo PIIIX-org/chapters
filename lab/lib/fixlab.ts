@@ -186,14 +186,18 @@ export async function filesPendingExtraction(ctx: LabContext, repoId: string) {
 }
 
 /**
- * Files without an embedding. Not quite filesPendingExtraction: the field
- * counts a file whose extract job is not done, and a file gets its embedding
- * before its job completes (semantic edges come in between), so the field can
- * be higher until that job finishes or a dead process's lease runs out (#845).
+ * Files without an embedded block of their current content (#452a; before
+ * 0035, files without an embedding). Not quite filesPendingExtraction: the
+ * field counts a file whose extract job is not done, and a file gets its
+ * blocks before its job completes (semantic edges come in between), so the
+ * field can be higher until that job finishes or a dead process's lease runs
+ * out (#845).
  */
 export async function sqlPending(ctx: LabContext, repoId: string): Promise<number> {
   return Number(
-    await ctx.docker.psql(`select count(*) from repository_files where repository_id = '${repoId}' and embedding is null;`),
+    await ctx.docker.psql(`select count(*) from repository_files f where f.repository_id = '${repoId}'
+      and not exists (select 1 from blocks b where b.owner_type = 'code' and b.owner_id = f.id
+        and b.owner_version = f.content_hash and b.embedding is not null);`),
   )
 }
 
