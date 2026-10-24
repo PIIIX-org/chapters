@@ -1348,8 +1348,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     file's content: an unchanged hash leaves it) and symbol hits their
     file's, filtered after the merge by `passesFilters` like `types`. A
     bound goes through `timeBound` (`Date.parse`); one that is no date
-    matches nothing. Every hit carries `updatedAt` (ISO, milliseconds);
-    MCP drops it with `snippet` at `no_context`. `notes.updated_at` moves
+    matches nothing. Both sides compare at millisecond precision (SQL
+    `date_trunc('milliseconds', updated_at)`, a JS `Date` in the graph), so
+    search and graph agree inside a bound's millisecond. A hit carries
+    only `updated`, the UTC day (`YYYY-MM-DD`) of its last change (REST
+    and MCP; coordinator decision on #446: a full instant on every hit
+    cost ~10 tokens each); MCP drops it with `snippet` at `no_context`.
+    Graph nodes and note reads keep the full `updatedAt`. `notes.updated_at` moves
     only in `applyRowChange` (store-tx.ts), when a write changes the row:
     every MCP and REST write, rename, trash and restore, and the CRDT
     fold (`foldCrdt`, so collaborative typing counts once per debounced

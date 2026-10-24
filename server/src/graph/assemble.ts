@@ -359,7 +359,8 @@ export function timeBound(value: string): string | null {
  * `since`/`until` bound the resource's last change, `updatedAt` (#446, D9 on
  * #930): a note's `updated_at`, a code file's (the last sync that changed its
  * content), a symbol's file's. Frontmatter `timestamp` is the creation time
- * and plays no part.
+ * and plays no part. Compared at millisecond precision (a `Date` holds no
+ * more), as search's SQL does (`date_trunc('milliseconds', updated_at)`).
  */
 export function passesFilters(
   node: { type: string | null; tags: string[]; updatedAt: string | null },

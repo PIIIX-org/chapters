@@ -186,13 +186,30 @@ describe('since/until and recency use updated_at (#446)', () => {
     expect(await recency(path, 'dingo')).toEqual(RECENT)
   })
 
-  it('search hits carry updatedAt, over REST and MCP', async () => {
+  it('search hits carry the day of the last change as `updated`, over REST and MCP', async () => {
     const id = await oldNote('docs/echidna-hit', 'echidna')
     const rest = await app.inject({ method: 'GET', url: `/api/vaults/${vaultId}/search?q=echidna`, headers: { cookie } })
-    const hit = rest.json<{ results: Array<{ id: string; updatedAt?: string }> }>().results.find((r) => r.id === id)
-    expect(hit?.updatedAt).toBe('2020-01-01T00:00:00.000Z')
+    const hit = rest.json<{ results: Array<{ id: string; updated?: string }> }>().results.find((r) => r.id === id)
+    expect(hit?.updated).toBe('2020-01-01')
 
-    const viaMcp = await must<{ results: Array<{ id: string; updatedAt?: string }> }>('search', { vaultId, query: 'echidna' })
-    expect(viaMcp.results.find((r) => r.id === id)?.updatedAt).toBe('2020-01-01T00:00:00.000Z')
+    const viaMcp = await must<{ results: Array<Record<string, unknown>> }>('search', { vaultId, query: 'echidna' })
+    const mcpHit = viaMcp.results.find((r) => r.id === id)
+    expect(mcpHit?.updated).toBe('2020-01-01')
+    expect(mcpHit).not.toHaveProperty('updatedAt')
+  })
+
+  it('search and graph agree on a change inside the millisecond of a bound', async () => {
+    const path = 'docs/kowari-edge'
+    const id = await oldNote(path, 'kowari')
+    // 500 µs past the millisecond: both compare at millisecond precision, so the change is at the bound.
+    await db.execute(sql`UPDATE notes SET updated_at = '2024-05-01T12:00:00.000500Z'::timestamptz WHERE id = ${id}`)
+    const at = encodeURIComponent('2024-05-01T12:00:00.000Z')
+    const after = encodeURIComponent('2024-05-01T12:00:00.001Z')
+    for (const qs of [`since=${at}`, `until=${at}`, `since=${at}&until=${at}`]) {
+      expect((await searchPaths('kowari', qs)).includes(path), qs).toBe(true)
+      expect((await graphPaths(qs)).includes(path), qs).toBe(true)
+    }
+    expect((await searchPaths('kowari', `since=${after}`)).includes(path)).toBe(false)
+    expect((await graphPaths(`since=${after}`)).includes(path)).toBe(false)
   })
 })
