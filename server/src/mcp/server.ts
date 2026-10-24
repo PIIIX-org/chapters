@@ -2729,9 +2729,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
             items: results,
             id: (r) => `${r.resourceType}:${r.id}`,
             limit,
-            // Down the ladder: without snippet and frontmatter, then the path (`path#La-Lb` for a symbol); counted per path.
+            // Down the ladder: without snippet, frontmatter and updated, then the path (`path#La-Lb` for a symbol); counted per path.
             ladder: {
-              no_context: (r) => ({ ...r, snippet: undefined, frontmatter: undefined }),
+              no_context: (r) => ({ ...r, snippet: undefined, frontmatter: undefined, updated: undefined }),
               locations: (r) => (r.startLine !== undefined && r.endLine !== undefined ? location(r.path, r.startLine, r.endLine) : r.path),
               group: (r) => r.path,
             },
