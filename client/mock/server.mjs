@@ -2044,11 +2044,14 @@ put('/repositories/:id/graph-preference', ({ params, body }) => {
 // --- mcp connections --------------------------------------------------------
 // Mirrors listMcpTools() on the server: [name, scope, capability], plus the
 // permission on a pinned vault or repository each tool needs (pinPermission)
-// and the smallest tool profile it is in (#428).
+// and the smallest tool profile it is in (#428), and its MCP annotations (#434:
+// readOnlyHint on reads, destructiveHint and idempotentHint on writes).
 const MCP_PIN_OWNER = ['update_vault', 'delete_vault', 'list_vault_shares', 'share_vault', 'revoke_vault_share', 'purge_note', 'purge_revision', 'update_repository', 'delete_repository', 'list_repository_shares', 'share_repository', 'revoke_repository_share']
 const MCP_PIN_EDIT = ['create_note', 'edit_note', 'rename_note', 'delete_note', 'list_trash', 'restore_note', 'note_history', 'get_revision', 'revert_note', 'export_vault', 'save_graph_perspective', 'delete_graph_perspective']
 const MCP_PROFILE_READER = ['list_vaults', 'list_repositories', 'browse_vault', 'browse_repository', 'search', 'read_note', 'read_file', 'find_symbols', 'graph', 'find_graph_path']
 const MCP_PROFILE_WRITER = ['create_note', 'edit_note', 'append_note']
+const MCP_DESTRUCTIVE = ['delete_graph_perspective', 'delete_note', 'delete_repository', 'delete_team', 'delete_vault', 'purge_note', 'purge_revision', 'purge_vault', 'remove_team_member', 'revoke_repository_share', 'revoke_vault_share', 'update_vault_preferences']
+const MCP_IDEMPOTENT = ['delete_graph_perspective', 'delete_repository', 'delete_team', 'delete_vault', 'mark_notification_read', 'purge_note', 'purge_revision', 'purge_vault', 'remove_team_member', 'restore_vault', 'revoke_repository_share', 'revoke_vault_share', 'set_repository_graph_preference', 'set_vault_graph_preference', 'share_repository', 'update_repository', 'update_vault', 'update_vault_preferences']
 const MCP_TOOLS = [
   ['list_vaults', 'account', 'read'], ['create_vault', 'account', 'write'], ['browse_vault', 'vault', 'read'],
   ['update_vault', 'vault', 'admin'], ['get_vault_graph_preference', 'vault', 'read'],
@@ -2082,6 +2085,10 @@ const MCP_TOOLS = [
   capability,
   pinPermission: MCP_PIN_OWNER.includes(name) ? 'owner' : MCP_PIN_EDIT.includes(name) ? 'edit' : 'read',
   profile: MCP_PROFILE_READER.includes(name) ? 'reader' : MCP_PROFILE_WRITER.includes(name) ? 'writer' : 'admin',
+  annotations:
+    capability === 'read'
+      ? { readOnlyHint: true }
+      : { destructiveHint: MCP_DESTRUCTIVE.includes(name), ...(MCP_IDEMPOTENT.includes(name) ? { idempotentHint: true } : {}) },
 }))
 get('/mcp-connections', () => mcpConnections.filter((c) => c.userId === ME.id).map(publicMcp))
 get('/mcp-connections/tools', () => MCP_TOOLS)

@@ -55,6 +55,8 @@ export interface McpToolInfo {
   pinPermission: 'read' | 'edit' | 'owner'
   /** The smallest profile the tool is in (#428). */
   profile: McpProfile
+  /** MCP tool annotations (#434): `readOnlyHint` on reads; `destructiveHint` and, when true, `idempotentHint` on writes. */
+  annotations: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean }
 }
 
 // Only the create response carries the raw token, and only once.
