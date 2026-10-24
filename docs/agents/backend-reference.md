@@ -2443,7 +2443,8 @@ vector, `embedding_note`, `extracted_hash`, `extractor_version` and
 (skipped when the file vector is reused). A failure or a crash anywhere
 before the commit leaves the previous imports, symbols and vectors whole
 and searchable. **Vector reuse:** when the row's `embedder_id` is the
-running one, the file vector is kept if `extracted_hash = content_hash`,
+running one, the file vector is kept if `extracted_hash = content_hash` (or,
+for a file not extracted since 0033, see *Upgrade to 0033* below),
 and a symbol's vector is kept if its embed text (kind, name, path, start
 line, snippet) equals one of the previous rows'; only the rest is
 embedded. A re-extraction of unchanged content (an `EXTRACTOR_VERSION`
@@ -2505,19 +2506,31 @@ change to those. Both are in the job keys and stored as plain columns
 transaction) and `notes.embedder_id` (out of the Drizzle `notes` model, like
 `seq`).
 
-*Upgrade to 0033.* The migration stamps the vectors already stored with
-`Xenova/bge-small-en-v1.5+text1`, the id of what made them (the model,
+*Upgrade to 0033.* The migration rewrites no row, so it holds the boot for
+well under a second: 244 ms measured locally on 100,000 notes (501 MB) and
+20,000 files (124 MB) with vectors (the review of #978 measured 590 s for a
+version that updated every row). It adds `notes.embedder_id` and
+`repository_files.embedder_id` with the constant default
+`Xenova/bge-small-en-v1.5+text1`, which PostgreSQL (11+) gives the existing
+rows from the catalog, then drops the default, so later rows start
+without one. That is the id of what made the stored vectors: the model,
 pooling and the note, file and symbol embed texts are unchanged since
-1f05a6f, 3bc7a5b and 2c584d0), and sets `extracted_hash = content_hash` on
-files; rows whose pre-0033 job for their current content or `seq` is
-pending or failed are left unstamped. Every file keeps `extractor_version`
-0. So the first boot re-embeds only the notes and files without a vector
-or with a pending or failed job (about 100 ms a note and 640 ms a file with
-bge-small on CPU), and re-extracts every repository file once with its
-vectors reused, which costs a parse and a write: measured locally on this
-repository's 766 source files ×3 (2,298 files, 9,807 symbols, shared
-loaded Postgres), 2,298 files queued in 76 ms and drained in 56 s, 24 ms a
-file, with no file or symbol embedded; about 8 minutes for 20,000 files.
+1f05a6f, 3bc7a5b and 2c584d0. The id counts only where `embedding` is set;
+the catch-up and `processFile` check that first. The one UPDATE clears the
+id of the few notes whose pre-0033 job for their current `seq` is pending
+or failed (reached from `jobs` by primary key), so the catch-up embeds them.
+Files keep `extracted_hash` null and `extractor_version` 0, so the first
+boot re-extracts each once. `processFile` keeps such a file's vector unless
+its pre-0033 job `extract:<id>:<hash>` for the current content is pending
+or failed, and a push to it before then records the replaced content in
+`extracted_hash` (`syncRepositoryFiles`), so a vector is only kept for the
+content it was made from. So the first boot re-embeds only the notes and
+files without a vector or with a pending or failed job (about 100 ms a note
+and 640 ms a file with bge-small on CPU), and re-extracts every repository
+file once with its vectors reused, which costs a parse and a write. Measured
+locally on this repository's 766 source files ×3 (2,298 files, 9,807 symbols,
+shared loaded Postgres): queued in 76 ms and drained in 56 s, 24 ms a file,
+with no file or symbol embedded, so about 8 minutes for 20,000 files.
 That re-extraction is also the backfill of import `line`s from before 0031
 (#558, ADR-004 A7). A note written 2 s into that catch-up had its vector
 81 ms later and a file pushed then had its symbols in 99 ms: writes go

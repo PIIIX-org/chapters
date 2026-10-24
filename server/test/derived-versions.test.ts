@@ -395,6 +395,54 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
   })
 })
 
+describe('files extracted before migration 0033 (#453)', () => {
+  /** A file as 0033 leaves it: its vector and the id from the catalog default, no `extracted_hash`, version 0, only pre-0033 jobs. */
+  async function legacyFile(name: string) {
+    const { repo, files } = await extractedRepo(name)
+    const file = files[0]!
+    await db.update(repositoryFiles).set({ extractedHash: null, extractorVersion: 0 }).where(eq(repositoryFiles.id, file.id))
+    await db.delete(jobs).where(sql`${jobs.payload}->>'fileId' = ${file.id}`)
+    return { repo, file }
+  }
+
+  it('re-extracted once at boot, keeping its file and symbol vectors', async () => {
+    const { file } = await legacyFile('legacy-current')
+    const texts = embeddedTexts()
+    await scheduleMissingExtractions()
+    await flushExtraction()
+    expect(texts.filter((t) => t.includes(file.path))).toEqual([])
+    const [row] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file.id))
+    expect(row).toMatchObject({ extractedHash: file.contentHash, extractorVersion: EXTRACTOR_VERSION, embedderId: EMBEDDER_ID })
+  })
+
+  it('its vector is embedded again when its pre-0033 job for the current content failed', async () => {
+    const { repo, file } = await legacyFile('legacy-failed')
+    await db.insert(jobs).values({
+      kind: 'extract',
+      payload: { fileId: file.id, repositoryId: repo.id },
+      idempotencyKey: `extract:${file.id}:${file.contentHash}`,
+      attempts: MAX_JOB_ATTEMPTS,
+      lastError: 'Error: model download failed',
+      doneAt: new Date(),
+    })
+    const texts = embeddedTexts()
+    await scheduleMissingExtractions()
+    await flushExtraction()
+    expect(texts.filter((t) => t === `${file.path}\n${SOURCE}`)).toHaveLength(1)
+  })
+
+  it('a push before its re-extraction records the content its vector was made from, so the new content is embedded', async () => {
+    const { repo, file } = await legacyFile('legacy-pushed')
+    const texts = embeddedTexts()
+    const changed = `${SOURCE}// changed\n`
+    await syncRepositoryFiles(repo.id, [{ path: file.path, content: changed }], [file.path])
+    await flushExtraction()
+    expect(texts.filter((t) => t === `${file.path}\n${changed}`)).toHaveLength(1)
+    const [row] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file.id))
+    expect(row!.extractedHash).toBe(createHash('sha256').update(changed).digest('hex'))
+  })
+})
+
 describe('the note model is unchanged (#453)', () => {
   it('notes.embedder_id is not part of the note rows the API returns', async () => {
     const user = await createActiveUser()
