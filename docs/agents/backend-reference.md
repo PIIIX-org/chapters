@@ -1574,9 +1574,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `server.registerTool`, `server.tool`, `server.registerResource` and
   `server.resource` are replaced on the instance by a function that
   throws, so a tool registered without a declaration fails when the
-  server is built. That is a guard against forgetting the declaration,
-  not a security boundary: the low-level `server.server.setRequestHandler`
-  would bypass it (here it is only wrapped, to filter `tools/list`).
+  server is built; the only resources are the tool manuals (below),
+  registered through the bound method. That is a guard against forgetting
+  the declaration, not a security boundary: the low-level
+  `server.server.setRequestHandler` would bypass it (here it is only
+  wrapped, to filter `tools/list` and `resources/list`).
   Scopes: `account` (account tokens only:
   `list_vaults`, `create_vault`, `restore_vault`, `purge_vault`, the two
   vault-preference tools, `list_repositories`, `connect_repository`, the
@@ -1665,6 +1667,37 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `mcp-strict-args`, `account-separation`, `mcp-tool-visibility`)
   enumerate an `admin` account token's `tools/list`, which lists every
   tool.
+- **Descriptions, manuals and the `tools/list` budget** (#429): every
+  tool description is at most two sentences (what the tool does and
+  answers, and what picking and calling it needs); details live in the
+  parameter descriptions and the manuals. The manuals are MCP resources
+  (`manuals.ts`): `elara://manual/conventions` and one per tool family
+  (`vaults`, `notes`, `repositories`, `search`, `graph`, `teams`,
+  `export`), parsed once per process from
+  `skills/elara/references/mcp-tools.md` (the one source; the Dockerfile
+  copies it to the same relative path, and the lab counts it as an image
+  input). A family manual is the section's opening text plus the entries
+  of the tools the connection's `tools/list` shows (`listedTools()`,
+  shared with the `tools/list` filter, live pin permission included);
+  `resources/list` leaves out a manual with none of them, and reading it
+  answers the SDK's own `Resource <uri> not found`. Without the file the
+  server logs it once and serves no manuals; tools are unaffected. The
+  `tools/list` wrapper also drops what restates a default: the input
+  schemas' `$schema` (draft-07; only keywords draft-07 and 2020-12 read
+  alike are used) and `execution: {taskSupport: "forbidden"}`.
+  `test/mcp-tool-budget.test.ts` measures, per profile, the ADR-004 §2.6
+  sum: characters / 4 of `tools/list`, `prompts/list` and the
+  `initialize` instructions. It fails a reader account token over 2,000
+  tokens (no prompts on reader, #428; measured 7,676 characters) and a
+  writer one whose `tools/list` plus instructions are over 4,000 (14,286;
+  its `prompts/list`, 10,042, is reported), reports admin (`tools/list`
+  37,512; its ceiling is in `mcp-tool-schema.test.ts`), checks the
+  `tools/list` bytes are the same on every call and for two vault pins of
+  a reader token (a writer or admin list follows the live pin permission),
+  and counts each description's
+  sentences. `test/mcp-manuals.test.ts` covers the manual scoping (profile,
+  pin, allow-list, live permission) and that every tool has exactly one
+  entry.
 - **Tools** (60, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):
   - *Vaults* (14): `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `get_vault_graph_preference`, `set_vault_graph_preference`, `get_vault_preferences`, `update_vault_preferences`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.
@@ -1827,7 +1860,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   which the REST local graph does not use yet (#472); REST graph routes
   keep their own default (the full graph) and take no `edgeTypes`.
 - **Secret-scan guard** (`test/mcp-secret-scan.test.ts`, #577): CI calls
-  every tool from `tools/list` and every prompt from `prompts/list`
+  every tool from `tools/list`, every prompt from `prompts/list` and reads
+  every resource from `resources/list` (#429)
   against a fixture world seeded with real secrets (git URLs with
   userinfo, a token-only non-GitHub URL, a query-string token, an
   `ssh://user:password@` remote, an explicit git credential, a webhook
