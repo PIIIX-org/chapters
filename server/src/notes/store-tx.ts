@@ -16,6 +16,7 @@ import { getTableColumns, sql, eq, and, asc, desc, gt, notInArray } from 'drizzl
 import { isDeepStrictEqual } from 'node:util'
 import { db } from '../db/client.js'
 import { noteLinks, noteRevisions, notes } from '../db/schema.js'
+import { EMBEDDING_JOB, embeddingJobKey } from '../search/embedding-queue.js'
 import { extractWikilinkLocations, type Frontmatter } from './okf.js'
 import { orderKeys, sameContent } from './frontmatter-order.js'
 import { holdsExclusiveLock, INSTANCE_LOCK_KEY, writesPaused } from './maintenance-lock.js'
@@ -368,7 +369,7 @@ export async function raiseProjections(tx: Tx, noteId: string, seq: number, kind
 export async function enqueueEmbeddingTx(tx: Tx, noteId: string, seq: number): Promise<void> {
   await tx.execute(sql`
     INSERT INTO jobs (kind, payload, idempotency_key)
-    VALUES ('embed_note', jsonb_build_object('noteId', ${noteId}::text, 'seq', ${seq}::bigint), ${`embed_note:${noteId}:${seq}`})
+    VALUES (${EMBEDDING_JOB}, jsonb_build_object('noteId', ${noteId}::text, 'seq', ${seq}::bigint), ${embeddingJobKey(noteId, seq)})
     ON CONFLICT (idempotency_key) DO NOTHING`)
 }
 

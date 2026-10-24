@@ -53,6 +53,7 @@ export interface SearchResult {
   language?: string | null // code only
   symbolName?: string // symbols only
   symbolKind?: string // symbols only
+  symbolParent?: string // symbols only: a method's class (#450)
   startLine?: number // symbols only
   endLine?: number // symbols only
   snippet: string
@@ -68,6 +69,8 @@ export interface SymbolSearchResult {
   path: string
   name: string
   kind: string
+  /** A method's class or a namespace member's namespace (#450); absent at module level. */
+  parent?: string
   startLine: number
   endLine: number
   snippet: string | null
@@ -137,6 +140,7 @@ interface SymbolRow {
   path: string
   name: string
   kind: string
+  parent: string | null
   start_line: number
   end_line: number
   snippet: string
@@ -244,7 +248,7 @@ async function symbolRows(
     mode === 'keyword'
       ? await db.execute(sql`
           SELECT s.id, s.file_id, f.repository_id AS container_id, f.path,
-                 s.name, s.kind, s.start_line, s.end_line,
+                 s.name, s.kind, s.parent, s.start_line, s.end_line,
                  coalesce(s.snippet, s.name) AS snippet, ${UPDATED_AT(sql`f.updated_at`)}
           FROM repository_file_symbols s
           JOIN repository_files f ON f.id = s.file_id
@@ -253,10 +257,11 @@ async function symbolRows(
             AND (
               s.name ILIKE ${`%${query}%`}
               OR (s.snippet IS NOT NULL AND s.snippet ILIKE ${`%${query}%`})
+              OR s.parent || '.' || s.name ILIKE ${`%${query}%`}
             )
           ORDER BY
             CASE
-              WHEN lower(s.name) = lower(${query}) THEN 1
+              WHEN lower(s.name) = lower(${query}) OR lower(s.parent || '.' || s.name) = lower(${query}) THEN 1
               WHEN lower(s.name) LIKE lower(${`${query}%`}) THEN 2
               ELSE 3
             END,
@@ -266,7 +271,7 @@ async function symbolRows(
       : await db.execute(
           gated(sql`
             SELECT s.id, s.file_id, f.repository_id AS container_id, f.path,
-                   s.name, s.kind, s.start_line, s.end_line,
+                   s.name, s.kind, s.parent, s.start_line, s.end_line,
                    coalesce(s.snippet, s.name) AS snippet, ${UPDATED_AT(sql`f.updated_at`)},
                    s.embedding <=> ${vec}::vector AS distance
             FROM repository_file_symbols s
@@ -401,6 +406,7 @@ export async function findSymbols(
           path: row.path,
           name: row.name,
           kind: row.kind,
+          ...(row.parent !== null ? { parent: row.parent } : {}),
           startLine: row.start_line,
           endLine: row.end_line,
           snippet: row.snippet || null,
@@ -500,6 +506,7 @@ export async function searchNotes(
           type: row.kind,
           symbolName: row.name,
           symbolKind: row.kind,
+          ...(row.parent !== null ? { symbolParent: row.parent } : {}),
           startLine: row.start_line,
           endLine: row.end_line,
           updated: row.updated_at.slice(0, 10),

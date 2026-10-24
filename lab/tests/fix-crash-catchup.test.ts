@@ -21,6 +21,8 @@ import { connectLocalRepo, copyIntoLocalRepo, filesPendingExtraction, repoProgre
 
 const FILES = Number(process.env.LAB_CATCHUP_FILES ?? 300)
 const CRASH_AT = Number(process.env.LAB_CATCHUP_CRASH_AT ?? 0.2)
+/** Symbols of each generated file (#450): `alpha`, `Beta`, its method `run`, `gamma`. */
+const SYMBOLS_PER_FILE = 4
 /** Lease (60 s) + drainer poll (5 s) + the re-run of the reclaimed file, with margin. */
 const PENDING_SETTLE_MS = 120_000
 
@@ -62,7 +64,7 @@ const test: LabTest = {
       ? []
       : await ctx.docker
           .psqlRows(`select f.path, j.attempts, j.lease_until, j.done_at, j.last_error from repository_files f
-            join jobs j on j.idempotency_key = 'extract:' || f.id || ':' || f.content_hash
+            join jobs j on j.idempotency_key like 'extract:' || f.id || ':' || f.content_hash || ':%'
             where f.repository_id = '${repo.id}' and j.done_at is null order by f.path limit 5`)
           .catch((e: unknown) => [{ error: String(e).slice(0, 300) }])
     const noSymbols = Number(
@@ -81,9 +83,9 @@ const test: LabTest = {
       },
       {
         name: 'crash mid-extraction: every file has symbols',
-        expected: '0 files without symbols (each file declares 3)',
-        actual: `${noSymbols} files without symbols; ${final.symbols} symbols total (expected ${FILES * 3})`,
-        ok: noSymbols === 0 && final.symbols === FILES * 3,
+        expected: `0 files without symbols (each file declares ${SYMBOLS_PER_FILE})`,
+        actual: `${noSymbols} files without symbols; ${final.symbols} symbols total (expected ${FILES * SYMBOLS_PER_FILE})`,
+        ok: noSymbols === 0 && final.symbols === FILES * SYMBOLS_PER_FILE,
         severity: 'high',
       },
       {

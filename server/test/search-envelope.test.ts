@@ -20,7 +20,7 @@ import { jobs, repositories, repositoryFiles } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
-import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { extractionJobKey, flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { embedder } from '../src/search/embeddings.js'
 import { createActiveUser, loginCookie } from './helpers.js'
@@ -152,7 +152,7 @@ beforeAll(async () => {
   await db.insert(jobs).values({
     kind: 'extract',
     payload: { fileId: failed!.id, repositoryId: failedRepoId },
-    idempotencyKey: `extract:${failed!.id}:${hash}`,
+    idempotencyKey: extractionJobKey(failed!.id, hash),
     attempts: 3,
     lastError: 'Error: parser blew up',
     doneAt: new Date(),

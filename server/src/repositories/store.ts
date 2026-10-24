@@ -67,8 +67,16 @@ export async function syncRepositoryFiles(
       sourceModifiedAt: file.sourceModifiedAt,
       updatedAt: new Date(),
     }
+    // A file with a vector but no `extracted_hash` was last extracted before
+    // migration 0033: record the content it replaces as the one its vector was
+    // made from, so the extraction of the new content embeds it again (#453).
+    const updated = {
+      ...values,
+      extractedHash: sql`CASE WHEN ${repositoryFiles.extractedHash} IS NULL AND ${repositoryFiles.embedding} IS NOT NULL
+        THEN ${repositoryFiles.contentHash} ELSE ${repositoryFiles.extractedHash} END`,
+    }
     if (current) {
-      await db.update(repositoryFiles).set(values).where(eq(repositoryFiles.id, current.id))
+      await db.update(repositoryFiles).set(updated).where(eq(repositoryFiles.id, current.id))
       toExtract.push(current.id)
       result.updated += 1
     } else {
@@ -77,7 +85,7 @@ export async function syncRepositoryFiles(
         .values(values)
         .onConflictDoUpdate({
           target: [repositoryFiles.repositoryId, repositoryFiles.path],
-          set: values,
+          set: updated,
         })
         .returning({ id: repositoryFiles.id })
       if (inserted) toExtract.push(inserted.id)
@@ -164,17 +172,19 @@ export async function listRepositoryFilesPage(
     .limit(opts.limit)
 }
 
-/** Declared top-level symbols for a file — its "outline" (spec 9). */
+/** A file's declared symbols — its "outline" (spec 9); `parent` only on a method or namespace member (#450). */
 export async function listFileSymbols(
   fileId: string,
-): Promise<Array<Pick<typeof repositoryFileSymbols.$inferSelect, 'name' | 'kind' | 'startLine' | 'endLine'>>> {
-  return db
+): Promise<Array<{ name: string; kind: string; parent?: string; startLine: number; endLine: number }>> {
+  const rows = await db
     .select({
       name: repositoryFileSymbols.name,
       kind: repositoryFileSymbols.kind,
+      parent: repositoryFileSymbols.parent,
       startLine: repositoryFileSymbols.startLine,
       endLine: repositoryFileSymbols.endLine,
     })
     .from(repositoryFileSymbols)
     .where(eq(repositoryFileSymbols.fileId, fileId))
+  return rows.map(({ parent, ...s }) => (parent === null ? s : { ...s, parent }))
 }

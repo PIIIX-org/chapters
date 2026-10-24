@@ -138,7 +138,8 @@ const HISTORY = 'docs/history'
 const BIG = 'docs/big'
 /** ~150 KB over 2,500 numbered lines, so even the largest budget pages it. */
 const bigBody = (tag: string) => Array.from({ length: 2_500 }, (_, i) => `${tag} line ${i + 1} ${'lorem ipsum '.repeat(4)}`).join('\n') + '\n'
-const bigFile = Array.from({ length: 3_000 }, (_, i) => `export const value${i} = ${i} // ${'x'.repeat(30)}`).join('\n')
+/** 3,000 lines and no symbols (unexported consts, #450), so its last page is content. */
+const bigFile = Array.from({ length: 3_000 }, (_, i) => `const value${i} = ${i} // ${'x'.repeat(30)}`).join('\n')
 /** Every path of the test repository: a sync deletes the paths it does not list. */
 const REPO_PATHS = ['src/big.ts', 'src/alpha.ts', ...Array.from({ length: 30 }, (_, i) => `src/mod-${String(i).padStart(2, '0')}.ts`)]
 const symbolFile = Array.from({ length: 30 }, (_, i) => `export function alphaHandler${i}(input: string) {\n  return input + '${i}'\n}`).join('\n')

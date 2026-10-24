@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { and, eq } from 'drizzle-orm'
+import { and, count, eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { repositories, repositoryFileImports, repositoryFiles, repositoryFileSymbols } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
@@ -10,6 +10,7 @@ import {
   flushExtraction,
   scheduleMissingExtractions,
 } from '../src/repositories/extraction-queue.js'
+import { EXTRACTOR_VERSION } from '../src/repositories/extraction.js'
 import { embedder } from '../src/search/embeddings.js'
 import { createActiveUser } from './helpers.js'
 
@@ -115,6 +116,46 @@ describe('extraction queue', () => {
       './components/Button.js': button.id,
       '@/lib/utils': utils.id,
     })
+  })
+
+  it('extracts .mts files and resolves `./x.mjs` to x.mts; a .tsx component with JSX keeps its symbols (#449, #451)', async () => {
+    const repo = await makeRepo()
+    await syncRepositoryFiles(
+      repo.id,
+      [
+        { path: 'tools/gen.mts', content: "import { load } from './load.mjs'\nexport function gen() { return load() }" },
+        { path: 'tools/load.mts', content: 'export function load() { return 1 }' },
+        {
+          path: 'client/src/Card.tsx',
+          content: [
+            "import { gen } from '../../tools/gen.mjs'",
+            'export function Card() {',
+            '  return <div className="card">{gen()}</div>',
+            '}',
+            'export default function Page() { return <Card /> }',
+          ].join('\n'),
+        },
+      ],
+      ['tools/gen.mts', 'tools/load.mts', 'client/src/Card.tsx'],
+    )
+    await flushExtraction()
+
+    const gen = await fileByPath(repo.id, 'tools/gen.mts')
+    const load = await fileByPath(repo.id, 'tools/load.mts')
+    const card = await fileByPath(repo.id, 'client/src/Card.tsx')
+    expect(gen.language).toBe('typescript')
+    const genImports = await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, gen.id))
+    expect(genImports.map((i) => [i.targetPath, i.resolvedTargetFileId])).toEqual([['./load.mjs', load.id]])
+    const genSymbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, gen.id))
+    expect(genSymbols.map((s) => s.name)).toEqual(['gen'])
+
+    const cardSymbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, card.id))
+    expect(cardSymbols.map((s) => [s.name, s.startLine, s.endLine]).sort()).toEqual([
+      ['Card', 2, 4],
+      ['Page', 5, 5],
+    ])
+    const cardImports = await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, card.id))
+    expect(cardImports.map((i) => [i.targetPath, i.resolvedTargetFileId])).toEqual([['../../tools/gen.mjs', gen.id]])
   })
 
   it('backfills imports stored unresolved by an older resolver, from their raw target path', async () => {
@@ -244,6 +285,86 @@ describe('extraction queue', () => {
     await flushExtraction()
     expect((await fileByPath(repo.id, 'src/many.ts')).embeddingNote).toBeNull()
   })
+
+  it('under the per-file budget, embeds exported then other top-level symbols before methods (#450)', async () => {
+    vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '3')
+    const repo = await makeRepo()
+    // A class with many methods opens the file: in document order its methods
+    // would take the budget from the functions after it.
+    const content = [
+      'export class Store {',
+      '  get(key: string) { return key }',
+      '  set(key: string) { return key }',
+      '  delete(key: string) { return key }',
+      '  clear() {}',
+      '}',
+      'function helper() { return 1 }',
+      'export const load = () => new Store()',
+      'const unused = () => helper()',
+    ].join('\n')
+    const embedSpy = vi.spyOn(embedder, 'embed')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'src/store.ts', content }], ['src/store.ts'])
+      await flushExtraction()
+      expect(embedSpy.mock.calls.map(([texts]) => texts.slice(1).map((t) => t.split('\n')[0]))).toEqual([
+        ['class Store in src/store.ts:1', 'function load in src/store.ts:8', 'function helper in src/store.ts:7'],
+      ])
+    } finally {
+      embedSpy.mockRestore()
+      warnSpy.mockRestore()
+      vi.unstubAllEnvs()
+    }
+
+    const file = await fileByPath(repo.id, 'src/store.ts')
+    const symbols = await db
+      .select()
+      .from(repositoryFileSymbols)
+      .where(eq(repositoryFileSymbols.fileId, file.id))
+      .orderBy(repositoryFileSymbols.startLine)
+    expect(symbols.map((s) => [s.kind, s.parent, s.name, s.embedding !== null])).toEqual([
+      ['class', null, 'Store', true],
+      ['method', 'Store', 'get', false],
+      ['method', 'Store', 'set', false],
+      ['method', 'Store', 'delete', false],
+      ['method', 'Store', 'clear', false],
+      ['function', null, 'helper', true],
+      ['function', null, 'load', true],
+      ['function', null, 'unused', false],
+    ])
+    expect(file.embeddingNote).toBe(
+      'symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: 3 of 8 symbols embedded, the rest are keyword-searchable only',
+    )
+  })
+
+  it('stores a file with more symbols and imports than one INSERT can bind (#450 review)', async () => {
+    // 8 parameters a symbol row and 4 an import row: one statement would pass
+    // postgres.js's 65,534-parameter cap (9,000 x 8 and 17,000 x 4). Generated
+    // constant tables reach this now that exported consts are symbols.
+    vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '4')
+    const repo = await makeRepo()
+    const consts = Array.from({ length: 9_000 }, (_, i) => `export const K${i} = ${i}`)
+    const imports = Array.from({ length: 17_000 }, (_, i) => `import './m${i}.js'`)
+    const content = [...imports, ...consts].join('\n')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'src/table.ts', content }], ['src/table.ts'])
+      await flushExtraction()
+    } finally {
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+      vi.unstubAllEnvs()
+    }
+
+    const file = await fileByPath(repo.id, 'src/table.ts')
+    expect(file.embedding).not.toBeNull()
+    expect(file.extractorVersion).toBe(EXTRACTOR_VERSION)
+    const [symbols] = await db.select({ n: count() }).from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file.id))
+    expect(symbols!.n).toBe(9_000)
+    const [importRows] = await db.select({ n: count() }).from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, file.id))
+    expect(importRows!.n).toBe(17_000)
+  }, 120_000)
 
   it('one failing file does not stop the files queued after it, and stays counted as pending', async () => {
     const repo = await makeRepo()
