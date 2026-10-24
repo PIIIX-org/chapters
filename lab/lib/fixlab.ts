@@ -15,15 +15,18 @@ export interface RepoProgress {
   files: number
   embedded: number
   symbols: number
+  /** Every block of the repository's files (symbol, skeleton and file blocks, #452). */
+  blocks: number
 }
 
 export async function repoProgress(ctx: LabContext, repoId: string): Promise<RepoProgress> {
   const [row] = await ctx.docker.psqlRows<Omit<RepoProgress, 't'>>(`
     select r.sync_status as "status", r.last_sync_error as "lastSyncError",
       (select count(*) from repository_files f where f.repository_id = r.id)::int as "files",
-      (select count(*) from repository_files f where f.repository_id = r.id and f.embedding is not null)::int as "embedded",
-      (select count(*) from repository_file_symbols s join repository_files f on f.id = s.file_id
-        where f.repository_id = r.id)::int as "symbols"
+      (select count(*) from repository_files f where f.repository_id = r.id
+        and exists (select 1 from blocks b where b.owner_type = 'code' and b.owner_id = f.id and b.owner_version = f.content_hash and b.embedding is not null))::int as "embedded",
+      (select count(*) from blocks b where b.owner_type = 'code' and b.kind = 'symbol' and b.container_id = r.id)::int as "symbols",
+      (select count(*) from blocks b where b.owner_type = 'code' and b.container_id = r.id)::int as "blocks"
     from repositories r where r.id = '${repoId}'`)
   if (!row) throw new Error(`repository ${repoId} not found`)
   return { t: Math.round((Date.now() - ctx.startedAt) / 1000), ...row }
@@ -56,7 +59,7 @@ export async function settleRepo(
       timeline.push(p)
       const enoughFiles = p.files > 0 && p.files >= (opts.minFiles ?? 1)
       if (p.status !== 'syncing' && enoughFiles && p.embedded === p.files) {
-        ctx.log(`${label}: complete files=${p.files} symbols=${p.symbols}`)
+        ctx.log(`${label}: complete files=${p.files} symbols=${p.symbols} blocks=${p.blocks}`)
         return { timeline, outcome: 'complete', ms: Date.now() - t0 }
       }
       if (p.status !== 'syncing' && Date.now() - lastChange >= opts.stallMs) {
@@ -183,14 +186,18 @@ export async function filesPendingExtraction(ctx: LabContext, repoId: string) {
 }
 
 /**
- * Files without an embedding. Not quite filesPendingExtraction: the field
- * counts a file whose extract job is not done, and a file gets its embedding
- * before its job completes (semantic edges come in between), so the field can
- * be higher until that job finishes or a dead process's lease runs out (#845).
+ * Files without an embedded block of their current content (#452a; before
+ * 0035, files without an embedding). Not quite filesPendingExtraction: the
+ * field counts a file whose extract job is not done, and a file gets its
+ * blocks before its job completes (semantic edges come in between), so the
+ * field can be higher until that job finishes or a dead process's lease runs
+ * out (#845).
  */
 export async function sqlPending(ctx: LabContext, repoId: string): Promise<number> {
   return Number(
-    await ctx.docker.psql(`select count(*) from repository_files where repository_id = '${repoId}' and embedding is null;`),
+    await ctx.docker.psql(`select count(*) from repository_files f where f.repository_id = '${repoId}'
+      and not exists (select 1 from blocks b where b.owner_type = 'code' and b.owner_id = f.id
+        and b.owner_version = f.content_hash and b.embedding is not null);`),
   )
 }
 

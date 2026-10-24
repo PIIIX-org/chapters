@@ -4,7 +4,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import { db } from '../src/db/client.js'
-import { repositories, repositoryFiles } from '../src/db/schema.js'
+import { blocks, repositories, repositoryFiles } from '../src/db/schema.js'
 import { and, eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
@@ -210,7 +210,9 @@ describe('error and job reports carry no note text (#705)', () => {
     jobTiming.backoffBaseMs = 0
     try {
       // beforeAll embedded this version already, so a plain enqueue is a
-      // no-op (#494); re-run it the way `pnpm reindex` does.
+      // no-op (#494); re-run it the way `pnpm reindex` does, without the
+      // note's blocks, whose vectors a re-run would otherwise reuse (#452).
+      await db.delete(blocks).where(and(eq(blocks.ownerType, 'note'), eq(blocks.ownerId, noteId)))
       await enqueueEmbeddings([noteId], 'finished')
       await flushEmbeddings()
     } finally {

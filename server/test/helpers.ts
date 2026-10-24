@@ -3,7 +3,8 @@ import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../src/config.js'
 import { db, sql } from '../src/db/client.js'
-import { users } from '../src/db/schema.js'
+import { and, asc, eq } from 'drizzle-orm'
+import { blocks, users } from '../src/db/schema.js'
 import { hashPassword } from '../src/auth/passwords.js'
 import { serializeNote, type Frontmatter } from '../src/notes/okf.js'
 import { getLiveNote, noteFile } from '../src/notes/store.js'
@@ -144,4 +145,41 @@ export async function wipeInstance(): Promise<void> {
   const tables = await sql<Array<{ tablename: string }>>`select tablename from pg_tables where schemaname = 'public'`
   await sql.unsafe(`truncate ${tables.map((t) => `"${t.tablename}"`).join(', ')} cascade`)
   await rm(join(config.dataDir, 'vaults'), { recursive: true, force: true })
+}
+
+/** A repository file's symbol blocks in line order (#413): what `repository_file_symbols` held before 0035. */
+export async function symbolBlocks(fileId: string) {
+  const rows = await db
+    .select()
+    .from(blocks)
+    .where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId), eq(blocks.kind, 'symbol')))
+    .orderBy(asc(blocks.startLine), asc(blocks.blockId))
+  return rows.map((b) => ({
+    name: b.symbolParent === null ? b.innerPath : b.innerPath.slice(b.symbolParent.length + 1),
+    kind: b.symbolKind!,
+    parent: b.symbolParent,
+    startLine: b.startLine,
+    endLine: b.endLine,
+    blockId: b.blockId,
+    embedding: b.embedding,
+  }))
+}
+
+/** The vector of a repository file's `file` block, or null (#452). */
+export async function fileEmbedding(fileId: string): Promise<number[] | null> {
+  const [row] = await db
+    .select({ embedding: blocks.embedding })
+    .from(blocks)
+    .where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId), eq(blocks.kind, 'file')))
+  return row?.embedding ?? null
+}
+
+/** The vectors of a note's blocks in body order; empty when it has none (#452: `notes.embedding` moved to `blocks`). */
+export async function noteVectors(noteId: string): Promise<number[][]> {
+  const rows = await db
+    .select({ embedding: blocks.embedding })
+    .from(blocks)
+    .where(and(eq(blocks.ownerType, 'note'), eq(blocks.ownerId, noteId)))
+    .orderBy(blocks.startLine, blocks.innerPath)
+  return rows.flatMap((r) => (r.embedding ? [r.embedding] : []))
 }

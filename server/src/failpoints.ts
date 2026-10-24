@@ -26,6 +26,8 @@ export const FAILPOINTS = [
   'migration.mid-batch',
   'revisions.compact-before-commit',
   'revisions.compact-after-commit',
+  'extract.after-embed-before-write',
+  'extract.before-commit',
   'collab.after-log-before-ack',
   'collab.after-ack-before-fold',
 ] as const

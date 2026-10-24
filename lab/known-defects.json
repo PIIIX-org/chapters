@@ -77,11 +77,6 @@
     },
     {
       "test": "multilingual-search",
-      "check": "normalization: Arabic kaf ك (\"فرش كاشان\" vs stored \"فرش کاشان\")",
-      "issue": 528
-    },
-    {
-      "test": "multilingual-search",
       "check": "normalization: Arabic kaf ك + Arabic yeh ي (\"كوير لوت\" vs stored \"کویر لوت\")",
       "issue": 528,
       "intermittent": "the keyword channel misses this variant every time; the hybrid rank drops only when the vector ranks, which shift with timestamp noise (#459), do not carry it (failed in 3 of 5 runs)"
@@ -105,11 +100,6 @@
       "test": "multilingual-search",
       "check": "Persian retrieval on par with English (hybrid hit@1)",
       "issue": 530
-    },
-    {
-      "test": "multilingual-search",
-      "check": "ranking is stable across identical copies of the corpus",
-      "issue": 459
     },
     {
       "test": "multilingual-search",

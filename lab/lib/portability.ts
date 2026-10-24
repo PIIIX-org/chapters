@@ -459,7 +459,7 @@ export async function noteSnapshot(database: string | null, vaultIds: string[]):
   const query = `select n.id, n.vault_id, n.path, n.frontmatter, n.body, n.deleted_at is not null as trashed,
       (select count(*) from note_revisions r where r.note_id = n.id)::int as revisions,
       coalesce((select json_agg(l.target_path order by l.target_path) from note_links l where l.source_note_id = n.id), '[]'::json) as links,
-      n.embedding is not null as embedded
+      exists (select 1 from blocks b where b.owner_type = 'note' and b.owner_id = n.id and b.owner_version = n.seq::text and b.embedding is not null) as embedded
     from notes n where n.vault_id in (${vaultIds.map(lit).join(',') || 'null'})
     order by n.vault_id, n.path, n.created_at`
   return database ? psqlRowsDb<NoteRow>(database, query) : psqlRowsDb<NoteRow>('"$POSTGRES_DB"', query)

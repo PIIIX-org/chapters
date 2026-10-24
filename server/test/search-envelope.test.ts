@@ -20,7 +20,7 @@ import { jobs, repositories, repositoryFiles } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
-import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { extractionJobKey, flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { embedder } from '../src/search/embeddings.js'
 import { createActiveUser, loginCookie } from './helpers.js'
@@ -88,14 +88,22 @@ async function bothVault(q: string, vault = vaultId): Promise<Envelope[]> {
 }
 
 const dialect = new PgDialect()
-/** Makes `db.execute` fail for the statements `match` picks (by their SQL text); others run. */
+/**
+ * Makes `db.execute` fail for the statements `match` picks (by their SQL
+ * text); others run. Vector legs over `blocks` run in a transaction (their
+ * `SET LOCAL hnsw.ef_search`), so the transaction's `execute` fails the same way.
+ */
 function failStatements(match: (text: string) => boolean) {
-  const execute = db.execute.bind(db)
-  const failing = (query: SQL) => {
-    if (match(dialect.sqlToQuery(query).sql)) return Promise.reject(new Error('injected leg failure'))
-    return execute(query)
-  }
-  return vi.spyOn(db, 'execute').mockImplementation(failing as unknown as typeof db.execute)
+  const failingOn = <E extends (query: SQL) => Promise<unknown>>(execute: E) =>
+    ((query: SQL) => (match(dialect.sqlToQuery(query).sql) ? Promise.reject(new Error('injected leg failure')) : execute(query))) as unknown as E
+  const transaction = db.transaction.bind(db)
+  vi.spyOn(db, 'transaction').mockImplementation(((run: (tx: unknown) => Promise<unknown>) =>
+    transaction(async (tx) => {
+      tx.execute = failingOn(tx.execute.bind(tx))
+      return run(tx)
+    })) as unknown as typeof db.transaction)
+  const execute = failingOn(db.execute.bind(db))
+  return vi.spyOn(db, 'execute').mockImplementation(execute)
 }
 const vectorLeg = (text: string) => text.includes('<=>')
 const keywordLeg = (text: string) => text.includes('websearch_to_tsquery') || text.includes('ILIKE')
@@ -152,7 +160,7 @@ beforeAll(async () => {
   await db.insert(jobs).values({
     kind: 'extract',
     payload: { fileId: failed!.id, repositoryId: failedRepoId },
-    idempotencyKey: `extract:${failed!.id}:${hash}`,
+    idempotencyKey: extractionJobKey(failed!.id, hash),
     attempts: 3,
     lastError: 'Error: parser blew up',
     doneAt: new Date(),
@@ -243,10 +251,11 @@ describe('index_building and unavailable (#442)', () => {
     expect(answer.index).toEqual({ pending_notes: 0, pending_files: 1, pending_repositories: 0, failed: 0 })
   })
 
-  it('a note without its embedding counts as pending', async () => {
+  it('a note without its blocks counts as pending', async () => {
     const note = await createNote(vaultId, { path: 'pending/note', body: 'pending '.repeat(10) })
     await flushEmbeddings()
-    await db.execute(sql`UPDATE notes SET embedding = NULL WHERE id = ${note.id}`)
+    // A note's vectors are its blocks (#452).
+    await db.execute(sql`DELETE FROM blocks WHERE owner_type = 'note' AND owner_id = ${note.id}`)
     await db.execute(sql`DELETE FROM jobs WHERE idempotency_key LIKE ${`embed_note:${note.id}:%`}`)
     try {
       for (const answer of await bothVault('zzyxxsecretmarker')) {

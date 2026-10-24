@@ -18,9 +18,15 @@
  *   with no `note_crdt` row): text different from the row, undecodable, or
  *   no live note. Bins S2b no longer reads are not problems.
  * - FTS: the stored `fts` vector differs from the one the row gives.
- * - vectors: a live note with no embedding and no job, or whose job for its
- *   current `seq` failed.
+ * - vectors: a live note without the blocks of its current `seq`, embedder
+ *   and chunker (#452) and no job for them (or one that finished without
+ *   them), or whose job for its current `seq` failed.
  * - links: the `note_links` rows (targets and lines) differ from the wikilinks of the body.
+ * - blocks (repository files, #413): a file with no blocks of its current
+ *   content and embed key (`blocks-missing`: no extraction job for them, or
+ *   one that finished without them), or whose extraction job for them
+ *   failed (`blocks-failed`). Checked on a whole-instance run or with
+ *   `repositoryId`, not when the run is scoped to a vault.
  *
  * Work that is still running (pending projections, embedding jobs, CRDT
  * tails not folded yet) is listed apart and is not a problem. So is `info`:
@@ -38,11 +44,11 @@
  * (under the ownership rules, so bytes it did not write are copied to
  * `.conflicts/` first), a missing projection row is created, a failed one is
  * retried, an outdated one re-rendered, link rows are derived again from the
- * body under the note lock, an embedding job is queued, and a fold error or
+ * body under the note lock, an embedding or extraction job is queued, and a fold error or
  * stale tail is folded as boot does (S2b `foldPendingCollab` for that note,
  * under its lock: acknowledged collab typing reaches the row, the one repair
  * that writes a row, and only from the note's own CRDT log). The running
- * server's projector and embedding worker pick these up (they poll), or the
+ * server's projector and embedding and extraction workers pick these up (they poll), or the
  * next start does. Every other class is report-only.
  */
 import { readFile, readdir } from 'node:fs/promises'
@@ -51,7 +57,8 @@ import * as Y from 'yjs'
 import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { onJobConflict } from '../jobs/durable.js'
-import { EMBEDDING_JOB } from '../search/embedding-queue.js'
+import { EXTRACTION_JOB, extractionJobKeySql, hasCurrentBlocksSql } from '../repositories/extraction-queue.js'
+import { EMBEDDING_JOB, embeddingJobKeySql, noteBlocksCurrentSql } from '../search/embedding-queue.js'
 import { sameContent } from './frontmatter-order.js'
 import { compareNoteFile, orphanFiles } from './integrity.js'
 import { PROJECTION_VERSIONS, noteFileRel, sha256 } from './projector.js'
@@ -83,17 +90,25 @@ export const DOCTOR_CLASSES = [
   'vector-missing',
   'vector-failed',
   'links-differ',
+  'blocks-missing',
+  'blocks-failed',
 ] as const
 
 export type DoctorClass = (typeof DOCTOR_CLASSES)[number]
 
 export interface DoctorProblem {
   class: DoctorClass
+  /** The note's vault; '' for a repository file's problem (`repositoryId`). */
   vaultId: string
   vaultName: string
-  /** Vault-relative: a note path, a file (`a/index.md`, `.trash/<id>.md`, `.conflicts/…`) or a bin (`.crdt/a.bin`). */
+  /** Set on a repository file's problem (`blocks-*`): its repository; `path` is the file's. */
+  repositoryId?: string
+  repositoryName?: string
+  /** Vault-relative: a note path, a file (`a/index.md`, `.trash/<id>.md`, `.conflicts/…`) or a bin (`.crdt/a.bin`); or a repository file's path. */
   path: string
   noteId: string | null
+  /** A repository file's problem: the `repository_files` id. */
+  fileId?: string
   detail: string
   /** `--repair` can re-raise the derived state behind it. */
   repairable: boolean
@@ -102,10 +117,14 @@ export interface DoctorProblem {
 }
 
 export interface DoctorPending {
-  kind: 'projection' | 'embedding' | 'crdt-tail' | 'crdt-rebase' | 'crdt-bin'
+  kind: 'projection' | 'embedding' | 'crdt-tail' | 'crdt-rebase' | 'crdt-bin' | 'extraction'
+  /** As in `DoctorProblem`: '' with `repositoryId` for an extraction. */
   vaultId: string
   vaultName: string
+  repositoryId?: string
+  repositoryName?: string
   path: string
+  /** A note's id, or a repository file's for an extraction. */
   noteId: string
   detail: string
 }
@@ -128,7 +147,7 @@ export interface DoctorReport {
   ok: boolean
   /** `ok`: no problems; `repairable`: every problem is `repairable`; `broken`: at least one is not. */
   status: 'ok' | 'repairable' | 'broken'
-  checked: { notes: number; files: number; bins: number; crdtRows: number }
+  checked: { notes: number; files: number; bins: number; crdtRows: number; repositoryFiles: number }
   counts: Partial<Record<DoctorClass, number>>
   problems: DoctorProblem[]
   pending: DoctorPending[]
@@ -156,6 +175,8 @@ const REPAIRABLE: ReadonlySet<DoctorClass> = new Set<DoctorClass>([
   'vector-missing',
   'vector-failed',
   'links-differ',
+  'blocks-missing',
+  'blocks-failed',
 ])
 
 interface NoteRow {
@@ -167,7 +188,7 @@ interface NoteRow {
   seq: string
   frontmatter: Record<string, unknown>
   body: string
-  no_embedding: boolean
+  no_current_blocks: boolean
   fts_stale: boolean
   has_revision: boolean
   revision_same: boolean | null
@@ -259,7 +280,7 @@ function contentDiff(a: { frontmatter: Record<string, unknown>; body: string }, 
 const FTS_STALE = sql`n.fts IS DISTINCT FROM to_tsvector('english', coalesce(n.path, '') || ' ' || coalesce(n.frontmatter::text, '') || ' ' || coalesce(n.body, ''))`
 
 export async function runDoctor(
-  options: { vaultId?: string; repair?: boolean; client?: Client; staleTailMinutes?: number } = {},
+  options: { vaultId?: string; repositoryId?: string; repair?: boolean; client?: Client; staleTailMinutes?: number } = {},
 ): Promise<DoctorReport> {
   const client = options.client ?? db
   const repair = options.repair ?? false
@@ -274,7 +295,7 @@ export async function runDoctor(
   const problems: DoctorProblem[] = []
   const pending: DoctorPending[] = []
   const info: DoctorInfo[] = []
-  const checked = { notes: 0, files: 0, bins: 0, crdtRows: 0 }
+  const checked = { notes: 0, files: 0, bins: 0, crdtRows: 0, repositoryFiles: 0 }
   const vaultFilter = (column: SQL): SQL => (options.vaultId ? sql`AND ${column} = ${options.vaultId}` : sql``)
 
   const vaults = (await client.execute(sql`
@@ -300,7 +321,7 @@ export async function runDoctor(
   for (;;) {
     const notes = (await client.execute(sql`
       SELECT n.id, n.vault_id, v.name AS vault_name, n.path, n.deleted_at, n.seq, n.frontmatter, n.body,
-        n.embedding IS NULL AS no_embedding, ${FTS_STALE} AS fts_stale,
+        NOT ${noteBlocksCurrentSql()} AS no_current_blocks, ${FTS_STALE} AS fts_stale,
         r.id IS NOT NULL AS has_revision, (r.frontmatter = n.frontmatter AND r.body = n.body) AS revision_same,
         COALESCE((SELECT array_agg(CASE WHEN l.start_line = 0 THEN l.target_path || ' (no line)' WHEN l.start_line = l.end_line THEN l.target_path || '#L' || l.start_line
           ELSE l.target_path || '#L' || l.start_line || '-L' || l.end_line END) FROM note_links l WHERE l.source_note_id = n.id), '{}') AS links
@@ -322,7 +343,7 @@ export async function runDoctor(
     const embedJobs = new Map<string, { done: boolean; last_error: string | null }>()
     for (const row of (await client.execute(sql`
       SELECT n.id, j.done_at IS NOT NULL AS done, j.last_error FROM notes n
-      JOIN jobs j ON j.idempotency_key = ${EMBEDDING_JOB} || ':' || n.id || ':' || n.seq
+      JOIN jobs j ON j.idempotency_key = ${embeddingJobKeySql(sql`n.id`, sql`n.seq`)}
       WHERE n.id = ANY(${ids}::uuid[])`)) as unknown as Array<{ id: string; done: boolean; last_error: string | null }>) {
       embedJobs.set(row.id, row)
     }
@@ -390,7 +411,10 @@ export async function runDoctor(
         const job = embedJobs.get(note.id)
         if (job && !job.done) pending.push({ ...pendingAt, kind: 'embedding', detail: `embedding job for seq ${seq}` })
         else if (job?.last_error) problem({ ...at, class: 'vector-failed', path: note.path, detail: `embedding for seq ${seq} failed: ${job.last_error}` })
-        else if (note.no_embedding) problem({ ...at, class: 'vector-missing', path: note.path, detail: 'no embedding and no embedding job' })
+        else if (note.no_current_blocks) {
+          const detail = job ? 'its embedding job finished without blocks of its current seq' : 'no blocks of its current seq, embedder and chunker, and no embedding job'
+          problem({ ...at, class: 'vector-missing', path: note.path, detail })
+        }
         // The rows `replaceLinks` would store (`linkRows`: one per target and start line); `(no line)` rows are from before migration 0031.
         const expected = linkRows(note.id, note.body)
           .map((l) => (l.startLine === l.endLine ? `${l.targetPath}#L${l.startLine}` : `${l.targetPath}#L${l.startLine}-L${l.endLine}`))
@@ -491,7 +515,54 @@ export async function runDoctor(
     }
   }
 
+  // Repository files (#413): each one's blocks are those of its current content and embed key, or an extraction is on its way.
+  if (!options.vaultId || options.repositoryId) {
+    let afterFile = '00000000-0000-0000-0000-000000000000'
+    for (;;) {
+      const files = (await client.execute(sql`
+        SELECT f.id, f.repository_id, r.name AS repository_name, f.path, ${hasCurrentBlocksSql()} AS current,
+          j.id IS NOT NULL AS has_job, j.done_at IS NOT NULL AS done, j.last_error
+        FROM repository_files f
+        JOIN repositories r ON r.id = f.repository_id
+        LEFT JOIN jobs j ON j.idempotency_key = ${extractionJobKeySql(sql`f.id`, sql`f.content_hash`)}
+        WHERE f.id > ${afterFile} ${options.repositoryId ? sql`AND f.repository_id = ${options.repositoryId}` : sql``}
+        ORDER BY f.id LIMIT ${BATCH}`)) as unknown as Array<{
+        id: string
+        repository_id: string
+        repository_name: string
+        path: string
+        current: boolean
+        has_job: boolean
+        done: boolean
+        last_error: string | null
+      }>
+      if (files.length === 0) break
+      afterFile = files[files.length - 1]!.id
+      for (const f of files) {
+        checked.repositoryFiles++
+        const at = { vaultId: '', vaultName: '', repositoryId: f.repository_id, repositoryName: f.repository_name, path: f.path }
+        if (f.has_job && !f.done) pending.push({ ...at, noteId: f.id, kind: 'extraction', detail: 'extraction job for its current content' })
+        else if (f.has_job && f.last_error) {
+          problems.push({ ...at, class: 'blocks-failed', noteId: null, fileId: f.id, detail: `extraction failed: ${f.last_error}`, repairable: true })
+        } else if (!f.current) {
+          const detail = f.has_job ? 'its extraction finished without blocks of its current content' : 'no blocks of its current content and embed key, and no extraction job'
+          problems.push({ ...at, class: 'blocks-missing', noteId: null, fileId: f.id, detail, repairable: true })
+        }
+      }
+    }
+  }
+
   if (repair) {
+    // The job row only, as for vectors: the running server's extraction worker polls for it.
+    for (const p of problems) {
+      if (!p.repairable || !p.fileId) continue
+      p.repaired = await affected(sql`
+        INSERT INTO jobs (kind, payload, idempotency_key)
+        SELECT ${EXTRACTION_JOB}, jsonb_build_object('fileId', f.id::text, 'repositoryId', f.repository_id::text),
+          ${extractionJobKeySql(sql`f.id`, sql`f.content_hash`)}
+        FROM repository_files f WHERE f.id = ${p.fileId}
+        ${onJobConflict('finished')} RETURNING id`)
+    }
     const folds = new Map<string, boolean>()
     for (const p of problems) {
       if (!p.repairable || !p.noteId) continue
@@ -578,7 +649,7 @@ async function repairProblem(p: DoctorProblem): Promise<boolean> {
       // `finished`: an operator's repair runs the job again however it ended (an error, a crash, or a success that left no vector).
       return affected(sql`
         INSERT INTO jobs (kind, payload, idempotency_key)
-        SELECT ${EMBEDDING_JOB}, jsonb_build_object('noteId', n.id::text, 'seq', n.seq), ${EMBEDDING_JOB} || ':' || n.id || ':' || n.seq
+        SELECT ${EMBEDDING_JOB}, jsonb_build_object('noteId', n.id::text, 'seq', n.seq), ${embeddingJobKeySql(sql`n.id`, sql`n.seq`)}
         FROM notes n WHERE n.id = ${id} AND n.deleted_at IS NULL
         ${onJobConflict('finished')} RETURNING id`)
     default:

@@ -5,7 +5,7 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { repositoryFiles } from '../src/db/schema.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, fileEmbedding, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
 beforeAll(async () => {
@@ -73,7 +73,7 @@ describe('agent/CLI push ingestion', () => {
         .select()
         .from(repositoryFiles)
         .where(and(eq(repositoryFiles.repositoryId, repoId), eq(repositoryFiles.path, path)))
-      expect(file?.embedding).not.toBeNull()
+      expect(await fileEmbedding(file!.id)).not.toBeNull()
     }
   })
 
