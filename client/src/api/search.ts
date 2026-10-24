@@ -26,9 +26,9 @@ export interface SearchResult {
  */
 export interface SearchResponse {
   status: 'ok' | 'no_match' | 'index_building' | 'unavailable'
-  retrieval_mode: 'hybrid' | 'keyword_only' | 'vector_only'
+  retrieval_mode: 'hybrid' | 'keyword_only' | 'vector_only' | 'none'
   degraded: false | { reason: 'embedder_failed' | 'vector_leg_failed' | 'keyword_leg_failed' }
-  index?: { pending_notes: number; pending_files: number; failed: number }
+  index?: { pending_notes: number; pending_files: number; pending_repositories: number; failed: number }
   results: SearchResult[]
 }
 

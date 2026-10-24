@@ -10,13 +10,13 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { createHash } from 'node:crypto'
-import { sql, type SQL } from 'drizzle-orm'
+import { eq, sql, type SQL } from 'drizzle-orm'
 import { PgDialect } from 'drizzle-orm/pg-core'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { jobs, repositoryFiles } from '../src/db/schema.js'
+import { jobs, repositories, repositoryFiles } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
@@ -36,9 +36,9 @@ interface Hit {
 }
 interface Envelope {
   status: 'ok' | 'no_match' | 'index_building' | 'unavailable'
-  retrieval_mode: 'hybrid' | 'keyword_only' | 'vector_only'
+  retrieval_mode: 'hybrid' | 'keyword_only' | 'vector_only' | 'none'
   degraded: false | { reason: string }
-  index?: { pending_notes: number; pending_files: number; failed: number }
+  index?: { pending_notes: number; pending_files: number; pending_repositories: number; failed: number }
   results: Hit[]
   truncated?: false | { cursor: string | null; shown: Record<string, number>; total: Record<string, number | string> }
 }
@@ -58,6 +58,12 @@ let repoId: string
 let buildingRepoId: string
 /** Its only file's extraction failed. */
 let failedRepoId: string
+/** First sync running, no file yet. */
+let syncingRepoId: string
+/** Never synced (no push yet), no file. */
+let unsyncedRepoId: string
+/** First sync failed, no file. */
+let brokenRepoId: string
 const clients: Client[] = []
 
 async function rest(url: string): Promise<Envelope> {
@@ -108,6 +114,11 @@ beforeAll(async () => {
   tieRepoId = (await post('/api/repositories', { name: 'envelope-ties', ingestionMethod: 'agent_push' })).id
   buildingRepoId = (await post('/api/repositories', { name: 'envelope-building', ingestionMethod: 'agent_push' })).id
   failedRepoId = (await post('/api/repositories', { name: 'envelope-failed', ingestionMethod: 'agent_push' })).id
+  syncingRepoId = (await post('/api/repositories', { name: 'envelope-syncing', ingestionMethod: 'agent_push' })).id
+  unsyncedRepoId = (await post('/api/repositories', { name: 'envelope-unsynced', ingestionMethod: 'agent_push' })).id
+  brokenRepoId = (await post('/api/repositories', { name: 'envelope-broken', ingestionMethod: 'agent_push' })).id
+  await db.update(repositories).set({ syncStatus: 'syncing' }).where(eq(repositories.id, syncingRepoId))
+  await db.update(repositories).set({ syncStatus: 'error', lastSyncError: 'clone failed' }).where(eq(repositories.id, brokenRepoId))
   const { token } = await post('/api/mcp-connections', { name: 'search-envelope', scope: 'account' })
   agent = new Client({ name: 'search-envelope-test', version: '0.0.0' })
   await agent.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }))
@@ -218,18 +229,18 @@ describe('index_building and unavailable (#442)', () => {
     for (const answer of [viaMcp, viaRest]) {
       expect(answer.results).toEqual([])
       expect(answer.status).toBe('index_building')
-      expect(answer.index).toEqual({ pending_notes: 0, pending_files: 1, failed: 0 })
+      expect(answer.index).toEqual({ pending_notes: 0, pending_files: 1, pending_repositories: 0, failed: 0 })
     }
     const symbols = await mcp('find_symbols', { repositoryId: buildingRepoId, query: 'zzyxxsecretmarker' })
     expect(symbols.status).toBe('index_building')
-    expect(symbols.index).toEqual({ pending_notes: 0, pending_files: 1, failed: 0 })
+    expect(symbols.index).toEqual({ pending_notes: 0, pending_files: 1, pending_repositories: 0, failed: 0 })
   })
 
   it('a match while indexing is still going on is ok, with the index block shown', async () => {
     const answer = await mcp('search', { repositoryId: buildingRepoId, query: 'building' })
     expect(answer.status).toBe('ok')
     expect(answer.results.map((h) => h.path)).toEqual(['src/building.ts'])
-    expect(answer.index).toEqual({ pending_notes: 0, pending_files: 1, failed: 0 })
+    expect(answer.index).toEqual({ pending_notes: 0, pending_files: 1, pending_repositories: 0, failed: 0 })
   })
 
   it('a note without its embedding counts as pending', async () => {
@@ -240,7 +251,7 @@ describe('index_building and unavailable (#442)', () => {
     try {
       for (const answer of await bothVault('zzyxxsecretmarker')) {
         expect(answer.status).toBe('index_building')
-        expect(answer.index).toEqual({ pending_notes: 1, pending_files: 0, failed: 0 })
+        expect(answer.index).toEqual({ pending_notes: 1, pending_files: 0, pending_repositories: 0, failed: 0 })
       }
     } finally {
       await db.execute(sql`DELETE FROM notes WHERE id = ${note.id}`)
@@ -253,7 +264,35 @@ describe('index_building and unavailable (#442)', () => {
     for (const answer of [viaMcp, viaRest]) {
       expect(answer.results).toEqual([])
       expect(answer.status).toBe('unavailable')
-      expect(answer.index).toEqual({ pending_notes: 0, pending_files: 0, failed: 1 })
+      expect(answer.index).toEqual({ pending_notes: 0, pending_files: 0, pending_repositories: 0, failed: 1 })
+    }
+  })
+
+  /** search (MCP and REST) and find_symbols (MCP and REST) over one repository. */
+  async function allOver(repository: string, q: string): Promise<Envelope[]> {
+    return [
+      await mcp('search', { repositoryId: repository, query: q }),
+      await rest(`/api/repositories/${repository}/search?q=${encodeURIComponent(q)}`),
+      await mcp('find_symbols', { repositoryId: repository, query: q }),
+      await rest(`/api/repositories/${repository}/symbols/search?q=${encodeURIComponent(q)}`),
+    ]
+  }
+
+  it("a repository whose first sync is running, or that was never synced, is index_building, not no_match", async () => {
+    for (const repository of [syncingRepoId, unsyncedRepoId]) {
+      for (const answer of await allOver(repository, 'zzyxxsecretmarker')) {
+        expect(answer.results).toEqual([])
+        expect(answer.status).toBe('index_building')
+        expect(answer.index).toEqual({ pending_notes: 0, pending_files: 0, pending_repositories: 1, failed: 0 })
+      }
+    }
+  })
+
+  it('a repository whose sync failed before any file landed is unavailable, counted as failed', async () => {
+    for (const answer of await allOver(brokenRepoId, 'zzyxxsecretmarker')) {
+      expect(answer.results).toEqual([])
+      expect(answer.status).toBe('unavailable')
+      expect(answer.index).toEqual({ pending_notes: 0, pending_files: 0, pending_repositories: 0, failed: 1 })
     }
   })
 
@@ -263,6 +302,8 @@ describe('index_building and unavailable (#442)', () => {
     for (const answer of await bothVault('apple')) {
       expect(answer.results).toEqual([])
       expect(answer.status).toBe('unavailable')
+      // No channel answered: the mode says so instead of naming one.
+      expect(answer.retrieval_mode).toBe('none')
       expect(answer.degraded).toEqual({ reason: 'embedder_failed' })
     }
   })
