@@ -1689,12 +1689,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `test/mcp-tool-budget.test.ts` measures, per profile, the ADR-004 §2.6
   sum: characters / 4 of `tools/list`, `prompts/list` and the
   `initialize` instructions. It fails a reader account token over 2,000
-  tokens (no prompts on reader, #428; measured 7,949 characters with
-  #434's annotations, 7,676 before) and a writer one whose `tools/list`
-  plus instructions are over 4,000 (15,429 with #434; 15,036 with #433's
-  output schemas, 14,286 before; its `prompts/list`, 10,042, is
-  reported), reports admin (`tools/list` 42,101 with #434; 39,512 with
-  #433, 37,512 before; its ceiling, 43,000, is in
+  tokens (no prompts on reader, #428; measured 7,984 characters with
+  #435's instructions, of which `tools/list` 7,746 and instructions 238;
+  7,949 with #434's annotations, 7,676 before) and a writer one whose
+  `tools/list` plus instructions are over 4,000 (15,669 with #435:
+  15,226 + 443; 15,429 with #434; 15,036 with #433's output schemas,
+  14,286 before; its `prompts/list`, 10,042, is reported), reports admin
+  (`tools/list` 41,811 with #435, plus 443 of instructions; 42,101 with
+  #434; 39,512 with #433, 37,512 before; its ceiling, 43,000, is in
   `mcp-tool-schema.test.ts`), checks the
   `tools/list` bytes are the same on every call and for two vault pins of
   a reader token (a writer or admin list follows the live pin permission),
@@ -1724,6 +1726,30 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   #432, #439). `test/mcp-structured-content.test.ts` covers each tool
   family through the real client (which validates against the listed
   schema), every write answer shape and the errors.
+- **Instructions** (#435): `instructionsFor(profile)` in
+  `mcp/instructions.ts` is the `initialize` result's `instructions`
+  (`new McpServer(info, {instructions})` in `buildServer`): one constant
+  text per profile, with no id, name, date or pin, so every token of a
+  profile gets the same bytes (#681). Reader: tools with
+  `budget_tokens` (characters / 4) fit it and end with `truncated`
+  (`search`, `list_vaults` and `list_repositories` take no budget and
+  answer bare arrays), the cursor is the only way on (read_note/read_file
+  page long bodies only that way), manuals are
+  `elara://manual/conventions` and one per family. Writer and admin (the
+  same text) add the whole-`body` merge base (`base_rev`, else this
+  token's last unpaged `read_note` within `READ_WINDOW_HOURS`, 24 h,
+  `last-read.ts`; a paged read records nothing, so after one the agent
+  sends its `rev` as `base_rev`; `ops` edit the live text) and the retry
+  rule, scoped to note writes ("Retry a note write with the same
+  `idempotency_key`": only the note writes take the key, admin's other
+  writes refuse it). Keyed on profile only: a
+  `read`-access token with the `writer` profile also gets the write
+  sentence. The reader text fits the 2,000-token budget because the
+  shared `budgetArgs` descriptions (`response.ts`) became `Max tokens;
+  default N` and `` `truncated.cursor` `` (the instructions explain
+  both). `test/mcp-instructions.test.ts` checks the rules per profile,
+  that every manual named is in the token's `resources/list`, and the
+  same bytes across two initializes and two vault pins per profile.
 - **Tool annotations** (#434, ADR-004 §2.6): `toolAnnotations()` in
   `server.ts` derives each tool's MCP `annotations` from its `tool()`
   record; `registerTool` lists them and `McpToolInfo` carries the same

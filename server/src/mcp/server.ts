@@ -91,6 +91,7 @@ import { NoteEditConflictError, requestedEdit, writeThroughCollab, type EditBase
 import { NO_NOTE, WRITE_RESULT_SCHEMA, diffStats, runWrite, writeAnswer, writeResult, type KeyedAnswer } from './write-result.js'
 import { showAgentPresence } from '../sync/agent-presence.js'
 import { registerMcpPrompts } from './prompts.js'
+import { instructionsFor } from './instructions.js'
 import { manualText, manualVisible, toolManuals, type ToolManual } from './manuals.js'
 import { strictArgs } from './strict-input.js'
 import { applyBodyOps, type EditOp } from '../sync/edit-ops.js'
@@ -389,7 +390,7 @@ export function listMcpTools(): readonly McpToolInfo[] {
 }
 
 function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] } {
-  const server = new McpServer({ name: 'elara', version: '0.2.0' })
+  const server = new McpServer({ name: 'elara', version: '0.2.0' }, { instructions: instructionsFor(auth.connection.profile) })
   const actor: Actor = { type: 'mcp', id: auth.connection.id }
   // Who editors see in "In this note now" (#481): the connection's label only.
   const presence = { key: auth.connection.id, name: auth.connection.name }
