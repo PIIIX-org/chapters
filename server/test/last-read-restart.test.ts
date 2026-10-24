@@ -10,7 +10,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 const BODY = 'Para one.\n\nPara two.\n\nPara three.\n'
 
@@ -40,7 +40,7 @@ async function call<T = Record<string, unknown>>(name: string, args: Record<stri
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: { vaultId, ...args } } }),
   })
   const body = (await res.json()) as { result?: { isError?: boolean; content: Array<{ text: string }> } }
-  const text = body.result?.content.map((c) => c.text).join('') ?? JSON.stringify(body)
+  const text = body.result ? toolText(body.result.content) : JSON.stringify(body)
   if (!body.result || body.result.isError) throw new Error(`${name} failed: ${text}`)
   return JSON.parse(text) as T
 }

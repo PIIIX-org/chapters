@@ -320,7 +320,7 @@ const test: LabTest = {
       actual: specVerified.ok ? 'created' : specVerified.text.slice(0, 160),
       ok: specVerified.ok,
       severity: 'medium',
-      detail: { code: 'okf.ts:171 requires item.tier; vendor/okf/schemas/concept.schema.json:97 "required": ["tier"]; SPEC.md:383-407 has no tier field — consumers derive it' },
+      detail: { code: 'okf.ts validateNote: tier is optional since #563 (SPEC.md §5.2 { by, at }, §5.3 consumers derive the tier); vendor/okf/schemas/concept.schema.json matches' },
     })
     const freeType = await mcp.call('create_note', { vaultId: V, path: 'concepts/free-type', frontmatter: { type: 'BigQuery Table' }, body: 'x\n' })
     if (freeType.ok) await mcp.call('delete_note', { vaultId: V, path: 'concepts/free-type' })
@@ -330,7 +330,7 @@ const test: LabTest = {
       actual: freeType.ok ? 'created' : freeType.text.slice(0, 160),
       ok: freeType.ok,
       severity: 'medium',
-      detail: { code: 'okf.ts:79-88: type must be a slug equal to the first path segment' },
+      detail: { code: 'okf.ts validateNote: frontmatter type is any non-empty string since #444 (notes.type stays the folder)' },
     })
 
     // rename (wikilink refactor), revisions, revert, trash
@@ -385,7 +385,7 @@ const test: LabTest = {
     const fidelity: Array<Record<string, unknown>> = []
     for (const [path, want] of finalIntended) {
       const r = await mcp.call('read_note', { vaultId: V, path })
-      // Shape: read_note returns { path, frontmatter, body } (mcp/server.ts:644).
+      // Shape: read_note returns { path, frontmatter, body }, the body as a plain text block (#445) that answerJson puts back in `body`.
       const got = r.json as ReadNote | undefined
       if (!r.ok || !got) {
         fidelity.push({ path, frontmatter: 'read failed', body: r.text.slice(0, 100) })
@@ -830,6 +830,8 @@ const test: LabTest = {
     }
     if (acmeFiles.length === ACME_FILES.length) {
       const acmeConcepts = ACME_FILES.filter((f) => !/(^|\/)(index|log)\.md$/.test(f))
+      // The reserved log.md (OKF §9) imports too, as the note `log`; index.md files never do.
+      const acmeNotes = acmeConcepts.length + ACME_FILES.filter((f) => /(^|\/)log\.md$/.test(f)).length
       const zip = writeZip([...acmeFiles, { name: 'manifest.json', data: enc.encode(JSON.stringify({ name: 'acme_retail (OKF sample)', mergeable: false, shares: [] })) }])
       const r = await postFile(base, '/api/import', admin.cookie, 'acme.zip', zip, 'application/zip')
       const res = r.json as ImportResult | undefined
@@ -843,11 +845,11 @@ const test: LabTest = {
       crafted.acme = { status: r.status, result: res, types: acmeTypes }
       checks.push({
         name: 'import a real OKF v0.2 bundle (open-knowledge-format bundles/acme_retail)',
-        expected: `${acmeConcepts.length} concepts imported`,
+        expected: `${acmeConcepts.length} concepts imported (${acmeNotes} notes with log.md), none skipped`,
         actual: res ? `${res.imported} imported, ${res.skipped.length} skipped: ${res.skipped.slice(0, 3).join(' | ')}` : `${r.status} ${r.text.slice(0, 160)}`,
-        ok: res ? res.imported === acmeConcepts.length : false,
+        ok: res ? res.imported === acmeNotes && res.skipped.length === 0 : false,
         severity: 'high',
-        detail: { result: res, acmeTypes, code: 'okf.ts:84 frontmatter.type must equal the first path segment slug; OKF types are free text (SPEC §4.1)' },
+        detail: { result: res, acmeTypes, code: 'type is free (#444); verified {by, at} without tier (#563) and nested producer keys parameters/executor/attester/not (#970) are accepted' },
       })
       if (res?.vaultId) {
         const acmeRows = await noteSnapshot(null, [res.vaultId])
@@ -871,6 +873,7 @@ const test: LabTest = {
       { name: 'concepts/../../escape2.md', data: enc.encode('---\ntype: escape2\n---\nx') },
       { name: 'assets/../../../escape.png', data: makePng(2, 2, 1) },
       { name: 'assets/ok.png', data: makePng(2, 2, 2) },
+      // A type that is not the folder is a free OKF type since #444: this note imports.
       { name: 'concepts/mismatch.md', data: enc.encode('---\ntype: tables\n---\nwrong type') },
       { name: 'concepts/no-fence.md', data: enc.encode('no frontmatter at all') },
       { name: 'concepts/good.md', data: enc.encode('---\ntype: concepts\ntitle: good\n---\nfine\n') },
@@ -882,11 +885,14 @@ const test: LabTest = {
     const evilShare = evilJson?.vaultId
       ? await ctx.docker.psqlRows<{ grantee_id: string; permission: string }>(`select grantee_id, permission from vault_shares where vault_id = '${evilJson.vaultId}'`)
       : []
+    const evilPaths = evilJson?.vaultId
+      ? (await ctx.docker.psqlRows<{ path: string }>(`select path from notes where vault_id = '${evilJson.vaultId}' and deleted_at is null order by path`)).map((r) => r.path)
+      : []
     checks.push({
       name: 'crafted archive: traversal entries are not written outside the vault',
-      expected: 'only concepts/good imported; no escape* files',
-      actual: `${evilRes.status} imported=${evilJson?.imported} skipped=${evilJson?.skipped.length}; escape files: ${escaped.stdout.trim() || 'none'}`,
-      ok: evilJson?.imported === 1 && escaped.stdout.trim() === '',
+      expected: 'only concepts/good and concepts/mismatch (a free type, #444) imported; no escape* files',
+      actual: `${evilRes.status} imported=${evilJson?.imported} (${evilPaths.join(', ')}) skipped=${evilJson?.skipped.length}; escape files: ${escaped.stdout.trim() || 'none'}`,
+      ok: evilPaths.join(',') === 'concepts/good,concepts/mismatch' && escaped.stdout.trim() === '',
       severity: 'high',
       detail: evilJson,
     })

@@ -1,5 +1,5 @@
 import { config } from '../config.js'
-import { OkfValidationError } from './okf.js'
+import { assertFrontmatterDepth, OkfValidationError } from './okf.js'
 
 /**
  * One size cap for every write path (#491): REST, MCP, import and the collab
@@ -104,9 +104,12 @@ export function frontmatterBytes(frontmatter: Record<string, unknown>): number {
  * The body cap's rule for frontmatter (#933), counted apart from the body:
  * throws NoteTooLargeError unless `frontmatter` is within the cap or no
  * larger than `current` (absent for a new note), so per-key merges cannot
- * grow it past the cap and a note already over it can still shrink.
+ * grow it past the cap and a note already over it can still shrink. The
+ * nesting bound (assertFrontmatterDepth, #970) runs first: measuring walks
+ * the whole value, and on some write paths this runs before validateNote.
  */
 export function assertFrontmatterFits(frontmatter: Record<string, unknown>, current?: Record<string, unknown>): void {
+  assertFrontmatterDepth(frontmatter)
   const limit = config.noteMaxBytes
   const bytes = frontmatterBytes(frontmatter)
   if (bytes <= limit) return
