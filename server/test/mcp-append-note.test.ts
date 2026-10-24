@@ -183,7 +183,7 @@ describe('append_note (#478)', () => {
 
   it('without createIfMissing a missing note is "not found" and nothing is created', async () => {
     const r = await call(agents[0]!, 'append_note', { vaultId, path: 'docs/absent-log', text: 'x' })
-    expect(r).toEqual({ isError: true, text: 'Error: note not found' })
+    expect(r).toEqual({ isError: true, text: '{"error":{"code":"NOT_FOUND","message":"note not found","retryable":false}}' })
     expect(await getLiveNote(vaultId, 'docs/absent-log')).toBeNull()
   })
 

@@ -168,7 +168,7 @@ export interface Budgeted {
   rendered?: (truncated: Truncated) => Promise<void>
 }
 
-/** A refused cursor; `code` is the ADR-004 §2.7 error code the error envelope (#439) will carry. */
+/** A refused cursor; `code` is the error envelope's code (#439, ADR-004 §2.7). */
 export class CursorError extends Error {
   constructor(
     readonly code: 'CURSOR_INVALID' | 'CURSOR_STALE',

@@ -533,8 +533,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   before the row or file is written): the note is serialized and parsed
   back; if that fails, or the frontmatter (deep-equal) or body (exact)
   differs, the write is refused with an `OkfValidationError`
-  (`note cannot be stored: ...`) — HTTP 400 over REST, an `isError`
-  result over MCP. The file projection renders the row, so a note its own
+  (`note cannot be stored: ...`) — HTTP 400 over REST, an `OKF_INVALID`
+  error over MCP (#439). The file projection renders the row, so a note its own
   file could not reproduce must never be stored.
 - **`store.ts`**: the note write path. Every write validates, then runs
   one store transaction (see "The S2a store" above): row, revision at the
@@ -556,8 +556,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `<file>.tmp` used to let two writes truncate and rename away each
   other's temp file (raw `ENOENT` naming server paths) and leave the row
   and the file on different writes. The MCP tool wrapper returns only the
-  code of a Node system error (`internal storage error (ENOENT)`); the
-  full error goes to the server log. The lock orders writes; it does not
+  code of a Node system error (an `INTERNAL` error `internal storage error
+  (ENOENT)`, #439); the full error goes to the server log. The lock orders writes; it does not
   merge them: a whole `body` write replaces the body, so two agents that
   each read a note and write it back with a line appended still keep only
   the later one (an `append` op resolves against the live text and keeps
@@ -1063,7 +1063,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   the body it replaces, so a note stored before the cap can still shrink
   and take frontmatter edits. REST answers 413 `{ error: "note body is N
   bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)" }`, MCP
-  `create_note`/`edit_note` an `isError` result with the same text,
+  `create_note`/`edit_note` a `TOO_LARGE` error with the same message and the limit as `rule` (#439),
   import lists the note in `skipped`; a revert to a revision over the cap
   (and larger than the current body) is refused the same way. A rename
   checks every body its link rewrite changes (the note's own self-links,
@@ -1731,8 +1731,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   successful answer, after the write committed, and a mismatch would
   turn the answer into an `Output validation error`; the schema is
   therefore the fields every write answer has (applied, merged,
-  conflicted, retry, dry run, replay, delete). Errors stay `isError`
-  text without `structuredContent`, which the SDK does not check.
+  conflicted, retry, dry run, replay, delete). Errors are the error
+  envelope (#439, below) in `content[0].text` without `structuredContent`:
+  the SDK server does not check an `isError` answer, but the SDK client
+  checks any `structuredContent` against the listed outputSchema, error
+  or not, so `{error}` there would fail on a write tool.
   Read tools get no output schema until their shapes settle (#445,
   #432, #439). `test/mcp-structured-content.test.ts` covers each tool
   family through the real client (which validates against the listed
@@ -1818,8 +1821,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols`, `graph` (the community view by default since #426, `aggregate: "none"` for every node, `community` for one community's members, `neighborsOf` + `depth` 1-3 for the local graph from `neighbors.ts`; `edgeTypes` applied before assembly; `limit` keeps the first nodes of the view's ranking (largest communities; most edges, then path; nearest, then path) and the edges among them, `truncated.total.nodes` `">limit"`; filters `types`, `tags`; conflicting arguments are refused; community numbers depend on `types`, `tags` and `edgeTypes`; `cappedGroups` is the whole graph's in the community view and the listed nodes' groups otherwise; `narrow` names `neighborsOf` by id), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
   - *Prompts*: 20, registered in `prompts.ts`.
   *(Security invariant: MCP connections cannot create new MCP connections or mint tokens).*
-  Every handler is wrapped so thrown errors become a structured `isError`
-  result instead of an uncaught exception. Input schemas are strict
+  Every handler is wrapped so thrown errors become an `isError` result
+  instead of an uncaught exception. Input schemas are strict
   (#437): `tool()` wraps each zod shape with `strictArgs()`
   (`strict-input.ts`), so the SDK refuses an undeclared argument before
   anything runs, with a message that names it, suggests the parameter it
@@ -1829,6 +1832,57 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `filters`); free-form maps (`frontmatter`, the preference maps) are
   `z.record` and accept any key. `test/mcp-strict-args.test.ts` loops
   over every tool.
+- **Error envelope** (`mcp/errors.ts`, #439, ADR-004 §2.7): every failed
+  call answers `isError: true`, `content[0].text` =
+  `JSON.stringify({error: {code, message, retryable, retryAfterMs?, rule?,
+  field?, suggestions?}})` and no `structuredContent`. `envelope()` fixes
+  the key order and leaves absent fields out (never `suggestions: []`),
+  so one refusal is one byte string. A handler throws
+  `McpToolError(code, message, extra?)`; `toErrorEnvelope(err)` in the
+  `tool()` catch maps it and the domain errors: `CursorError` (its
+  code), `OkfValidationError` by its `refusal` (`OKF_INVALID`,
+  `TYPE_MISMATCH`, `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the
+  type rule, the depth limit), `NoteTooLargeError` (`TOO_LARGE`, the
+  limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
+  included) and `MaintenanceInProgressError` (`BUSY`, retryable), the
+  quarantine errors (`QUARANTINED`, the rule), `NoteEditError`
+  (`INVALID_ARGUMENT`), `NoteEditConflictError` and
+  `IdempotencyKeyReusedError` (`CONFLICT`), a Node system error
+  (`INTERNAL`, its code only, the error logged), anything else
+  (`INTERNAL` with its message; #443 adds a database-error branch here
+  that shows only the SQLSTATE). `CONFLICT`, `BUSY` and `QUARANTINED`
+  extend ADR-004's list, and `field` its envelope. The SDK's own
+  refusals (arguments its schema check rejects, an unknown tool, an
+  answer failing its outputSchema) are isError text it makes itself; a
+  wrapper on `CallToolRequestSchema` (next to the tools/list one) turns
+  every error result `tool()` did not make (a `WeakSet`) into the
+  envelope: arguments → `INVALID_ARGUMENT` (`argumentRefusal`: the tool's
+  strict schema re-parses the arguments; an unknown key first, `field`
+  its dotted path, `suggestions` the names strict-input would suggest,
+  else all of that object's keys; an enum's values, a discriminated
+  union's tag values for a bad `op`), an unknown tool →
+  `NOT_FOUND` (close names among `listedTools()`), else `INTERNAL`; the
+  message is the SDK's without `MCP error -32602: Input validation
+  error: `. Suggestions only from what the caller reaches: a `note not
+  found` after the access check carries `closest()` of
+  `nearbyNotePaths()` (live paths of that vault directly in the same
+  folder, and with the same last segment anywhere, each query up to 500;
+  at most 3 shown), while the access check's
+  own `not found` has none, so another account's id answers exactly
+  `{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}`
+  like a missing id (`account-separation`). The owner-only checks
+  (`requireVaultOwner`, `requireRepositoryOwner`, `requireTeamOwner`)
+  answer that same `NOT_FOUND` for a container the caller cannot reach
+  (a team it is not a member of) and `PERMISSION_REQUIRED` only for one
+  it can see. An ambiguous graph node
+  reference (`resolveGraphNode`) is `AMBIGUOUS` with the node ids; #447
+  turns it into a candidates answer and adds suggestions to graph
+  lookups through the same `McpToolError` extra. `rateLimitedError(ms)`
+  is the `RATE_LIMITED` envelope #440 sends as JSON-RPC `error.data`
+  with HTTP 429 (`routes.ts` unchanged until then). Write statuses stay
+  results: `status: 'retry'` (`write-result.ts`), `merged`,
+  `conflicted`. `test/mcp-errors.test.ts` covers the code families,
+  `retryable`, scoped suggestions and the wrapped SDK refusals.
 - **Budgets and the response envelope** (`response.ts`, #420, #422;
   ADR-004 §2.1): a tool registered with `budget: 'list' | 'read'`
   (`browse_vault`, `read_note`, `list_trash`, `note_history`,
@@ -2352,7 +2406,7 @@ flips both.
 | The 429 carries `Retry-After` and a JSON-RPC error body | **defect #440**: no header, body `{"error":"rate limit exceeded for this connection"}` | `mcp-rate-limit` (pins today's 429) | the two `rate limit: the 429 ...` checks (known defects) |
 | B's search, graph, `find_symbols`, related-note edges (local graph, backlinks), notifications, perspective listings, vaults, repositories and teams name nothing of A's | holds | `account-separation` | `separation: B's ... names nothing of A's` (six checks) |
 | `lookup_user` returns only `{id, email}` of an active account; deactivated and unknown emails answer alike | holds; any active account is found by exact email (sharing needs the id) | `account-separation` | `separation: B's lookup_user returns A's id and email only` |
-| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
+| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault); MCP's not-found is the same envelope bytes, with no suggestions from A's containers (#439) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
 | Semantic neighbours are chosen within the owner's reach | **defect #461**: the neighbour lookup spans every account; every read filters the stored edges | `account-separation` (inserts such an edge and checks B's reads) | `semantic edges are stored only between notes of the same account` (known defect) |
 | Note text in a prompt sits in a separate, delimited data block, apart from the instructions | **defect #556**: `active_project_companion`, `prepare_task_context`, `test_gap_analysis` (bodies) and `plan_feature_implementation`, `explain_code_architecture` (snippets) put it inside their one user-role instruction message, after a heading and before the prompt's own instructions | `mcp-prompt-note-content` (pins today's placement) | `prompt note text: placed in a separate data block, not inside the instructions` (known defect) |
 

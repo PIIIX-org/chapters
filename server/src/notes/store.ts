@@ -3,7 +3,7 @@ import { basename, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import * as Y from 'yjs'
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql, type SQL } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, lt, ne, notInArray, notLike, or, sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { recordJob } from '../monitoring/metrics.js'
@@ -95,7 +95,7 @@ const SYSTEM_ACTOR: Actor = { type: 'collab' }
 /** createNote found a live note at the path (the unique index decided, #478). */
 class NoteExistsError extends OkfValidationError {
   constructor(path: string) {
-    super(`a note already exists at ${path}`)
+    super(`a note already exists at ${path}`, 'exists')
   }
 }
 
@@ -673,6 +673,39 @@ export async function getLiveNote(vaultId: string, path: string): Promise<NoteRo
   return rows[0] ?? null
 }
 
+/** Live notes fetched per query as candidates for a not-found path's suggestions (#439). */
+const NEARBY_CANDIDATES = 500
+
+/**
+ * Candidates for "did you mean" when no live note is at `path` (#439): the
+ * live notes directly in the same folder (the vault root for a root path;
+ * not its subfolders, so a large subtree cannot crowd the siblings out),
+ * and live notes with the same last segment in any folder, each up to
+ * NEARBY_CANDIDATES. The caller ranks them (errors.ts `closest`) and must
+ * have checked the caller can read the vault. A path that does not
+ * resolve has none.
+ */
+export async function nearbyNotePaths(vaultId: string, path: string): Promise<string[]> {
+  let resolved: ResolvedNotePath
+  try {
+    resolved = resolveNotePath(path)
+  } catch {
+    return []
+  }
+  const literal = (text: string) => text.replace(/[\\%_]/g, '\\$&')
+  const live = and(eq(notes.vaultId, vaultId), isNull(notes.deletedAt))
+  const inFolder = resolved.directory
+    ? and(like(notes.path, `${literal(resolved.directory)}/%`), notLike(notes.path, `${literal(resolved.directory)}/%/%`))
+    : sql`strpos(${notes.path}, '/') = 0`
+  const sameName = or(eq(notes.path, resolved.baseName), like(notes.path, `%/${literal(resolved.baseName)}`))
+  const [siblings, namesakes] = await Promise.all(
+    [inFolder, sameName].map((where) =>
+      db.select({ path: notes.path }).from(notes).where(and(live, where)).orderBy(notes.path).limit(NEARBY_CANDIDATES),
+    ),
+  )
+  return [...siblings!, ...namesakes!].map((row) => row.path)
+}
+
 /** A note as a read serves it: the row (with `seq`, its `rev`) and the frontmatter in the key order of its file. */
 export interface ReadNote {
   row: WrittenNote
@@ -1141,7 +1174,7 @@ async function moveNote(
   const seen = await readStored(vaultId, fromResolved.fullPath)
   if (!seen) return null
   if (toResolved.fullPath !== fromResolved.fullPath && (await getLiveNote(vaultId, toResolved.fullPath))) {
-    throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
+    throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`, 'exists')
   }
   const isMoving = fromResolved.fullPath !== toResolved.fullPath
   const fold = foldSource(seen.id)
@@ -1195,7 +1228,7 @@ async function moveNote(
       return { updated, referrers: referrers.map((r) => r.id), job, update, rebased }
     })
   } catch (err) {
-    if (isUniqueViolation(err)) throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
+    if (isUniqueViolation(err)) throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`, 'exists')
     throw err
   } finally {
     releaseFold(fold)
@@ -1298,7 +1331,7 @@ export async function restoreNote(
 ): Promise<WrittenNote | null> {
   return withTrashedNote(vaultId, noteId, async (seen) => {
     if (await getLiveNote(vaultId, seen.path)) {
-      throw new OkfValidationError(`a live note already exists at ${seen.path}`)
+      throw new OkfValidationError(`a live note already exists at ${seen.path}`, 'exists')
     }
     let restored: StoredNote | null
     try {
@@ -1310,7 +1343,7 @@ export async function restoreNote(
         return restored
       })
     } catch (err) {
-      if (isUniqueViolation(err)) throw new OkfValidationError(`a live note already exists at ${seen.path}`)
+      if (isUniqueViolation(err)) throw new OkfValidationError(`a live note already exists at ${seen.path}`, 'exists')
       throw err
     }
     if (!restored) return null
