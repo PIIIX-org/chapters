@@ -72,11 +72,13 @@ function modifiers(node: Node): Set<string> {
 }
 const MODIFIER_NODES = new Set(['modifiers', 'modifier', 'visibility_modifier', 'storage_class_specifier'])
 
-/** A type's bare name: `Store` for `Store<T>`, `a::Store`, `Store<T>::` scopes. */
+/** A type's bare name: `Store` for `Store<T>`, `&'a Store`, `a::Store`, `Store<T>::` scopes. */
 function typeName(node: Node | null): string | null {
   if (!node) return null
   switch (node.type) {
     case 'generic_type':
+    case 'reference_type':
+    case 'pointer_type':
       return typeName(node.childForFieldName('type'))
     case 'template_type':
     case 'scoped_type_identifier':
