@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { CAPS, Episode, GREP, missCost, readingOrder, runElara, runGrep, visibleContentLines, type ElaraTools, type GrepTools } from './policies.ts'
+import { CAPS, Episode, GREP, missCost, runElara, runGrep, searchHits, visibleContentLines, type ElaraTools, type GrepTools } from './policies.ts'
 
-test('readingOrder keeps the server order and breaks exact score ties by path', () => {
-  const hits = [
-    { path: 'b.ts', score: 0.03 },
-    { path: 'z.ts', score: 0.02 },
-    { path: 'a.ts', score: 0.02 },
-    { path: 'c.ts', score: 0.01 },
-    { path: 'y.ts' },
-    { path: 'x.ts' },
-  ]
-  // Hits without a score are not ties: they keep their place.
-  assert.deepEqual(readingOrder(hits).map((h) => h.path), ['b.ts', 'a.ts', 'z.ts', 'c.ts', 'y.ts', 'x.ts'])
+/** A `search` answer (#441, #442, #458): the hits inside the envelope. */
+const answer = (results: unknown[]) => JSON.stringify({ status: results.length > 0 ? 'ok' : 'no_match', retrieval_mode: 'hybrid', degraded: false, results, truncated: false })
+
+test('searchHits reads the envelope in the server order, location strings as paths', () => {
+  const hits = searchHits(
+    JSON.parse(answer([{ path: 'b.ts', score: 0.03 }, 'src/a.ts', 'src/c.ts#L4-L9', { path: 'z.ts', score: 0.01 }])),
+  )
+  assert.deepEqual(hits.map((h) => h.path), ['b.ts', 'src/a.ts', 'src/c.ts', 'z.ts'])
+  // An answer at `counts` (an object, not a list) or a bare array is not a ranking.
+  assert.deepEqual(searchHits({ status: 'ok', results: { 'src/a.ts': 2 } }), [])
+  assert.deepEqual(searchHits([{ path: 'a.ts' }]), [])
 })
 
 /** A fake repository: path -> content. */
@@ -26,7 +26,7 @@ function fakeElara(hits: unknown[], calls: string[]): ElaraTools {
   return {
     async search(query) {
       calls.push(`search ${query}`)
-      return { text: JSON.stringify(hits), ms: 5, ok: true }
+      return { text: answer(hits), ms: 5, ok: true }
     },
     async readFile(path) {
       calls.push(`read_file ${path}`)
@@ -50,7 +50,7 @@ test('elara: reads hits best first and stops once the gold is covered', async ()
   assert.deepEqual(calls, ['search where is target', 'read_file src/a.ts', 'read_file src/b.ts'])
   const ep = run.episode
   assert.equal(ep.callsToGold, 3)
-  const searchTokens = Math.ceil(JSON.stringify(hits).length / 4)
+  const searchTokens = Math.ceil(answer(hits).length / 4)
   assert.equal(ep.trace[0]!.tokens, searchTokens)
   assert.equal(ep.tokensToGold, ep.tokens)
   assert.equal(ep.tokensToAllGold, ep.tokens)
@@ -96,7 +96,7 @@ test('elara: a response past perCallChars only shows the lines that fit', async 
   const content = Array.from({ length: 1000 }, (_, i) => `line ${i + 1} ${'x'.repeat(90)}`).join('\n')
   const tools: ElaraTools = {
     async search() {
-      return { text: JSON.stringify([{ resourceType: 'code', path: 'big.ts', snippet: '' }]), ms: 1, ok: true }
+      return { text: answer([{ resourceType: 'code', path: 'big.ts', snippet: '' }]), ms: 1, ok: true }
     },
     async readFile(path) {
       return { text: JSON.stringify({ path, language: null, content, symbols: [] }), ms: 1, ok: true }
@@ -121,7 +121,7 @@ test('elara: a paged read_file follows the cursor page by page and stops once th
   const calls: string[] = []
   const tools: ElaraTools = {
     async search() {
-      return { text: JSON.stringify([{ resourceType: 'code', path: 'paged.ts', snippet: '' }]), ms: 1, ok: true }
+      return { text: answer([{ resourceType: 'code', path: 'paged.ts', snippet: '' }]), ms: 1, ok: true }
     },
     async readFile(path, cursor) {
       calls.push(`read_file ${path} ${cursor ?? '-'}`)
