@@ -1323,11 +1323,48 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 
 - **`search.ts`**: `searchNotes()` — the single hybrid search function
   used by the UI routes and the MCP `search` tool. Runs four queries in
-  parallel (note-keyword, note-semantic, code-keyword, code-semantic)
-  and merges them with **Reciprocal Rank Fusion** (`k=60`), no score
-  normalization to tune. Keyword hits use Postgres
+  parallel (note-keyword, note-semantic, code-keyword, code-semantic;
+  six with symbols) and merges them with **Reciprocal Rank Fusion**
+  (`k=60`), no score normalization to tune. Keyword hits use Postgres
   `websearch_to_tsquery` + `ts_rank` + `ts_headline` snippets; semantic
   hits use pgvector's `<=>` cosine-distance operator over HNSW indexes.
+  `findSymbols()` does the same over symbols (keyword: `ILIKE` on the
+  whole query).
+  - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
+    `SearchResponse` = `{status, retrieval_mode, degraded, index?,
+    results}`, served as is by REST and inside the budget envelope by MCP.
+  - **Relevance gate** (#441): each vector leg takes its 30 nearest rows
+    (`ORDER BY distance LIMIT 30`, which the HNSW index serves) and keeps
+    those with cosine distance under `config.searchMaxDistance`
+    (`SEARCH_MAX_DISTANCE`, in (0, 2), else a boot warning and the
+    default; 0.40 for bge-small, measured on the five benchmark corpora
+    as `config.ts` records; 0.8 for the fake embedder).
+    Keyword rows
+    always count. The gate cuts a suffix of a distance-ordered list, so the
+    RRF ranks of the rows it keeps do not change.
+  - **Degraded** (#458): a failed query embedding (`queryVector`) skips the
+    vector legs (`keyword_only`, `degraded: {reason: 'embedder_failed'}`);
+    a failed leg drops its whole channel (`vector_leg_failed` →
+    `keyword_only`, `keyword_leg_failed` → `vector_only`; neither →
+    `none`). The failure is logged; the search answers from the channel
+    that ran.
+  - **Status** (#442): `ok` with any result; otherwise `unavailable` when
+    no channel ran, `index_building` when notes, files or repositories
+    in scope are pending, `unavailable` when every item in scope failed
+    indexing, else `no_match`. `index` comes from `embeddingState()`
+    (notes: `embed_note:<id>:<seq>` job pending, or no job and no
+    embedding; failed: that job gave up) and `extractionState()` (files:
+    the predicates of `countPendingExtractions` and `extractionFailures`;
+    repositories with no file whose `sync_status` is `syncing` or that
+    were never synced count in `pending_repositories`, those whose sync
+    failed count as failed items), read beside the query embedding; left
+    out when all zero.
+  - **Total order**: keyword legs `ORDER BY rank DESC, path COLLATE "C",
+    id`, vector legs re-sorted by `distance, path COLLATE "C", id` outside
+    the HNSW limit, final sort score descending then path and id by UTF-16
+    code unit (`compareCodeUnits`), so equal scores never depend on row
+    order. [INFERENCE] HNSW stays approximate: which rows make a vector
+    leg's 30 can still differ between instances.
 - **`embeddings.ts`**: an `Embedder` interface with two
   implementations — `LocalEmbedder` (real: Transformers.js/ONNX,
   `bge-small-en-v1.5`, 384 dimensions, mean-pooled, normalized) and
@@ -1751,6 +1788,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   pin, allow-list, live permission) and that every tool has exactly one
   entry.
 - **Structured content and output schemas** (#433, ADR-004 §2.1, D6
+<<<<<<< HEAD
   default): `tool()` answers every success through `answered(text,
   blocks)`: `content[0].text` is the JSON answer, followed by the
   rendered `blocks` as text blocks of their own (`read_note`'s body,
@@ -1760,6 +1798,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   text in its key in place of the `{"in": "content[n]"}` marker, so it
   holds exactly what the blocks show (dates as strings) and is the whole
   answer. Bare-array answers (`search`, the unbudgeted list tools) carry
+=======
+  default): `tool()` answers every success through `answered(text)`:
+  `content[0].text` stays the whole JSON answer (clients that show the
+  model only `content` lose nothing), and when that text is an object
+  (it starts with `{`) `structuredContent` is `JSON.parse(text)`, so it
+  holds exactly what the text shows (dates as strings) and the two never
+  differ. Bare-array answers (the unbudgeted list tools) carry
+>>>>>>> origin/dev
   none: MCP's `structuredContent` is an object, and wrapping the array
   would make it differ from the text. A tool may declare `outputSchema`
   (a loose zod object, so other keys pass): today only the eight
@@ -1784,7 +1830,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   text per profile, with no id, name, date or pin, so every token of a
   profile gets the same bytes (#681). Reader: tools with
   `budget_tokens` (characters / 4) fit it and end with `truncated`
-  (`search`, `list_vaults` and `list_repositories` take no budget and
+  (`list_vaults` and `list_repositories` take no budget and
   answer bare arrays), the cursor is the only way on (read_note/read_file
   page long bodies only that way), manuals are
   `elara://manual/conventions` and one per family. Writer and admin (the
@@ -2066,6 +2112,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `CURSOR_STALE`). The codes wait for the error envelope (#439).
   - `read_note` records the last read (#864) in `Budgeted.rendered`, on
     every page: the `rev` it reports, the merge base of a later whole-body
+<<<<<<< HEAD
     edit (#961). Its body is a `block` section (#445): `content[0]` holds
     `path, rev, frontmatter, indexed, fold_error?, lines?, body: {"in":
     "content[1]"}, truncated`, and `content[1]` the page's slice of the
@@ -2075,6 +2122,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     budget and the token saving.
   - `search` keeps its bare array and has no budget (its envelope waits
     for #441/#442/#458). `test/mcp-response-envelope.test.ts` drives each
+=======
+    edit (#961).
+  - `search` (#441) is budgeted like `find_symbols`: the
+    `SearchResponse` head (`status`, `retrieval_mode`, `degraded`,
+    `index`) then the ranked `results` (limit + 1 fetch; ladder: without
+    `snippet`/`frontmatter`, then the path or `path#La-Lb`; counted per
+    path). `test/search-envelope.test.ts` covers each status, the gate,
+    the fallbacks and the order through MCP and REST.
+    `test/mcp-response-envelope.test.ts` drives each
+>>>>>>> origin/dev
     tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`
     each ladder level.
   `search` and `graph` call

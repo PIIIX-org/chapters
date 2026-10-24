@@ -75,7 +75,7 @@ procedure, so a run is deterministic up to the index Elara builds.
 
 | | Elara agent | grep agent |
 |---|---|---|
-| ranking call | MCP `search {query: question, repositoryId, limit: 10}`; hits of exactly equal score are read in path order (the server leaves such ties to row order, #623) | `rg --count -i -e <keywords>` over the checkout, files sorted by matching lines (ties by path), first 50 shown |
+| ranking call | MCP `search {query: question, repositoryId, limit: 10}` (default budget); the agent reads `results` in the server's order (score, then path, then id, #441), a hit down the budget's ladder as its path | `rg --count -i -e <keywords>` over the checkout, files sorted by matching lines (ties by path), first 50 shown |
 | where in the files | (the `search` response itself) | one `rg -n -i -m 5 -e <keywords> -- <top 10 files>`: the first 5 matching lines of each, each line cut at 200 characters |
 | reads, best file first | MCP `read_file` of each hit, page by page from line 1 (the default 4,000-token budget, #420), following `truncated.cursor` until the gold is seen or the file ends; Elara has no ranged reads yet | up to 2 ranged reads per file of 41 lines (10 before, 30 after a match the earlier read did not show) |
 | lines put in context | the lines of the pages read (a line split across pages counts on the page where it ends); for `search` symbol hits, the snippet's lines (file hits carry a keyword headline without line numbers, so they show none) | the `rg -n` lines and the ranged reads |
@@ -252,9 +252,11 @@ How to read it, honestly:
 ## Noise
 
 The grep agent is deterministic: identical in every run. Elara's ranks move
-between instances of identical code because the server breaks score ties by
-database row order (#623); the agent breaks exact score ties by path, which
-does not cover ties that change the candidate set. Measured, per suite,
+between instances of identical code. When the table below was measured the
+server broke score ties by database row order (#623) and the agent broke
+exact ties by path; since #441 the server orders ties by path, then id, in
+every leg and in the final sort, which leaves the approximate HNSW candidate
+set as the known source. Measured, per suite,
 Elara hit@5 / tokens-to-gold:
 
 | suite | 3 instances of run 38856349787 | earlier single instances (harness a941c16): runs 38848135892, 38848138390, PR runs 38852760271, 38853656282 (chapters only) |

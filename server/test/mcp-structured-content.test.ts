@@ -135,8 +135,8 @@ describe('structuredContent is the text JSON, per tool family', () => {
     await ok('read_file', { repositoryId: repoId, path: 'src/alpha.ts' })
     await ok('repository_status', { repositoryId: repoId })
     expect(await ok('find_symbols', { repositoryId: repoId, query: 'alphaHandler' })).toHaveProperty('truncated')
-    // search still answers a bare array: no structuredContent (checked in call()).
-    expect(Array.isArray(await ok('search', { vaultId, query: 'alpha' }))).toBe(true)
+    // search answers its envelope (#441, #442, #458), with the budget's `truncated`.
+    expect(await ok('search', { vaultId, query: 'alpha' })).toMatchObject({ status: 'ok', truncated: false })
     await ok('graph', { vaultId })
   })
 })

@@ -2713,18 +2713,39 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Hybrid keyword and semantic search over notes and code, as in the app.',
+        'Keyword and semantic search over notes and code.',
       inputSchema: {
         query: z.string().describe('Search text'),
         vaultId: UUID_ARG.optional().describe('Vault to search'),
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
-        everywhere: z.boolean().optional().describe('Search every accessible vault and repository (account tokens)'),
-        symbols: z.boolean().optional().describe('Include code symbols as results'),
+        everywhere: z.boolean().optional().describe('Every accessible vault and repository (account tokens)'),
+        symbols: z.boolean().optional().describe('Include code symbols'),
         limit: z.number().int().min(1).max(100).optional().describe('Max results'),
       },
+      budget: 'list',
     },
     async (args: { query: string; symbols?: boolean; limit?: number }, { resources }) => {
-      return searchNotes(resources, args.query, args.limit, {}, { includeSymbols: args.symbols ?? true })
+      const limit = args.limit ?? 20
+      // The first `limit` hits of the ranking, plus one to know whether more match.
+      const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true })
+      return {
+        head,
+        sections: [
+          ranked({
+            name: 'results',
+            items: results,
+            id: (r) => `${r.resourceType}:${r.id}`,
+            limit,
+            // Down the ladder: without snippet and frontmatter, then the path (`path#La-Lb` for a symbol); counted per path.
+            ladder: {
+              no_context: (r) => ({ ...r, snippet: undefined, frontmatter: undefined }),
+              locations: (r) => (r.startLine !== undefined && r.endLine !== undefined ? location(r.path, r.startLine, r.endLine) : r.path),
+              group: (r) => r.path,
+            },
+          }),
+        ],
+        narrow: args.symbols === false ? [] : ['symbols: false'],
+      }
     },
   )
 
@@ -2735,12 +2756,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Search code symbols (functions, classes, interfaces, types) by meaning, signature or name. Returns `{results}`: declarations with line ranges, snippets and file paths, without reading whole files.',
+        'Search code symbols by meaning, signature or name: declarations with line ranges and snippets, without reading whole files.',
       inputSchema: {
-        query: z.string().describe('Symbol name, signature or meaning'),
-        kind: z.enum(['function', 'class', 'interface', 'type']).optional().describe('Filter by symbol kind'),
+        query: z.string().describe('Name, signature or meaning'),
+        kind: z.enum(['function', 'class', 'interface', 'type']).optional().describe('Symbol kind'),
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
-        everywhere: z.boolean().optional().describe('Search every accessible repository (account tokens)'),
+        everywhere: z.boolean().optional().describe('Every accessible repository (account tokens)'),
         limit: z.number().int().min(1).max(50).optional().describe('Max results'),
       },
       budget: 'list',
@@ -2756,9 +2777,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         : (await listAccessibleRepositories(auth.user.id)).map((r) => r.id)
       const limit = args.limit ?? 20
       // The first `limit` symbols of the ranking, plus one to know whether more match.
-      const results = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 })
+      const { results, ...head } = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 })
       return {
-        head: {},
+        head,
         sections: [
           ranked({
             name: 'results',

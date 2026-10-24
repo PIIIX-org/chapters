@@ -174,7 +174,7 @@ describe('search', () => {
       url: `/api/vaults/${vaultId}/search?q=rocket&types=people`,
       headers: { cookie: ownerCookie },
     })
-    const results = res.json() as Array<{ path: string }>
+    const results = res.json<{ results: Array<{ path: string }> }>().results
     expect(results.length).toBeGreaterThan(0)
     const paths = results.map((r) => r.path)
     expect(paths).toContain('people/wernher')
@@ -187,7 +187,7 @@ describe('search', () => {
       url: `/api/vaults/${vaultId}/search?q=rocket&tags=engineering`,
       headers: { cookie: ownerCookie },
     })
-    const results = res.json() as Array<{ path: string }>
+    const results = res.json<{ results: Array<{ path: string }> }>().results
     expect(results.length).toBeGreaterThan(0)
     const paths = results.map((r) => r.path)
     expect(paths).toContain('people/wernher')
@@ -201,7 +201,7 @@ describe('search', () => {
         url: `/api/vaults/${vaultId}/search?q=zeppelin&${qs}`,
         headers: { cookie: ownerCookie },
       })
-      return (res.json() as Array<{ path: string }>).map((r) => r.path)
+      return res.json<{ results: Array<{ path: string }> }>().results.map((r) => r.path)
     }
 
     expect(await paths('since=2026-01-01')).toContain('notes/zeppelin-log')
@@ -216,7 +216,7 @@ describe('search', () => {
       url: '/api/search?q=rocket&types=people',
       headers: { cookie: ownerCookie },
     })
-    const results = res.json() as Array<{ path: string }>
+    const results = res.json<{ results: Array<{ path: string }> }>().results
     expect(results.length).toBeGreaterThan(0)
     const paths = results.map((r) => r.path)
     expect(paths).toContain('people/wernher')
@@ -230,7 +230,7 @@ describe('search', () => {
       headers: { cookie: ownerCookie },
     })
     expect(res.statusCode).toBe(200)
-    const results = res.json() as Array<{ path: string; snippet: string }>
+    const results = res.json<{ results: Array<{ path: string; snippet: string }> }>().results
     expect(results[0]?.path).toBe('people/margaret')
     expect(results[0]?.snippet).toContain('<b>')
   })
@@ -241,7 +241,7 @@ describe('search', () => {
       url: `/api/vaults/${vaultId}/search?q=rocket engine`,
       headers: { cookie: ownerCookie },
     })
-    const paths = (res.json() as Array<{ path: string }>).map((r) => r.path)
+    const paths = res.json<{ results: Array<{ path: string }> }>().results.map((r) => r.path)
     expect(paths).toContain('projects/apollo')
     expect(paths).toContain('people/wernher')
   })
@@ -256,7 +256,7 @@ describe('search', () => {
       url: '/api/search?q=rocket',
       headers: { cookie: readerCookie },
     })
-    expect(res.json()).toEqual([])
+    expect(res.json()).toMatchObject({ status: 'no_match', results: [] })
 
     const share = await app.inject({
       method: 'POST',
@@ -270,7 +270,7 @@ describe('search', () => {
       url: '/api/search?q=rocket',
       headers: { cookie: readerCookie },
     })
-    expect((res.json() as unknown[]).length).toBeGreaterThan(0)
+    expect(res.json<{ results: unknown[] }>().results.length).toBeGreaterThan(0)
 
     await app.inject({
       method: 'DELETE',
@@ -282,6 +282,6 @@ describe('search', () => {
       url: '/api/search?q=rocket',
       headers: { cookie: readerCookie },
     })
-    expect(res.json()).toEqual([])
+    expect(res.json()).toMatchObject({ status: 'no_match', results: [] })
   })
 })
