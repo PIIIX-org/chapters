@@ -147,14 +147,21 @@ describe('MCP integration', () => {
 
     const search = await client.callTool({ name: 'search', arguments: { query: 'quantum' } })
     expect(search.isError).toBe(true)
-    expect(textOf(search)).toContain('INVALID_ARGUMENT')
-    expect(textOf(search)).toContain('everywhere: true')
+    expect(JSON.parse(textOf(search))).toEqual({
+      error: {
+        code: 'INVALID_ARGUMENT',
+        message: 'pass vaultId or repositoryId, or everywhere: true for every accessible vault and repository',
+        retryable: false,
+        suggestions: ['everywhere: true', 'vaultId', 'repositoryId'],
+      },
+    })
 
     // graph has the same scope but no `everywhere` parameter.
     const graph = await client.callTool({ name: 'graph', arguments: {} })
     expect(graph.isError).toBe(true)
-    expect(textOf(graph)).toContain('INVALID_ARGUMENT')
-    expect(textOf(graph)).not.toContain('everywhere')
+    expect(JSON.parse(textOf(graph))).toEqual({
+      error: { code: 'INVALID_ARGUMENT', message: 'vaultId or repositoryId is required for account-scoped connections', retryable: false },
+    })
 
     const read = await client.callTool({ name: 'read_note', arguments: { path: 'docs/readme' } })
     expect(read.isError).toBe(true)
