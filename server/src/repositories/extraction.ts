@@ -14,8 +14,14 @@ export interface ExtractedSymbol {
   endLine: number
 }
 
+/** An import specifier and the line it is written on (1-based). */
+export interface ExtractedImport {
+  target: string
+  line: number
+}
+
 export interface ExtractionResult {
-  imports: string[]
+  imports: ExtractedImport[]
   symbols: ExtractedSymbol[]
 }
 
@@ -136,9 +142,9 @@ export async function extractStructure(language: string, content: string): Promi
     if (!tree) return { imports: [], symbols: [] }
 
     const importQuery = getCompiledQuery(lang, language, 'import', config.importQuery)
-    const imports: string[] = []
+    const imports: ExtractedImport[] = []
     for (const match of importQuery.matches(tree.rootNode)) {
-      for (const capture of match.captures) imports.push(capture.node.text)
+      for (const capture of match.captures) imports.push({ target: capture.node.text, line: capture.node.startPosition.row + 1 })
     }
 
     const symbolQuery = getCompiledQuery(lang, language, 'symbol', config.symbolQuery)

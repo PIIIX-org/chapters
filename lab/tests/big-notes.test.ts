@@ -24,7 +24,7 @@
 // just under the limit, which must sync and take an agent's append.
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
 import { CollabClient, Y, collabDocName, type CollabEvent } from '../lib/collab.ts'
-import { stringField } from '../lib/mcp.ts'
+import { nextCursor, stringField } from '../lib/mcp.ts'
 import type { ContainerState } from '../lib/docker.ts'
 import { RestSession } from '../lib/rest.ts'
 import {
@@ -406,8 +406,14 @@ const test: LabTest = {
         if (fitsDbLen === fits.length) break
         await Bun.sleep(1000)
       }
-      const cur = await call('read_note', { path: cPath }, { parse: true })
-      const curBody = stringField(cur.json, 'body') ?? ''
+      // read_note pages a body this long (#420): follow the cursor for the whole of it.
+      let curBody = ''
+      let readCursor: string | null = null
+      do {
+        const page = await call('read_note', { path: cPath, budget_tokens: 25_000, ...(readCursor ? { cursor: readCursor } : {}) }, { parse: true })
+        curBody += stringField(page.json, 'body') ?? ''
+        readCursor = nextCursor(page.json)
+      } while (readCursor)
       const rt = await call('edit_note', { path: cPath, body: `${curBody}\nappended by agent` })
       checks.push({
         name: 'a note just under the size limit syncs through collab and an agent can append to it',

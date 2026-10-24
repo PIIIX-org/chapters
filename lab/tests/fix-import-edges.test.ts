@@ -13,6 +13,7 @@
 //              null the synthetic repo's resolved targets in SQL, restart
 //              the app, count again
 import type { Check, LabContext, LabTest } from '../lib/context.ts'
+import { nextCursor } from '../lib/mcp.ts'
 import {
   connectLocalRepo,
   copyIntoLocalRepo,
@@ -74,12 +75,22 @@ async function unresolvedSample(ctx: LabContext, repoId: string) {
 }
 
 async function graphExtractedEdges(ctx: LabContext, repoId: string) {
-  const r = await ctx.mcp('adminAccount').call('graph', { repositoryId: repoId })
-  const j = r.json as { nodes?: unknown[]; edges?: Array<{ kind?: string }> } | undefined
-  const edges = j?.edges ?? []
+  // `graph` lists nodes, then edges, page by page (#420): walk every page. The node list is `aggregate: "none"` (#426).
+  const mcp = ctx.mcp('adminAccount')
+  let r = await mcp.call('graph', { repositoryId: repoId, aggregate: 'none', budget_tokens: 25_000 })
+  const nodes: unknown[] = []
+  const edges: Array<{ kind?: string }> = []
+  for (let pages = 1; ; pages++) {
+    const j = r.json as { nodes?: unknown[]; edges?: Array<{ kind?: string }> } | undefined
+    nodes.push(...(j?.nodes ?? []))
+    edges.push(...(j?.edges ?? []))
+    const cursor = r.ok ? nextCursor(r.json) : null
+    if (!cursor || pages >= 500) break
+    r = await mcp.call('graph', { repositoryId: repoId, aggregate: 'none', budget_tokens: 25_000, cursor })
+  }
   return {
     ok: r.ok,
-    nodes: j?.nodes?.length ?? null,
+    nodes: r.ok ? nodes.length : null,
     extracted: edges.filter((e) => e.kind === 'extracted').length,
     byKind: edges.reduce<Record<string, number>>((acc, e) => {
       const k = String(e.kind)

@@ -142,10 +142,14 @@ describe('what the SPA shell must never answer for', () => {
 
   it('does not swallow /mcp', async () => {
     // MCP's streamable-HTTP transport GETs this path; a 200 page would be
-    // parsed as a protocol response.
+    // parsed as a protocol response. The endpoint answers its own GET with
+    // 405 (#436); a path below it is still kept from the shell.
     const res = await app.inject({ method: 'GET', url: '/mcp' })
-    expect(res.statusCode).toBe(404)
+    expect(res.statusCode).toBe(405)
     expect(res.body).not.toContain('<!doctype html>')
+    const below = await app.inject({ method: 'GET', url: '/mcp/anything' })
+    expect(below.statusCode).toBe(404)
+    expect(below.body).not.toContain('<!doctype html>')
   })
 
   it('leaves /health alone', async () => {

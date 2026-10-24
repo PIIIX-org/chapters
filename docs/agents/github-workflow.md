@@ -481,9 +481,10 @@ Traps and Decided against sections.
 the integration tests where the collab relay, the note store, the disk,
 Postgres and MCP meet, against an instance built from the commit with the
 repo's `docker-compose.yml`. Fast tier (~6 min) on PRs to `dev` that
-change anything the image is built from (`server/**`, `client/**`, the
-root `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`,
-`tsconfig.base.json`, `Dockerfile`, `.dockerignore`,
+change anything the image is built from (`server/**`, `client/**`,
+`skills/elara/references/mcp-tools.md` (the tool manuals the server
+serves, #429), the root `package.json`, `pnpm-lock.yaml`,
+`pnpm-workspace.yaml`, `tsconfig.base.json`, `Dockerfile`, `.dockerignore`,
 `docker-compose.yml`) or the lab (`lab/**`); client collab code also adds
 the browser test. Full tier (about an hour) nightly on `dev`, on every PR
 to `prod`, and by `gh workflow run elara-lab.yml --ref <branch>`. A gate

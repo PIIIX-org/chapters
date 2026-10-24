@@ -27,11 +27,12 @@ import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { TEST_PASSWORD, createActiveUser, loginCookie } from './helpers.js'
 
 /*
- * #577: every MCP tool and prompt, called against a world seeded with real
- * secrets, must return none of them. #383 served GitHub tokens embedded in
- * git URLs through `list_repositories` for 86 days because no test looked at
- * what tools return. The tool list comes from `tools/list`, so a new tool
- * fails this file until it has a fixture step below.
+ * #577: every MCP tool, prompt and resource, called against a world seeded
+ * with real secrets, must return none of them. #383 served GitHub tokens
+ * embedded in git URLs through `list_repositories` for 86 days because no
+ * test looked at what tools return. The tool list comes from `tools/list`,
+ * so a new tool fails this file until it has a fixture step below; the
+ * resources (the tool manuals, #429) are read as listed by every caller.
  */
 
 const SECRET_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
@@ -548,8 +549,9 @@ const readSteps: Step[] = [
   { tool: 'search', args: () => ({ query: 'helper', repositoryId: fx.pushRepoId }), contains: 'src/helper.ts' },
   { tool: 'search', args: () => ({ query: 'credentials', everywhere: true }), contains: 'docs/credentials' },
   { tool: 'find_symbols', args: () => ({ query: 'run', everywhere: true }), contains: '"name":"run"' },
-  { tool: 'graph', args: () => ({ vaultId: fx.vaultId }), contains: 'docs/credentials' },
-  { tool: 'graph', args: () => ({ repositoryId: fx.pushRepoId }), contains: 'src/service.ts' },
+  { tool: 'graph', args: () => ({ vaultId: fx.vaultId, aggregate: 'none' }), contains: 'docs/credentials' },
+  { tool: 'graph', args: () => ({ repositoryId: fx.pushRepoId, aggregate: 'none' }), contains: 'src/service.ts' },
+  { tool: 'graph', args: () => ({ repositoryId: fx.pushRepoId, neighborsOf: 'src/service.ts', depth: 3 }), contains: 'src/service.ts' },
   {
     tool: 'find_graph_path',
     args: () => ({ vaultId: fx.vaultId, source: 'docs/roadmap', target: 'docs/credentials' }),
@@ -778,6 +780,30 @@ describe('MCP secret scan (#577)', () => {
       }
     }
     expect(failures, 'prompts that failed for the owner account').toEqual([])
+    expect(findings).toEqual([])
+  }, 60_000)
+
+  it('no resource returns a secret', async () => {
+    const findings: string[] = []
+    const failures: string[] = []
+    for (const { who, client, isOwnerAccount } of callers) {
+      resetRateLimits()
+      const { resources } = await client.listResources()
+      if (isOwnerAccount) expect(resources.length).toBeGreaterThan(0)
+      findings.push(...findSecrets(resources, scanContext).map((f) => `resources/list as ${who}: ${f}`))
+      for (const resource of resources) {
+        resetRateLimits()
+        let response: unknown
+        try {
+          response = await client.readResource({ uri: resource.uri })
+        } catch (err) {
+          response = err instanceof Error ? err.message : String(err)
+          failures.push(`${resource.uri} as ${who}: ${String(response)}`)
+        }
+        findings.push(...findSecrets(response, scanContext).map((f) => `${resource.uri} as ${who}: ${f}`))
+      }
+    }
+    expect(failures, 'listed resources that failed to read').toEqual([])
     expect(findings).toEqual([])
   }, 60_000)
 

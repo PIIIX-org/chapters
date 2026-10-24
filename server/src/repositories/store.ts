@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { and, eq, notInArray } from 'drizzle-orm'
+import { and, eq, notInArray, sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositoryFiles, repositoryFileSymbols } from '../db/schema.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
@@ -129,6 +129,36 @@ export async function listRepositoryFiles(
     })
     .from(repositoryFiles)
     .where(eq(repositoryFiles.repositoryId, repositoryId))
+}
+
+/**
+ * One page of a repository's files for `browse_repository` (#424), in path
+ * order by code unit (`COLLATE "C"`, the index 0029 adds): the files under
+ * `folder` (all of them when null) whose path sorts after `after`, at most
+ * `limit` of them. The subtree is the range `folder/` ≤ path < `folder0`
+ * ('0' is the code unit after '/'), which needs no LIKE escaping. REST's
+ * `listRepositoryFiles` stays whole and unordered.
+ */
+export async function listRepositoryFilesPage(
+  repositoryId: string,
+  opts: { folder: string | null; after: string | null; limit: number },
+): Promise<Array<Pick<RepositoryFileRow, 'id' | 'path' | 'language' | 'size' | 'updatedAt'>>> {
+  const path = sql`${repositoryFiles.path} collate "C"`
+  const where: SQL[] = [eq(repositoryFiles.repositoryId, repositoryId)]
+  if (opts.folder !== null) where.push(sql`${path} >= ${`${opts.folder}/`}`, sql`${path} < ${`${opts.folder}0`}`)
+  if (opts.after !== null) where.push(sql`${path} > ${opts.after}`)
+  return db
+    .select({
+      id: repositoryFiles.id,
+      path: repositoryFiles.path,
+      language: repositoryFiles.language,
+      size: repositoryFiles.size,
+      updatedAt: repositoryFiles.updatedAt,
+    })
+    .from(repositoryFiles)
+    .where(and(...where))
+    .orderBy(path)
+    .limit(opts.limit)
 }
 
 /** Declared top-level symbols for a file — its "outline" (spec 9). */

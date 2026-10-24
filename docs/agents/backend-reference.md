@@ -125,7 +125,7 @@ chapters/
 │   │   ├── vaults/                 # vaults, sharing, teams, MCP connection management
 │   │   ├── notes/                  # OKF file storage, validation, the note write path
 │   │   ├── notifications/          # single notify() write path + routes
-│   │   ├── graph/                  # buildGraph() — the one graph assembly function
+│   │   ├── graph/                  # buildGraph() — the one graph assembly function; neighbors.ts — the local graph around one node (#426)
 │   │   ├── search/                 # hybrid search, embeddings, embedding queue, semantic edges
 │   │   ├── sync/                   # Hocuspocus relay, permission-event bus, SSE viewers
 │   │   ├── mcp/                    # MCP server, tools, rate limiting, CRDT-aware writes
@@ -162,7 +162,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 | `vaultShares` | direct-user or team grants on a vault, `read`/`edit`, unique on `(vaultId, granteeType, granteeId)` |
 | `vaultGraphPreferences` | per-user opt-in for a vault in the merged graph view |
 | `userVaultPreferences` | per-user vault organization preferences: storage mode ('online'/'local'), folders, colors, and favorites |
-| `mcpConnections` | issued MCP bearer tokens, scoped `account`/`vault`/`repository`, hashed; `access` (`read`/`write`/`admin`), `allowedTools` (null = all), `expiresAt` (null = never), all set at mint time |
+| `mcpConnections` | issued MCP bearer tokens, scoped `account`/`vault`/`repository`, hashed; `access` (`read`/`write`/`admin`), `profile` (`reader`/`writer`/`admin`, default `admin`, #428), `allowedTools` (null = all), `expiresAt` (null = never), all set at mint time |
 | `instanceState` | singleton row: setup-token lifecycle, instance-wide MFA requirement |
 | `securityEvents` | append-only audit log (login failures, permission denials, admin actions, MFA events, export/backup access) |
 | `notifications` | in-app notification rows |
@@ -171,9 +171,9 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 
 | Table | Purpose |
 |---|---|
-| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed) |
+| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), `embedding vector(384)` (HNSW-indexed); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages |
 | `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order |
-| `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every save |
+| `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every body save: one row per link with its body-relative `start_line`/`end_line` (migration 0031, #558), PK (`source_note_id`, `target_path`, `start_line`), so a target linked on several lines has several rows. 0 = not located yet (rows from before 0031, or written by older code after a rollback; the column default keeps that working): `backfillLinkLines()` (`notes/store-tx.ts`) rewrites them from the body under the note lock, in the background after `listen` at every boot (about 8 ms a note: 5,000 notes took 40 s locally; until then those edges have `evidence: null`), and the doctor's `links-differ` lists any left |
 | `exportLinks` | expiring/revocable vault export download links |
 
 **ADR-003 store schema (migration 0021; S2a: Postgres is the only authority
@@ -196,7 +196,7 @@ revision bodies, so older code goes on a migrated database only after
 | `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), actor detail (#403). `idempotency_key` stays unused: #477's keys need the call's arguments and its whole answer, also for writes that record no revision, so they live in `write_idempotency` |
 | `note_revisions.body_delta` / `delta_base_id` / `body_bytes` (migration 0026) | a compacted revision (#501, **Revision compaction** below): `body` is `''`, `body_delta` (jsonb) rebuilds the body from the revision `delta_base_id` (FK to `note_revisions`, NO ACTION, partial index `note_revisions_delta_base`), `body_bytes` is its UTF-8 size; all three null on a revision stored whole (check `note_revisions_delta_check`). SQL `note_revision_body(body, body_delta, delta_base_id)` returns any revision's body (`revisionBody` in store-tx.ts); `note_revision_patch(base, delta)` applies a delta. Kept out of the Drizzle model like `seq`. 0026 merged after 0027, so its journal `when` (1791750000000) is above 0027's: drizzle applies an entry only when its `when` is above the newest one already applied, so an instance that ran 0027 first still runs 0026 (`test/migration-order.test.ts`) |
 | `write_idempotency` (migration 0025) | the first answer of an MCP write sent with `idempotency_key` (#477, `mcp/write-result.ts` `runWrite`): PK (`connection_id`, `key`), `tool`, `args_hash` (sha256 of the tool, vault and canonical arguments), `note_id` (FK to `notes`, cascade: purging the note deletes its keys and the note text their answers hold), `result` jsonb, `created_at` (indexed). A write that commits inserts its row **inside its own store transaction** (`WriteOptions.recordKey`, called with the committed row by `createNote`, `writeNote`, the rename move, `softDeleteNote`, `restoreNote`), so a crash after COMMIT and before the answer still leaves the key and the retry replays (ADR-003 §4, §10); its recorded answer has `indexed: false`. Answers that commit nothing (`conflicted`) are inserted after the call. A repeat with the same hash answers `result` + `replayed: true`; another hash is refused. Every keyed call first deletes rows older than 24 h. Calls with one key run one at a time (in-process key lock). Rows also go with their connection (FK cascade) |
-| `note_reads` (migration 0028, after #861's 0026 and #869's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
+| `note_reads` (migration 0028, after #861's 0026 and #869's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` (every page too: the `rev` it reports, #961) and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
 | `note_crdt` | Yjs snapshot per note id (replaced `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
 | `note_projections` | per note and projection (`file`/`dir_index`/`embedding`): `target_seq`, `applied_seq`, `index_version`, lease and error columns; `note_projections_pending` indexes the work queue |
@@ -381,8 +381,8 @@ fold of that transaction keeps; the next fold clears it.
 | `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable` |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
-| `repositoryFiles` | indexed file content — same `fts`/`embedding` pattern as `notes`; **hard-deleted** on resync, no trash |
-| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible |
+| `repositoryFiles` | indexed file content — same `fts`/`embedding` pattern as `notes`; **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s code-unit-order pages (#424) |
+| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (#453) |
 | `repositoryFileSymbols` | per-file top-level declarations (function/class/interface/type), surfaced as a file "outline" — **not** emitted as a graph edge despite the schema comment calling them "contains" edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
 
@@ -482,15 +482,20 @@ collab socket and live view it opened closes at once (#498, §5.7).
   have read permission, so mint a read token`); a repository share
   allows `write`. An omitted level takes the pin default lowered to the
   cap, so a read-only member's token is `read`.
-  `allowedTools` (names checked against `listMcpTools()`, 400 for an
-  unknown one) and `expiresAt` (ISO time, must be in the future).
-  The Settings and vault forms always send a level. The vault form
+  `profile` (`reader` | `writer` | `admin`, #428; default `admin`, so a
+  token minted without one lists every tool its access allows, as
+  before), `allowedTools` (names checked against `listMcpTools()`, 400
+  for an unknown one) and `expiresAt` (ISO time, must be in the future).
+  The Settings and vault forms always send a level and a profile; the
+  profile starts at the one matching the level (`read` → `reader`,
+  `write` → `writer`, `admin` → `admin`) until the user picks one, and
+  the allow-list picker offers only tools inside it. The vault form
   offers only the levels the route grants (`admin` to the owner, up to
   `write` to an editor, `read` alone to a read-only member) and starts
   at `write`, or at `read` for a read-only member; its allow-list picker
   leaves out tools whose `pinPermission` is above the user's permission.
   `GET /mcp-connections/tools` returns `listMcpTools()` (name, scope,
-  capability, pinPermission) for the allow-list picker. Migration 0019 set
+  capability, pinPermission, profile, annotations) for the allow-list picker. Migration 0019 set
   existing account tokens to `admin` and left existing pinned tokens at
   `write`, whoever minted them; a restore of an older dump applies the
   same rule. Such a token held by a read-only member keeps `write` in
@@ -498,6 +503,9 @@ collab socket and live view it opened closes at once (#498, §5.7).
   and every call is refused by the handler's own permission check, so no
   data migration is needed. Migration
   0020 dropped the column default, so every insert names its level.
+  Migration 0032 (#428) added `profile` with the default `admin` kept on
+  the column: every existing token became `admin` (no change), and the
+  column and the route share one default.
   Resolution (`resolveMcpToken`) is fully live — a revoked, expired, or
   now-inactive-owner token never resolves regardless of when it was
   issued (HTTP 401 `invalid, revoked or expired MCP token`).
@@ -525,8 +533,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   before the row or file is written): the note is serialized and parsed
   back; if that fails, or the frontmatter (deep-equal) or body (exact)
   differs, the write is refused with an `OkfValidationError`
-  (`note cannot be stored: ...`) — HTTP 400 over REST, an `isError`
-  result over MCP. The file projection renders the row, so a note its own
+  (`note cannot be stored: ...`) — HTTP 400 over REST, an `OKF_INVALID`
+  error over MCP (#439). The file projection renders the row, so a note its own
   file could not reproduce must never be stored.
 - **`store.ts`**: the note write path. Every write validates, then runs
   one store transaction (see "The S2a store" above): row, revision at the
@@ -548,8 +556,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `<file>.tmp` used to let two writes truncate and rename away each
   other's temp file (raw `ENOENT` naming server paths) and leave the row
   and the file on different writes. The MCP tool wrapper returns only the
-  code of a Node system error (`internal storage error (ENOENT)`); the
-  full error goes to the server log. The lock orders writes; it does not
+  code of a Node system error (an `INTERNAL` error `internal storage error
+  (ENOENT)`, #439); the full error goes to the server log. The lock orders writes; it does not
   merge them: a whole `body` write replaces the body, so two agents that
   each read a note and write it back with a line appended still keep only
   the later one (an `append` op resolves against the live text and keeps
@@ -712,7 +720,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   so it keeps text typed after the agent's `read_note`, which itself
   serves the live document (#474, below). REST PUT takes `baseRev` (#865,
   the `rev` REST GET returned, or a revision id) and is rebased from it
-  the same way: a clean merge answers the row plus `status`
+  the same way: a clean merge answers `noteReply` of the row plus `status`
   (`applied`/`merged`), `concurrentChanges` and `baseRev`; an overlap
   writes nothing, keeps the body as a `proposal` revision and answers 409
   `{ error, status: "conflicted", baseRev, proposalId, conflicts }`; a
@@ -739,7 +747,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   ids, #822): `getBaseRevision`, never a `quarantine` or `proposal` row;
   anything else is refused and nothing changes.
 - **Write results** (#477, `mcp/write-result.ts`): every MCP note write
-  answers its row (without `seq`) plus `rev`, `status`
+  answers `noteReply` of its row (`notes/reply-fields.ts`, #427, #931:
+  only `NOTE_REPLY_FIELDS` = id, vaultId, type, name, path, frontmatter,
+  body, createdAt, updatedAt, plus `rev` = `seq`; never `embedding`,
+  `deletedAt`, `seq` or other columns) plus `status`
   (`applied`/`merged`/`conflicted`, or `retry` when `StoreBusyError`
   refused it: nothing written, `rev` null), `diff_stats` (`diffLines`
   hunks from `WriteOutcome.before`, the state writeNote met, to the
@@ -753,7 +764,11 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   recording (`proposalId: null`, `NoteWriteWouldQuarantineError`).
   `idempotency_key`: `write_idempotency` (above). A read whose fold
   the store refuses (StoreBusyError) fails as `NoteReadBusyError`, with a
-  read's wording.
+  read's wording. The REST write routes (POST `/notes`, PUT `/notes/*`,
+  POST `/notes-rename`, POST `/trash/:noteId/restore`, POST `/revert/*`)
+  answer the same `noteReply` (PUT with `baseRev` adds `status`,
+  `concurrentChanges`, `baseRev`, above); REST GET answers id, path,
+  `rev`, frontmatter, body, updatedAt.
 - **Stale base: three-way merge or proposal** (#475): with `base_rev`,
   `writeThroughCollab` gets `NoteEdit.base` and rebases the edit
   onto the live document inside the same transaction
@@ -799,7 +814,11 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   <connection name>".
 - **A whole body without `base_rev` uses the last read as its base**
   (#408, #476, `mcp/last-read.ts`): MCP `read_note` and `export_note`
-  record, per connection and note id, the `rev` they served; an
+  record, per connection and note id, the `rev` they served (`read_note`
+  on every page too: all pages of a cursor are that rev's text, since a
+  changed note refuses the cursor, so the base is exact; #961 replaced
+  #420's whole-body-only rule, which left no base after a paged read and
+  let the next whole body replace concurrent edits); an
   `edit_note` with `body` and no `base_rev` takes that revision as
   `NoteEdit.base` (stale-base merge above; the answer echoes it as
   `baseRev`). Each whole body the connection writes moves it to the
@@ -971,7 +990,9 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `folded_seq < seq` is `pending` `crdt-rebase`); `fts-stale` (stored `fts`
   against the 0002 expression); `vector-missing` (no embedding and no
   job), `vector-failed` (the `embed_note` job of the current `seq`
-  failed); `links-differ` (`note_links` against `extractWikilinks(body)`).
+  failed); `links-differ` (`note_links` targets and body lines against
+  `linkRows(body)`, the rows `replaceLinks` stores; a row without lines, from before
+  migration 0031, shows as `<target> (no line)`).
   Pending projections, embedding jobs and unfolded CRDT tails are listed
   in `pending`, not as problems. `info` (#908) lists `migration-copy`: a
   `.conflicts/<path minus .md>.<stamp>.md` copy whose bytes equal a
@@ -1036,7 +1057,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
 - **Body size cap** (#491, `size-cap.ts`): one cap on every write path,
   `ELARA_NOTE_MAX_BYTES` (`config.noteMaxBytes`, default 1 MiB =
   1048576), measured as the **UTF-8 bytes of the body** (frontmatter is
-  not counted). `assertBodyFits` runs in `createNote` and `updateNote`
+  counted apart, next item). `assertBodyFits` runs in `createNote` and `updateNote`
   (REST, MCP, import, the relay's store) and in `writeThroughCollab`
   before the live document is edited, so a refused write never reaches
   editors. A write is refused (`NoteTooLargeError`, an
@@ -1044,7 +1065,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   the body it replaces, so a note stored before the cap can still shrink
   and take frontmatter edits. REST answers 413 `{ error: "note body is N
   bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)" }`, MCP
-  `create_note`/`edit_note` an `isError` result with the same text,
+  `create_note`/`edit_note` a `TOO_LARGE` error with the same message and the limit as `rule` (#439),
   import lists the note in `skipped`; a revert to a revision over the cap
   (and larger than the current body) is refused the same way. A rename
   checks every body its link rewrite changes (the note's own self-links,
@@ -1067,6 +1088,26 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   body under 1 MiB with JSON escaping was refused), import took any size
   and the relay stored up to ws's 100 MiB default (60 MiB froze the
   server ~20 s in the lab).
+- **Frontmatter size cap** (#933, `assertFrontmatterFits` in
+  `size-cap.ts`): the same `ELARA_NOTE_MAX_BYTES` bounds the frontmatter
+  as stored, counted apart from the body and measured as the relay
+  measures the rest of a live document (#780): each key's UTF-8 bytes
+  plus its value as JSON (`frontmatterBytes`). It runs on the *resulting*
+  map, after a per-key merge (#438), so many small merges cannot grow it
+  past the cap: in `newNoteState` (create, upsert/append creating a note,
+  import) and in `writeNote` after `compute` (REST PUT, MCP
+  `edit_note`/`append_note`/`upsert_note`/`revert_note`, dry runs, the
+  relay's store), plus the fold's `refusal` and a rename's `type` rewrite
+  (`moveNote`). Inside `compute` it runs before any revision can be
+  written: in `updateNote` and `writeThroughCollab` before the write
+  quarantine (`refuseSuspiciousWrite`), and in `propose` before the
+  `proposal` revision, so neither stores an over-cap map. Same rule as the body: refused
+  (`NoteTooLargeError`, REST 413, MCP `isError`, import `skipped`: `note
+  frontmatter (keys and values as JSON) is N bytes (UTF-8); the limit is
+  L bytes (ELARA_NOTE_MAX_BYTES)`) when over the cap **and** larger than
+  the stored frontmatter, before anything is written; a note already over
+  it can shrink (`removeKeys`, `replace`) and take body-only edits.
+  `restore_note` puts a trashed note back unchanged, so it cannot grow.
 - **Write quarantine** (`growth-guard.ts`, #492): a stale reload once
   doubled a whole note (#488) and the store wrote it like any edit. A body
   write is checked against the stored body (UTF-8 bytes, linear time:
@@ -1096,7 +1137,21 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   MCP/REST write continues only an identical retry of the newest quarantine
   by the same actor. `recordRevision`'s
   dedupe skips quarantine and proposal rows. Restore one
-  with `revert_note` / the REST revert route.
+  with `revert_note` / the REST revert route. The relay **tells the
+  editors** (#784): a Hocuspocus stateless message `{"type":
+  "elara-store", "quarantine": {revisionId, rule, repeatedBytes,
+  noteBytes, excerpt} | null}`. It is sent to every connection on connect
+  (`connected` hook) and broadcast whenever it changes: set by a
+  quarantined store, cleared by the next written store. A document loaded
+  with `note_crdt.fold_error` set (after an unload or a restart) rebuilds
+  it from the repeat check against the row and the newest quarantine
+  revision by `ord`. `excerpt` is the first 80 characters of the first
+  repeated chunk (`firstRepeatAt`). The editor shows `QuarantineNotice`
+  and the status pill reads "Held back". Clients cannot send it: their
+  stateless messages go to the default `onStateless`, which relays
+  nothing. The typing itself survives a reload through the CRDT log
+  (ADR-003: `keepRefusedTyping` appends the refused state with
+  `fold_error`), not through the browser's copy.
 - **Restore points** (`withRestorePoint` in `store.ts`, #482): the MCP
   write tools (`edit_note`, `rename_note`, `delete_note`, `revert_note`)
   run through `withRestorePoint(vaultId, path, connectionId, write)`.
@@ -1158,8 +1213,26 @@ one implementation, three callers. Nodes are the union of `notes` and
 - **semantic** — pulled from `semanticEdges`, filtered to the live node
   set.
 
+Every `GraphEdge` (#558) also carries `directed`, `relation` (`link`,
+`import`, `same_type`, `same_tag`, `same_language`, `same_folder`,
+`similar`), `confidence` (`resolved`, or a semantic edge's similarity) and
+`evidence` as stored (`[start, end]` lines: a link's body-relative lines,
+an import's specifier line; the group for a structural edge; null when
+unknown and for semantic edges). `EdgeList` keeps a link or import per
+ordered pair and relation (a link both ways is two edges; several lines:
+the first), a structural or semantic edge per unordered pair (several
+shared groups: type, then tag, language, folder; both stored semantic
+directions: the higher similarity), so `buildGraph` and `neighborhood`
+give the same edges in any insertion order. REST graph routes return these
+fields as they are (additive: the canvas reads `source`/`target`/`kind`),
+and a link both ways is now two REST edges.
+
 Community detection runs `graphology-communities-louvain` over the
-fully assembled graph on every call, seeded from the node ids. Its result
+undirected projection of the assembled graph (`EdgeList.pairs`: the first
+edge per unordered pair and kind, ends as first added: the edge list
+before #558, so keeping directions moves no community) on every call,
+seeded from the node ids. The community view's `weight` counts the same
+pairs. Its result
 also depends on node and edge insertion order, so every query feeding it
 (notes, repository files, note links, code imports, semantic edges) has
 an `ORDER BY` on ids (#816): unordered, the row order followed the index
@@ -1167,6 +1240,44 @@ the planner picked, and two calls over the same data could differ. The merged cr
 additionally requires the resource owner's `mergeable` flag and the
 viewing user's own per-resource opt-in — three independent gates, all
 re-resolved live.
+
+`filters.edgeTypes` (#426) names the edge kinds to build; the others are
+never queried or grouped, so Louvain runs over the kept edges only. The
+shared pieces (`noteNode`/`fileNode` and their columns, `repoLinkTarget`
+for `repo:`/`code:` links, `groupKeys`, `EdgeList` and the edge
+constructors, `STRUCTURAL_GROUP_CAP`) are exported for `neighbors.ts`.
+
+`edges.ts` (#558, ADR-004 §2.8) renders edges for MCP `graph` and
+`find_graph_path` as rows `{from, to, directed, kind, relation,
+confidence, evidence}`: ends as `{path, in?}` (`in`: vault or repository
+name and the first 8 characters of its id, the whole id when two of the
+call's share them; only when the call spans several), no ids; undirected rows' ends in
+name order; similarity to 2 decimals; evidence `path#La-Lb` (link lines
+shifted to whole-file lines by `bodyStartLine(row)` from
+`notes/projector.ts`: the lines of `renderNoteFile(row)`, the file the
+projector writes; an adopted file keeps its own bytes and may differ), `path#Ln` for an
+import, `type:`/`tag:`/`language:`/`folder:` for structural, null for
+semantic and for import rows extracted before migration 0031 (`line` null
+until #453's extractor-version bump extracts them again). On the budget
+ladder a row's `locations` form is one line, `from -> to relation
+evidence`. `mcp/prompts.ts`'s path prompt still prints ids.
+
+`neighbors.ts` (#426) is the local graph without the whole graph:
+`resolveGraphNode(resources, ref)` takes a node id or exact path (none or
+several matches are refused, the latter with the ids; #447 widens it), and
+`neighborhood(resources, center, {depth, edgeTypes, types, tags, limit})`
+walks ring by ring in SQL over the frontier's ids only: links out and in
+(`note_links_target_idx`; `repo:` links to a frontier file by reading the
+vaults' `repo:`/`code:` link rows), imports both ways
+(`repository_file_imports_resolved_idx`), semantic rows on either side,
+and the frontier's structural groups counted in SQL (a group over 50 is
+skipped and reported in `cappedGroups`, as above). It reads node rows only
+for the nodes reached, applies `types`/`tags` as `passesFilters` does (the
+centre is always kept), stops at the ring that reaches `limit` + 1 nodes,
+and reads the edges among the kept outer-ring nodes in a last round, so
+the result is `buildGraph`'s graph restricted to the neighbourhood (the
+test compares the two). No Louvain: nodes carry `distance`. #472's
+`neighbors(depth)` (REST local graph, backlinks) is meant to reuse it.
 
 **Saved perspectives** (`graph_perspectives`; REST `GET/POST
 /graph/perspectives`, `DELETE /graph/perspectives/:id`, and the three MCP
@@ -1382,7 +1493,39 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   e.g. an undone paste), it first rebuilds the document from its own
   state: same history, so it still merges, but deleted text and the undo
   history are dropped (the notice says so); the browser's copy moves to
-  the new document.
+  the new document. **The rest of the document** (#780) is bounded the
+  same way, by the same cap and separately from the body: `restBytes` is
+  the content of every live item that is not body text (frontmatter keys
+  and values as JSON, strings in other root types, embeds, formatting,
+  binaries, nested types, and entries of the `body` type's own map: body
+  text is only a string item in its list, `parentSub` null, #952), so
+  frontmatter can no longer grow without
+  limit into the row and the file, and nothing else can grow in the CRDT
+  log. Its running bound counts 6× each update's length (the worst JSON
+  expansion of Yjs's encoding: `false` is 1 byte encoded and 5 as JSON, a
+  control character 1 and 6), so property edits far from the cap measure
+  nothing. An update that adds nothing but body text (typing, deletions)
+  skips the rest check, as an update without text skips the body's, so
+  typing on a note whose frontmatter is already over the cap measures
+  nothing either (#947). `addsRest` follows what Yjs will do with the
+  update, not what it claims: an update that re-sends an id the document
+  holds (Yjs skips it) or holds one id twice (Yjs keeps the last section)
+  counts as rest, a decoded item's parent is its neighbour's
+  (`origin`/`rightOrigin`) in the document first, then in the update, and
+  an item it cannot place counts as rest; the full check then runs.
+  The editor measures both parts alike (`client/src/lib/noteSize.ts`),
+  `tooLarge.otherBytes` says how large the properties are, and it reconnects
+  only once both fit. REST, MCP and import bound frontmatter with the same
+  measure (`jsonBytes` from `size-cap.ts`; Frontmatter size cap, #933).
+  Before a `note-too-large` close the relay sends the refused connection a
+  stateless `{"type": "elara-size", limitBytes, bodyBytes, otherBytes}`:
+  the exact sizes of the document it holds (`documentSizes`, which also
+  restarts both bounds). "Fits" for the editor is then the relay's own
+  rule (#948): each part within the cap or no larger than the relay's
+  (`tooLarge.bodyRoomBytes`/`otherRoomBytes`), so a note whose
+  frontmatter is stored over the cap resumes once the body is cut, and
+  `TooLargeNotice` asks only for the cuts that are needed. Without the
+  message (a 1009 close, an older relay) each part must fit the cap.
 - **`permission-events.ts`**: an in-process `EventEmitter` bus.
   Every share/team/deactivation mutation calls `emitPermissionChange()`,
   and every session delete announces the ended sessions' hashes on it;
@@ -1419,6 +1562,17 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `sessionIdGenerator: undefined`, a fresh `McpServer` + transport
   built per HTTP request. No cross-connection caching is possible by
   construction; auth and permissions are recomputed every call.
+  With no session and no stream, the server can send nothing unasked
+  (#436): `GET` and `DELETE` on both paths answer `405` with
+  `Allow: POST` and the SDK transport's JSON-RPC error
+  (`{"jsonrpc":"2.0","error":{"code":-32000,"message":"Method not
+  allowed."},"id":null}`), before authentication, and `buildServer`
+  overrides the SDK's `listChanged: true` with `false` on each list
+  capability it has (`tools`; `resources` when a manual is registered;
+  `prompts` when they are registered: not with an allow-list, not on a
+  `reader` profile). A list changes only
+  with permissions, and the next `tools/list` shows it.
+  `test/mcp-list-changed.test.ts` covers both paths.
 - **Auth**: bearer token → `resolveMcpToken()` (same live-resolution
   guarantee as everywhere else) → per-connection rate limit
   (`rate-limit.ts`, default 120/min, in-process — see §9).
@@ -1433,9 +1587,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `server.registerTool`, `server.tool`, `server.registerResource` and
   `server.resource` are replaced on the instance by a function that
   throws, so a tool registered without a declaration fails when the
-  server is built. That is a guard against forgetting the declaration,
-  not a security boundary: the low-level `server.server.setRequestHandler`
-  would bypass it (here it is only wrapped, to filter `tools/list`).
+  server is built; the only resources are the tool manuals (below),
+  registered through the bound method. That is a guard against forgetting
+  the declaration, not a security boundary: the low-level
+  `server.server.setRequestHandler` would bypass it (here it is only
+  wrapped, to filter `tools/list` and `resources/list`).
   Scopes: `account` (account tokens only:
   `list_vaults`, `create_vault`, `restore_vault`, `purge_vault`, the two
   vault-preference tools, `list_repositories`, `connect_repository`, the
@@ -1478,11 +1634,23 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   any access to a repository, `read` for a read-only vault share. An
   explicit `access` above that is refused (403, the message names the
   permission needed); an omitted one takes the pin default (`write`)
-  lowered to it. Prompts are
+  lowered to it. Then the profile (#428): every `tool()` may declare
+  `profile: 'reader' | 'writer'`, the smallest profile it is in
+  (omitted: `admin` only), and the connection's `profile` must rank at
+  or above it (reader < writer < admin; `<tool> needs the writer
+  profile; this connection has the reader profile (mint a token with
+  that profile)`). `reader`: `list_vaults`, `list_repositories`,
+  `browse_vault`, `browse_repository`, `search`, `read_note`,
+  `read_file`, `find_symbols`, `graph`, `find_graph_path`; `writer`
+  adds `create_note`, `edit_note`, `append_note`. A new tool is
+  `admin` unless it declares a smaller profile. The profile only
+  intersects with the allow-list, access level, scope and pin; it never
+  widens them. Prompts are
   not registered for a connection with an allow-list (they read notes
-  outside `tool()`). `tools/list` advertises only the tools the
+  outside `tool()`) or with the `reader` profile (owner decision on
+  #930). `tools/list` advertises only the tools the
   connection can call (#641): in its allow-list, within its access level
-  and of a scope class its scope reaches (`account` tools for account
+  and profile, and of a scope class its scope reaches (`account` tools for account
   tokens only, `vault`/`vault-or-account` not for repository tokens,
   `repository`/`repository-or-account` not for vault tokens). For a
   pinned token it also leaves out every tool whose `pinPermission` is
@@ -1504,8 +1672,128 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   registrations; `test/mcp-tool-capabilities.test.ts` pins the admin
   set and the `owner`/`edit` pin-permission sets (a new tool whose
   handler checks owner or edit permission must declare `pinPermission`),
-  `test/mcp-capabilities.test.ts` covers each rule and
-  `test/mcp-tool-visibility.test.ts` the filtered `tools/list`.
+  `test/mcp-capabilities.test.ts` covers each rule,
+  `test/mcp-tool-visibility.test.ts` the filtered `tools/list` and
+  `test/mcp-tool-profiles.test.ts` the profiles (exact reader and writer
+  sets, refusals, no widening, `admin` for older and API-minted tokens).
+  The test registries (`mcp-secret-scan`, `mcp-scope`,
+  `mcp-strict-args`, `account-separation`, `mcp-tool-visibility`)
+  enumerate an `admin` account token's `tools/list`, which lists every
+  tool.
+- **Descriptions, manuals and the `tools/list` budget** (#429): every
+  tool description is at most two sentences (what the tool does and
+  answers, and what picking and calling it needs); details live in the
+  parameter descriptions and the manuals. The manuals are MCP resources
+  (`manuals.ts`): `elara://manual/conventions` and one per tool family
+  (`vaults`, `notes`, `repositories`, `search`, `graph`, `teams`,
+  `export`), parsed once per process from
+  `skills/elara/references/mcp-tools.md` (the one source; the Dockerfile
+  copies it to the same relative path, and the lab counts it as an image
+  input). A family manual is the section's opening text plus the entries
+  of the tools the connection's `tools/list` shows (`listedTools()`,
+  shared with the `tools/list` filter, live pin permission included);
+  `resources/list` leaves out a manual with none of them, and reading it
+  answers the SDK's own `Resource <uri> not found`. Without the file the
+  server logs it once and serves no manuals; tools are unaffected. The
+  `tools/list` wrapper also drops what restates a default: the input
+  schemas' `$schema` (draft-07; only keywords draft-07 and 2020-12 read
+  alike are used) and `execution: {taskSupport: "forbidden"}`, and the
+  output schemas' `$schema`.
+  `test/mcp-tool-budget.test.ts` measures, per profile, the ADR-004 §2.6
+  sum: characters / 4 of `tools/list`, `prompts/list` and the
+  `initialize` instructions. It fails a reader account token over 2,000
+  tokens (no prompts on reader, #428; measured 7,984 characters with
+  #435's instructions, of which `tools/list` 7,746 and instructions 238;
+  7,949 with #434's annotations, 7,676 before) and a writer one whose
+  `tools/list` plus instructions are over 4,000 (15,669 with #435:
+  15,226 + 443; 15,429 with #434; 15,036 with #433's output schemas,
+  14,286 before; its `prompts/list`, 10,042, is reported), reports admin
+  (`tools/list` 41,811 with #435, plus 443 of instructions; 42,101 with
+  #434; 39,512 with #433, 37,512 before; its ceiling, 43,000, is in
+  `mcp-tool-schema.test.ts`), checks the
+  `tools/list` bytes are the same on every call and for two vault pins of
+  a reader token (a writer or admin list follows the live pin permission),
+  and counts each description's
+  sentences. `test/mcp-manuals.test.ts` covers the manual scoping (profile,
+  pin, allow-list, live permission) and that every tool has exactly one
+  entry.
+- **Structured content and output schemas** (#433, ADR-004 §2.1, D6
+  default): `tool()` answers every success through `answered(text)`:
+  `content[0].text` stays the whole JSON answer (clients that show the
+  model only `content` lose nothing), and when that text is an object
+  (it starts with `{`) `structuredContent` is `JSON.parse(text)`, so it
+  holds exactly what the text shows (dates as strings) and the two never
+  differ. Bare-array answers (`search`, the unbudgeted list tools) carry
+  none: MCP's `structuredContent` is an object, and wrapping the array
+  would make it differ from the text. A tool may declare `outputSchema`
+  (a loose zod object, so other keys pass): today only the eight
+  `runWrite` tools, with `WRITE_RESULT_SCHEMA` (`write-result.ts`:
+  `rev` number or null, `status` enum, `indexed` boolean; about 250
+  characters per tool in `tools/list`). The SDK checks it on every
+  successful answer, after the write committed, and a mismatch would
+  turn the answer into an `Output validation error`; the schema is
+  therefore the fields every write answer has (applied, merged,
+  conflicted, retry, dry run, replay, delete). Errors are the error
+  envelope (#439, below) in `content[0].text` without `structuredContent`:
+  the SDK server does not check an `isError` answer, but the SDK client
+  checks any `structuredContent` against the listed outputSchema, error
+  or not, so `{error}` there would fail on a write tool.
+  Read tools get no output schema until their shapes settle (#445,
+  #432, #439). `test/mcp-structured-content.test.ts` covers each tool
+  family through the real client (which validates against the listed
+  schema), every write answer shape and the errors.
+- **Instructions** (#435): `instructionsFor(profile)` in
+  `mcp/instructions.ts` is the `initialize` result's `instructions`
+  (`new McpServer(info, {instructions})` in `buildServer`): one constant
+  text per profile, with no id, name, date or pin, so every token of a
+  profile gets the same bytes (#681). Reader: tools with
+  `budget_tokens` (characters / 4) fit it and end with `truncated`
+  (`search`, `list_vaults` and `list_repositories` take no budget and
+  answer bare arrays), the cursor is the only way on (read_note/read_file
+  page long bodies only that way), manuals are
+  `elara://manual/conventions` and one per family. Writer and admin (the
+  same text) add the whole-`body` merge base (`base_rev`, else this
+  token's last `read_note`, paged or not, within `READ_WINDOW_HOURS`,
+  24 h, `last-read.ts`; `ops` edit the live text) and the retry
+  rule, scoped to note writes ("Retry a note write with the same
+  `idempotency_key`": only the note writes take the key, admin's other
+  writes refuse it). Keyed on profile only: a
+  `read`-access token with the `writer` profile also gets the write
+  sentence. The reader text fits the 2,000-token budget because the
+  shared `budgetArgs` descriptions (`response.ts`) became `Max tokens;
+  default N` and `` `truncated.cursor` `` (the instructions explain
+  both). `test/mcp-instructions.test.ts` checks the rules per profile,
+  that every manual named is in the token's `resources/list`, and the
+  same bytes across two initializes and two vault pins per profile.
+- **Tool annotations** (#434, ADR-004 §2.6): `toolAnnotations()` in
+  `server.ts` derives each tool's MCP `annotations` from its `tool()`
+  record; `registerTool` lists them and `McpToolInfo` carries the same
+  map. A `read` tool lists `{readOnlyHint: true}` only (MCP reads the
+  other hints only for tools that are not read-only; the reads' read
+  markers, presence and export security events change nothing a user
+  sees). Every other tool lists `destructiveHint` (from the def's
+  `destructive: true`; `false` otherwise, written out because MCP's
+  default is `true`) and `idempotentHint: true` when the def says
+  `idempotent: true`: a repeat of the same call without an
+  `idempotency_key` changes nothing more or fails. Destructive: every
+  `delete_*`, `purge_*`, `revoke_*` and `remove_*` tool (`tool()` throws
+  at registration when one of these names lacks `destructive`, or a read
+  declares either flag) and `update_vault_preferences` (its maps replace
+  the stored ones, with no history). Note edits, reverts and renames are
+  not: every state stays a revision. Not idempotent: tools that create
+  a row or start a sync each call, `share_vault` and `add_team_member`
+  (a notification each call), and the eight note writes that take an
+  `idempotency_key` (an unkeyed repeat can merge again, record a restore
+  point or append twice; the key is their retry contract). No `title`
+  and no `openWorldHint`: about 20 characters per tool each, against
+  the reader budget. The annotations cost 36 characters on a read tool
+  and 39 to 62 on the others; reader's budget was kept by dropping
+  "currently" from `list_vaults`/`list_repositories` and the second
+  sentence of `search` (it repeated the `everywhere` parameter).
+  `test/mcp-tool-annotations.test.ts` checks every listed tool through
+  the real client against its capability, the destructive and
+  idempotent sets against their lists, a reader token's list (all
+  read-only) and `listMcpTools()`.
 - **Tools** (60, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):
   - *Vaults* (14): `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `get_vault_graph_preference`, `set_vault_graph_preference`, `get_vault_preferences`, `update_vault_preferences`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.
@@ -1516,10 +1804,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   more query adds `actorName` for MCP rows, #482),
   keyset on `ord` descending (the order recorded, #825) over
   `note_revisions_note_ord (note_id, ord)`, `limit` default 20,
-  max 100, one extra row to set `hasMore`. The opaque `cursor` is
-  base64url JSON of the last row's `ord` (`{"ord":n}`; the `{at, id}`
-  cursor from before #825 is refused as invalid), so a revision recorded
-  while a caller pages shifts nothing. `get_revision` returns one
+  max 100, one extra row to know whether older ones exist
+  (`truncated.total.revisions` is `">limit"`). The cursor is the
+  envelope's (below) at the last row shown, keyed on its `ord`
+  (`listRevisionPage()` returns the page's `ords`); the bare `{"ord":n}`
+  cursor of #411 and the `{at, id}` one from before #825 are refused as
+  invalid, and there is no `hasMore`/`nextCursor` any more (#422). A
+  revision recorded while a caller pages shifts nothing. `get_revision` returns one
   revision's frontmatter and body (`getRevision()`, the same query as
   the REST revision route), gated like `note_history`. Both, and the
   REST history list, add `sourceRevisionId` / `fromPath` / `toPath`
@@ -1528,11 +1819,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - *Repositories* (13): `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `get_repository_graph_preference`, `set_repository_graph_preference`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
   - *Teams & Users* (7): `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
   - *Export & Notifications* (4): `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`.
-  - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols`, `graph` (nodes, extracted/structural/semantic edges, Louvain communities; filters `types`, `tags`, `aggregate`, `community`), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
+  - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols`, `graph` (the community view by default since #426, `aggregate: "none"` for every node, `community` for one community's members, `neighborsOf` + `depth` 1-3 for the local graph from `neighbors.ts`; `edgeTypes` applied before assembly; `limit` keeps the first nodes of the view's ranking (largest communities; most edges, then path; nearest, then path) and the edges among them, `truncated.total.nodes` `">limit"`; filters `types`, `tags`; conflicting arguments are refused; community numbers depend on `types`, `tags` and `edgeTypes`; `cappedGroups` is the whole graph's in the community view and the listed nodes' groups otherwise; `narrow` names `neighborsOf` by id), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
   - *Prompts*: 20, registered in `prompts.ts`.
   *(Security invariant: MCP connections cannot create new MCP connections or mint tokens).*
-  Every handler is wrapped so thrown errors become a structured `isError`
-  result instead of an uncaught exception. Input schemas are strict
+  Every handler is wrapped so thrown errors become an `isError` result
+  instead of an uncaught exception. Input schemas are strict
   (#437): `tool()` wraps each zod shape with `strictArgs()`
   (`strict-input.ts`), so the SDK refuses an undeclared argument before
   anything runs, with a message that names it, suggests the parameter it
@@ -1542,11 +1833,183 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `filters`); free-form maps (`frontmatter`, the preference maps) are
   `z.record` and accept any key. `test/mcp-strict-args.test.ts` loops
   over every tool.
+- **Error envelope** (`mcp/errors.ts`, #439, ADR-004 §2.7): every failed
+  call answers `isError: true`, `content[0].text` =
+  `JSON.stringify({error: {code, message, retryable, retryAfterMs?, rule?,
+  field?, suggestions?}})` and no `structuredContent`. `envelope()` fixes
+  the key order and leaves absent fields out (never `suggestions: []`),
+  so one refusal is one byte string. A handler throws
+  `McpToolError(code, message, extra?)`; `toErrorEnvelope(err)` in the
+  `tool()` catch maps it and the domain errors: `CursorError` (its
+  code), `OkfValidationError` by its `refusal` (`OKF_INVALID`,
+  `TYPE_MISMATCH`, `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the
+  type rule, the depth limit), `NoteTooLargeError` (`TOO_LARGE`, the
+  limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
+  included) and `MaintenanceInProgressError` (`BUSY`, retryable), the
+  quarantine errors (`QUARANTINED`, the rule), `NoteEditError`
+  (`INVALID_ARGUMENT`), `NoteEditConflictError` and
+  `IdempotencyKeyReusedError` (`CONFLICT`), a Node system error
+  (`INTERNAL`, its code only, the error logged), anything else
+  (`INTERNAL` with its message; #443 adds a database-error branch here
+  that shows only the SQLSTATE). `CONFLICT`, `BUSY` and `QUARANTINED`
+  extend ADR-004's list, and `field` its envelope. The SDK's own
+  refusals (arguments its schema check rejects, an unknown tool, an
+  answer failing its outputSchema) are isError text it makes itself; a
+  wrapper on `CallToolRequestSchema` (next to the tools/list one) turns
+  every error result `tool()` did not make (a `WeakSet`) into the
+  envelope: arguments → `INVALID_ARGUMENT` (`argumentRefusal`: the tool's
+  strict schema re-parses the arguments; an unknown key first, `field`
+  its dotted path, `suggestions` the names strict-input would suggest,
+  else all of that object's keys; an enum's values, a discriminated
+  union's tag values for a bad `op`), an unknown tool →
+  `NOT_FOUND` (close names among `listedTools()`), else `INTERNAL`; the
+  message is the SDK's without `MCP error -32602: Input validation
+  error: `. Suggestions only from what the caller reaches: a `note not
+  found` after the access check carries `closest()` of
+  `nearbyNotePaths()` (live paths of that vault directly in the same
+  folder, and with the same last segment anywhere, each query up to 500;
+  at most 3 shown), while the access check's
+  own `not found` has none, so another account's id answers exactly
+  `{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}`
+  like a missing id (`account-separation`). The owner-only checks
+  (`requireVaultOwner`, `requireRepositoryOwner`, `requireTeamOwner`)
+  answer that same `NOT_FOUND` for a container the caller cannot reach
+  (a team it is not a member of) and `PERMISSION_REQUIRED` only for one
+  it can see. An ambiguous graph node
+  reference (`resolveGraphNode`) is `AMBIGUOUS` with the node ids; #447
+  turns it into a candidates answer and adds suggestions to graph
+  lookups through the same `McpToolError` extra. `rateLimitedError(ms)`
+  is the `RATE_LIMITED` envelope #440 sends as JSON-RPC `error.data`
+  with HTTP 429 (`routes.ts` unchanged until then). Write statuses stay
+  results: `status: 'retry'` (`write-result.ts`), `merged`,
+  `conflicted`. `test/mcp-errors.test.ts` covers the code families,
+  `retryable`, scoped suggestions and the wrapped SDK refusals.
+- **Budgets and the response envelope** (`response.ts`, #420, #422;
+  ADR-004 §2.1): a tool registered with `budget: 'list' | 'read'`
+  (`browse_vault`, `read_note`, `list_trash`, `note_history`,
+  `get_revision`, `browse_repository`, `read_file`, `find_symbols`,
+  `graph`, `find_graph_path`) gets `budget_tokens` (256-25,000; default
+  2,000 for lists, 4,000 for reads) and `cursor` added to its schema by
+  `tool()`. Its handler returns a `Budgeted` answer, a head of fixed
+  fields plus sections, and `tool()` renders it with `render()` at the one
+  serialisation point:
+  - Sections: `keyset` lists (the handler starts after `Page.after()`,
+    the cursor's path/`ord`/offset; `browse_*` by path in code-unit
+    order, `note_history` by `ord`, `list_trash` by offset), `ranked`
+    lists (the whole ranking recomputed per page, offset plus a guard:
+    `find_symbols`, `graph`, `find_graph_path`, `read_file`'s outline) and
+    `textSection` (a body or file cut at line boundaries; a line longer
+    than a page is split).
+  - `browse_repository` (#424) pages in SQL, not in memory:
+    `listRepositoryFilesPage` (`repositories/store.ts`) reads `BROWSE_PAGE`
+    (500) + 1 files after the cursor's path, `ORDER BY path COLLATE "C"`,
+    and its `path` folder is the `COLLATE "C"` range `folder/` ≤ path <
+    `folder0` (leading/trailing `/` ignored; a file's path lists nothing).
+    The index `repository_files_repo_path_c` (`repository_id`, `path
+    COLLATE "C"`, migration 0029) serves both: the unique
+    `repository_files_repo_path` is in the database collation. Past 500
+    files `truncated.total.files` is `">500"`; `narrow` names the three
+    largest folders one level below `folder` on the page. `path` is in the
+    cursor's fingerprint, so a cursor from another folder is refused. The
+    REST `GET /repositories/:id/files` keeps `listRepositoryFiles`: every
+    file, unordered, no paging.
+  - `browse_vault` (#425) pages in SQL the same way, one code path for
+    the root (the empty folder) and a folder (`notes/store.ts`), reading
+    only the page: `browseNotesPage` reads 500 + 1 live notes after the
+    cursor's path, either directly in the folder (`recursive` false: the
+    note's folder `coalesce(substring(path from '^(.*/)'), '')` equals
+    `folder/`, `''` at the root; index `notes_vault_dir_c_live`) or under
+    it (`recursive: true`: the `COLLATE "C"` range `folder/` ≤ path <
+    `folder0`, the whole vault at the root; index
+    `notes_vault_path_c_live`). One level also lists
+    `browseSubfoldersPage` (section 0) before the notes (section 1): a
+    skip scan of `notes_vault_dir_c_live`, one probe per subfolder from
+    `folder/name0`, so subfolders come in the order of `name/` (`docs-old`
+    before `docs`) and the cursor resumes after a name; each subfolder's
+    note count is one range count of `notes_vault_path_c_live`. A folder
+    (not the root) adds `indexContent` (section 2: its own `index` note,
+    else `renderDirIndex` over `folderIndexRows`, the folder's rows). A
+    page starting past a section does not query it. Items are `{path,
+    title}` (title = `frontmatter->>'title'`, else `name` when missing or
+    empty) unless `fields` picks from `BROWSE_FIELDS` (id, path, title,
+    type, name, tags = `frontmatter->'tags'`, updatedAt; `path` always);
+    never body, frontmatter or embedding. The schema normalises `fields`
+    to allowlist order without repeats, so `path`, `recursive` and the
+    set of `fields` are in the cursor's fingerprint. Both indexes are
+    partial on live rows (migration 0030); the expression in
+    `browseNotesPage`/`browseSubfoldersPage` must match the index's.
+    REST's `listNotes` (tree, audit, export) is unchanged: every note,
+    whole.
+  - Size: `approxTokens` = `ceil(text.length / 4)`, the premise
+    benchmark's estimate (it undercounts a real tokenizer by roughly
+    10-20 % on code and JSON and 1.3-4x on Persian or Chinese text; kept
+    because it is what the benchmark gate measures, ADR-004 §5); the rendered text stays within the budget
+    (items dropped whole from the end, a refill loop accounts for the
+    `truncated` block), except that a text which would show nothing
+    shows its first line (split when longer than the page), so paging
+    always moves on.
+  - Ladder (#421, ADR-004 §2.1): `render()` tries `full`, `no_context`,
+    `locations`, `counts`, `total` in order, one level for the whole
+    answer; a level no list on the page defines is skipped. An item level
+    is kept when the page fits and did not stop inside a list, or the
+    list it stopped in could show `min(MIN_ITEMS = 5, items left)` at
+    that level on a page of its own (so a list crowded out by an earlier
+    section starts the next page instead of stepping down). `counts` is
+    kept when it fits; `total` always is (a head larger than the budget
+    is the one way over it). A section's `ladder` gives its forms:
+    `no_context` and `locations` map an item (a missing form falls back
+    to the level above), `group`/`weight` key `counts`. At `counts` a
+    list is `{group: n}` (keys in code-unit order) and at `total` `n`,
+    over the items from the page start; no item is shown (`shown` 0,
+    everything `dropped`), lists issue no cursor, and text after a
+    counted list is left out (counted); a text before the counted lists
+    that did not fit keeps its cursor (`read_file`'s content beside a
+    counted outline). Text is never laddered. Below
+    `full`, `narrow` starts with `budget_tokens: N`, the budget measured
+    to show `min(5, left)` items of that list at `full` (omitted over
+    25,000), and `truncated` is never `false`.
+  - Forms per tool: `list_trash` notes `{id, path, type, name}` → path →
+    per folder (`folderOf`, `.` at the root); `browse_vault` notes the
+    asked fields without `tags`/`updatedAt` → path → per folder; directory
+    `subdirectories` → name → `{name: notes under it}`;
+    `browse_repository` files `{path, language}` → path → per folder;
+    `note_history` revisions `{id, action, createdAt}` → id → per action;
+    `find_symbols` results without `snippet` → `path#La-Lb` (`location`,
+    ADR-004 §2.2) → per file; `graph`/`find_graph_path` nodes `{id, path,
+    type, community}` (`distance` for `neighborsOf`; community nodes `{id,
+    community, size}`) → `{id, path}` (`{id}`) → per type (`communities`),
+    edges → per kind;
+    `read_file`'s outline → per kind.
+  - `truncated` is always the last key: `false`, or `{shown, total,
+    dropped, level, cursor, narrow}`, counted from the page start
+    (`total` `">n"` from a limit + 1 fetch). A `ranked` section's `limit`
+    bounds the whole ranking (`find_symbols`, `graph`'s nodes): past it
+    there is no cursor (a larger limit shows more), and the page goes on
+    to the next section, so `graph`'s edges among the kept nodes follow.
+  - Cursor: base64url JSON `{v: 1, t: tool, f, k: {s, p}, g?}`. `f` is 16
+    hex of sha256 over the canonical arguments without `cursor`,
+    `budget_tokens` and the id arguments, plus the resolved scope
+    (`argsFingerprint`); `decodeCursor` refuses another tool or other
+    arguments (`invalid cursor`, `CursorError` code `CURSOR_INVALID`).
+    `g` guards text (8 hex of the text's sha256) and rankings (of the ids
+    before the position); a change refuses the cursor (`stale cursor`,
+    `CURSOR_STALE`). The codes wait for the error envelope (#439).
+  - `read_note` records the last read (#864) in `Budgeted.rendered`, on
+    every page: the `rev` it reports, the merge base of a later whole-body
+    edit (#961).
+  - `search` keeps its bare array and has no budget (its envelope waits
+    for #441/#442/#458). `test/mcp-response-envelope.test.ts` drives each
+    tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`
+    each ladder level.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
+  `graph`'s `neighborsOf` uses `neighborhood()` (`graph/neighbors.ts`),
+  which the REST local graph does not use yet (#472); REST graph routes
+  keep their own default (the full graph) and take no `edgeTypes`.
 - **Secret-scan guard** (`test/mcp-secret-scan.test.ts`, #577): CI calls
-  every tool from `tools/list` and every prompt from `prompts/list`
+  every tool from `tools/list`, every prompt from `prompts/list` and reads
+  every resource from `resources/list` (#429)
   against a fixture world seeded with real secrets (git URLs with
   userinfo, a token-only non-GitHub URL, a query-string token, an
   `ssh://user:password@` remote, an explicit git credential, a webhook
@@ -1803,7 +2266,9 @@ stored with no resolved target and produces no graph edge.
 `backfillUnresolvedImports()` runs at boot and re-resolves every stored
 import row whose target is still null with the current rules, so
 repositories indexed before #398 gain their import edges without a
-re-sync (unchanged files are never re-extracted).
+re-sync (unchanged files are never re-extracted). After `listen`, in the
+background, `backfillLinkLines()` (#558) writes wikilink rows without
+lines again from their note's body.
 
 **Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
 **Durable jobs** below), kind `extract`, payload `{fileId,
@@ -1943,7 +2408,7 @@ flips both.
 | The 429 carries `Retry-After` and a JSON-RPC error body | **defect #440**: no header, body `{"error":"rate limit exceeded for this connection"}` | `mcp-rate-limit` (pins today's 429) | the two `rate limit: the 429 ...` checks (known defects) |
 | B's search, graph, `find_symbols`, related-note edges (local graph, backlinks), notifications, perspective listings, vaults, repositories and teams name nothing of A's | holds | `account-separation` | `separation: B's ... names nothing of A's` (six checks) |
 | `lookup_user` returns only `{id, email}` of an active account; deactivated and unknown emails answer alike | holds; any active account is found by exact email (sharing needs the id) | `account-separation` | `separation: B's lookup_user returns A's id and email only` |
-| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
+| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault); MCP's not-found is the same envelope bytes, with no suggestions from A's containers (#439) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
 | Semantic neighbours are chosen within the owner's reach | **defect #461**: the neighbour lookup spans every account; every read filters the stored edges | `account-separation` (inserts such an edge and checks B's reads) | `semantic edges are stored only between notes of the same account` (known defect) |
 | Note text in a prompt sits in a separate, delimited data block, apart from the instructions | **defect #556**: `active_project_companion`, `prepare_task_context`, `test_gap_analysis` (bodies) and `plan_feature_implementation`, `explain_code_architecture` (snippets) put it inside their one user-role instruction message, after a heading and before the prompt's own instructions | `mcp-prompt-note-content` (pins today's placement) | `prompt note text: placed in a separate data block, not inside the instructions` (known defect) |
 

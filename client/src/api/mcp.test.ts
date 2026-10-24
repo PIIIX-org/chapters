@@ -22,7 +22,7 @@ describe('mcp api', () => {
 
     await createMcpConnection(
       { scope: 'vault', vaultId: 'v1' },
-      { name: 'Claude', access: 'read', allowedTools: ['read_note'], expiresAt: '2026-11-15T00:00:00.000Z' },
+      { name: 'Claude', access: 'read', profile: 'reader', allowedTools: ['read_note'], expiresAt: '2026-11-15T00:00:00.000Z' },
     )
 
     expect(fetchMock).toHaveBeenCalledWith('/api/mcp-connections', expect.objectContaining({ method: 'POST' }))
@@ -32,6 +32,7 @@ describe('mcp api', () => {
       scope: 'vault',
       vaultId: 'v1',
       access: 'read',
+      profile: 'reader',
       allowedTools: ['read_note'],
       expiresAt: '2026-11-15T00:00:00.000Z',
     })
@@ -41,10 +42,10 @@ describe('mcp api', () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse(200, { id: 'c1', token: 'raw-token' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await createMcpConnection({ scope: 'account' }, { name: 'Laptop', access: 'admin' })
+    await createMcpConnection({ scope: 'account' }, { name: 'Laptop', access: 'admin', profile: 'admin' })
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(JSON.parse(init.body as string)).toEqual({ name: 'Laptop', scope: 'account', access: 'admin' })
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'Laptop', scope: 'account', access: 'admin', profile: 'admin' })
   })
 
   it('listMcpTools calls GET /api/mcp-connections/tools', async () => {

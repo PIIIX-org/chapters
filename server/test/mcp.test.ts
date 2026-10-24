@@ -389,7 +389,7 @@ describe('MCP integration', () => {
       arguments: { vaultId },
     })
     expect(trashRes.isError).toBeFalsy()
-    const trash = JSON.parse(textOf(trashRes)) as Array<{ id: string; path: string }>
+    const trash = (JSON.parse(textOf(trashRes)) as { notes: Array<{ id: string; path: string }> }).notes
     const trashedNote = trash.find((n) => n.path === 'ideas/quantum-hyperdrive')
     expect(trashedNote).toBeDefined()
 

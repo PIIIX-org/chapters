@@ -39,7 +39,10 @@ const FILE = { A: 'src/a-only.ts', B: 'src/b-only.ts' }
 const CONTAINER_KEYS = ['vaultId', 'repositoryId'] as const
 /** Arguments that address an object inside a container: probed from B's own container. */
 const OBJECT_KEYS = ['noteId', 'revisionId', 'shareId', 'notificationId', 'teamId', 'id'] as const
-const ARGS_REJECTED = /input validation|invalid arguments|-32602/i
+/** A call the SDK refused for its arguments (#439: the error envelope wraps it), before any id was looked up. */
+const ARGS_REJECTED = /^\{"error":\{"code":"INVALID_ARGUMENT","message":"Invalid arguments for tool /
+/** The not-found answer, byte for byte, for an id B cannot reach and for one that does not exist (#439, ADR-004 §2.7). */
+const NOT_FOUND = '{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}'
 
 let seq = 0
 const next = () => `${Date.now().toString(36)}${(seq++).toString(36)}`
@@ -174,7 +177,7 @@ beforeAll(async () => {
   ).id
   await must(acctA, 'create_note', { vaultId: VA, type: 'docs', name: 'a-trashed', body: MARK_A })
   await must(acctA, 'delete_note', { vaultId: VA, path: 'docs/a-trashed' })
-  const trash = await must<Array<{ id: string; path: string }>>(acctA, 'list_trash', { vaultId: VA })
+  const { notes: trash } = await must<{ notes: Array<{ id: string; path: string }> }>(acctA, 'list_trash', { vaultId: VA })
   const { revisions } = await must<{ revisions: Array<{ id: string }> }>(acctA, 'note_history', { vaultId: VA, path: PATH.A })
   await must(acctA, 'share_vault', { vaultId: VA, granteeType: 'user', granteeId: c.id, permission: 'read' })
   const vaultShares = await must<Array<{ id: string }>>(acctA, 'list_vault_shares', { vaultId: VA })
@@ -352,7 +355,7 @@ describe("account separation: B sees nothing of A's (#552)", () => {
   it("A's own views show A's things (the fixtures are real)", async () => {
     expect((await call(acctA, 'search', { query: SHARED, everywhere: true })).text).toContain(fx.noteA)
     expect((await call(acctA, 'find_symbols', { query: SYMBOL_A })).text).toContain(SYMBOL_A)
-    expect((await call(acctA, 'graph', { vaultId: fx.VA })).text).toContain(fx.noteA)
+    expect((await call(acctA, 'graph', { vaultId: fx.VA, aggregate: 'none' })).text).toContain(fx.noteA)
     expect((await call(acctA, 'list_notifications', {})).text).toContain(MARK_A)
     expect((await call(acctA, 'list_graph_perspectives', {})).text).toContain(fx.objects.id[1]!)
     // The cross-account edge is stored: only the read side keeps it from B.
@@ -366,8 +369,10 @@ describe("account separation: B sees nothing of A's (#552)", () => {
       ['search', { query: MARK_A, everywhere: true }],
       ['search', { query: SHARED, vaultId: fx.VB }],
       ['search', { query: SYMBOL_A, repositoryId: fx.RB }],
-      ['graph', { repositoryId: fx.RB }],
-      ['graph', { vaultId: fx.VB }],
+      ['graph', { repositoryId: fx.RB, aggregate: 'none' }],
+      ['graph', { vaultId: fx.VB, aggregate: 'none' }],
+      // The local view reads neighbours in SQL (#426): the stored cross-account semantic edge from B's note stays out.
+      ['graph', { vaultId: fx.VB, neighborsOf: PATH.B, depth: 3 }],
       ['find_symbols', { query: SYMBOL_A }],
       ['find_symbols', { query: SYMBOL_A, everywhere: true }],
       ['list_notifications', {}],
@@ -421,8 +426,23 @@ describe("account separation: B sees nothing of A's (#552)", () => {
     expect(JSON.parse((await call(acctB, 'lookup_user', { email: fx.a.email })).text)).toEqual({ id: fx.a.id, email: fx.a.email })
     const inactive = await call(acctB, 'lookup_user', { email: fx.deactivatedEmail })
     const unknown = await call(acctB, 'lookup_user', { email: `nobody-${next()}@test.local` })
-    expect(inactive).toEqual({ isError: true, text: 'Error: user not found' })
+    expect(inactive).toEqual({ isError: true, text: '{"error":{"code":"NOT_FOUND","message":"user not found","retryable":false}}' })
     expect(unknown).toEqual(inactive)
+  })
+
+  it("A's vault answers B the exact not-found bytes of a missing vault, with no path of A's suggested (#439)", async () => {
+    const typo = 'docs/secret-pln'
+    for (const vaultId of [fx.VA, randomUUID()]) {
+      for (const tool of ['read_note', 'export_note', 'note_history', 'delete_note']) {
+        expect(await call(acctB, tool, { vaultId, path: typo }), `${tool} ${vaultId === fx.VA ? "A's vault" : 'a missing vault'}`).toEqual({
+          isError: true,
+          text: NOT_FOUND,
+        })
+      }
+    }
+    // A reads the vault, so A gets its own path suggested.
+    const own = JSON.parse((await call(acctA, 'read_note', { vaultId: fx.VA, path: typo })).text) as { error: { suggestions?: string[] } }
+    expect(own.error.suggestions).toEqual([PATH.A])
   })
 
   it("every MCP tool answers B the same for A's id as for an id that does not exist", async () => {

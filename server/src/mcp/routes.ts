@@ -44,4 +44,15 @@ export function mcpRoutes(app: FastifyInstance) {
   const options = { bodyLimit: noteTransportLimit() }
   app.post('/mcp', options, handler)
   app.post('/elara/mcp', options, handler)
+
+  // Stateless: no session to end and no GET stream to open, so no
+  // list_changed or other server-sent message (initialize advertises
+  // `listChanged: false`, #436). Streamable HTTP expects 405 for these; the
+  // body is the JSON-RPC error the SDK's own transport sends for them.
+  const notAllowed = async (_req: FastifyRequest, reply: FastifyReply) =>
+    reply
+      .code(405)
+      .header('allow', 'POST')
+      .send({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null })
+  for (const url of ['/mcp', '/elara/mcp']) app.route({ method: ['GET', 'DELETE'], url, handler: notAllowed })
 }

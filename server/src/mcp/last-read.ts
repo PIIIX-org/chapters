@@ -58,3 +58,4 @@ export async function lastRead(connectionId: string, noteId: string): Promise<{ 
     .where(and(eq(noteReads.connectionId, connectionId), eq(noteReads.noteId, noteId), inWindow))
   return row
 }
+

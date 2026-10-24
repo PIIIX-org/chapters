@@ -113,6 +113,32 @@ test('elara: a response past perCallChars only shows the lines that fit', async 
   assert.equal(run.episode.tokensToGold, null)
 })
 
+test('elara: a paged read_file follows the cursor page by page and stops once the gold is seen', async () => {
+  // 100 lines served ~30 per page, line 60 split across pages 2 and 3, as the server's budget does with an overlong line.
+  const lines = Array.from({ length: 100 }, (_, i) => `p line ${i + 1}\n`)
+  const pages = [lines.slice(0, 30).join(''), lines.slice(30, 59).join('') + 'p line', lines.slice(59, 90).join('').slice('p line'.length), lines.slice(90).join('')]
+  const firsts = [1, 31, 60, 91]
+  const calls: string[] = []
+  const tools: ElaraTools = {
+    async search() {
+      return { text: JSON.stringify([{ resourceType: 'code', path: 'paged.ts', snippet: '' }]), ms: 1, ok: true }
+    },
+    async readFile(path, cursor) {
+      calls.push(`read_file ${path} ${cursor ?? '-'}`)
+      const n = cursor === undefined ? 0 : Number(cursor)
+      const truncated = n === pages.length - 1 ? false : { shown: {}, total: {}, dropped: {}, level: 'full', cursor: String(n + 1), narrow: [] }
+      return { text: JSON.stringify({ path, language: null, lines: [firsts[n], 0], content: pages[n], symbols: [], truncated }), ms: 1, ok: true }
+    },
+  }
+  assert.equal(pages.join(''), lines.join(''))
+  const run = await runElara('q', [{ path: 'paged.ts', start: 60, end: 62 }], tools)
+  assert.deepEqual(calls, ['read_file paged.ts -', 'read_file paged.ts 1', 'read_file paged.ts 2'])
+  assert.equal(run.episode.callsToGold, 4)
+  // Lines 1-90 were completed in context; line 60 counts on page 3, where its end was shown.
+  assert.equal(run.episode.seen.size, 90)
+  assert.deepEqual(run.episode.trace.slice(1).map((t) => t.tool), ['read_file', 'read_file', 'read_file'])
+})
+
 test('visibleContentLines counts JSON-escaped characters', () => {
   const content = 'a"b\nline2\nline3'
   const response = JSON.stringify({ path: 'p', content })

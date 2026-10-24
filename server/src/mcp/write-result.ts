@@ -18,14 +18,30 @@
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { and, eq, getTableColumns, sql } from 'drizzle-orm'
+import { z } from 'zod'
 import { db } from '../db/client.js'
 import { notes, writeIdempotency } from '../db/schema.js'
 import { withKeyLock } from '../notes/key-lock.js'
+import { NOTE_REPLY_FIELDS, noteReply } from '../notes/reply-fields.js'
 import { noteIndexed, type RecordKey, type WrittenNote } from '../notes/store.js'
 import { StoreBusyError } from '../notes/store-tx.js'
 import { diffLines } from '../sync/text-diff.js'
 
 export type WriteStatus = 'applied' | 'merged' | 'conflicted' | 'retry'
+
+/**
+ * The `outputSchema` every write tool lists (#433): the fields every write
+ * answer has, whatever its status (a dry run, a replay, a `retry`, a
+ * `conflicted` edit and delete_note's answer included). Other keys are
+ * allowed, so the SDK's check of a successful answer, which runs after the
+ * write committed, never turns one into an error; they are documented in
+ * mcp-tools.md. Kept this small because tools/list repeats it per tool.
+ */
+export const WRITE_RESULT_SCHEMA = z.looseObject({
+  rev: z.number().nullable(),
+  status: z.enum(['applied', 'merged', 'conflicted', 'retry'] satisfies WriteStatus[]),
+  indexed: z.boolean(),
+})
 
 export interface DiffStats {
   lines_added: number
@@ -66,16 +82,9 @@ export interface WriteHow {
   dryRun?: boolean
 }
 
-/**
- * The note fields a write answers (#427): what an agent needs of the note it
- * wrote. The row's other columns (`embedding`, `deletedAt`, bookkeeping) stay
- * internal: the embedding alone was 93% of an edit_note answer.
- */
-export const ANSWER_NOTE_FIELDS = ['id', 'vaultId', 'type', 'name', 'path', 'frontmatter', 'body', 'createdAt', 'updatedAt'] as const
-
 /** Note columns a write never answers; a stored answer recorded before #427 may hold them. */
 const INTERNAL_NOTE_FIELDS = [
-  ...Object.keys(getTableColumns(notes)).filter((key) => !(ANSWER_NOTE_FIELDS as readonly string[]).includes(key)),
+  ...Object.keys(getTableColumns(notes)).filter((key) => !(NOTE_REPLY_FIELDS as readonly string[]).includes(key)),
   'frontmatterSrc',
   'seq',
 ]
@@ -88,19 +97,17 @@ function storedAnswer(result: unknown): Record<string, unknown> {
 }
 
 /**
- * The answer of a write to note `row` (#477): the note's ANSWER_NOTE_FIELDS,
- * then `rev` (the row's `seq`), `status`, `diff_stats`,
+ * The answer of a write to note `row` (#477): noteReply (the note's
+ * NOTE_REPLY_FIELDS and `rev`, the row's `seq`), then `status`, `diff_stats`,
  * `concurrent_changes` and `indexed`. A dry run answers `dry_run: true` and
  * the `rev` the note still has. Synchronous, so the answer can be recorded
  * with an idempotency key inside the write's transaction (runWrite), where
  * `indexed` is false: nothing is projected before the commit.
  */
 export function writeAnswer(row: { id: string; seq: number } & Record<string, unknown>, how: WriteHow, indexed: boolean): Record<string, unknown> {
-  const fields = Object.fromEntries(ANSWER_NOTE_FIELDS.filter((key) => key in row).map((key) => [key, row[key]]))
   const after = how.after ?? { frontmatter: row.frontmatter as Record<string, unknown>, body: String(row.body ?? '') }
   return {
-    ...fields,
-    rev: row.seq,
+    ...noteReply(row),
     status: how.status,
     diff_stats: how.before ? diffStats(how.before, after) : null,
     concurrent_changes: how.concurrent ?? null,

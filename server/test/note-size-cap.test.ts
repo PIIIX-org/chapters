@@ -21,10 +21,11 @@ import { createNote, getLiveNote, readNote, updateNote } from '../src/notes/stor
 import { flushProjections } from '../src/notes/projector.js'
 import { NoteTooLargeError } from '../src/notes/size-cap.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
+import { restBytes } from '../src/sync/collab-size.js'
 import { db } from '../src/db/client.js'
 import { noteRevisions } from '../src/db/schema.js'
 import { and, eq } from 'drizzle-orm'
-import { createActiveUser, loginCookie, loginToken, noteDocName, storedCrdtText } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName, storedCrdtDoc, storedCrdtText } from './helpers.js'
 
 /** The default cap: 1 MiB of UTF-8. */
 const CAP = 1024 * 1024
@@ -113,6 +114,19 @@ async function mcpClient(): Promise<Client> {
 function textOf(result: Awaited<ReturnType<Client['callTool']>>): string {
   const content = result.content as Array<{ type: string; text?: string }>
   return content[0]?.text ?? ''
+}
+
+/** A note's whole body over MCP: read_note pages a long one (#420). */
+async function mcpBody(client: Client, args: Record<string, unknown>): Promise<string> {
+  let body = ''
+  let cursor: string | null = null
+  for (;;) {
+    const read = await client.callTool({ name: 'read_note', arguments: { ...args, budget_tokens: 25_000, ...(cursor ? { cursor } : {}) } })
+    const page = JSON.parse(textOf(read)) as { body: string; truncated: false | { cursor: string | null } }
+    body += page.body
+    cursor = page.truncated === false ? null : page.truncated.cursor
+    if (cursor === null) return body
+  }
 }
 
 beforeAll(async () => {
@@ -223,6 +237,38 @@ describe('note body size cap (#491)', () => {
     expect(await readNote(result.vaultId, 'docs/too-big')).toBeNull()
   })
 
+  // #948: the editor resumes under the relay's rule (a part fits the cap or is no larger than the relay holds), so the relay says what it holds.
+  it('collab tells a refused editor the sizes of the document it holds, before it closes', async () => {
+    await newNote('collab-sizes', 'sized start')
+    const events: Array<{ close: string } | { sizes: Record<string, unknown> }> = []
+    const provider = new HocuspocusProvider({
+      url: collabUrl,
+      name: await noteDocName(vaultId, 'docs/collab-sizes'),
+      token: ownerToken,
+      document: new Y.Doc(),
+      onClose: ({ event }) => events.push({ close: event.reason }),
+      onStateless: ({ payload }) => {
+        const message = JSON.parse(payload) as Record<string, unknown>
+        if (message.type === 'elara-size') events.push({ sizes: message })
+      },
+    })
+    providers.push(provider)
+    await waitFor(() => provider.isSynced)
+    provider.document.getMap('frontmatter').set('title', 'Sized')
+    await waitFor(() => collab.hocuspocus.documents.get(provider.configuration.name)?.getMap('frontmatter').get('title') === 'Sized')
+    const serverDoc = collab.hocuspocus.documents.get(provider.configuration.name)!
+    const otherBytes = restBytes(serverDoc)
+
+    provider.document.getText('body').insert(0, bodyOfBytes(CAP))
+    await waitFor(() => events.some((e) => 'close' in e && e.close === 'note-too-large'))
+    const closeAt = events.findIndex((e) => 'close' in e)
+    const sizesAt = events.findIndex((e) => 'sizes' in e)
+    expect(sizesAt).toBeGreaterThanOrEqual(0)
+    expect(sizesAt).toBeLessThan(closeAt)
+    expect(events[sizesAt]).toEqual({ sizes: { type: 'elara-size', limitBytes: CAP, bodyBytes: Buffer.byteLength('sized start'), otherBytes } })
+    provider.destroy()
+  })
+
   it('collab refuses an update that would push the body over the cap, and never stores it', async () => {
     await newNote('collab-over', 'small start')
     const closes: Closed[] = []
@@ -259,6 +305,47 @@ describe('note body size cap (#491)', () => {
     expect(await storedCrdtText(vaultId, 'docs/collab-frame')).toBe('frame start')
   })
 
+  // #780: the relay bounded the body only; frontmatter and other document content reached the row, the file and the CRDT log.
+  it('collab refuses frontmatter that would pass the cap before it is applied, and never stores it', async () => {
+    await newNote('collab-fm-over', 'fm start')
+    const closes: Closed[] = []
+    const provider = await connect('docs/collab-fm-over', closes)
+    await waitFor(() => provider.isSynced)
+    const serverDoc = () => collab.hocuspocus.documents.get(provider.configuration.name)
+    const refused = () => closes.some((c) => c.reason === 'note-too-large')
+
+    provider.document.getMap('frontmatter').set('huge', `FM-MARKER ${'f'.repeat(CAP)}`)
+    await waitFor(() => refused() || serverDoc()?.getMap('frontmatter').has('huge') === true)
+    expect(refused()).toBe(true)
+    expect(serverDoc()?.getMap('frontmatter').has('huge') ?? false).toBe(false)
+    await storeSettled('docs/collab-fm-over')
+
+    const rest = await app.inject({ method: 'GET', url: `/api/vaults/${vaultId}/notes/docs/collab-fm-over`, headers: { cookie: ownerCookie } })
+    expect((rest.json() as { frontmatter: Record<string, unknown> }).frontmatter).not.toHaveProperty('huge')
+    await flushProjections()
+    const file = await readFile(join(config.dataDir, 'vaults', vaultId, 'docs', 'collab-fm-over.md'), 'utf8')
+    expect(file).not.toContain('FM-MARKER')
+    expect((await storedCrdtDoc(vaultId, 'docs/collab-fm-over')).getMap('frontmatter').has('huge')).toBe(false)
+    provider.destroy()
+  })
+
+  it('collab refuses other document content past the cap, which is never stored to the note but was kept in its CRDT log', async () => {
+    await newNote('collab-junk', 'junk start')
+    const closes: Closed[] = []
+    const provider = await connect('docs/collab-junk', closes)
+    await waitFor(() => provider.isSynced)
+    const refused = () => closes.some((c) => c.reason === 'note-too-large')
+    const serverDoc = () => collab.hocuspocus.documents.get(provider.configuration.name)
+
+    provider.document.getMap('junk').set('k', `JUNK-MARKER ${'j'.repeat(CAP)}`)
+    await waitFor(() => refused() || serverDoc()?.getMap('junk').has('k') === true)
+    expect(refused()).toBe(true)
+    await storeSettled('docs/collab-junk')
+    expect((await storedCrdtDoc(vaultId, 'docs/collab-junk')).getMap('junk').has('k')).toBe(false)
+    expect(await restBody('docs/collab-junk')).toBe('junk start')
+    provider.destroy()
+  })
+
   it('a note of exactly the cap round-trips: collab stores it, an agent reads and edits it, the editor sees the edit', async () => {
     await newNote('collab-fits', 'tiny')
     const closes: Closed[] = []
@@ -275,8 +362,7 @@ describe('note body size cap (#491)', () => {
     expect(closes).toEqual([])
 
     const client = await mcpClient()
-    const read = await client.callTool({ name: 'read_note', arguments: { vaultId, path: 'docs/collab-fits' } })
-    expect((JSON.parse(textOf(read)) as { body: string }).body).toBe(full)
+    expect(await mcpBody(client, { vaultId, path: 'docs/collab-fits' })).toBe(full)
     // Same size: the last line swapped for the agent's own.
     const edited = `${full.slice(0, full.length - 20)}appended by agent!!!`
     expect(Buffer.byteLength(edited)).toBe(CAP)

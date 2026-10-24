@@ -3,7 +3,7 @@ import { basename, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import * as Y from 'yjs'
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, lt, ne, notInArray, notLike, or, sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '../db/schema.js'
 import { recordJob } from '../monitoring/metrics.js'
@@ -51,7 +51,7 @@ import {
   splitPath,
 } from './okf/paths.js'
 import { withKeyLock, withKeyLocks } from './key-lock.js'
-import { assertBodyFits, NoteTooLargeError } from './size-cap.js'
+import { assertBodyFits, assertFrontmatterFits, NoteTooLargeError } from './size-cap.js'
 import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from './growth-guard.js'
 import { orderKeys, presentedFrontmatter, sameContent } from './frontmatter-order.js'
 import {
@@ -95,7 +95,7 @@ const SYSTEM_ACTOR: Actor = { type: 'collab' }
 /** createNote found a live note at the path (the unique index decided, #478). */
 class NoteExistsError extends OkfValidationError {
   constructor(path: string) {
-    super(`a note already exists at ${path}`)
+    super(`a note already exists at ${path}`, 'exists')
   }
 }
 
@@ -403,6 +403,7 @@ function refusal(row: NoteRow, state: DocState): string | null {
   try {
     validateNote(row.type, row.name, { ...state.frontmatter, type: row.type } as Frontmatter, state.body)
     assertBodyFits(state.body, row.body)
+    assertFrontmatterFits(state.frontmatter, row.frontmatter as Record<string, unknown>)
   } catch (err) {
     return err instanceof Error ? err.message : String(err)
   }
@@ -579,6 +580,7 @@ function newNoteState(input: NewNote, asImported = false): { resolved: ResolvedN
   const body = input.body ?? ''
   validateNote(resolved.type, resolved.name, frontmatter, body)
   assertBodyFits(body)
+  assertFrontmatterFits(frontmatter)
   return { resolved, frontmatter, body }
 }
 
@@ -669,6 +671,39 @@ export async function getLiveNote(vaultId: string, path: string): Promise<NoteRo
     .from(notes)
     .where(and(eq(notes.vaultId, vaultId), eq(notes.path, resolved.fullPath), isNull(notes.deletedAt)))
   return rows[0] ?? null
+}
+
+/** Live notes fetched per query as candidates for a not-found path's suggestions (#439). */
+const NEARBY_CANDIDATES = 500
+
+/**
+ * Candidates for "did you mean" when no live note is at `path` (#439): the
+ * live notes directly in the same folder (the vault root for a root path;
+ * not its subfolders, so a large subtree cannot crowd the siblings out),
+ * and live notes with the same last segment in any folder, each up to
+ * NEARBY_CANDIDATES. The caller ranks them (errors.ts `closest`) and must
+ * have checked the caller can read the vault. A path that does not
+ * resolve has none.
+ */
+export async function nearbyNotePaths(vaultId: string, path: string): Promise<string[]> {
+  let resolved: ResolvedNotePath
+  try {
+    resolved = resolveNotePath(path)
+  } catch {
+    return []
+  }
+  const literal = (text: string) => text.replace(/[\\%_]/g, '\\$&')
+  const live = and(eq(notes.vaultId, vaultId), isNull(notes.deletedAt))
+  const inFolder = resolved.directory
+    ? and(like(notes.path, `${literal(resolved.directory)}/%`), notLike(notes.path, `${literal(resolved.directory)}/%/%`))
+    : sql`strpos(${notes.path}, '/') = 0`
+  const sameName = or(eq(notes.path, resolved.baseName), like(notes.path, `%/${literal(resolved.baseName)}`))
+  const [siblings, namesakes] = await Promise.all(
+    [inFolder, sameName].map((where) =>
+      db.select({ path: notes.path }).from(notes).where(and(live, where)).orderBy(notes.path).limit(NEARBY_CANDIDATES),
+    ),
+  )
+  return [...siblings!, ...namesakes!].map((row) => row.path)
 }
 
 /** A note as a read serves it: the row (with `seq`, its `rev`) and the frontmatter in the key order of its file. */
@@ -872,6 +907,7 @@ export async function writeNote(
         try {
           const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
           const next = await compute(current, plainRow(seen))
+          assertFrontmatterFits({ ...next.frontmatter, type: seen.type }, seen.frontmatter as Record<string, unknown>)
           if (options.outcome) options.outcome.before = current
           return { ...plainRow(seen), frontmatter: { ...next.frontmatter, type: seen.type }, body: next.body }
         } finally {
@@ -891,6 +927,8 @@ export async function writeNote(
           const { row, refused } = await catchUp(tx, locked, crdt, fold, { storeRow: !options.relay })
           const current = crdt ? docState(crdt.doc) : { frontmatter: row.frontmatter as Record<string, unknown>, body: row.body }
           const next = await compute(current, plainRow(row))
+          // Every write path's frontmatter, merged or whole, against the stored one (#933), before anything is written.
+          assertFrontmatterFits({ ...next.frontmatter, type: row.type }, row.frontmatter as Record<string, unknown>)
           if (options.outcome) options.outcome.before = current
           const { row: written } = await applyRowChange(
             tx,
@@ -955,6 +993,7 @@ export async function updateNote(
       validateNote(row.type, row.name, frontmatter, body)
       // The size cap first: an over-cap body is refused, never kept as a quarantine revision (#491).
       assertBodyFits(body, row.body)
+      assertFrontmatterFits(frontmatter, row.frontmatter as Record<string, unknown>)
       if (options.quarantine) {
         await refuseSuspiciousWrite(row, { frontmatter: edit.frontmatter, body }, actor, options.quarantine, options.episode)
       }
@@ -1135,7 +1174,7 @@ async function moveNote(
   const seen = await readStored(vaultId, fromResolved.fullPath)
   if (!seen) return null
   if (toResolved.fullPath !== fromResolved.fullPath && (await getLiveNote(vaultId, toResolved.fullPath))) {
-    throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
+    throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`, 'exists')
   }
   const isMoving = fromResolved.fullPath !== toResolved.fullPath
   const fold = foldSource(seen.id)
@@ -1155,6 +1194,7 @@ async function moveNote(
       // body (the note's own, then each referrer's) is checked before anything is
       // written, so a refused rename leaves the vault as it was.
       assertBodyFits(newBody, row.body, `${renaming} rewrites its own links`)
+      assertFrontmatterFits(newFrontmatter, row.frontmatter as Record<string, unknown>)
       const referrers = isMoving ? await linkReferrers(tx, vaultId, row.id, fromResolved.fullPath) : []
       for (const referrer of referrers) {
         const rewritten = refactorWikilinks(referrer.body, fromResolved.fullPath, toResolved.fullPath)
@@ -1188,7 +1228,7 @@ async function moveNote(
       return { updated, referrers: referrers.map((r) => r.id), job, update, rebased }
     })
   } catch (err) {
-    if (isUniqueViolation(err)) throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`)
+    if (isUniqueViolation(err)) throw new OkfValidationError(`a note already exists at ${toResolved.fullPath}`, 'exists')
     throw err
   } finally {
     releaseFold(fold)
@@ -1291,7 +1331,7 @@ export async function restoreNote(
 ): Promise<WrittenNote | null> {
   return withTrashedNote(vaultId, noteId, async (seen) => {
     if (await getLiveNote(vaultId, seen.path)) {
-      throw new OkfValidationError(`a live note already exists at ${seen.path}`)
+      throw new OkfValidationError(`a live note already exists at ${seen.path}`, 'exists')
     }
     let restored: StoredNote | null
     try {
@@ -1303,7 +1343,7 @@ export async function restoreNote(
         return restored
       })
     } catch (err) {
-      if (isUniqueViolation(err)) throw new OkfValidationError(`a live note already exists at ${seen.path}`)
+      if (isUniqueViolation(err)) throw new OkfValidationError(`a live note already exists at ${seen.path}`, 'exists')
       throw err
     }
     if (!restored) return null
@@ -1327,6 +1367,120 @@ export async function listNotes(vaultId: string): Promise<
     .from(notes)
     .where(and(eq(notes.vaultId, vaultId), isNull(notes.deletedAt)))
     .orderBy(asc(notes.path))
+}
+
+/** The note fields `browse_vault` can return (#425), in the order it shows them: never the body, the whole frontmatter or the embedding. */
+export const BROWSE_FIELDS = ['id', 'path', 'title', 'type', 'name', 'tags', 'updatedAt'] as const
+export type BrowseField = (typeof BROWSE_FIELDS)[number]
+
+/** A note as `browse_vault` lists it (#425): its title is `frontmatter.title` (an empty one too: its name); never the body or the embedding. */
+export interface BrowsedNote {
+  id: string
+  path: string
+  title: string
+  type: string
+  name: string
+  tags: unknown
+  updatedAt: Date
+}
+
+const browsedNote = {
+  id: notes.id,
+  path: notes.path,
+  title: sql<string>`coalesce(nullif(${notes.frontmatter}->>'title', ''), ${notes.name})`,
+  type: notes.type,
+  name: notes.name,
+  tags: sql<unknown>`${notes.frontmatter}->'tags'`,
+  updatedAt: notes.updatedAt,
+}
+
+/** A path in code-unit order, as `notes_vault_path_c_live` (migration 0030) holds it. */
+const pathC = sql`${notes.path} collate "C"`
+
+/**
+ * The folder a note is in with its trailing '/' ('' at the root), as
+ * `notes_vault_dir_c_live` (migration 0030) holds it: the expression must
+ * stay as written there, with the pattern inline, for the index to serve it.
+ */
+const dirC = sql`coalesce(substring(${notes.path} from '^(.*/)'), '') collate "C"`
+
+const live = (vaultId: string) => sql`${notes.vaultId} = ${vaultId} and ${notes.deletedAt} is null`
+
+/** The folder's path with its trailing '/' ('' at the root), and what every path under it sorts below (none at the root): '0' is the code unit after '/'. */
+const folderRange = (folder: string) => ({ prefix: folder ? `${folder}/` : '', below: folder ? `${folder}0` : null })
+
+/**
+ * One page of `browse_vault`'s notes (#425), in path order by code unit,
+ * whose path sorts after `after`, at most `limit`: the notes directly in
+ * `folder` (`''`: the root), one range of `notes_vault_dir_c_live`, or with
+ * `recursive` every note under it, one range of `notes_vault_path_c_live`
+ * (`folder/` ≤ path < `folder0`, no LIKE escaping). REST's `listNotes`
+ * (tree, audit, export) stays whole.
+ */
+export async function browseNotesPage(
+  vaultId: string,
+  opts: { folder: string; recursive: boolean; after: string | null; limit: number },
+): Promise<BrowsedNote[]> {
+  const { prefix, below } = folderRange(opts.folder)
+  const where: SQL[] = [live(vaultId)]
+  if (!opts.recursive) where.push(sql`${dirC} = ${prefix}`)
+  else if (below !== null) where.push(sql`${pathC} >= ${prefix}`, sql`${pathC} < ${below}`)
+  if (opts.after !== null) where.push(sql`${pathC} > ${opts.after}`)
+  return db.select(browsedNote).from(notes).where(and(...where)).orderBy(pathC).limit(opts.limit)
+}
+
+/**
+ * One page of the subfolders directly in `folder` (`''`: the root) for
+ * `browse_vault` (#425), after the subfolder `after`, at most `limit`, each
+ * with the number of live notes under it (at any depth). They come in the
+ * order of their paths with the trailing '/' (`docs-old/` before `docs/`),
+ * which is the order of `notes_vault_dir_c_live`: each subfolder is one probe
+ * of that index from the end of the one before (a skip scan), and its count
+ * one range of `notes_vault_path_c_live`. Neither the notes directly in
+ * `folder` nor the subfolders past the page are read.
+ */
+export async function browseSubfoldersPage(
+  vaultId: string,
+  opts: { folder: string; after: string | null; limit: number },
+): Promise<Array<{ name: string; count: number }>> {
+  const { prefix, below } = folderRange(opts.folder)
+  const inFolder = below === null ? sql`` : sql` and ${dirC} < ${below}`
+  // A subfolder's name is the first segment of a folder below `prefix`; the next one starts at or after `prefix` + name + '0'.
+  const nameOf = (d: SQL) => sql`split_part(substr(${d}, char_length(${prefix}::text) + 1), '/', 1)`
+  const first = opts.after === null ? sql`${dirC} > ${prefix}` : sql`${dirC} >= ${`${prefix}${opts.after}0`}`
+  const rows = (await db.execute(sql`
+    WITH RECURSIVE sub(d) AS (
+      (SELECT ${dirC} FROM ${notes} WHERE ${live(vaultId)} AND ${first}${inFolder} ORDER BY ${dirC} LIMIT 1)
+      UNION ALL
+      SELECT (
+        SELECT ${dirC} FROM ${notes}
+        WHERE ${live(vaultId)} AND ${dirC} >= ${prefix}::text || ${nameOf(sql`sub.d`)} || '0'${inFolder}
+        ORDER BY ${dirC} LIMIT 1
+      ) FROM sub WHERE sub.d IS NOT NULL
+    )
+    SELECT page.name, (
+      SELECT count(*)::int FROM ${notes}
+      WHERE ${live(vaultId)} AND ${pathC} >= ${prefix}::text || page.name || '/' AND ${pathC} < ${prefix}::text || page.name || '0'
+    ) AS count
+    FROM (SELECT ${nameOf(sql`d`)} AS name FROM sub WHERE d IS NOT NULL LIMIT ${opts.limit}) AS page`)) as unknown as Array<{
+    name: string
+    count: number
+  }>
+  return rows.map(({ name, count }) => ({ name, count }))
+}
+
+/** The live notes under `folder` with what `renderDirIndex` reads, for `browse_vault`'s generated `indexContent` (#425). */
+export async function folderIndexRows(
+  vaultId: string,
+  folder: string,
+): Promise<Array<{ path: string; type: string; frontmatter: Record<string, unknown> }>> {
+  const { prefix, below } = folderRange(folder)
+  const where: SQL[] = [live(vaultId)]
+  if (below !== null) where.push(sql`${pathC} >= ${prefix}`, sql`${pathC} < ${below}`)
+  return db
+    .select({ path: notes.path, type: notes.type, frontmatter: sql<Record<string, unknown>>`${notes.frontmatter}` })
+    .from(notes)
+    .where(and(...where))
 }
 
 export async function listTrash(
@@ -1419,8 +1573,9 @@ export interface RevisionPosition {
  * the bodies are never read (`octet_length` takes the size from the stored
  * value's header; a compacted revision's size is its `body_bytes`, #501).
  * Keyset-paged on `ord` after `before`, so a revision
- * recorded while a caller pages does not shift the pages. `next` is
- * the position to continue from, or null on the last page. Null when the note
+ * recorded while a caller pages does not shift the pages. `ords` are the
+ * revisions' positions (a page can stop after any of them), `next` the
+ * position to continue from, or null on the last page. Null when the note
  * does not exist. Edit/owner only — enforced by callers.
  */
 export async function listRevisionPage(
@@ -1428,7 +1583,7 @@ export async function listRevisionPage(
   path: string,
   limit: number,
   before?: RevisionPosition,
-): Promise<{ revisions: RevisionSummary[]; next: RevisionPosition | null } | null> {
+): Promise<{ revisions: RevisionSummary[]; ords: number[]; next: RevisionPosition | null } | null> {
   const row = await getLiveNote(vaultId, path)
   if (!row) return null
   const rows = await db
@@ -1460,6 +1615,7 @@ export async function listRevisionPage(
         ...eventDetail(r),
       })),
     ),
+    ords: page.map((r) => r.ord),
     next: rows.length > limit && last ? { ord: last.ord } : null,
   }
 }
@@ -2003,14 +2159,15 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
  * same transaction when it has none; a row changed behind the store is
  * rebased into it and folded first, and so is a tail left unfolded. Never
  * reads a file or a `.crdt` bin, and never rebuilds the text (#488).
- * Returns the state to apply to the document, the note's path, and the last
+ * Returns the state to apply to the document, the note's path, the last
  * update id that state includes (null while `fold_error` is set: the open
- * document then caches nothing, see note-crdt.ts readNoteCrdt).
+ * document then caches nothing, see note-crdt.ts readNoteCrdt), and that
+ * `fold_error` (the relay tells the editors of a quarantine it names, #784).
  */
 export async function loadCollabState(
   vaultId: string,
   noteId: string,
-): Promise<{ state: Uint8Array; path: string; lastId: number | null }> {
+): Promise<{ state: Uint8Array; path: string; lastId: number | null; foldError: string | null }> {
   for (let round = 0; round < WRITE_ROUNDS; round++) {
     const [note] = await db
       .select({ path: notes.path })
@@ -2027,11 +2184,11 @@ export async function loadCollabState(
         if (stored) {
           const { row } = await catchUp(tx, locked, stored, null, { storeRow: true })
           if (row.seq !== locked.seq) foldedRow = true
-          return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null }
+          return { state: Y.encodeStateAsUpdate(stored.doc), lastId: stored.foldError === null ? stored.lastId : null, foldError: stored.foldError }
         }
         const seed = seedDocument(noteId, { frontmatter: locked.frontmatter as Record<string, unknown>, body: locked.body })
         await insertNoteCrdt(tx, noteId, seed, locked.seq)
-        return { state: Y.encodeStateAsUpdate(seed), lastId: 0 }
+        return { state: Y.encodeStateAsUpdate(seed), lastId: 0, foldError: null }
       }),
     )
     // A fold that stored the row wakes the projector, so the file follows at once, not at its next poll.

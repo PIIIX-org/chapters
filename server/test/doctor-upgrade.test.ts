@@ -73,7 +73,7 @@ describe('doctor right after the upgrade (#908)', () => {
 
     const report = await doctor()
     expect(report.problems.map((p) => [p.class, p.path, p.repairable])).toEqual([['links-differ', 'upgrade/linked', true]])
-    expect(report.problems[0]!.detail).toBe('missing [], extra [repo:chapters/server]')
+    expect(report.problems[0]!.detail).toBe('missing [], extra [repo:chapters/server (no line)]')
     expect(report.info).toEqual([
       expect.objectContaining({ kind: 'migration-copy', vaultId, path: copy, detail: expect.stringMatching(/\.migration\/\d{4}-\d{2}-\d{2}\/unparseable\/upgrade\/garbled\.md/) }),
     ])

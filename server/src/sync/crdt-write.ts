@@ -13,7 +13,7 @@ import {
   type WrittenNote,
 } from '../notes/store.js'
 import { NoteWriteWouldQuarantineError, suspiciousWrite, type QuarantineRules } from '../notes/growth-guard.js'
-import { assertBodyFits } from '../notes/size-cap.js'
+import { assertBodyFits, assertFrontmatterFits } from '../notes/size-cap.js'
 import { OkfValidationError, validateNote, type Frontmatter } from '../notes/okf.js'
 
 /** Where an edit and the changes made since its base revision meet (#475): body lines and frontmatter keys. */
@@ -190,9 +190,11 @@ async function propose(
   let body = base.body
   if (typeof edit.body === 'string') body = edit.body
   else if (ops.some((op) => !isFrontmatterOp(op))) body = applyBodyOps(liveBody, ops, note.body)
-  if (dryRun) throw new NoteEditConflictError(note.path, null, conflicts)
   const wanted = nextFrontmatter(base.frontmatter, { ...edit, ops: undefined }, note.type) ?? base.frontmatter
   const proposal = { frontmatter: { ...applyFrontmatterOps(wanted, ops), type: note.type }, body }
+  // A proposal revision is stored whole: its frontmatter is bounded like the note's (#933).
+  assertFrontmatterFits(proposal.frontmatter, note.frontmatter as Record<string, unknown>)
+  if (dryRun) throw new NoteEditConflictError(note.path, null, conflicts)
   throw new NoteEditConflictError(note.path, await recordProposal(note.id, proposal, actor, base.id), conflicts)
 }
 
@@ -280,6 +282,12 @@ export async function writeThroughCollab(
         body = input.body
         screened = true
       }
+      const frontmatter = (rebased ? rebased.frontmatter : nextFrontmatter(current.frontmatter, input, existing.type)) ?? {
+        ...current.frontmatter,
+        type: existing.type,
+      }
+      // Before any revision is written, a quarantine one included (#933).
+      assertFrontmatterFits(frontmatter, existing.frontmatter as Record<string, unknown>)
       if (screened) {
         // Before anything is written: a refused body must never reach the editors (#491, #492).
         assertBodyFits(body, existing.body)
@@ -292,10 +300,6 @@ export async function writeThroughCollab(
             await refuseSuspiciousWrite(existing, next, actor, options.quarantine)
           }
         }
-      }
-      const frontmatter = (rebased ? rebased.frontmatter : nextFrontmatter(current.frontmatter, input, existing.type)) ?? {
-        ...current.frontmatter,
-        type: existing.type,
       }
       try {
         validateNote(existing.type, existing.name, frontmatter, body)
@@ -342,5 +346,7 @@ function explainInheritedKeys(
   const keys = culprits.map((key) => `"${key}"`).join(', ')
   return new OkfValidationError(
     `${err.message} (frontmatter ${keys} is already on the note, not in this edit; send a valid value, list it in \`removeKeys\`, or pass \`replace: true\` with the whole map)`,
+    err.refusal,
+    err.rule,
   )
 }

@@ -13,7 +13,7 @@ describe('isSupportedLanguage', () => {
 })
 
 describe('extractStructure', () => {
-  it('extracts TypeScript imports and top-level symbols with 1-indexed lines', async () => {
+  it('extracts TypeScript imports with their lines and top-level symbols with 1-indexed lines', async () => {
     const src = [
       "import { x } from './a'",
       "import y from '../b'",
@@ -26,7 +26,11 @@ describe('extractStructure', () => {
       '',
     ].join('\n')
     const result = await extractStructure('typescript', src)
-    expect(result.imports.sort()).toEqual(['../b', './a'])
+    // In document order, each with the line of its specifier (#558).
+    expect(result.imports).toEqual([
+      { target: './a', line: 1 },
+      { target: '../b', line: 2 },
+    ])
     expect(result.symbols).toEqual(
       expect.arrayContaining([
         { name: 'foo', kind: 'function', startLine: 4, endLine: 6 },
@@ -48,7 +52,10 @@ describe('extractStructure', () => {
       '',
     ].join('\n')
     const result = await extractStructure('javascript', src)
-    expect(result.imports.sort()).toEqual(['../b', './a'])
+    expect(result.imports).toEqual([
+      { target: './a', line: 1 },
+      { target: '../b', line: 2 },
+    ])
     expect(result.symbols).toEqual(
       expect.arrayContaining([
         { name: 'foo', kind: 'function', startLine: 4, endLine: 6 },
@@ -70,7 +77,10 @@ describe('extractStructure', () => {
       '',
     ].join('\n')
     const result = await extractStructure('python', src)
-    expect(result.imports.sort()).toEqual(['.utils', 'os'])
+    expect(result.imports).toEqual([
+      { target: 'os', line: 1 },
+      { target: '.utils', line: 2 },
+    ])
     const names = result.symbols.map((s) => s.name).sort()
     expect(names).toEqual(['Bar', 'foo'])
   })
@@ -90,7 +100,10 @@ describe('extractStructure', () => {
       '',
     ].join('\n')
     const result = await extractStructure('go', src)
-    expect(result.imports.sort()).toEqual(['fmt', 'os'])
+    expect(result.imports).toEqual([
+      { target: 'fmt', line: 4 },
+      { target: 'os', line: 5 },
+    ])
     const names = result.symbols.map((s) => s.name).sort()
     expect(names).toEqual(['Bar', 'Foo'])
   })

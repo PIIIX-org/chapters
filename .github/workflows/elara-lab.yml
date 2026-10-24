@@ -114,7 +114,7 @@ jobs:
               else
                 gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
                 # Everything the Dockerfile copies into the image, plus the lab itself.
-                if grep -Eq '^(server/|client/|lab/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig\.base\.json$|Dockerfile$|\.dockerignore$|docker-compose\.yml$|\.github/workflows/elara-lab\.yml$|\.github/actions/lab-instance/|\.github/scripts/lab-gate\.mjs$)' "$RUNNER_TEMP/changed.txt"; then
+                if grep -Eq '^(server/|client/|lab/|skills/elara/references/mcp-tools\.md$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig\.base\.json$|Dockerfile$|\.dockerignore$|docker-compose\.yml$|\.github/workflows/elara-lab\.yml$|\.github/actions/lab-instance/|\.github/scripts/lab-gate\.mjs$)' "$RUNNER_TEMP/changed.txt"; then
                   tier=fast
                 else
                   tier=none
