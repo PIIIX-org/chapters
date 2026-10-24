@@ -30,11 +30,17 @@ let vaultId: string
 let mcp: Client
 const providers: HocuspocusProvider[] = []
 
-async function call(name: string, args: Args): Promise<{ isError: boolean; text: string }> {
+type ErrorBody = { code: string; message: string; field?: string }
+
+/** A call's text; a failed call's error envelope (#439) also parsed as `error`. */
+async function call(name: string, args: Args): Promise<{ isError: boolean; text: string; error?: ErrorBody }> {
   resetRateLimits()
   const result = await mcp.callTool({ name, arguments: args })
   const content = result.content as Array<{ type: string; text?: string }>
-  return { isError: result.isError === true, text: content.map((c) => c.text ?? '').join('') }
+  const text = content.map((c) => c.text ?? '').join('')
+  if (result.isError !== true) return { isError: false, text }
+  const envelope = JSON.parse(text) as { error: ErrorBody }
+  return { isError: true, text, error: envelope.error }
 }
 
 async function must<T>(name: string, args: Args): Promise<T> {
@@ -296,10 +302,10 @@ describe('edit_note ops (#408)', () => {
       ],
     })
     expect(ambiguous.isError).toBe(true)
-    expect(ambiguous.text).toMatch(/ops\[1\].*"foo".*2 times/)
+    expect(ambiguous.error?.message).toMatch(/ops\[1\].*"foo".*2 times/)
     const missing = await call('edit_note', { vaultId, path, ops: [{ op: 'delete_block', find: 'nowhere' }] })
     expect(missing.isError).toBe(true)
-    expect(missing.text).toMatch(/ops\[0\].*"nowhere".*not found/)
+    expect(missing.error?.message).toMatch(/ops\[0\].*"nowhere".*not found/)
     // The index counts frontmatter ops too.
     const afterFrontmatter = await call('edit_note', {
       vaultId,
@@ -310,7 +316,7 @@ describe('edit_note ops (#408)', () => {
       ],
     })
     expect(afterFrontmatter.isError).toBe(true)
-    expect(afterFrontmatter.text).toMatch(/ops\[1\] replace_text: "nowhere" not found/)
+    expect(afterFrontmatter.error?.message).toMatch(/ops\[1\] replace_text: "nowhere" not found/)
     const count = await call('edit_note', { vaultId, path, ops: [{ op: 'replace_text', find: 'foo', replace: 'bar' }] })
     expect(count.isError).toBe(true)
     expect(count.text).toMatch(/2 times.*expectedCount/)
@@ -327,7 +333,7 @@ describe('edit_note ops (#408)', () => {
     expect(both.text).toMatch(/`ops`.*`body`/)
     const unknown = await call('edit_note', { vaultId, path, ops: [{ op: 'append', text: 'y', where: 'end' }] })
     expect(unknown.isError).toBe(true)
-    expect(unknown.text).toContain('"where"')
+    expect(unknown.error).toMatchObject({ code: 'INVALID_ARGUMENT', field: 'ops.0.where' })
     expect(await rowBody(path)).toBe(base)
   })
 

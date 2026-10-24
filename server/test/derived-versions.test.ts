@@ -405,6 +405,47 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     expect(symbols.map((s) => s.name).sort()).toEqual(['LIMIT', 'Store', 'keep', 'load', 'save'])
     expect(symbols.every((s) => s.embedding !== null)).toBe(true)
   })
+
+  // #451: before it, `.mts`/`.cts` had no language, so their rows carry
+  // `language` NULL. A sync skips unchanged content and never relabels them;
+  // the catch-up derives the language from the path and writes it back.
+  it('a .mts row indexed with no language is labelled typescript and extracted at boot', async () => {
+    const owner = await createActiveUser()
+    const [repo] = await db
+      .insert(repositories)
+      .values({ name: 'versions-mts-null-language', ownerId: owner.id, ingestionMethod: 'agent_push' })
+      .returning()
+    const content = "import { load } from './load.mjs'\nexport function gen() { return load() }\n"
+    versions.extractor = 1
+    await syncRepositoryFiles(repo!.id, [{ path: 'tools/gen.mts', content }], ['tools/gen.mts'])
+    await flushExtraction()
+    const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id))
+    // What version 1 left: no language, so a file vector and nothing else.
+    await db.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    await db.execute(sql`UPDATE repository_files SET language = NULL WHERE id = ${file!.id}`)
+    expect(await fileVersions(file!.id)).toEqual({ extractor_version: 1, embedder_id: EMBEDDER_ID })
+    versions.extractor = shipped.extractor
+    await othersCurrent(repo!.id, null)
+    const texts = embeddedTexts()
+
+    expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
+    await flushExtraction()
+
+    const [after] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file!.id))
+    expect([after!.language, after!.extractorVersion]).toEqual(['typescript', EXTRACTOR_VERSION])
+    expect(after!.embedding).toEqual(file!.embedding)
+    const symbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    expect(symbols.map((s) => [s.name, s.kind, s.startLine])).toEqual([['gen', 'function', 2]])
+    // Only the new symbol is embedded, not the file again.
+    expect(texts.filter((t) => t.includes(file!.path)).map((t) => t.split('\n')[0])).toEqual([`function gen in ${file!.path}:2`])
+
+    // A later sync of the same content changes nothing.
+    await syncRepositoryFiles(repo!.id, [{ path: 'tools/gen.mts', content }], ['tools/gen.mts'])
+    await flushExtraction()
+    const [resynced] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file!.id))
+    expect([resynced!.language, resynced!.extractorVersion]).toEqual(['typescript', EXTRACTOR_VERSION])
+    expect(await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))).toHaveLength(1)
+  })
 })
 
 describe('the note model is unchanged (#453)', () => {

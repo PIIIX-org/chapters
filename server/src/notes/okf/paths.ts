@@ -1,4 +1,4 @@
-import { isSlug, OkfValidationError } from '../okf.js'
+import { isSlug, OkfValidationError, SLUG_RULE } from '../okf.js'
 
 export interface ResolvedNotePath {
   fullPath: string
@@ -43,7 +43,7 @@ export function resolveNotePath(inputPath: string): ResolvedNotePath {
   }
 
   if (segments.length > 8) {
-    throw new OkfValidationError('note path exceeds maximum depth of 8 segments')
+    throw new OkfValidationError('note path exceeds maximum depth of 8 segments', 'invalid', 'at most 8 path segments')
   }
 
   for (const seg of segments) {
@@ -54,7 +54,7 @@ export function resolveNotePath(inputPath: string): ResolvedNotePath {
       throw new OkfValidationError(`hidden path segments not allowed: ${seg}`)
     }
     if (!isSlug(seg)) {
-      throw new OkfValidationError(`invalid path segment: ${seg}`)
+      throw new OkfValidationError(`invalid path segment: ${seg}`, 'invalid', SLUG_RULE)
     }
   }
 

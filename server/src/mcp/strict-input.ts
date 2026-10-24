@@ -47,7 +47,7 @@ const MAX_KEY_CHARS = 64
 const normalize = (key: string): string => key.toLowerCase().replace(/[-_]/g, '')
 
 /** Edits (insert, delete, substitute, swap two adjacent letters) that turn `a` into `b`. */
-function editDistance(a: string, b: string): number {
+export function editDistance(a: string, b: string): number {
   let before: number[] = []
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j)
   for (let i = 1; i <= a.length; i++) {
@@ -62,8 +62,8 @@ function editDistance(a: string, b: string): number {
   return prev[b.length]!
 }
 
-/** The declared name an unknown key most likely meant, if any is close. */
-function suggestion(key: string, names: readonly string[]): string | undefined {
+/** The declared name an unknown key most likely meant, if any is close (also the error envelope's suggestion, #439). */
+export function suggestion(key: string, names: readonly string[]): string | undefined {
   // No parameter or guess comes near this length, so a huge key skips
   // normalising and comparing (#769).
   if (key.length > MAX_KEY_CHARS) return undefined
