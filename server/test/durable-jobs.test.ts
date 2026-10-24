@@ -2,7 +2,7 @@
 // of the `jobs` table, not from in-process arrays. These tests use the queue
 // entry points, their job keys (#453) and SQL on `jobs`.
 import { createHash } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { jobs, notes, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
@@ -17,6 +17,12 @@ import { embedder } from '../src/search/embeddings.js'
 import { createActiveUser, fileEmbedding } from './helpers.js'
 
 const createdVaultIds: string[] = []
+// The boot catch-up these tests call queues every stale file of the shared test database, other files' included:
+// drain that backlog first, so a test's flush waits only for its own file (CI run 40098011837 timed out here).
+beforeAll(async () => {
+  await scheduleMissingExtractions()
+  await flushExtraction()
+}, 600_000)
 afterEach(async () => {
   vi.restoreAllMocks()
   for (const id of createdVaultIds.splice(0)) await db.delete(vaults).where(eq(vaults.id, id))
