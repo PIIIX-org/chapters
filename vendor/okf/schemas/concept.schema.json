@@ -91,10 +91,11 @@
       }
     },
     "verified": {
+      "description": "OKF §5.2 verification events, each { by, at }; consumers derive the trust tier (§5.3). A bare mapping is a one-element list. `tier` is optional (Elara's older form).",
       "oneOf": [
         {
           "type": "object",
-          "required": ["tier"],
+          "anyOf": [{ "required": ["by", "at"] }, { "required": ["tier"] }],
           "properties": {
             "tier": {
               "type": "string",
@@ -114,7 +115,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["tier"],
+            "anyOf": [{ "required": ["by", "at"] }, { "required": ["tier"] }],
             "properties": {
               "tier": {
                 "type": "string",
