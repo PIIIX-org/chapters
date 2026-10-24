@@ -61,11 +61,11 @@ describe('initialize.instructions (#435)', () => {
     for (const rule of ['budget_tokens', 'truncated', 'cursor', 'read_note', 'read_file', 'elara://manual/']) expect(text).toContain(rule)
     expect(text).not.toContain('idempotency_key')
     expect(text).not.toContain('base_rev')
-    // `truncated` is promised only for tools with `budget_tokens`: search, list_vaults and list_repositories have none.
+    // `truncated` is promised only for tools with `budget_tokens`: list_vaults and list_repositories have none (search has, #441).
     expect(text).toContain('Tools with `budget_tokens`')
     const { tools } = await reader.listTools()
     const unbudgeted = tools.filter((t) => !('budget_tokens' in (t.inputSchema.properties ?? {}))).map((t) => t.name)
-    expect(unbudgeted).toEqual(expect.arrayContaining(['search', 'list_vaults', 'list_repositories']))
+    expect(unbudgeted.sort()).toEqual(['list_repositories', 'list_vaults'])
   })
 
   it('adds the merge and retry rules for writer and admin, scoped to what they are true of', async () => {

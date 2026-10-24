@@ -87,6 +87,25 @@ export async function scheduleMissingEmbeddings(limit?: number): Promise<number>
   return missing.length
 }
 
+/**
+ * Embedding state of the live notes of these vaults: `pending`, notes whose
+ * embedding for their current `seq` is still to come (a pending job, or no
+ * job and no embedding: the boot catch-up adds its job); `failed`, notes
+ * whose job for their current `seq` gave up; `notes`, all of them. Search
+ * reports it next to its results (#442).
+ */
+export async function embeddingState(vaultIds: string[]): Promise<{ notes: number; pending: number; failed: number }> {
+  if (vaultIds.length === 0) return { notes: 0, pending: 0, failed: 0 }
+  const [row] = (await db.execute(sql`
+    SELECT count(*)::int AS notes,
+      (count(*) FILTER (WHERE j.id IS NOT NULL AND j.done_at IS NULL OR j.id IS NULL AND n.embedding IS NULL))::int AS pending,
+      (count(*) FILTER (WHERE j.done_at IS NOT NULL AND j.last_error IS NOT NULL))::int AS failed
+    FROM notes n
+    LEFT JOIN jobs j ON j.idempotency_key = ${EMBEDDING_JOB} || ':' || n.id || ':' || n.seq
+    WHERE n.vault_id = ANY(${`{${vaultIds.join(',')}}`}::uuid[]) AND n.deleted_at IS NULL`)) as unknown as [{ notes: number; pending: number; failed: number }]
+  return row ?? { notes: 0, pending: 0, failed: 0 }
+}
+
 async function drainOnce(): Promise<void> {
   await failCrashedJobs(EMBEDDING_JOB, 'embedding', 'noteId')
   for (;;) {

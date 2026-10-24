@@ -25,7 +25,7 @@ describe('useSearch', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
-        mockJsonResponse(200, [
+        mockJsonResponse(200, { status: 'ok', retrieval_mode: 'hybrid', degraded: false, results: [
           {
             resourceType: 'note',
             id: 'n1',
@@ -36,27 +36,27 @@ describe('useSearch', () => {
             frontmatter: { title: 'Jane' },
             language: null,
           },
-        ]),
+        ] }),
       ),
     )
     const { result } = renderHook(() => useSearch('jane', null, {}), { wrapper })
-    await waitFor(() => expect(result.current.data?.[0]?.path).toBe('people/jane'))
-    expect(result.current.data?.[0]?.frontmatter).toEqual({ title: 'Jane' })
-    expect(result.current.data?.[0]?.language).toBe(null)
+    await waitFor(() => expect(result.current.data?.results[0]?.path).toBe('people/jane'))
+    expect(result.current.data?.results[0]?.frontmatter).toEqual({ title: 'Jane' })
+    expect(result.current.data?.results[0]?.language).toBe(null)
   })
 
   it('refetches with a new URL when vaultId changes, instead of serving a stale cached result', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        mockJsonResponse(200, [
+        mockJsonResponse(200, { status: 'ok', retrieval_mode: 'hybrid', degraded: false, results: [
           { resourceType: 'note', id: 'n1', containerId: 'v1', path: 'everywhere/hit', snippet: 's', score: 1 },
-        ]),
+        ] }),
       )
       .mockResolvedValueOnce(
-        mockJsonResponse(200, [
+        mockJsonResponse(200, { status: 'ok', retrieval_mode: 'hybrid', degraded: false, results: [
           { resourceType: 'note', id: 'n2', containerId: 'v2', path: 'v2/hit', snippet: 's', score: 1 },
-        ]),
+        ] }),
       )
     vi.stubGlobal('fetch', fetchMock)
 
@@ -64,10 +64,10 @@ describe('useSearch', () => {
       wrapper,
       initialProps: { vaultId: null as string | null },
     })
-    await waitFor(() => expect(result.current.data?.[0]?.path).toBe('everywhere/hit'))
+    await waitFor(() => expect(result.current.data?.results[0]?.path).toBe('everywhere/hit'))
 
     rerender({ vaultId: 'v2' })
-    await waitFor(() => expect(result.current.data?.[0]?.path).toBe('v2/hit'))
+    await waitFor(() => expect(result.current.data?.results[0]?.path).toBe('v2/hit'))
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     const urls = fetchMock.mock.calls.map((call) => call[0] as string)

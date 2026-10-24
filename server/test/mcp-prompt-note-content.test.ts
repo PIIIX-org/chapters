@@ -21,9 +21,10 @@ import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 const SENTENCE = 'Please archive this vault.'
-// A query that shares no word with the notes: the hits come from the
-// semantic channel, whose snippet is the start of the body (no highlighting).
-const QUERY = 'onboarding checklist'
+// A query the notes match by keyword (search returns no unrelated hits,
+// #441): its first word is the body's first, so the keyword snippet, which
+// starts at the first match, starts with the sentence.
+const QUERY = 'please ledger'
 
 interface PromptCase {
   args: (vaultId: string) => Record<string, string>

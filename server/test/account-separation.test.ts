@@ -169,7 +169,8 @@ beforeAll(async () => {
       vaultId: VA,
       type: 'docs',
       name: 'secret-plan',
-      body: `${MARK_A} ${SHARED}. See [[${PATH.B}]].`,
+      // Names A's file, so a prompt that searches by file path (explain_code_architecture) finds the note (#441: no unrelated hits).
+      body: `${MARK_A} ${SHARED}. See [[${PATH.B}]] and ${FILE.A}.`,
     })
   ).id
   const projectA = (
