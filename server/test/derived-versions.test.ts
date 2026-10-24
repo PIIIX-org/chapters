@@ -163,7 +163,7 @@ describe('derived rows record what produced them (#453)', () => {
     const fileBlocks = await db.select().from(blocks).where(eq(blocks.ownerId, file.id)).orderBy(blocks.kind)
     expect(fileBlocks.map((b) => [b.kind, b.embedKey, b.ownerVersion])).toEqual([
       ['file', embedKey(`${file.path}\n${SOURCE}`), file.contentHash],
-      ['symbol', embedKey(`function unchanged in ${file.path}\n${SOURCE.split('\n')[1]}`), file.contentHash],
+      ['symbol', embedKey(`function unchanged in ${file.path}:2\n${SOURCE.split('\n')[1]}`), file.contentHash],
     ])
     const [job] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, key))
     expect(job?.doneAt).not.toBeNull()
@@ -224,7 +224,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     await scheduleMissingExtractions()
     await flushExtraction()
 
-    expect(texts.filter((t) => t.includes(file.path))).toEqual([`function unchanged in ${file.path}\n${SOURCE.split('\n')[1]}`])
+    expect(texts.filter((t) => t.includes(file.path))).toEqual([`function unchanged in ${file.path}:2\n${SOURCE.split('\n')[1]}`])
     const symbols = await symbolBlocks(file.id)
     expect(symbols.map((s) => s.name)).toEqual(['unchanged'])
     expect(symbols[0]!.embedding).not.toBeNull()
@@ -383,8 +383,8 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     // the two symbols the TSX grammar recovers are embedded.
     const embeddedHere = texts.filter((t) => t.includes(file!.path))
     expect(embeddedHere.map((t) => t.split('\n')[0])).toEqual([
-      `function Page in ${file!.path}`,
-      `interface PageProps in ${file!.path}`,
+      `function Page in ${file!.path}:4`,
+      `interface PageProps in ${file!.path}:5`,
     ])
     expect(byLine[0]!.embedding).toEqual(cardBefore!.embedding)
     expect(byLine.every((s) => s.embedding !== null)).toBe(true)
@@ -427,9 +427,9 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     expect(await fileVersions(file!.id)).toEqual({ extractor_version: EXTRACTOR_VERSION, embedder_id: EMBEDDER_ID })
     // No file text; exported symbols before methods (the embed budget's order).
     expect(texts.filter((t) => t.includes(file!.path)).map((t) => t.split('\n')[0])).toEqual([
-      `function load in ${file!.path}`,
-      `variable LIMIT in ${file!.path}`,
-      `method Store.save in ${file!.path}`,
+      `function load in ${file!.path}:5`,
+      `variable LIMIT in ${file!.path}:6`,
+      `method Store.save in ${file!.path}:3`,
     ])
     expect(await fileEmbedding(file!.id)).toEqual(fileVectorBefore)
     const symbols = await symbolBlocks(file!.id)
@@ -472,7 +472,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     const symbols = await symbolBlocks(file!.id)
     expect(symbols.map((s) => [s.name, s.kind, s.startLine])).toEqual([['gen', 'function', 2]])
     // Only the new symbol is embedded, not the file again.
-    expect(texts.filter((t) => t.includes(file!.path)).map((t) => t.split('\n')[0])).toEqual([`function gen in ${file!.path}`])
+    expect(texts.filter((t) => t.includes(file!.path)).map((t) => t.split('\n')[0])).toEqual([`function gen in ${file!.path}:2`])
 
     // A later sync of the same content changes nothing.
     await syncRepositoryFiles(repo!.id, [{ path: 'tools/gen.mts', content }], ['tools/gen.mts'])

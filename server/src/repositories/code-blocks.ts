@@ -19,9 +19,11 @@
  * embedded; the `file` block comes first. Ranking a file by its skeleton
  * instead of its head was measured worse (chapters A13: a 304-line hook's
  * outline outranked the 80-line answer, hit@5 0.9655 -> 0.931). A symbol's embedded text is
- * `<kind> <inner_path> in <path>\n<snippet>`, the snippet being its first
- * `SNIPPET_LINES` lines cut to `SNIPPET_CHARS` characters: no line number,
- * so a block whose lines only moved keeps its text and its vector.
+ * `<kind> <inner_path> in <path>:<start line>\n<snippet>`, the snippet being
+ * its first `SNIPPET_LINES` lines cut to `SNIPPET_CHARS` code points. The
+ * line stays in the text: without it chapters A13 left the top 5 (bench run
+ * 40076821407 vs 40076707623, hit@5 0.9655 vs 1), so a symbol whose lines
+ * moved is embedded again (its id stays).
  * An empty file's `file` block spans no line (1..0).
  */
 import { createHash } from 'node:crypto'
@@ -93,7 +95,7 @@ export function codeBlocks(fileId: string, path: string, content: string, symbol
         symbolKind: s.kind,
         symbolParent: s.parent ?? null,
         snippet,
-        embedText: `${s.kind} ${innerPath} in ${path}\n${snippet}`,
+        embedText: `${s.kind} ${innerPath} in ${path}:${s.startLine}\n${snippet}`,
         budgetTier: s.kind === 'method' ? 2 : s.exported ? 0 : 1,
       }) - 1
     const methods = s.kind === 'class' ? (methodsOf.get(s.name) ?? []) : []

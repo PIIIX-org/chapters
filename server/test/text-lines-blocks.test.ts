@@ -100,8 +100,9 @@ describe('code blocks (#452a)', () => {
     expect(after!.blockId).toBe(before!.blockId)
     expect([after!.startLine, after!.endLine]).toEqual([3, 5])
     expect(after!.contentHash).toBe(before!.contentHash)
-    expect(after!.embedText).toBe(before!.embedText)
-    expect(after!.embedText).toBe('function f in src/f.ts\nexport function f() {\n  return 1\n}')
+    // The embedded text names the line (the vector follows the move).
+    expect(before!.embedText).toBe('function f in src/f.ts:1\nexport function f() {\n  return 1\n}')
+    expect(after!.embedText).toBe('function f in src/f.ts:3\nexport function f() {\n  return 1\n}')
   })
 
   it('overloads and methods: inner_path is Class.method, equal ones get the next sibling_index', () => {
@@ -149,7 +150,7 @@ describe('code blocks (#452a)', () => {
   it('a block hashes and embeds the exact text of its lines: CRLF and blank lines kept', () => {
     const content = 'export function spaced() {\r\n\r\n\r\n  return 1\r\n}\r\n'
     const [, block] = codeBlocks(FILE, 'src/crlf.ts', content, [sym('spaced', 1, 5)])
-    expect(block!.embedText).toBe('function spaced in src/crlf.ts\nexport function spaced() {\r\n\r\n\r\n  return 1\r\n}\r')
+    expect(block!.embedText).toBe('function spaced in src/crlf.ts:1\nexport function spaced() {\r\n\r\n\r\n  return 1\r\n}\r')
     expect(content.includes(block!.embedText.split('\n').slice(1).join('\n'))).toBe(true)
   })
 

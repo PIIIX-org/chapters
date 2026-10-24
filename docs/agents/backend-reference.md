@@ -2488,10 +2488,12 @@ symbols, a `skeleton` block for the file (`<path>` then every symbol's first
 line) and one per class with methods (`<kind> <Class> in <path>`, the
 class's first line, then its methods' first lines). The file-level blocks
 are always embedded. A symbol's embedded text is `<kind> <inner_path> in
-<path>\n<snippet>`, the snippet its first 30 lines cut to 1,500
-characters (`SNIPPET_LINES`, `SNIPPET_CHARS`; search computes hit
-snippets from `content` with the same numbers), with no line number, so a
-block whose lines only moved keeps its text. *Rows*: `content_hash` is the
+<path>:<start line>\n<snippet>`, the snippet its first 30 lines cut to
+1,500 code points (`SNIPPET_LINES`, `SNIPPET_CHARS`), stored on the block
+as `snippet` (the keyword legs match it and hits show it). The line stays
+in the text: without it chapters A13 fell out of the top 5 (bench run
+40076821407 vs 40076707623), so a symbol whose lines moved is embedded
+again while its id stays. *Rows*: `content_hash` is the
 sha256 of the block's lines, `owner_version` the file `content_hash` the
 set was derived from, `embed_key` (`search/embed-key.ts` `embedKey`) the
 first 16 hex characters of sha256(`EMBEDDER_ID` + `\n` + embedded text),
@@ -2502,8 +2504,8 @@ owner_id, block_id)` with the blocks the content no longer has deleted, so
 a surviving block keeps its row (`find_symbols` `id`); a result for content
 that moved on is dropped. *Reuse*: a block whose `embed_key` a block of the
 same file already has keeps that vector instead of being embedded again, so
-a line shift, an edit to another symbol, or a version bump that leaves a
-block's text alone embeds nothing new for it. *Readers*: `search` code
+an edit to another symbol, or a version bump that leaves a block's text
+alone, embeds nothing new for it. *Readers*: `search` code
 vector leg — the nearest `file` blocks of the scoped repositories
 (`hnsw.ef_search` 200, #967's distance gate), one hit per file with the
 same `{…, snippet: left(content, 200)}` as before. Measured alternatives:
