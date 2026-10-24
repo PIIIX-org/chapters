@@ -262,6 +262,43 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
       .where(and(eq(jobs.kind, 'extract'), sql`${jobs.payload}->>'fileId' = ${file!.id}`, sql`${jobs.doneAt} IS NULL`))
     expect(pending).toHaveLength(0)
   })
+
+  // #449/#451 bumped EXTRACTOR_VERSION to 2: a .tsx file version 1 parsed with
+  // the TypeScript grammar lost the symbols after its first JSX element, and
+  // gets them at the next boot without a push.
+  it('a .tsx row extractor version 1 produced is extracted again with the TSX grammar', async () => {
+    const owner = await createActiveUser()
+    const [repo] = await db
+      .insert(repositories)
+      .values({ name: 'versions-tsx-v1', ownerId: owner.id, ingestionMethod: 'agent_push' })
+      .returning()
+    const content = [
+      'export function Card() {',
+      '  return <div className="card"><span>hi</span></div>',
+      '}',
+      'export default function Page() { return <Card /> }',
+      'export interface PageProps { id: string }',
+    ].join('\n')
+    await syncRepositoryFiles(repo!.id, [{ path: 'src/Page.tsx', content }], ['src/Page.tsx'])
+    await flushExtraction()
+    const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id))
+    // What version 1 left on the row: no symbols past the JSX, stamped 1.
+    await db.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    await db.execute(sql`UPDATE repository_files SET extractor_version = 1 WHERE id = ${file!.id}`)
+    await othersCurrent(repo!.id, null)
+
+    expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
+    await flushExtraction()
+
+    expect(await fileVersions(file!.id)).toEqual({ extractor_version: EXTRACTOR_VERSION, embedder_id: EMBEDDER_ID })
+    const symbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    const byLine = symbols.sort((a, b) => a.startLine - b.startLine)
+    expect(byLine.map((s) => [s.name, s.kind, s.startLine, s.endLine])).toEqual([
+      ['Card', 'function', 1, 3],
+      ['Page', 'function', 4, 4],
+      ['PageProps', 'interface', 5, 5],
+    ])
+  })
 })
 
 describe('the note model is unchanged (#453)', () => {

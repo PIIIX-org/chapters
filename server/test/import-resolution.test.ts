@@ -30,6 +30,10 @@ const known = new Set([
   'dual/thing.js',
   'dual/thing.ts',
   'dual/main.ts',
+  'esm/lib/index.mts',
+  'esm/both.mts',
+  'esm/both.mjs',
+  'cjs/lib/index.cjs',
 ])
 
 describe('resolveImportPath', () => {
@@ -119,6 +123,28 @@ describe('resolveImportPath', () => {
 
     it('prefers the TypeScript source when both x.ts and x.js exist (tsc semantics)', () => {
       expect(resolveImportPath('dual/main.ts', './thing.js', known)).toBe('dual/thing.ts')
+    })
+  })
+
+  describe('.mts/.cts/.mjs/.cjs as candidate extensions (#451)', () => {
+    it('resolves an extensionless import to x.mts and x.cts', () => {
+      expect(resolveImportPath('tools/gen.mts', './load', known)).toBe('tools/load.mts')
+      expect(resolveImportPath('tools/gen.mts', './compat', known)).toBe('tools/compat.cts')
+    })
+
+    it('resolves an extensionless import to x.mjs and x.cjs', () => {
+      expect(resolveImportPath('scripts/build.mjs', './util', known)).toBe('scripts/util.mjs')
+      expect(resolveImportPath('scripts/build.mjs', './legacy', known)).toBe('scripts/legacy.cjs')
+    })
+
+    it('resolves a directory import to its index.mts or index.cjs', () => {
+      expect(resolveImportPath('esm/main.mts', './lib', known)).toBe('esm/lib/index.mts')
+      expect(resolveImportPath('cjs/main.cjs', './lib', known)).toBe('cjs/lib/index.cjs')
+    })
+
+    it('prefers the TypeScript source when both x.mts and x.mjs exist', () => {
+      expect(resolveImportPath('esm/main.mts', './both', known)).toBe('esm/both.mts')
+      expect(resolveImportPath('esm/main.mts', './both.mjs', known)).toBe('esm/both.mts')
     })
   })
 
