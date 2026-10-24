@@ -285,6 +285,57 @@ describe('extraction queue', () => {
     expect((await fileByPath(repo.id, 'src/many.ts')).embeddingNote).toBeNull()
   })
 
+  it('under the per-file budget, embeds exported then other top-level symbols before methods (#450)', async () => {
+    vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '3')
+    const repo = await makeRepo()
+    // A class with many methods opens the file: in document order its methods
+    // would take the budget from the functions after it.
+    const content = [
+      'export class Store {',
+      '  get(key: string) { return key }',
+      '  set(key: string) { return key }',
+      '  delete(key: string) { return key }',
+      '  clear() {}',
+      '}',
+      'function helper() { return 1 }',
+      'export const load = () => new Store()',
+      'const unused = () => helper()',
+    ].join('\n')
+    const embedSpy = vi.spyOn(embedder, 'embed')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'src/store.ts', content }], ['src/store.ts'])
+      await flushExtraction()
+      expect(embedSpy.mock.calls.map(([texts]) => texts.slice(1).map((t) => t.split('\n')[0]))).toEqual([
+        ['class Store in src/store.ts:1', 'function load in src/store.ts:8', 'function helper in src/store.ts:7'],
+      ])
+    } finally {
+      embedSpy.mockRestore()
+      warnSpy.mockRestore()
+      vi.unstubAllEnvs()
+    }
+
+    const file = await fileByPath(repo.id, 'src/store.ts')
+    const symbols = await db
+      .select()
+      .from(repositoryFileSymbols)
+      .where(eq(repositoryFileSymbols.fileId, file.id))
+      .orderBy(repositoryFileSymbols.startLine)
+    expect(symbols.map((s) => [s.kind, s.parent, s.name, s.embedding !== null])).toEqual([
+      ['class', null, 'Store', true],
+      ['method', 'Store', 'get', false],
+      ['method', 'Store', 'set', false],
+      ['method', 'Store', 'delete', false],
+      ['method', 'Store', 'clear', false],
+      ['function', null, 'helper', true],
+      ['function', null, 'load', true],
+      ['function', null, 'unused', false],
+    ])
+    expect(file.embeddingNote).toBe(
+      'symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: 3 of 8 symbols embedded, the rest are keyword-searchable only',
+    )
+  })
+
   it('one failing file does not stop the files queued after it, and stays counted as pending', async () => {
     const repo = await makeRepo()
     const embedSpy = vi.spyOn(embedder, 'embed').mockRejectedValueOnce(new Error('model crashed'))
