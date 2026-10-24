@@ -79,7 +79,10 @@ export function toolText(content: readonly unknown[]): string {
   for (const [key, value] of Object.entries(json)) {
     const marker = value !== null && typeof value === 'object' && 'in' in value ? value.in : undefined
     const at = typeof marker === 'string' ? /^content\[(\d+)\]$/.exec(marker) : null
-    if (at) json[key] = texts[Number(at[1])]
+    if (!at) continue
+    const text = texts[Number(at[1])]
+    if (text === undefined) throw new Error(`${key} is in ${marker}, but the answer has ${texts.length} content blocks`)
+    json[key] = text
   }
   return JSON.stringify(json)
 }

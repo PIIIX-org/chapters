@@ -72,8 +72,8 @@ async function read(args: Json): Promise<Read> {
   return { blocks: content.map((c) => c.text ?? ''), json: JSON.parse(content[0]!.text ?? '') as Json, structured: result.structuredContent as Json | undefined }
 }
 
-/** Characters every block of an answer takes: what the budget counts. */
-const size = (r: Read) => r.blocks.reduce((n, b) => n + b.length, 0)
+/** Characters an answer takes as the budget and the benchmark count them: the blocks joined by a newline. */
+const size = (r: Read) => r.blocks.join('\n').length
 
 beforeAll(async () => {
   app = await buildApp()
@@ -173,11 +173,11 @@ describe('read_note: the body as a plain text block', () => {
     expect(r.blocks[1]).toBe(DENSE)
     // The answer before #445: one JSON block with the body as an escaped string in the marker's place.
     const escaped = JSON.stringify(r.structured)
-    const raw = r.blocks.join('')
+    const raw = r.blocks.join('\n')
     const measured = { escapedTokens: approxTokens(escaped), rawTokens: approxTokens(raw), bodyChars: DENSE.length, escapedBodyChars: JSON.stringify(DENSE).length - 2 }
     console.log(`#445 token comparison on docs/dense: ${JSON.stringify(measured)}`)
-    // What is saved: the body's escapes and quotes, less the marker.
-    expect(escaped.length - raw.length).toBe(JSON.stringify(DENSE).length - DENSE.length - JSON.stringify({ in: 'content[1]' }).length)
+    // What is saved: the body's escapes and quotes, less the marker and the newline the benchmark puts between blocks.
+    expect(escaped.length - raw.length).toBe(JSON.stringify(DENSE).length - DENSE.length - JSON.stringify({ in: 'content[1]' }).length - 1)
     expect(measured.rawTokens).toBeLessThan(measured.escapedTokens)
   })
 })

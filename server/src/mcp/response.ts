@@ -464,8 +464,13 @@ export interface Rendered {
   truncated: Truncated
 }
 
-/** The characters a rendered answer is sent in: the JSON and every block after it. */
-const charsOf = (r: Rendered) => r.blocks.reduce((n, block) => n + block.text.length, r.text.length)
+/**
+ * The characters a rendered answer takes: the JSON, and each block after it
+ * plus one for the separator between text blocks. The premise benchmark
+ * (the lab client's `text`) joins the blocks with a newline, so the budget
+ * and the benchmark count the same characters.
+ */
+const charsOf = (r: Rendered) => r.blocks.reduce((n, block) => n + 1 + block.text.length, r.text.length)
 
 /**
  * Renders a budgeted answer: `{...head, lines?, ...sections, truncated}`

@@ -67,7 +67,7 @@ async function call(tool: string, args: Args): Promise<{ isError: boolean; text:
   resetRateLimits()
   const result = await agent.callTool({ name: tool, arguments: args })
   const content = result.content as Array<{ type: string; text?: string }>
-  return { isError: result.isError === true, text: toolText(content), chars: content.reduce((n, c) => n + (c.text ?? '').length, 0) }
+  return { isError: result.isError === true, text: toolText(content), chars: content.map((c) => c.text ?? '').join('\n').length }
 }
 
 /** One answer, checked against the envelope's invariants: within budget, `truncated` last and consistent. */

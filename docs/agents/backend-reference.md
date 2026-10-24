@@ -1961,7 +1961,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     benchmark's estimate (it undercounts a real tokenizer by roughly
     10-20 % on code and JSON and 1.3-4x on Persian or Chinese text; kept
     because it is what the benchmark gate measures, ADR-004 §5); the rendered
-    answer, the JSON plus every block (`charsOf`), stays within the budget
+    answer, the JSON plus every block and one separator character per
+    block (`charsOf`; the benchmark's lab client joins blocks with a
+    newline, so both count the same), stays within the budget
     (items dropped whole from the end, a refill loop accounts for the
     `truncated` block), except that a text which would show nothing
     shows its first line (split when longer than the page), so paging

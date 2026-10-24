@@ -17,7 +17,11 @@ export function answerJson(content: ReadonlyArray<{ text?: string }>): unknown {
   for (const [key, value] of Object.entries(json)) {
     const marker = value !== null && typeof value === 'object' && 'in' in value ? value.in : undefined
     const at = typeof marker === 'string' ? /^content\[(\d+)\]$/.exec(marker) : null
-    if (at) Reflect.set(json, key, content[Number(at[1])]?.text ?? '')
+    if (!at) continue
+    const block = content[Number(at[1])]
+    // A marker without its block is a broken answer, not an empty body.
+    if (block === undefined) throw new Error(`${key} is in ${marker}, but the answer has ${content.length} content blocks`)
+    Reflect.set(json, key, block.text ?? '')
   }
   return json
 }

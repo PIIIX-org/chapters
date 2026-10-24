@@ -12,10 +12,15 @@ test('read_note: the body block goes back in `body`, exact', () => {
   assert.deepEqual(answerJson([{ text: JSON.stringify(json) }, { text: BODY }]), { ...json, body: BODY })
 })
 
-test('an empty body block is an empty body; a missing one too', () => {
+test('an empty body block is an empty body', () => {
   const head = JSON.stringify({ body: { in: 'content[1]' }, truncated: false })
   assert.deepEqual(answerJson([{ text: head }, { text: '' }]), { body: '', truncated: false })
-  assert.deepEqual(answerJson([{ text: head }]), { body: '', truncated: false })
+})
+
+test('a marker without its block is a broken answer: it throws, not an empty body', () => {
+  const head = JSON.stringify({ body: { in: 'content[1]' }, truncated: false })
+  assert.throws(() => answerJson([{ text: head }]), /body is in content\[1\], but the answer has 1 content blocks/)
+  assert.throws(() => answerJson([{ text: JSON.stringify({ body: { in: 'content[2]' } }) }, { text: 'x' }]), /content\[2\]/)
 })
 
 test('answers without blocks, errors, arrays and non-JSON text are as parsed', () => {
