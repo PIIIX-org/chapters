@@ -23,7 +23,6 @@ import {
   type GraphResourceSet,
   type InternalNode,
 } from './assemble.js'
-import { McpToolError } from '../mcp/errors.js'
 
 /**
  * The local graph around one node (#426): every node within `depth` edges of
@@ -60,54 +59,11 @@ export interface NeighborhoodOptions {
   limit?: number
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 /** Ids bound as one Postgres array literal: a ring can hold more ids than a query has parameters (as `buildGraph`'s semantic query). */
 const anyId = (column: AnyColumn, ids: readonly string[]) => sql`${column} = ANY(${`{${ids.join(',')}}`}::uuid[])`
 
 /** A code file's top-level directory in SQL, as `topDirectory`. */
 const TOP_DIRECTORY = sql`CASE WHEN strpos(${repositoryFiles.path}, '/') > 0 THEN split_part(${repositoryFiles.path}, '/', 1) ELSE '.' END`
-
-/**
- * The node `ref` names in `resources`: its id, or its exact path (a note path
- * without `.md`, a repository file path). Refused when it names none, or
- * several (a note and a file with one path), with their ids. #447 widens this
- * to names and partial paths with candidates; callers keep calling this.
- */
-export async function resolveGraphNode(resources: GraphResourceSet, ref: string): Promise<InternalNode> {
-  const { vaultIds, repositoryIds } = resources
-  const isId = UUID.test(ref)
-  const found: InternalNode[] = []
-  if (vaultIds.length > 0) {
-    const rows = await db
-      .select(NOTE_NODE_COLUMNS)
-      .from(notes)
-      .where(and(inArray(notes.vaultId, vaultIds), isNull(notes.deletedAt), isId ? or(eq(notes.id, ref), eq(notes.path, ref)) : eq(notes.path, ref)))
-      .orderBy(notes.id)
-    found.push(...rows.map(noteNode))
-  }
-  if (repositoryIds.length > 0) {
-    const rows = await db
-      .select(FILE_NODE_COLUMNS)
-      .from(repositoryFiles)
-      .where(and(inArray(repositoryFiles.repositoryId, repositoryIds), isId ? or(eq(repositoryFiles.id, ref), eq(repositoryFiles.path, ref)) : eq(repositoryFiles.path, ref)))
-      .orderBy(repositoryFiles.id)
-    found.push(...rows.map(fileNode))
-  }
-  if (found.length === 1) return found[0]!
-  if (found.length === 0) {
-    throw new McpToolError(
-      'NOT_FOUND',
-      `"${ref}" is not a node of this graph: pass a node id or its exact path (a note path without .md, or a repository file path)`,
-    )
-  }
-  // The candidates come from `resources`, which the caller's access resolved: their ids are in its reach.
-  throw new McpToolError(
-    'AMBIGUOUS',
-    `"${ref}" names ${found.length} nodes; pass one of their ids: ${found.map((n) => `${n.id} (${n.resourceType} ${n.path})`).join(', ')}`,
-    { suggestions: found.map((n) => n.id) },
-  )
-}
 
 /** The nodes reached so far, by id and by path. */
 class Reach {

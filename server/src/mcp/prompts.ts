@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 import { buildGraph, findShortestPath } from '../graph/assemble.js'
+import { resolveNode } from '../graph/resolve-node.js'
 import { searchNotes } from '../search/search.js'
 import { readNote } from '../notes/store.js'
 
@@ -513,11 +514,11 @@ STRUCTURE OF THE BRIEFING:
       try {
         const vaultId = vaultFor(reqVaultId)
         await requireAccess(vaultId, 'read')
-        const graph = await buildGraph({ vaultIds: [vaultId], repositoryIds: [] })
-        const sourceNodeObj = graph.nodes.find((n) => n.id === sourceNode || n.path === sourceNode)
-        const targetNodeObj = graph.nodes.find((n) => n.id === targetNode || n.path === targetNode)
-        if (sourceNodeObj && targetNodeObj) {
-          const path = findShortestPath(graph, sourceNodeObj.id, targetNodeObj.id)
+        const resources = { vaultIds: [vaultId], repositoryIds: [] }
+        // Each end as find_graph_path resolves it (#447); a name with several matches or none adds no path.
+        const [sourceRef, targetRef] = await Promise.all([resolveNode(resources, sourceNode), resolveNode(resources, targetNode)])
+        if ('node' in sourceRef && 'node' in targetRef) {
+          const path = findShortestPath(await buildGraph(resources), sourceRef.node.id, targetRef.node.id)
           if (path.found && path.nodes.length > 0) {
             pathInfo =
               `\nDISCOVERED GRAPH PATH (${path.distance} hops):\n` +
