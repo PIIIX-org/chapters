@@ -25,7 +25,7 @@ Specification references:
    - `timestamp` defaults to the creation time when `create_note` doesn't set it.
 
 4. **Frontmatter values (enforced)**:
-   - `generated`, `sources`, `verified`, `usage_window`, and `properties` may hold objects (shapes in §3). Every other top-level key must be a scalar (string, number, boolean, null) or a list of scalars.
+   - Any top-level key may hold a scalar (string, number, boolean, null), a list, or a mapping, nested up to 8 levels of lists and mappings; deeper values are refused. Your own keys and the OKF §10 computation keys can hold objects and lists of objects (`parameters: [{ name: year, type: integer, required: true }]`, `executor: { resource: ... }`). The keys in §3 keep their shapes: `title`, `description` and `resource` are strings, `tags` a list of strings, and so on.
    - The note must survive being saved and read back. If its serialized file would parse to different frontmatter or body, the write is refused.
    - The frontmatter block in a file starts with a `---` line and ends at the first line that is exactly `---` (trailing spaces allowed). LF and CRLF files both parse. A `---` inside a value or in the body is content, not a fence.
 
@@ -36,7 +36,7 @@ Specification references:
 
 6. **Provenance, trust, and lifecycle fields** (validated when present):
    - **`status`**: `draft`, `active`, `stable`, `deprecated`, `superseded`, or `archived`.
-   - **`verified`**: object or list of objects with `tier` (`unverified`, `machine-confirmed`, `human-reviewed`), optional `by`, optional `at`.
+   - **`verified`**: a `{ by, at }` object or a list of them (OKF §5.2): `by` an actor (`human:taha`, `process:nightly`), `at` a datetime. `tier` (`unverified`, `machine-confirmed`, `human-reviewed`) is optional; an entry with a `tier` may leave out `by` and `at`.
    - **`generated`**: `{ by, at }`, both required.
    - **`sources`**: list of objects, each with a string `resource`; `id`, `title`, `last_modified`, `hash`, `author` are optional.
    - **`usage_window`**: `{ from, to? }`.
@@ -120,10 +120,9 @@ stale_after: "2026-12-31T23:59:59Z"    # Optional. Explicit offset required.
 
 # === Lifecycle & trust ===
 status: active                      # draft | active | stable | deprecated | superseded | archived
-verified:
-  tier: human-reviewed              # unverified | machine-confirmed | human-reviewed
-  by: "human:taha"
-  at: "2026-09-22T05:00:00Z"
+verified:                           # one { by, at } or a list of them
+  - by: "human:taha"
+    at: "2026-09-22T05:00:00Z"
 
 # === Provenance ===
 generated:
@@ -152,7 +151,7 @@ properties:
 - **`resource`**: a string such as `repo:<repo>/server/src/auth/sessions.ts` or an external URL. It is metadata only; it does not create a graph edge. Put a bare `[[repo:...]]` link in the body for that.
 - **`timestamp`**: creation time with an explicit offset; edits leave it as it is. Recency (`updatedAt`, search and graph `since`/`until`) is the note's last change. A key named `created` is not treated as a datetime; use `timestamp`.
 - **`generated`** / **`sources`**: who produced the note and from which artifacts.
-- **`verified`**: how much the note can be trusted. A single object or a list.
+- **`verified`**: who confirmed the note and when. A single `{ by, at }` object or a list. OKF derives the trust tier from `by`: a `human:` actor means human-reviewed, any other actor machine-confirmed, no `verified` unverified.
 
 ---
 

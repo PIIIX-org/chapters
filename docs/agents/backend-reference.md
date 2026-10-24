@@ -523,6 +523,14 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   differ from the path's first segment (#444, D8). `withType` gives a note
   without one the folder; `notes.type` is always the folder, which the
   `types` filter and structural edges key on.
+  Any top-level key may hold a scalar, a list or a mapping (OKF §4.1 and
+  the §10 computation keys, #970), nested at most `MAX_FRONTMATTER_DEPTH`
+  (8) levels of lists and mappings (`assertFrontmatterDepth`, also run
+  first by `assertFrontmatterFits` so the size measure never walks a
+  deeper value); known keys (`type`, `title`, `tags`, `timestamp`,
+  `status`, ...) keep their shapes. A `verified` entry is OKF §5.2's
+  `{ by, at }`; `tier` is optional (#563), and an entry with a `tier` may
+  leave out `by` and `at`.
 - **Frontmatter fence** (#400, `parseNote`): the frontmatter runs from an
   opening `---` line to the first line that is exactly `---` (trailing
   spaces/tabs allowed); LF and CRLF files both parse, and the body is
