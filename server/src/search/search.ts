@@ -263,8 +263,9 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
             SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet,
                    ${UPDATED_AT(sql`f.updated_at`)}, b.embedding <=> ${vec}::vector AS distance
             FROM blocks b JOIN repository_files f ON f.id = b.owner_id
-            WHERE b.owner_type = 'code' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL
-              AND b.kind = 'file'
+            -- kind = 'file' alone (only code has file blocks): naming owner_type too would let the planner take the
+            -- owner_type = 'code' index (migration 0036), whose post-filter is what the files-only index avoids.
+            WHERE b.kind = 'file' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL
             ORDER BY b.embedding <=> ${vec}::vector`),
         )
   return rows as unknown as Row[]
@@ -302,7 +303,8 @@ async function symbolRows(
           gated(sql`
             SELECT ${SYMBOL_COLUMNS}, b.embedding <=> ${vec}::vector AS distance
             FROM blocks b JOIN repository_files f ON f.id = b.owner_id
-            WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
+            -- kind = 'symbol' alone, so the planner takes the symbols-only index (see codeRows).
+            WHERE b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
               AND b.embedding IS NOT NULL
             ORDER BY b.embedding <=> ${vec}::vector`),
         )
