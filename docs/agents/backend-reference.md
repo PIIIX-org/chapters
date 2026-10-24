@@ -1347,8 +1347,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     hits use `repository_files.updated_at` (the last sync that changed the
     file's content: an unchanged hash leaves it) and symbol hits their
     file's, filtered after the merge by `passesFilters` like `types`. A
-    bound goes through `timeBound` (`Date.parse`); one that is no date
-    matches nothing. Both sides compare at millisecond precision (SQL
+    bound goes through `timeBound`: `YYYY-MM-DD` or an ISO date-time
+    (`THH:MM`, `:SS`, a fraction cut to ms, `Z` or `±HH:MM`); one without
+    an offset is UTC, never the server's time zone; anything else (a
+    5-digit year, `2030/01/01`, `2030-02-30`) matches nothing. Both sides compare at millisecond precision (SQL
     `date_trunc('milliseconds', updated_at)`, a JS `Date` in the graph), so
     search and graph agree inside a bound's millisecond. A hit carries
     only `updated`, the UTC day (`YYYY-MM-DD`) of its last change (REST

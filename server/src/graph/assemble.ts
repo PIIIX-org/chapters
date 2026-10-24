@@ -345,13 +345,25 @@ export class EdgeList {
   }
 }
 
+/** `YYYY-MM-DD`, optionally `THH:MM`, `:SS`, a fraction and `Z` or `±HH:MM`. */
+const TIME_BOUND = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/
+
 /**
  * A `since`/`until` bound as an ISO instant (`toISOString`, the form of a
- * node's `updatedAt`), or null when it is no date: the filter then matches
- * nothing.
+ * node's `updatedAt`), or null when it is not a calendar date `YYYY-MM-DD`
+ * or an ISO date-time: the filter then matches nothing. A bound without an
+ * offset is UTC (never the server's time zone); a fraction is cut to
+ * milliseconds.
  */
 export function timeBound(value: string): string | null {
-  const ms = Date.parse(value)
+  const m = TIME_BOUND.exec(value)
+  if (!m) return null
+  const [, year, month, day, hour = '00', minute = '00', second = '00', fraction = '', offset = 'Z'] = m
+  const date = `${year}-${month}-${day}`
+  // A bound names a real day: 2021-02-30 is refused, never rolled over to March.
+  const midnight = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)))
+  if (midnight.getUTCFullYear() !== Number(year) || midnight.getUTCMonth() !== Number(month) - 1 || midnight.getUTCDate() !== Number(day)) return null
+  const ms = Date.parse(`${date}T${hour}:${minute}:${second}${fraction.slice(0, 4)}${offset}`)
   return Number.isNaN(ms) ? null : new Date(ms).toISOString()
 }
 

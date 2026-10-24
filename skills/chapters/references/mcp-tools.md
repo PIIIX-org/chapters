@@ -585,7 +585,7 @@ The write is committed when the call returns; a connection lost before the answe
 - **Parameters**:
   - `name` (string, required).
   - `vaultId` (uuid, optional).
-  - `filters` (object, optional): `{ types?: string[], tags?: string[], since?: string, until?: string, colorMode?: string }`. `since`/`until` bound a node's `updatedAt` (its last change), not frontmatter `timestamp`.
+  - `filters` (object, optional): `{ types?: string[], tags?: string[], since?: string, until?: string, colorMode?: string }`. `since`/`until` bound a node's `updatedAt` (its last change), not frontmatter `timestamp`: `YYYY-MM-DD` or an ISO date-time, UTC when it has no offset; any other text matches nothing.
   - `isShared` (boolean, optional, default `true`): show it to the vault's other members. No effect on a global perspective.
 - **Returns**: the created perspective row. Perspectives are for the UI; the `graph` tool does not read them.
 
