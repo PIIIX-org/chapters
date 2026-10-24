@@ -2,9 +2,11 @@
  * Durable background jobs on the `jobs` table (ADR-003 §4, §7; S5 = #494).
  *
  * A job is one row: `kind`, `payload`, and an `idempotency_key` of the form
- * `<stage>:<item id>:<item version>` (a repository file's content hash, a
- * note's `seq`), so enqueueing the same work twice is a no-op and a restart
- * loses nothing. The table has no `run_after` column, so `lease_until` serves
+ * `<stage>:<item id>:<item version>[:<producer versions>]` (a repository
+ * file's content hash, a note's `seq`; then the extractor version and the
+ * embedder id that will produce the result, #453), so enqueueing the same
+ * work twice is a no-op, a restart loses nothing, and new code that derives
+ * differently gets new jobs. The table has no `run_after` column, so `lease_until` serves
  * both purposes: a job is claimable when it is not done and `lease_until` is
  * null or past. A claim sets it to now + `leaseMs` (a process that dies
  * mid-job leaves a lease that simply runs out); a failure sets it to now +
@@ -43,6 +45,13 @@ export const jobTiming = {
   pollMs: 5_000,
 }
 
+/**
+ * Boot catch-up enqueues in pages of this many items, one short statement
+ * each (#453): a version bump on a large instance re-enqueues every file and
+ * note without one transaction holding the whole backlog. Mutable for tests only.
+ */
+export const catchUpLimits = { batchSize: 1000 }
+
 /** Successfully finished jobs are deleted after this long (failed ones stay as the status). */
 const DONE_RETENTION_DAYS = 7
 const MAX_ERROR_LENGTH = 500
@@ -77,6 +86,16 @@ function erroredJob(job: SQL): SQL {
  */
 export function erroredJobExists(key: SQL): SQL {
   return sql`EXISTS (SELECT 1 FROM jobs j WHERE j.idempotency_key = ${key} AND ${erroredJob(sql`j`)})`
+}
+
+/**
+ * Boot catch-up condition: a job with idempotency key `key` exists, in any
+ * state (#453): an item derived by other versions needs a job only when
+ * there is none for the current ones (a pending one runs, an errored one is
+ * matched by `erroredJobExists`, a `LeaseExpired` one stays failed).
+ */
+export function jobExists(key: SQL): SQL {
+  return sql`EXISTS (SELECT 1 FROM jobs j WHERE j.idempotency_key = ${key})`
 }
 
 /**

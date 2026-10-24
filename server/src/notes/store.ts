@@ -9,7 +9,7 @@ import { mcpConnections, noteLinks, noteRevisions, notes, semanticEdges } from '
 import { recordJob } from '../monitoring/metrics.js'
 import { INSTANCE_LOCK_KEY, writesPaused } from './maintenance-lock.js'
 import { config } from '../config.js'
-import { kickEmbeddings } from '../search/embedding-queue.js'
+import { embeddingJobKey, kickEmbeddings } from '../search/embedding-queue.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import {
   closeNoteEditors,
@@ -1688,7 +1688,7 @@ export async function noteIndexed(noteId: string, seq: number): Promise<boolean>
         SELECT 1 FROM note_projections
         WHERE note_id = ${noteId} AND projection IN ('file', 'dir_index') AND applied_seq < ${seq}
       ) AND NOT EXISTS (
-        SELECT 1 FROM jobs WHERE idempotency_key = ${`embed_note:${noteId}:${seq}`} AND done_at IS NULL
+        SELECT 1 FROM jobs WHERE idempotency_key = ${embeddingJobKey(noteId, seq)} AND done_at IS NULL
       ) AS indexed`)) as unknown as Array<{ indexed: boolean }>
   return found?.indexed === true
 }

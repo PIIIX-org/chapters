@@ -1,13 +1,18 @@
 // ADR-003 S5 (#494): repository extraction and note embedding run from rows
-// of the `jobs` table, not from in-process arrays. These tests use only the
-// queue entry points that existed before, plus SQL on `jobs`.
+// of the `jobs` table, not from in-process arrays. These tests use the queue
+// entry points, their job keys (#453) and SQL on `jobs`.
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { jobs, notes, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
-import { flushExtraction, scheduleExtraction, scheduleMissingExtractions } from '../src/repositories/extraction-queue.js'
-import { flushEmbeddings, scheduleEmbedding } from '../src/search/embedding-queue.js'
+import {
+  extractionJobKey,
+  flushExtraction,
+  scheduleExtraction,
+  scheduleMissingExtractions,
+} from '../src/repositories/extraction-queue.js'
+import { embeddingJobKey, flushEmbeddings, scheduleEmbedding } from '../src/search/embedding-queue.js'
 import { embedder } from '../src/search/embeddings.js'
 import { createActiveUser } from './helpers.js'
 
@@ -31,7 +36,7 @@ async function fileWithoutExtraction(name: string) {
     .insert(repositoryFiles)
     .values({ repositoryId: repo!.id, path, language: 'typescript', content, contentHash, size: content.length })
     .returning()
-  return { repo: repo!, file: file!, key: `extract:${file!.id}:${contentHash}` }
+  return { repo: repo!, file: file!, key: extractionJobKey(file!.id, contentHash) }
 }
 
 /** Counts embedder calls whose first text is the given file's `${path}\n…`. */
@@ -138,7 +143,7 @@ describe('durable note embedding jobs (#494)', () => {
     expect(rows).toHaveLength(1)
     // `notes.seq` (migration 0021) is not in the Drizzle schema yet.
     const [{ seq }] = (await db.execute(sql`SELECT seq FROM notes WHERE id = ${note!.id}`)) as unknown as [{ seq: string }]
-    expect(rows[0]!.idempotencyKey).toBe(`embed_note:${note!.id}:${seq}`)
+    expect(rows[0]!.idempotencyKey).toBe(embeddingJobKey(note!.id, seq))
     expect(rows[0]!.doneAt).not.toBeNull()
   })
 })

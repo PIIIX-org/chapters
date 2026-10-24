@@ -340,7 +340,9 @@ export const instanceState = pgTable('instance_state', {
  *
  * Migration 0021 (ADR-003 §4) also adds `seq bigint NOT NULL DEFAULT 1`
  * (bumped by the `notes_bump_seq` trigger on any change of body, frontmatter,
- * path or deleted_at) and `frontmatter_src json`. They are deliberately not
+ * path or deleted_at) and `frontmatter_src json`; migration 0033 (#453) adds
+ * `embedder_id text` (search/embeddings.ts `EMBEDDER_ID` of the embedding;
+ * null before #453). They are deliberately not
  * in this model: rows are returned whole by REST and MCP, so declaring them
  * would add fields to responses. The store reads them with SQL
  * (store-tx.ts `storedColumns`).
@@ -763,6 +765,16 @@ export const repositoryFiles = pgTable(
      * per-file symbol budget); null when it embedded everything.
      */
     embeddingNote: text('embedding_note'),
+    /**
+     * What produced this file's imports, symbols and vectors (#453, migration
+     * 0033), written in one transaction with them: the `content_hash` they
+     * were extracted from, extraction.ts `EXTRACTOR_VERSION` (0: before #453)
+     * and embeddings.ts `EMBEDDER_ID` (null: before #453). Boot catch-up
+     * re-extracts a file whose values differ from its content and the running code.
+     */
+    extractedHash: text('extracted_hash'),
+    extractorVersion: integer('extractor_version').notNull().default(0),
+    embedderId: text('embedder_id'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

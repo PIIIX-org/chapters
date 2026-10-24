@@ -5,6 +5,19 @@ import { Parser, Language, Query, Tree } from 'web-tree-sitter'
 
 const require = createRequire(import.meta.url)
 
+/**
+ * Version of everything that turns a repository file's content into its
+ * imports and symbols (#453): the grammars and queries below, the symbol
+ * kinds, and in extraction-queue.ts the minified-file rule, the snippet cut
+ * and the symbol embed text. Bump it with any change to those: it is part of
+ * the `extract` job key and stored on `repository_files.extractor_version`,
+ * so the next boot re-extracts every file another version produced (old rows
+ * stay searchable until each file's new result commits).
+ * 1: tree-sitter TypeScript, JavaScript, Python, Go, imports with their line
+ * (#558). Rows extracted before #453 carry 0.
+ */
+export const EXTRACTOR_VERSION = 1
+
 export type SymbolKind = 'function' | 'class' | 'interface' | 'type'
 
 export interface ExtractedSymbol {
