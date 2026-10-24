@@ -871,6 +871,7 @@ const test: LabTest = {
       { name: 'concepts/../../escape2.md', data: enc.encode('---\ntype: escape2\n---\nx') },
       { name: 'assets/../../../escape.png', data: makePng(2, 2, 1) },
       { name: 'assets/ok.png', data: makePng(2, 2, 2) },
+      // A type that is not the folder is a free OKF type since #444: this note imports.
       { name: 'concepts/mismatch.md', data: enc.encode('---\ntype: tables\n---\nwrong type') },
       { name: 'concepts/no-fence.md', data: enc.encode('no frontmatter at all') },
       { name: 'concepts/good.md', data: enc.encode('---\ntype: concepts\ntitle: good\n---\nfine\n') },
@@ -882,11 +883,14 @@ const test: LabTest = {
     const evilShare = evilJson?.vaultId
       ? await ctx.docker.psqlRows<{ grantee_id: string; permission: string }>(`select grantee_id, permission from vault_shares where vault_id = '${evilJson.vaultId}'`)
       : []
+    const evilPaths = evilJson?.vaultId
+      ? (await ctx.docker.psqlRows<{ path: string }>(`select path from notes where vault_id = '${evilJson.vaultId}' and deleted_at is null order by path`)).map((r) => r.path)
+      : []
     checks.push({
       name: 'crafted archive: traversal entries are not written outside the vault',
-      expected: 'only concepts/good imported; no escape* files',
-      actual: `${evilRes.status} imported=${evilJson?.imported} skipped=${evilJson?.skipped.length}; escape files: ${escaped.stdout.trim() || 'none'}`,
-      ok: evilJson?.imported === 1 && escaped.stdout.trim() === '',
+      expected: 'only concepts/good and concepts/mismatch (a free type, #444) imported; no escape* files',
+      actual: `${evilRes.status} imported=${evilJson?.imported} (${evilPaths.join(', ')}) skipped=${evilJson?.skipped.length}; escape files: ${escaped.stdout.trim() || 'none'}`,
+      ok: evilPaths.join(',') === 'concepts/good,concepts/mismatch' && escaped.stdout.trim() === '',
       severity: 'high',
       detail: evilJson,
     })
