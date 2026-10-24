@@ -16,7 +16,7 @@ import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
 type Truncated =
@@ -62,11 +62,12 @@ async function mcpClient(token: string): Promise<Client> {
   return client
 }
 
-async function call(tool: string, args: Args): Promise<{ isError: boolean; text: string }> {
+/** `text`: the answer as one JSON (read_note's body block in its key, #445); `chars`: what every block takes, as the budget counts it. */
+async function call(tool: string, args: Args): Promise<{ isError: boolean; text: string; chars: number }> {
   resetRateLimits()
   const result = await agent.callTool({ name: tool, arguments: args })
   const content = result.content as Array<{ type: string; text?: string }>
-  return { isError: result.isError === true, text: content.map((c) => c.text ?? '').join('') }
+  return { isError: result.isError === true, text: toolText(content), chars: content.map((c) => c.text ?? '').join('\n').length }
 }
 
 /** One answer, checked against the envelope's invariants: within budget, `truncated` last and consistent. */
@@ -74,7 +75,7 @@ async function page(tool: string, args: Args): Promise<Answer> {
   const r = await call(tool, args)
   expect(r.isError, `${tool}: ${r.text.slice(0, 300)}`).toBe(false)
   const budget = typeof args.budget_tokens === 'number' ? args.budget_tokens : (DEFAULT_BUDGET[tool] ?? 2_000)
-  expect(Math.ceil(r.text.length / 4), `${tool} answer of ${r.text.length} chars over ${budget} tokens`).toBeLessThanOrEqual(budget)
+  expect(Math.ceil(r.chars / 4), `${tool} answer of ${r.chars} chars over ${budget} tokens`).toBeLessThanOrEqual(budget)
   const json = JSON.parse(r.text) as Answer
   expect(Object.keys(json).at(-1)).toBe('truncated')
   const t = json.truncated
@@ -303,7 +304,7 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
     await updateNote(vaultId, BIG, { body })
   })
 
-  it('read_note records the last read (#864) only when it returned the whole body', async () => {
+  it('read_note records the rev it reports as the last read (#864, #961), on a paged read too', async () => {
     const recorded = async (path: string) => {
       const [read] = await db
         .select({ rev: noteReads.rev })
@@ -312,8 +313,9 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
         .where(and(eq(noteReads.connectionId, agentConnectionId), eq(notes.vaultId, vaultId), eq(notes.path, path)))
       return read
     }
-    await page('read_note', { vaultId, path: BIG })
-    expect(await recorded(BIG)).toBeUndefined()
+    const paged = await page('read_note', { vaultId, path: BIG })
+    expect(paged.truncated).not.toBe(false)
+    expect(await recorded(BIG)).toMatchObject({ rev: paged.rev })
     const small = await page('read_note', { vaultId, path: 'docs/small' })
     expect(small.truncated).toBe(false)
     expect(small.body).toBe('A small note.\n')
@@ -336,12 +338,12 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
         expect(r.isError, `${tool} ${path}: ${r.text.slice(0, 200)}`).toBe(false)
         const json = JSON.parse(r.text) as Answer
         expect(json).toMatchObject({ body: '', truncated: false })
-        expect(r.text.length).toBeGreaterThan(chars)
+        expect(r.chars).toBeGreaterThan(chars)
       }
     }
   })
 
-  it('a paged read drops an older base: read, a person grows the note, paged read, whole-body edit is applied', async () => {
+  it('a paged read replaces an older base: read, a person grows the note, paged read, whole-body edit is not conflicted', async () => {
     const path = 'docs/grows'
     await createNote(vaultId, { path, body: 'short\n' })
     const first = await page('read_note', { vaultId, path })
@@ -352,11 +354,33 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
     expect(pages.length).toBeGreaterThan(1)
     const body = pages.map((p) => p.body).join('')
     expect(body).toBe(grown)
-    const [note] = await db.select({ id: notes.id }).from(notes).where(and(eq(notes.vaultId, vaultId), eq(notes.path, path)))
-    expect(await db.select().from(noteReads).where(and(eq(noteReads.connectionId, agentConnectionId), eq(noteReads.noteId, note!.id)))).toEqual([])
     const edit = await call('edit_note', { vaultId, path, body: `${body}agent line\n` })
     expect(edit.isError, edit.text.slice(0, 300)).toBe(false)
-    expect(JSON.parse(edit.text)).toMatchObject({ status: 'applied', body: `${grown}agent line\n` })
+    const result = JSON.parse(edit.text) as { status: string; body: string; baseRev?: number }
+    expect(['applied', 'merged']).toContain(result.status)
+    expect(result).toMatchObject({ body: `${grown}agent line\n`, baseRev: pages[0]!.rev })
+  })
+
+  it('a paged read is a merge base (#961): paged read, a person edits line 5, a whole-body edit keeps both edits', async () => {
+    const path = 'docs/sixty'
+    const lines = Array.from({ length: 60 }, (_, i) => `line ${i + 1} of the note, with enough words to fill a page quickly`)
+    await createNote(vaultId, { path, body: `${lines.join('\n')}\n` })
+    const pages = await walk('read_note', { vaultId, path, budget_tokens: 256 })
+    expect(pages.length).toBeGreaterThan(1)
+    const read = pages.map((p) => p.body).join('')
+    expect(read).toBe(`${lines.join('\n')}\n`)
+    // A person edits line 5 after the agent's read.
+    const theirs = [...lines]
+    theirs[4] = 'line 5 rewritten by a person'
+    await updateNote(vaultId, path, { body: `${theirs.join('\n')}\n` }, { type: 'user', id: ownerId })
+    // The agent sends its whole body with its own change at line 50, without base_rev.
+    const mine = [...lines]
+    mine[49] = 'line 50 rewritten by the agent'
+    const edit = await call('edit_note', { vaultId, path, body: `${mine.join('\n')}\n` })
+    expect(edit.isError, edit.text.slice(0, 300)).toBe(false)
+    const both = [...theirs]
+    both[49] = 'line 50 rewritten by the agent'
+    expect(JSON.parse(edit.text)).toMatchObject({ status: 'merged', baseRev: pages[0]!.rev, body: `${both.join('\n')}\n` })
   })
 
   it('get_revision pages the revision body the same way', async () => {

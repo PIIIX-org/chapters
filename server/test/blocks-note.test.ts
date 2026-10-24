@@ -214,7 +214,7 @@ describe('the note vector leg rolls blocks up to one hit per note (#452)', () =>
     await embedNow(other!.id)
     expect((await noteBlockRows(note.id)).length).toBe(6)
 
-    const hits = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, 'kiwi orchard harvest', 10)
+    const hits = (await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, 'kiwi orchard harvest', 10)).results
     expect(hits.filter((h) => h.id === note.id)).toHaveLength(1)
     expect(hits[0]!.id).toBe(note.id)
     // One contribution per leg at most (RRF k = 60): duplicates in the vector leg would add more.

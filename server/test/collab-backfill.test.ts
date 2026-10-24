@@ -375,6 +375,27 @@ describe('roll-forward after a code-only rollback (§9)', () => {
     // Leave no export bins for the tests after this one.
     await rm(join(config.dataDir, 'vaults', vaultId, '.crdt'), { recursive: true, force: true })
   })
+
+  it('a note whose unfolded typing changed only its frontmatter type gets no bin: the type is compared too (#444)', async () => {
+    await db.execute(sql`
+      INSERT INTO instance_state (id, store_migrated_at) VALUES ('singleton', now()) ON CONFLICT (id) DO UPDATE SET store_migrated_at = now()`)
+    const note = await create('export-type', 'Same body.\n')
+    const { state } = await loadCollabState(vaultId, note.id)
+    const tab = new Y.Doc()
+    Y.applyUpdate(tab, state)
+    const sv = Y.encodeStateVector(tab)
+    tab.getMap('frontmatter').set('type', 'Decision Record')
+    expect(await appendCollabUpdate(vaultId, note.id, Y.encodeStateAsUpdate(tab, sv), { type: 'collab' })).not.toBeNull()
+    setFailpointHandler((point) => {
+      if (point === 'fold.before-commit') throw new FailpointError(point)
+    })
+    const report = await exportLegacyFiles()
+    setFailpointHandler(null)
+    // The bin would carry a type the row and its file do not have.
+    expect(report.bins.skipped.map((s) => s.noteId)).toContain(note.id)
+    expect(await loadCrdtState(vaultId, note.path)).toBeNull()
+    await rm(join(config.dataDir, 'vaults', vaultId, '.crdt'), { recursive: true, force: true })
+  })
 })
 
 describe('the boot fold (§7 steps 4-5)', () => {

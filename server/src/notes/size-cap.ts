@@ -1,5 +1,5 @@
 import { config } from '../config.js'
-import { OkfValidationError } from './okf.js'
+import { assertFrontmatterDepth, OkfValidationError } from './okf.js'
 
 /**
  * One size cap for every write path (#491): REST, MCP, import and the collab
@@ -22,11 +22,15 @@ export class NoteTooLargeError extends OkfValidationError {
   readonly statusCode = 413
   /**
    * `atLeast`: `bytes` is a lower bound, for a body refused before it is built.
-   * `part`: what is over the cap, the body or (#933) the frontmatter.
+   * `part`: what is over the cap, the body or (#933) the frontmatter. The
+   * error envelope's `rule` (#439) names the limit of that part.
    */
   constructor(bytes: number, limit: number, context?: string, atLeast = false, part: 'body' | 'frontmatter' = 'body') {
+    const what = part === 'body' ? 'body' : 'frontmatter (keys and values as JSON)'
     super(
-      `${context ? `${context}: ` : ''}note ${part === 'body' ? 'body' : 'frontmatter (keys and values as JSON)'} ${atLeast ? 'would be at least' : 'is'} ${bytes} bytes (UTF-8); the limit is ${limit} bytes (ELARA_NOTE_MAX_BYTES)`,
+      `${context ? `${context}: ` : ''}note ${what} ${atLeast ? 'would be at least' : 'is'} ${bytes} bytes (UTF-8); the limit is ${limit} bytes (ELARA_NOTE_MAX_BYTES)`,
+      'invalid',
+      `note ${what} at most ${limit} bytes (UTF-8, ELARA_NOTE_MAX_BYTES)`,
     )
   }
 }
@@ -100,9 +104,12 @@ export function frontmatterBytes(frontmatter: Record<string, unknown>): number {
  * The body cap's rule for frontmatter (#933), counted apart from the body:
  * throws NoteTooLargeError unless `frontmatter` is within the cap or no
  * larger than `current` (absent for a new note), so per-key merges cannot
- * grow it past the cap and a note already over it can still shrink.
+ * grow it past the cap and a note already over it can still shrink. The
+ * nesting bound (assertFrontmatterDepth, #970) runs first: measuring walks
+ * the whole value, and on some write paths this runs before validateNote.
  */
 export function assertFrontmatterFits(frontmatter: Record<string, unknown>, current?: Record<string, unknown>): void {
+  assertFrontmatterDepth(frontmatter)
   const limit = config.noteMaxBytes
   const bytes = frontmatterBytes(frontmatter)
   if (bytes <= limit) return

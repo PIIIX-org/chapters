@@ -105,9 +105,9 @@ describe('applyBodyOps resolution', () => {
 })
 
 describe('applyFrontmatterOps', () => {
-  it('refuses list ops on a value that is not a list, and the type key', () => {
+  it('refuses list ops on a value that is not a list, and sets the type key like any other (#444)', () => {
     expect(() => applyFrontmatterOps({ title: 'x' }, [{ op: 'frontmatter_add', key: 'title', value: 'y' }])).toThrow(/not a list/)
-    expect(() => applyFrontmatterOps({}, [{ op: 'frontmatter_set', key: 'type', value: 'other' }])).toThrow(/`type` is the note's folder/)
+    expect(applyFrontmatterOps({ type: 'notes' }, [{ op: 'frontmatter_set', key: 'type', value: 'decision' }])).toEqual({ type: 'decision' })
   })
 
   it('compares list items by value, nested ones included', () => {

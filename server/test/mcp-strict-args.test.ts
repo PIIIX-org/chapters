@@ -10,7 +10,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { buildApp } from '../src/app.js'
 import { listMcpTools } from '../src/mcp/server.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
 interface JsonSchema {
@@ -59,14 +59,20 @@ async function call(client: Client, name: string, args: Args): Promise<{ isError
   resetRateLimits()
   const result = await client.callTool({ name, arguments: args })
   const content: unknown[] = Array.isArray(result.content) ? result.content : []
-  return { isError: result.isError === true, text: content.map((c) => field(c, 'text')).join('') }
+  return { isError: result.isError === true, text: toolText(content) }
 }
 
-/** A refused call: its text, after checking it is an error. */
-async function refusal(client: Client, name: string, args: Args): Promise<string> {
+/** A refused call's error envelope (#439), after checking it is an error. */
+async function refused(client: Client, name: string, args: Args): Promise<{ code: string; message: string; field?: string; suggestions?: string[] }> {
   const r = await call(client, name, args)
   expect(r.isError, `${name} ${JSON.stringify(args)} answered ${r.text.slice(0, 200)}`).toBe(true)
-  return r.text
+  const envelope = JSON.parse(r.text) as { error: { code: string; message: string; field?: string; suggestions?: string[] } }
+  return envelope.error
+}
+
+/** A refused call's message. */
+async function refusal(client: Client, name: string, args: Args): Promise<string> {
+  return (await refused(client, name, args)).message
 }
 
 /** Every object node of a JSON Schema, with its path, through `properties` and `anyOf`. */
@@ -100,6 +106,11 @@ describe('MCP tools reject unknown arguments (#437)', () => {
     const path = 'concepts/strict-content-probe'
     const text = await refusal(account, 'create_note', { vaultId, path, content: 'the body I meant to write' })
     expect(text).toMatch(/unknown argument "content" \(did you mean "body"\?\)/)
+    expect(await refused(account, 'create_note', { vaultId, path, content: 'x' })).toMatchObject({
+      code: 'INVALID_ARGUMENT',
+      field: 'content',
+      suggestions: ['body'],
+    })
     for (const param of ['vaultId', 'path', 'type', 'name', 'frontmatter', 'body']) expect(text).toContain(param)
     expect(await refusal(account, 'read_note', { vaultId, path })).toMatch(/not found/)
   })

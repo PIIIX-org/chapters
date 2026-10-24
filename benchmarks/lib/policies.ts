@@ -125,27 +125,19 @@ interface SearchHit {
 }
 
 /**
- * The hits in the order the agent reads them: the server's order (score,
- * best first), with hits of exactly equal score taken by path, so a tie the
- * server leaves to database row order cannot move a question between runs.
- * The server's own ordering is not changed (#623 tracks its missing
- * tie-breaker).
+ * The hits of a `search` answer (#441, #442, #458): `results` of the
+ * `{status, retrieval_mode, degraded, index?, results, truncated}` envelope,
+ * in the server's order (score, then path, then id). Down the budget's
+ * ladder a hit is its location string, `path` or `path#La-Lb`; at `counts`
+ * and `total` there are no hits to read.
  */
-export function readingOrder<T extends SearchHit>(hits: readonly T[]): T[] {
-  const path = (h: SearchHit) => (typeof h.path === 'string' ? h.path : '')
-  const out: T[] = []
-  let run: T[] = []
-  const flush = () => {
-    out.push(...run.sort((a, b) => (path(a) < path(b) ? -1 : path(a) > path(b) ? 1 : 0)))
-    run = []
-  }
-  for (const h of hits) {
-    // Only consecutive hits with the same numeric score are a tie; anything else keeps its place.
-    if (run.length > 0 && !(typeof h.score === 'number' && h.score === run[0]!.score)) flush()
-    run.push(h)
-  }
-  flush()
-  return out
+export function searchHits(answer: unknown): SearchHit[] {
+  const results: unknown = answer && typeof answer === 'object' ? Reflect.get(answer, 'results') : undefined
+  if (!Array.isArray(results)) return []
+  return results.flatMap((hit: unknown): SearchHit[] => {
+    if (typeof hit === 'string') return [{ path: hit.replace(/#L\d+(-L\d+)?$/, '') }]
+    return hit && typeof hit === 'object' ? [hit as SearchHit] : []
+  })
 }
 
 function parseJson(text: string): unknown {
@@ -211,7 +203,7 @@ export async function runElara(question: string, gold: readonly LineRange[], too
   const res = await tools.search(question)
   const { visible, truncated } = ep.clip(res.text)
   const parsed = res.ok ? parseJson(res.text) : undefined
-  const hits: SearchHit[] = Array.isArray(parsed) ? readingOrder(parsed as SearchHit[]) : []
+  const hits = searchHits(parsed)
   const ranges = hits.map(symbolLines).filter((r): r is LineRange => r !== null)
   ep.record('search', question, visible, truncated, res.ms, res.ok, ranges)
   const ranking = dedupe(hits.map((h) => h.path).filter((p): p is string => typeof p === 'string'))
