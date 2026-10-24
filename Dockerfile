@@ -59,7 +59,14 @@ COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --chown=node:node client/package.json ./client/
 COPY --chown=node:node server/package.json ./server/
 
-RUN pnpm install --frozen-lockfile --filter @elara/server
+# The tree-sitter grammar packages (server/package.json) also ship their
+# generated C sources and native prebuilds, most of their ~300 MB; the server
+# loads only each package's .wasm (repositories/extraction.ts), and no native
+# build runs (`allowBuilds: false`). Deleted in the install layer, so the
+# image never carries them (#464).
+RUN pnpm install --frozen-lockfile --filter @elara/server \
+ && find node_modules/.pnpm -mindepth 4 -maxdepth 5 -type d \( -name src -o -name prebuilds \) \
+      -path 'node_modules/.pnpm/*tree-sitter-*/node_modules/*tree-sitter-*/*' -prune -exec rm -rf {} +
 
 COPY --chown=node:node tsconfig.base.json ./
 COPY --chown=node:node server ./server

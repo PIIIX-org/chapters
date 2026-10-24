@@ -192,10 +192,10 @@ describe('extraction queue', () => {
 
   it('embeds an unsupported-language file without producing import/symbol rows', async () => {
     const repo = await makeRepo()
-    await syncRepositoryFiles(repo.id, [{ path: 'README.rs', content: 'fn main() {}' }], ['README.rs'])
+    await syncRepositoryFiles(repo.id, [{ path: 'Sources/main.swift', content: 'func main() {}' }], ['Sources/main.swift'])
     await flushExtraction()
 
-    const file = await fileByPath(repo.id, 'README.rs')
+    const file = await fileByPath(repo.id, 'Sources/main.swift')
     expect(await fileEmbedding(file.id)).not.toBeNull()
     const symbols = await symbolBlocks(file.id)
     expect(symbols).toHaveLength(0)
