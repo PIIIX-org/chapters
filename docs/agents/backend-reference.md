@@ -2479,9 +2479,17 @@ That re-extraction is also the backfill of import `line`s from before 0031
 (#558, ADR-004 A7). A note written 2 s into that catch-up had its vector
 81 ms later and a file pushed then had its symbols in 99 ms: writes go
 first (**Durable jobs**). *Upgrade to 0036* (#452b): every note is
-re-embedded once as its blocks (`chunk_version` 0), about 12 blocks a note
-on the Chapters vault, and every file re-extracted once with no vector
-computed again (`CHUNK_VERSION` 2). *Later bumps:* an `EXTRACTOR_VERSION` bump costs
+re-embedded once as its blocks (`chunk_version` 0) and every file
+re-extracted once with no vector computed again (`CHUNK_VERSION` 2). The
+note re-embed is the cost: the Chapters vault snapshot has 11.95 blocks a
+note (206 notes, 2,461 blocks), and bge-small on CPU took about 0.2 s a
+block (491 s for those 2,461 blocks, in the worker's batches of 8, against
+50 s for one whole-note text each), so plan about 6.7 hours of background
+embedding per 10,000 notes of that shape (one embedder thread). Meanwhile
+the `legacy:note` blocks keep the note vector leg answering, and a note
+written during it is embedded first (its job has priority 0, the catch-up
+1). After that, an edit embeds only the blocks whose text changed.
+*Later bumps:* an `EXTRACTOR_VERSION` bump costs
 the same parse per file, plus embedding only symbols whose embed text
 changed; an `EMBEDDER_ID` bump re-embeds every note and file (the ~100 ms /
 640 ms above per item), in the background behind writes, the old vectors
