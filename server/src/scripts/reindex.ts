@@ -10,6 +10,7 @@ import { db, sql } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { runMigrations } from '../db/migrate.js'
 import { syncNoteLinks } from '../notes/store.js'
+import { JOB_PRIORITY } from '../jobs/durable.js'
 import { enqueueEmbeddings, flushEmbeddings } from '../search/embedding-queue.js'
 import { holdSharedLockOrExit } from '../notes/maintenance-lock.js'
 
@@ -24,10 +25,12 @@ console.log(`reindexing ${rows.length} notes...`)
 for (const row of rows) {
   await syncNoteLinks(row.id, row.body)
 }
-// Re-embeds notes whose job for the current version already finished, too.
+// Re-embeds notes whose job for the current version already finished, too,
+// behind the jobs of the running server's writes.
 await enqueueEmbeddings(
   rows.map((r) => r.id),
   'finished',
+  JOB_PRIORITY.catchUp,
 )
 await flushEmbeddings()
 console.log('done')
