@@ -35,6 +35,9 @@ import {
  */
 export const EMBEDDING_JOB = 'embed_note'
 
+/** At most this many of a note's blocks, in body order, query its semantic neighbours (semantic-edges.ts). */
+export const EDGE_QUERY_BLOCKS = 16
+
 /** The key of the job that embeds note `noteId` at `seq` with the running embedder and chunker (#453, #452). */
 export function embeddingJobKey(noteId: string, seq: number | string): string {
   return `${EMBEDDING_JOB}:${noteId}:${seq}:${EMBEDDER_ID}+chunk${CHUNK_VERSION}`
@@ -248,5 +251,7 @@ async function processNote(noteId: string, jobSeq: number | undefined): Promise<
   })
   // The note's neighbours follow its block vectors: a set that only kept vectors it had (a frontmatter edit) has the edges it had.
   const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !keys.includes(k))
-  if (written && changed) await recomputeSemanticEdges('note', noteId, vectors as number[][])
+  // A note's own neighbours come from its first EDGE_QUERY_BLOCKS blocks (the preamble and first sections): each
+  // costs one HNSW search per owner type, and a very long note has hundreds of blocks.
+  if (written && changed) await recomputeSemanticEdges('note', noteId, (vectors as number[][]).slice(0, EDGE_QUERY_BLOCKS))
 }

@@ -4,7 +4,7 @@
 // catch-up jobs still queued. Uses only entry points that existed before
 // (the fails-before job runs this file against the base source).
 import { createHash } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { and, eq, inArray, isNotNull } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { blocks, notes, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
@@ -20,6 +20,16 @@ const BACKLOG = 5
 afterEach(() => {
   vi.restoreAllMocks()
 })
+
+// The shared test database holds other files' rows the catch-up would also queue (since #452 a note whose
+// seq moved without a job lacks current blocks too): drain that backlog first, so each test's flush only
+// waits for its own BACKLOG.
+beforeAll(async () => {
+  await scheduleMissingEmbeddings()
+  await flushEmbeddings()
+  await scheduleMissingExtractions()
+  await flushExtraction()
+}, 600_000)
 
 describe('writes are served before the boot catch-up backlog (#453)', () => {
   it('a push during the extraction catch-up is extracted before the backlog of its repository', async () => {
