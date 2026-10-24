@@ -66,7 +66,8 @@ function contentBytes(content: Y.Item['content']): number {
 
 /**
  * Everything in `doc` but the body's text, in bytes: the frontmatter's keys
- * and values as JSON, and any other content. The relay bounds it by the same
+ * and values as JSON, and any other content, map entries on the body root
+ * included (#952). The relay bounds it by the same
  * cap as the body (#780) and measures it the same way
  * (server/src/sync/collab-size.ts `restBytes`), so the editor knows when a
  * change it refused fits again.
@@ -77,7 +78,8 @@ export function restBytes(doc: Y.Doc): number {
   for (const structs of doc.store.clients.values()) {
     for (const struct of structs) {
       if (!(struct instanceof Y.Item) || struct.deleted) continue
-      if (struct.parent === body && struct.content instanceof Y.ContentString) continue
+      // Only the body's own text is the body measure's; a map entry on the body root is rest (#952).
+      if (struct.parent === body && struct.parentSub === null && struct.content instanceof Y.ContentString) continue
       bytes += contentBytes(struct.content) + (struct.parentSub === null ? 0 : utf8Length(struct.parentSub))
     }
   }
