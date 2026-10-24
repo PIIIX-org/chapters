@@ -28,7 +28,7 @@ committed baseline of known defects.
 
 | tier | when | tests | time |
 |---|---|---|---|
-| fast | PRs to `dev` that change anything the image is built from (`server/**`, `client/**`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`) or the lab (`lab/**`, the lab workflow, the `lab-instance` action, the gate); pushes to `lab/**` | tests with `tier: 'fast'`, with their long parts skipped | lab job 5 min 37 s (run 38830575391) |
+| fast | PRs to `dev` that change anything the image is built from (`server/**`, `client/**`, `skills/elara/references/mcp-tools.md` (the tool manuals the server serves, #429), `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`) or the lab (`lab/**`, the lab workflow, the `lab-instance` action, the gate); pushes to `lab/**` | tests with `tier: 'fast'`, with their long parts skipped | lab job 5 min 37 s (run 38830575391) |
 | full | nightly 02:30 UTC on `dev`, every PR to `prod` (promotion), and by hand | every test, every part | lab job 61 min (run 38830570057; `restart-extraction` 19 min, `big-notes` 18 min) |
 
 The `plan` job reads the PR's changed files (GitHub API); a PR to `dev`
