@@ -321,10 +321,15 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     await flushExtraction()
     const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id))
     expect((await fileVersions(file!.id)).extractor_version).toBe(1)
-    // Stand-in for the broken outline version 1's TypeScript grammar left.
-    await db.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    // Stand-in for the broken outline version 1's TypeScript grammar left:
+    // the declaration before the JSX, none of those after it.
+    await db
+      .delete(repositoryFileSymbols)
+      .where(and(eq(repositoryFileSymbols.fileId, file!.id), inArray(repositoryFileSymbols.name, ['Page', 'PageProps'])))
+    const [cardBefore] = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
     versions.extractor = shipped.extractor
     await othersCurrent(repo!.id, null)
+    const texts = embeddedTexts()
 
     expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
     await flushExtraction()
@@ -337,6 +342,15 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
       ['Page', 'function', 4, 4],
       ['PageProps', 'interface', 5, 5],
     ])
+    // The bump costs a parse: the file vector and Card's vector are kept; only
+    // the two symbols the TSX grammar recovers are embedded.
+    const embeddedHere = texts.filter((t) => t.includes(file!.path))
+    expect(embeddedHere.map((t) => t.split('\n')[0])).toEqual([
+      `function Page in ${file!.path}:4`,
+      `interface PageProps in ${file!.path}:5`,
+    ])
+    expect(byLine[0]!.embedding).toEqual(cardBefore!.embedding)
+    expect(byLine.every((s) => s.embedding !== null)).toBe(true)
   })
 })
 
