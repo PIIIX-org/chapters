@@ -16,6 +16,8 @@ import {
 import { z } from 'zod'
 import { and, asc, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
+import { DATABASE_FAILED, databaseFailure } from '../db/errors.js'
+import { findNulByte, nulByteMessage } from '../nul-bytes.js'
 import {
   graphPerspectives,
   notifications,
@@ -443,14 +445,35 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       // The SDK answers what it refuses itself (arguments its schema check
       // rejects, an unknown tool, an answer failing its outputSchema) as
       // `MCP error -32602: ...` text before or after tool(); it becomes the
-      // error envelope here too (#439).
+      // error envelope here too (#439). A NUL byte in any string or key of
+      // the arguments is refused first, for every tool (#443).
       const callTool = handler as (request: CallToolRequest, extra: unknown) => Promise<CallToolResult>
       return setRequestHandler(schema, async (request: CallToolRequest, extra: unknown) => {
+        const nul = findNulByte(request.params.arguments)
+        if (nul) {
+          const field = nul.field || 'arguments'
+          return errorResult(envelope('INVALID_ARGUMENT', nulByteMessage(field, nul.inKey), { field }))
+        }
         const result = await callTool(request, extra)
         return result.isError && !toolErrors.has(result) ? errorResult(await sdkRefusal(request.params, result)) : result
       })
     }
-    return setRequestHandler(schema, handler)
+    // Other requests (prompts/get, resources/read): a NUL byte in their
+    // params is InvalidParams, and a failed query a fixed message, since the
+    // SDK answers a thrown error with its message (#443).
+    const handle = handler as (request: { params?: unknown }, extra: unknown) => unknown
+    return setRequestHandler(schema, async (request: { params?: unknown }, extra: unknown) => {
+      const nul = findNulByte(request.params)
+      if (nul) throw new McpError(ErrorCode.InvalidParams, nulByteMessage(nul.field || 'params', nul.inKey))
+      try {
+        return await handle(request, extra)
+      } catch (err) {
+        const failure = databaseFailure(err)
+        if (!failure) throw err
+        console.error('[mcp] request failed:', failure.logged, { query: failure.query })
+        throw new McpError(ErrorCode.InternalError, DATABASE_FAILED)
+      }
+    })
   }
 
   /**
