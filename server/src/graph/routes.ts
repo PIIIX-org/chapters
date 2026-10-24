@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply } from 'fastify'
 import { and, asc, eq, inArray, or } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import {
@@ -10,9 +10,32 @@ import {
 } from '../db/schema.js'
 import { atLeast, listAccessibleVaults, resolveAccess, UUID_REGEX } from '../vaults/permissions.js'
 import { listAccessibleRepositories } from '../repositories/permissions.js'
-import { buildGraph, findShortestPath } from './assemble.js'
+import { buildGraph, findShortestPath, type GraphResourceSet } from './assemble.js'
 import { graphQuerySchema, parseGraphFilters, type GraphQuery } from './filters.js'
 import { isInstanceAdmin, visibleGlobalPerspectives } from './perspective-access.js'
+import { resolveNode, type NodeResolution } from './resolve-node.js'
+
+/**
+ * The shortest path between the nodes `source` and `target` name, as
+ * `resolveNode` resolves them (#447). An end naming several nodes answers
+ * `{end, candidates, truncated}` (`truncated`: how many more matched, or
+ * false); an end naming none is 404 with nearby paths as `suggestions`.
+ */
+async function pathBetween(resources: GraphResourceSet, source: string, target: string, reply: FastifyReply) {
+  const [from, to] = await Promise.all([resolveNode(resources, source), resolveNode(resources, target)])
+  const missing = (end: string, suggestions: string[]) =>
+    reply.code(404).send({ error: `${end} node not found in graph`, ...(suggestions.length > 0 ? { suggestions } : {}) })
+  const ambiguous = (end: string, found: Extract<NodeResolution, { candidates: unknown }>) => ({
+    end,
+    candidates: found.candidates,
+    truncated: found.total > found.candidates.length ? found.total - found.candidates.length : false,
+  })
+  if ('suggestions' in from) return missing('Source', from.suggestions)
+  if ('suggestions' in to) return missing('Target', to.suggestions)
+  if ('candidates' in from) return ambiguous('source', from)
+  if ('candidates' in to) return ambiguous('target', to)
+  return findShortestPath(await buildGraph(resources), from.node.id, to.node.id)
+}
 
 async function resolveMergedResources(userId: string): Promise<{ vaultIds: string[]; repositoryIds: string[] }> {
   const accessibleVaults = await listAccessibleVaults(userId)
@@ -106,11 +129,7 @@ export function graphRoutes(app: FastifyInstance) {
       if (!atLeast(access, 'read')) return reply.code(404).send({ error: 'not found' })
       const { source, target } = req.query
       if (!source || !target) return reply.code(400).send({ error: 'source and target required' })
-      const graph = await buildGraph({ vaultIds: [req.params.id], repositoryIds: [] })
-      const sNode = graph.nodes.find((n) => n.id === source || n.path === source)
-      const tNode = graph.nodes.find((n) => n.id === target || n.path === target)
-      if (!sNode || !tNode) return reply.code(404).send({ error: 'Source or target node not found in graph' })
-      return findShortestPath(graph, sNode.id, tNode.id)
+      return pathBetween({ vaultIds: [req.params.id], repositoryIds: [] }, source, target, reply)
     },
   )
 
@@ -132,12 +151,7 @@ export function graphRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { source, target } = req.query
       if (!source || !target) return reply.code(400).send({ error: 'source and target required' })
-      const resources = await resolveMergedResources(req.user!.id)
-      const graph = await buildGraph(resources)
-      const sNode = graph.nodes.find((n) => n.id === source || n.path === source)
-      const tNode = graph.nodes.find((n) => n.id === target || n.path === target)
-      if (!sNode || !tNode) return reply.code(404).send({ error: 'Source or target node not found in graph' })
-      return findShortestPath(graph, sNode.id, tNode.id)
+      return pathBetween(await resolveMergedResources(req.user!.id), source, target, reply)
     },
   )
 

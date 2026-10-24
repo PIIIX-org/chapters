@@ -6,7 +6,7 @@ import type { ToolProfile } from './server.js'
  * token of a profile gets the same bytes and a client can cache them (#681);
  * it counts in the reader budget (mcp-tool-budget.test.ts), so the reader
  * text holds only the budget, cursor and manual rules. Only tools with
- * `budget_tokens` answer with `truncated` (`search`, `list_vaults` and
+ * `budget_tokens` answer with `truncated` (`list_vaults` and
  * `list_repositories` answer bare arrays). Profiles that list the note
  * writes add how a whole body merges (every `read_note`, paged or not,
  * records its `rev` as the base, last-read.ts) and how a note write is retried (only

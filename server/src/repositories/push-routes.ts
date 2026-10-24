@@ -20,6 +20,9 @@ export function repositoryPushRoutes(app: FastifyInstance) {
   app.post<{ Body: PushBody }>(
     '/repositories/sync',
     {
+      // File content may hold NULs (binary-ish files): syncRepositoryFiles
+      // strips them and hashes the bytes as sent. Paths are still refused (#443).
+      config: { nulBytesAllowed: ['files.*.content'] },
       schema: {
         body: {
           type: 'object',
