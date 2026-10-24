@@ -366,9 +366,11 @@ const test: LabTest = {
       `select alias, token, lexemes from ts_debug('english', ${lit('می‌خواهم سی‌وسه‌پل كوير کویر يلدا یلدا ۱۳۴۹ 1349 PostgreSQL')})`,
     )
     const similarity = await ctx.docker.psqlRows<{ pair: string; avg_sim: number; min_sim: number }>(
-      `select a.tags || '-' || b.tags as pair, round(avg(1 - (a.embedding <=> b.embedding))::numeric, 3)::float as avg_sim, round(min(1 - (a.embedding <=> b.embedding))::numeric, 3)::float as min_sim
-       from (select id, embedding, frontmatter->'tags'->>0 as tags from notes where vault_id = '${V}') a
-       join (select id, embedding, frontmatter->'tags'->>0 as tags from notes where vault_id = '${V}') b on a.id < b.id
+      `with e as (select distinct on (n.id) n.id, b.embedding, n.frontmatter->'tags'->>0 as tags from notes n
+         join blocks b on b.owner_type = 'note' and b.owner_id = n.id and b.embedding is not null
+         where n.vault_id = '${V}' order by n.id, b.start_line, b.block_id)
+       select a.tags || '-' || b.tags as pair, round(avg(1 - (a.embedding <=> b.embedding))::numeric, 3)::float as avg_sim, round(min(1 - (a.embedding <=> b.embedding))::numeric, 3)::float as min_sim
+       from e a join e b on a.id < b.id
        group by 1 order by 1`,
     )
     // semantic-edges.ts:16-56 kNN is not scoped to a vault, so with identical
