@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql, type SQL } from 'drizzle-orm'
+import { and, eq, isNotNull, isNull, sql, type SQL } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFileSymbols, repositoryFiles } from '../db/schema.js'
@@ -9,6 +9,7 @@ import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type Extracti
 import { resolveImportPath } from './import-resolution.js'
 import { recordJob } from '../monitoring/metrics.js'
 import {
+  JOB_PRIORITY,
   MAX_JOB_ATTEMPTS,
   catchUpLimits,
   claimJob,
@@ -19,6 +20,7 @@ import {
   jobDrainer,
   jobExists,
   onJobConflict,
+  type JobPriority,
   type JobRerun,
 } from '../jobs/durable.js'
 
@@ -90,15 +92,22 @@ async function getRepoSiblings(repositoryId: string) {
   return cached
 }
 
-/** Inserts extraction jobs for these files at their current content, in this order (a repeated id counts once). */
-export async function enqueueExtractions(fileIds: string[], rerun: JobRerun = 'succeeded'): Promise<void> {
+/**
+ * Inserts extraction jobs for these files at their current content, in this
+ * order (a repeated id counts once), at `priority` (a push's are `write`).
+ */
+export async function enqueueExtractions(
+  fileIds: string[],
+  rerun: JobRerun = 'succeeded',
+  priority: JobPriority = JOB_PRIORITY.write,
+): Promise<void> {
   if (fileIds.length === 0) return
   // A push may list one path twice; ON CONFLICT DO UPDATE refuses a key twice in one statement.
   const ids = [...new Set(fileIds)]
   await db.execute(sql`
-    INSERT INTO jobs (kind, payload, idempotency_key)
+    INSERT INTO jobs (kind, payload, idempotency_key, priority)
     SELECT ${EXTRACTION_JOB}, jsonb_build_object('fileId', f.id::text, 'repositoryId', f.repository_id::text),
-      ${extractionJobKeySql(sql`f.id`, sql`f.content_hash`)}
+      ${extractionJobKeySql(sql`f.id`, sql`f.content_hash`)}, ${priority}::smallint
     FROM unnest(${`{${ids.join(',')}}`}::uuid[]) WITH ORDINALITY AS u(id, ord)
     JOIN repository_files f ON f.id = u.id
     ORDER BY u.ord
@@ -203,6 +212,7 @@ export async function scheduleMissingExtractions(): Promise<number> {
     await enqueueExtractions(
       page.map((r) => r.id),
       'errored',
+      JOB_PRIORITY.catchUp,
     )
     found += page.length
     if (page.length < batchSize) break
@@ -249,31 +259,51 @@ export async function extractionFailures(
   }
 }
 
-/** The next repository to get a turn: least recently served, then oldest claimable job. */
-async function nextRepository(): Promise<string | null> {
+/** Claimable `extract` jobs (row alias `jobs`). */
+const claimable = sql`kind = ${EXTRACTION_JOB} AND done_at IS NULL AND (lease_until IS NULL OR lease_until < now())
+  AND attempts < ${MAX_JOB_ATTEMPTS}`
+
+/**
+ * The next turn: among the repositories with claimable jobs of the lowest
+ * priority present (a push's before catch-up, #453), the least recently
+ * served, then the one with the oldest such job.
+ */
+async function nextRepository(): Promise<{ repositoryId: string; priority: JobPriority } | null> {
   const rows = (await db.execute(sql`
-    SELECT payload->>'repositoryId' AS "repositoryId", min(id) AS first
+    SELECT payload->>'repositoryId' AS "repositoryId", priority, min(id) AS first
     FROM jobs
-    WHERE kind = ${EXTRACTION_JOB} AND done_at IS NULL AND (lease_until IS NULL OR lease_until < now())
-      AND attempts < ${MAX_JOB_ATTEMPTS}
-    GROUP BY 1`)) as unknown as Array<{ repositoryId: string; first: string | number }>
-  let best: { repositoryId: string; turn: number; first: number } | null = null
+    WHERE ${claimable} AND priority = (SELECT min(priority) FROM jobs WHERE ${claimable})
+    GROUP BY 1, 2`)) as unknown as Array<{ repositoryId: string; priority: JobPriority; first: string | number }>
+  let best: { repositoryId: string; priority: JobPriority; turn: number; first: number } | null = null
   for (const row of rows) {
-    const candidate = { repositoryId: row.repositoryId, turn: lastTurn.get(row.repositoryId) ?? 0, first: Number(row.first) }
+    const candidate = { ...row, turn: lastTurn.get(row.repositoryId) ?? 0, first: Number(row.first) }
     if (!best || candidate.turn < best.turn || (candidate.turn === best.turn && candidate.first < best.first)) best = candidate
   }
-  return best?.repositoryId ?? null
+  return best && { repositoryId: best.repositoryId, priority: best.priority }
+}
+
+/** Whether a push's job is waiting: a catch-up turn then ends, so pushes never wait behind one. */
+async function writeJobWaiting(): Promise<boolean> {
+  const [row] = (await db.execute(sql`
+    SELECT EXISTS (SELECT 1 FROM jobs WHERE ${claimable} AND priority = ${JOB_PRIORITY.write}) AS waiting`)) as unknown as Array<{
+    waiting: boolean
+  }>
+  return row?.waiting === true
 }
 
 async function drainOnce(): Promise<void> {
   try {
     await failCrashedJobs(EXTRACTION_JOB, 'extraction', 'fileId')
     for (;;) {
-      const repositoryId = await nextRepository()
-      if (!repositoryId) return
-      lastTurn.set(repositoryId, ++turn)
+      const next = await nextRepository()
+      if (!next) return
+      lastTurn.set(next.repositoryId, ++turn)
       for (let n = 0; n < EXTRACTION_TURN_FILES; n++) {
-        const job = await claimJob<{ fileId: string }>(EXTRACTION_JOB, sql`payload->>'repositoryId' = ${repositoryId}`)
+        if (n > 0 && next.priority !== JOB_PRIORITY.write && (await writeJobWaiting())) break
+        const job = await claimJob<{ fileId: string }>(
+          EXTRACTION_JOB,
+          sql`payload->>'repositoryId' = ${next.repositoryId} AND priority = ${next.priority}`,
+        )
         if (!job) break
         const { fileId } = job.payload
         try {
@@ -306,7 +336,11 @@ export const extractionWork = { processFile }
  * imports, symbols, vectors and versions together. A failure or a crash at
  * any point before the commit leaves the previous rows whole and searchable.
  * A result for content a push replaced meanwhile is dropped: that push
- * enqueued the job of the new content.
+ * enqueued the job of the new content. Vectors the running embedder already
+ * made are kept, not embedded again: the file's when its content is the one
+ * they were made from, a symbol's when its embed text is unchanged. An
+ * `EXTRACTOR_VERSION` bump therefore costs a parse per file, and the
+ * embedder only runs for the symbols whose text changed.
  */
 async function processFile(fileId: string): Promise<void> {
   const row = (await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, fileId)))[0]
@@ -340,7 +374,7 @@ async function processFile(fileId: string): Promise<void> {
       startLine: s.startLine,
       endLine: s.endLine,
       snippet,
-      embedText: `${s.kind} ${s.name} in ${row.path}:${s.startLine}\n${snippet}`,
+      embedText: symbolEmbedText(s.kind, s.name, row.path, s.startLine, snippet),
     }
   })
 
@@ -354,9 +388,36 @@ async function processFile(fileId: string): Promise<void> {
     embeddingNote = `symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: ${budget} of ${symbolPayloads.length} symbols embedded, the rest are keyword-searchable only`
     console.warn(`[extraction] ${row.path} (repository file ${fileId}): ${embeddingNote}`)
   }
-  const allEmbeddings = await embedder.embed([`${row.path}\n${row.content}`, ...embedded.map((s) => s.embedText)])
-  const fileEmbedding = allEmbeddings[0]!
-  const symbolEmbeddings = allEmbeddings.slice(1)
+
+  // The vectors this embedder made for this file: reused where their text is the one to embed now.
+  const sameEmbedder = row.embedding !== null && row.embedderId === embedderId
+  const reusedFileVector = sameEmbedder && row.extractedHash === row.contentHash ? row.embedding : null
+  const previousSymbolVectors = new Map<string, number[]>()
+  if (sameEmbedder && embedded.length > 0) {
+    const previous = await db
+      .select({
+        name: repositoryFileSymbols.name,
+        kind: repositoryFileSymbols.kind,
+        startLine: repositoryFileSymbols.startLine,
+        snippet: repositoryFileSymbols.snippet,
+        embedding: repositoryFileSymbols.embedding,
+      })
+      .from(repositoryFileSymbols)
+      .where(and(eq(repositoryFileSymbols.fileId, fileId), isNotNull(repositoryFileSymbols.embedding)))
+    for (const p of previous) {
+      if (p.snippet !== null && p.embedding !== null) {
+        previousSymbolVectors.set(symbolEmbedText(p.kind, p.name, row.path, p.startLine, p.snippet), p.embedding)
+      }
+    }
+  }
+  const toEmbed = [
+    ...(reusedFileVector ? [] : [`${row.path}\n${row.content}`]),
+    ...embedded.map((s) => s.embedText).filter((text) => !previousSymbolVectors.has(text)),
+  ]
+  const vectors = toEmbed.length > 0 ? await embedder.embed(toEmbed) : []
+  const vectorByText = new Map(toEmbed.map((text, i) => [text, vectors[i]!]))
+  const fileEmbedding = reusedFileVector ?? vectorByText.get(`${row.path}\n${row.content}`)!
+  const symbolEmbeddings = embedded.map((s) => previousSymbolVectors.get(s.embedText) ?? vectorByText.get(s.embedText) ?? null)
   failpoint('extract.after-embed-before-write')
 
   const written = await db.transaction(async (tx) => {
@@ -390,5 +451,11 @@ async function processFile(fileId: string): Promise<void> {
     failpoint('extract.before-commit')
     return true
   })
-  if (written) await recomputeSemanticEdges('code', fileId, fileEmbedding)
+  // An unchanged file vector has the semantic edges it had.
+  if (written && !reusedFileVector) await recomputeSemanticEdges('code', fileId, fileEmbedding)
+}
+
+/** The text a symbol is embedded from (`EMBED_TEXT_VERSION` in search/embeddings.ts versions it). */
+function symbolEmbedText(kind: string, name: string, path: string, startLine: number, snippet: string): string {
+  return `${kind} ${name} in ${path}:${startLine}\n${snippet}`
 }

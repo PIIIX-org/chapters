@@ -52,6 +52,15 @@ export const jobTiming = {
  */
 export const catchUpLimits = { batchSize: 1000 }
 
+/**
+ * `jobs.priority` (#453, migration 0033): claims take the lowest first, then
+ * the oldest. A job a write queued (a note saved, a file pushed) goes before
+ * the jobs a boot catch-up or `pnpm reindex` queued, so a version bump that
+ * re-derives a whole instance never makes a new note wait for its vector.
+ */
+export const JOB_PRIORITY = { write: 0, catchUp: 1 } as const
+export type JobPriority = (typeof JOB_PRIORITY)[keyof typeof JOB_PRIORITY]
+
 /** Successfully finished jobs are deleted after this long (failed ones stay as the status). */
 const DONE_RETENTION_DAYS = 7
 const MAX_ERROR_LENGTH = 500
@@ -110,8 +119,10 @@ export function onJobConflict(rerun: JobRerun): SQL {
     errored: sql`AND ${erroredJob(sql`jobs`)}`,
     finished: sql``,
   }[rerun]
+  // A job run again takes the priority of the enqueue that runs it.
   return sql`ON CONFLICT (idempotency_key) DO UPDATE
-    SET id = nextval(pg_get_serial_sequence('jobs', 'id')), done_at = NULL, attempts = 0, last_error = NULL, lease_until = NULL
+    SET id = nextval(pg_get_serial_sequence('jobs', 'id')), done_at = NULL, attempts = 0, last_error = NULL, lease_until = NULL,
+      priority = EXCLUDED.priority
     WHERE jobs.done_at IS NOT NULL ${which}`
 }
 
@@ -134,7 +145,7 @@ export async function failCrashedJobs(kind: string, monitoringKind: JobKind, sub
   return rows.length
 }
 
-/** Claims the oldest claimable job of `kind` (optionally narrowed by `filter` on `payload`). */
+/** Claims the claimable job of `kind` (optionally narrowed by `filter` on `payload`) with the lowest priority, then the oldest. */
 export async function claimJob<P>(kind: string, filter?: SQL): Promise<ClaimedJob<P> | null> {
   const rows = (await db.execute(sql`
     UPDATE jobs SET lease_until = now() + ${jobTiming.leaseMs} * interval '1 millisecond', attempts = attempts + 1
@@ -142,7 +153,7 @@ export async function claimJob<P>(kind: string, filter?: SQL): Promise<ClaimedJo
       SELECT id FROM jobs
       WHERE kind = ${kind} AND done_at IS NULL AND (lease_until IS NULL OR lease_until < now())
         AND attempts < ${MAX_JOB_ATTEMPTS} ${filter ? sql`AND ${filter}` : sql``}
-      ORDER BY id LIMIT 1
+      ORDER BY priority, id LIMIT 1
       FOR UPDATE SKIP LOCKED
     )
     RETURNING id, payload, attempts`)) as unknown as Array<{ id: string | number; payload: P; attempts: number }>
