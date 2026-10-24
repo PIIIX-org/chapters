@@ -63,17 +63,17 @@
     {
       "test": "export-roundtrip",
       "check": "import a real OKF v0.2 bundle (open-knowledge-format bundles/acme_retail)",
-      "issue": 444
+      "issue": 563
+    },
+    {
+      "test": "export-roundtrip",
+      "check": "import a real OKF v0.2 bundle (open-knowledge-format bundles/acme_retail)",
+      "issue": 970
     },
     {
       "test": "export-roundtrip",
       "check": "non-ASCII attachment name kept",
       "issue": 619
-    },
-    {
-      "test": "export-roundtrip",
-      "check": "OKF §4.1 free-text `type` (\"BigQuery Table\") is accepted",
-      "issue": 444
     },
     {
       "test": "export-roundtrip",

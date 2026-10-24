@@ -30,10 +30,14 @@ describe('OKF validation', () => {
     )
   })
 
-  it('rejects frontmatter type mismatching the path', () => {
-    expect(() => validateNote('people', 'x', { type: 'projects' }, '')).toThrow(
-      OkfValidationError,
-    )
+  it('accepts any non-empty string type, not only the folder (#444)', () => {
+    expect(() => validateNote('people', 'x', { type: 'projects' }, '')).not.toThrow()
+    expect(() => validateNote('tables', 'orders', { type: 'BigQuery Table' }, '')).not.toThrow()
+    for (const bad of ['', '   ', 7, undefined]) {
+      expect(() => validateNote('people', 'x', { type: bad } as unknown as Frontmatter, ''), String(bad)).toThrow(
+        'frontmatter type must be a non-empty string',
+      )
+    }
   })
 
   it('rejects malformed tags and nested values', () => {

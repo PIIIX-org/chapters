@@ -14,9 +14,10 @@ Specification references:
    - Every segment must match `^[a-z0-9][a-z0-9-]*$`: lowercase letters, digits, and hyphens, starting with a letter or digit. No uppercase, underscores, dots, or spaces. `decisions/adr-001-crdt-relay` is valid; `decisions/ADR-001` is not.
    - `.`/`..` segments, hidden segments, and leading, trailing, or double slashes are refused.
 
-2. **`type` equals the first path segment (enforced)**:
-   - `domains/auth/index` must have `type: domains`; `specs/login-flow` must have `type: specs`; a root note such as `index` must have `type: index`.
-   - `create_note` fills `type` in from the path when you omit it, and refuses a different value. `edit_note` always keeps the note's current type. Moving a note with `rename_note` (full path in `toName`) rewrites `type` to the new first segment.
+2. **`type` is the note's OKF type; the folder is the first path segment**:
+   - `type` may be any non-empty string (OKF §4.1): `Metric`, `BigQuery Table`, `decision`. A note at `notes/adr-007` can have `type: decision`.
+   - Left out (or empty), `type` is the first path segment: `create_note` at `specs/login-flow` without a `type` stores `type: specs`, and a root note such as `index` gets `type: index`. `edit_note` keeps the current `type` unless you set it; removing it (`removeKeys: ["type"]`) puts the folder back. Moving a note with `rename_note` (full path in `toName`) rewrites a `type` equal to the old folder to the new folder and keeps any other `type`; `revert_note` to a revision from before a move does the same with the folder the note had then (a move recorded before the revision-events migration, 0023, is not known, so a revert across it keeps the revision's `type`).
+   - The folder, not the frontmatter `type`, is the note's `type` field in replies and what the `types` filter of `search` (REST) and `graph`, and structural graph edges, match. The frontmatter `type` shows in `frontmatter` (reads, search hits) and in generated `index.md` tables. Filtering by the frontmatter `type` is not supported yet.
 
 3. **Datetimes with an explicit offset (enforced)**:
    - `timestamp`, `stale_after`, `generated.at`, `verified.at`, `sources[].last_modified`, `usage_window.from`, and `usage_window.to` must be ISO 8601 datetimes with `Z` or an offset: `2026-09-22T12:00:00Z`, `2026-09-22T17:30:00+03:30`.
@@ -107,7 +108,7 @@ Through MCP, frontmatter is passed to `create_note` / `edit_note` as a JSON obje
 ```yaml
 ---
 # === Identity ===
-type: domains                       # REQUIRED. Must equal the first path segment.
+type: domains                       # REQUIRED in OKF; any non-empty string. Defaults to the first path segment.
 title: "Authentication & Security"  # Display title.
 description: "Handles user sessions, MFA verification, and permission checks." # One-sentence summary.
 
@@ -146,7 +147,7 @@ properties:
 
 ### 3.1 Field Notes
 
-- **`type`**: not a free-form category. It is the first path segment, so the folder decides it. Use folders to group notes (`domains/`, `specs/`, `models/`, `decisions/`, `guides/`, ...).
+- **`type`**: the kind of concept, free text (`Metric`, `Policy`, `decision`). The folder (first path segment) groups notes and is what the `types` filter matches; `type` defaults to it when left out.
 - **`description`**: one dense sentence; shown in search snippets and index tables.
 - **`resource`**: a string such as `repo:<repo>/server/src/auth/sessions.ts` or an external URL. It is metadata only; it does not create a graph edge. Put a bare `[[repo:...]]` link in the body for that.
 - **`timestamp`**: creation time with an explicit offset; edits leave it as it is. Recency (`updatedAt`, search and graph `since`/`until`) is the note's last change. A key named `created` is not treated as a datetime; use `timestamp`.
