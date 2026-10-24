@@ -309,7 +309,9 @@ describe('edit_note frontmatter merge through the live relay', () => {
     await typeLive((document) => document.getMap('frontmatter').set('status', 'bogus'))
     const merged = await editNote({ path, frontmatter: { description: 'Agent note.' } })
     expect(merged.isError).toBe(true)
-    expect(merged.text).toMatch(/"status" is already on the note.*`replace: true`/)
+    const refusal = JSON.parse(merged.text) as { error: { code: string; message: string } }
+    expect(refusal.error.code).toBe('OKF_INVALID')
+    expect(refusal.error.message).toMatch(/"status" is already on the note.*`replace: true`/)
     const replaced = await editNote({ path, frontmatter: { title: TITLE, description: 'Agent note.' }, replace: true })
     expect(replaced.isError).toBe(false)
     expect((await stored(path)).frontmatter).toEqual({ type: 'docs', title: TITLE, description: 'Agent note.' })

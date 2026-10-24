@@ -10,6 +10,7 @@ import { recomputeSemanticEdges } from '../search/semantic-edges.js'
 import { codeBlocks } from './code-blocks.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import { resolveImportPath } from './import-resolution.js'
+import { detectLanguage } from './language.js'
 import { recordJob } from '../monitoring/metrics.js'
 import {
   JOB_PRIORITY,
@@ -30,7 +31,7 @@ import {
 /**
  * Extraction runs from durable `jobs` rows (#494, ADR-003 S5; see
  * jobs/durable.ts): kind `extract`, payload `{fileId, repositoryId}`, key
- * `extract:<fileId>:<contentHash>:<EXTRACTOR_VERSION>:<EMBEDDER_ID>` (#453).
+ * `extractionJobKey` below (#453, #452).
  * Fair across repositories (#497): each turn
  * claims at most `EXTRACTION_TURN_FILES` jobs of one repository, then the
  * repository with claimable jobs that was served least recently goes next
@@ -369,10 +370,14 @@ async function processFile(fileId: string): Promise<void> {
   const embedderId = EMBEDDER_ID
   const chunkVersion = CHUNK_VERSION
 
+  // The language comes from the path, not the stored label: a row indexed
+  // before its extension was mapped (`.mts`/`.cts` before #451) keeps a stale
+  // label, since a sync skips unchanged content. It is written back below.
+  const language = detectLanguage(row.path)
   // An unsupported or minified file gets its file block only, and still loses the imports/symbols an earlier content left.
   const { imports, symbols }: ExtractionResult =
-    isSupportedLanguage(row.language) && !looksMinified(row.content)
-      ? await extractStructure(row.language, row.content, row.path)
+    isSupportedLanguage(language) && !looksMinified(row.content)
+      ? await extractStructure(language, row.content, row.path)
       : { imports: [], symbols: [] }
 
   const importRows: Array<typeof repositoryFileImports.$inferInsert> = []
@@ -434,6 +439,7 @@ async function processFile(fileId: string): Promise<void> {
     innerPath: b.innerPath,
     symbolKind: b.symbolKind,
     symbolParent: b.symbolParent,
+    snippet: b.snippet,
     startLine: b.startLine,
     endLine: b.endLine,
     contentHash: b.contentHash,
@@ -455,7 +461,7 @@ async function processFile(fileId: string): Promise<void> {
     await replaceBlockSet(tx, 'code', fileId, blockRows)
     await tx
       .update(repositoryFiles)
-      .set({ embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId, chunkVersion })
+      .set({ language, embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId, chunkVersion })
       .where(eq(repositoryFiles.id, fileId))
     failpoint('extract.before-commit')
     return true

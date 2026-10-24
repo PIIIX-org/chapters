@@ -7,7 +7,7 @@ type BlockRow = typeof blocks.$inferInsert
 
 /**
  * Rows per INSERT: one statement binds at most 65,534 parameters
- * (postgres.js), and a block row has 14, so a generated file with thousands
+ * (postgres.js), and a block row has 15, so a generated file with thousands
  * of constants would fail whole (#450 review). Every chunk is in the same
  * transaction, so the owner still commits all or nothing.
  */
@@ -53,6 +53,7 @@ export async function replaceBlockSet(tx: Tx, ownerType: 'note' | 'code', ownerI
           innerPath: sql`excluded.inner_path`,
           symbolKind: sql`excluded.symbol_kind`,
           symbolParent: sql`excluded.symbol_parent`,
+          snippet: sql`excluded.snippet`,
           startLine: sql`excluded.start_line`,
           endLine: sql`excluded.end_line`,
           contentHash: sql`excluded.content_hash`,
