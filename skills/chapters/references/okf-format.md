@@ -150,7 +150,7 @@ properties:
 - **`type`**: the kind of concept, free text (`Metric`, `Policy`, `decision`). The folder (first path segment) groups notes and is what the `types` filter matches; `type` defaults to it when left out.
 - **`description`**: one dense sentence; shown in search snippets and index tables.
 - **`resource`**: a string such as `repo:<repo>/server/src/auth/sessions.ts` or an external URL. It is metadata only; it does not create a graph edge. Put a bare `[[repo:...]]` link in the body for that.
-- **`timestamp`**: creation or modification time with an explicit offset. A key named `created` is not treated as a datetime; use `timestamp`.
+- **`timestamp`**: creation time with an explicit offset; edits leave it as it is. Recency (`updatedAt`, search and graph `since`/`until`) is the note's last change. A key named `created` is not treated as a datetime; use `timestamp`.
 - **`generated`** / **`sources`**: who produced the note and from which artifacts.
 - **`verified`**: how much the note can be trusted. A single object or a list.
 
