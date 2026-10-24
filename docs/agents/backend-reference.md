@@ -1345,13 +1345,17 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   six with symbols) and merges them with **Reciprocal Rank Fusion**
   (`k=60`), no score normalization to tune. Keyword hits use Postgres
   `websearch_to_tsquery` + `ts_rank` + `ts_headline` snippets; semantic
-  hits use pgvector's `<=>` cosine-distance operator over the `blocks`
-  HNSW indexes — one per owner type since migration 0036
-  (`blocks_note_embedding_idx`, `blocks_code_embedding_idx`, partial on
-  `owner_type`), so every vector query names its owner type as a SQL literal
-  for the planner to use them — notes ranked by their best block, files by
-  their `file` block, one hit per document (see **Blocks and the line
-  contract**).
+  hits use pgvector's `<=>` cosine-distance operator over partial HNSW
+  indexes on `blocks`, one per kind of query, each query's WHERE naming the
+  index predicate as SQL literals so the planner uses it:
+  `blocks_file_embedding_idx` (`kind = 'file'`, the code file leg) and
+  `blocks_symbol_embedding_idx` (`kind = 'symbol'`, the symbol legs) from
+  0035, `blocks_note_embedding_idx` (`owner_type = 'note'`, the note leg and
+  note semantic edges) and `blocks_code_embedding_idx` (`owner_type =
+  'code'`, code semantic edges, which take any code block) from 0036, which
+  drops 0035's index over every block. Notes are ranked by their best block,
+  files by their `file` block, one hit per document (see **Blocks and the
+  line contract**).
   `findSymbols()` does the same over symbols (keyword: `ILIKE` on the
   whole query).
   - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
@@ -2586,15 +2590,17 @@ p95 28–34 ms against 22–32 ms for the old `notes.embedding` leg; the first
 query after a restart is slower, 190–700 ms against 30–70 ms, while the
 larger index pages in); `search` code
 vector leg — the nearest `file` blocks of the scoped repositories
-(`hnsw.ef_search` 200, #967's distance gate), one hit per file with the
+(their own partial HNSW index `blocks_file_embedding_idx`, as the old
+file index held only files; `hnsw.ef_search` 200; #967's distance gate), one hit per file with the
 same `{…, snippet: left(content, 200)}` as before. Measured alternatives:
 the ADR-004 best-block roll-up let symbol blocks of large files crowd the
 leg (chapters hit@5 0.9655 → 0.8966), and ranking a large file by its
 outline put a 304-line hook above the answer to A13 (0.931), so both wait
 for #414/#415's per-block hits; `search` symbol legs and `find_symbols` —
 `kind = 'symbol'` blocks, keyword by name, `Class.name` or the stored
-`snippet`, vector by the nearest symbol blocks; semantic edges (`semantic-edges.ts`) — a note's or file's
-similarity to another node is its best block's, the query vectors a note's
+`snippet`, vector by the nearest symbol blocks (`blocks_symbol_embedding_idx`); semantic edges (`semantic-edges.ts`) — a note's or file's
+similarity to another node is its best block's (`blocks_note_embedding_idx`,
+`blocks_code_embedding_idx`), the query vectors a note's
 blocks or a file's file-level block; `read_file`'s outline, the REST file view's
 `symbols` and `listFileSymbols`; the staleness check (a `#anchor` is a
 symbol's bare name or its `Class.method`); the doctor (`blocks-missing`,
