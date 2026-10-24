@@ -1788,7 +1788,6 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   pin, allow-list, live permission) and that every tool has exactly one
   entry.
 - **Structured content and output schemas** (#433, ADR-004 §2.1, D6
-<<<<<<< HEAD
   default): `tool()` answers every success through `answered(text,
   blocks)`: `content[0].text` is the JSON answer, followed by the
   rendered `blocks` as text blocks of their own (`read_note`'s body,
@@ -1797,15 +1796,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   with `{`) `structuredContent` is `JSON.parse(text)` with each block's
   text in its key in place of the `{"in": "content[n]"}` marker, so it
   holds exactly what the blocks show (dates as strings) and is the whole
-  answer. Bare-array answers (`search`, the unbudgeted list tools) carry
-=======
-  default): `tool()` answers every success through `answered(text)`:
-  `content[0].text` stays the whole JSON answer (clients that show the
-  model only `content` lose nothing), and when that text is an object
-  (it starts with `{`) `structuredContent` is `JSON.parse(text)`, so it
-  holds exactly what the text shows (dates as strings) and the two never
-  differ. Bare-array answers (the unbudgeted list tools) carry
->>>>>>> origin/dev
+  answer. Bare-array answers (the unbudgeted list tools) carry
   none: MCP's `structuredContent` is an object, and wrapping the array
   would make it differ from the text. A tool may declare `outputSchema`
   (a loose zod object, so other keys pass): today only the eight
@@ -2112,17 +2103,6 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `CURSOR_STALE`). The codes wait for the error envelope (#439).
   - `read_note` records the last read (#864) in `Budgeted.rendered`, on
     every page: the `rev` it reports, the merge base of a later whole-body
-<<<<<<< HEAD
-    edit (#961). Its body is a `block` section (#445): `content[0]` holds
-    `path, rev, frontmatter, indexed, fold_error?, lines?, body: {"in":
-    "content[1]"}, truncated`, and `content[1]` the page's slice of the
-    body; `truncated` and the cursor stay in the JSON. REST note reads are
-    unchanged. `test/mcp-read-note-raw-body.test.ts` covers the shape, the
-    exact body (CRLF, quotes, backslashes, unicode), paging within the
-    budget and the token saving.
-  - `search` keeps its bare array and has no budget (its envelope waits
-    for #441/#442/#458). `test/mcp-response-envelope.test.ts` drives each
-=======
     edit (#961).
   - `search` (#441) is budgeted like `find_symbols`: the
     `SearchResponse` head (`status`, `retrieval_mode`, `degraded`,
@@ -2131,7 +2111,6 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     path). `test/search-envelope.test.ts` covers each status, the gate,
     the fallbacks and the order through MCP and REST.
     `test/mcp-response-envelope.test.ts` drives each
->>>>>>> origin/dev
     tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`
     each ladder level.
   `search` and `graph` call
