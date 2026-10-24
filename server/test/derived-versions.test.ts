@@ -103,14 +103,13 @@ async function noteVersion(noteId: string) {
   return row
 }
 
-/** Counts, per matcher, the embeds whose first text (a file's or a note's text) it matches. */
-function countEmbeds(...matchers: Array<(first: string) => boolean>) {
-  const calls = matchers.map(() => ({ n: 0 }))
+/** Counts the embeds whose first text is the file's text `file`, and those whose first text starts with `notePrefix`. */
+function countEmbeds(file: string, notePrefix?: string) {
+  const calls = { file: 0, note: 0 }
   const embed = embedder.embed.bind(embedder)
   vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => {
-    matchers.forEach((match, i) => {
-      if (match(texts[0]!)) calls[i]!.n++
-    })
+    if (texts[0] === file) calls.file++
+    if (notePrefix !== undefined && texts[0]!.startsWith(notePrefix)) calls.note++
     return embed(texts)
   })
   return calls
@@ -158,12 +157,12 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     await db.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file.id))
     versions.extractor = shipped.extractor + 1
     await othersCurrent(repo.id, null)
-    const [calls] = countEmbeds((t) => t === `${file.path}\n${SOURCE}`)
+    const calls = countEmbeds(`${file.path}\n${SOURCE}`)
 
     expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
     await flushExtraction()
 
-    expect(calls.n).toBe(1)
+    expect(calls.file).toBe(1)
     expect(await fileVersions(file.id)).toEqual({ extractor_version: versions.extractor, embedder_id: EMBEDDER_ID })
     const symbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file.id))
     expect(symbols.map((s) => s.name)).toEqual(['unchanged'])
@@ -174,7 +173,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     // The next boot finds it current: nothing runs again.
     await scheduleMissingExtractions()
     await flushExtraction()
-    expect(calls.n).toBe(1)
+    expect(calls.file).toBe(1)
   })
 
   it('EMBEDDER_ID bumped: files and notes are embedded again, once', async () => {
@@ -189,18 +188,14 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
 
     versions.embedder = `${shipped.embedder}-next`
     await othersCurrent(repo.id, vault!.id)
-    const [fileCalls, noteCalls] = countEmbeds(
-      (t) => t === `${file.path}\n${SOURCE}`,
-      (t) => t.startsWith(`${note.path}\n`),
-    )
+    const calls = countEmbeds(`${file.path}\n${SOURCE}`, `${note.path}\n`)
 
     await scheduleMissingEmbeddings()
     await scheduleMissingExtractions()
     await flushEmbeddings()
     await flushExtraction()
 
-    expect(fileCalls.n).toBe(1)
-    expect(noteCalls.n).toBe(1)
+    expect(calls).toEqual({ file: 1, note: 1 })
     expect((await fileVersions(file.id)).embedder_id).toBe(versions.embedder)
     const after = await noteVersion(note.id)
     expect(after.embedder_id).toBe(versions.embedder)
@@ -212,8 +207,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     await scheduleMissingExtractions()
     await flushEmbeddings()
     await flushExtraction()
-    expect(fileCalls.n).toBe(1)
-    expect(noteCalls.n).toBe(1)
+    expect(calls).toEqual({ file: 1, note: 1 })
   })
 
   it('works in batches: a page smaller than the backlog still reaches every file', async () => {
@@ -250,17 +244,17 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
       lastError: `LeaseExpired: the process running this job stopped before it finished, ${MAX_JOB_ATTEMPTS} times`,
       doneAt: new Date(),
     })
-    const [calls] = countEmbeds((t) => t === `crash.txt\n${content}`)
+    const calls = countEmbeds(`crash.txt\n${content}`)
 
     await scheduleMissingExtractions()
     await flushExtraction()
-    expect(calls.n).toBe(0)
+    expect(calls.file).toBe(0)
 
     versions.extractor = shipped.extractor + 1
     await othersCurrent(repo!.id, null)
     await scheduleMissingExtractions()
     await flushExtraction()
-    expect(calls.n).toBe(1)
+    expect(calls.file).toBe(1)
     expect(await fileVersions(file!.id)).toEqual({ extractor_version: versions.extractor, embedder_id: EMBEDDER_ID })
     const pending = await db
       .select()
