@@ -1262,9 +1262,34 @@ until #453's extractor-version bump extracts them again). On the budget
 ladder a row's `locations` form is one line, `from -> to relation
 evidence`. `mcp/prompts.ts`'s path prompt still prints ids.
 
+`resolve-node.ts` (#447) turns a node reference into a node for MCP
+`graph`'s `neighborsOf`, `find_graph_path`'s ends, the REST
+`/vaults/:id/graph/path` and `/graph/merged/path` routes and the
+`summarize_concept_chain` prompt. `resolveNode(resources, ref)` tries, in
+order: the id; the exact path (both indexed, the fast path); then one
+query per table with the tier as a `CASE` and `count(*) over (partition by
+tier)`, limit 11: the path in any case, a note path with `.md` or (for a
+ref without an extension) a file path without its extension; a path
+suffix on a `/` boundary (`right(lower(path), n + 1) = '/' || lower(ref)`,
+for a ref without an extension also against the extension-less file path,
+so `store.ts` never matches `store.ts.orig`);
+a note's frontmatter `title`. Graph nodes have no symbols, so no symbol
+tier. One match is `{node}`; several are `{candidates, next, total}`
+(`{path, kind, id}`, shorter path first, then path and id; 10 shown,
+`next` the 11th as a `limit` + 1 read); none is `{suggestions}` (empty for
+a node id, so an id out of reach answers as a missing one): up to 5
+paths from a pool of at most 200 per table (same basename without
+extension, a folder ending like the ref's, a basename containing it or
+sharing its first two characters), ranked by the edit distance between the
+ref and the path's last as many segments. Every query is bounded by
+`resources` (live notes of its vaults, files of its repositories), which
+the caller's access resolved, so neither list can name a node outside its
+reach. MCP answers candidates as a budgeted `{end?, matches?, candidates,
+truncated}` (`end` for `find_graph_path`, `matches` past 10) and none as
+`NOT_FOUND` with `suggestions`; REST answers candidates `200 {end,
+candidates, truncated: false | n more}` and none `404 {error, suggestions?}`.
+
 `neighbors.ts` (#426) is the local graph without the whole graph:
-`resolveGraphNode(resources, ref)` takes a node id or exact path (none or
-several matches are refused, the latter with the ids; #447 widens it), and
 `neighborhood(resources, center, {depth, edgeTypes, types, tags, limit})`
 walks ring by ring in SQL over the frontier's ids only: links out and in
 (`note_links_target_idx`; `repo:` links to a frontier file by reading the
@@ -1883,10 +1908,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   (`requireVaultOwner`, `requireRepositoryOwner`, `requireTeamOwner`)
   answer that same `NOT_FOUND` for a container the caller cannot reach
   (a team it is not a member of) and `PERMISSION_REQUIRED` only for one
-  it can see. An ambiguous graph node
-  reference (`resolveGraphNode`) is `AMBIGUOUS` with the node ids; #447
-  turns it into a candidates answer and adds suggestions to graph
-  lookups through the same `McpToolError` extra. `rateLimitedError(ms)`
+  it can see. A graph node reference (#447, `graph/resolve-node.ts`)
+  that names several nodes is a successful candidates answer, not an
+  error; one that names none is `NOT_FOUND` with in-reach `suggestions`.
+  `rateLimitedError(ms)`
   is the `RATE_LIMITED` envelope `routes.ts` sends as JSON-RPC
   `error.data` with HTTP 429 (#440, **Auth** above). Write statuses stay
   results: `status: 'retry'` (`write-result.ts`), `merged`,
