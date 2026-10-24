@@ -2437,12 +2437,14 @@ that moved on is dropped. *Reuse*: a block whose `embed_key` a block of the
 same file already has keeps that vector instead of being embedded again, so
 a line shift, an edit to another symbol, or a version bump that leaves a
 block's text alone embeds nothing new for it. *Readers*: `search` code
-vector leg — the nearest 200 blocks of the scoped repositories
-(`hnsw.ef_search` 200), then each file's best block distance, one hit per
-file with the same `{…, snippet: left(content, 200)}` as before; `search`
-symbol legs and `find_symbols` — `kind = 'symbol'` blocks (name, then
-`Class.name`, then snippet text in a file whose content matches; vector:
-nearest symbol blocks); semantic edges (`semantic-edges.ts`) — a file's
+vector leg — the nearest file-level blocks (`file`, or the file
+`skeleton`) of the scoped repositories (`hnsw.ef_search` 200), one hit per
+file with the same `{…, snippet: left(content, 200)}` as before (the
+ADR-004 best-block roll-up was measured: symbol blocks of large files
+crowded the leg and chapters hit@5 fell 0.9655 → 0.8966, so it waits for
+#414/#415's per-block hits); `search` symbol legs and `find_symbols` —
+`kind = 'symbol'` blocks, keyword by name, `Class.name` or the stored
+`snippet`, vector by the nearest symbol blocks; semantic edges (`semantic-edges.ts`) — a file's
 similarity to another node is its best block's, the file's own query
 vector its file-level block; `read_file`'s outline, the REST file view's
 `symbols` and `listFileSymbols`; the staleness check (a `#anchor` is a

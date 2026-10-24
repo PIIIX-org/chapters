@@ -68,9 +68,9 @@ export interface SearchNotesOptions {
 const CANDIDATES = 30
 const RRF_K = 60
 /**
- * Nearest blocks a code vector leg reads before it keeps each file's best
- * one (#452): a file has several blocks, so 30 files need more than 30.
- * Also the leg's `hnsw.ef_search`, since HNSW returns at most that many rows.
+ * The `hnsw.ef_search` of a vector leg over `blocks` (HNSW returns at most
+ * that many rows, and each leg keeps only some kinds: file-level blocks, or
+ * symbol blocks, so the default 40 would leave it short of `CANDIDATES`).
  */
 const BLOCK_CANDIDATES = 200
 
@@ -173,18 +173,18 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
           FROM top_code
         `)
       : await blockLeg(sql`
-          -- A file's vector rank is its best block's distance (ADR-004 §2.5 roll-up): one row per file, as before blocks.
-          WITH nearest AS (
+          -- A file's vector rank is its file-level block's (the whole small file, or a larger file's outline): one row
+          -- per file, as before blocks. The ADR-004 §2.5 best-block roll-up ranked chapters questions A6 and A13 out of
+          -- the top 5 (bench run 40063746649, hit@5 0.9655 -> 0.8966): symbol blocks of large files crowded the leg.
+          SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet
+          FROM (
             SELECT owner_id, embedding <=> ${vec}::vector AS distance
             FROM blocks
             WHERE owner_type = 'code' AND container_id = ANY(${uuidArray(repositoryIds)}) AND embedding IS NOT NULL
+              AND inner_path = '' AND kind IN ('file', 'skeleton')
             ORDER BY embedding <=> ${vec}::vector
-            LIMIT ${BLOCK_CANDIDATES}
-          ), best AS (
-            SELECT owner_id, min(distance) AS distance FROM nearest GROUP BY owner_id ORDER BY 2, 1 LIMIT ${CANDIDATES}
-          )
-          SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet
-          FROM best JOIN repository_files f ON f.id = best.owner_id
+            LIMIT ${CANDIDATES}
+          ) best JOIN repository_files f ON f.id = best.owner_id
           ORDER BY best.distance, f.id
         `)
   return rows as unknown as Row[]
