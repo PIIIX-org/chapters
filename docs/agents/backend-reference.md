@@ -1336,8 +1336,12 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   normalization to tune. Keyword hits use Postgres
   `websearch_to_tsquery` + `ts_rank` + `ts_headline` snippets; semantic
   hits use pgvector's `<=>` cosine-distance operator over the `blocks`
-  HNSW index, each note or file ranked by its best block, one hit per
-  document (see **Blocks and the line contract**).
+  HNSW indexes — one per owner type since migration 0036
+  (`blocks_note_embedding_idx`, `blocks_code_embedding_idx`, partial on
+  `owner_type`), so every vector query names its owner type as a SQL literal
+  for the planner to use them — notes ranked by their best block, files by
+  their file-level block, one hit per document (see **Blocks and the line
+  contract**).
 - **`embeddings.ts`**: an `Embedder` interface with two
   implementations — `LocalEmbedder` (real: Transformers.js/ONNX,
   `bge-small-en-v1.5`, 384 dimensions, mean-pooled, normalized) and
@@ -2481,9 +2485,11 @@ version bump that leaves a block's text alone embeds nothing new for it.
 scoped vaults (`hnsw.ef_search` 200), then each live note's best block
 distance (filters applied to the note), one hit per note with the same
 `{…, snippet: left(body, 200)}` as before. A vault has about 12 times as
-many note blocks as notes, so this leg reads a larger index than the old
-`notes.embedding` one (10k notes: 31 ms → 330 ms p50 measured on the loaded
-shared test database, cold cache; 20–30 ms per leg query warm); `search` code
+many note blocks as notes; the partial `blocks_note_embedding_idx` keeps the
+leg on note blocks only (10k notes × 12 blocks on a quiet database: warm
+p95 28–34 ms against 22–32 ms for the old `notes.embedding` leg; the first
+query after a restart is slower, 190–700 ms against 30–70 ms, while the
+larger index pages in); `search` code
 vector leg — the nearest file-level blocks (`file`, or the file
 `skeleton`) of the scoped repositories (`hnsw.ef_search` 200), one hit per
 file with the same `{…, snippet: left(content, 200)}` as before (the
