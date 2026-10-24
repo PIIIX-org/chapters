@@ -2455,14 +2455,14 @@ survives line shifts and edits elsewhere; renaming the symbol changes it.
 The fence-aware heading parser (`headings()`) lives there too, used by
 `replace_section` (`sync/edit-ops.ts`) and, with #452b, note blocks.
 *Code blocks* (`repositories/code-blocks.ts`): a `symbol` block per
-symbol; a `file` block (lines 1..total, text `<path>\n<content>`) when
-the file is small — at most 300 lines (`SMALL_FILE_MAX_LINES`) and 16,000
-characters (the embedder's cut) — or has no symbols (an unsupported
-language, a minified file, no declarations); otherwise a `skeleton` block
-for the file (`<path>` then every symbol's first line) and one per class
-with methods (`<kind> <Class> in <path>`, the class's first line, then its
-methods' first lines). Every file thus has one file-level block, always
-embedded. A symbol's embedded text is `<kind> <inner_path> in
+symbol; a `file` block for every file (lines 1..total, text
+`<path>\n<content>`, the old file vector's; the model reads its first 512
+tokens); and, when the file is not small — more than 300 lines
+(`SMALL_FILE_MAX_LINES`) or 16,000 characters (the embedder's cut) — and has
+symbols, a `skeleton` block for the file (`<path>` then every symbol's first
+line) and one per class with methods (`<kind> <Class> in <path>`, the
+class's first line, then its methods' first lines). The file-level blocks
+are always embedded. A symbol's embedded text is `<kind> <inner_path> in
 <path>\n<snippet>`, the snippet its first 30 lines cut to 1,500
 characters (`SNIPPET_LINES`, `SNIPPET_CHARS`; search computes hit
 snippets from `content` with the same numbers), with no line number, so a
@@ -2479,12 +2479,13 @@ that moved on is dropped. *Reuse*: a block whose `embed_key` a block of the
 same file already has keeps that vector instead of being embedded again, so
 a line shift, an edit to another symbol, or a version bump that leaves a
 block's text alone embeds nothing new for it. *Readers*: `search` code
-vector leg — the nearest file-level blocks (`file`, or the file
-`skeleton`) of the scoped repositories (`hnsw.ef_search` 200), one hit per
-file with the same `{…, snippet: left(content, 200)}` as before (the
-ADR-004 best-block roll-up was measured: symbol blocks of large files
-crowded the leg and chapters hit@5 fell 0.9655 → 0.8966, so it waits for
-#414/#415's per-block hits); `search` symbol legs and `find_symbols` —
+vector leg — the nearest `file` blocks of the scoped repositories
+(`hnsw.ef_search` 200, #967's distance gate), one hit per file with the
+same `{…, snippet: left(content, 200)}` as before. Measured alternatives:
+the ADR-004 best-block roll-up let symbol blocks of large files crowd the
+leg (chapters hit@5 0.9655 → 0.8966), and ranking a large file by its
+outline put a 304-line hook above the answer to A13 (0.931), so both wait
+for #414/#415's per-block hits; `search` symbol legs and `find_symbols` —
 `kind = 'symbol'` blocks, keyword by name, `Class.name` or the stored
 `snippet`, vector by the nearest symbol blocks; semantic edges (`semantic-edges.ts`) — a file's
 similarity to another node is its best block's, the file's own query
@@ -2494,8 +2495,8 @@ symbol's bare name or its `Class.method`); the doctor (`blocks-missing`,
 `blocks-failed`). Migration 0035 carries the existing vectors and symbols
 over as `legacy:` blocks so search keeps answering until the first boot
 re-extracts each file (a carried file vector made from the file's current
-content gets the `embed_key` of its text, so a small file is not embedded
-again).
+content gets the `embed_key` of its text, so the `file` block is not
+embedded again).
 
 **Import resolution** (`import-resolution.ts`, #398): `resolveImportPath`
 resolves a specifier only against files already known in the same

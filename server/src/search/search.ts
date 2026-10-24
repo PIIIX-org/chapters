@@ -233,15 +233,15 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
         `)
       : await blockLeg(
           gated(sql`
-            -- A file's vector rank is its file-level block's (the whole small file, or a larger file's outline): one
-            -- row per file, as before blocks. The ADR-004 §2.5 best-block roll-up ranked chapters questions A6 and
-            -- A13 out of the top 5 (bench run 40063746649, hit@5 0.9655 -> 0.8966): symbol blocks of large files
-            -- crowded the leg. #967's relevance gate applies to that block's distance.
+            -- A file's vector rank is its file block's (path and content, the old file vector): one row per file,
+            -- as before blocks. The ADR-004 §2.5 best-block roll-up ranked chapters A6 and A13 out of the top 5 (bench
+            -- run 40063746649, hit@5 0.9655 -> 0.8966), and the outline of a large file did A13 (run 40068837408,
+            -- 0.931). #967's relevance gate applies to that block's distance.
             SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet,
                    b.embedding <=> ${vec}::vector AS distance
             FROM blocks b JOIN repository_files f ON f.id = b.owner_id
             WHERE b.owner_type = 'code' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL
-              AND b.inner_path = '' AND b.kind IN ('file', 'skeleton')
+              AND b.kind = 'file'
             ORDER BY b.embedding <=> ${vec}::vector`),
         )
   return rows as unknown as Row[]

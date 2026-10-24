@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../src/config.js'
 import { db, sql } from '../src/db/client.js'
-import { and, asc, eq, inArray } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 import { blocks, users } from '../src/db/schema.js'
 import { hashPassword } from '../src/auth/passwords.js'
 import { serializeNote, type Frontmatter } from '../src/notes/okf.js'
@@ -144,11 +144,11 @@ export async function symbolBlocks(fileId: string) {
   }))
 }
 
-/** The vector of a repository file's file-level block (`file`, or the file `skeleton`), or null (#452). */
+/** The vector of a repository file's `file` block, or null (#452). */
 export async function fileEmbedding(fileId: string): Promise<number[] | null> {
   const [row] = await db
     .select({ embedding: blocks.embedding })
     .from(blocks)
-    .where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId), eq(blocks.innerPath, ''), inArray(blocks.kind, ['file', 'skeleton'])))
+    .where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId), eq(blocks.kind, 'file')))
   return row?.embedding ?? null
 }
