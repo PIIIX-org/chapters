@@ -126,13 +126,18 @@ function embeddedTexts(): string[] {
   return texts
 }
 
-/** Every row outside `repositoryId` counts as derived by the current versions: the catch-up then only has this test's rows to do. */
+/**
+ * The other rows that were derived by the shipped versions follow the bump,
+ * as if already re-derived: the catch-up then has only this test's rows to do.
+ * Rows other test files left stale stay stale (afterEach moves these back).
+ */
 async function othersCurrent(repositoryId: string | null, vaultId: string | null) {
-  await db.execute(sql`UPDATE repository_files SET extractor_version = ${versions.extractor}, embedder_id = ${versions.embedder},
-    extracted_hash = content_hash
-    WHERE embedding IS NOT NULL ${repositoryId ? sql`AND repository_id <> ${repositoryId}` : sql``}`)
+  await db.execute(sql`UPDATE repository_files SET extractor_version = ${versions.extractor}, embedder_id = ${versions.embedder}
+    WHERE embedding IS NOT NULL AND extracted_hash = content_hash
+      AND extractor_version = ${shipped.extractor} AND embedder_id = ${shipped.embedder}
+      ${repositoryId ? sql`AND repository_id <> ${repositoryId}` : sql``}`)
   await db.execute(sql`UPDATE notes SET embedder_id = ${versions.embedder}
-    WHERE embedding IS NOT NULL ${vaultId ? sql`AND vault_id <> ${vaultId}` : sql``}`)
+    WHERE embedding IS NOT NULL AND embedder_id = ${shipped.embedder} ${vaultId ? sql`AND vault_id <> ${vaultId}` : sql``}`)
 }
 
 describe('derived rows record what produced them (#453)', () => {
