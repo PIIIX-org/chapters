@@ -5,7 +5,7 @@
 // of a file is replaced in one transaction, never partly, and a result for
 // content that moved on is dropped. The stored text is the hashed text (NUL
 // bytes stripped first), and a snippet is the exact text of its lines: CRLF
-// and blank lines stay.
+// and blank lines stay. The doctor reports a file without its blocks.
 // Uses only entry points that existed before the blocks table (the
 // fails-before job runs this file against the base source).
 import { createHash } from 'node:crypto'
@@ -15,6 +15,7 @@ import { db } from '../src/db/client.js'
 import { repositories, repositoryFiles } from '../src/db/schema.js'
 import { FailpointError, setFailpointHandler, type Failpoint } from '../src/failpoints.js'
 import { jobTiming } from '../src/jobs/durable.js'
+import { runDoctor } from '../src/notes/doctor.js'
 import { flushExtraction, scheduleExtraction } from '../src/repositories/extraction-queue.js'
 import { listFileSymbols, syncRepositoryFiles } from '../src/repositories/store.js'
 import { embedder } from '../src/search/embeddings.js'
@@ -213,5 +214,32 @@ describe('stored text = hashed text (#418)', () => {
     expect(hit!.snippet).toBe(content.split('\n').slice(0, 6).join('\n'))
     expect(hit!.snippet).toBe('export function spaced() {\r\n  const a = 1\r\n\r\n\r\n  return a\r\n}\r')
     expect(content.includes(hit!.snippet!)).toBe(true)
+  })
+})
+
+describe('the doctor checks repository files have their blocks (#413)', () => {
+  it('a file with no blocks of its content is blocks-missing; --repair queues its extraction, which clears it', async () => {
+    const repo = await makeRepo('blocks-doctor')
+    const content = 'export function lost() { return 1 }\n'
+    // Stored by a sync whose process stopped before it enqueued the extraction.
+    await db.insert(repositoryFiles).values({
+      repositoryId: repo.id,
+      path: 'src/lost.ts',
+      language: 'typescript',
+      content,
+      contentHash: createHash('sha256').update(content).digest('hex'),
+      size: content.length,
+    })
+    const report = await runDoctor({ repositoryId: repo.id, repair: true })
+    const problems = report.problems.filter((p) => p.path === 'src/lost.ts')
+    expect(problems.map((p) => [p.class, p.repositoryId, p.repairable, p.repaired])).toEqual([['blocks-missing', repo.id, true, true]])
+
+    // The server's worker polls for the job; here it is woken (the job the repair queued is the one it runs).
+    const file = await fileRow(repo.id, 'src/lost.ts')
+    scheduleExtraction(file.id)
+    await flushExtraction()
+    const after = await runDoctor({ repositoryId: repo.id })
+    expect(after.problems.filter((p) => p.path === 'src/lost.ts')).toEqual([])
+    expect((await listFileSymbols(file.id)).map((s) => s.name)).toEqual(['lost'])
   })
 })
