@@ -1,4 +1,5 @@
 import { apiFetch } from '../lib/api.js'
+import type { McpProfile } from './mcp.js'
 
 /**
  * Admin oversight — metadata only, never note content
@@ -87,6 +88,8 @@ export interface AdminMcpConnection {
   id: string
   name: string
   scope: 'account' | 'vault' | 'repository'
+  /** The token's tool profile (#428). */
+  profile: McpProfile
   userEmail: string
   vaultId: string | null
   repositoryId: string | null

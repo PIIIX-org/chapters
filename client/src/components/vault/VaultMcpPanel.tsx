@@ -20,7 +20,7 @@ import {
   useMcpTools,
   useRevokeMcpConnection,
 } from '../../hooks/useMcpConnections.js'
-import type { McpAccess, McpConnection, McpTarget, McpToolInfo } from '../../api/mcp.js'
+import type { McpAccess, McpConnection, McpProfile, McpTarget, McpToolInfo } from '../../api/mcp.js'
 import type { VaultAccess } from '../../api/vaults.js'
 
 // Native <select>, same as the sharing panels — no shadcn select is installed.
@@ -38,6 +38,16 @@ const ACCESS_LABEL: Record<McpAccess, string> = {
   write: 'Read and write',
   admin: 'Admin: also share, change settings, delete, purge',
 }
+const PROFILE_RANK: Record<McpProfile, number> = { reader: 0, writer: 1, admin: 2 }
+const PROFILES: McpProfile[] = ['reader', 'writer', 'admin']
+const PROFILE_LABEL: Record<McpProfile, string> = {
+  reader: 'Reader: search, read, browse, code questions',
+  writer: 'Writer: also create and edit notes',
+  admin: 'Admin: every tool the access allows',
+}
+// A new token's profile follows its access level until one is picked (#428):
+// the smallest tool list that still covers what the access level is for.
+const PROFILE_FOR_ACCESS: Record<McpAccess, McpProfile> = { read: 'reader', write: 'writer', admin: 'admin' }
 // Days until the token stops working; 0 = never.
 const EXPIRY_PRESETS = [
   { days: 7, label: '7 days' },
@@ -118,7 +128,7 @@ function McpConnectionRow({ connection, reach }: { connection: McpConnection; re
       </TableCell>
       <TableCell className="block sm:table-cell p-0 sm:px-3 sm:py-2.5 font-mono text-xs text-muted-foreground h-auto whitespace-normal">
         <span className="sm:hidden font-mono text-muted-foreground/70">Access: </span>
-        {connection.access}
+        {connection.access}, {connection.profile} profile
         <span className="block break-words">
           {connection.allowedTools ? `only ${connection.allowedTools.join(', ')}` : 'all tools'}
         </span>
@@ -181,6 +191,8 @@ function CreateMcpConnectionForm({
   const [access, setAccess] = useState<McpAccess>(
     ACCESS_RANK[copy.defaultAccess] <= ACCESS_RANK[maxAccess] ? copy.defaultAccess : maxAccess,
   )
+  const [pickedProfile, setPickedProfile] = useState<McpProfile | null>(null)
+  const profile = pickedProfile ?? PROFILE_FOR_ACCESS[access]
   const [expiryDays, setExpiryDays] = useState(0)
   const [limitTools, setLimitTools] = useState(false)
   const [allowedTools, setAllowedTools] = useState<string[]>([])
@@ -188,11 +200,12 @@ function CreateMcpConnectionForm({
   const createConnection = useCreateMcpConnection(target)
   const toolsQuery = useMcpTools(limitTools)
 
-  // Tools this token could call at all: within its access level and its scope,
-  // and for a vault token within the user's own permission on the vault.
+  // Tools this token could call at all: within its access level, its profile
+  // and its scope, and for a vault token within the user's own permission on the vault.
   const offered = (toolsQuery.data ?? []).filter(
     (t) =>
       ACCESS_RANK[t.capability] <= ACCESS_RANK[access] &&
+      PROFILE_RANK[t.profile] <= PROFILE_RANK[profile] &&
       (vaultAccess === null ||
         (VAULT_TOOL_SCOPES[t.scope] === true && PERMISSION_RANK[t.pinPermission] <= PERMISSION_RANK[vaultAccess])),
   )
@@ -211,6 +224,7 @@ function CreateMcpConnectionForm({
       {
         name: trimmed,
         access,
+        profile,
         ...(limitTools ? { allowedTools: tools } : {}),
         ...(expiryDays ? { expiresAt: expiresAtAfter(expiryDays) } : {}),
       },
@@ -219,6 +233,8 @@ function CreateMcpConnectionForm({
           onCreated(connection.token, connection.name)
           setName('')
           setAllowedTools([])
+          // The next token's profile follows its access level again.
+          setPickedProfile(null)
         },
         onError: (err) => setError(err.message || copy.createError),
       },
@@ -251,6 +267,21 @@ function CreateMcpConnectionForm({
             {levels.map((level) => (
               <option key={level} value={level}>
                 {ACCESS_LABEL[level]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="mcp-connection-profile">Profile</Label>
+          <select
+            id="mcp-connection-profile"
+            className={selectClassName}
+            value={profile}
+            onChange={(e) => setPickedProfile(e.target.value as McpProfile)}
+          >
+            {PROFILES.map((p) => (
+              <option key={p} value={p}>
+                {PROFILE_LABEL[p]}
               </option>
             ))}
           </select>

@@ -37,7 +37,11 @@ export const DEFAULT_BUDGET: Record<BudgetKind, number> = { list: 2_000, read: 4
 const MIN_BUDGET = 256
 const MAX_BUDGET = 25_000
 
-/** The arguments every budgeted tool takes, with its kind's default in the description. */
+/**
+ * The arguments every budgeted tool takes, with its kind's default in the
+ * description. What a token is and how the cursor is used is said once, in
+ * `initialize.instructions` (#435, instructions.ts).
+ */
 export function budgetArgs(kind: BudgetKind): z.ZodRawShape {
   return {
     budget_tokens: z
@@ -46,8 +50,8 @@ export function budgetArgs(kind: BudgetKind): z.ZodRawShape {
       .min(MIN_BUDGET)
       .max(MAX_BUDGET)
       .optional()
-      .describe(`Max tokens (chars/4); default ${DEFAULT_BUDGET[kind]}`),
-    cursor: z.string().optional().describe('`truncated.cursor` of the last answer'),
+      .describe(`Max tokens; default ${DEFAULT_BUDGET[kind]}`),
+    cursor: z.string().optional().describe('`truncated.cursor`'),
   }
 }
 
@@ -122,7 +126,9 @@ export interface KeysetSection<T> {
  * first item (recomputed per page); the cursor holds the offset and a guard
  * over the `id`s before it, so a ranking that changed is refused, never
  * skipped or repeated. `limit` bounds the whole ranking: pages walk its first
- * `limit` items, and an item past them (a limit + 1 fetch) only sets `">limit"`.
+ * `limit` items, and an item past them (a limit + 1 fetch) only sets `">limit"`:
+ * the answer is not whole, but no cursor continues past it (a larger limit
+ * does), and the page goes on to the sections after this one.
  */
 export interface RankedSection<T> {
   name: string
@@ -162,7 +168,7 @@ export interface Budgeted {
   rendered?: (truncated: Truncated) => Promise<void>
 }
 
-/** A refused cursor; `code` is the ADR-004 §2.7 error code the error envelope (#439) will carry. */
+/** A refused cursor; `code` is the error envelope's code (#439, ADR-004 §2.7). */
 export class CursorError extends Error {
   constructor(
     readonly code: 'CURSOR_INVALID' | 'CURSOR_STALE',
@@ -283,6 +289,7 @@ interface Slot {
   start: number
   /** Ranked and keyset sections: the items this page may show, in order. */
   avail: readonly unknown[]
+  /** More items than `avail`: a keyset section's next page, or a ranked section's items past its `limit` (no page). */
   more: boolean
   limit: number
 }
@@ -386,7 +393,8 @@ function fill(slots: Slot[], room: number, itemLength: (slot: number, i: number)
       shown[n] = i + 1
       any = true
     }
-    if (slot.more) return { shown, forced: false, stop: n }
+    // A keyset list's next page starts here; past a ranked list's `limit` there is no page, so the next section fills on.
+    if (slot.more && slot.section.kind === 'keyset') return { shown, forced: false, stop: n }
   }
   return { shown, forced: false, stop: -1 }
 }

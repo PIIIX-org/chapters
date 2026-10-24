@@ -28,7 +28,7 @@ committed baseline of known defects.
 
 | tier | when | tests | time |
 |---|---|---|---|
-| fast | PRs to `dev` that change anything the image is built from (`server/**`, `client/**`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`) or the lab (`lab/**`, the lab workflow, the `lab-instance` action, the gate); pushes to `lab/**` | tests with `tier: 'fast'`, with their long parts skipped | lab job 5 min 37 s (run 38830575391) |
+| fast | PRs to `dev` that change anything the image is built from (`server/**`, `client/**`, `skills/elara/references/mcp-tools.md` (the tool manuals the server serves, #429), `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`) or the lab (`lab/**`, the lab workflow, the `lab-instance` action, the gate); pushes to `lab/**` | tests with `tier: 'fast'`, with their long parts skipped | lab job 5 min 37 s (run 38830575391) |
 | full | nightly 02:30 UTC on `dev`, every PR to `prod` (promotion), and by hand | every test, every part | lab job 61 min (run 38830570057; `restart-extraction` 19 min, `big-notes` 18 min) |
 
 The `plan` job reads the PR's changed files (GitHub API); a PR to `dev`
@@ -376,7 +376,7 @@ in `pnpm lint`; for types run `tsc --noEmit` with `types: ["bun"]`,
 | `ctx.tier` | `'fast'` or `'full'` |
 | `ctx.mcp(key \| rawToken, label?)` | `McpClient`: `call(tool, args)` → `{ok, isError, httpStatus, text, json, ms, retries429}` (never throws; HTTP 0 = server down), `must(tool, args)` (throws), `listTools()`, `rpc(method, params)`. Retries 429 with backoff; `run.ts` writes per-test call stats |
 | `ctx.rest('admin' \| 'member')` | `RestSession` with the bootstrap cookie: `get`, `post`, `request`, `must`; `RestSession.login(baseUrl, email, password)` for a fresh session (login is limited to 10/min per IP) |
-| `ctx.mintToken(user, name, scope?, options?)` | new MCP connection via `POST /api/mcp-connections` → `{id, token}`; `options`: `vaultId`/`repositoryId` for the pin, `access` (`read`/`write`/`admin`), `allowedTools`, `expiresAt` |
+| `ctx.mintToken(user, name, scope?, options?)` | new MCP connection via `POST /api/mcp-connections` → `{id, token}`; `options`: `vaultId`/`repositoryId` for the pin, `access` (`read`/`write`/`admin`), `profile` (`reader`/`writer`/`admin`, default `admin`), `allowedTools`, `expiresAt` |
 | `ctx.createVault(user, name)` / `ctx.connectRepo(user, name, gitUrl)` | REST create; repo sync starts immediately (public https URLs only) |
 | `ctx.signupUser(email, password)` | a new active user through signup, the mailpit code, verification, admin approval and login → `{id, session}`; for tests that must deactivate or otherwise spend a user (never the bootstrap ones) |
 | `ctx.docker.app.restart(baseUrl)` / `.crash(baseUrl)` | graceful restart / `docker kill -s KILL`, then (`lib/app-recovery.ts`, #658) wait for the old process to exit, `compose start` up to 3 times (a failed start, or a container that exits again during boot, is retried), wait up to 300 s for `/health`; throws with every attempt and the last app log lines when the app does not come back |

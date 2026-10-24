@@ -62,6 +62,8 @@ const SYMBOL = { RP: 'scopeProbePinned', RO: 'scopeProbeOther' }
 const REPO_LINK = { missing: 'repo:scope-other-repo/missing.ts', present: 'repo:scope-other-repo/src/other-only.ts' }
 const SCOPE_DENIAL =
   /pinned to a different|is scoped to a (vault|repository)|requires an account-scoped connection/i
+/** The not-found error envelope (#439): a perspective outside the pin answers it, like a missing id. */
+const NOT_FOUND = '{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}'
 
 let seq = 0
 const next = () => `${Date.now().toString(36)}${(seq++).toString(36)}`
@@ -90,7 +92,7 @@ const CASES: Record<string, ScopeCase> = {
   mark_notification_read: { kind: 'account', args: () => ({ notificationId: randomUUID() }) },
 
   // one vault
-  browse_vault: { kind: 'vault', finds: { vault: ['docs/probe'] } },
+  browse_vault: { kind: 'vault', args: () => ({ recursive: true }), finds: { vault: ['docs/probe'] } },
   update_vault: { kind: 'vault', args: () => ({ mergeable: false }) },
   get_vault_graph_preference: { kind: 'vault' },
   set_vault_graph_preference: { kind: 'vault', args: () => ({ include: false }) },
@@ -335,7 +337,7 @@ describe('MCP tools respect a pinned token (#546, #547)', () => {
 
     const other = await call(vault, 'delete_graph_perspective', { id: fx.O.perspectiveId })
     expect(other.isError).toBe(true)
-    expect(other.text).toBe('Error: not found')
+    expect(other.text).toBe(NOT_FOUND)
     const listed = await must<Array<{ id: string }>>(acct, 'list_graph_perspectives', { vaultId: fx.O.id })
     expect(listed.map((p) => p.id)).toContain(fx.O.perspectiveId)
   })
@@ -360,14 +362,14 @@ describe('MCP tools respect a pinned token (#546, #547)', () => {
         continue
       }
       if (p.expect === 'hide') {
-        if (r.text !== 'Error: not found') failures.push(`${where}: expected "not found", got ${r.text.slice(0, 160)}`)
+        if (r.text !== NOT_FOUND) failures.push(`${where}: expected "not found", got ${r.text.slice(0, 160)}`)
         continue
       }
       if (r.isError && SCOPE_DENIAL.test(r.text)) {
         failures.push(`${where}: refused inside its own pin: ${r.text.slice(0, 160)}`)
         continue
       }
-      if (r.isError && /input validation|invalid arguments/i.test(r.text)) {
+      if (r.isError && r.text.startsWith('{"error":{"code":"INVALID_ARGUMENT","message":"Invalid arguments for tool ')) {
         failures.push(`${where}: test arguments rejected: ${r.text.slice(0, 160)}`)
         continue
       }

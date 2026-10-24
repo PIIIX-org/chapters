@@ -66,10 +66,30 @@ export interface GraphNode {
   community: number
 }
 
+export const EDGE_KINDS = ['extracted', 'structural', 'semantic'] as const
+export type EdgeKind = (typeof EDGE_KINDS)[number]
+
+/** Why an edge exists (ADR-004 §2.8); `kind` says how it was found. */
+export type EdgeRelation = 'link' | 'import' | 'same_type' | 'same_tag' | 'same_language' | 'same_folder' | 'similar'
+
 export interface GraphEdge {
   source: string
   target: string
-  kind: 'extracted' | 'structural' | 'semantic'
+  kind: EdgeKind
+  /** True for links and imports: the source links to or imports the target. Structural and semantic edges have no direction. */
+  directed: boolean
+  relation: EdgeRelation
+  /** `resolved` (links, resolved imports, shared groups), or a semantic edge's similarity (the higher of its two stored directions). */
+  confidence: 'resolved' | number
+  /**
+   * Where the edge is written, as stored: `[start, end]` lines of the source
+   * (a link: body-relative lines of its note; an import: the line of its
+   * specifier), null when not known (an import extracted before migration
+   * 0031, a link row not located yet) and for semantic edges; for a
+   * structural edge the group (`type:`, `tag:`, `language:` or `folder:`).
+   * `graph/edges.ts` renders it as `path#La-Lb` in whole-file lines.
+   */
+  evidence: readonly [number, number] | string | null
 }
 
 export interface VaultGraph {
@@ -81,7 +101,7 @@ export interface VaultGraph {
   memberTotal?: number
 }
 
-const STRUCTURAL_GROUP_CAP = 50
+export const STRUCTURAL_GROUP_CAP = 50
 /** Louvain communities can be huge; cap the member fetch so d3-force layout doesn't stall. */
 export const COMMUNITY_MEMBER_CAP = 2500
 
@@ -92,6 +112,8 @@ export interface GraphFilters {
   until?: string
   aggregate?: 'community'
   community?: number
+  /** Edge kinds to build (default all); the others are never queried, so Louvain runs over these only (#426). */
+  edgeTypes?: readonly EdgeKind[]
 }
 
 export interface CommunityNode {
@@ -121,7 +143,8 @@ export interface GraphResourceSet {
   repositoryIds: string[]
 }
 
-interface InternalNode {
+/** A graph node before Louvain gives it a community. */
+export interface InternalNode {
   id: string
   resourceType: ResourceType
   resourceId: string
@@ -130,6 +153,196 @@ interface InternalNode {
   tags: string[]
   timestamp: string | null
   updatedAt: string | null
+}
+
+/** The note columns a graph node is read from. */
+export const NOTE_NODE_COLUMNS = {
+  id: notes.id,
+  vaultId: notes.vaultId,
+  path: notes.path,
+  type: notes.type,
+  frontmatter: notes.frontmatter,
+  updatedAt: notes.updatedAt,
+}
+
+export function noteNode(r: { id: string; vaultId: string; path: string; type: string; frontmatter: unknown; updatedAt: Date | null }): InternalNode {
+  const fm = r.frontmatter as { tags?: string[]; timestamp?: string }
+  return {
+    id: r.id,
+    resourceType: 'note',
+    resourceId: r.vaultId,
+    path: r.path,
+    type: r.type,
+    tags: Array.isArray(fm.tags) ? fm.tags : [],
+    timestamp: typeof fm.timestamp === 'string' ? fm.timestamp : null,
+    updatedAt: r.updatedAt?.toISOString() ?? null,
+  }
+}
+
+/** The repository file columns a graph node is read from. */
+export const FILE_NODE_COLUMNS = {
+  id: repositoryFiles.id,
+  repositoryId: repositoryFiles.repositoryId,
+  path: repositoryFiles.path,
+  language: repositoryFiles.language,
+  updatedAt: repositoryFiles.updatedAt,
+}
+
+export function fileNode(r: { id: string; repositoryId: string; path: string; language: string | null; updatedAt: Date | null }): InternalNode {
+  return {
+    id: r.id,
+    resourceType: 'code',
+    resourceId: r.repositoryId,
+    path: r.path,
+    type: r.language,
+    tags: [],
+    timestamp: null,
+    updatedAt: r.updatedAt?.toISOString() ?? null,
+  }
+}
+
+/**
+ * The file a `repo:<name>/<path>` (or `code:`, or `<name>:<path>`) wikilink
+ * names: `{repositoryId, path}` within `repositoryIds` (by name or id),
+ * null when it names none, undefined for a plain note link.
+ */
+export function repoLinkTarget(
+  targetPath: string,
+  repoNameToId: ReadonlyMap<string, string>,
+  repositoryIds: readonly string[],
+): { repositoryId: string; path: string } | null | undefined {
+  if (!targetPath.startsWith('repo:') && !targetPath.startsWith('code:')) return undefined
+  const cleanPath = targetPath.slice('repo:'.length).split('#')[0] ?? ''
+  if (!cleanPath) return null
+  let repoKey = cleanPath
+  let filePath = ''
+  const colonIdx = cleanPath.indexOf(':')
+  const slashIdx = cleanPath.indexOf('/')
+  const cut = colonIdx !== -1 ? colonIdx : slashIdx
+  if (cut !== -1) {
+    repoKey = cleanPath.slice(0, cut)
+    filePath = cleanPath.slice(cut + 1)
+  }
+  const repositoryId = (repoKey ? repoNameToId.get(repoKey) : undefined) ?? (repositoryIds.includes(repoKey) ? repoKey : undefined)
+  return repositoryId ? { repositoryId, path: filePath } : null
+}
+
+/** Repository names to ids, for `repo:<name>/…` links: only the call's own repositories, never a wider lookup. */
+export async function repositoryNames(repositoryIds: readonly string[]): Promise<Map<string, string>> {
+  if (repositoryIds.length === 0) return new Map()
+  const rows = await db
+    .select({ id: repositories.id, name: repositories.name })
+    .from(repositories)
+    .where(inArray(repositories.id, [...repositoryIds]))
+  return new Map(rows.map((r) => [r.name, r.id]))
+}
+
+/** A code file's top-level directory, `.` at the repository root: its `dir:` structural group. */
+export const topDirectory = (path: string): string => (path.includes('/') ? path.split('/')[0]! : '.')
+
+/**
+ * The structural groups a node belongs to: notes by type and each tag, code
+ * by language (across repositories) and top-level directory (per
+ * repository: "same folder" means something within one repository only).
+ */
+export function groupKeys(n: InternalNode): string[] {
+  if (n.resourceType === 'note') return [`type:${n.type}`, ...n.tags.map((tag) => `tag:${tag}`)]
+  return [...(n.type ? [`language:${n.type}`] : []), `dir:${n.resourceId}:${topDirectory(n.path)}`]
+}
+
+/** The structural edge between two members of group `key` (`groupKeys`): its relation and the group as evidence. */
+export function structuralEdge(source: string, target: string, key: string): GraphEdge {
+  const at = key.indexOf(':')
+  const prefix = key.slice(0, at)
+  const relation = prefix === 'type' ? 'same_type' : prefix === 'tag' ? 'same_tag' : prefix === 'language' ? 'same_language' : 'same_folder'
+  // `dir:<repositoryId>:<directory>`: the folder's name, both ends being in that repository.
+  const evidence = prefix === 'dir' ? `folder:${key.slice(key.indexOf(':', at + 1) + 1)}` : key
+  return { source, target, kind: 'structural', directed: false, relation, confidence: 'resolved', evidence }
+}
+
+/** A wikilink row as an edge from its note: its lines when located (0: not located yet). */
+export const linkEdge = (source: string, target: string, startLine: number, endLine: number): GraphEdge => ({
+  source,
+  target,
+  kind: 'extracted',
+  directed: true,
+  relation: 'link',
+  confidence: 'resolved',
+  evidence: startLine > 0 ? [startLine, endLine] : null,
+})
+
+/** A resolved import as an edge from the importing file: the line of its specifier when known. */
+export const importEdge = (source: string, target: string, line: number | null): GraphEdge => ({
+  source,
+  target,
+  kind: 'extracted',
+  directed: true,
+  relation: 'import',
+  confidence: 'resolved',
+  evidence: line === null ? null : [line, line],
+})
+
+/** A stored semantic row as an edge: undirected, its similarity as the confidence. */
+export const semanticEdge = (source: string, target: string, similarity: number): GraphEdge => ({
+  source,
+  target,
+  kind: 'semantic',
+  directed: false,
+  relation: 'similar',
+  confidence: similarity,
+  evidence: null,
+})
+
+const GROUP_RANK: readonly EdgeRelation[] = ['same_type', 'same_tag', 'same_language', 'same_folder']
+
+/** Whether structural edge `a` names a better group than `b`: type, tag, language, folder; then the group in code-unit order. */
+const betterGroup = (a: GraphEdge, b: GraphEdge): boolean =>
+  GROUP_RANK.indexOf(a.relation) - GROUP_RANK.indexOf(b.relation) < 0 || (a.relation === b.relation && String(a.evidence) < String(b.evidence))
+
+/**
+ * Edges in the order first added; a self-edge is dropped (#558). A directed
+ * edge (link, import) is kept per ordered pair and relation, so a→b and b→a
+ * are two edges; written on several lines, it names the first. An
+ * undirected one is kept per unordered pair and kind: a structural pair
+ * sharing several groups names the best-ranked group, a semantic pair keeps
+ * the higher similarity. So the whole graph and a neighbourhood give the
+ * same rows whatever order they add them in.
+ *
+ * `pairs` is the undirected projection Louvain and the community weights
+ * read: the first edge per unordered pair and kind, with its ends as first
+ * added. That is exactly this list before directions were kept, so keeping
+ * them moves no community.
+ */
+export class EdgeList {
+  readonly edges: GraphEdge[] = []
+  readonly pairs: Array<readonly [string, string]> = []
+  private readonly byKey = new Map<string, GraphEdge>()
+  private readonly paired = new Set<string>()
+
+  add(edge: GraphEdge): void {
+    const { source: a, target: b } = edge
+    if (a === b) return
+    const pair = a < b ? `${a}|${b}|${edge.kind}` : `${b}|${a}|${edge.kind}`
+    if (!this.paired.has(pair)) {
+      this.paired.add(pair)
+      this.pairs.push([a, b])
+    }
+    const key = edge.directed ? `${a}>${b}|${edge.relation}` : pair
+    const seen = this.byKey.get(key)
+    if (!seen) {
+      this.byKey.set(key, edge)
+      this.edges.push(edge)
+    } else if (edge.directed) {
+      const line = (edge.evidence as readonly [number, number] | null)?.[0]
+      const seenLine = (seen.evidence as readonly [number, number] | null)?.[0]
+      if (line !== undefined && (seenLine === undefined || line < seenLine)) seen.evidence = edge.evidence
+    } else if (edge.kind === 'semantic' && (edge.confidence as number) > (seen.confidence as number)) {
+      seen.confidence = edge.confidence
+    } else if (edge.kind === 'structural' && betterGroup(edge, seen)) {
+      seen.relation = edge.relation
+      seen.evidence = edge.evidence
+    }
+  }
 }
 
 export function passesFilters(
@@ -146,9 +359,10 @@ export function passesFilters(
 /**
  * Collapses an assembled graph into one node per Louvain community. This
  * shrinks the payload and what the client has to draw; it does NOT make
- * buildGraph cheaper — the full assembly still runs (see issue #93).
+ * buildGraph cheaper — the full assembly still runs (see issue #93). The
+ * weights count `pairs` (`EdgeList.pairs`): a link both ways counts once.
  */
-function collapseToCommunities(graph: VaultGraph): CommunityGraph {
+function collapseToCommunities(graph: VaultGraph, pairs: ReadonlyArray<readonly [string, string]>): CommunityGraph {
   const byCommunity = new Map<number, CommunityNode>()
   const communityOf = new Map<string, number>()
 
@@ -174,9 +388,9 @@ function collapseToCommunities(graph: VaultGraph): CommunityGraph {
   }
 
   const weights = new Map<string, CommunityEdge>()
-  for (const e of graph.edges) {
-    const a = communityOf.get(e.source)
-    const b = communityOf.get(e.target)
+  for (const [source, target] of pairs) {
+    const a = communityOf.get(source)
+    const b = communityOf.get(target)
     if (a === undefined || b === undefined) continue
     if (a === b) continue // intra-community edges are already implied by size
     const [lo, hi] = a < b ? [a, b] : [b, a]
@@ -221,69 +435,34 @@ export async function buildGraph(
   const { vaultIds, repositoryIds } = resources
   if (vaultIds.length === 0 && repositoryIds.length === 0) {
     const empty: VaultGraph = { nodes: [], edges: [], cappedGroups: [] }
-    return filters.aggregate === 'community' ? collapseToCommunities(empty) : empty
+    return filters.aggregate === 'community' ? collapseToCommunities(empty, []) : empty
   }
 
   let internalNodes: InternalNode[] = []
 
   if (vaultIds.length > 0) {
     const noteRows = await db
-      .select({
-        id: notes.id,
-        vaultId: notes.vaultId,
-        path: notes.path,
-        type: notes.type,
-        frontmatter: notes.frontmatter,
-        updatedAt: notes.updatedAt,
-      })
+      .select(NOTE_NODE_COLUMNS)
       .from(notes)
       .where(and(inArray(notes.vaultId, vaultIds), isNull(notes.deletedAt)))
       // Every query feeding Louvain is ordered (#816): node and edge
       // insertion order changes its partition, and an unordered query's row
       // order follows whichever index the planner picks.
       .orderBy(notes.id)
-    for (const r of noteRows) {
-      const fm = r.frontmatter as { tags?: string[]; timestamp?: string }
-      internalNodes.push({
-        id: r.id,
-        resourceType: 'note',
-        resourceId: r.vaultId,
-        path: r.path,
-        type: r.type,
-        tags: Array.isArray(fm.tags) ? fm.tags : [],
-        timestamp: typeof fm.timestamp === 'string' ? fm.timestamp : null,
-        updatedAt: r.updatedAt?.toISOString() ?? null,
-      })
-    }
+    for (const r of noteRows) internalNodes.push(noteNode(r))
   }
 
   if (repositoryIds.length > 0) {
     const fileRows = await db
-      .select({
-        id: repositoryFiles.id,
-        repositoryId: repositoryFiles.repositoryId,
-        path: repositoryFiles.path,
-        language: repositoryFiles.language,
-        updatedAt: repositoryFiles.updatedAt,
-      })
+      .select(FILE_NODE_COLUMNS)
       .from(repositoryFiles)
       .where(inArray(repositoryFiles.repositoryId, repositoryIds))
       .orderBy(repositoryFiles.id)
-    for (const r of fileRows) {
-      internalNodes.push({
-        id: r.id,
-        resourceType: 'code',
-        resourceId: r.repositoryId,
-        path: r.path,
-        type: r.language,
-        tags: [],
-        timestamp: null,
-        updatedAt: r.updatedAt?.toISOString() ?? null,
-      })
-    }
+    for (const r of fileRows) internalNodes.push(fileNode(r))
   }
 
   internalNodes = internalNodes.filter((n) => passesFilters(n, filters))
+  const kinds = new Set(filters.edgeTypes ?? EDGE_KINDS)
 
   const byId = new Map(internalNodes.map((n) => [n.id, n]))
   const noteByVaultPath = new Map(
@@ -295,77 +474,33 @@ export async function buildGraph(
   const noteIds = internalNodes.filter((n) => n.resourceType === 'note').map((n) => n.id)
   const codeIds = internalNodes.filter((n) => n.resourceType === 'code').map((n) => n.id)
 
-  // repo:<name>/<path> wikilinks resolve only against repositories already
-  // in this call's own resource set — never a wider lookup.
-  const repoNameToId =
-    repositoryIds.length > 0
-      ? new Map(
-          (
-            await db
-              .select({ id: repositories.id, name: repositories.name })
-              .from(repositories)
-              .where(inArray(repositories.id, repositoryIds))
-          ).map((r) => [r.name, r.id]),
-        )
-      : new Map<string, string>()
+  const list = new EdgeList()
+  const { edges } = list
 
-  const edges: GraphEdge[] = []
-  const seen = new Set<string>()
-  const addEdge = (a: string, b: string, kind: GraphEdge['kind']) => {
-    if (a === b) return
-    const key = a < b ? `${a}|${b}|${kind}` : `${b}|${a}|${kind}`
-    if (seen.has(key)) return
-    seen.add(key)
-    edges.push({ source: a, target: b, kind })
-  }
-
-  if (noteIds.length > 0) {
+  if (kinds.has('extracted') && noteIds.length > 0) {
     // EXTRACTED: plain wikilinks resolve within the source note's own
     // vault; a `repo:<name>/<path>` link resolves against a repository
     // already in this call's resource set (cross-type — spec 9).
+    const repoNameToId = await repositoryNames(repositoryIds)
     const links = await db
       .select()
       .from(noteLinks)
       .where(inArray(noteLinks.sourceNoteId, noteIds))
-      .orderBy(noteLinks.sourceNoteId, noteLinks.targetPath)
+      // A target linked on several lines: the first line is the edge's evidence.
+      .orderBy(noteLinks.sourceNoteId, noteLinks.targetPath, noteLinks.startLine)
     for (const link of links) {
       const source = byId.get(link.sourceNoteId)
       if (!source) continue
-      if (link.targetPath.startsWith('repo:') || link.targetPath.startsWith('code:')) {
-        const withoutPrefix = link.targetPath.startsWith('repo:')
-          ? link.targetPath.slice('repo:'.length)
-          : link.targetPath.slice('code:'.length)
-        const cleanPath = withoutPrefix.split('#')[0] ?? ''
-        if (!cleanPath) continue
-        let repoKey = ''
-        let filePath = ''
-        const colonIdx = cleanPath.indexOf(':')
-        if (colonIdx !== -1) {
-          repoKey = cleanPath.slice(0, colonIdx)
-          filePath = cleanPath.slice(colonIdx + 1)
-        } else {
-          const slashIdx = cleanPath.indexOf('/')
-          if (slashIdx !== -1) {
-            repoKey = cleanPath.slice(0, slashIdx)
-            filePath = cleanPath.slice(slashIdx + 1)
-          } else {
-            repoKey = cleanPath
-            filePath = ''
-          }
-        }
-        const repositoryId =
-          (repoKey ? repoNameToId.get(repoKey) : undefined) ??
-          (repositoryIds.includes(repoKey) ? repoKey : undefined)
-        const targetId = repositoryId ? codeByRepoPath.get(`${repositoryId}:${filePath}`) : undefined
-        if (targetId) addEdge(link.sourceNoteId, targetId, 'extracted')
-        continue
-      }
-      const targetId = noteByVaultPath.get(`${source.resourceId}:${link.targetPath}`)
-      if (targetId) addEdge(link.sourceNoteId, targetId, 'extracted')
+      const file = repoLinkTarget(link.targetPath, repoNameToId, repositoryIds)
+      const targetId =
+        file === undefined
+          ? noteByVaultPath.get(`${source.resourceId}:${link.targetPath}`)
+          : file && codeByRepoPath.get(`${file.repositoryId}:${file.path}`)
+      if (targetId) list.add(linkEdge(link.sourceNoteId, targetId, link.startLine, link.endLine))
     }
   }
 
-  if (codeIds.length > 0) {
+  if (kinds.has('extracted') && codeIds.length > 0) {
     // EXTRACTED: code imports resolved within the same repository.
     const imports = await db
       .select()
@@ -374,71 +509,58 @@ export async function buildGraph(
       .orderBy(repositoryFileImports.sourceFileId, repositoryFileImports.targetPath)
     for (const imp of imports) {
       if (imp.resolvedTargetFileId && byId.has(imp.resolvedTargetFileId)) {
-        addEdge(imp.sourceFileId, imp.resolvedTargetFileId, 'extracted')
+        list.add(importEdge(imp.sourceFileId, imp.resolvedTargetFileId, imp.line))
       }
     }
   }
 
-  if (internalNodes.length > 0) {
+  if (kinds.has('semantic') && internalNodes.length > 0) {
     // Semantic: stored pairs (now spanning notes and code — spec 9)
     // filtered to the permitted, live node set.
     const allIds = [...byId.keys()]
     // ponytail: bind allIds as Postgres array literal to prevent 65,535 parameter ceiling crash on large repositories (DB-08).
     const pgIds = `{${allIds.join(',')}}`
-    const sem =
-      allIds.length > 0
-        ? await db
-            .select()
-            .from(semanticEdges)
-            .where(
-              sql`${semanticEdges.sourceId} = ANY(${pgIds}::uuid[]) OR ${semanticEdges.targetId} = ANY(${pgIds}::uuid[])`,
-            )
-            .orderBy(semanticEdges.sourceId, semanticEdges.targetId)
-        : []
+    const sem = await db
+      .select()
+      .from(semanticEdges)
+      .where(sql`${semanticEdges.sourceId} = ANY(${pgIds}::uuid[]) OR ${semanticEdges.targetId} = ANY(${pgIds}::uuid[])`)
+      .orderBy(semanticEdges.sourceId, semanticEdges.targetId)
     for (const edge of sem) {
       if (byId.has(edge.sourceId) && byId.has(edge.targetId)) {
-        addEdge(edge.sourceId, edge.targetId, 'semantic')
+        list.add(semanticEdge(edge.sourceId, edge.targetId, edge.similarity))
       }
     }
   }
 
-  // Structural: notes group by type/tag (existing); code groups by
-  // language (global, mirrors note type) and by top-level directory
-  // (per-repository — "same folder" only means something within one repo).
+  // Structural: pairs within each group (`groupKeys`).
   const cappedGroups: string[] = []
-  const groups = new Map<string, string[]>()
-  const addToGroup = (key: string, id: string) => {
-    const list = groups.get(key)
-    if (list) list.push(id)
-    else groups.set(key, [id])
-  }
-  for (const n of internalNodes) {
-    if (n.resourceType === 'note') {
-      addToGroup(`type:${n.type}`, n.id)
-      for (const tag of n.tags) addToGroup(`tag:${tag}`, n.id)
-    } else {
-      if (n.type) addToGroup(`language:${n.type}`, n.id)
-      const topDir = n.path.includes('/') ? n.path.split('/')[0] : '.'
-      addToGroup(`dir:${n.resourceId}:${topDir}`, n.id)
+  if (kinds.has('structural')) {
+    const groups = new Map<string, string[]>()
+    for (const n of internalNodes) {
+      for (const key of groupKeys(n)) {
+        const members = groups.get(key)
+        if (members) members.push(n.id)
+        else groups.set(key, [n.id])
+      }
     }
-  }
-  for (const [key, ids] of groups) {
-    if (ids.length > STRUCTURAL_GROUP_CAP) {
-      // ponytail: pairwise edges for huge groups are an unreadable hairball;
-      // color-by-type/tag/language conveys the grouping instead. Capped, reported.
-      cappedGroups.push(key)
-      continue
-    }
-    for (let i = 0; i < ids.length; i++) {
-      for (let j = i + 1; j < ids.length; j++) addEdge(ids[i]!, ids[j]!, 'structural')
+    for (const [key, ids] of groups) {
+      if (ids.length > STRUCTURAL_GROUP_CAP) {
+        // ponytail: pairwise edges for huge groups are an unreadable hairball;
+        // color-by-type/tag/language conveys the grouping instead. Capped, reported.
+        cappedGroups.push(key)
+        continue
+      }
+      for (let i = 0; i < ids.length; i++) {
+        for (let j = i + 1; j < ids.length; j++) list.add(structuralEdge(ids[i]!, ids[j]!, key))
+      }
     }
   }
 
-  // Louvain communities over the full assembled edge graph.
+  // Louvain communities over the undirected projection of the assembled edges (`EdgeList.pairs`).
   const g = new UndirectedGraph()
   for (const id of byId.keys()) g.addNode(id)
-  for (const e of edges) {
-    if (!g.hasEdge(e.source, e.target)) g.addEdge(e.source, e.target)
+  for (const [a, b] of list.pairs) {
+    if (!g.hasEdge(a, b)) g.addEdge(a, b)
   }
   const communities: Record<string, number> =
     g.order > 0 && g.size > 0 ? louvain(g, { rng: mulberry32(seedFromNodeIds(byId.keys())) }) : {}
@@ -449,7 +571,7 @@ export async function buildGraph(
   }))
 
   const assembled: VaultGraph = { nodes, edges, cappedGroups }
-  if (filters.aggregate === 'community') return collapseToCommunities(assembled)
+  if (filters.aggregate === 'community') return collapseToCommunities(assembled, list.pairs)
   if (filters.community !== undefined) {
     const members = assembled.nodes.filter((n) => n.community === filters.community)
     const sliced = members

@@ -13,10 +13,10 @@ import {
   trashFile,
 } from '../notes/store.js'
 import { reconcileStore } from '../notes/store-reconcile.js'
+import { linkRows } from '../notes/store-tx.js'
 import { flushProjections, projectDirIndices } from '../notes/projector.js'
 import {
   OkfValidationError,
-  extractWikilinks,
   parseNote,
   serializeNote,
   validateNote,
@@ -594,8 +594,8 @@ async function applyRestore(contents: BackupContents, { inserts, writes }: Prepa
           sql`select setval(pg_get_serial_sequence(${spec.name}, ${column}), max(${sql.identifier(column)})) from ${sql.identifier(spec.name)} having max(${sql.identifier(column)}) is not null`,
         )
       }
-      // Derived from the bodies, as on every save.
-      const links = newNotes.flatMap((n) => extractWikilinks(String(n.body)).map((targetPath) => ({ sourceNoteId: String(n.id), targetPath })))
+      // Derived from the bodies, as on every save (`replaceLinks`).
+      const links = newNotes.flatMap((n) => linkRows(String(n.id), String(n.body)))
       for (let i = 0; i < links.length; i += 10_000) {
         await tx.insert(noteLinks).values(links.slice(i, i + 10_000)).onConflictDoNothing()
       }
