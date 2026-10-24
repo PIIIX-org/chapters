@@ -1262,9 +1262,34 @@ until #453's extractor-version bump extracts them again). On the budget
 ladder a row's `locations` form is one line, `from -> to relation
 evidence`. `mcp/prompts.ts`'s path prompt still prints ids.
 
+`resolve-node.ts` (#447) turns a node reference into a node for MCP
+`graph`'s `neighborsOf`, `find_graph_path`'s ends, the REST
+`/vaults/:id/graph/path` and `/graph/merged/path` routes and the
+`summarize_concept_chain` prompt. `resolveNode(resources, ref)` tries, in
+order: the id; the exact path (both indexed, the fast path); then one
+query per table with the tier as a `CASE` and `count(*) over (partition by
+tier)`, limit 11: the path in any case, a note path with `.md` or (for a
+ref without an extension) a file path without its extension; a path
+suffix on a `/` boundary (`right(lower(path), n + 1) = '/' || lower(ref)`,
+for a ref without an extension also against the extension-less file path,
+so `store.ts` never matches `store.ts.orig`);
+a note's frontmatter `title`. Graph nodes have no symbols, so no symbol
+tier. One match is `{node}`; several are `{candidates, next, total}`
+(`{path, kind, id}`, shorter path first, then path and id; 10 shown,
+`next` the 11th as a `limit` + 1 read); none is `{suggestions}` (empty for
+a node id, so an id out of reach answers as a missing one): up to 5
+paths from a pool of at most 200 per table (same basename without
+extension, a folder ending like the ref's, a basename containing it or
+sharing its first two characters), ranked by the edit distance between the
+ref and the path's last as many segments. Every query is bounded by
+`resources` (live notes of its vaults, files of its repositories), which
+the caller's access resolved, so neither list can name a node outside its
+reach. MCP answers candidates as a budgeted `{end?, matches?, candidates,
+truncated}` (`end` for `find_graph_path`, `matches` past 10) and none as
+`NOT_FOUND` with `suggestions`; REST answers candidates `200 {end,
+candidates, truncated: false | n more}` and none `404 {error, suggestions?}`.
+
 `neighbors.ts` (#426) is the local graph without the whole graph:
-`resolveGraphNode(resources, ref)` takes a node id or exact path (none or
-several matches are refused, the latter with the ids; #447 widens it), and
 `neighborhood(resources, center, {depth, edgeTypes, types, tags, limit})`
 walks ring by ring in SQL over the frontier's ids only: links out and in
 (`note_links_target_idx`; `repo:` links to a frontier file by reading the
@@ -1859,10 +1884,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   included) and `MaintenanceInProgressError` (`BUSY`, retryable), the
   quarantine errors (`QUARANTINED`, the rule), `NoteEditError`
   (`INVALID_ARGUMENT`), `NoteEditConflictError` and
-  `IdempotencyKeyReusedError` (`CONFLICT`), a Node system error
-  (`INTERNAL`, its code only, the error logged), anything else
-  (`INTERNAL` with its message; #443 adds a database-error branch here
-  that shows only the SQLSTATE). `CONFLICT`, `BUSY` and `QUARANTINED`
+  `IdempotencyKeyReusedError` (`CONFLICT`), a failed query (`INTERNAL`
+  `a database query failed (<SQLSTATE>)`, #443: `databaseFailure()` in
+  `db/errors.ts` finds a `DrizzleQueryError` or postgres.js
+  `PostgresError` in the `cause` chain; drizzle's message is the SQL and
+  every parameter, so the driver error is logged with the statement
+  alone, `{query}`, no parameters), a Node system
+  error (`INTERNAL`, its code only, the error logged), anything else
+  (`INTERNAL` with its message). `CONFLICT`, `BUSY` and `QUARANTINED`
   extend ADR-004's list, and `field` its envelope. The SDK's own
   refusals (arguments its schema check rejects, an unknown tool, an
   answer failing its outputSchema) are isError text it makes itself; a
@@ -1875,7 +1904,27 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   union's tag values for a bad `op`), an unknown tool →
   `NOT_FOUND` (close names among `listedTools()`), else `INTERNAL`; the
   message is the SDK's without `MCP error -32602: Input validation
-  error: `. Suggestions only from what the caller reaches: a `note not
+  error: `. The same wrapper refuses a NUL byte (U+0000) in any string
+  or object key of the arguments before the SDK's check, for every tool
+  (#443, `findNulByte()` in `nul-bytes.ts`): `INVALID_ARGUMENT`, `field`
+  its dotted path (a key: the key's own path, the NUL shown as `\0`, e.g.
+  `frontmatter.k\0`), message `<field>: NUL bytes (U+0000) are not
+  allowed` (` (in a key)` for a key). Postgres `text` and `jsonb` cannot
+  hold one; other control characters (tab, LF, CR and the rest) are kept.
+  Every other request the override sets (prompts/get, resources/read)
+  answers a NUL in its params as JSON-RPC InvalidParams and a failed
+  query as InternalError `a database query failed`. REST does the same
+  in app.ts: a root `preValidation` hook answers a NUL in path params,
+  query string or parsed body with 400 `{statusCode, error, message,
+  code: "INVALID_ARGUMENT", field}` (`params.<name>`, `query.<name>`, or
+  the body's field path). A route that handles a NUL in its body itself
+  names those body paths in its `config.nulBytesAllowed` (`*` any key or
+  index, `''` the whole body): the MCP routes `['']` (the MCP answer
+  above), agent push `['files.*.content']` (`syncRepositoryFiles` strips
+  NULs from file content and hashes the bytes as sent; paths and
+  `currentPaths` stay checked). Multipart uploads are streams, not
+  walked. The error handler answers a failed query 500 `a database query
+  failed` in every environment. Suggestions only from what the caller reaches: a `note not
   found` after the access check carries `closest()` of
   `nearbyNotePaths()` (live paths of that vault directly in the same
   folder, and with the same last segment anywhere, each query up to 500;
@@ -1886,10 +1935,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   (`requireVaultOwner`, `requireRepositoryOwner`, `requireTeamOwner`)
   answer that same `NOT_FOUND` for a container the caller cannot reach
   (a team it is not a member of) and `PERMISSION_REQUIRED` only for one
-  it can see. An ambiguous graph node
-  reference (`resolveGraphNode`) is `AMBIGUOUS` with the node ids; #447
-  turns it into a candidates answer and adds suggestions to graph
-  lookups through the same `McpToolError` extra. `rateLimitedError(ms)`
+  it can see. A graph node reference (#447, `graph/resolve-node.ts`)
+  that names several nodes is a successful candidates answer, not an
+  error; one that names none is `NOT_FOUND` with in-reach `suggestions`.
+  `rateLimitedError(ms)`
   is the `RATE_LIMITED` envelope `routes.ts` sends as JSON-RPC
   `error.data` with HTTP 429 (#440, **Auth** above). Write statuses stay
   results: `status: 'retry'` (`write-result.ts`), `merged`,
@@ -2223,6 +2272,24 @@ is the history record, not Chapters).
    bearer sync-token auth, the client sends its own file list directly
    — the closest analog to how a coding agent itself already works.
 
+**Which files are indexed** — git and local_path share one scan
+(`readRepositoryFiles` in `fs-scan.ts`) over the listed paths (each
+method's ignored directories and the binary extensions are not listed; at
+most 10,000 files). It skips a file over `MAX_FILE_BYTES` (1 MiB on disk) or holding
+a NUL byte: a server-side scan can't tell a stray NUL in a text file from
+a binary format, so it takes the file as binary. A skipped file is left out
+of `currentPaths` as well, so a row indexed from an earlier version is
+deleted with its symbols, imports, embedding and semantic edges: a file
+that grows past the cap or gains a NUL byte leaves the index (`read_file`
+answers `NOT_FOUND`, search and `find_symbols` stop finding it) and comes
+back on the first sync after it is indexable again (#923). The scan
+returns the skipped paths with a reason (`too_large`, `binary`), not
+reported anywhere yet (#465). A file that fails to read (gone since the
+listing, no permission) stays current and keeps its row. agent_push is
+the exception: the client chose to send the content as text, so
+`syncRepositoryFiles` strips NUL bytes and indexes the rest, with no
+per-file size check (the request body limit bounds it).
+
 **Credential encryption** (`credentials.ts`): AES-256-GCM,
 `CREDENTIALS_ENCRYPTION_KEY` (32-byte hex), used for both git
 credentials and webhook secrets. Reversible by design (a stored
@@ -2409,7 +2476,7 @@ are idempotent rewrites.
 - **Secrets in backups** (SEC-06, revised by #409): the instance backup keeps password hashes, token hashes and TOTP secrets as stored (stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The scheduled local backup file is written with mode `0600` (through a temp file of the same mode) in a `0700` directory, whatever the umask (#493). The restore CLI prints counts, and only a driver message and code on errors. The `backup.json` digests (#493) are integrity checks, not a signature: they catch damage and truncation, not someone who can rewrite the whole archive.
 - **OIDC host-header sanitization**: Validated against `APP_URL` and injection characters to protect authorization code callbacks.
 - **Admin role hierarchy**: Strict `ROLE_RANK` enforcement preventing self-promotion or subordinate demotion of superadmins and instance owners.
-- **Ingestion bounds**: Git clone ingestion capped to 1MB per file and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`).
+- **Ingestion bounds**: git and local-path ingestion capped to 1 MiB per file (`MAX_FILE_BYTES`, `fs-scan.ts`) and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`); a file over the cap or with a NUL byte is skipped and drops out of the index (§5.10, #923).
 - **Global perspective guards**: Unvaulted graph perspectives are created only by instance admins and listed to and deleted by their creator only (#550; §5.5).
 - Full findings and the design changes they drove:
   `docs/superpowers/specs/2026-07-12-security-audit-findings.md` and
