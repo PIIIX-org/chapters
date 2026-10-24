@@ -2303,7 +2303,12 @@ supported languages — TypeScript, JavaScript, Python, Go. `language.ts`
 labels files by extension: `.ts`, `.tsx`, `.mts` and `.cts` are all
 `typescript` (#449, #451; the label is what `read_file`, `search` and the
 graph's language groups show, so one `typescript` filter finds them all),
-`.js`, `.jsx`, `.mjs` and `.cjs` are `javascript`. The grammar comes from
+`.js`, `.jsx`, `.mjs` and `.cjs` are `javascript`. The path is the source
+of truth: `processFile` derives the language from it and writes it in the
+same update as `extractor_version`, so a row labelled under older rules
+(`.mts`/`.cts` rows had `language` null before #451, and a sync skips
+unchanged content) is relabelled and extracted at the version bump's
+catch-up. The grammar comes from
 the extension, not the label: `.tsx` parses with TSX
 (`tree-sitter-tsx.wasm`, #449), since JSX is not TypeScript syntax and the
 TypeScript grammar reads `<div>` as a type assertion; the other TypeScript
