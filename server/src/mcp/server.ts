@@ -413,6 +413,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   const manualOf = new Map<string, ToolManual>()
   /** Each tool's strict input schema, to read the issues of arguments the SDK refused. */
   const inputSchemaOf = new Map<string, z.ZodType>()
+  /** Tools whose input schema takes `everywhere` (#448). */
+  const everywhereTools = new Set<string>()
   /** The error results tool() answered; any other error result is the SDK's own. */
   const toolErrors = new WeakSet<CallToolResult>()
   const setRequestHandler = server.server.setRequestHandler.bind(server.server) as (
@@ -589,7 +591,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     return pin(requested)
   }
 
-  async function resolveResourceSet(ids: ScopeIds): Promise<ResourceSet> {
+  async function resolveResourceSet(name: string, ids: ScopeIds): Promise<ResourceSet> {
     const vaultIds: string[] = []
     const repositoryIds: string[] = []
     if (auth.connection.scope === 'vault' || ids.vaultId) {
@@ -603,6 +605,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       repositoryIds.push(target)
     }
     if (vaultIds.length === 0 && repositoryIds.length === 0) {
+      // Name the account-wide option only where the tool takes it (#448, D13).
+      if (everywhereTools.has(name)) {
+        throw new McpToolError('INVALID_ARGUMENT', 'pass vaultId or repositoryId, or everywhere: true for every accessible vault and repository', {
+          suggestions: ['everywhere: true', 'vaultId', 'repositoryId'],
+        })
+      }
       throw new McpToolError('INVALID_ARGUMENT', 'vaultId or repositoryId is required for account-scoped connections')
     }
     return { vaultIds, repositoryIds }
@@ -632,7 +640,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         ])
         return { resources: { vaultIds: vaultsList.map((v) => v.id), repositoryIds: repos.map((r) => r.id) } }
       }
-      return { resources: await resolveResourceSet(ids) }
+      return { resources: await resolveResourceSet(name, ids) }
     },
   }
 
@@ -732,6 +740,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     tools.push({ name, scope: def.scope, capability: def.capability, pinPermission, profile, annotations })
     if (!callable(name, def.scope, def.capability, profile)) hiddenTools.add(name)
     pinPermissionOf.set(name, pinPermission)
+    if (def.inputSchema && Object.hasOwn(def.inputSchema, 'everywhere')) everywhereTools.add(name)
     inputSchemaOf.set(name, inputSchema)
     const config = { description: def.description, inputSchema, annotations, ...(def.outputSchema ? { outputSchema: def.outputSchema } : {}) }
     registerTool(name, config, async (raw: unknown) => {
