@@ -51,9 +51,9 @@ async function progress(ctx: LabContext, repoId: string): Promise<Progress> {
   const [row] = await ctx.docker.psqlRows<Omit<Progress, 't'>>(`
     select r.sync_status as "status", r.last_synced_at as "lastSyncedAt", r.last_sync_error as "lastSyncError",
       (select count(*) from repository_files f where f.repository_id = r.id)::int as "files",
-      (select count(*) from repository_files f where f.repository_id = r.id and f.embedding is not null)::int as "embedded",
-      (select count(*) from repository_file_symbols s join repository_files f on f.id = s.file_id
-        where f.repository_id = r.id)::int as "symbols"
+      (select count(*) from repository_files f where f.repository_id = r.id
+        and exists (select 1 from blocks b where b.owner_type = 'code' and b.owner_id = f.id and b.owner_version = f.content_hash and b.embedding is not null))::int as "embedded",
+      (select count(*) from blocks b where b.owner_type = 'code' and b.kind = 'symbol' and b.container_id = r.id)::int as "symbols"
     from repositories r where r.id = '${repoId}'`)
   if (!row) throw new Error(`repository ${repoId} not found`)
   return { t: Math.round((Date.now() - ctx.startedAt) / 1000), ...row }
@@ -61,8 +61,8 @@ async function progress(ctx: LabContext, repoId: string): Promise<Progress> {
 
 async function perFile(ctx: LabContext, repoId: string): Promise<FileRow[]> {
   return ctx.docker.psqlRows<FileRow>(`
-    select f.path, f.language, (f.embedding is not null) as embedded,
-      (select count(*) from repository_file_symbols s where s.file_id = f.id)::int as symbols
+    select f.path, f.language, exists (select 1 from blocks b where b.owner_type = 'code' and b.owner_id = f.id and b.owner_version = f.content_hash and b.embedding is not null) as embedded,
+      (select count(*) from blocks b where b.owner_type = 'code' and b.owner_id = f.id and b.kind = 'symbol')::int as symbols
     from repository_files f where f.repository_id = '${repoId}' order by f.path`)
 }
 

@@ -1,12 +1,6 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import {
-  noteLinks,
-  notes,
-  repositories,
-  repositoryFiles,
-  repositoryFileSymbols,
-} from '../db/schema.js'
+import { blocks, noteLinks, notes, repositories, repositoryFiles } from '../db/schema.js'
 import { notify } from '../notifications/notify.js'
 import type { OkfV2Frontmatter, SourceDescriptor } from './okf/types.js'
 
@@ -48,14 +42,12 @@ export async function checkCodeStaleness(
     repoFiles.map((f) => [f.path, f.contentHash]),
   )
 
+  // Symbol blocks (#413): an anchor names a symbol by its bare name, or a method as `Class.method` (its inner path).
   const symbols = await db
-    .select({
-      name: repositoryFileSymbols.name,
-      filePath: repositoryFiles.path,
-    })
-    .from(repositoryFileSymbols)
-    .innerJoin(repositoryFiles, eq(repositoryFiles.id, repositoryFileSymbols.fileId))
-    .where(eq(repositoryFiles.repositoryId, repositoryId))
+    .select({ innerPath: blocks.innerPath, parent: blocks.symbolParent, filePath: repositoryFiles.path })
+    .from(blocks)
+    .innerJoin(repositoryFiles, eq(repositoryFiles.id, blocks.ownerId))
+    .where(and(eq(blocks.ownerType, 'code'), eq(blocks.kind, 'symbol'), eq(blocks.containerId, repositoryId)))
 
   const fileSymbolsMap = new Map<string, Set<string>>()
   for (const s of symbols) {
@@ -64,7 +56,8 @@ export async function checkCodeStaleness(
       set = new Set<string>()
       fileSymbolsMap.set(s.filePath, set)
     }
-    set.add(s.name)
+    set.add(s.parent === null ? s.innerPath : s.innerPath.slice(s.parent.length + 1))
+    set.add(s.innerPath)
   }
 
   // ponytail: query note_links and frontmatter sources matching repo to avoid loading entire database into RAM (GRAPH-08).

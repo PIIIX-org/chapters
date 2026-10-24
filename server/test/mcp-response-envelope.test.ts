@@ -139,7 +139,8 @@ const HISTORY = 'docs/history'
 const BIG = 'docs/big'
 /** ~150 KB over 2,500 numbered lines, so even the largest budget pages it. */
 const bigBody = (tag: string) => Array.from({ length: 2_500 }, (_, i) => `${tag} line ${i + 1} ${'lorem ipsum '.repeat(4)}`).join('\n') + '\n'
-const bigFile = Array.from({ length: 3_000 }, (_, i) => `export const value${i} = ${i} // ${'x'.repeat(30)}`).join('\n')
+/** 3,000 lines and no symbols (unexported consts, #450), so its last page is content. */
+const bigFile = Array.from({ length: 3_000 }, (_, i) => `const value${i} = ${i} // ${'x'.repeat(30)}`).join('\n')
 /** Every path of the test repository: a sync deletes the paths it does not list. */
 const REPO_PATHS = ['src/big.ts', 'src/alpha.ts', ...Array.from({ length: 30 }, (_, i) => `src/mod-${String(i).padStart(2, '0')}.ts`)]
 const symbolFile = Array.from({ length: 30 }, (_, i) => `export function alphaHandler${i}(input: string) {\n  return input + '${i}'\n}`).join('\n')
@@ -447,20 +448,22 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
     const first = await page('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 5 })
     expect(first.results).toHaveLength(5)
     expect(first.truncated).toMatchObject({ total: { results: '>5' }, dropped: { results: 0 } })
-    const all = await page('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 50, budget_tokens: 25_000 })
+    // Functions only: the vector leg (scoped to the repository since blocks, #452) also ranks the other files'
+    // constants, and the repository's 30 functions are the alphaHandlers.
+    const all = await page('find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 50, budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
     expect((all.results as unknown[]).length).toBe(30)
-    const pages = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 50, budget_tokens: LIST_PAGE })
+    const pages = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 50, budget_tokens: LIST_PAGE })
     expect(pages.length).toBeGreaterThan(2)
     expect(ids(pages, 'results')).toEqual(ids([all], 'results'))
     await refused('find_symbols', { repositoryId: repoId, query: 'other', limit: 50, budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
 
     // `limit` bounds the ranking, not each page: a walk of a limit + 1 fetch shows exactly `limit` results, the
     // same as one large answer, and the lookahead result past them only says ">limit" (no cursor beyond it).
-    const capped = await page('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 29, budget_tokens: 25_000 })
+    const capped = await page('find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 29, budget_tokens: 25_000 })
     expect(capped.results).toHaveLength(29)
     expect(capped.truncated).toMatchObject({ total: { results: '>29' }, dropped: { results: 0 }, cursor: null })
-    const walked = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', limit: 29, budget_tokens: LIST_PAGE })
+    const walked = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 29, budget_tokens: LIST_PAGE })
     expect(walked.length).toBeGreaterThan(2)
     expect(ids(walked, 'results')).toEqual(ids([capped], 'results'))
   })

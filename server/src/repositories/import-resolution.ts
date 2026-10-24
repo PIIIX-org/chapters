@@ -1,6 +1,7 @@
 import { posix } from 'node:path'
 
-const CANDIDATE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go']
+/** Tried in order for an extensionless specifier: TypeScript sources before the JavaScript they compile to (#451). */
+const CANDIDATE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go']
 
 /** TypeScript ESM: a `.js`-style specifier names the compiled output of a TS source. */
 const TS_SOURCE_EXTENSIONS: Record<string, string[]> = {

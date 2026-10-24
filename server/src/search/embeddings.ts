@@ -20,7 +20,28 @@ const EMBED_BATCH_SIZE = 8
  * after tokenizing the whole string (381k tokens for a 742 KB bundle).
  * 512 tokens of source code fit well inside this many characters.
  */
-const MAX_EMBED_CHARS = 16_000
+export const MAX_EMBED_CHARS = 16_000
+
+/** The model the local embedder runs (passed to embedding-worker.ts, which imports nothing from here). */
+export const LOCAL_EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5'
+
+/**
+ * Version of the texts the queues embed (#453): a note's
+ * `<path>\n<frontmatter JSON>\n<body>` (embedding-queue.ts) and the
+ * `MAX_EMBED_CHARS` cut. Bump it with any change to those. A repository
+ * file's block texts are versioned by embed-key.ts `CHUNK_VERSION`.
+ */
+const EMBED_TEXT_VERSION = 1
+
+/**
+ * What produced a vector (#453): the model (`fake` for the test embedder)
+ * and the embed-text version. Part of the `embed_note` job key and stored on
+ * `notes.embedder_id` and `repository_files.embedder_id`; a code block's
+ * vector carries embed-key.ts `embedKey(text)`, which covers it. Changing either
+ * re-embeds every note and file at the next boot, the old vectors searchable
+ * until each new one commits.
+ */
+export const EMBEDDER_ID = `${config.embeddings === 'local' ? LOCAL_EMBEDDING_MODEL : 'fake'}+text${EMBED_TEXT_VERSION}`
 
 export interface Embedder {
   embed(texts: string[]): Promise<number[][]>
@@ -116,7 +137,7 @@ export class LocalEmbedder implements Embedder {
 
   private spawn(): Worker {
     if (this.worker) return this.worker
-    const worker = new Worker(this.workerUrl)
+    const worker = new Worker(this.workerUrl, { workerData: { model: LOCAL_EMBEDDING_MODEL } })
     let uncaught: unknown
     worker.on('message', (res: EmbedBatchResponse) => this.onResponse(res))
     worker.on('error', (err) => {

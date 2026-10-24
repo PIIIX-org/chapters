@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { and, eq } from 'drizzle-orm'
+import { and, count, eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
-import { repositories, repositoryFileImports, repositoryFiles, repositoryFileSymbols } from '../src/db/schema.js'
+import { blocks, repositories, repositoryFileImports, repositoryFiles } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import {
   backfillUnresolvedImports,
@@ -10,8 +10,9 @@ import {
   flushExtraction,
   scheduleMissingExtractions,
 } from '../src/repositories/extraction-queue.js'
+import { EXTRACTOR_VERSION } from '../src/repositories/extraction.js'
 import { embedder } from '../src/search/embeddings.js'
-import { createActiveUser } from './helpers.js'
+import { createActiveUser, fileEmbedding, symbolBlocks } from './helpers.js'
 
 async function makeRepo() {
   const owner = await createActiveUser()
@@ -45,12 +46,9 @@ describe('extraction queue', () => {
     await flushExtraction()
 
     const indexFile = await fileByPath(repo.id, 'src/index.ts')
-    expect(indexFile.embedding).not.toBeNull()
+    expect(await fileEmbedding(indexFile.id)).not.toBeNull()
 
-    const symbols = await db
-      .select()
-      .from(repositoryFileSymbols)
-      .where(eq(repositoryFileSymbols.fileId, indexFile.id))
+    const symbols = await symbolBlocks(indexFile.id)
     expect(symbols.map((s) => s.name)).toEqual(['main'])
 
     const imports = await db
@@ -117,6 +115,46 @@ describe('extraction queue', () => {
     })
   })
 
+  it('extracts .mts files and resolves `./x.mjs` to x.mts; a .tsx component with JSX keeps its symbols (#449, #451)', async () => {
+    const repo = await makeRepo()
+    await syncRepositoryFiles(
+      repo.id,
+      [
+        { path: 'tools/gen.mts', content: "import { load } from './load.mjs'\nexport function gen() { return load() }" },
+        { path: 'tools/load.mts', content: 'export function load() { return 1 }' },
+        {
+          path: 'client/src/Card.tsx',
+          content: [
+            "import { gen } from '../../tools/gen.mjs'",
+            'export function Card() {',
+            '  return <div className="card">{gen()}</div>',
+            '}',
+            'export default function Page() { return <Card /> }',
+          ].join('\n'),
+        },
+      ],
+      ['tools/gen.mts', 'tools/load.mts', 'client/src/Card.tsx'],
+    )
+    await flushExtraction()
+
+    const gen = await fileByPath(repo.id, 'tools/gen.mts')
+    const load = await fileByPath(repo.id, 'tools/load.mts')
+    const card = await fileByPath(repo.id, 'client/src/Card.tsx')
+    expect(gen.language).toBe('typescript')
+    const genImports = await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, gen.id))
+    expect(genImports.map((i) => [i.targetPath, i.resolvedTargetFileId])).toEqual([['./load.mjs', load.id]])
+    const genSymbols = await symbolBlocks(gen.id)
+    expect(genSymbols.map((s) => s.name)).toEqual(['gen'])
+
+    const cardSymbols = await symbolBlocks(card.id)
+    expect(cardSymbols.map((s) => [s.name, s.startLine, s.endLine]).sort()).toEqual([
+      ['Card', 2, 4],
+      ['Page', 5, 5],
+    ])
+    const cardImports = await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, card.id))
+    expect(cardImports.map((i) => [i.targetPath, i.resolvedTargetFileId])).toEqual([['../../tools/gen.mjs', gen.id]])
+  })
+
   it('backfills imports stored unresolved by an older resolver, from their raw target path', async () => {
     const repo = await makeRepo()
     await syncRepositoryFiles(
@@ -158,11 +196,8 @@ describe('extraction queue', () => {
     await flushExtraction()
 
     const file = await fileByPath(repo.id, 'README.rs')
-    expect(file.embedding).not.toBeNull()
-    const symbols = await db
-      .select()
-      .from(repositoryFileSymbols)
-      .where(eq(repositoryFileSymbols.fileId, file.id))
+    expect(await fileEmbedding(file.id)).not.toBeNull()
+    const symbols = await symbolBlocks(file.id)
     expect(symbols).toHaveLength(0)
   })
 
@@ -187,7 +222,7 @@ describe('extraction queue', () => {
     ])
     await flushExtraction()
     const readable = await fileByPath(repo.id, 'dist/cli.bundle.mjs')
-    expect(await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, readable.id))).toHaveLength(1)
+    expect(await symbolBlocks(readable.id)).toHaveLength(1)
 
     // Shaped like the production bundle that took the server down: hundreds of
     // declarations on a handful of very long lines.
@@ -203,8 +238,8 @@ describe('extraction queue', () => {
     }
 
     const file = await fileByPath(repo.id, 'dist/cli.bundle.mjs')
-    expect(file.embedding).not.toBeNull()
-    expect(await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file.id))).toHaveLength(0)
+    expect(await fileEmbedding(file.id)).not.toBeNull()
+    expect(await symbolBlocks(file.id)).toHaveLength(0)
     expect(await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, file.id))).toHaveLength(0)
   })
 
@@ -227,12 +262,8 @@ describe('extraction queue', () => {
     }
 
     const file = await fileByPath(repo.id, 'src/many.ts')
-    expect(file.embedding).not.toBeNull()
-    const symbols = await db
-      .select()
-      .from(repositoryFileSymbols)
-      .where(eq(repositoryFileSymbols.fileId, file.id))
-      .orderBy(repositoryFileSymbols.startLine)
+    expect(await fileEmbedding(file.id)).not.toBeNull()
+    const symbols = await symbolBlocks(file.id)
     expect(symbols.map((s) => s.name)).toEqual(['f0', 'f1', 'f2', 'f3', 'f4'])
     expect(symbols.map((s) => s.embedding !== null)).toEqual([true, true, true, false, false])
     expect(file.embeddingNote).toBe(
@@ -244,6 +275,91 @@ describe('extraction queue', () => {
     await flushExtraction()
     expect((await fileByPath(repo.id, 'src/many.ts')).embeddingNote).toBeNull()
   })
+
+  it('under the per-file budget, embeds exported then other top-level symbols before methods (#450)', async () => {
+    vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '3')
+    const repo = await makeRepo()
+    // A class with many methods opens the file: in document order its methods
+    // would take the budget from the functions after it.
+    const content = [
+      'export class Store {',
+      '  get(key: string) { return key }',
+      '  set(key: string) { return key }',
+      '  delete(key: string) { return key }',
+      '  clear() {}',
+      '}',
+      'function helper() { return 1 }',
+      'export const load = () => new Store()',
+      'const unused = () => helper()',
+    ].join('\n')
+    const embedSpy = vi.spyOn(embedder, 'embed')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'src/store.ts', content }], ['src/store.ts'])
+      await flushExtraction()
+      expect(embedSpy.mock.calls.map(([texts]) => texts.slice(1).map((t) => t.split('\n')[0]))).toEqual([
+        ['class Store in src/store.ts:1', 'function load in src/store.ts:8', 'function helper in src/store.ts:7'],
+      ])
+    } finally {
+      embedSpy.mockRestore()
+      warnSpy.mockRestore()
+      vi.unstubAllEnvs()
+    }
+
+    const file = await fileByPath(repo.id, 'src/store.ts')
+    const symbols = await symbolBlocks(file.id)
+    expect(symbols.map((s) => [s.kind, s.parent, s.name, s.embedding !== null])).toEqual([
+      ['class', null, 'Store', true],
+      ['method', 'Store', 'get', false],
+      ['method', 'Store', 'set', false],
+      ['method', 'Store', 'delete', false],
+      ['method', 'Store', 'clear', false],
+      ['function', null, 'helper', true],
+      ['function', null, 'load', true],
+      ['function', null, 'unused', false],
+    ])
+    expect(file.embeddingNote).toBe(
+      'symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: 3 of 8 symbols embedded, the rest are keyword-searchable only',
+    )
+  })
+
+  it('stores a file with more blocks and imports than one INSERT can bind, and replaces them (#450 review, #413)', async () => {
+    // 14 parameters a block row and 4 an import row: one statement would pass
+    // postgres.js's 65,534-parameter cap (12,002 x 15 and 17,000 x 4). Generated
+    // constant tables reach this now that exported consts are symbols.
+    vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '4')
+    const repo = await makeRepo()
+    const consts = Array.from({ length: 12_000 }, (_, i) => `export const K${i} = ${i}`)
+    const imports = Array.from({ length: 17_000 }, (_, i) => `import './m${i}.js'`)
+    const content = [...imports, ...consts].join('\n')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const countBlocks = async (fileId: string) =>
+      (await db.select({ n: count() }).from(blocks).where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId))))[0]!.n
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'src/table.ts', content }], ['src/table.ts'])
+      await flushExtraction()
+      const file = await fileByPath(repo.id, 'src/table.ts')
+      expect(await fileEmbedding(file.id)).not.toBeNull()
+      expect(file.extractorVersion).toBe(EXTRACTOR_VERSION)
+      // The file block, the file skeleton and one block per constant.
+      expect(await countBlocks(file.id)).toBe(12_002)
+      const [importRows] = await db.select({ n: count() }).from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, file.id))
+      expect(importRows!.n).toBe(17_000)
+
+      // Half the constants go: the set is replaced whole, past the cap again.
+      await syncRepositoryFiles(repo.id, [{ path: 'src/table.ts', content: [...imports, ...consts.slice(0, 6_000)].join('\n') }], ['src/table.ts'])
+      await flushExtraction()
+      const replaced = await fileByPath(repo.id, 'src/table.ts')
+      expect(replaced.extractedHash).toBe(replaced.contentHash)
+      expect(replaced.contentHash).not.toBe(file.contentHash)
+      expect(await countBlocks(file.id)).toBe(6_002)
+    } finally {
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+      vi.unstubAllEnvs()
+    }
+  }, 180_000)
 
   it('one failing file does not stop the files queued after it, and stays counted as pending', async () => {
     const repo = await makeRepo()
@@ -265,8 +381,8 @@ describe('extraction queue', () => {
       errorSpy.mockRestore()
     }
 
-    expect((await fileByPath(repo.id, 'notes/first.txt')).embedding).toBeNull()
-    expect((await fileByPath(repo.id, 'notes/second.txt')).embedding).not.toBeNull()
+    expect((await fileEmbedding((await fileByPath(repo.id, 'notes/first.txt')).id))).toBeNull()
+    expect((await fileEmbedding((await fileByPath(repo.id, 'notes/second.txt')).id))).not.toBeNull()
     expect(await countPendingExtractions(repo.id)).toBe(1)
   })
 
@@ -286,15 +402,15 @@ describe('extraction queue', () => {
     const resync = await syncRepositoryFiles(repo.id, [{ path: 'src/lost.ts', content }], ['src/lost.ts'])
     await flushExtraction()
     expect(resync.unchanged).toBe(1)
-    expect((await fileByPath(repo.id, 'src/lost.ts')).embedding).toBeNull()
+    expect((await fileEmbedding((await fileByPath(repo.id, 'src/lost.ts')).id))).toBeNull()
     expect(await countPendingExtractions(repo.id)).toBe(1)
 
     expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
     await flushExtraction()
 
     const file = await fileByPath(repo.id, 'src/lost.ts')
-    expect(file.embedding).not.toBeNull()
-    const symbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file.id))
+    expect(await fileEmbedding(file.id)).not.toBeNull()
+    const symbols = await symbolBlocks(file.id)
     expect(symbols.map((s) => s.name)).toEqual(['lost'])
     expect(await countPendingExtractions(repo.id)).toBe(0)
   })
