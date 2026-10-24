@@ -25,7 +25,7 @@ Elara is a team knowledge base and codebase mapping platform built on four found
    - `structural`: notes sharing a type or tag; code files sharing a language or top-level directory.
    - `semantic`: nearest neighbours by embedding similarity.
    - Louvain communities are computed on every call. `find_graph_path` finds the shortest path (breadth-first). Saved graph perspectives are stored for the UI; the `graph` tool cannot apply them. There is no PageRank or centrality score.
-3. **Synced Code Repositories**: Read-only ingestion of git repositories (clone with polling or webhook), a local path under the server's repos root, or agent push. Files are indexed with Tree-sitter for TypeScript (`.ts`, `.tsx`, `.mts`, `.cts`; all labelled `typescript`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), Python, and Go (imports and top-level functions, classes, interfaces, types), and embedded for semantic search (`find_symbols`).
+3. **Synced Code Repositories**: Read-only ingestion of git repositories (clone with polling or webhook), a local path under the server's repos root, or agent push. Files are indexed with Tree-sitter for TypeScript (`.ts`, `.tsx`, `.mts`, `.cts`; all labelled `typescript`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), Python, and Go (imports, and module-level functions including arrow-function consts, classes, interfaces, types, enums, namespaces and exported consts, plus class methods with their class), and embedded for semantic search (`find_symbols`).
 4. **MCP Server & Prompts**: A stateless, permission-scoped MCP server over Streamable HTTP (`POST /mcp` or `POST /elara/mcp`; there is no stdio transport) with **60 tools** and **20 prompts**.
 
 ---
@@ -37,7 +37,7 @@ When exploring a project or answering questions about architecture, concepts, or
 - **Pick the cheaper tool.** Use Elara for cross-repo questions, notes, decisions, history, verified claims, and code questions that span repos. In one checked-out repo, try Elara `search` first for natural-language questions; for an exact identifier or string, `grep`/`glob` plus a ranged read is cheaper ([benchmark](https://github.com/PIIIX-org/chapters/blob/dev/benchmarks/README.md)). Never read a whole file when a line range or outline will do.
 - **Step 1 — Search & Symbols**:
   - Run `search` (or `/elara-search` / legacy `/chapters-search`) with a query to find relevant notes and code files using hybrid (lexical + vector) retrieval.
-  - Run `find_symbols` (or `/elara-symbols` / legacy `/chapters-symbols`) to pinpoint specific functions, classes, interfaces, or types with exact declaration line numbers without reading whole files.
+  - Run `find_symbols` (or `/elara-symbols` / legacy `/chapters-symbols`) to pinpoint specific functions, methods, classes, interfaces, types or enums with exact declaration line numbers without reading whole files.
 - **Step 2 — Graph Topology & Pathfinding**:
   - Use `graph` (or `/elara-graph` / legacy `/chapters-graph`) scoped to one `vaultId` or `repositoryId` with `aggregate: "community"` to view community clusters, then `community: <n>` to list one cluster's members. Communities are the default (#426). For the graph around one note or file, pass `neighborsOf` (its id or exact path) with `depth` (1-3); `edgeTypes` keeps some edge kinds and `limit` the first nodes. `aggregate: "none"` lists the whole resource graph, which is large for a real repository.
   - Use `find_graph_path` (or `/elara-path` / legacy `/chapters-path`) to trace the shortest conceptual path between two components, notes, or code files.
@@ -117,8 +117,8 @@ Executes hybrid lexical + semantic search across notes and codebases.
 - **Tool called**: `search`
 - **Example**: `/elara-search "authentication session validation"`
 
-### `/elara-symbols <query> [--kind function|class|interface|type] [--repo <id>] [--everywhere]` (alias: `/chapters-symbols`)
-Fine-grained search for code declarations (functions, classes, interfaces, types) with file path and line span across repositories.
+### `/elara-symbols <query> [--kind function|class|interface|type|enum|method|variable|namespace] [--repo <id>] [--everywhere]` (alias: `/chapters-symbols`)
+Fine-grained search for code declarations (functions, methods, classes, interfaces, types, enums, exported consts, namespaces) with file path and line span across repositories.
 - **Tool called**: `find_symbols`
 - **Example**: `/elara-symbols "buildGraph" --kind function`
 
@@ -263,7 +263,7 @@ Elara exposes 60 tools across 7 functional domains. **Capability** is the token 
 | Tool | Scope | Capability | Description |
 | :--- | :--- | :--- | :--- |
 | `search` | Any | `read` | Hybrid search (lexical + semantic) across notes and code with `symbols` support. |
-| `find_symbols` | Repository/Account | `read` | Keyword and semantic search for code symbols (functions, classes, interfaces, types) with file path and line range. Vault-scoped tokens are refused. |
+| `find_symbols` | Repository/Account | `read` | Keyword and semantic search for code symbols (functions, methods, classes, interfaces, types, enums, exported consts, namespaces) with file path and line range. Vault-scoped tokens are refused. |
 
 ### 5. Knowledge Graph & Perspectives (5 tools)
 | Tool | Scope | Capability | Description |

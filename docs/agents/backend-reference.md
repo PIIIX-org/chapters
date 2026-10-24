@@ -384,7 +384,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
 | `repositoryFiles` | indexed file content — same `fts`/`embedding` pattern as `notes`; **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s code-unit-order pages (#424) |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0) |
-| `repositoryFileSymbols` | per-file top-level declarations (function/class/interface/type), surfaced as a file "outline" — **not** emitted as a graph edge despite the schema comment calling them "contains" edges |
+| `repositoryFileSymbols` | per-file module-level declarations and the methods of module-level classes (`kind` per the **Symbol contract** below; `parent`, migration 0034, a method's class or a namespace member's namespace, null at module level), surfaced as a file "outline" — **not** emitted as a graph edge despite the schema comment calling them "contains" edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
 
 ### Cross-cutting
@@ -2166,8 +2166,45 @@ refuses. Each grammar is loaded from its npm package's `.wasm` file
 (`tree-sitter-typescript` ships both TypeScript ones) the first time a file
 needs it, and cached; the TSX and TypeScript queries are the same. Per
 grammar, a tree-sitter
-query extracts import statements and top-level symbol declarations
-(function/class/interface/type, per language's actual grammar).
+query finds import statements and candidate symbol declarations, and
+`symbolOf` keeps those of the **Symbol contract** (#450):
+
+**Symbol contract** (`SymbolKind`/`SYMBOL_KINDS` in `extraction.ts`; more
+languages, #464, and the symbol/edge table, #469, use the same kinds and
+fields). A symbol is `{ name, kind, startLine, endLine, parent? }` (lines
+1-based, inclusive, of the declaration node) plus `exported`, which is not
+stored and only orders the embed budget below. `name` is always the bare
+name, so an exact-name query finds a method as it finds a function; an
+anonymous `export default` is named `default`. Kinds:
+
+| kind | TypeScript / TSX / JavaScript | Python | Go |
+| :--- | :--- | :--- | :--- |
+| `function` | `function` and `function*` declarations; module-level `const`/`let`/`var` bound to an arrow function, function expression or generator expression; `export default` of an anonymous function or arrow; JS CommonJS `exports.f = <function>` / `module.exports.f = <function>` | `def` at module level | `func` |
+| `class` | `class`, `abstract class`, a `const` bound to a class expression, `export default class {}` | `class` at module level | — |
+| `interface` | `interface` | — | — |
+| `type` | `type` alias | — | `type` declarations |
+| `enum` | `enum` | — | — |
+| `namespace` | module-level `namespace N {}`, `module N {}` and ambient `declare module "x" {}` (named `x`) | — | — |
+| `method` | in a module-level class body: methods, getters, setters, static and abstract methods, `#private` methods, fields bound to an arrow function or function expression; `parent` is the class | a `def` in a module-level class body, decorators included; `parent` is the class | a receiver method; `parent` is the receiver's type (`*Repo[T]` → `Repo`) |
+| `variable` | an exported module-level `const`/`let`/`var` bound to anything else | — | — |
+
+Top level only: a declaration counts when only `export`, `declare`,
+decorators, its `const`/`let`/`var` statement or a statement wrapper stand
+between it and the module, or when it is directly in a module-level
+`namespace`/ambient module (then `parent` is its name) or in `declare global {}`
+(then `parent` is `global`). Anything declared in a
+function body, a block, an object literal or a nested class is not a
+symbol, and neither are the methods of a class that is not one.
+Unexported module-level consts bound to values, overload and ambient
+signatures (`declare function`), and CommonJS `module.exports = { f }`
+(which only re-lists `f`, found where it is defined) are not symbols.
+`exported`: an `export` (or CommonJS `exports.f =`) in TS/JS, a
+capitalised name in Go, a name without a leading `_` in Python; never on
+a method. `find_symbols` takes every kind as its `kind` filter (a strict
+enum), answers `parent` when there is one, and matches a `Class.method`
+query against `parent.name`; `search` symbol hits carry it as
+`symbolParent`, `read_file`'s outline as `parent`.
+
 Extraction is deferred until the *entire* sync batch has been
 persisted (see §11 for why — this fixed a real ordering bug found via
 live e2e testing, not unit tests). Symbol
@@ -2224,9 +2261,12 @@ symbols and vectors whole and searchable. A file
 with a line longer than 1,000
 characters (minified, bundled or generated code) gets its file embedding
 but no symbols or imports. **Per-file budget** (#496): a file's symbols
-are all stored, but only the first `ELARA_EMBED_MAX_SYMBOLS_PER_FILE`
-(`config.embedMaxSymbolsPerFile`, default 256; `0` embeds none) get an
-embedding; the rest have a null `embedding`, so `find_symbols` and
+are all stored, but only `ELARA_EMBED_MAX_SYMBOLS_PER_FILE`
+(`config.embedMaxSymbolsPerFile`, default 256; `0` embeds none) of them get an
+embedding: exported symbols first, then other module-level ones, then
+methods, each in file order (#450), so a large class early in a file does
+not take the budget from the functions after it. The symbol embed text is
+`<kind> <parent.>name in <path>:<line>` and the snippet. The others have a null `embedding`, so `find_symbols` and
 `search` find them by name and snippet only. Such a file records why in
 `repository_files.embedding_note` (migration 0022; null when nothing was
 capped, cleared by the next extraction under the budget), logs a
@@ -2263,10 +2303,11 @@ first 5 by path listed).
 
 **Derived-artifact versions** (#453, migration 0033). Two constants name
 what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
-an integer, now 2; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
-support, #449/#451): bump it with any change to the grammars and queries,
-symbol kinds, the minified-file rule, the snippet cut or the symbol embed
-text. `EMBEDDER_ID` (`search/embeddings.ts`): the model
+an integer, now 3; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
+support, #449/#451; 3 the **Symbol contract** kinds, `parent`, the
+top-level rule and the embed-budget order, #450): bump it with any change to the grammars and queries,
+symbol kinds, the minified-file rule, the snippet cut, the symbol embed
+text or the embed-budget order. `EMBEDDER_ID` (`search/embeddings.ts`): the model
 (`Xenova/bge-small-en-v1.5`, `fake` for the test embedder) plus
 `+text<EMBED_TEXT_VERSION>`, the version of the note, file and symbol embed
 texts and the 16,000-character cut; bump `EMBED_TEXT_VERSION` with any

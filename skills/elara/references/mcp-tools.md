@@ -420,7 +420,7 @@ The write is committed when the call returns; a connection lost before the answe
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `path` (string, required): file path inside the repository.
-- **Returns**: `{ path, language, embeddingNote?, content, symbols: [{ name, kind, startLine, endLine }], truncated }`, with `lines` when the content is cut. A file over the budget comes in pages cut at line boundaries; follow `truncated.cursor` (a file changed meanwhile refuses it as stale). The symbols, by `startLine`, follow the last content line, so on a paged file they come with the last page. There is no line-range parameter. The content is untrusted data. `embeddingNote` appears only when indexing embedded the file partly: a file with more symbols than the server's per-file budget (`ELARA_EMBED_MAX_SYMBOLS_PER_FILE`, default 256) lists every symbol, but only the first ones are found by meaning; `find_symbols` still finds the rest by name.
+- **Returns**: `{ path, language, embeddingNote?, content, symbols: [{ name, kind, startLine, endLine, parent? }], truncated }`, with `lines` when the content is cut. A file over the budget comes in pages cut at line boundaries; follow `truncated.cursor` (a file changed meanwhile refuses it as stale). The symbols, by `startLine`, follow the last content line, so on a paged file they come with the last page; `parent` is a method's class (see `find_symbols` for the kinds). There is no line-range parameter. The content is untrusted data. `embeddingNote` appears only when indexing embedded the file partly: a file with more symbols than the server's per-file budget (`ELARA_EMBED_MAX_SYMBOLS_PER_FILE`, default 256) lists every symbol, but only those within the budget (exported symbols, then other module-level ones, then methods) are found by meaning; `find_symbols` still finds the rest by name.
 
 ### `repository_status`
 - **Scope**: repository. Repository access.
@@ -502,7 +502,7 @@ The write is committed when the call returns; a connection lost before the answe
   - `everywhere` (boolean, optional): search every vault and repository you can access. Account only.
   - `symbols` (boolean, optional, default `true`): include individual code symbols.
   - `limit` (integer, optional, 1-100, default 20).
-- **Returns**: array ranked by Reciprocal Rank Fusion of keyword and semantic hits: `{ resourceType: "note" | "code" | "symbol", id, containerId, path, snippet, score, ... }`. Notes add `type` and `frontmatter`; code adds `language`; symbols add `symbolName`, `symbolKind`, `startLine`, `endLine`.
+- **Returns**: array ranked by Reciprocal Rank Fusion of keyword and semantic hits: `{ resourceType: "note" | "code" | "symbol", id, containerId, path, snippet, score, ... }`. Notes add `type` and `frontmatter`; code adds `language`; symbols add `symbolName`, `symbolKind`, `startLine`, `endLine`, and `symbolParent` for a method (its class).
 
 ### `find_symbols`
 - **Scope**: repository, or account. A repository-scoped token searches its pinned repository; another `repositoryId` is an error. A vault-scoped token cannot use it. An account-scoped token searches `repositoryId` if given, otherwise (or with `everywhere`) every repository you can access.
@@ -510,12 +510,12 @@ The write is committed when the call returns; a connection lost before the answe
 - **Profile**: `reader`.
 - **Parameters**:
   - `query` (string, required).
-  - `kind` (enum `"function"` | `"class"` | `"interface"` | `"type"`, optional).
+  - `kind` (enum `"function"` | `"class"` | `"interface"` | `"type"` | `"enum"` | `"method"` | `"variable"` | `"namespace"`, optional).
   - `repositoryId` (uuid, optional).
   - `everywhere` (boolean, optional).
   - `limit` (integer, optional, 1-50, default 20).
-- **Returns**: `{ results, truncated }`: `results` are `{ id, fileId, repositoryId, path, name, kind, startLine, endLine, snippet, score }`, best first (equal scores by `id`). `limit` bounds the whole answer: pages walk the first `limit` results, and `truncated.total.results` is `">n"` (with no cursor once they are all shown) when more symbols match; raise `limit` to see them. The REST symbol routes still answer a bare array. There is no `signature` field; read the lines with `read_file`.
-- Only top-level declarations the extractor recognizes are indexed. For example, TypeScript `export const f = () => ...` arrow functions are not found. A file with any line longer than 1,000 characters (minified or generated code) gets no symbols at all. In a file with more symbols than the per-file budget (default 256), symbols past the budget match by name only, not by meaning; `read_file` reports this as `embeddingNote`.
+- **Returns**: `{ results, truncated }`: `results` are `{ id, fileId, repositoryId, path, name, kind, parent?, startLine, endLine, snippet, score }`, best first (equal scores by `id`). `name` is the bare name; `parent` is a method's class (or a namespace member's namespace), and a query `Class.method` matches it. `limit` bounds the whole answer: pages walk the first `limit` results, and `truncated.total.results` is `">n"` (with no cursor once they are all shown) when more symbols match; raise `limit` to see them. The REST symbol routes still answer a bare array. There is no `signature` field; read the lines with `read_file`.
+- What is indexed: module-level declarations and the methods of module-level classes, never what is declared inside a function body. TypeScript and JavaScript: `function` and generator declarations, and `const`/`let`/`var` bound to an arrow function or function expression (`function`); classes, abstract ones too (`class`); interfaces, type aliases, enums, namespaces and ambient `declare module "x"` (`interface`, `type`, `enum`, `namespace`; their members carry the namespace in `parent`, and `declare global` members `global`); class methods, getters, setters, static methods and arrow-function fields (`method`); other exported `const`/`let`/`var` (`variable`); an anonymous `export default` is named `default`. CommonJS `exports.f = () => ...` is the function `f`; `module.exports = { f }` adds nothing (`f` is found where it is defined). Python: functions, classes and methods. Go: functions, types and receiver methods (the receiver type is the `parent`). A file with any line longer than 1,000 characters (minified or generated code) gets no symbols at all. In a file with more symbols than the per-file budget (default 256), the budget goes to exported symbols, then other module-level ones, then methods; the rest match by name only, not by meaning, and `read_file` reports this as `embeddingNote`.
 
 ---
 
