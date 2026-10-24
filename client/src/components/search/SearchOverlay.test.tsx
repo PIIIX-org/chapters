@@ -61,6 +61,11 @@ function sessionUser(role: 'member' | 'admin') {
   }
 }
 
+/** A search answer (#441, #442, #458): the hits with their status. */
+function found(results: unknown[], extra: Record<string, unknown> = {}): Response {
+  return mockJsonResponse(200, { status: results.length > 0 ? 'ok' : 'no_match', retrieval_mode: 'hybrid', degraded: false, results, ...extra })
+}
+
 function stubFetch(search: () => Response, role: 'member' | 'admin' = 'member') {
   const fetchMock = vi.fn().mockImplementation((url: string) => {
     if (url.startsWith('/api/search')) return Promise.resolve(search())
@@ -89,7 +94,7 @@ const VAULTS = [
 
 function stubCommandFetch(opts?: { createResponse?: Response }) {
   const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-    if (url.startsWith('/api/search')) return Promise.resolve(mockJsonResponse(200, []))
+    if (url.startsWith('/api/search')) return Promise.resolve(found([]))
     if (url === '/api/vaults' && (!init || init.method === undefined)) {
       return Promise.resolve(mockJsonResponse(200, VAULTS))
     }
@@ -132,7 +137,7 @@ describe('SearchOverlay', () => {
   it('renders both note and code results, with note chips and score', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    stubFetch(() => mockJsonResponse(200, FIXTURE))
+    stubFetch(() => found(FIXTURE))
     renderOverlay(true)
 
     await search(user, 'jane')
@@ -154,7 +159,7 @@ describe('SearchOverlay', () => {
   it('clicking a note result navigates, closes the overlay, and records a recent', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    stubFetch(() => mockJsonResponse(200, FIXTURE))
+    stubFetch(() => found(FIXTURE))
     const { onClose, router } = renderOverlay(true)
 
     await search(user, 'jane')
@@ -173,7 +178,7 @@ describe('SearchOverlay', () => {
   it('clicking a code result toggles an inline preview without navigating or closing', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    stubFetch(() => mockJsonResponse(200, FIXTURE))
+    stubFetch(() => found(FIXTURE))
     const { onClose, router } = renderOverlay(true)
 
     await search(user, 'jane')
@@ -210,7 +215,7 @@ describe('SearchOverlay', () => {
         score: 0.88,
       },
     ]
-    stubFetch(() => mockJsonResponse(200, symbolFixture))
+    stubFetch(() => found(symbolFixture))
     const { onClose, router, container } = renderOverlay(true)
 
     await search(user, 'generateAuthToken')
@@ -245,11 +250,60 @@ describe('SearchOverlay', () => {
     await expectNoA11yViolations(container)
   })
 
+  it('says why a search came back empty: nothing matched, still indexing, or unavailable (#442)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    let answer = found([])
+    stubFetch(() => answer)
+    const { container } = renderOverlay(true)
+
+    await search(user, 'zzyx')
+    await waitFor(() => expect(screen.getByText('No results found.')).toBeInTheDocument())
+
+    answer = found([], { status: 'index_building', index: { pending_notes: 3, pending_files: 1, pending_repositories: 0, failed: 0 } })
+    await search(user, 'q')
+    await waitFor(() => expect(screen.getByText('No results yet: 3 notes and 1 file still being indexed.')).toBeInTheDocument())
+    expect(screen.queryByText('No results found.')).toBeNull()
+    await expectNoA11yViolations(container)
+
+    answer = found([], { status: 'unavailable' })
+    await search(user, 'w')
+    await waitFor(() => expect(screen.getByText('Search is unavailable right now. Try again in a moment.')).toBeInTheDocument())
+    expect(screen.queryByText(/no results/i)).toBeNull()
+
+    answer = found([], { status: 'index_building', index: { pending_notes: 0, pending_files: 0, pending_repositories: 2, failed: 0 } })
+    await search(user, 'r')
+    await waitFor(() => expect(screen.getByText('No results yet: 2 repositories still being indexed.')).toBeInTheDocument())
+
+    // Nothing matched on the keyword channel alone: say the other one was missing (#458).
+    answer = found([], { retrieval_mode: 'keyword_only', degraded: { reason: 'embedder_failed' } })
+    await search(user, 'k')
+    await waitFor(() => expect(screen.getByText('No keyword matches. Search by meaning is unavailable right now.')).toBeInTheDocument())
+    expect(screen.queryByText('No results found.')).toBeNull()
+  })
+
+  it('says when results are keyword matches only (#458) or indexing is still going on', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    let answer = found(FIXTURE, { retrieval_mode: 'keyword_only', degraded: { reason: 'embedder_failed' } })
+    stubFetch(() => answer)
+    renderOverlay(true)
+
+    await search(user, 'jane')
+    await waitFor(() => expect(screen.getByText('people/jane')).toBeInTheDocument())
+    expect(screen.getByText('Showing keyword matches only: search by meaning is unavailable right now.')).toBeInTheDocument()
+
+    answer = found(FIXTURE, { index: { pending_notes: 2, pending_files: 0, pending_repositories: 0, failed: 0 } })
+    await search(user, 'x')
+    await waitFor(() => expect(screen.getByText('Still indexing 2 items: more results may appear.')).toBeInTheDocument())
+    expect(screen.queryByText(/keyword matches only/)).toBeNull()
+  })
+
   it('retry refetches and replaces the alert with results', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     let failing = true
-    stubFetch(() => (failing ? mockJsonResponse(500, { error: 'down' }) : mockJsonResponse(200, FIXTURE)))
+    stubFetch(() => (failing ? mockJsonResponse(500, { error: 'down' }) : found(FIXTURE)))
     renderOverlay(true)
 
     await search(user, 'jane')
@@ -290,7 +344,7 @@ describe('SearchOverlay', () => {
   it('has no accessibility violations with results rendered', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    stubFetch(() => mockJsonResponse(200, FIXTURE))
+    stubFetch(() => found(FIXTURE))
     const { container } = renderOverlay(true)
 
     await search(user, 'jane')
@@ -302,7 +356,7 @@ describe('SearchOverlay', () => {
   it('never uses the accent token for ordinary chrome (authorship colour is reserved)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    stubFetch(() => mockJsonResponse(200, FIXTURE))
+    stubFetch(() => found(FIXTURE))
     const { container } = renderOverlay(true)
 
     await search(user, 'jane')
@@ -317,7 +371,7 @@ describe('SearchOverlay', () => {
   })
 
   it('offers "Go to admin" to an admin only', async () => {
-    stubFetch(() => mockJsonResponse(200, []), 'admin')
+    stubFetch(() => found([]), 'admin')
     const { router } = renderOverlay()
 
     const adminCommand = await screen.findByRole('option', { name: 'Command: Go to admin' })
@@ -326,7 +380,7 @@ describe('SearchOverlay', () => {
   })
 
   it('hides it from a member, who would only reach a wall', async () => {
-    stubFetch(() => mockJsonResponse(200, []), 'member')
+    stubFetch(() => found([]), 'member')
     renderOverlay()
 
     // The team command proves the command list rendered at all — without it
@@ -336,7 +390,7 @@ describe('SearchOverlay', () => {
   })
 
   it('offers "Go to settings" to everyone, admin or not', async () => {
-    stubFetch(() => mockJsonResponse(200, []), 'member')
+    stubFetch(() => found([]), 'member')
     const { router } = renderOverlay()
 
     // Unlike admin, settings is every account's own page — a member reaching
@@ -526,7 +580,7 @@ describe('SearchOverlay commands', () => {
     // Real results (FIXTURE), not stubCommandFetch's empty array — otherwise
     // there is nothing for the commands to be above, and the test can't fail.
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-      if (url.startsWith('/api/search')) return Promise.resolve(mockJsonResponse(200, FIXTURE))
+      if (url.startsWith('/api/search')) return Promise.resolve(found(FIXTURE))
       if (url === '/api/vaults' && (!init || init.method === undefined)) {
         return Promise.resolve(mockJsonResponse(200, VAULTS))
       }
@@ -553,7 +607,7 @@ describe('SearchOverlay commands', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     const fetchMock = vi.fn().mockImplementation((url: string) => {
-      if (url.startsWith('/api/search')) return Promise.resolve(mockJsonResponse(200, FIXTURE))
+      if (url.startsWith('/api/search')) return Promise.resolve(found(FIXTURE))
       if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, VAULTS))
       throw new Error(`unexpected fetch: ${url}`)
     })
@@ -649,7 +703,7 @@ describe('SearchOverlay new-note action', () => {
 
   function stubNoteFetch(opts?: { createResponse?: Response }) {
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-      if (url.startsWith('/api/search')) return Promise.resolve(mockJsonResponse(200, []))
+      if (url.startsWith('/api/search')) return Promise.resolve(found([]))
       if (url === '/api/vaults' && (!init || init.method === undefined)) {
         return Promise.resolve(mockJsonResponse(200, NOTE_VAULTS))
       }
@@ -757,7 +811,7 @@ describe('SearchOverlay keyboard navigation', () => {
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (url.startsWith('/api/search')) {
         const q = new URL(url, 'http://test').searchParams.get('q') ?? ''
-        return Promise.resolve(mockJsonResponse(200, opts?.searchByQuery ? opts.searchByQuery(q) : FIXTURE))
+        return Promise.resolve(found(opts?.searchByQuery ? opts.searchByQuery(q) : FIXTURE))
       }
       if (url === '/api/vaults' && (!init || init.method === undefined)) {
         return Promise.resolve(mockJsonResponse(200, NAV_VAULTS))
@@ -910,7 +964,7 @@ describe('SearchOverlay scope and filters', () => {
       if (url.startsWith('/api/vaults/') && url.includes('/search')) {
         return Promise.resolve(mockJsonResponse(200, fixture))
       }
-      if (url.startsWith('/api/search')) return Promise.resolve(mockJsonResponse(200, fixture))
+      if (url.startsWith('/api/search')) return Promise.resolve(found(fixture))
       if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, VAULTS))
       throw new Error(`unexpected fetch: ${url}`)
     })
@@ -1040,7 +1094,7 @@ describe('SearchOverlay connect-repository command', () => {
 
   function stubNoRepositories() {
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-      if (url.startsWith('/api/search')) return Promise.resolve(mockJsonResponse(200, []))
+      if (url.startsWith('/api/search')) return Promise.resolve(found([]))
       if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, []))
       if (url === '/api/repositories') {
         return Promise.resolve(
@@ -1116,7 +1170,7 @@ describe('SearchOverlay symbol jump and filters', () => {
       },
     ]
     const fetchMock = vi.fn().mockImplementation((url: string) => {
-      if (url.startsWith('/api/search')) return Promise.resolve(mockJsonResponse(200, symbolFixture))
+      if (url.startsWith('/api/search')) return Promise.resolve(found(symbolFixture))
       if (url === '/api/vaults') return Promise.resolve(mockJsonResponse(200, []))
       if (url === '/api/me') return Promise.resolve(mockJsonResponse(200, sessionUser('member')))
       throw new Error(`unexpected fetch: ${url}`)
@@ -1137,7 +1191,7 @@ describe('SearchOverlay symbol jump and filters', () => {
   it('shows symbol jump guidance when typing @ alone', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    stubFetch(() => mockJsonResponse(200, []))
+    stubFetch(() => found([]))
     renderOverlay(true)
 
     await search(user, '@')
@@ -1148,7 +1202,7 @@ describe('SearchOverlay symbol jump and filters', () => {
   it('filtering by result type radio chip narrows displayed results', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    stubFetch(() => mockJsonResponse(200, FIXTURE))
+    stubFetch(() => found(FIXTURE))
     renderOverlay(true)
 
     await search(user, 'jane')

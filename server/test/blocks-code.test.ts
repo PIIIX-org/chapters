@@ -56,7 +56,7 @@ async function fileRow(repositoryId: string, path = PATH) {
 async function symbolIds(repositoryId: string, names: string[]) {
   const ids: Record<string, string> = {}
   for (const name of names) {
-    const [hit] = (await findSymbols([repositoryId], name, { limit: 1 })).filter((s) => s.name === name)
+    const [hit] = (await findSymbols([repositoryId], name, { limit: 1 })).results.filter((s) => s.name === name)
     if (hit) ids[name] = hit.id
   }
   return ids
@@ -209,7 +209,7 @@ describe('stored text = hashed text (#418)', () => {
     const lines = ['export function spaced() {', '  const a = 1', '', '', '  return a', '}', '', 'export const tail = 2', '']
     const content = lines.join('\r\n')
     await sync(repo.id, content, 'src/crlf.ts')
-    const [hit] = (await findSymbols([repo.id], 'spaced', { limit: 5 })).filter((s) => s.name === 'spaced')
+    const [hit] = (await findSymbols([repo.id], 'spaced', { limit: 5 })).results.filter((s) => s.name === 'spaced')
     expect(hit).toMatchObject({ startLine: 1, endLine: 6 })
     expect(hit!.snippet).toBe(content.split('\n').slice(0, 6).join('\n'))
     expect(hit!.snippet).toBe('export function spaced() {\r\n  const a = 1\r\n\r\n\r\n  return a\r\n}\r')

@@ -108,8 +108,8 @@ async function expectIndexed(repositoryId: string): Promise<string> {
   expect(read.isError).toBe(false)
   expect(read.text).toContain(TOKEN)
   const hits = await searchNotes({ vaultIds: [], repositoryIds: [repositoryId] }, TOKEN)
-  expect(hits.some((h) => h.path === 'big.ts')).toBe(true)
-  expect((await findSymbols([repositoryId], TOKEN)).some((s) => s.name === TOKEN)).toBe(true)
+  expect(hits.results.some((h) => h.path === 'big.ts')).toBe(true)
+  expect((await findSymbols([repositoryId], TOKEN)).results.some((s) => s.name === TOKEN)).toBe(true)
   expect((await symbolsOf(file!.id)).map((s) => s.name)).toContain(TOKEN)
   expect((await importsOf(file!.id)).map((i) => i.targetPath)).toEqual(['./small'])
   return file!.id
@@ -123,8 +123,8 @@ async function expectGone(repositoryId: string, oldFileId: string): Promise<void
   expect(read.isError).toBe(true)
   expect(read.text).toMatch(/^\{"error":\{"code":"NOT_FOUND","message":"file not found"/)
   const hits = await searchNotes({ vaultIds: [], repositoryIds: [repositoryId] }, TOKEN)
-  expect(hits.filter((h) => h.path === 'big.ts')).toEqual([])
-  expect((await findSymbols([repositoryId], TOKEN)).filter((s) => s.name === TOKEN)).toEqual([])
+  expect(hits.results.filter((h) => h.path === 'big.ts')).toEqual([])
+  expect((await findSymbols([repositoryId], TOKEN)).results.filter((s) => s.name === TOKEN)).toEqual([])
   expect(await symbolsOf(oldFileId)).toEqual([])
   expect(await importsOf(oldFileId)).toEqual([])
   // The rest of the repository is still indexed.
