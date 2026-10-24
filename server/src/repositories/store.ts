@@ -161,17 +161,19 @@ export async function listRepositoryFilesPage(
     .limit(opts.limit)
 }
 
-/** Declared top-level symbols for a file — its "outline" (spec 9). */
+/** A file's declared symbols — its "outline" (spec 9); `parent` only on a method or namespace member (#450). */
 export async function listFileSymbols(
   fileId: string,
-): Promise<Array<Pick<typeof repositoryFileSymbols.$inferSelect, 'name' | 'kind' | 'startLine' | 'endLine'>>> {
-  return db
+): Promise<Array<{ name: string; kind: string; parent?: string; startLine: number; endLine: number }>> {
+  const rows = await db
     .select({
       name: repositoryFileSymbols.name,
       kind: repositoryFileSymbols.kind,
+      parent: repositoryFileSymbols.parent,
       startLine: repositoryFileSymbols.startLine,
       endLine: repositoryFileSymbols.endLine,
     })
     .from(repositoryFileSymbols)
     .where(eq(repositoryFileSymbols.fileId, fileId))
+  return rows.map(({ parent, ...s }) => (parent === null ? s : { ...s, parent }))
 }

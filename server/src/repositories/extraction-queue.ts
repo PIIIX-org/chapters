@@ -337,26 +337,34 @@ async function processFile(fileId: string): Promise<void> {
       fileId,
       name: s.name,
       kind: s.kind,
+      parent: s.parent ?? null,
       startLine: s.startLine,
       endLine: s.endLine,
       snippet,
-      embedText: `${s.kind} ${s.name} in ${row.path}:${s.startLine}\n${snippet}`,
+      embedText: `${s.kind} ${s.parent ? `${s.parent}.` : ''}${s.name} in ${row.path}:${s.startLine}\n${snippet}`,
     }
   })
 
-  // Per-file budget (#496): the file and its first N symbols get a vector,
-  // the rest are stored without one, so one file with thousands of
-  // declarations neither holds the queue for minutes nor loses its structure.
+  // Per-file budget (#496): the file and N of its symbols get a vector, the
+  // rest are stored without one, so one file with thousands of declarations
+  // neither holds the queue for minutes nor loses its structure. The budget
+  // goes to exported symbols, then other module-level ones, then methods,
+  // each in file order (#450): a large class early in a file does not take
+  // it from the functions after it.
   const budget = config.embedMaxSymbolsPerFile
-  const embedded = symbolPayloads.slice(0, budget)
+  const embedOrder = symbols
+    .map((s, i) => ({ i, tier: s.kind === 'method' ? 2 : s.exported ? 0 : 1 }))
+    .sort((a, b) => a.tier - b.tier)
+    .slice(0, budget)
+    .map(({ i }) => i)
   let embeddingNote: string | null = null
   if (symbolPayloads.length > budget) {
     embeddingNote = `symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: ${budget} of ${symbolPayloads.length} symbols embedded, the rest are keyword-searchable only`
     console.warn(`[extraction] ${row.path} (repository file ${fileId}): ${embeddingNote}`)
   }
-  const allEmbeddings = await embedder.embed([`${row.path}\n${row.content}`, ...embedded.map((s) => s.embedText)])
+  const allEmbeddings = await embedder.embed([`${row.path}\n${row.content}`, ...embedOrder.map((i) => symbolPayloads[i]!.embedText)])
   const fileEmbedding = allEmbeddings[0]!
-  const symbolEmbeddings = allEmbeddings.slice(1)
+  const symbolEmbeddings = new Map(embedOrder.map((symbolIndex, k) => [symbolIndex, allEmbeddings[k + 1]!]))
   failpoint('extract.after-embed-before-write')
 
   const written = await db.transaction(async (tx) => {
@@ -376,10 +384,11 @@ async function processFile(fileId: string): Promise<void> {
           fileId: s.fileId,
           name: s.name,
           kind: s.kind,
+          parent: s.parent,
           startLine: s.startLine,
           endLine: s.endLine,
           snippet: s.snippet,
-          embedding: symbolEmbeddings[i] ?? null,
+          embedding: symbolEmbeddings.get(i) ?? null,
         })),
       )
     }

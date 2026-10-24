@@ -92,6 +92,25 @@ describe('TypeScript and TSX definitions (#450)', () => {
     expect(brief(result.symbols)).toEqual(['3-7 function Counter (exported)', '9-9 function default (exported)'])
   })
 
+  it('captures the declarations of a .d.ts: an ambient module is a namespace, `declare global` members have parent `global`', async () => {
+    const src = lines(
+      'declare module "frida" {',
+      '  export interface Session { detach(): void }',
+      '  export type Pid = number',
+      '}',
+      'declare global {',
+      '  interface Window { elara: string }',
+      '}',
+    )
+    const result = await extractStructure('typescript', src, 'src/frida/bindings.d.ts')
+    expect(brief(result.symbols)).toEqual([
+      '1-4 namespace frida',
+      '2-2 interface frida.Session (exported)',
+      '3-3 type frida.Pid (exported)',
+      '6-6 interface global.Window',
+    ])
+  })
+
   it('does not capture functions, classes or consts declared inside a body', async () => {
     const src = lines(
       'export function outer() {',

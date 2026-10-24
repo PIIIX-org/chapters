@@ -66,6 +66,14 @@ describe('find_symbols kinds and parents (#450)', () => {
     expect(results.map((s) => [s.kind, s.parent, s.name, s.startLine])).toEqual([['method', 'Uploader', 'resumeUpload', 4]])
   })
 
+  it('finds a method by `Class.method`', async () => {
+    const r = await call('find_symbols', { repositoryId: repoId, query: 'Uploader.resumeUpload' })
+    expect(r.isError, r.text).toBe(false)
+    const { results } = JSON.parse(r.text) as { results: Array<Record<string, unknown>> }
+    // The keyword match adds to its semantic rank: first of every symbol.
+    expect([results[0]?.parent, results[0]?.name]).toEqual(['Uploader', 'resumeUpload'])
+  })
+
   it('filters by enum and variable', async () => {
     for (const [kind, query, name] of [
       ['enum', 'Mode', 'Mode'],

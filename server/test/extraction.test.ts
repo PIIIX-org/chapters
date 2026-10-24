@@ -45,8 +45,8 @@ describe('extractStructure', () => {
     ])
     expect(result.symbols).toEqual(
       expect.arrayContaining([
-        { name: 'foo', kind: 'function', startLine: 4, endLine: 6 },
-        { name: 'Bar', kind: 'class', startLine: 8, endLine: 8 },
+        { name: 'foo', kind: 'function', startLine: 4, endLine: 6, exported: true },
+        { name: 'Bar', kind: 'class', startLine: 8, endLine: 8, exported: false },
       ]),
     )
   })
@@ -70,8 +70,8 @@ describe('extractStructure', () => {
     ])
     expect(result.symbols).toEqual(
       expect.arrayContaining([
-        { name: 'foo', kind: 'function', startLine: 4, endLine: 6 },
-        { name: 'Bar', kind: 'class', startLine: 8, endLine: 8 },
+        { name: 'foo', kind: 'function', startLine: 4, endLine: 6, exported: false },
+        { name: 'Bar', kind: 'class', startLine: 8, endLine: 8, exported: false },
       ]),
     )
   })
@@ -161,18 +161,19 @@ describe('extractStructure', () => {
       { target: '@/lib/utils', line: 19 },
     ])
     expect(result.symbols).toEqual([
-      { name: 'CounterProps', kind: 'interface', startLine: 6, endLine: 8 },
-      { name: 'Counter', kind: 'function', startLine: 10, endLine: 17 },
-      { name: 'Mode', kind: 'type', startLine: 21, endLine: 21 },
-      { name: 'App', kind: 'function', startLine: 23, endLine: 25 },
-      { name: 'Store', kind: 'class', startLine: 27, endLine: 27 },
+      { name: 'identity', kind: 'function', startLine: 4, endLine: 4, exported: true },
+      { name: 'CounterProps', kind: 'interface', startLine: 6, endLine: 8, exported: true },
+      { name: 'Counter', kind: 'function', startLine: 10, endLine: 17, exported: true },
+      { name: 'Mode', kind: 'type', startLine: 21, endLine: 21, exported: false },
+      { name: 'App', kind: 'function', startLine: 23, endLine: 25, exported: true },
+      { name: 'Store', kind: 'class', startLine: 27, endLine: 27, exported: false },
     ])
   })
 
   it('keeps the TypeScript grammar for .ts: `<T>value` is a type assertion there, not JSX', async () => {
     const src = ['const n = <number>(1 as unknown)', '', 'export function after() { return n }', ''].join('\n')
     const result = await extractStructure('typescript', src, 'src/cast.ts')
-    expect(result.symbols).toEqual([{ name: 'after', kind: 'function', startLine: 3, endLine: 3 }])
+    expect(result.symbols).toEqual([{ name: 'after', kind: 'function', startLine: 3, endLine: 3, exported: true }])
   })
 
   it('extracts .mts and .cts files with the TypeScript grammar (#451)', async () => {
@@ -189,8 +190,8 @@ describe('extractStructure', () => {
       const result = await extractStructure(language!, src, path)
       expect(result.imports).toEqual([{ target: './load.mjs', line: 1 }])
       expect(result.symbols).toEqual([
-        { name: 'gen', kind: 'function', startLine: 3, endLine: 3 },
-        { name: 'Out', kind: 'type', startLine: 4, endLine: 4 },
+        { name: 'gen', kind: 'function', startLine: 3, endLine: 3, exported: true },
+        { name: 'Out', kind: 'type', startLine: 4, endLine: 4, exported: true },
       ])
     }
   })

@@ -73,6 +73,7 @@ import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
 import { getRepositoryFile, listFileSymbols, listRepositoryFilesPage } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
+import { SYMBOL_KINDS, type SymbolKind } from '../repositories/extraction.js'
 import { prepareGitRemote } from '../repositories/git-remote.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
@@ -2642,11 +2643,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'repository-or-account',
       capability: 'read',
       profile: 'reader',
+      // The kinds are the `kind` enum (#450): naming them again in the description would cost reader tokens twice.
       description:
-        'Search code symbols (functions, classes, interfaces, types) by meaning, signature or name. Returns `{results}`: declarations with line ranges, snippets and file paths, without reading whole files.',
+        'Search code symbols by meaning, signature or name. Returns `{results}`: declarations with line ranges, snippets and file paths, without reading whole files.',
       inputSchema: {
         query: z.string().describe('Symbol name, signature or meaning'),
-        kind: z.enum(['function', 'class', 'interface', 'type']).optional().describe('Filter by symbol kind'),
+        kind: z.enum(SYMBOL_KINDS).optional().describe('Filter by symbol kind'),
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('Search every accessible repository (account tokens)'),
         limit: z.number().int().min(1).max(50).optional().describe('Max results'),
@@ -2654,7 +2656,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       budget: 'list',
     },
     async (
-      args: { query: string; kind?: 'function' | 'class' | 'interface' | 'type'; limit?: number },
+      args: { query: string; kind?: SymbolKind; limit?: number },
       { repositoryId },
     ) => {
       // null: an account-scoped connection with no repositoryId, or `everywhere`.
